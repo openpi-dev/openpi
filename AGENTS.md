@@ -13,4 +13,3 @@ When working in svelte(kit):
 In general:
 
 - when asking questions, ask them one at a time
-- read the full contents of a file every time, never subsets so you don't miss important context

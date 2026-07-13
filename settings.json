@@ -6,8 +6,5 @@
   "hideThinkingBlock": false,
   "defaultThinkingLevel": "high",
   "shellPath": "/Users/davis/.pi/agent/bin/zsh-with-rc",
-  "extensions": [],
-  "packages": [
-    "../../Developer/qwen-pi-mlx/.pi-agent/extensions/qwen-model.ts"
-  ]
+  "extensions": []
 }
