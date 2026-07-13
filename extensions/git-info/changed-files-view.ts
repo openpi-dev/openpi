@@ -336,10 +336,14 @@ export async function showChangedFiles(
             const isSelected = fileIndex === selectedIndex;
             if (row % 2 === 0) {
               const marker = isSelected ? "› " : "  ";
-              const stats =
-                file.additions === null || file.deletions === null
-                  ? "binary"
-                  : `+${file.additions} -${file.deletions}`;
+              const isBinary =
+                file.additions === null || file.deletions === null;
+              const stats = isBinary
+                ? "binary"
+                : `+${file.additions} -${file.deletions}`;
+              const styledStats = isBinary
+                ? theme.fg("success", stats)
+                : `${theme.fg("success", `+${file.additions}`)} ${theme.fg("error", `-${file.deletions}`)}`;
               const nameWidth = Math.max(
                 1,
                 sidebarWidth - visibleWidth(marker) - visibleWidth(stats) - 1,
@@ -354,7 +358,7 @@ export async function showChangedFiles(
                     visibleWidth(stats),
                 ),
               );
-              sidebar = `${marker}${name}${gap}${theme.fg("success", stats.startsWith("+") ? stats.split(" ")[0]! : stats)}${stats.startsWith("+") ? ` ${theme.fg("error", stats.split(" ")[1]!)}` : ""}`;
+              sidebar = `${marker}${name}${gap}${styledStats}`;
             } else {
               sidebar = `  ${theme.fg("dim", truncateToWidth(file.path, Math.max(1, sidebarWidth - 2), "…"))}`;
             }

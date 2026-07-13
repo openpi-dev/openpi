@@ -8,6 +8,8 @@ import {
   DEFAULT_MAX_LINES,
   formatSize,
   truncateHead,
+  type AgentToolResult,
+  type AgentToolUpdateCallback,
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 import { Firecrawl } from "firecrawl";
@@ -63,16 +65,6 @@ function stringify(value: unknown) {
   return JSON.stringify(value, null, 2);
 }
 
-function asErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
-}
-
-function throwToolError(operation: string, error: unknown): never {
-  throw new Error(`Firecrawl ${operation} failed: ${asErrorMessage(error)}`, {
-    cause: error,
-  });
-}
-
 function checkCancellation(signal: AbortSignal | undefined) {
   if (signal?.aborted) throw new Error("Firecrawl request cancelled");
 }
@@ -90,6 +82,36 @@ async function formatOutput(value: unknown, operation: string) {
   await writeFile(outputPath, output, "utf8");
 
   return `${truncation.content}\n\n[Output truncated: ${truncation.outputLines} of ${truncation.totalLines} lines (${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)}). Full output saved to: ${outputPath}]`;
+}
+
+/** Shared execute pipeline: cancellation, progress update, request, truncation, errors. */
+async function runFirecrawl<T>(
+  operation: string,
+  status: string,
+  signal: AbortSignal | undefined,
+  onUpdate: AgentToolUpdateCallback<T | undefined> | undefined,
+  request: (client: Firecrawl) => Promise<{ details: T; output: unknown }>,
+): Promise<AgentToolResult<T | undefined>> {
+  try {
+    checkCancellation(signal);
+    onUpdate?.({
+      content: [{ type: "text", text: status }],
+      details: undefined,
+    });
+
+    const { details, output } = await request(createClient());
+    checkCancellation(signal);
+
+    return {
+      content: [{ type: "text", text: await formatOutput(output, operation) }],
+      details,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(`Firecrawl ${operation} failed: ${message}`, {
+      cause: error,
+    });
+  }
 }
 
 export default function firecrawlTools(pi: ExtensionAPI) {
@@ -121,36 +143,24 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      try {
-        checkCancellation(signal);
-        onUpdate?.({
-          content: [
-            { type: "text", text: `Searching Firecrawl for: ${params.query}` },
-          ],
-          details: undefined,
-        });
-
-        const result = await createClient().search(params.query, {
-          limit: params.limit ?? 5,
-          sources: [params.source ?? "web"],
-          scrapeOptions: params.scrapeResults
-            ? { formats: ["markdown"], timeout: 30_000 }
-            : undefined,
-          timeout: 30_000,
-        });
-        checkCancellation(signal);
-
-        return {
-          content: [
-            { type: "text", text: await formatOutput(result, "search") },
-          ],
-          details: result,
-        };
-      } catch (error) {
-        throwToolError("search", error);
-      }
-    },
+    execute: (_toolCallId, params, signal, onUpdate) =>
+      runFirecrawl(
+        "search",
+        `Searching Firecrawl for: ${params.query}`,
+        signal,
+        onUpdate,
+        async (client) => {
+          const result = await client.search(params.query, {
+            limit: params.limit ?? 5,
+            sources: [params.source ?? "web"],
+            scrapeOptions: params.scrapeResults
+              ? { formats: ["markdown"], timeout: 30_000 }
+              : undefined,
+            timeout: 30_000,
+          });
+          return { details: result, output: result };
+        },
+      ),
   });
 
   pi.registerTool({
@@ -212,46 +222,31 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      try {
-        checkCancellation(signal);
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Crawling up to ${params.limit ?? 20} pages from: ${params.url}`,
+    execute: (_toolCallId, params, signal, onUpdate) =>
+      runFirecrawl(
+        "crawl",
+        `Crawling up to ${params.limit ?? 20} pages from: ${params.url}`,
+        signal,
+        onUpdate,
+        async (client) => {
+          const result = await client.crawl(params.url, {
+            limit: params.limit ?? 20,
+            maxDiscoveryDepth: params.maxDiscoveryDepth,
+            includePaths: params.includePaths,
+            excludePaths: params.excludePaths,
+            crawlEntireDomain: params.crawlEntireDomain,
+            allowSubdomains: params.allowSubdomains,
+            sitemap: params.sitemap,
+            scrapeOptions: {
+              formats: ["markdown"],
+              onlyMainContent: params.onlyMainContent ?? true,
             },
-          ],
-          details: undefined,
-        });
-
-        const result = await createClient().crawl(params.url, {
-          limit: params.limit ?? 20,
-          maxDiscoveryDepth: params.maxDiscoveryDepth,
-          includePaths: params.includePaths,
-          excludePaths: params.excludePaths,
-          crawlEntireDomain: params.crawlEntireDomain,
-          allowSubdomains: params.allowSubdomains,
-          sitemap: params.sitemap,
-          scrapeOptions: {
-            formats: ["markdown"],
-            onlyMainContent: params.onlyMainContent ?? true,
-          },
-          pollInterval: 2,
-          timeout: params.timeout ?? 120,
-        });
-        checkCancellation(signal);
-
-        return {
-          content: [
-            { type: "text", text: await formatOutput(result, "crawl") },
-          ],
-          details: result,
-        };
-      } catch (error) {
-        throwToolError("crawl", error);
-      }
-    },
+            pollInterval: 2,
+            timeout: params.timeout ?? 120,
+          });
+          return { details: result, output: result };
+        },
+      ),
   });
 
   pi.registerTool({
@@ -292,44 +287,29 @@ export default function firecrawlTools(pi: ExtensionAPI) {
         }),
       ),
     }),
-    async execute(_toolCallId, params, signal, onUpdate) {
-      try {
-        checkCancellation(signal);
-        onUpdate?.({
-          content: [
-            {
-              type: "text",
-              text: `Scraping page with Firecrawl: ${params.url}`,
-            },
-          ],
-          details: undefined,
-        });
+    execute: (_toolCallId, params, signal, onUpdate) =>
+      runFirecrawl(
+        "scrape",
+        `Scraping page with Firecrawl: ${params.url}`,
+        signal,
+        onUpdate,
+        async (client) => {
+          const document = await client.scrape(params.url, {
+            formats: ["markdown"],
+            onlyMainContent: params.onlyMainContent ?? true,
+            waitFor: params.waitFor,
+            timeout: params.timeout ?? 30_000,
+          });
 
-        const document = await createClient().scrape(params.url, {
-          formats: ["markdown"],
-          onlyMainContent: params.onlyMainContent ?? true,
-          waitFor: params.waitFor,
-          timeout: params.timeout ?? 30_000,
-        });
-        checkCancellation(signal);
+          const metadata =
+            params.includeMetadata && document.metadata
+              ? `\n\nMetadata:\n${stringify(document.metadata)}`
+              : "";
+          const markdown =
+            document.markdown?.trim() || "No markdown content returned.";
 
-        const metadata =
-          params.includeMetadata && document.metadata
-            ? `\n\nMetadata:\n${stringify(document.metadata)}`
-            : "";
-        const markdown =
-          document.markdown?.trim() || "No markdown content returned.";
-        const output = `${markdown}${metadata}`;
-
-        return {
-          content: [
-            { type: "text", text: await formatOutput(output, "scrape") },
-          ],
-          details: document,
-        };
-      } catch (error) {
-        throwToolError("scrape", error);
-      }
-    },
+          return { details: document, output: `${markdown}${metadata}` };
+        },
+      ),
   });
 }

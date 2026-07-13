@@ -100,14 +100,20 @@ export default function askUser(pi: ExtensionAPI) {
     parameters: AskUserParams,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const simpleOptions = params.options.map((o) => o.label);
-      const baseDetails: Omit<
-        AskUserDetails,
-        "answer" | "wasCustom" | "cancelled"
-      > = {
-        question: params.question,
-        options: simpleOptions,
-      };
+      const reply = (
+        text: string,
+        answer: string | null = null,
+        wasCustom = false,
+      ) => ({
+        content: [{ type: "text" as const, text }],
+        details: {
+          question: params.question,
+          options: params.options.map((o) => o.label),
+          answer,
+          wasCustom,
+          cancelled: answer === null,
+        } satisfies AskUserDetails,
+      });
 
       if (
         params.options.length < MIN_OPTIONS ||
@@ -119,32 +125,13 @@ export default function askUser(pi: ExtensionAPI) {
       }
 
       if (ctx.mode !== "tui") {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "No interactive UI is available, so the question could not be shown. Ask the user in plain text instead.",
-            },
-          ],
-          details: {
-            ...baseDetails,
-            answer: null,
-            wasCustom: false,
-            cancelled: true,
-          } satisfies AskUserDetails,
-        };
+        return reply(
+          "No interactive UI is available, so the question could not be shown. Ask the user in plain text instead.",
+        );
       }
 
       if (signal?.aborted) {
-        return {
-          content: [{ type: "text", text: "Cancelled" }],
-          details: {
-            ...baseDetails,
-            answer: null,
-            wasCustom: false,
-            cancelled: true,
-          } satisfies AskUserDetails,
-        };
+        return reply("Cancelled");
       }
 
       const allOptions: DisplayOption[] = [
@@ -274,9 +261,7 @@ export default function askUser(pi: ExtensionAPI) {
               const marker = opt.isOther ? "✎" : `${i + 1}.`;
               const label = `${marker} ${opt.label}`;
 
-              if (opt.isOther && editMode) {
-                add(prefix + theme.fg("accent", label));
-              } else if (selected) {
+              if (selected || (opt.isOther && editMode)) {
                 add(prefix + theme.fg("accent", label));
               } else {
                 add(prefix + theme.fg(opt.isOther ? "muted" : "text", label));
@@ -323,53 +308,23 @@ export default function askUser(pi: ExtensionAPI) {
       );
 
       if (!result) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: "User dismissed the question without answering. Do not assume an answer; proceed accordingly or ask differently.",
-            },
-          ],
-          details: {
-            ...baseDetails,
-            answer: null,
-            wasCustom: false,
-            cancelled: true,
-          } satisfies AskUserDetails,
-        };
+        return reply(
+          "User dismissed the question without answering. Do not assume an answer; proceed accordingly or ask differently.",
+        );
       }
 
       if (result.wasCustom) {
-        return {
-          content: [
-            {
-              type: "text",
-              text: `User wrote their own answer: ${result.answer}`,
-            },
-          ],
-          details: {
-            ...baseDetails,
-            answer: result.answer,
-            wasCustom: true,
-            cancelled: false,
-          } satisfies AskUserDetails,
-        };
+        return reply(
+          `User wrote their own answer: ${result.answer}`,
+          result.answer,
+          true,
+        );
       }
 
-      return {
-        content: [
-          {
-            type: "text",
-            text: `User selected option ${result.index}: ${result.answer}`,
-          },
-        ],
-        details: {
-          ...baseDetails,
-          answer: result.answer,
-          wasCustom: false,
-          cancelled: false,
-        } satisfies AskUserDetails,
-      };
+      return reply(
+        `User selected option ${result.index}: ${result.answer}`,
+        result.answer,
+      );
     },
 
     renderCall(args, theme, _context) {

@@ -11,13 +11,13 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import {
+  emptyGitInfoState,
+  emptyModelInfoState,
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   isGitInfoState,
   isModelInfoState,
-  type GitInfoState,
-  type ModelInfoState,
 } from "../shared/dashboard-state.ts";
 
 type Rgb = [number, number, number];
@@ -168,34 +168,10 @@ function columns(left: string, right: string, width: number) {
   );
 }
 
-function emptyModelState(): ModelInfoState {
-  return {
-    provider: "",
-    modelId: "no-model",
-    modelName: "No model",
-    thinking: "off",
-    contextTokens: null,
-    contextWindow: 0,
-    contextPercent: null,
-    cost: 0,
-    tokensPerSecond: null,
-    generating: false,
-  };
-}
-
-function emptyGitState(): GitInfoState {
-  return {
-    isRepository: false,
-    branch: null,
-    changedFiles: 0,
-    pullRequest: null,
-  };
-}
-
 export default function uiCustomization(pi: ExtensionAPI) {
   let title = "pi";
-  let modelInfo = emptyModelState();
-  let gitInfo = emptyGitState();
+  let modelInfo = emptyModelInfoState();
+  let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
   let activeTui: DashboardTui | undefined;
   let themeRemovalTimers: Array<ReturnType<typeof setTimeout>> = [];
@@ -299,8 +275,8 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     title = formatDirectory(ctx.cwd);
-    modelInfo = emptyModelState();
-    gitInfo = emptyGitState();
+    modelInfo = emptyModelInfoState();
+    gitInfo = emptyGitInfoState();
     install(ctx);
   });
 

@@ -28,6 +28,30 @@ export interface GitInfoState {
   pullRequest: PullRequestInfo | null;
 }
 
+export function emptyModelInfoState(): ModelInfoState {
+  return {
+    provider: "",
+    modelId: "no-model",
+    modelName: "No model",
+    thinking: "off",
+    contextTokens: null,
+    contextWindow: 0,
+    contextPercent: null,
+    cost: 0,
+    tokensPerSecond: null,
+    generating: false,
+  };
+}
+
+export function emptyGitInfoState(): GitInfoState {
+  return {
+    isRepository: false,
+    branch: null,
+    changedFiles: 0,
+    pullRequest: null,
+  };
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null;
 }

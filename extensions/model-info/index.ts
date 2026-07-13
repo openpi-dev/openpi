@@ -3,9 +3,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  emptyModelInfoState,
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
-  type ModelInfoState,
 } from "../shared/dashboard-state.ts";
 
 const CHARS_PER_ESTIMATED_TOKEN = 4;
@@ -28,18 +28,7 @@ function estimateContentTokens(characters: number) {
 }
 
 export default function modelInfo(pi: ExtensionAPI) {
-  let state: ModelInfoState = {
-    provider: "",
-    modelId: "no-model",
-    modelName: "No model",
-    thinking: "off",
-    contextTokens: null,
-    contextWindow: 0,
-    contextPercent: null,
-    cost: 0,
-    tokensPerSecond: null,
-    generating: false,
-  };
+  let state = emptyModelInfoState();
   let contentStreamStart: number | null = null;
   let lastContentDeltaAt: number | null = null;
   let contentCharacters = 0;

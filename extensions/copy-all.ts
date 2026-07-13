@@ -55,29 +55,27 @@ export default function (pi: ExtensionAPI) {
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
 
-      const messages = ctx.sessionManager
+      const sections = ctx.sessionManager
         .getBranch()
         .filter((entry) => entry.type === "message")
         .map((entry) => entry.message)
         .filter(
           (message) => message.role === "user" || message.role === "assistant",
-        );
+        )
+        .map((message) => ({
+          role: message.role,
+          content: textFromContent(message.content).trim(),
+        }))
+        .filter(({ content }) => content)
+        .map(({ role, content }) => `${role.toUpperCase()}:\n${content}`);
 
-      const text = messages
-        .map((message) => {
-          const content = textFromContent(message.content).trim();
-          return `${message.role.toUpperCase()}:\n${content}`;
-        })
-        .filter((section) => !section.endsWith(":\n"))
-        .join("\n\n---\n\n");
-
-      if (!text) {
+      if (sections.length === 0) {
         ctx.ui.notify("No user or assistant messages to copy", "info");
         return;
       }
 
-      await copyToClipboard(text);
-      ctx.ui.notify(`Copied ${messages.length} messages to clipboard`, "info");
+      await copyToClipboard(sections.join("\n\n---\n\n"));
+      ctx.ui.notify(`Copied ${sections.length} messages to clipboard`, "info");
     },
   });
 }

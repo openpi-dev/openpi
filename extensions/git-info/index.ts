@@ -3,9 +3,9 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  emptyGitInfoState,
   GIT_INFO_CHANNEL,
   REFRESH_CHANNEL,
-  type GitInfoState,
   type PullRequestInfo,
 } from "../shared/dashboard-state.ts";
 import { loadChangedFiles, showChangedFiles } from "./changed-files-view.ts";
@@ -33,12 +33,7 @@ function parsePullRequest(value: unknown) {
 }
 
 export default function gitInfo(pi: ExtensionAPI) {
-  let state: GitInfoState = {
-    isRepository: false,
-    branch: null,
-    changedFiles: 0,
-    pullRequest: null,
-  };
+  let state = emptyGitInfoState();
   let interval: ReturnType<typeof setInterval> | undefined;
   let currentContext: ExtensionContext | undefined;
   let generation = 0;
@@ -89,12 +84,7 @@ export default function gitInfo(pi: ExtensionAPI) {
 
       if (repo.code !== 0 || repo.stdout.trim() !== "true") {
         queriedPrBranch = null;
-        state = {
-          isRepository: false,
-          branch: null,
-          changedFiles: 0,
-          pullRequest: null,
-        };
+        state = emptyGitInfoState();
         publish();
         return;
       }
@@ -128,9 +118,8 @@ export default function gitInfo(pi: ExtensionAPI) {
       publish();
 
       if (!branchName) {
+        // queriedPrBranch is never "", so branchChanged already cleared pullRequest.
         queriedPrBranch = null;
-        state = { ...state, pullRequest: null };
-        publish();
         return;
       }
 
