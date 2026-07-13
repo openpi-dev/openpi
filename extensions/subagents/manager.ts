@@ -21,8 +21,16 @@ export const MAX_RUNNING = 4;
 export const SUBAGENT_TOOL_NAMES = [
   "subagent_spawn",
   "subagent_wait",
+  "subagent_cancel",
   "subagent_check",
   "subagent_list",
+] as const;
+
+/** Orchestration tools that child sessions must never receive. */
+export const CHILD_EXCLUDED_TOOL_NAMES = [
+  ...SUBAGENT_TOOL_NAMES,
+  "workflow",
+  "ask_user",
 ] as const;
 
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -39,8 +47,8 @@ export interface Subagent {
   createdAt: number;
   settledAt?: number;
   errorText?: string;
-  /** Number of in-flight prompt() runs. 0 while settled. */
-  activeRuns: number;
+  /** Lightweight lifecycle listener used only for status accounting. */
+  unsubscribeLifecycle?: () => void;
 }
 
 export interface SpawnOptions {
@@ -187,8 +195,9 @@ export class SubagentManager {
       sessionManager: SessionManager.create(options.cwd),
       model: options.model,
       thinkingLevel: options.thinkingLevel,
-      // No recursion: subagents never get the subagent tools.
-      excludeTools: [...SUBAGENT_TOOL_NAMES],
+      // No recursive/nested orchestration: child sessions get coding and
+      // integration tools, but never subagent or workflow spawning tools.
+      excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
     });
 
     const id = `sa-${++this.counter}`;
@@ -200,9 +209,21 @@ export class SubagentManager {
       session,
       status: "running",
       createdAt: Date.now(),
-      activeRuns: 0,
     };
     this.subagents.set(id, sub);
+    sub.unsubscribeLifecycle = session.subscribe((event) => {
+      if (this.disposed) return;
+      if (event.type === "agent_start") {
+        sub.status = "running";
+        sub.settledAt = undefined;
+        sub.errorText = undefined;
+        this.notifyChange();
+      } else if (event.type === "agent_settled") {
+        // Stronger than prompt() completion: no queued steering/follow-up,
+        // retry, compaction, or automatic continuation remains.
+        this.settle(sub);
+      }
+    });
 
     try {
       session.sessionManager.appendSessionInfo(`subagent: ${options.title}`);
@@ -214,29 +235,37 @@ export class SubagentManager {
     return sub;
   }
 
-  /** Send a message to a subagent (used by takeover view). Restarts it if settled. */
+  /**
+   * Send a message from the takeover view. While the agent is active, use the
+   * SDK's steering queue rather than starting a second concurrent prompt().
+   * If it is idle, the message starts a fresh run.
+   */
   send(sub: Subagent, text: string) {
+    if (sub.session.isStreaming) {
+      sub.status = "running";
+      sub.settledAt = undefined;
+      this.notifyChange();
+      void sub.session.steer(text).catch((error) => {
+        sub.errorText = error instanceof Error ? error.message : String(error);
+        this.notifyChange();
+      });
+      return;
+    }
     void this.run(sub, text);
   }
 
   private async run(sub: Subagent, text: string) {
-    sub.activeRuns++;
     sub.status = "running";
     sub.settledAt = undefined;
     sub.errorText = undefined;
     this.notifyChange();
     try {
-      const streaming = sub.session.isStreaming;
-      await sub.session.prompt(
-        text,
-        streaming ? { streamingBehavior: "steer" } : undefined,
-      );
+      await sub.session.prompt(text);
     } catch (error) {
       sub.errorText = error instanceof Error ? error.message : String(error);
-    } finally {
-      sub.activeRuns--;
-      if (sub.activeRuns === 0) this.settle(sub);
-      else this.notifyChange();
+      // Preflight failures may not start an agent lifecycle, so no
+      // agent_settled event will arrive for them.
+      if (!sub.session.isStreaming) this.settle(sub);
     }
   }
 
@@ -295,6 +324,8 @@ export class SubagentManager {
     const subs = this.list();
     this.subagents.clear();
     for (const sub of subs) {
+      sub.unsubscribeLifecycle?.();
+      sub.unsubscribeLifecycle = undefined;
       try {
         if (sub.status === "running") await sub.session.abort();
       } catch {

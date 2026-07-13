@@ -5,6 +5,7 @@
  * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
  *   provider, reasoning_effort). Max 4 running at once.
  * - subagent_wait: block until the listed subagents settle, return results.
+ * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
  * - subagent_list: list all subagents.
  *
@@ -231,7 +232,7 @@ export default function (pi: ExtensionAPI) {
             text:
               `Spawned subagent ${sub.id} "${sub.title}" (${model.provider}/${model.id}, ${cwd}).\n` +
               `It runs in the background. Its result will be delivered to you when it finishes, ` +
-              `or use subagent_wait(ids: ["${sub.id}"]) to block for it, subagent_check to peek, subagent_list to see all.`,
+              `or use subagent_wait(ids: ["${sub.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`,
           },
         ],
         details: {
@@ -293,6 +294,58 @@ export default function (pi: ExtensionAPI) {
           results: params.ids.map((id) => {
             const sub = manager.get(id);
             return { id, title: sub?.title, status: sub?.status };
+          }),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_cancel",
+    label: "Cancel Subagents",
+    description:
+      "Cancel one or more running subagents. This aborts their active model/tool work but preserves their partial session transcripts on disk.",
+    parameters: Type.Object({
+      ids: Type.Array(Type.String(), {
+        description: 'Subagent ids to cancel, e.g. ["sa-1", "sa-2"]',
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      const ids = [...new Set(params.ids)];
+      if (ids.length === 0)
+        throw new Error("Provide at least one subagent id.");
+
+      const known = manager.list().map((sub) => sub.id);
+      const unknown = ids.filter((id) => !manager.get(id));
+      if (unknown.length > 0) {
+        throw new Error(
+          `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+
+      const running = ids
+        .map((id) => manager.get(id))
+        .filter((sub): sub is Subagent => sub?.status === "running");
+
+      // Mark these results as consumed before aborting so cancellation does not
+      // also enqueue duplicate automatic result messages into the parent.
+      const waitForSettled = manager.waitFor(running.map((sub) => sub.id));
+      await Promise.all(running.map((sub) => manager.abort(sub)));
+      await waitForSettled;
+
+      const lines = ids.map((id) => {
+        const sub = manager.get(id)!;
+        return running.includes(sub)
+          ? `Cancelled ${sub.id} "${sub.title}".`
+          : `${sub.id} "${sub.title}" was already ${sub.status}.`;
+      });
+
+      return {
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: {
+          results: ids.map((id) => {
+            const sub = manager.get(id)!;
+            return { id, title: sub.title, status: sub.status };
           }),
         },
       };

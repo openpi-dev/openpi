@@ -12,6 +12,7 @@ import type {
   UserMessage,
 } from "@earendil-works/pi-ai";
 import type {
+  AgentSessionEvent,
   ExtensionCommandContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
@@ -73,6 +74,28 @@ function sanitizeText(text: string): string {
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 }
 
+function liveToolPreview(value: unknown): string | undefined {
+  if (typeof value === "string") {
+    return sanitizeText(value)
+      .split("\n")
+      .find((line) => line.trim())
+      ?.trim();
+  }
+  if (!value || typeof value !== "object") return undefined;
+  const content = (value as { content?: unknown }).content;
+  if (!Array.isArray(content)) return undefined;
+  for (const part of content) {
+    if (!part || typeof part !== "object") continue;
+    const record = part as { type?: unknown; text?: unknown };
+    if (record.type !== "text" || typeof record.text !== "string") continue;
+    const firstLine = sanitizeText(record.text)
+      .split("\n")
+      .find((line) => line.trim());
+    if (firstLine) return firstLine.trim();
+  }
+  return undefined;
+}
+
 function renderUserMessage(
   theme: Theme,
   msg: UserMessage,
@@ -108,6 +131,22 @@ function renderAssistantMessage(
       const text = sanitizeText(part.text).trim();
       if (!text) continue;
       out.push(...wrapTextWithAnsi(text, width));
+    } else if (part.type === "thinking") {
+      const reasoning = part.redacted
+        ? "[redacted reasoning]"
+        : sanitizeText(part.thinking).trim();
+      if (!reasoning) continue;
+      const prefix = theme.fg("dim", "~ ");
+      const wrapped = wrapTextWithAnsi(reasoning, Math.max(10, width - 2));
+      for (let i = 0; i < wrapped.length; i++) {
+        out.push(
+          truncateToWidth(
+            (i === 0 ? prefix : "  ") +
+              theme.fg("muted", theme.italic(wrapped[i])),
+            width,
+          ),
+        );
+      }
     } else if (part.type === "toolCall") {
       let preview = "";
       try {
@@ -121,7 +160,6 @@ function renderAssistantMessage(
         (preview && preview !== "{}" ? theme.fg("dim", ` ${preview}`) : "");
       out.push(truncateToWidth(line, width));
     }
-    // Thinking parts are intentionally skipped.
   }
 }
 
@@ -146,15 +184,40 @@ function renderToolResultMessage(
   );
 }
 
+interface LiveToolEvent {
+  id: string;
+  name: string;
+  args: Record<string, unknown>;
+  preview?: string;
+  done?: boolean;
+  isError?: boolean;
+}
+
+interface LiveTranscriptState {
+  assistant?: AssistantMessage;
+  tools?: readonly LiveToolEvent[];
+}
+
 /** Render a subagent's conversation as plain lines, wrapped to `width`. */
 export function buildTranscriptLines(
   sub: Subagent,
   width: number,
   theme: Theme,
+  live?: LiveTranscriptState,
 ): string[] {
   const messages: unknown[] = [...sub.session.messages];
-  const streaming = sub.session.agent.state.streamingMessage;
-  if (streaming) messages.push(streaming);
+  const streaming = live?.assistant ?? sub.session.agent.state.streamingMessage;
+  if (streaming) {
+    const timestamp = (streaming as { timestamp?: number }).timestamp;
+    const alreadyPersisted = messages.some(
+      (message) =>
+        message === streaming ||
+        (timestamp !== undefined &&
+          messageRole(message) === "assistant" &&
+          (message as { timestamp?: number }).timestamp === timestamp),
+    );
+    if (!alreadyPersisted) messages.push(streaming);
+  }
 
   const out: string[] = [];
   for (const msg of messages) {
@@ -170,6 +233,51 @@ export function buildTranscriptLines(
     if (out.length > before) out.push("");
   }
   while (out.length > 0 && out[out.length - 1] === "") out.pop();
+
+  // Tool execution updates are not represented in session.messages until the
+  // final tool result arrives. Render their live state while this view is open.
+  for (const tool of live?.tools ?? []) {
+    if (out.length > 0) out.push("");
+    const marker = tool.done
+      ? tool.isError
+        ? theme.fg("error", "x")
+        : theme.fg("success", "+")
+      : theme.fg("warning", "*");
+    let line = `${marker} ${theme.fg("toolTitle", tool.name)}`;
+    if (tool.preview) line += theme.fg("dim", ` · ${tool.preview}`);
+    else if (!tool.done) line += theme.fg("dim", " · running");
+    out.push(truncateToWidth(line, width));
+  }
+
+  // Steering/follow-up messages are not added to session.messages until the
+  // agent reaches a delivery point. Show them immediately so Enter visibly
+  // acknowledges the user's input instead of appearing to do nothing.
+  const queued = [
+    ...sub.session
+      .getSteeringMessages()
+      .map((text) => ({ text, kind: "steer" })),
+    ...sub.session
+      .getFollowUpMessages()
+      .map((text) => ({ text, kind: "follow-up" })),
+  ];
+  for (const message of queued) {
+    if (out.length > 0) out.push("");
+    const prefix = theme.fg("warning", `> [queued ${message.kind}] `);
+    const wrapped = wrapTextWithAnsi(
+      sanitizeText(message.text),
+      Math.max(10, width - visibleWidth(prefix)),
+    );
+    for (let i = 0; i < wrapped.length; i++) {
+      out.push(
+        truncateToWidth(
+          (i === 0 ? prefix : " ".repeat(visibleWidth(prefix))) +
+            theme.fg("muted", wrapped[i]),
+          width,
+        ),
+      );
+    }
+  }
+
   return out;
 }
 
@@ -445,6 +553,8 @@ class SubagentDashboard implements Component {
 
 // --- Takeover view -----------------------------------------------------------
 
+const TRANSCRIPT_SCROLL_STEP = 6;
+
 class TakeoverView implements Component, Focusable {
   private tui: TUI;
   private theme: Theme;
@@ -456,6 +566,9 @@ class TakeoverView implements Component, Focusable {
   /** Scroll offset in lines from the bottom of the transcript. 0 = pinned to bottom. */
   private scrollOffset = 0;
   private unsubscribe: () => void;
+  private renderTimer?: ReturnType<typeof setTimeout>;
+  private liveAssistant?: AssistantMessage;
+  private liveTools = new Map<string, LiveToolEvent>();
   private closed = false;
 
   private _focused = false;
@@ -479,9 +592,9 @@ class TakeoverView implements Component, Focusable {
     this.sub = sub;
     this.manager = manager;
     this.done = done;
-    this.unsubscribe = sub.session.subscribe(() => {
-      this.tui.requestRender();
-    });
+    this.unsubscribe = sub.session.subscribe((event) =>
+      this.handleSessionEvent(event),
+    );
     this.input.onSubmit = (value: string) => {
       const text = value.trim();
       if (!text) return;
@@ -492,10 +605,78 @@ class TakeoverView implements Component, Focusable {
     };
   }
 
+  private handleSessionEvent(event: AgentSessionEvent) {
+    switch (event.type) {
+      case "message_start":
+      case "message_update":
+        if (messageRole(event.message) === "assistant") {
+          this.liveAssistant = event.message as AssistantMessage;
+        }
+        break;
+      case "message_end":
+        if (messageRole(event.message) === "assistant") {
+          this.liveAssistant = event.message as AssistantMessage;
+        } else if (messageRole(event.message) === "toolResult") {
+          this.liveTools.delete(
+            (event.message as ToolResultMessage).toolCallId,
+          );
+        }
+        break;
+      case "tool_execution_start":
+        this.liveTools.set(event.toolCallId, {
+          id: event.toolCallId,
+          name: event.toolName,
+          args: event.args as Record<string, unknown>,
+        });
+        break;
+      case "tool_execution_update": {
+        const current = this.liveTools.get(event.toolCallId);
+        this.liveTools.set(event.toolCallId, {
+          id: event.toolCallId,
+          name: event.toolName,
+          args: event.args as Record<string, unknown>,
+          preview: liveToolPreview(event.partialResult) ?? current?.preview,
+        });
+        break;
+      }
+      case "tool_execution_end": {
+        const current = this.liveTools.get(event.toolCallId);
+        this.liveTools.set(event.toolCallId, {
+          id: event.toolCallId,
+          name: event.toolName,
+          args: current?.args ?? {},
+          preview: liveToolPreview(event.result) ?? current?.preview,
+          done: true,
+          isError: event.isError,
+        });
+        break;
+      }
+      case "agent_settled":
+        this.liveAssistant = undefined;
+        this.liveTools.clear();
+        break;
+    }
+    this.scheduleRender();
+  }
+
+  private scheduleRender() {
+    if (this.renderTimer) return;
+    // Streaming can emit an event per token. Limit terminal repaints so opening
+    // the inspector cannot starve input handling or make the child look frozen.
+    this.renderTimer = setTimeout(() => {
+      this.renderTimer = undefined;
+      if (!this.closed) this.tui.requestRender();
+    }, 50);
+  }
+
   private close() {
     if (this.closed) return;
     this.closed = true;
     this.unsubscribe();
+    this.liveAssistant = undefined;
+    this.liveTools.clear();
+    if (this.renderTimer) clearTimeout(this.renderTimer);
+    this.renderTimer = undefined;
     this.done(null);
   }
 
@@ -509,12 +690,15 @@ class TakeoverView implements Component, Focusable {
       return;
     }
     if (matchesKey(data, Key.up)) {
-      this.scrollOffset++;
+      this.scrollOffset += TRANSCRIPT_SCROLL_STEP;
       this.tui.requestRender();
       return;
     }
     if (matchesKey(data, Key.down)) {
-      this.scrollOffset = Math.max(0, this.scrollOffset - 1);
+      this.scrollOffset = Math.max(
+        0,
+        this.scrollOffset - TRANSCRIPT_SCROLL_STEP,
+      );
       this.tui.requestRender();
       return;
     }
@@ -559,7 +743,10 @@ class TakeoverView implements Component, Focusable {
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
-    const transcript = buildTranscriptLines(this.sub, width, theme);
+    const transcript = buildTranscriptLines(this.sub, width, theme, {
+      assistant: this.liveAssistant,
+      tools: [...this.liveTools.values()],
+    });
     const viewport = this.viewportHeight();
     const errorRows = this.sub.errorText ? 1 : 0;
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
