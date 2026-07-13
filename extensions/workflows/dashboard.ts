@@ -5,8 +5,8 @@
  *   name                                             5/5 agents · 31m18s · done
  *   description
  *   ╭ Phases ────────────╮ ╭ Gather · 3 agents ──────────────────────────────╮
- *   │ ❯ ■ Gather     3/3 │ │ ■ CodeRabbit feedback   gpt-5 · 69.3k tok  5m37s│
- *   │   ■ Verify     1/1 │ │ ■ Other bot feedback    gpt-5 · 87.4k tok  4m43s│
+ *   │ ❯ ■ Gather     3/3 │ │ ■ CodeRabbit feedback   gpt-5 · 7%/372k  5m37s│
+ *   │   ■ Verify     1/1 │ │ ■ Other bot feedback    gpt-5 · 9%/372k  4m43s│
  *   ╰────────────────────╯ ╰─────────────────────────────────────────────────╯
  *   up/down select · esc back · s save report
  */
@@ -16,6 +16,7 @@ import * as path from "node:path";
 import {
   getAgentDir,
   type ExtensionContext,
+  type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import {
   Key,
@@ -26,7 +27,7 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import {
-  agentTokens,
+  agentContext,
   countStates,
   formatElapsed,
   formatUsage,
@@ -120,9 +121,18 @@ function normalizeDetails(
       phase: typeof a.phase === "string" ? a.phase : undefined,
       state,
       model: typeof a.model === "string" ? a.model : undefined,
+      contextWindow:
+        typeof a.contextWindow === "number" &&
+        Number.isFinite(a.contextWindow) &&
+        a.contextWindow > 0
+          ? a.contextWindow
+          : undefined,
       startedAt: typeof a.startedAt === "number" ? a.startedAt : startedAt,
       finishedAt: typeof a.finishedAt === "number" ? a.finishedAt : undefined,
-      error: typeof a.error === "string" ? a.error : undefined,
+      error:
+        typeof a.error === "string" && a.error !== "[undefined]"
+          ? a.error
+          : undefined,
       preview: typeof a.preview === "string" ? a.preview : "",
       usage: {
         input: 0,
@@ -130,7 +140,6 @@ function normalizeDetails(
         cacheRead: 0,
         cacheWrite: 0,
         cost: 0,
-        contextTokens: 0,
         turns: 0,
         ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
       },
@@ -187,6 +196,14 @@ function normalizeDetails(
       typeof record.currentPhase === "string" ? record.currentPhase : undefined,
     agents,
     result: record.result,
+    resultArtifact:
+      typeof record.resultArtifact === "string"
+        ? record.resultArtifact
+        : undefined,
+    transcriptArtifact:
+      typeof record.transcriptArtifact === "string"
+        ? record.transcriptArtifact
+        : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
   };
 }
@@ -236,6 +253,48 @@ export function loadRunEntries(
         details &&
         (details.sessionId === sessionId || referencedRunIds.has(runId))
       ) {
+        const runDir = path.join(runsDir(), runId);
+        if (details.resultArtifact) {
+          try {
+            details.result = JSON.parse(
+              fs.readFileSync(
+                path.join(runDir, path.basename(details.resultArtifact)),
+                "utf8",
+              ),
+            );
+          } catch {
+            // Keep the compact compatibility marker from workflow.json.
+          }
+        }
+        if (details.transcriptArtifact) {
+          try {
+            const transcripts = JSON.parse(
+              fs.readFileSync(
+                path.join(runDir, path.basename(details.transcriptArtifact)),
+                "utf8",
+              ),
+            ) as Record<string, unknown>;
+            for (const agent of details.agents) {
+              agent.transcript = normalizeTranscript(
+                transcripts[String(agent.index)],
+              );
+            }
+          } catch {
+            // Older or partially written artifacts simply lack transcripts.
+          }
+        }
+        if (details.status === "running") {
+          details.status = "aborted";
+          details.finishedAt = details.finishedAt ?? Date.now();
+          details.error =
+            details.error ?? "Recovered stale run that was not active";
+          for (const agent of details.agents) {
+            if (agent.state !== "running") continue;
+            agent.state = "error";
+            agent.error = agent.error ?? "Run ended before this agent settled";
+            agent.finishedAt = details.finishedAt;
+          }
+        }
         entries.push({ runId, details, live: false });
       }
     } catch {
@@ -275,7 +334,7 @@ function buildReport(details: WorkflowDetails): string {
             : "running";
       const stats = [
         agent.model,
-        agentTokens(agent.usage),
+        agentContext(agent),
         formatElapsed(agent.startedAt, agent.finishedAt),
       ]
         .filter(Boolean)
@@ -317,9 +376,11 @@ export class WorkflowDashboard {
   private current?: RunEntry;
   private notice?: string;
   private noticeAt = 0;
+  private disposed = false;
   private timer: ReturnType<typeof setInterval>;
   private tui: TUI;
   private theme: Theme;
+  private keybindings: KeybindingsManager;
   private getActive: () => Map<string, WorkflowDetails>;
   private sessionId: string;
   private referencedRunIds: ReadonlySet<string>;
@@ -328,6 +389,7 @@ export class WorkflowDashboard {
   constructor(
     tui: TUI,
     theme: Theme,
+    keybindings: KeybindingsManager,
     getActive: () => Map<string, WorkflowDetails>,
     sessionId: string,
     referencedRunIds: ReadonlySet<string>,
@@ -336,6 +398,7 @@ export class WorkflowDashboard {
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.keybindings = keybindings;
     this.getActive = getActive;
     this.sessionId = sessionId;
     this.referencedRunIds = referencedRunIds;
@@ -364,6 +427,8 @@ export class WorkflowDashboard {
   }
 
   dispose() {
+    if (this.disposed) return;
+    this.disposed = true;
     clearInterval(this.timer);
   }
 
@@ -426,10 +491,15 @@ export class WorkflowDashboard {
   }
 
   handleInput(data: string) {
-    const up = matchesKey(data, Key.up) || data === "k";
-    const down = matchesKey(data, Key.down) || data === "j";
-    const left = matchesKey(data, Key.left) || data === "h";
-    const right = matchesKey(data, Key.right) || data === "l";
+    const up = this.keybindings.matches(data, "tui.select.up") || data === "k";
+    const down =
+      this.keybindings.matches(data, "tui.select.down") || data === "j";
+    const left =
+      this.keybindings.matches(data, "tui.editor.cursorLeft") || data === "h";
+    const right =
+      this.keybindings.matches(data, "tui.editor.cursorRight") || data === "l";
+    const confirm = this.keybindings.matches(data, "tui.select.confirm");
+    const cancel = this.keybindings.matches(data, "tui.select.cancel");
 
     if (this.view === "list") {
       if (up) {
@@ -440,7 +510,7 @@ export class WorkflowDashboard {
         this.listIndex = 0;
       } else if (data === "G") {
         this.listIndex = Math.max(0, this.entries.length - 1);
-      } else if (matchesKey(data, Key.enter)) {
+      } else if (confirm) {
         const entry = this.entries[this.listIndex];
         if (entry) {
           this.current = entry;
@@ -449,7 +519,7 @@ export class WorkflowDashboard {
           this.detailFocus = "phases";
           this.view = "detail";
         }
-      } else if (matchesKey(data, Key.escape)) {
+      } else if (cancel) {
         this.close();
         return;
       }
@@ -477,14 +547,13 @@ export class WorkflowDashboard {
           this.agentIndex = 0;
         } else if (
           right ||
-          (matchesKey(data, Key.enter) &&
-            (this.selectedGroup()?.agents.length ?? 0) > 0)
+          (confirm && (this.selectedGroup()?.agents.length ?? 0) > 0)
         ) {
           if ((this.selectedGroup()?.agents.length ?? 0) > 0) {
             this.detailFocus = "agents";
             this.clampAgentIndex();
           }
-        } else if (matchesKey(data, Key.escape)) {
+        } else if (cancel) {
           this.view = "list";
           this.refresh();
         }
@@ -498,9 +567,9 @@ export class WorkflowDashboard {
           this.agentIndex = 0;
         } else if (data === "G") {
           this.agentIndex = Math.max(0, agents.length - 1);
-        } else if (left || matchesKey(data, Key.escape)) {
+        } else if (left || cancel) {
           this.detailFocus = "phases";
-        } else if (matchesKey(data, Key.enter) && this.selectedAgent()) {
+        } else if (confirm && this.selectedAgent()) {
           this.transcriptScroll = 0;
           this.view = "transcript";
         }
@@ -532,7 +601,7 @@ export class WorkflowDashboard {
         this.transcriptScroll = 0;
       } else if (data === "G") {
         this.transcriptScroll = maxScroll;
-      } else if (matchesKey(data, Key.escape) || left) {
+      } else if (cancel || left) {
         this.view = "detail";
         this.detailFocus = "agents";
       }
@@ -609,6 +678,10 @@ export class WorkflowDashboard {
     return { items: items.slice(offset, offset + size), offset };
   }
 
+  private keys(binding: Parameters<KeybindingsManager["getKeys"]>[0]) {
+    return this.keybindings.getKeys(binding).join("/") || "unbound";
+  }
+
   private hintLine(hint: string, width: number): string {
     const theme = this.theme;
     if (this.notice)
@@ -641,7 +714,9 @@ export class WorkflowDashboard {
           panelHeight,
         ),
       );
-      lines.push(this.hintLine("esc close", width));
+      lines.push(
+        this.hintLine(`${this.keys("tui.select.cancel")} close`, width),
+      );
       return lines;
     }
 
@@ -672,7 +747,12 @@ export class WorkflowDashboard {
       return this.split(left, right, width - 2);
     });
     lines.push(...this.panel("Runs", rows, width, panelHeight));
-    lines.push(this.hintLine("↑↓ select · enter open · esc close", width));
+    lines.push(
+      this.hintLine(
+        `${this.keys("tui.select.up")}/${this.keys("tui.select.down")} select · ${this.keys("tui.select.confirm")} open · ${this.keys("tui.select.cancel")} close`,
+        width,
+      ),
+    );
     return lines;
   }
 
@@ -764,7 +844,7 @@ export class WorkflowDashboard {
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", "❯")
             : " ";
-        const stats = [agent.model, agentTokens(agent.usage)]
+        const stats = [agent.model, agentContext(agent)]
           .filter(Boolean)
           .join(" · ");
         const label =
@@ -824,8 +904,8 @@ export class WorkflowDashboard {
 
     const hint =
       this.detailFocus === "phases"
-        ? "j/k select phase · l/right/enter agents · esc back · s save report"
-        : "j/k select agent · h/left/esc phases · enter transcript · s save report";
+        ? `j/k select phase · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} agents · ${this.keys("tui.select.cancel")} back · s save report`
+        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · ${this.keys("tui.select.confirm")} transcript · s save report`;
     lines.push(this.hintLine(hint, width));
     return lines;
   }
@@ -873,7 +953,7 @@ export class WorkflowDashboard {
       "dim",
       [
         agent.model,
-        agentTokens(agent.usage),
+        agentContext(agent),
         formatElapsed(agent.startedAt, agent.finishedAt),
       ]
         .filter(Boolean)
@@ -959,10 +1039,11 @@ export async function showWorkflowDashboard(
   initialRunId?: string,
 ): Promise<void> {
   await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => {
+    (tui, theme, keybindings, done) => {
       const dashboard: WorkflowDashboard = new WorkflowDashboard(
         tui,
         theme,
+        keybindings,
         getActive,
         ctx.sessionManager.getSessionId(),
         sessionWorkflowRunIds(ctx),

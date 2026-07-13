@@ -2,9 +2,9 @@
  * Workflow subagent runner.
  *
  * Each `agent()` call in a workflow script becomes one isolated in-process
- * AgentSession created here: in-memory session, no extensions (so the
- * `workflow` tool can never recurse), skills + AGENTS.md context still loaded,
- * and an optional one-shot `structured_output` tool when a schema is supplied.
+ * AgentSession created here: in-memory session, normal trust-aware resources
+ * and extensions, recursive orchestration/user-prompt tools denied, and an
+ * optional one-shot `structured_output` tool when a schema is supplied.
  *
  * `runAgent()` never throws: every failure mode (session creation, provider
  * errors, aborts, missing structured output) settles into an `AgentOutcome`.
@@ -14,15 +14,27 @@ import {
   createAgentSession,
   DefaultResourceLoader,
   defineTool,
-  getAgentDir,
   SessionManager,
+  SettingsManager,
   type AgentSession,
   type ExtensionAPI,
   type ExtensionContext,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type, type TSchema } from "typebox";
+import {
+  bindChildSessionExtensions,
+  childToolPolicy,
+  createChildResources,
+  shutdownAndDisposeChildSession,
+} from "../shared/child-session.ts";
 import { emptyUsage, type AgentUsage, type TranscriptEntry } from "./model.ts";
+import { safeStringify, truncateUtf8 } from "./serialization.ts";
+
+const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
+const TRANSCRIPT_ENTRY_MAX_BYTES = 16 * 1024;
+const TRANSCRIPT_TOTAL_MAX_BYTES = 256 * 1024;
+const TRANSCRIPT_MAX_ENTRIES = 200;
 
 export type WorkflowModel = NonNullable<ExtensionContext["model"]>;
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -38,6 +50,7 @@ export interface AgentOutcome {
   aborted: boolean;
   usage: AgentUsage;
   model?: string;
+  contextWindow?: number;
   transcript: TranscriptEntry[];
 }
 
@@ -45,6 +58,7 @@ export interface AgentProgress {
   preview: string;
   usage: AgentUsage;
   model?: string;
+  contextWindow?: number;
   transcript: TranscriptEntry[];
 }
 
@@ -55,6 +69,7 @@ export interface RunAgentOptions {
   thinkingLevel?: ThinkingLevel;
   cwd: string;
   loader: DefaultResourceLoader;
+  settingsManager: SettingsManager;
   modelRegistry: ExtensionContext["modelRegistry"];
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
@@ -63,89 +78,57 @@ export interface RunAgentOptions {
 const STRUCTURED_OUTPUT_INSTRUCTION =
   "When your task is complete, call the `structured_output` tool exactly once as your final action, with fields matching the required schema. Do not write any other text after it.";
 
-/**
- * Build a resource loader for workflow subagents. Extensions are disabled (no
- * recursion into `workflow`), while skills and AGENTS.md context still load.
- * One loader per variant is shared across all agents in a run.
- */
-export async function createWorkflowLoader(
+/** Build a fresh extension runtime for each concurrent workflow child. */
+export function createWorkflowResources(
   cwd: string,
   variant: "plain" | "structured",
-): Promise<DefaultResourceLoader> {
-  const loader = new DefaultResourceLoader({
+  projectTrusted: boolean,
+) {
+  return createChildResources({
     cwd,
-    agentDir: getAgentDir(),
-    noExtensions: true,
+    projectTrusted,
     ...(variant === "structured"
       ? { appendSystemPrompt: [STRUCTURED_OUTPUT_INSTRUCTION] }
       : {}),
   });
-  await loader.reload();
-  return loader;
 }
 
-/**
- * Convert the JSON-schema-ish object a workflow script passes as `schema`
- * into a TypeBox schema usable as tool parameters. Covers the practical
- * subset (object/array/string/number/integer/boolean, enums, required,
- * descriptions); unknown shapes degrade to Type.Any().
- */
-function jsonSchemaToTypebox(schema: unknown): TSchema {
-  if (!schema || typeof schema !== "object") return Type.Any();
-  const node = schema as {
-    type?: unknown;
-    description?: unknown;
-    enum?: unknown;
-    properties?: Record<string, unknown>;
-    required?: unknown;
-    items?: unknown;
-  };
-  const opts =
-    typeof node.description === "string"
-      ? { description: node.description }
-      : {};
-
-  if (Array.isArray(node.enum) && node.enum.length > 0) {
-    return Type.Union(
-      node.enum.map((value) =>
-        Type.Literal(value as string | number | boolean),
-      ),
-      opts,
-    );
-  }
-
-  // Tolerate schemas that omit `type` but are still unambiguous.
-  const inferredType =
-    node.type ??
-    (node.properties !== undefined || node.required !== undefined
-      ? "object"
-      : node.items !== undefined
-        ? "array"
-        : undefined);
-
-  switch (inferredType) {
-    case "object": {
-      const properties = node.properties ?? {};
-      const required = Array.isArray(node.required) ? node.required : [];
-      const props: Record<string, TSchema> = {};
-      for (const key of Object.keys(properties)) {
-        const child = jsonSchemaToTypebox(properties[key]);
-        props[key] = required.includes(key) ? child : Type.Optional(child);
-      }
-      return Type.Object(props, opts);
+function isJsonSchema(value: unknown): value is TSchema {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const seen = new WeakSet<object>();
+  let nodes = 0;
+  const validate = (current: unknown, depth: number): boolean => {
+    if (++nodes > 10_000 || depth > 24) return false;
+    if (
+      current === null ||
+      typeof current === "string" ||
+      typeof current === "boolean"
+    ) {
+      return true;
     }
-    case "array":
-      return Type.Array(jsonSchemaToTypebox(node.items), opts);
-    case "string":
-      return Type.String(opts);
-    case "number":
-    case "integer":
-      return Type.Number(opts);
-    case "boolean":
-      return Type.Boolean(opts);
-    default:
-      return Type.Any();
+    if (typeof current === "number") return Number.isFinite(current);
+    if (Array.isArray(current)) {
+      return current.every((item) => validate(item, depth + 1));
+    }
+    if (typeof current !== "object") return false;
+    if (seen.has(current)) return false;
+    seen.add(current);
+    return Object.keys(current).every((key) => {
+      if (key === "__proto__" || key === "constructor" || key === "prototype") {
+        return false;
+      }
+      return validate((current as Record<string, unknown>)[key], depth + 1);
+    });
+  };
+  return validate(value, 0);
+}
+
+/** Preserve the caller's full JSON Schema instead of lossy keyword conversion. */
+function jsonSchemaToTypebox(schema: unknown): TSchema {
+  if (!isJsonSchema(schema)) {
+    throw new Error("structured output schema must be a bounded JSON object");
   }
+  return Type.Unsafe(schema);
 }
 
 /**
@@ -188,11 +171,11 @@ function finalOutput(messages: AgentMessage[]): string {
 }
 
 function safeJson(value: unknown): string {
-  try {
-    return JSON.stringify(value, null, 2);
-  } catch {
-    return String(value);
-  }
+  return safeStringify(value, {
+    maxBytes: TRANSCRIPT_ENTRY_MAX_BYTES,
+    maxDepth: 12,
+    maxNodes: 2_000,
+  });
 }
 
 /** Convert pi messages into a compact, serializable transcript for the UI. */
@@ -254,7 +237,34 @@ function transcriptFromMessages(messages: AgentMessage[]): TranscriptEntry[] {
       timestamp: message.timestamp,
     });
   }
-  return entries;
+  const selected =
+    entries.length <= TRANSCRIPT_MAX_ENTRIES
+      ? entries
+      : [entries[0], ...entries.slice(-(TRANSCRIPT_MAX_ENTRIES - 1))];
+  const bounded: TranscriptEntry[] = [];
+  let totalBytes = 0;
+  for (const entry of selected) {
+    const remaining = TRANSCRIPT_TOTAL_MAX_BYTES - totalBytes;
+    if (remaining <= 0) break;
+    const text = truncateUtf8(
+      entry.text,
+      Math.min(TRANSCRIPT_ENTRY_MAX_BYTES, remaining),
+    );
+    totalBytes += Buffer.byteLength(text, "utf8");
+    bounded.push({
+      ...entry,
+      text:
+        text === entry.text ? text : `${text}\n[transcript entry truncated]`,
+    });
+  }
+  if (bounded.length < entries.length) {
+    bounded.push({
+      role: "toolResult",
+      name: "transcript",
+      text: `[transcript truncated: retained ${bounded.length} of ${entries.length} entries]`,
+    });
+  }
+  return bounded;
 }
 
 function computeUsage(messages: AgentMessage[]): AgentUsage {
@@ -269,30 +279,32 @@ function computeUsage(messages: AgentMessage[]): AgentUsage {
     usage.cacheRead += u.cacheRead || 0;
     usage.cacheWrite += u.cacheWrite || 0;
     usage.cost += u.cost?.total || 0;
-    if (u.totalTokens) usage.contextTokens = u.totalTokens;
   }
   return usage;
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return (error instanceof Error ? error.message : String(error)).slice(
+    0,
+    16 * 1024,
+  );
 }
 
 export async function runAgent(
   options: RunAgentOptions,
 ): Promise<AgentOutcome> {
   let structured: unknown;
-  const customTools =
-    options.schema !== undefined
-      ? [
-          makeStructuredOutputTool(options.schema, (value) => {
-            structured = value;
-          }),
-        ]
-      : undefined;
-
-  let session: AgentSession;
+  let customTools: ToolDefinition[] | undefined;
+  let session: AgentSession | undefined;
   try {
+    customTools =
+      options.schema !== undefined
+        ? [
+            makeStructuredOutputTool(options.schema, (value) => {
+              structured = value;
+            }),
+          ]
+        : undefined;
     ({ session } = await createAgentSession({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
@@ -301,54 +313,102 @@ export async function runAgent(
         : {}),
       modelRegistry: options.modelRegistry,
       resourceLoader: options.loader,
+      settingsManager: options.settingsManager,
       sessionManager: SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
+      ...childToolPolicy(),
     }));
+    await bindChildSessionExtensions(session);
   } catch (error) {
+    if (session) await shutdownAndDisposeChildSession(session);
     return {
       ok: false,
       output: "",
       error: `Failed to create agent session: ${errorText(error)}`,
       aborted: false,
       usage: emptyUsage(),
+      model: options.model?.id,
+      contextWindow: options.model?.contextWindow,
       transcript: [],
     };
   }
 
+  const childSession = session;
   let usage = emptyUsage();
-  let modelId = options.model?.id;
+  let modelId = childSession.model?.id ?? options.model?.id;
+  let contextWindow = childSession.model?.contextWindow;
   let stopReason: string | undefined;
   let errorMessage: string | undefined;
 
   const sync = () => {
-    const messages = session.messages;
+    const messages = childSession.messages;
     usage = computeUsage(messages);
+
+    const sessionModel = childSession.model;
+    modelId = sessionModel?.id ?? modelId;
+    contextWindow = sessionModel?.contextWindow ?? contextWindow;
+    const context = childSession.getContextUsage();
+    if (
+      typeof context?.tokens === "number" &&
+      Number.isFinite(context.tokens) &&
+      context.tokens >= 0
+    ) {
+      usage.contextTokens = context.tokens;
+    }
+    if (
+      typeof context?.contextWindow === "number" &&
+      Number.isFinite(context.contextWindow) &&
+      context.contextWindow > 0
+    ) {
+      contextWindow = context.contextWindow;
+    }
+
     for (let i = messages.length - 1; i >= 0; i--) {
       const msg = messages[i];
       if (msg.role !== "assistant") continue;
-      if (msg.model) modelId = msg.model;
+      // Some gateways report a concrete fallback model. Prefer its registry
+      // metadata when available so capacity tracks the model that served the
+      // latest response rather than a hardcoded/configured guess.
+      const responseMatchesSession =
+        !sessionModel ||
+        (msg.provider === sessionModel.provider &&
+          msg.model === sessionModel.id);
+      const reportedId = msg.responseModel ?? msg.model;
+      const reportedModel = responseMatchesSession
+        ? options.modelRegistry.find(msg.provider, reportedId)
+        : undefined;
+      if (reportedModel) {
+        modelId = reportedModel.id;
+        contextWindow = reportedModel.contextWindow;
+      }
       if (msg.stopReason) stopReason = msg.stopReason;
       if (msg.errorMessage) errorMessage = msg.errorMessage;
       break;
     }
   };
 
-  const unsubscribe = session.subscribe((event) => {
-    if (event.type !== "message_end" && event.type !== "tool_execution_end")
+  const unsubscribe = childSession.subscribe((event) => {
+    if (
+      event.type !== "message_end" &&
+      event.type !== "tool_execution_end" &&
+      event.type !== "compaction_end"
+    )
       return;
     sync();
     options.onProgress?.({
-      preview: finalOutput(session.messages),
+      preview: finalOutput(childSession.messages),
       usage,
       model: modelId,
-      transcript: transcriptFromMessages(session.messages),
+      contextWindow,
+      transcript: transcriptFromMessages(childSession.messages),
     });
   });
 
   let aborted = false;
+  let abortPromise: Promise<void> | undefined;
   const onAbort = () => {
     aborted = true;
-    void session.abort();
+    abortPromise ??= childSession.abort().catch(() => {});
   };
   if (options.signal) {
     if (options.signal.aborted) onAbort();
@@ -358,21 +418,21 @@ export async function runAgent(
   let output = "";
   let transcript: TranscriptEntry[] = [];
   try {
-    await session.prompt(options.prompt);
+    if (!aborted) await childSession.prompt(options.prompt);
   } catch (error) {
     errorMessage = errorMessage ?? errorText(error);
     stopReason = stopReason ?? "error";
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
+    if (abortPromise) await abortPromise;
     unsubscribe();
     sync();
-    output = finalOutput(session.messages);
-    transcript = transcriptFromMessages(session.messages);
-    try {
-      session.dispose();
-    } catch {
-      // Best-effort dispose.
-    }
+    output = truncateUtf8(
+      finalOutput(childSession.messages),
+      AGENT_OUTPUT_MAX_BYTES,
+    );
+    transcript = transcriptFromMessages(childSession.messages);
+    await shutdownAndDisposeChildSession(childSession);
   }
 
   if (aborted || stopReason === "aborted") {
@@ -384,6 +444,7 @@ export async function runAgent(
       aborted: true,
       usage,
       model: modelId,
+      contextWindow,
       transcript,
     };
   }
@@ -398,6 +459,7 @@ export async function runAgent(
       aborted: false,
       usage,
       model: modelId,
+      contextWindow,
       transcript,
     };
   }
@@ -411,6 +473,7 @@ export async function runAgent(
       aborted: false,
       usage,
       model: modelId,
+      contextWindow,
       transcript,
     };
   }
@@ -422,6 +485,7 @@ export async function runAgent(
     aborted: false,
     usage,
     model: modelId,
+    contextWindow,
     transcript,
   };
 }

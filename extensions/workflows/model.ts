@@ -8,6 +8,8 @@ import {
   truncateHead,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
+import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
 
@@ -20,7 +22,8 @@ export interface AgentUsage {
   cacheRead: number;
   cacheWrite: number;
   cost: number;
-  contextTokens: number;
+  /** Latest compaction-aware conversation occupancy, not cumulative billing. */
+  contextTokens?: number;
   turns: number;
 }
 
@@ -31,7 +34,6 @@ export function emptyUsage(): AgentUsage {
     cacheRead: 0,
     cacheWrite: 0,
     cost: 0,
-    contextTokens: 0,
     turns: 0,
   };
 }
@@ -57,6 +59,8 @@ export interface AgentRecord {
   phase?: string;
   state: AgentState;
   model?: string;
+  /** Context capacity of the active model used for this agent. */
+  contextWindow?: number;
   startedAt: number;
   finishedAt?: number;
   error?: string;
@@ -80,6 +84,8 @@ export interface WorkflowDetails {
   currentPhase?: string;
   agents: AgentRecord[];
   result?: unknown;
+  resultArtifact?: string;
+  transcriptArtifact?: string;
   error?: string;
 }
 
@@ -133,10 +139,12 @@ export function formatUsage(usage: AgentUsage, model?: string): string {
   return parts.join(" · ");
 }
 
-/** Total tokens for compact per-agent display, e.g. "69.3k tok". */
-export function agentTokens(usage: AgentUsage): string {
-  const total = usage.contextTokens || usage.input + usage.output;
-  return total > 0 ? `${formatTokens(total)} tok` : "";
+/** Current per-agent context-window utilization, e.g. "7%/372k". */
+export function agentContext(agent: AgentRecord): string {
+  return formatContextUtilization({
+    tokens: agent.usage.contextTokens,
+    contextWindow: agent.contextWindow,
+  });
 }
 
 export function formatElapsed(startedAt: number, finishedAt?: number): string {
@@ -208,17 +216,19 @@ export function phaseGroups(
 }
 
 export function resultJson(value: unknown): string {
-  let text: string;
-  try {
-    text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  } catch {
-    text = String(value);
-  }
+  const text =
+    typeof value === "string"
+      ? value
+      : safeStringify(value, {
+          maxBytes: RESULT_JSON_MAX_BYTES * 2,
+          maxDepth: 16,
+          maxNodes: 10_000,
+        });
   const truncation = truncateHead(text ?? "", {
     maxLines: RESULT_JSON_MAX_LINES,
     maxBytes: RESULT_JSON_MAX_BYTES,
   });
   return truncation.truncated
-    ? `${truncation.content}\n…[result truncated; full result in workflow.json]`
+    ? `${truncation.content}\n…[result truncated; bounded result artifact in result.json]`
     : truncation.content;
 }

@@ -267,13 +267,12 @@ export default function uiCustomization(pi: ExtensionAPI) {
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
           ];
 
-          // Extension statuses (ctx.ui.setStatus), one line, sorted by key.
+          // Extension statuses render after the two dashboard lines, one per row.
           const statuses = footerData.getExtensionStatuses();
-          if (statuses.size > 0) {
-            const statusLine = Array.from(statuses.entries())
-              .sort(([a], [b]) => a.localeCompare(b))
-              .map(([, text]) => text.replaceAll("\n", " "))
-              .join(" · ");
+          const statusLines = Array.from(statuses.entries())
+            .sort(([a], [b]) => a.localeCompare(b))
+            .flatMap(([, text]) => text.split("\n"));
+          for (const statusLine of statusLines) {
             lines.push(
               truncateToWidth(statusLine, width, theme.fg("dim", "...")),
             );

@@ -14,25 +14,32 @@ import type {
 import type {
   AgentSessionEvent,
   ExtensionCommandContext,
+  KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import {
   Input,
-  Key,
-  matchesKey,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
-  contextTokens,
+  activeModel,
+  contextUsage,
   formatElapsed,
-  formatTokens,
   messageRole,
   type Subagent,
   type SubagentManager,
 } from "./manager.ts";
+
+function configuredKeys(
+  keybindings: KeybindingsManager,
+  binding: Parameters<KeybindingsManager["getKeys"]>[0],
+) {
+  return keybindings.getKeys(binding).join("/") || "unbound";
+}
 
 function statusGlyph(sub: Subagent, theme: Theme): string {
   switch (sub.status) {
@@ -176,11 +183,11 @@ function renderToolResultMessage(
       .join("\n"),
   );
   const firstLine = text.split("\n").find((line) => line.trim()) ?? "";
-  const icon = msg.isError
-    ? theme.fg("error", "  x ")
-    : theme.fg("success", "  + ");
+  const label = msg.isError
+    ? theme.fg("error", "  error: ")
+    : theme.fg("dim", "  output: ");
   out.push(
-    truncateToWidth(icon + theme.fg("dim", firstLine || "(no output)"), width),
+    truncateToWidth(label + theme.fg("dim", firstLine || "(no output)"), width),
   );
 }
 
@@ -240,12 +247,11 @@ export function buildTranscriptLines(
     if (out.length > 0) out.push("");
     const marker = tool.done
       ? tool.isError
-        ? theme.fg("error", "x")
-        : theme.fg("success", "+")
-      : theme.fg("warning", "*");
-    let line = `${marker} ${theme.fg("toolTitle", tool.name)}`;
+        ? theme.fg("error", "error")
+        : theme.fg("success", "done")
+      : theme.fg("warning", "running");
+    let line = `${theme.fg("toolTitle", tool.name)} · ${marker}`;
     if (tool.preview) line += theme.fg("dim", ` · ${tool.preview}`);
-    else if (!tool.done) line += theme.fg("dim", " · running");
     out.push(truncateToWidth(line, width));
   }
 
@@ -294,8 +300,8 @@ export async function openSubagentPicker(
     }
 
     const picked = await ctx.ui.custom<string | null>(
-      (tui, theme, _keybindings, done) =>
-        new SubagentDashboard(tui, theme, manager, done),
+      (tui, theme, keybindings, done) =>
+        new SubagentDashboard(tui, theme, keybindings, manager, done),
       {
         overlay: true,
         overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
@@ -307,8 +313,8 @@ export async function openSubagentPicker(
     if (!sub) continue;
 
     await ctx.ui.custom<null>(
-      (tui, theme, _keybindings, done) =>
-        new TakeoverView(tui, theme, sub, manager, done),
+      (tui, theme, keybindings, done) =>
+        new TakeoverView(tui, theme, keybindings, sub, manager, done),
       {
         overlay: true,
         overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
@@ -323,6 +329,7 @@ export async function openSubagentPicker(
 class SubagentDashboard implements Component {
   private tui: TUI;
   private theme: Theme;
+  private keybindings: KeybindingsManager;
   private manager: SubagentManager;
   private done: (value: string | null) => void;
 
@@ -334,11 +341,13 @@ class SubagentDashboard implements Component {
   constructor(
     tui: TUI,
     theme: Theme,
+    keybindings: KeybindingsManager,
     manager: SubagentManager,
     done: (value: string | null) => void,
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.keybindings = keybindings;
     this.manager = manager;
     this.done = done;
     // Elapsed times, token counts, and statuses tick along at 1Hz.
@@ -370,23 +379,23 @@ class SubagentDashboard implements Component {
     this.clampSelection();
     const subs = this.subs();
 
-    if (matchesKey(data, Key.escape)) {
+    if (this.keybindings.matches(data, "tui.select.cancel")) {
       this.close(null);
       return;
     }
-    if (matchesKey(data, Key.enter)) {
+    if (this.keybindings.matches(data, "tui.select.confirm")) {
       const sub = subs[this.selected];
       if (sub) this.close(sub.id);
       return;
     }
-    if (matchesKey(data, Key.up) || data === "k") {
+    if (this.keybindings.matches(data, "tui.select.up") || data === "k") {
       if (subs.length > 0) {
         this.selected = (this.selected - 1 + subs.length) % subs.length;
         this.tui.requestRender();
       }
       return;
     }
-    if (matchesKey(data, Key.down) || data === "j") {
+    if (this.keybindings.matches(data, "tui.select.down") || data === "j") {
       if (subs.length > 0) {
         this.selected = (this.selected + 1) % subs.length;
         this.tui.requestRender();
@@ -476,7 +485,7 @@ class SubagentDashboard implements Component {
       truncateToWidth(
         theme.fg(
           "dim",
-          "  ↑↓/jk select · enter take over · x abort · esc close",
+          `  ${configuredKeys(this.keybindings, "tui.select.up")}/${configuredKeys(this.keybindings, "tui.select.down")}/jk select · ${configuredKeys(this.keybindings, "tui.select.confirm")} take over · x abort · ${configuredKeys(this.keybindings, "tui.select.cancel")} close`,
         ),
         width,
       ),
@@ -515,15 +524,13 @@ class SubagentDashboard implements Component {
         : theme.fg("text", sub.title);
       const left = ` ${marker} ${statusGlyph(sub, theme)} ${title} ${theme.fg("dim", sub.id)}`;
 
-      // Right: model · tokens · elapsed · status
-      const model = sub.session.model;
-      const tokens = contextTokens(sub);
+      // Right: model · current context utilization · elapsed · status
+      const model = activeModel(sub);
+      const utilization = formatContextUtilization(contextUsage(sub));
       const dot = theme.fg("dim", " · ");
       const rightParts = [
         theme.fg("muted", model?.id ?? "?"),
-        ...(tokens !== undefined
-          ? [theme.fg("muted", `${formatTokens(tokens)} tok`)]
-          : []),
+        ...(utilization ? [theme.fg("muted", utilization)] : []),
         theme.fg("muted", formatElapsed(sub)),
         statusWord(sub, theme),
       ];
@@ -558,6 +565,7 @@ const TRANSCRIPT_SCROLL_STEP = 6;
 class TakeoverView implements Component, Focusable {
   private tui: TUI;
   private theme: Theme;
+  private keybindings: KeybindingsManager;
   private sub: Subagent;
   private manager: SubagentManager;
   private done: (value: null) => void;
@@ -583,12 +591,14 @@ class TakeoverView implements Component, Focusable {
   constructor(
     tui: TUI,
     theme: Theme,
+    keybindings: KeybindingsManager,
     sub: Subagent,
     manager: SubagentManager,
     done: (value: null) => void,
   ) {
     this.tui = tui;
     this.theme = theme;
+    this.keybindings = keybindings;
     this.sub = sub;
     this.manager = manager;
     this.done = done;
@@ -681,20 +691,23 @@ class TakeoverView implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, Key.escape)) {
-      this.close();
-      return;
-    }
-    if (matchesKey(data, Key.ctrl("c"))) {
+    if (this.keybindings.matches(data, "app.clear")) {
       if (this.sub.status === "running") void this.manager.abort(this.sub);
       return;
     }
-    if (matchesKey(data, Key.up)) {
+    if (
+      this.keybindings.matches(data, "app.interrupt") ||
+      this.keybindings.matches(data, "tui.select.cancel")
+    ) {
+      this.close();
+      return;
+    }
+    if (this.keybindings.matches(data, "tui.editor.cursorUp")) {
       this.scrollOffset += TRANSCRIPT_SCROLL_STEP;
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, Key.down)) {
+    if (this.keybindings.matches(data, "tui.editor.cursorDown")) {
       this.scrollOffset = Math.max(
         0,
         this.scrollOffset - TRANSCRIPT_SCROLL_STEP,
@@ -702,12 +715,12 @@ class TakeoverView implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, Key.pageUp)) {
+    if (this.keybindings.matches(data, "tui.editor.pageUp")) {
       this.scrollOffset += this.viewportHeight();
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, Key.pageDown)) {
+    if (this.keybindings.matches(data, "tui.editor.pageDown")) {
       this.scrollOffset = Math.max(
         0,
         this.scrollOffset - this.viewportHeight(),
@@ -732,12 +745,14 @@ class TakeoverView implements Component, Focusable {
     const lines: string[] = [];
 
     lines.push(border);
-    const model = this.sub.session.model;
+    const model = activeModel(this.sub);
+    const utilization = formatContextUtilization(contextUsage(this.sub));
     const header =
       `${statusGlyph(this.sub, theme)} ` +
       theme.fg("accent", theme.bold(`${this.sub.id} · ${this.sub.title}`)) +
       theme.fg("muted", ` · ${this.sub.status} · ${formatElapsed(this.sub)}`) +
-      theme.fg("dim", ` · ${model ? `${model.provider}/${model.id}` : "?"}`);
+      theme.fg("dim", ` · ${model ? `${model.provider}/${model.id}` : "?"}`) +
+      (utilization ? theme.fg("dim", ` · ${utilization}`) : "");
     lines.push(truncateToWidth(header, width));
     lines.push(border);
 
@@ -790,7 +805,7 @@ class TakeoverView implements Component, Focusable {
       truncateToWidth(
         theme.fg(
           "dim",
-          "enter send · esc back · ctrl+c abort run · ↑↓ scroll · pgup/pgdn page",
+          `${configuredKeys(this.keybindings, "tui.input.submit")} send · ${configuredKeys(this.keybindings, "app.interrupt")} back · ${configuredKeys(this.keybindings, "app.clear")} abort run · ${configuredKeys(this.keybindings, "tui.editor.cursorUp")}/${configuredKeys(this.keybindings, "tui.editor.cursorDown")} scroll · ${configuredKeys(this.keybindings, "tui.editor.pageUp")}/${configuredKeys(this.keybindings, "tui.editor.pageDown")} page`,
         ),
         width,
       ),

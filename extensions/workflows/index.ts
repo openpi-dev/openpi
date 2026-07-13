@@ -17,7 +17,8 @@
  * Runs are blocking by default (live progress in the tool block). Pass
  * `background: true` to return immediately and get a follow-up message when
  * the run finishes. Run artifacts (script, args, statuses, result) are saved
- * under `~/.pi/agent/workflows/<runId>/` for inspection; there is no resume.
+ * under `~/.pi/agent/workflows/<runId>/` for inspection; result and bounded
+ * transcripts use separate artifacts, and there is no resume.
  */
 
 import { randomBytes } from "node:crypto";
@@ -32,9 +33,16 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import { formatActivityStatus } from "../shared/activity-status.ts";
+import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
-import { extractMeta, stripExports, type WorkflowMeta } from "./meta.ts";
 import {
+  extractMeta,
+  prepareWorkflowScript,
+  type WorkflowMeta,
+} from "./meta.ts";
+import {
+  agentContext,
   aggregateUsage,
   countStates,
   emptyUsage,
@@ -48,14 +56,21 @@ import {
   statusWord,
   SQUARE,
   type AgentRecord,
+  type TranscriptEntry,
   type WorkflowDetails,
 } from "./model.ts";
 import {
-  createWorkflowLoader,
+  createWorkflowResources,
   runAgent,
   type ThinkingLevel,
   type WorkflowModel,
 } from "./runner.ts";
+import { runWorkflowSandbox } from "./sandbox.ts";
+import {
+  safeStringify,
+  truncateUtf8,
+  writeFileAtomic,
+} from "./serialization.ts";
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
@@ -108,12 +123,11 @@ const WorkflowParams = Type.Object({
 
 type WorkflowInput = Static<typeof WorkflowParams>;
 
-const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor as new (
-  ...args: string[]
-) => (...fnArgs: unknown[]) => Promise<unknown>;
-
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return (error instanceof Error ? error.message : String(error)).slice(
+    0,
+    16 * 1024,
+  );
 }
 
 function summaryLine(details: WorkflowDetails): string {
@@ -155,47 +169,78 @@ function resultText(details: WorkflowDetails, runDir: string): string {
   return lines.join("\n");
 }
 
-async function mapWithConcurrencyLimit<TIn, TOut>(
-  items: TIn[],
-  concurrency: number,
-  fn: (item: TIn, index: number) => Promise<TOut>,
-): Promise<TOut[]> {
-  if (items.length === 0) return [];
-  const limit = Math.max(1, Math.min(concurrency, items.length));
-  const results: TOut[] = new Array(items.length);
-  let nextIndex = 0;
-  const workers = new Array(limit).fill(null).map(async () => {
-    while (true) {
-      const current = nextIndex++;
-      if (current >= items.length) return;
-      results[current] = await fn(items[current], current);
-    }
-  });
-  await Promise.all(workers);
-  return results;
+function writeRunFile(runDir: string, name: string, content: string) {
+  writeFileAtomic(path.join(runDir, name), content);
 }
 
-function writeRunFile(runDir: string, name: string, content: string) {
-  try {
-    fs.mkdirSync(runDir, { recursive: true });
-    fs.writeFileSync(path.join(runDir, name), content, "utf8");
-  } catch {
-    // Artifacts are best-effort.
+function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
+  return {
+    ...details,
+    ...(details.result !== undefined
+      ? {
+          result: JSON.parse(
+            safeStringify(details.result, { maxBytes: 64 * 1024 }),
+          ),
+        }
+      : {}),
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
+}
+
+function boundedArtifactTranscript(transcript: TranscriptEntry[]) {
+  const entries: TranscriptEntry[] = [];
+  let remaining = 32 * 1024;
+  for (const entry of transcript) {
+    if (remaining <= 0) break;
+    const text = truncateUtf8(entry.text, Math.min(8 * 1024, remaining));
+    entries.push({
+      ...entry,
+      text: text === entry.text ? text : `${text}\n[entry truncated]`,
+    });
+    remaining -= Buffer.byteLength(text, "utf8");
   }
+  if (entries.length < transcript.length) {
+    entries.push({
+      role: "toolResult",
+      name: "transcript",
+      text: `[artifact transcript truncated: ${entries.length}/${transcript.length} entries]`,
+    });
+  }
+  return entries;
 }
 
 function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
-  let serialized: string;
-  try {
-    serialized = JSON.stringify(details, null, 2);
-  } catch {
-    serialized = JSON.stringify(
-      { ...details, result: "(unserializable)" },
-      null,
-      2,
+  const transcripts = Object.fromEntries(
+    details.agents.map((agent) => [
+      agent.index,
+      boundedArtifactTranscript(agent.transcript),
+    ]),
+  );
+  writeRunFile(
+    runDir,
+    "transcripts.json",
+    safeStringify(transcripts, { maxBytes: 2 * 1024 * 1024 }),
+  );
+  if (details.result !== undefined) {
+    writeRunFile(
+      runDir,
+      "result.json",
+      safeStringify(details.result, { maxBytes: 1024 * 1024 }),
     );
   }
-  writeRunFile(runDir, "workflow.json", serialized);
+  const compact: WorkflowDetails = {
+    ...details,
+    ...(details.result !== undefined
+      ? { result: "[stored in result.json]", resultArtifact: "result.json" }
+      : {}),
+    transcriptArtifact: "transcripts.json",
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
+  writeRunFile(
+    runDir,
+    "workflow.json",
+    safeStringify(compact, { maxBytes: 1024 * 1024 }),
+  );
 }
 
 interface RunSummary {
@@ -247,7 +292,10 @@ function listRuns(
       summaries.push({
         runId,
         name: parsed.name,
-        status: parsed.status ?? "unknown",
+        status:
+          parsed.status === "running"
+            ? "aborted"
+            : (parsed.status ?? "unknown"),
         done: agents.filter((agent) => agent.state !== "running").length,
         total: agents.length,
         startedAt: parsed.startedAt ?? 0,
@@ -282,10 +330,10 @@ const TOOL_DESCRIPTION = [
   "The script runs as an async function body with these primitives:",
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
-  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }; it NEVER throws. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the parsed object on success. `model`/`provider` override the session model (e.g. provider: 'anthropic', model: 'claude-sonnet-4-5', or model: 'anthropic/claude-sonnet-4-5'); `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Subagents get the full built-in toolset plus skills and AGENTS.md context, but cannot spawn workflows.",
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run agent thunks concurrently and return results in order. Unbounded by default; pass `concurrency` to bound it. Pass zero-arg thunks, not started promises.",
+  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
+  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. Concurrency is globally capped at 4 for the run.",
   "• args — the parsed value of the `args` tool parameter (or undefined).",
-  "Everything else is plain JavaScript (map/filter/if/await/template strings), so fan out dynamically and feed earlier results into later prompts. `return` a final aggregate; it is reported back to you.",
+  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has a fixed deadline. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
   "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
   "Example:",
   "export const meta = { name: 'audit', description: 'Audit modules, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
@@ -302,39 +350,46 @@ export default function workflows(pi: ExtensionAPI) {
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<
     string,
-    { details: WorkflowDetails; abort: AbortController }
+    {
+      details: WorkflowDetails;
+      controller: RunController;
+      completion?: Promise<void>;
+    }
   >();
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
 
-  /**
-   * Persistent indicator on its own line below the editor:
-   * "workflows running - /workflows" while any run is active, then
-   * "workflows done - /workflows" until the dashboard is opened.
-   */
+  /** Finished counts remain visible until the dashboard acknowledges them. */
   let lastUi: ExtensionContext["ui"] | undefined;
-  let sawRuns = false;
+  let completedRuns = 0;
+  let failedRuns = 0;
   const updateIndicator = () => {
     const ui = lastUi;
     if (!ui) return;
     try {
-      if (activeRuns.size === 0 && !sawRuns) {
+      const running = activeRuns.size;
+      if (running === 0 && completedRuns === 0 && failedRuns === 0) {
         ui.setStatus("workflows", undefined);
         return;
       }
-      const running = activeRuns.size > 0;
-      const theme = ui.theme;
       ui.setStatus(
         "workflows",
-        theme.fg(running ? "warning" : "success", SQUARE) +
-          theme.fg("muted", ` workflows ${running ? "running" : "done"} - `) +
-          theme.fg("accent", "/workflows"),
+        formatActivityStatus(ui.theme, "workflows", {
+          running,
+          done: completedRuns,
+          failed: failedRuns,
+        }),
       );
     } catch {
       // UI may be unavailable.
     }
+  };
+
+  const recordSettledRun = (status: WorkflowDetails["status"]) => {
+    if (status === "completed") completedRuns += 1;
+    else failedRuns += 1;
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -342,8 +397,27 @@ export default function workflows(pi: ExtensionAPI) {
     updateIndicator();
   });
 
-  pi.on("session_shutdown", () => {
-    for (const run of activeRuns.values()) run.abort.abort();
+  pi.on("session_shutdown", async () => {
+    const runs = [...activeRuns.values()];
+    for (const run of runs) run.controller.abort("Session is shutting down");
+    await Promise.all(
+      runs.map((run) => run.controller.settle({ abort: true })),
+    );
+    const completions = runs
+      .map((run) => run.completion)
+      .filter(
+        (completion): completion is Promise<void> => completion !== undefined,
+      );
+    if (completions.length > 0) {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<void>((resolve) => {
+        timer = setTimeout(resolve, 8_000);
+        timer.unref?.();
+      });
+      await Promise.race([Promise.allSettled(completions), timeout]);
+      if (timer) clearTimeout(timer);
+    }
+    lastUi?.setStatus("workflows", undefined);
     lastUi = undefined;
   });
 
@@ -356,7 +430,8 @@ export default function workflows(pi: ExtensionAPI) {
         lastUi = ctx.ui;
         await showWorkflowDashboard(ctx, activeDetails, arg || undefined);
         // Opening the dashboard acknowledges finished runs.
-        if (activeRuns.size === 0) sawRuns = false;
+        completedRuns = 0;
+        failedRuns = 0;
         updateIndicator();
         return;
       }
@@ -408,16 +483,9 @@ export default function workflows(pi: ExtensionAPI) {
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      // Compile first so a syntax error fails fast with a clear message.
-      let scriptFn: (...fnArgs: unknown[]) => Promise<unknown>;
+      let prepared: ReturnType<typeof prepareWorkflowScript>;
       try {
-        scriptFn = new AsyncFunction(
-          "agent",
-          "parallel",
-          "phase",
-          "args",
-          stripExports(params.script),
-        );
+        prepared = prepareWorkflowScript(params.script);
       } catch (error) {
         throw new Error(`Workflow script failed to parse: ${errorText(error)}`);
       }
@@ -431,7 +499,7 @@ export default function workflows(pi: ExtensionAPI) {
         }
       }
 
-      const meta: WorkflowMeta = extractMeta(params.script);
+      const meta = prepared.meta;
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
       const background = (params.background ?? false) && ctx.hasUI;
@@ -453,29 +521,19 @@ export default function workflows(pi: ExtensionAPI) {
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
 
-      // Background runs get their own abort (survive Esc on the parent turn,
-      // aborted on session shutdown). Blocking runs use the tool signal.
-      const runAbort = new AbortController();
-      const runSignal = runAbort.signal;
-      if (!background && signal) {
-        if (signal.aborted) runAbort.abort();
-        else
-          signal.addEventListener("abort", () => runAbort.abort(), {
-            once: true,
-          });
-      }
+      // Background runs survive Esc on the parent turn, but all runs are
+      // aborted and settled during session shutdown.
+      const controller = new RunController(background ? undefined : signal);
 
-      // Shared loaders: one resource discovery per variant per run.
-      let plainLoader: ReturnType<typeof createWorkflowLoader> | undefined;
-      let structuredLoader: ReturnType<typeof createWorkflowLoader> | undefined;
-      const getLoader = (structured: boolean) => {
-        if (structured)
-          return (structuredLoader ??= createWorkflowLoader(
-            ctx.cwd,
-            "structured",
-          ));
-        return (plainLoader ??= createWorkflowLoader(ctx.cwd, "plain"));
-      };
+      // Each concurrent child gets its own extension runtime. All children use
+      // the parent cwd and live trust decision.
+      const projectTrusted = ctx.isProjectTrusted();
+      const getResources = (structured: boolean) =>
+        createWorkflowResources(
+          ctx.cwd,
+          structured ? "structured" : "plain",
+          projectTrusted,
+        );
 
       // Throttled progress: tool-block updates when blocking. Background
       // runs are covered by the below-editor indicator and /workflows.
@@ -487,7 +545,7 @@ export default function workflows(pi: ExtensionAPI) {
         if (background) return;
         onUpdate?.({
           content: [{ type: "text", text: summaryLine(details) }],
-          details,
+          details: compactToolDetails(details),
         });
       };
       const emit = () => {
@@ -522,15 +580,19 @@ export default function workflows(pi: ExtensionAPI) {
             : {};
         const label =
           typeof opts.label === "string" && opts.label.trim()
-            ? opts.label.trim()
+            ? opts.label.trim().slice(0, 160)
             : `agent-${index}`;
 
         const record: AgentRecord = {
           index,
           label,
           phase:
-            typeof opts.phase === "string" ? opts.phase : details.currentPhase,
+            typeof opts.phase === "string"
+              ? opts.phase.slice(0, 160)
+              : details.currentPhase,
           state: "running",
+          model: ctx.model?.id,
+          contextWindow: ctx.model?.contextWindow,
           startedAt: Date.now(),
           preview: "",
           usage: emptyUsage(),
@@ -553,167 +615,194 @@ export default function workflows(pi: ExtensionAPI) {
             : String(promptValue ?? "");
         if (!prompt.trim())
           return fail("agent() requires a non-empty prompt string");
-        if (runSignal.aborted)
+        if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
-        // Model/provider resolution: default to the parent session's model.
-        let model: WorkflowModel | undefined = ctx.model;
-        if (opts.model !== undefined || opts.provider !== undefined) {
-          const modelOpt =
-            typeof opts.model === "string" ? opts.model : undefined;
-          const providerOpt =
-            typeof opts.provider === "string" ? opts.provider : undefined;
-          if (!modelOpt)
-            return fail(
-              `agent "${label}": \`provider\` requires \`model\` as well`,
-            );
-          let resolved: WorkflowModel | undefined;
-          if (providerOpt) {
-            resolved = ctx.modelRegistry.find(providerOpt, modelOpt);
-          } else {
-            const slash = modelOpt.indexOf("/");
-            if (slash > 0) {
-              resolved = ctx.modelRegistry.find(
-                modelOpt.slice(0, slash),
-                modelOpt.slice(slash + 1),
-              );
+        return controller
+          .schedule(async (runSignal) => {
+            // Model/provider resolution: default to the parent session's model.
+            let model: WorkflowModel | undefined = ctx.model;
+            if (opts.model !== undefined || opts.provider !== undefined) {
+              const modelOpt =
+                typeof opts.model === "string" ? opts.model : undefined;
+              const providerOpt =
+                typeof opts.provider === "string" ? opts.provider : undefined;
+              if (!modelOpt)
+                return fail(
+                  `agent "${label}": \`provider\` requires \`model\` as well`,
+                );
+              let resolved: WorkflowModel | undefined;
+              if (providerOpt) {
+                resolved = ctx.modelRegistry.find(providerOpt, modelOpt);
+              } else {
+                const slash = modelOpt.indexOf("/");
+                if (slash > 0) {
+                  resolved = ctx.modelRegistry.find(
+                    modelOpt.slice(0, slash),
+                    modelOpt.slice(slash + 1),
+                  );
+                }
+                resolved ??= ctx.modelRegistry
+                  .getAll()
+                  .find((m) => m.id === modelOpt);
+              }
+              if (!resolved) {
+                const requested = providerOpt
+                  ? `${providerOpt}/${modelOpt}`
+                  : modelOpt;
+                return fail(
+                  `agent "${label}": unknown model "${requested}" (use provider/id)`,
+                );
+              }
+              model = resolved;
             }
-            resolved ??= ctx.modelRegistry
-              .getAll()
-              .find((m) => m.id === modelOpt);
-          }
-          if (!resolved) {
-            const requested = providerOpt
-              ? `${providerOpt}/${modelOpt}`
-              : modelOpt;
-            return fail(
-              `agent "${label}": unknown model "${requested}" (use provider/id)`,
-            );
-          }
-          model = resolved;
-        }
-
-        // Effort → thinking level; default inherits the parent session.
-        let thinkingLevel: ThinkingLevel = pi.getThinkingLevel();
-        if (opts.effort !== undefined) {
-          const effort = String(opts.effort);
-          if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
-            return fail(
-              `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,
-            );
-          }
-          thinkingLevel = effort as ThinkingLevel;
-        }
-
-        const outcome = await runAgent({
-          prompt,
-          schema: opts.schema,
-          model,
-          thinkingLevel,
-          cwd: ctx.cwd,
-          loader: await getLoader(opts.schema !== undefined),
-          modelRegistry: ctx.modelRegistry,
-          signal: runSignal,
-          onProgress: (progress) => {
-            record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
-            record.usage = progress.usage;
-            record.model = progress.model ?? record.model;
-            record.transcript = progress.transcript;
+            record.model = model?.id;
+            record.contextWindow = model?.contextWindow;
             emit();
-          },
-        });
 
-        record.usage = outcome.usage;
-        record.model = outcome.model ?? record.model;
-        record.transcript = outcome.transcript;
-        record.preview = (outcome.output || record.preview).slice(
-          0,
-          PREVIEW_LENGTH,
-        );
-        record.finishedAt = Date.now();
-        record.state = outcome.ok ? "done" : "error";
-        record.error = outcome.error;
-        emit();
+            // Effort → thinking level; default inherits the parent session.
+            let thinkingLevel: ThinkingLevel = pi.getThinkingLevel();
+            if (opts.effort !== undefined) {
+              const effort = String(opts.effort);
+              if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
+                return fail(
+                  `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,
+                );
+              }
+              thinkingLevel = effort as ThinkingLevel;
+            }
 
-        return {
-          ok: outcome.ok,
-          output: outcome.output,
-          ...(outcome.structured !== undefined
-            ? { structured: outcome.structured }
-            : {}),
-          ...(outcome.error !== undefined ? { error: outcome.error } : {}),
-        };
-      };
+            const resources = await getResources(opts.schema !== undefined);
+            const outcome = await runAgent({
+              prompt,
+              schema: opts.schema,
+              model,
+              thinkingLevel,
+              cwd: ctx.cwd,
+              loader: resources.loader,
+              settingsManager: resources.settingsManager,
+              modelRegistry: ctx.modelRegistry,
+              signal: runSignal,
+              onProgress: (progress) => {
+                record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
+                record.usage = progress.usage;
+                record.model = progress.model ?? record.model;
+                record.contextWindow =
+                  progress.contextWindow ?? record.contextWindow;
+                record.transcript = progress.transcript;
+                emit();
+              },
+            });
 
-      const parallelFn = async (
-        items: unknown,
-        optsValue?: unknown,
-      ): Promise<unknown[]> => {
-        if (!Array.isArray(items)) {
-          throw new Error(
-            "parallel() expects an array of zero-arg functions returning agent() calls",
-          );
-        }
-        const opts = (
-          optsValue && typeof optsValue === "object" ? optsValue : {}
-        ) as {
-          concurrency?: unknown;
-        };
-        const run = (item: unknown) =>
-          Promise.resolve(
-            typeof item === "function" ? (item as () => unknown)() : item,
-          );
-        const concurrency =
-          typeof opts.concurrency === "number" &&
-          Number.isFinite(opts.concurrency)
-            ? Math.floor(opts.concurrency)
-            : undefined;
-        if (concurrency !== undefined && concurrency < 1) {
-          throw new Error("parallel(): concurrency must be a positive integer");
-        }
-        if (concurrency === undefined || concurrency >= items.length) {
-          return Promise.all(items.map(run));
-        }
-        return mapWithConcurrencyLimit(items, concurrency, run);
-      };
+            record.usage = outcome.usage;
+            record.model = outcome.model ?? record.model;
+            record.contextWindow =
+              outcome.contextWindow ?? record.contextWindow;
+            record.transcript = outcome.transcript;
+            record.preview = (outcome.output || record.preview).slice(
+              0,
+              PREVIEW_LENGTH,
+            );
+            record.finishedAt = Date.now();
+            record.state = outcome.ok ? "done" : "error";
+            if (outcome.ok) {
+              delete record.error;
+            } else {
+              record.error = outcome.error ?? "Agent failed";
+            }
+            emit();
 
-      const finalize = (status: WorkflowDetails["status"]) => {
-        details.status = status;
-        details.finishedAt = Date.now();
-        persistWorkflowJson(runDir, details);
-        flushNow();
+            return {
+              ok: outcome.ok,
+              output: outcome.output,
+              ...(outcome.structured !== undefined
+                ? { structured: outcome.structured }
+                : {}),
+              ...(outcome.error !== undefined ? { error: outcome.error } : {}),
+            };
+          })
+          .catch((error) => fail(errorText(error)));
       };
 
       const runScript = async () => {
+        let status: WorkflowDetails["status"] = "completed";
         try {
-          details.result = await scriptFn(agentFn, parallelFn, phaseFn, args);
-          finalize(runSignal.aborted ? "aborted" : "completed");
+          details.result = await runWorkflowSandbox({
+            source: prepared.source,
+            args,
+            cwd: ctx.cwd,
+            signal: controller.signal,
+            onAgent: agentFn,
+            onPhase: phaseFn,
+          });
         } catch (error) {
           details.error = errorText(error);
-          finalize(runSignal.aborted ? "aborted" : "failed");
+          status = controller.signal.aborted ? "aborted" : "failed";
+          controller.abort("Workflow script failed");
+        }
+
+        const settled = await controller.settle({
+          abort: status !== "completed",
+        });
+        if (!settled) {
+          status = "failed";
+          details.error = details.error
+            ? `${details.error}; agent shutdown deadline exceeded`
+            : "Agent shutdown deadline exceeded";
+        }
+        for (const record of details.agents) {
+          if (record.state !== "running") continue;
+          record.state = "error";
+          record.error =
+            record.error ?? "Agent did not settle before run cleanup";
+          record.finishedAt = Date.now();
+        }
+        details.status = status;
+        details.finishedAt = Date.now();
+        try {
+          persistWorkflowJson(runDir, details);
+        } catch (error) {
+          details.status = "failed";
+          details.error = `Artifact persistence failed: ${errorText(error)}`;
+          throw new Error(details.error);
+        } finally {
+          flushNow();
         }
       };
 
       // Registered for /workflows visibility and session_shutdown abort;
       // blocking runs are watchable live from the dashboard too.
-      activeRuns.set(runId, { details, abort: runAbort });
-      sawRuns = true;
+      const activeRun = { details, controller } as {
+        details: WorkflowDetails;
+        controller: RunController;
+        completion?: Promise<void>;
+      };
+      activeRuns.set(runId, activeRun);
+      const completion = runScript();
+      activeRun.completion = completion;
       if (ctx.hasUI) lastUi = ctx.ui;
       updateIndicator();
 
       if (background) {
-        void runScript().finally(() => {
-          activeRuns.delete(runId);
-          updateIndicator();
-          try {
-            pi.sendUserMessage(
-              `[Background workflow ${runId} ${details.status}]\n\n${resultText(details, runDir)}`,
-              { deliverAs: "followUp" },
-            );
-          } catch {
-            // Session may be shutting down.
-          }
-        });
+        void completion
+          .catch((error) => {
+            details.status = "failed";
+            details.finishedAt = Date.now();
+            details.error = details.error ?? errorText(error);
+          })
+          .finally(() => {
+            activeRuns.delete(runId);
+            recordSettledRun(details.status);
+            updateIndicator();
+            try {
+              pi.sendUserMessage(
+                `[Background workflow ${runId} ${details.status}]\n\n${resultText(details, runDir)}`,
+                { deliverAs: "followUp" },
+              );
+            } catch {
+              // Session may be shutting down.
+            }
+          });
         return {
           content: [
             {
@@ -725,20 +814,25 @@ export default function workflows(pi: ExtensionAPI) {
               ].join("\n"),
             },
           ],
-          details,
+          details: compactToolDetails(details),
         };
       }
 
       try {
-        await runScript();
+        await completion;
       } finally {
         activeRuns.delete(runId);
+        recordSettledRun(details.status);
         updateIndicator();
+      }
+      if (details.status !== "completed") {
+        // Pi marks tool failures only when execute throws; returning isError is
+        // ignored by the extension API.
+        throw new Error(resultText(details, runDir));
       }
       return {
         content: [{ type: "text", text: resultText(details, runDir) }],
-        details,
-        isError: details.status !== "completed",
+        details: compactToolDetails(details),
       };
     },
 
@@ -793,9 +887,13 @@ export default function workflows(pi: ExtensionAPI) {
       if (!expanded) {
         let text = header;
         for (const agent of details.agents) {
+          const context = agentContext(agent);
           text += `\n  ${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)}${
             agent.phase ? theme.fg("dim", ` (${agent.phase})`) : ""
-          }${theme.fg("dim", ` ${formatElapsed(agent.startedAt, agent.finishedAt)}`)}`;
+          }${theme.fg(
+            "dim",
+            `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
+          )}`;
         }
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
         if (details.error)
@@ -819,9 +917,12 @@ export default function workflows(pi: ExtensionAPI) {
         );
         for (const agent of group.agents) {
           const usage = formatUsage(agent.usage, agent.model);
+          const context = agentContext(agent);
           let line = `${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)} ${theme.fg(
             "dim",
-            formatElapsed(agent.startedAt, agent.finishedAt),
+            [context, formatElapsed(agent.startedAt, agent.finishedAt)]
+              .filter(Boolean)
+              .join(" · "),
           )}`;
           if (usage) line += ` ${theme.fg("dim", usage)}`;
           container.addChild(new Text(line, 0, 0));

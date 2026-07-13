@@ -31,15 +31,26 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { formatActivityStatus } from "../shared/activity-status.ts";
+import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
+  activeModel,
+  contextUsage,
   finalOutput,
   formatElapsed,
+  latestOutput,
   MAX_RUNNING,
   type Subagent,
   SubagentManager,
   type ThinkingLevel,
 } from "./manager.ts";
+import { createDeferredResultDelivery } from "./result-delivery.ts";
 import { openSubagentPicker } from "./takeover.ts";
+
+const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
+const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
+const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 
 const THINKING_LEVELS = [
   "off",
@@ -52,15 +63,24 @@ const THINKING_LEVELS = [
 ] as const;
 
 function describeSubagent(sub: Subagent): string {
-  const model = sub.session.model;
-  return `${sub.id} [${sub.status}] "${sub.title}" (${model ? `${model.provider}/${model.id}` : "?"}, ${formatElapsed(sub)}, ${sub.cwd})`;
+  const model = activeModel(sub);
+  const details = [
+    model ? `${model.provider}/${model.id}` : "?",
+    formatContextUtilization(contextUsage(sub)),
+    formatElapsed(sub),
+    sub.cwd,
+  ].filter(Boolean);
+  return `${sub.id} [${sub.status}] "${sub.title}" (${details.join(", ")})`;
 }
 
-function truncatedOutput(sub: Subagent): string {
+function truncatedOutput(
+  sub: Subagent,
+  maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
+): string {
   const output = finalOutput(sub) || "(no output)";
   const truncation = truncateHead(output, {
-    maxBytes: DEFAULT_MAX_BYTES,
-    maxLines: DEFAULT_MAX_LINES,
+    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+    maxLines: Math.min(600, DEFAULT_MAX_LINES),
   });
   let text = truncation.content;
   if (truncation.truncated) {
@@ -112,6 +132,8 @@ function resolveModel(
 
 export default function (pi: ExtensionAPI) {
   const manager = new SubagentManager();
+  const resultDelivery = createDeferredResultDelivery<Subagent>();
+  let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
 
   const updateStatus = () => {
@@ -124,22 +146,15 @@ export default function (pi: ExtensionAPI) {
     const running = subs.filter((sub) => sub.status === "running").length;
     const failed = subs.filter((sub) => sub.status === "error").length;
     const done = subs.length - running - failed;
-    const theme = ui.theme;
-    const parts: string[] = [];
-    if (running > 0) parts.push(theme.fg("warning", `* ${running} running`));
-    if (done > 0) parts.push(theme.fg("success", `■ ${done} done`));
-    if (failed > 0) parts.push(theme.fg("error", `x ${failed} failed`));
-    parts.push(theme.fg("dim", "/subagents to view"));
     ui.setStatus(
       "subagents",
-      `${theme.fg("muted", "subagents:")} ${parts.join(theme.fg("dim", " · "))}`,
+      formatActivityStatus(ui.theme, "subagents", { running, done, failed }),
     );
   };
 
   manager.addChangeListener(updateStatus);
 
-  manager.onSettled = (sub, consumed) => {
-    if (consumed) return;
+  const deliverResult = (sub: Subagent) => {
     pi.sendMessage(
       {
         customType: "subagent-result",
@@ -151,12 +166,32 @@ export default function (pi: ExtensionAPI) {
     );
   };
 
+  const flushResults = () => {
+    for (const sub of resultDelivery.drain()) deliverResult(sub);
+  };
+
+  manager.onSettled = (sub, consumed) => {
+    if (consumed) {
+      resultDelivery.consume([sub.id]);
+      return;
+    }
+    // Keep the result retractable while the parent is working. A later
+    // subagent_wait can consume it before agent_settled flushes follow-ups.
+    resultDelivery.defer(sub);
+    if (sessionContext?.isIdle()) flushResults();
+  };
+
   pi.on("session_start", (_event, ctx) => {
+    sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
     updateStatus();
   });
 
+  pi.on("agent_settled", flushResults);
+
   pi.on("session_shutdown", async () => {
+    sessionContext = undefined;
+    resultDelivery.clear();
     ui?.setStatus("subagents", undefined);
     await manager.disposeAll();
   });
@@ -167,13 +202,13 @@ export default function (pi: ExtensionAPI) {
     name: "subagent_spawn",
     label: "Spawn Subagent",
     description: [
-      "Spawn a background subagent: a fully autonomous pi thread with its own context window and all coding tools.",
+      "Spawn a background subagent: a fully autonomous, headless pi thread with its own context window, normal built-ins, and trust-appropriate extension tools/resources.",
       "Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles,",
-      "or collect it explicitly with subagent_wait. The subagent cannot see this conversation, so the prompt must be self-contained.",
+      "or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained.",
       `Max ${MAX_RUNNING} subagents can be running at once.`,
     ].join(" "),
     promptSnippet:
-      "Spawn a background subagent (own context, all tools) for a self-contained task",
+      "Spawn a background subagent (own context, normal tools/resources) for a self-contained task",
     promptGuidelines: [
       "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
       "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
@@ -217,12 +252,19 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
+      const title = params.title.trim().slice(0, 160) || "subagent";
       const sub = await manager.spawn({
         prompt: params.prompt,
-        title: params.title,
+        title,
         cwd,
         model,
         thinkingLevel,
+        modelRegistry: ctx.modelRegistry,
+        projectTrusted: resolveStandaloneChildProjectTrust({
+          parentCwd: ctx.cwd,
+          childCwd: cwd,
+          parentTrusted: ctx.isProjectTrusted(),
+        }),
       });
 
       return {
@@ -252,21 +294,23 @@ export default function (pi: ExtensionAPI) {
       "Block until all listed subagents have settled, then return their final outputs. Prefer letting results arrive automatically; use this only when you need a result before continuing.",
     parameters: Type.Object({
       ids: Type.Array(Type.String(), {
+        maxItems: 64,
         description: 'Subagent ids to wait for, e.g. ["sa-1", "sa-2"]',
       }),
     }),
     async execute(_toolCallId, params, signal, onUpdate) {
-      if (params.ids.length === 0)
+      const ids = [...new Set(params.ids)];
+      if (ids.length === 0)
         throw new Error("Provide at least one subagent id.");
       const known = manager.list().map((sub) => sub.id);
-      const unknown = params.ids.filter((id) => !manager.get(id));
+      const unknown = ids.filter((id) => !manager.get(id));
       if (unknown.length > 0) {
         throw new Error(
           `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
         );
       }
 
-      await manager.waitFor(params.ids, signal, (pending) => {
+      await manager.waitFor(ids, signal, (pending) => {
         onUpdate?.({
           content: [
             { type: "text", text: `Waiting for ${pending.join(", ")}...` },
@@ -278,20 +322,50 @@ export default function (pi: ExtensionAPI) {
       if (signal?.aborted)
         throw new Error("Wait aborted. Subagents keep running.");
 
-      const sections = params.ids.map((id) => {
+      // Settlement may have happened before this wait began. Remove any
+      // deferred automatic delivery now that the tool is returning the result.
+      resultDelivery.consume(ids);
+
+      const sections: string[] = [];
+      let remainingBytes = WAIT_OUTPUT_MAX_BYTES;
+      for (const id of ids) {
         const sub = manager.get(id);
-        if (!sub) return `## ${id}\n\n(no longer tracked)`;
+        if (!sub) {
+          sections.push(`## ${id}\n\n(no longer tracked)`);
+          continue;
+        }
         const verb = sub.status === "error" ? "failed" : "finished";
         let section = `## ${sub.id} "${sub.title}" ${verb}`;
         if (sub.errorText) section += `\nError: ${sub.errorText}`;
-        section += `\n\n${truncatedOutput(sub)}`;
-        return section;
-      });
+        const headerBytes = Buffer.byteLength(section, "utf8") + 2;
+        const outputBudget = Math.max(
+          512,
+          Math.min(WAIT_PER_AGENT_MAX_BYTES, remainingBytes - headerBytes),
+        );
+        section += `\n\n${truncatedOutput(sub, outputBudget)}`;
+        const sectionBytes = Buffer.byteLength(section, "utf8");
+        if (sectionBytes > remainingBytes) {
+          sections.push(
+            `## ${sub.id} "${sub.title}"\n\n[omitted: total wait output limit reached]`,
+          );
+          break;
+        }
+        sections.push(section);
+        remainingBytes -= sectionBytes;
+      }
 
+      const combined = sections.join("\n\n---\n\n");
+      const bounded = truncateHead(combined, {
+        maxBytes: WAIT_OUTPUT_MAX_BYTES - 128,
+        maxLines: DEFAULT_MAX_LINES,
+      });
+      const text = bounded.truncated
+        ? `${bounded.content}\n\n[wait output truncated at the total output limit]`
+        : bounded.content;
       return {
-        content: [{ type: "text", text: sections.join("\n\n---\n\n") }],
+        content: [{ type: "text", text }],
         details: {
-          results: params.ids.map((id) => {
+          results: ids.map((id) => {
             const sub = manager.get(id);
             return { id, title: sub?.title, status: sub?.status };
           }),
@@ -375,7 +449,7 @@ export default function (pi: ExtensionAPI) {
       let text = `${describeSubagent(sub)}\nTurns: ${turns}`;
       if (sub.errorText) text += `\nError: ${sub.errorText}`;
 
-      const output = finalOutput(sub);
+      const output = latestOutput(sub);
       if (output) {
         const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
         text += `\n\nLatest output:\n${preview.content}`;
@@ -437,7 +511,9 @@ export default function (pi: ExtensionAPI) {
 
       const content =
         typeof message.content === "string" ? message.content : "";
-      const body = content.split("\n").slice(2).join("\n").trim();
+      // Remove only the summary line. The following Error line (when present)
+      // is part of the actual result and must remain visible.
+      const body = content.split("\n").slice(1).join("\n").trim();
 
       if (expanded) {
         const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
