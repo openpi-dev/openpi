@@ -6,8 +6,9 @@ bin/
 
 # Pi runtime and private state
 sessions/
-workflows/
+/workflows/
 auth.json
+settings.json
 trust.json
 
 # Environment variables and secrets

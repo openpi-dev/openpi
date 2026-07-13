@@ -3,6 +3,7 @@ import { relative } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
 import {
   getCapabilities,
@@ -224,7 +225,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
       };
     });
 
-    ctx.ui.setFooter((tui, theme) => {
+    ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
       requestRender = () => tui.requestRender();
 
       return {
@@ -261,10 +262,24 @@ export default function uiCustomization(pi: ExtensionAPI) {
             ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
             : modelInfo.modelId;
 
-          return [
+          const lines = [
             columns(directory, theme.fg("muted", model), width),
             columns(theme.fg("muted", usage), theme.fg("muted", git), width),
           ];
+
+          // Extension statuses (ctx.ui.setStatus), one line, sorted by key.
+          const statuses = footerData.getExtensionStatuses();
+          if (statuses.size > 0) {
+            const statusLine = Array.from(statuses.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .map(([, text]) => text.replaceAll("\n", " "))
+              .join(" · ");
+            lines.push(
+              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+            );
+          }
+
+          return lines;
         },
       };
     });
