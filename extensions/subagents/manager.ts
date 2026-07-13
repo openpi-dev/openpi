@@ -23,6 +23,7 @@ import {
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
 import type { ContextUtilization } from "../shared/context-utilization.ts";
+import { createToolCallTimeoutGuard } from "./tool-call-timeout.ts";
 
 export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
@@ -170,6 +171,7 @@ export class SubagentManager {
   private cancelling = new WeakSet<Subagent>();
   private cleanupTasks = new Set<Promise<void>>();
   private changeResolvers: Array<() => void> = [];
+  private toolCallTimeout = createToolCallTimeoutGuard();
   /** Count of active subagent_wait calls interested in each id. */
   private waitInterest = new Map<string, number>();
 
@@ -262,6 +264,7 @@ export class SubagentManager {
         ...childToolPolicy(),
       }));
       await bindChildSessionExtensions(session);
+      this.toolCallTimeout.apply(session);
 
       if (this.disposed) {
         throw new Error("Subagent manager shut down while spawning.");
@@ -282,6 +285,9 @@ export class SubagentManager {
       sub.unsubscribeLifecycle = session.subscribe((event) => {
         if (this.disposed) return;
         if (event.type === "agent_start") {
+          // Extensions may register tools between runs, so pick up any new
+          // definitions before this run can execute one.
+          this.toolCallTimeout.apply(sub.session);
           sub.status = "running";
           sub.settledAt = undefined;
           sub.errorText = undefined;

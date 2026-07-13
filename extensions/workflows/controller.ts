@@ -2,6 +2,12 @@ const DEFAULT_CONCURRENCY = 4;
 export const MAX_AGENT_CALLS = 32;
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;
 
+function abortError(signal: AbortSignal) {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("Workflow was aborted");
+}
+
 class Semaphore {
   private active = 0;
   private readonly limit: number;
@@ -17,8 +23,7 @@ class Semaphore {
   }
 
   acquire(signal: AbortSignal) {
-    if (signal.aborted)
-      return Promise.reject(new Error("Workflow was aborted"));
+    if (signal.aborted) return Promise.reject(abortError(signal));
     if (this.active < this.limit) {
       this.active++;
       return Promise.resolve();
@@ -37,7 +42,7 @@ class Semaphore {
       const onAbort = () => {
         const index = this.queue.indexOf(waiter);
         if (index >= 0) this.queue.splice(index, 1);
-        reject(new Error("Workflow was aborted"));
+        reject(abortError(signal));
       };
       waiter.onAbort = onAbort;
       this.queue.push(waiter);
@@ -51,7 +56,7 @@ class Semaphore {
       const waiter = this.queue.shift()!;
       if (waiter.signal.aborted) {
         waiter.signal.removeEventListener("abort", waiter.onAbort);
-        waiter.reject(new Error("Workflow was aborted"));
+        waiter.reject(abortError(waiter.signal));
         continue;
       }
       waiter.resolve();
@@ -64,7 +69,7 @@ class Semaphore {
     this.queue = [];
     for (const waiter of queued) {
       waiter.signal.removeEventListener("abort", waiter.onAbort);
-      waiter.reject(new Error("Workflow was aborted"));
+      waiter.reject(abortError(waiter.signal));
     }
   }
 }
@@ -102,10 +107,12 @@ export class RunController {
     return this.callCount;
   }
 
-  schedule<T>(task: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  schedule<T>(
+    task: (signal: AbortSignal) => Promise<T>,
+    invocationSignal?: AbortSignal,
+  ): Promise<T> {
     if (this.sealed) return Promise.reject(new Error("Workflow is settling"));
-    if (this.signal.aborted)
-      return Promise.reject(new Error("Workflow was aborted"));
+    if (this.signal.aborted) return Promise.reject(abortError(this.signal));
     if (this.callCount >= MAX_AGENT_CALLS) {
       return Promise.reject(
         new Error(
@@ -116,12 +123,28 @@ export class RunController {
     this.callCount++;
 
     const running = (async () => {
-      await this.semaphore.acquire(this.signal);
+      const taskAbort = new AbortController();
+      const onRunAbort = () => taskAbort.abort(this.signal.reason);
+      const onInvocationAbort = () => taskAbort.abort(invocationSignal?.reason);
+      this.signal.addEventListener("abort", onRunAbort, { once: true });
+      invocationSignal?.addEventListener("abort", onInvocationAbort, {
+        once: true,
+      });
+      if (this.signal.aborted) onRunAbort();
+      else if (invocationSignal?.aborted) onInvocationAbort();
+
+      let acquired = false;
       try {
-        if (this.signal.aborted) throw new Error("Workflow was aborted");
-        return await task(this.signal);
+        await this.semaphore.acquire(taskAbort.signal);
+        acquired = true;
+        if (taskAbort.signal.aborted) throw abortError(taskAbort.signal);
+        const result = await task(taskAbort.signal);
+        if (invocationSignal?.aborted) throw abortError(invocationSignal);
+        return result;
       } finally {
-        this.semaphore.release();
+        this.signal.removeEventListener("abort", onRunAbort);
+        invocationSignal?.removeEventListener("abort", onInvocationAbort);
+        if (acquired) this.semaphore.release();
       }
     })();
     this.tasks.add(running);
@@ -129,8 +152,8 @@ export class RunController {
     return running;
   }
 
-  abort(_reason = "Workflow was aborted") {
-    if (!this.signal.aborted) this.abortController.abort();
+  abort(reason = "Workflow was aborted") {
+    if (!this.signal.aborted) this.abortController.abort(new Error(reason));
     this.semaphore.clear();
   }
 

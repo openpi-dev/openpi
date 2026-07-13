@@ -333,7 +333,7 @@ const TOOL_DESCRIPTION = [
   "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
   "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. Concurrency is globally capped at 4 for the run.",
   "• args — the parsed value of the `args` tool parameter (or undefined).",
-  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has a fixed deadline. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
+  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has no overall deadline; each agent() invocation times out independently after 3 minutes and resolves with ok:false so the script can recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
   "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
   "Example:",
   "export const meta = { name: 'audit', description: 'Audit modules, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
@@ -572,6 +572,7 @@ export default function workflows(pi: ExtensionAPI) {
       const agentFn = async (
         promptValue: unknown,
         optsValue: unknown = {},
+        invocationSignal?: AbortSignal,
       ): Promise<ScriptAgentResult> => {
         const index = ++agentCounter;
         const opts: AgentCallOptions =
@@ -720,7 +721,7 @@ export default function workflows(pi: ExtensionAPI) {
                 : {}),
               ...(outcome.error !== undefined ? { error: outcome.error } : {}),
             };
-          })
+          }, invocationSignal)
           .catch((error) => fail(errorText(error)));
       };
 

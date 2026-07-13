@@ -26,6 +26,26 @@ test("RunController reserves calls synchronously and caps global fanout", async 
   assert.equal(await controller.settle(), true);
 });
 
+test("RunController propagates an invocation timeout without aborting the run", async () => {
+  const controller = new RunController(undefined, 1);
+  const invocation = new AbortController();
+  const timedOut = controller.schedule(
+    (signal) =>
+      new Promise<string>((resolve) => {
+        signal.addEventListener("abort", () => resolve("stopped"), {
+          once: true,
+        });
+      }),
+    invocation.signal,
+  );
+
+  invocation.abort(new Error("Agent invocation timed out after 3 minutes"));
+  await assert.rejects(timedOut, /timed out after 3 minutes/);
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(await controller.schedule(async () => "recovered"), "recovered");
+  assert.equal(await controller.settle(), true);
+});
+
 test("RunController enforces call budget and aborts queued tasks", async () => {
   const controller = new RunController(undefined, 1);
   const blocker = controller.schedule(

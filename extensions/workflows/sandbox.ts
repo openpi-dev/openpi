@@ -4,7 +4,7 @@ import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { safeStringify, toSerializable } from "./serialization.ts";
 
-export const WORKFLOW_TIMEOUT_MS = 15 * 60 * 1000;
+export const AGENT_TIMEOUT_MS = 3 * 60 * 1000;
 const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_ARGS_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 1024 * 1024;
@@ -32,10 +32,12 @@ export interface RunWorkflowSandboxOptions {
   args: unknown;
   cwd: string;
   signal: AbortSignal;
-  timeoutMs?: number;
+  /** Test-only override; production agent invocations always use the default. */
+  agentTimeoutMs?: number;
   onAgent: (
     prompt: string,
     options: SandboxAgentOptions,
+    signal: AbortSignal,
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
 }
@@ -77,7 +79,8 @@ function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
 /**
  * Execute orchestration code in a separate, permission-restricted Node process.
  * The child can only invoke the narrow agent/phase IPC protocol and is always
- * terminated on completion, cancellation, protocol failure, or deadline.
+ * terminated on completion, cancellation, or protocol failure. The workflow
+ * itself has no deadline; each agent request is bounded independently.
  */
 export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
   if (!process.allowedNodeEnvironmentFlags.has("--permission")) {
@@ -123,11 +126,22 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     );
     const token = randomBytes(24).toString("hex");
     const requestIds = new Set<number>();
+    const activeAgentRequests = new Map<
+      number,
+      {
+        abortController: AbortController;
+        timer: ReturnType<typeof setTimeout>;
+      }
+    >();
     let requestCount = 0;
     let finished = false;
 
     const cleanup = () => {
-      clearTimeout(deadline);
+      for (const request of activeAgentRequests.values()) {
+        clearTimeout(request.timer);
+        request.abortController.abort(new Error("Workflow stopped"));
+      }
+      activeAgentRequests.clear();
       options.signal.removeEventListener("abort", onAbort);
       child.removeAllListeners("message");
       child.removeAllListeners("error");
@@ -142,16 +156,6 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       else resolve(value);
     };
     const onAbort = () => finish(new Error("Workflow was aborted"));
-    const deadline = setTimeout(
-      () =>
-        finish(
-          new Error(
-            `Workflow exceeded its ${Math.round((options.timeoutMs ?? WORKFLOW_TIMEOUT_MS) / 1000)} second deadline`,
-          ),
-        ),
-      options.timeoutMs ?? WORKFLOW_TIMEOUT_MS,
-    );
-    deadline.unref?.();
 
     options.signal.addEventListener("abort", onAbort, { once: true });
     if (options.signal.aborted) {
@@ -232,35 +236,50 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         }
         requestIds.add(payload.id);
         const id = payload.id;
-        void options
-          .onAgent(payload.prompt, sanitizeAgentOptions(payload.options))
-          .then((result) => {
-            if (finished || !child.connected) return;
-            const normalized = toSerializable(result, {
-              maxDepth: 16,
-              maxNodes: 10_000,
-              maxStringBytes: 128 * 1024,
-            });
-            let resultJson = JSON.stringify(normalized);
-            if (byteLength(resultJson) > MAX_AGENT_MESSAGE_BYTES) {
-              resultJson = JSON.stringify({
-                ok: false,
-                output: "",
-                error: "Agent result exceeded the workflow IPC output limit",
-              });
-            }
-            child.send({ token, kind: "agentResult", id, resultJson });
-          })
-          .catch((error) => {
-            if (!finished && child.connected) {
-              child.send({
-                token,
-                kind: "agentResult",
-                id,
-                error: errorText(error).slice(0, 16 * 1024),
-              });
-            }
+        const timeoutMs = options.agentTimeoutMs ?? AGENT_TIMEOUT_MS;
+        const abortController = new AbortController();
+        const sendResult = (result: SandboxAgentResult) => {
+          const request = activeAgentRequests.get(id);
+          if (!request) return;
+          clearTimeout(request.timer);
+          activeAgentRequests.delete(id);
+          if (finished || !child.connected) return;
+          const normalized = toSerializable(result, {
+            maxDepth: 16,
+            maxNodes: 10_000,
+            maxStringBytes: 128 * 1024,
           });
+          let resultJson = JSON.stringify(normalized);
+          if (byteLength(resultJson) > MAX_AGENT_MESSAGE_BYTES) {
+            resultJson = JSON.stringify({
+              ok: false,
+              output: "",
+              error: "Agent result exceeded the workflow IPC output limit",
+            });
+          }
+          child.send({ token, kind: "agentResult", id, resultJson });
+        };
+        const timeoutDescription =
+          timeoutMs % 60_000 === 0
+            ? `${timeoutMs / 60_000} minute${timeoutMs === 60_000 ? "" : "s"}`
+            : `${timeoutMs}ms`;
+        const timeoutError = `Agent invocation timed out after ${timeoutDescription}`;
+        const timer = setTimeout(() => {
+          abortController.abort(new Error(timeoutError));
+          sendResult({ ok: false, output: "", error: timeoutError });
+        }, timeoutMs);
+        timer.unref?.();
+        activeAgentRequests.set(id, { abortController, timer });
+        void options
+          .onAgent(
+            payload.prompt,
+            sanitizeAgentOptions(payload.options),
+            abortController.signal,
+          )
+          .then(sendResult)
+          .catch((error) =>
+            sendResult({ ok: false, output: "", error: errorText(error) }),
+          );
         return;
       }
       if (raw.kind === "result") {

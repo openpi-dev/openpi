@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runWorkflowSandbox } from "./sandbox.ts";
+import { AGENT_TIMEOUT_MS, runWorkflowSandbox } from "./sandbox.ts";
 
 function run(
   source: string,
@@ -17,6 +17,10 @@ function run(
     ...overrides,
   });
 }
+
+test("workflow agent timeout defaults to three minutes", () => {
+  assert.equal(AGENT_TIMEOUT_MS, 3 * 60 * 1000);
+});
 
 test("sandbox exposes only workflow capabilities and validates results", async () => {
   const phases: string[] = [];
@@ -68,6 +72,46 @@ test("sandbox rejects unawaited agent calls", async () => {
   assert.equal(calls, 0);
 });
 
-test("sandbox deadline kills non-yielding code", async () => {
-  await assert.rejects(run(`while (true) {}`, { timeoutMs: 100 }), /deadline/);
+test("sandbox VM still rejects non-yielding synchronous code", async () => {
+  await assert.rejects(run(`while (true) {}`), /timed out/);
+});
+
+test("an agent timeout is recoverable and does not fail the workflow", async () => {
+  let slowCallAborted = false;
+  const result = await run(
+    `
+      const timedOut = await agent("slow");
+      const recovered = await agent("recovery");
+      return { timedOut, recovered: recovered.output };
+    `,
+    {
+      agentTimeoutMs: 25,
+      onAgent: async (prompt, _options, signal) => {
+        if (prompt === "recovery") {
+          return { ok: true, output: "recovered" };
+        }
+        await new Promise<void>((resolve) => {
+          signal.addEventListener(
+            "abort",
+            () => {
+              slowCallAborted = true;
+              resolve();
+            },
+            { once: true },
+          );
+        });
+        return { ok: false, output: "", error: "Agent was aborted" };
+      },
+    },
+  );
+
+  assert.deepEqual(result, {
+    timedOut: {
+      ok: false,
+      output: "",
+      error: "Agent invocation timed out after 25ms",
+    },
+    recovered: "recovered",
+  });
+  assert.equal(slowCallAborted, true);
 });
