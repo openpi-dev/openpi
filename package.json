@@ -1,0 +1,5 @@
+{
+  "dependencies": {
+    "@mendable/firecrawl-js": "^4.30.0"
+  }
+}
