@@ -17,26 +17,36 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
+import {
+  ASK_USER_PARAMETER_DESCRIPTIONS,
+  ASK_USER_PROMPT_GUIDELINES,
+  ASK_USER_PROMPT_SNIPPET,
+  ASK_USER_TOOL_DESCRIPTION,
+  buildAskUserResultMessage,
+} from "./prompt.ts";
 
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
 
 const OptionSchema = Type.Object({
-  label: Type.String({ description: "Short display label for this option" }),
+  label: Type.String({
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.optionLabel,
+  }),
   description: Type.Optional(
     Type.String({
-      description: "Optional one-line description shown below the label",
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.optionDescription,
     }),
   ),
 });
 
 const AskUserParams = Type.Object({
-  question: Type.String({ description: "The question to ask the user" }),
+  question: Type.String({
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.question,
+  }),
   options: Type.Array(OptionSchema, {
     minItems: MIN_OPTIONS,
     maxItems: MAX_OPTIONS,
-    description:
-      "Between 2 and 5 answer options. A free-form 'write my own answer' option is always appended automatically - never include one yourself.",
+    description: ASK_USER_PARAMETER_DESCRIPTIONS.options,
   }),
 });
 
@@ -89,14 +99,9 @@ export default function askUser(pi: ExtensionAPI) {
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",
-    description:
-      "Ask the user a single multiple-choice question (2-5 options). A free-form 'write my own answer' option is always added automatically, and the user may dismiss the question without answering. Ask exactly one question per call.",
-    promptSnippet:
-      "Ask the user a multiple-choice question (2-5 options plus a free-form answer)",
-    promptGuidelines: [
-      "When asking the user a question whose likely answers can be enumerated, use the ask_user tool instead of asking in plain text.",
-      "Ask one question per ask_user call; ask follow-up questions in subsequent calls.",
-    ],
+    description: ASK_USER_TOOL_DESCRIPTION,
+    promptSnippet: ASK_USER_PROMPT_SNIPPET,
+    promptGuidelines: ASK_USER_PROMPT_GUIDELINES,
     parameters: AskUserParams,
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
@@ -125,13 +130,11 @@ export default function askUser(pi: ExtensionAPI) {
       }
 
       if (ctx.mode !== "tui") {
-        return reply(
-          "No interactive UI is available, so the question could not be shown. Ask the user in plain text instead.",
-        );
+        return reply(buildAskUserResultMessage({ kind: "no-ui" }));
       }
 
       if (signal?.aborted) {
-        return reply("Cancelled");
+        return reply(buildAskUserResultMessage({ kind: "cancelled" }));
       }
 
       const allOptions: DisplayOption[] = [
@@ -308,21 +311,26 @@ export default function askUser(pi: ExtensionAPI) {
       );
 
       if (!result) {
-        return reply(
-          "User dismissed the question without answering. Do not assume an answer; proceed accordingly or ask differently.",
-        );
+        return reply(buildAskUserResultMessage({ kind: "dismissed" }));
       }
 
       if (result.wasCustom) {
         return reply(
-          `User wrote their own answer: ${result.answer}`,
+          buildAskUserResultMessage({
+            kind: "custom",
+            answer: result.answer,
+          }),
           result.answer,
           true,
         );
       }
 
       return reply(
-        `User selected option ${result.index}: ${result.answer}`,
+        buildAskUserResultMessage({
+          kind: "selected",
+          answer: result.answer,
+          index: result.index,
+        }),
         result.answer,
       );
     },

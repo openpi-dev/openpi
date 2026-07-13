@@ -14,6 +14,20 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { Firecrawl } from "firecrawl";
 import { Type } from "typebox";
+import {
+  CRAWL_PARAMETER_DESCRIPTIONS,
+  CRAWL_PROMPT_GUIDELINES,
+  CRAWL_PROMPT_SNIPPET,
+  CRAWL_TOOL_DESCRIPTION,
+  SCRAPE_PARAMETER_DESCRIPTIONS,
+  SCRAPE_PROMPT_GUIDELINES,
+  SCRAPE_PROMPT_SNIPPET,
+  SCRAPE_TOOL_DESCRIPTION,
+  SEARCH_PARAMETER_DESCRIPTIONS,
+  SEARCH_PROMPT_GUIDELINES,
+  SEARCH_PROMPT_SNIPPET,
+  SEARCH_TOOL_DESCRIPTION,
+} from "./prompt.ts";
 
 function readEnvValue(name: string) {
   if (process.env[name]) return process.env[name];
@@ -118,19 +132,16 @@ export default function firecrawlTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "search",
     label: "Search Web",
-    description:
-      "Search the web with Firecrawl. Returns web, news, or image results. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.",
-    promptSnippet: "Search the web with Firecrawl for current information.",
-    promptGuidelines: [
-      "Use search when the user asks for current web information, discovery, or sources beyond the local workspace.",
-      "Use scrape after search when you need the full readable content of a specific page.",
-      "Use crawl when the user needs content from multiple pages of the same website.",
-    ],
+    description: SEARCH_TOOL_DESCRIPTION,
+    promptSnippet: SEARCH_PROMPT_SNIPPET,
+    promptGuidelines: SEARCH_PROMPT_GUIDELINES,
     parameters: Type.Object({
-      query: Type.String({ description: "The web search query." }),
+      query: Type.String({
+        description: SEARCH_PARAMETER_DESCRIPTIONS.query,
+      }),
       limit: Type.Optional(
         Type.Number({
-          description: "Maximum number of results. Defaults to 5.",
+          description: SEARCH_PARAMETER_DESCRIPTIONS.limit,
           minimum: 1,
           maximum: 20,
         }),
@@ -138,8 +149,7 @@ export default function firecrawlTools(pi: ExtensionAPI) {
       source: Type.Optional(StringEnum(["web", "news", "images"] as const)),
       scrapeResults: Type.Optional(
         Type.Boolean({
-          description:
-            "Whether to include markdown scraped from each result. Defaults to false.",
+          description: SEARCH_PARAMETER_DESCRIPTIONS.scrapeResults,
         }),
       ),
     }),
@@ -166,57 +176,53 @@ export default function firecrawlTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "crawl",
     label: "Crawl Website",
-    description:
-      "Crawl multiple pages of a website with Firecrawl and return markdown documents. Defaults to 20 pages and never accepts a limit above 100. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.",
-    promptSnippet: "Crawl multiple pages of a website with Firecrawl.",
-    promptGuidelines: [
-      "Use crawl when the user needs content from multiple related pages on one website.",
-      "Keep crawl limits as low as practical because each crawled page consumes Firecrawl credits.",
-      "Use scrape instead of crawl when only one known URL is needed.",
-    ],
+    description: CRAWL_TOOL_DESCRIPTION,
+    promptSnippet: CRAWL_PROMPT_SNIPPET,
+    promptGuidelines: CRAWL_PROMPT_GUIDELINES,
     parameters: Type.Object({
-      url: Type.String({ description: "The starting URL to crawl." }),
+      url: Type.String({ description: CRAWL_PARAMETER_DESCRIPTIONS.url }),
       limit: Type.Optional(
         Type.Number({
-          description: "Maximum pages to crawl. Defaults to 20; maximum 100.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.limit,
           minimum: 1,
           maximum: 100,
         }),
       ),
       maxDiscoveryDepth: Type.Optional(
         Type.Number({
-          description: "Maximum link-discovery depth from the starting URL.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.maxDiscoveryDepth,
           minimum: 0,
         }),
       ),
       includePaths: Type.Optional(
         Type.Array(Type.String(), {
-          description: "URL pathname regex patterns to include.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.includePaths,
         }),
       ),
       excludePaths: Type.Optional(
         Type.Array(Type.String(), {
-          description: "URL pathname regex patterns to exclude.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.excludePaths,
         }),
       ),
       crawlEntireDomain: Type.Optional(
         Type.Boolean({
-          description: "Allow sibling and parent paths on the same domain.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.crawlEntireDomain,
         }),
       ),
       allowSubdomains: Type.Optional(
-        Type.Boolean({ description: "Allow crawling subdomains." }),
+        Type.Boolean({
+          description: CRAWL_PARAMETER_DESCRIPTIONS.allowSubdomains,
+        }),
       ),
       sitemap: Type.Optional(StringEnum(["include", "skip", "only"] as const)),
       onlyMainContent: Type.Optional(
         Type.Boolean({
-          description:
-            "Extract only each page's main content. Defaults to true.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.onlyMainContent,
         }),
       ),
       timeout: Type.Optional(
         Type.Number({
-          description: "Maximum crawl wait time in seconds. Defaults to 120.",
+          description: CRAWL_PARAMETER_DESCRIPTIONS.timeout,
           minimum: 1,
           maximum: 600,
         }),
@@ -252,38 +258,31 @@ export default function firecrawlTools(pi: ExtensionAPI) {
   pi.registerTool({
     name: "scrape",
     label: "Scrape Page",
-    description:
-      "Scrape one page with Firecrawl and return markdown. Output is limited to 50KB or 2000 lines; complete truncated output is saved to a temporary file.",
-    promptSnippet: "Fetch one URL as readable markdown with Firecrawl.",
-    promptGuidelines: [
-      "Use scrape when you need the full readable markdown content of one known URL.",
-      "Prefer scrape over bash or raw HTTP fetching for web pages because scrape returns cleaned content.",
-      "Use crawl instead when content is needed from multiple pages on the same website.",
-    ],
+    description: SCRAPE_TOOL_DESCRIPTION,
+    promptSnippet: SCRAPE_PROMPT_SNIPPET,
+    promptGuidelines: SCRAPE_PROMPT_GUIDELINES,
     parameters: Type.Object({
-      url: Type.String({ description: "The URL to scrape." }),
+      url: Type.String({ description: SCRAPE_PARAMETER_DESCRIPTIONS.url }),
       onlyMainContent: Type.Optional(
         Type.Boolean({
-          description: "Return only the main page content. Defaults to true.",
+          description: SCRAPE_PARAMETER_DESCRIPTIONS.onlyMainContent,
         }),
       ),
       waitFor: Type.Optional(
         Type.Number({
-          description:
-            "Milliseconds to wait before capture, useful for JavaScript-heavy pages.",
+          description: SCRAPE_PARAMETER_DESCRIPTIONS.waitFor,
           minimum: 0,
         }),
       ),
       timeout: Type.Optional(
         Type.Number({
-          description: "Request timeout in milliseconds. Defaults to 30000.",
+          description: SCRAPE_PARAMETER_DESCRIPTIONS.timeout,
           minimum: 1,
         }),
       ),
       includeMetadata: Type.Optional(
         Type.Boolean({
-          description:
-            "Append page metadata to the markdown. Defaults to false; metadata remains available in tool details.",
+          description: SCRAPE_PARAMETER_DESCRIPTIONS.includeMetadata,
         }),
       ),
     }),

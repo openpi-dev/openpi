@@ -17,6 +17,8 @@ import {
   SessionManager,
   SettingsManager,
   type AgentSession,
+  type AgentSessionEvent,
+  type AgentSessionEventListener,
   type ExtensionAPI,
   type ExtensionContext,
   type ToolDefinition,
@@ -28,7 +30,13 @@ import {
   createChildResources,
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
+import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
 import { emptyUsage, type AgentUsage, type TranscriptEntry } from "./model.ts";
+import {
+  buildWorkflowAgentPrompt,
+  STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
+  STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
+} from "./prompt.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
@@ -39,6 +47,16 @@ const TRANSCRIPT_MAX_ENTRIES = 200;
 export type WorkflowModel = NonNullable<ExtensionContext["model"]>;
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 type AgentMessage = AgentSession["messages"][number];
+type ToolTimingEvent = Extract<
+  AgentSessionEvent,
+  { type: "tool_execution_start" | "tool_execution_end" }
+>;
+
+export interface ToolExecutionTiming {
+  startedAt?: number;
+  finishedAt?: number;
+  durationMs?: number;
+}
 
 export interface AgentOutcome {
   ok: boolean;
@@ -73,10 +91,9 @@ export interface RunAgentOptions {
   modelRegistry: ExtensionContext["modelRegistry"];
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
+  /** Test-only override for the per-tool execution timeout. */
+  toolCallTimeoutMs?: number;
 }
-
-const STRUCTURED_OUTPUT_INSTRUCTION =
-  "When your task is complete, call the `structured_output` tool exactly once as your final action, with fields matching the required schema. Do not write any other text after it.";
 
 /** Build a fresh extension runtime for each concurrent workflow child. */
 export function createWorkflowResources(
@@ -88,8 +105,26 @@ export function createWorkflowResources(
     cwd,
     projectTrusted,
     ...(variant === "structured"
-      ? { appendSystemPrompt: [STRUCTURED_OUTPUT_INSTRUCTION] }
+      ? { appendSystemPrompt: [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION] }
       : {}),
+  });
+}
+
+interface WorkflowToolSession {
+  getAllTools(): Array<{ name: string }>;
+  getToolDefinition(name: string): ToolDefinition | undefined;
+  subscribe(listener: AgentSessionEventListener): () => void;
+}
+
+/** Guard current tools and tools registered by extensions at later agent starts. */
+export function guardWorkflowChildTools(
+  session: WorkflowToolSession,
+  timeoutMs?: number,
+) {
+  const guard = createToolCallTimeoutGuard(timeoutMs);
+  guard.apply(session);
+  return session.subscribe((event) => {
+    if (event.type === "agent_start") guard.apply(session);
   });
 }
 
@@ -142,8 +177,7 @@ function makeStructuredOutputTool(
   return defineTool({
     name: "structured_output",
     label: "Structured Output",
-    description:
-      "Return your final result as structured data matching the required schema. Call this exactly once, as your last action; do not write any other text after it.",
+    description: STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
     parameters: jsonSchemaToTypebox(schema),
     async execute(_toolCallId, params) {
       capture(params);
@@ -178,8 +212,52 @@ function safeJson(value: unknown): string {
   });
 }
 
+/** Record lifecycle timings without inferring completion from message timestamps. */
+export function recordToolExecutionTiming(
+  timings: Map<string, ToolExecutionTiming>,
+  event: ToolTimingEvent,
+  observedAt = Date.now(),
+) {
+  const previous = timings.get(event.toolCallId);
+  if (event.type === "tool_execution_start") {
+    if (previous?.startedAt !== undefined) return;
+    timings.set(event.toolCallId, { ...previous, startedAt: observedAt });
+    return;
+  }
+  if (previous?.finishedAt !== undefined) return;
+  const durationMs =
+    previous?.startedAt === undefined
+      ? undefined
+      : Math.max(0, observedAt - previous.startedAt);
+  timings.set(event.toolCallId, {
+    ...previous,
+    finishedAt: observedAt,
+    ...(durationMs === undefined ? {} : { durationMs }),
+  });
+}
+
+function toolMetadata(
+  toolCallId: string,
+  timings: ReadonlyMap<string, ToolExecutionTiming>,
+) {
+  const timing = timings.get(toolCallId);
+  return {
+    toolCallId: truncateUtf8(toolCallId, 1024),
+    ...(timing?.startedAt === undefined ? {} : { startedAt: timing.startedAt }),
+    ...(timing?.finishedAt === undefined
+      ? {}
+      : { finishedAt: timing.finishedAt }),
+    ...(timing?.durationMs === undefined
+      ? {}
+      : { durationMs: timing.durationMs }),
+  };
+}
+
 /** Convert pi messages into a compact, serializable transcript for the UI. */
-function transcriptFromMessages(messages: AgentMessage[]): TranscriptEntry[] {
+export function transcriptFromMessages(
+  messages: AgentMessage[],
+  toolTimings: ReadonlyMap<string, ToolExecutionTiming> = new Map(),
+): TranscriptEntry[] {
   const entries: TranscriptEntry[] = [];
   for (const message of messages) {
     if (message.role === "user") {
@@ -217,6 +295,7 @@ function transcriptFromMessages(messages: AgentMessage[]): TranscriptEntry[] {
             name: part.name,
             text: safeJson(part.arguments),
             timestamp: message.timestamp,
+            ...toolMetadata(part.id, toolTimings),
           });
         }
       }
@@ -235,6 +314,7 @@ function transcriptFromMessages(messages: AgentMessage[]): TranscriptEntry[] {
       text,
       isError: message.isError,
       timestamp: message.timestamp,
+      ...toolMetadata(message.toolCallId, toolTimings),
     });
   }
   const selected =
@@ -296,6 +376,7 @@ export async function runAgent(
   let structured: unknown;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
+  let unsubscribeToolTimeout: (() => void) | undefined;
   try {
     customTools =
       options.schema !== undefined
@@ -319,7 +400,12 @@ export async function runAgent(
       ...childToolPolicy(),
     }));
     await bindChildSessionExtensions(session);
+    unsubscribeToolTimeout = guardWorkflowChildTools(
+      session,
+      options.toolCallTimeoutMs,
+    );
   } catch (error) {
+    unsubscribeToolTimeout?.();
     if (session) await shutdownAndDisposeChildSession(session);
     return {
       ok: false,
@@ -339,6 +425,7 @@ export async function runAgent(
   let contextWindow = childSession.model?.contextWindow;
   let stopReason: string | undefined;
   let errorMessage: string | undefined;
+  const toolTimings = new Map<string, ToolExecutionTiming>();
 
   const sync = () => {
     const messages = childSession.messages;
@@ -389,18 +476,23 @@ export async function runAgent(
 
   const unsubscribe = childSession.subscribe((event) => {
     if (
+      event.type === "tool_execution_start" ||
+      event.type === "tool_execution_end"
+    ) {
+      recordToolExecutionTiming(toolTimings, event);
+    } else if (
       event.type !== "message_end" &&
-      event.type !== "tool_execution_end" &&
       event.type !== "compaction_end"
-    )
+    ) {
       return;
+    }
     sync();
     options.onProgress?.({
       preview: finalOutput(childSession.messages),
       usage,
       model: modelId,
       contextWindow,
-      transcript: transcriptFromMessages(childSession.messages),
+      transcript: transcriptFromMessages(childSession.messages, toolTimings),
     });
   });
 
@@ -418,7 +510,8 @@ export async function runAgent(
   let output = "";
   let transcript: TranscriptEntry[] = [];
   try {
-    if (!aborted) await childSession.prompt(options.prompt);
+    if (!aborted)
+      await childSession.prompt(buildWorkflowAgentPrompt(options.prompt));
   } catch (error) {
     errorMessage = errorMessage ?? errorText(error);
     stopReason = stopReason ?? "error";
@@ -426,12 +519,13 @@ export async function runAgent(
     options.signal?.removeEventListener("abort", onAbort);
     if (abortPromise) await abortPromise;
     unsubscribe();
+    unsubscribeToolTimeout?.();
     sync();
     output = truncateUtf8(
       finalOutput(childSession.messages),
       AGENT_OUTPUT_MAX_BYTES,
     );
-    transcript = transcriptFromMessages(childSession.messages);
+    transcript = transcriptFromMessages(childSession.messages, toolTimings);
     await shutdownAndDisposeChildSession(childSession);
   }
 

@@ -48,7 +48,7 @@ import {
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
-const TRANSCRIPT_SCROLL_STEP = 6;
+const TRANSCRIPT_SCROLL_STEP = 20;
 
 function wrapSelection(index: number, delta: number, length: number): number {
   if (length === 0) return 0;

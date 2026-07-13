@@ -34,6 +34,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
 import {
@@ -50,15 +51,23 @@ import {
   formatUsage,
   phaseGroups,
   resultJson,
-  shortenHome,
   stateSquare,
   statusColor,
   statusWord,
   SQUARE,
   type AgentRecord,
-  type TranscriptEntry,
   type WorkflowDetails,
 } from "./model.ts";
+import {
+  buildBackgroundWorkflowFollowUp,
+  buildBackgroundWorkflowLaunchResult,
+  buildWorkflowAgentPrompt,
+  buildWorkflowResultMessage,
+  WORKFLOW_PARAMETER_DESCRIPTIONS,
+  WORKFLOW_PROMPT_GUIDELINES,
+  WORKFLOW_PROMPT_SNIPPET,
+  WORKFLOW_TOOL_DESCRIPTION,
+} from "./prompt.ts";
 import {
   createWorkflowResources,
   runAgent,
@@ -66,11 +75,7 @@ import {
   type WorkflowModel,
 } from "./runner.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
-import {
-  safeStringify,
-  truncateUtf8,
-  writeFileAtomic,
-} from "./serialization.ts";
+import { safeStringify, writeFileAtomic } from "./serialization.ts";
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
@@ -104,19 +109,16 @@ interface AgentCallOptions {
 
 const WorkflowParams = Type.Object({
   script: Type.String({
-    description:
-      "JavaScript workflow script. May start with `export const meta = {...}`, then use phase(), agent(), parallel(), args, and a final `return`.",
+    description: WORKFLOW_PARAMETER_DESCRIPTIONS.script,
   }),
   args: Type.Optional(
     Type.String({
-      description:
-        "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
+      description: WORKFLOW_PARAMETER_DESCRIPTIONS.args,
     }),
   ),
   background: Type.Optional(
     Type.Boolean({
-      description:
-        "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
+      description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
     }),
   ),
 });
@@ -138,37 +140,6 @@ function summaryLine(details: WorkflowDetails): string {
   }`;
 }
 
-/** Plain-text report for the LLM (and the background follow-up message). */
-function resultText(details: WorkflowDetails, runDir: string): string {
-  const { done, failed } = countStates(details);
-  const elapsed = formatElapsed(details.startedAt, details.finishedAt);
-  const lines = [
-    `Workflow ${details.name ? `"${details.name}"` : details.runId} ${details.status} — ` +
-      `${done}/${details.agents.length} agents ok${failed ? `, ${failed} failed` : ""} ` +
-      `across ${details.phases.length} phase(s) in ${elapsed}.`,
-    `Run dir: ${shortenHome(runDir)}`,
-  ];
-  if (details.error) lines.push(`Error: ${details.error}`);
-  if (details.agents.length > 0) {
-    lines.push("", "Agents:");
-    for (const agent of details.agents) {
-      const status =
-        agent.state === "done"
-          ? "ok"
-          : agent.state === "error"
-            ? "FAILED"
-            : "running";
-      lines.push(
-        `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
-          (agent.error ? ` — ${agent.error}` : ""),
-      );
-    }
-  }
-  if (details.result !== undefined)
-    lines.push("", "Result:", resultJson(details.result));
-  return lines.join("\n");
-}
-
 function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
@@ -185,62 +156,6 @@ function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
       : {}),
     agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
   };
-}
-
-function boundedArtifactTranscript(transcript: TranscriptEntry[]) {
-  const entries: TranscriptEntry[] = [];
-  let remaining = 32 * 1024;
-  for (const entry of transcript) {
-    if (remaining <= 0) break;
-    const text = truncateUtf8(entry.text, Math.min(8 * 1024, remaining));
-    entries.push({
-      ...entry,
-      text: text === entry.text ? text : `${text}\n[entry truncated]`,
-    });
-    remaining -= Buffer.byteLength(text, "utf8");
-  }
-  if (entries.length < transcript.length) {
-    entries.push({
-      role: "toolResult",
-      name: "transcript",
-      text: `[artifact transcript truncated: ${entries.length}/${transcript.length} entries]`,
-    });
-  }
-  return entries;
-}
-
-function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
-  const transcripts = Object.fromEntries(
-    details.agents.map((agent) => [
-      agent.index,
-      boundedArtifactTranscript(agent.transcript),
-    ]),
-  );
-  writeRunFile(
-    runDir,
-    "transcripts.json",
-    safeStringify(transcripts, { maxBytes: 2 * 1024 * 1024 }),
-  );
-  if (details.result !== undefined) {
-    writeRunFile(
-      runDir,
-      "result.json",
-      safeStringify(details.result, { maxBytes: 1024 * 1024 }),
-    );
-  }
-  const compact: WorkflowDetails = {
-    ...details,
-    ...(details.result !== undefined
-      ? { result: "[stored in result.json]", resultArtifact: "result.json" }
-      : {}),
-    transcriptArtifact: "transcripts.json",
-    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
-  };
-  writeRunFile(
-    runDir,
-    "workflow.json",
-    safeStringify(compact, { maxBytes: 1024 * 1024 }),
-  );
 }
 
 interface RunSummary {
@@ -314,37 +229,16 @@ function runDetailText(
 ): string {
   const runDir = path.join(getAgentDir(), "workflows", run.runId);
   const live = activeRuns.get(run.runId);
-  if (live) return resultText(live, runDir);
+  if (live) return buildWorkflowResultMessage(live, runDir);
   try {
     const parsed = JSON.parse(
       fs.readFileSync(path.join(runDir, "workflow.json"), "utf8"),
     ) as WorkflowDetails;
-    return resultText(parsed, runDir);
+    return buildWorkflowResultMessage(parsed, runDir);
   } catch {
     return `Run ${run.runId} — ${run.status}`;
   }
 }
-
-const TOOL_DESCRIPTION = [
-  "Run a multi-agent workflow from a JavaScript orchestration script you write inline. Use this when a task benefits from fanning work out across several isolated subagents in ordered phases (research fan-out, per-file review, verify-then-synthesize pipelines).",
-  "The script runs as an async function body with these primitives:",
-  "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
-  "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
-  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. Concurrency is globally capped at 4 for the run.",
-  "• args — the parsed value of the `args` tool parameter (or undefined).",
-  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. A run may make at most 32 agent calls and has no overall deadline; each agent() invocation times out independently after 3 minutes and resolves with ok:false so the script can recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
-  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
-  "Example:",
-  "export const meta = { name: 'audit', description: 'Audit modules, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
-  "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
-  "phase('Scan')",
-  "const scans = await parallel(args.files.map((f) => () => agent(`Audit ${f} for security issues.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS })))",
-  "const findings = scans.filter((r) => r.ok).map((r) => r.structured)",
-  "phase('Report')",
-  "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report' })",
-  "return { findings, report: report.ok ? report.output : report.error }",
-].join("\n");
 
 export default function workflows(pi: ExtensionAPI) {
   /** Live background runs, for /workflows and shutdown cleanup. */
@@ -473,13 +367,9 @@ export default function workflows(pi: ExtensionAPI) {
   pi.registerTool({
     name: "workflow",
     label: "Workflow",
-    description: TOOL_DESCRIPTION,
-    promptSnippet:
-      "Orchestrate isolated subagents from an inline JS script: phase()/agent()/parallel() with structured outputs and optional background execution",
-    promptGuidelines: [
-      "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
-      "In workflow scripts, agent() never throws — always check `.ok` on its result before using `.output`/`.structured`.",
-    ],
+    description: WORKFLOW_TOOL_DESCRIPTION,
+    promptSnippet: WORKFLOW_PROMPT_SNIPPET,
+    promptGuidelines: WORKFLOW_PROMPT_GUIDELINES,
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
@@ -520,6 +410,7 @@ export default function workflows(pi: ExtensionAPI) {
       if (params.args !== undefined)
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
+      const persistence = createWorkflowPersistence(runDir, details);
 
       // Background runs survive Esc on the parent turn, but all runs are
       // aborted and settled during session shutdown.
@@ -548,7 +439,8 @@ export default function workflows(pi: ExtensionAPI) {
           details: compactToolDetails(details),
         });
       };
-      const emit = () => {
+      const emit = (checkpoint = true) => {
+        if (checkpoint) persistence.checkpoint();
         if (emitTimer) return;
         emitTimer = setTimeout(
           flush,
@@ -600,7 +492,8 @@ export default function workflows(pi: ExtensionAPI) {
           transcript: [],
         };
         details.agents.push(record);
-        emit();
+        persistence.checkpoint({ immediate: true });
+        emit(false);
 
         const fail = (error: string): ScriptAgentResult => {
           record.state = "error";
@@ -610,10 +503,11 @@ export default function workflows(pi: ExtensionAPI) {
           return { ok: false, output: "", error };
         };
 
-        const prompt =
+        const prompt = buildWorkflowAgentPrompt(
           typeof promptValue === "string"
             ? promptValue
-            : String(promptValue ?? "");
+            : String(promptValue ?? ""),
+        );
         if (!prompt.trim())
           return fail("agent() requires a non-empty prompt string");
         if (controller.signal.aborted)
@@ -761,7 +655,7 @@ export default function workflows(pi: ExtensionAPI) {
         details.status = status;
         details.finishedAt = Date.now();
         try {
-          persistWorkflowJson(runDir, details);
+          persistence.flush();
         } catch (error) {
           details.status = "failed";
           details.error = `Artifact persistence failed: ${errorText(error)}`;
@@ -797,7 +691,11 @@ export default function workflows(pi: ExtensionAPI) {
             updateIndicator();
             try {
               pi.sendUserMessage(
-                `[Background workflow ${runId} ${details.status}]\n\n${resultText(details, runDir)}`,
+                buildBackgroundWorkflowFollowUp({
+                  runId,
+                  status: details.status,
+                  result: buildWorkflowResultMessage(details, runDir),
+                }),
                 { deliverAs: "followUp" },
               );
             } catch {
@@ -808,11 +706,11 @@ export default function workflows(pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: [
-                `Workflow ${details.name ? `"${details.name}"` : runId} launched in background (run ${runId}).`,
-                `Artifacts: ${shortenHome(runDir)}`,
-                "You'll receive a follow-up message when it finishes; /workflows shows progress.",
-              ].join("\n"),
+              text: buildBackgroundWorkflowLaunchResult({
+                runId,
+                name: details.name,
+                runDir,
+              }),
             },
           ],
           details: compactToolDetails(details),
@@ -829,10 +727,15 @@ export default function workflows(pi: ExtensionAPI) {
       if (details.status !== "completed") {
         // Pi marks tool failures only when execute throws; returning isError is
         // ignored by the extension API.
-        throw new Error(resultText(details, runDir));
+        throw new Error(buildWorkflowResultMessage(details, runDir));
       }
       return {
-        content: [{ type: "text", text: resultText(details, runDir) }],
+        content: [
+          {
+            type: "text",
+            text: buildWorkflowResultMessage(details, runDir),
+          },
+        ],
         details: compactToolDetails(details),
       };
     },

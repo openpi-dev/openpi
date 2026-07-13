@@ -5,13 +5,13 @@ import { Type } from "typebox";
 import {
   createToolCallTimeoutGuard,
   runWithToolCallTimeout,
-  SUBAGENT_TOOL_CALL_TIMEOUT_MS,
+  CHILD_TOOL_CALL_TIMEOUT_MS,
   ToolCallTimeoutError,
 } from "./tool-call-timeout.ts";
 
 test("the production timeout error names the tool and three-minute limit", () => {
   assert.equal(
-    new ToolCallTimeoutError("fixture_tool", SUBAGENT_TOOL_CALL_TIMEOUT_MS)
+    new ToolCallTimeoutError("fixture_tool", CHILD_TOOL_CALL_TIMEOUT_MS)
       .message,
     'Tool call "fixture_tool" timed out after 3 minutes.',
   );
@@ -85,6 +85,24 @@ test("the guard wraps each definition once and can discover later tools", () => 
 
   assert.equal(first.execute, firstWrappedExecute);
   assert.notEqual(second.execute, secondExecute);
+});
+
+test("successful and terminating tool results pass through unchanged", async () => {
+  const result = {
+    content: [{ type: "text" as const, text: "recorded" }],
+    details: { value: "fixture" },
+    terminate: true,
+  };
+
+  assert.equal(
+    await runWithToolCallTimeout(
+      "structured_output",
+      10,
+      undefined,
+      async () => result,
+    ),
+    result,
+  );
 });
 
 test("the timeout is fresh for each tool call, not shared across calls", async () => {

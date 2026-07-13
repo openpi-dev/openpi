@@ -26,10 +26,10 @@ test("RunController reserves calls synchronously and caps global fanout", async 
   assert.equal(await controller.settle(), true);
 });
 
-test("RunController propagates an invocation timeout without aborting the run", async () => {
+test("RunController propagates invocation cancellation without aborting the run", async () => {
   const controller = new RunController(undefined, 1);
   const invocation = new AbortController();
-  const timedOut = controller.schedule(
+  const pending = controller.schedule(
     (signal) =>
       new Promise<string>((resolve) => {
         signal.addEventListener("abort", () => resolve("stopped"), {
@@ -39,8 +39,8 @@ test("RunController propagates an invocation timeout without aborting the run", 
     invocation.signal,
   );
 
-  invocation.abort(new Error("Agent invocation timed out after 3 minutes"));
-  await assert.rejects(timedOut, /timed out after 3 minutes/);
+  invocation.abort(new Error("Workflow agent request was cancelled"));
+  await assert.rejects(pending, /request was cancelled/);
   assert.equal(controller.signal.aborted, false);
   assert.equal(await controller.schedule(async () => "recovered"), "recovered");
   assert.equal(await controller.settle(), true);

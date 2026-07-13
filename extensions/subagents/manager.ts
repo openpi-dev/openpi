@@ -23,7 +23,11 @@ import {
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
 import type { ContextUtilization } from "../shared/context-utilization.ts";
-import { createToolCallTimeoutGuard } from "./tool-call-timeout.ts";
+import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
+import {
+  buildSubagentTaskPrompt,
+  forwardSubagentTakeoverMessage,
+} from "./prompt.ts";
 
 export const MAX_RUNNING = 4;
 export const MAX_TRACKED = 64;
@@ -303,7 +307,7 @@ export class SubagentManager {
         // Session naming is best-effort.
       }
 
-      void this.run(sub, options.prompt);
+      void this.run(sub, buildSubagentTaskPrompt(options.prompt));
       return sub;
     } catch (error) {
       if (session && !this.list().some((sub) => sub.session === session)) {
@@ -329,17 +333,18 @@ export class SubagentManager {
     ) {
       return;
     }
+    const message = forwardSubagentTakeoverMessage(text);
     if (sub.session.isStreaming) {
       sub.status = "running";
       sub.settledAt = undefined;
       this.notifyChange();
-      void sub.session.steer(text).catch((error) => {
+      void sub.session.steer(message).catch((error) => {
         sub.errorText = boundedError(error);
         this.notifyChange();
       });
       return;
     }
-    void this.run(sub, text);
+    void this.run(sub, message);
   }
 
   private async run(sub: Subagent, text: string) {

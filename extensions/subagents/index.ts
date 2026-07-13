@@ -45,6 +45,22 @@ import {
   SubagentManager,
   type ThinkingLevel,
 } from "./manager.ts";
+import {
+  buildSubagentResultMessage,
+  buildSubagentSpawnResult,
+  buildSubagentTaskPrompt,
+  SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_CANCEL_TOOL_DESCRIPTION,
+  SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_CHECK_TOOL_DESCRIPTION,
+  SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
+  SUBAGENT_SPAWN_PROMPT_SNIPPET,
+  SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+  SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_WAIT_TOOL_DESCRIPTION,
+} from "./prompt.ts";
 import { createDeferredResultDelivery } from "./result-delivery.ts";
 import { openSubagentPicker } from "./takeover.ts";
 
@@ -86,14 +102,6 @@ function truncatedOutput(
   if (truncation.truncated) {
     text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${sub.session.sessionFile ?? "?"}]`;
   }
-  return text;
-}
-
-function buildResultText(sub: Subagent): string {
-  const verb = sub.status === "error" ? "failed" : "finished";
-  let text = `Subagent ${sub.id} "${sub.title}" ${verb}.`;
-  if (sub.errorText) text += `\nError: ${sub.errorText}`;
-  text += `\n\n${truncatedOutput(sub)}`;
   return text;
 }
 
@@ -158,7 +166,13 @@ export default function (pi: ExtensionAPI) {
     pi.sendMessage(
       {
         customType: "subagent-result",
-        content: buildResultText(sub),
+        content: buildSubagentResultMessage({
+          id: sub.id,
+          title: sub.title,
+          status: sub.status,
+          errorText: sub.errorText,
+          output: truncatedOutput(sub),
+        }),
         display: true,
         details: { id: sub.id, title: sub.title, status: sub.status },
       },
@@ -201,44 +215,34 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_spawn",
     label: "Spawn Subagent",
-    description: [
-      "Spawn a background subagent: a fully autonomous, headless pi thread with its own context window, normal built-ins, and trust-appropriate extension tools/resources.",
-      "Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles,",
-      "or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained.",
-      `Max ${MAX_RUNNING} subagents can be running at once.`,
-    ].join(" "),
-    promptSnippet:
-      "Spawn a background subagent (own context, normal tools/resources) for a self-contained task",
-    promptGuidelines: [
-      "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-      "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
-    ],
+    description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+    promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
+    promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
     parameters: Type.Object({
       prompt: Type.String({
-        description:
-          "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
+        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
       }),
       title: Type.String({
-        description: "Short human-readable title for this subagent",
+        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.title,
       }),
       working_dir: Type.Optional(
         Type.String({
-          description: "Working directory (default: current working directory)",
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
         }),
       ),
       model: Type.Optional(
         Type.String({
-          description: "Model id (default: inherit the current model)",
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
         }),
       ),
       provider: Type.Optional(
         Type.String({
-          description: "Model provider (default: inherit the current provider)",
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.provider,
         }),
       ),
       reasoning_effort: Type.Optional(
         StringEnum(THINKING_LEVELS, {
-          description: "Thinking level (default: inherit the current level)",
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
     }),
@@ -254,7 +258,7 @@ export default function (pi: ExtensionAPI) {
 
       const title = params.title.trim().slice(0, 160) || "subagent";
       const sub = await manager.spawn({
-        prompt: params.prompt,
+        prompt: buildSubagentTaskPrompt(params.prompt),
         title,
         cwd,
         model,
@@ -271,10 +275,13 @@ export default function (pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text:
-              `Spawned subagent ${sub.id} "${sub.title}" (${model.provider}/${model.id}, ${cwd}).\n` +
-              `It runs in the background. Its result will be delivered to you when it finishes, ` +
-              `or use subagent_wait(ids: ["${sub.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`,
+            text: buildSubagentSpawnResult({
+              id: sub.id,
+              title: sub.title,
+              provider: model.provider,
+              model: model.id,
+              cwd,
+            }),
           },
         ],
         details: {
@@ -290,12 +297,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_wait",
     label: "Wait for Subagents",
-    description:
-      "Block until all listed subagents have settled, then return their final outputs. Prefer letting results arrive automatically; use this only when you need a result before continuing.",
+    description: SUBAGENT_WAIT_TOOL_DESCRIPTION,
     parameters: Type.Object({
       ids: Type.Array(Type.String(), {
         maxItems: 64,
-        description: 'Subagent ids to wait for, e.g. ["sa-1", "sa-2"]',
+        description: SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS.ids,
       }),
     }),
     async execute(_toolCallId, params, signal, onUpdate) {
@@ -377,11 +383,10 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_cancel",
     label: "Cancel Subagents",
-    description:
-      "Cancel one or more running subagents. This aborts their active model/tool work but preserves their partial session transcripts on disk.",
+    description: SUBAGENT_CANCEL_TOOL_DESCRIPTION,
     parameters: Type.Object({
       ids: Type.Array(Type.String(), {
-        description: 'Subagent ids to cancel, e.g. ["sa-1", "sa-2"]',
+        description: SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS.ids,
       }),
     }),
     async execute(_toolCallId, params) {
@@ -429,10 +434,11 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_check",
     label: "Check Subagent",
-    description:
-      "Peek at a subagent's status and recent activity without blocking. Does not consume its result.",
+    description: SUBAGENT_CHECK_TOOL_DESCRIPTION,
     parameters: Type.Object({
-      id: Type.String({ description: "Subagent id" }),
+      id: Type.String({
+        description: SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS.id,
+      }),
     }),
     async execute(_toolCallId, params) {
       const sub = manager.get(params.id);
@@ -468,7 +474,7 @@ export default function (pi: ExtensionAPI) {
   pi.registerTool({
     name: "subagent_list",
     label: "List Subagents",
-    description: "List all subagents (running and finished) with their status.",
+    description: SUBAGENT_LIST_TOOL_DESCRIPTION,
     parameters: Type.Object({}),
     async execute() {
       const subs = manager.list();

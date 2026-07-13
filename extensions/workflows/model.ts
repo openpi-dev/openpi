@@ -49,8 +49,15 @@ export interface TranscriptEntry {
   text: string;
   /** Tool name for tool calls/results. */
   name?: string;
+  /** Stable tool-call identifier used to pair calls, results, and timings. */
+  toolCallId?: string;
   isError?: boolean;
+  /** Original message timestamp, when provided by the model/session. */
   timestamp?: number;
+  /** Tool execution lifecycle timestamps, measured by the child session. */
+  startedAt?: number;
+  finishedAt?: number;
+  durationMs?: number;
 }
 
 export interface AgentRecord {

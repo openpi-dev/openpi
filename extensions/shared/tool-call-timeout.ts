@@ -1,6 +1,6 @@
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 
-export const SUBAGENT_TOOL_CALL_TIMEOUT_MS = 3 * 60 * 1_000;
+export const CHILD_TOOL_CALL_TIMEOUT_MS = 3 * 60 * 1_000;
 
 interface ToolRegistry {
   getAllTools(): Array<{ name: string }>;
@@ -78,7 +78,7 @@ export async function runWithToolCallTimeout<T>(
  * timeout. Calling apply() again is safe and picks up tools registered later.
  */
 export function createToolCallTimeoutGuard(
-  timeoutMs = SUBAGENT_TOOL_CALL_TIMEOUT_MS,
+  timeoutMs = CHILD_TOOL_CALL_TIMEOUT_MS,
 ) {
   const wrapped = new WeakSet<ToolDefinition>();
 
