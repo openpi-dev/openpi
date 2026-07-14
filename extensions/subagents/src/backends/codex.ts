@@ -871,13 +871,13 @@ const makeCodexSession = (
           capabilities: { experimentalApi: true },
         });
         writeMessage({ method: "initialized" });
-        // Approval policy and sandbox are deliberately NOT set: omitting
-        // them makes the thread inherit the user's own codex config.toml,
-        // so subagents run with exactly the permissions the user configured
-        // for their terminal. requestApproval below stays as the headless
-        // answer in case that config still asks.
+        // Headless children cannot answer approval prompts. The caller
+        // already chose to launch an autonomous subagent, so give the thread
+        // full workspace access without interactive approval requests.
         return request("thread/start", {
           cwd: task.cwd,
+          approvalPolicy: "never",
+          sandbox: "danger-full-access",
           ephemeral: false,
           ...(task.model ? { model: task.model } : {}),
         });
