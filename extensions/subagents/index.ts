@@ -78,7 +78,7 @@ const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
 const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 
-function describeSubagent(snap: SubagentSnapshot): string {
+function describeSubagent(snap: SubagentSnapshot) {
   const details = [
     `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
     formatContextUtilization(snap.usage),

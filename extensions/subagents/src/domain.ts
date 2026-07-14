@@ -208,13 +208,13 @@ export interface SubagentSnapshot {
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */
-export function latestText(snap: SubagentSnapshot): string {
+export function latestText(snap: SubagentSnapshot) {
   const live = snap.liveAssistant?.text.trim();
   if (live) return live;
   return snap.finalText;
 }
 
-export function formatElapsed(snap: SubagentSnapshot): string {
+export function formatElapsed(snap: SubagentSnapshot) {
   const end = snap.settledAt ?? Date.now();
   const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));
   const minutes = Math.floor(totalSeconds / 60);

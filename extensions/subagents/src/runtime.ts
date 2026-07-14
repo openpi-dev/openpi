@@ -39,7 +39,7 @@ export async function runTool<A, E>(
   runtime: SubagentRuntime,
   effect: Effect.Effect<A, E>,
   options: { signal?: AbortSignal; interruptMessage?: string } = {},
-): Promise<A> {
+) {
   const exit = await runtime.runPromiseExit(
     effect,
     options.signal ? { signal: options.signal } : undefined,

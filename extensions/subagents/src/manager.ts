@@ -46,7 +46,7 @@ export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 
-function bounded(text: string): string {
+function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
 }
 

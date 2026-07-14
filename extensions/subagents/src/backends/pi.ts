@@ -310,7 +310,7 @@ function userText(msg: Message): string {
 
 // --- The session ------------------------------------------------------------------
 
-function boundedError(error: unknown): string {
+function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
     4096,

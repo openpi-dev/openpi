@@ -153,19 +153,19 @@ const THINKING_BUDGETS = {
   max: 63_999,
 } satisfies Record<ReasoningEffort, number>;
 
-function boundedError(error: unknown): string {
+function boundedError(error: unknown) {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
     4_096,
   );
 }
 
-function singleLine(text: string): string | undefined {
+function singleLine(text: string) {
   const flattened = text.replace(/\s+/g, " ").trim();
   return flattened ? flattened.slice(0, PREVIEW_MAX_LENGTH) : undefined;
 }
 
-function safeJson(value: unknown): string | undefined {
+function safeJson(value: unknown) {
   try {
     const text = JSON.stringify(value);
     if (!text || text === "{}") return undefined;
