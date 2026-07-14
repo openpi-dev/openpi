@@ -843,8 +843,17 @@ const makeCodexSession = (
       Effect.promise(async () => {
         if (state.closing) return;
         state.closing = true;
-        state.closed = true;
         if (state.interruptTimer) clearTimeout(state.interruptTimer);
+        // Settle before marking closed so the run gets the correct
+        // "Interrupted" outcome instead of the pump's generic fallback.
+        if (state.activeRun) {
+          settleRun({
+            _tag: "Interrupted",
+            partialText:
+              state.finalText || state.lastAssistantText || undefined,
+          });
+        }
+        state.closed = true;
         rejectPending("Codex session closed.");
         await terminateChild(child, () => state.exited);
         Queue.endUnsafe(events);
