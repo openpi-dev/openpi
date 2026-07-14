@@ -407,7 +407,7 @@ const makeClaudeSession = (
 
       // Top-level messages only: subagent (sidechain) requests have their own
       // context and must not overwrite this conversation's occupancy.
-      if (message.parent_tool_use_id === null) {
+      if (message.parent_tool_use_id == null) {
         const tokens = contextOccupancyTokens(message.message.usage);
         if (tokens !== undefined) emit({ _tag: "UsageChanged", tokens });
       }

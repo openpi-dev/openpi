@@ -13,7 +13,8 @@ import {
   loadChangedFiles,
   showChangedFiles,
 } from "./src/changed-files-view.ts";
-import { CommandRunner } from "./src/process.ts";
+import { runCommand, type CommandRunner } from "./src/process.ts";
+import { makeRefreshCoordinator } from "./src/refresh-coordinator.ts";
 import {
   createRuntime,
   runEffect,
@@ -54,11 +55,10 @@ export default function gitInfo(pi: ExtensionAPI) {
   let state = emptyGitInfoState();
   let runtime: GitInfoRuntime | undefined;
   let pollingFiber: Fiber.Fiber<void> | undefined;
-  const backgroundFibers = new Set<Fiber.Fiber<void>>();
   let currentContext: ExtensionContext | undefined;
   let generation = 0;
-  let refreshing = false;
   let queriedPrBranch: string | null = null;
+  const refreshCoordinator = makeRefreshCoordinator();
 
   const getRuntime = () => (runtime ??= createRuntime());
   const publish = () => pi.events.emit(GIT_INFO_CHANNEL, { ...state });
@@ -67,11 +67,7 @@ export default function gitInfo(pi: ExtensionAPI) {
     args: string[],
     ctx: ExtensionContext,
     timeout: number,
-  ) =>
-    Effect.gen(function* () {
-      const commands = yield* CommandRunner;
-      return yield* commands.run(command, args, ctx.cwd, timeout);
-    });
+  ) => runCommand(command, args, ctx.cwd, timeout);
 
   const lookupPullRequest = (ctx: ExtensionContext, branch: string) =>
     Effect.gen(function* () {
@@ -85,12 +81,14 @@ export default function gitInfo(pi: ExtensionAPI) {
       return parsePullRequestJson(result.stdout);
     });
 
-  const refresh = (ctx: ExtensionContext, forcePullRequest = false) =>
+  const refreshEffect = (
+    ctx: ExtensionContext,
+    forcePullRequest: boolean,
+    refreshGeneration: number,
+  ) =>
     Effect.suspend(() => {
-      if (refreshing) return Effect.void;
-      refreshing = true;
+      if (refreshGeneration !== generation) return Effect.void;
       currentContext = ctx;
-      const refreshGeneration = generation;
 
       return Effect.gen(function* () {
         const repo = yield* run(
@@ -154,44 +152,35 @@ export default function gitInfo(pi: ExtensionAPI) {
           state = { ...state, pullRequest };
           publish();
         }
-      }).pipe(
-        Effect.ensuring(
-          Effect.sync(() => {
-            refreshing = false;
-          }),
-        ),
-      );
+      });
     });
 
-  const poll = () => {
-    let first = true;
-    const tick = Effect.suspend(() => {
-      if (first) {
-        first = false;
-        return Effect.void;
-      }
-      return currentContext
-        ? refresh(currentContext).pipe(Effect.catchDefect(() => Effect.void))
-        : Effect.void;
-    });
+  const refresh = (ctx: ExtensionContext, forcePullRequest = false) =>
+    refreshCoordinator.run(refreshEffect(ctx, forcePullRequest, generation));
 
-    return tick.pipe(
+  const refreshIfIdle = (ctx: ExtensionContext) =>
+    refreshCoordinator.runIfIdle(refreshEffect(ctx, false, generation));
+
+  const reportBackgroundDefect = (defect: unknown) =>
+    Effect.logError("git-info background task defect", defect);
+
+  const poll = () =>
+    Effect.suspend(() =>
+      currentContext ? refreshIfIdle(currentContext) : Effect.void,
+    ).pipe(
+      Effect.catchDefect(reportBackgroundDefect),
       Effect.repeat(Schedule.fixed(POLL_INTERVAL_MS)),
+      Effect.delay(POLL_INTERVAL_MS),
       Effect.asVoid,
     );
-  };
 
-  const forkBackground = (
-    effect: Effect.Effect<void, never, CommandRunner>,
-  ) => {
-    const fiber = getRuntime().runFork(effect);
-    backgroundFibers.add(fiber);
-    fiber.addObserver(() => backgroundFibers.delete(fiber));
-    return fiber;
-  };
+  const forkBackground = (effect: Effect.Effect<void, never, CommandRunner>) =>
+    getRuntime().runFork(
+      effect.pipe(Effect.catchDefect(reportBackgroundDefect)),
+    );
 
   const refreshInBackground = (ctx: ExtensionContext) => {
-    forkBackground(refresh(ctx));
+    forkBackground(refreshIfIdle(ctx));
   };
 
   pi.events.on(REFRESH_CHANNEL, () => {
@@ -227,11 +216,6 @@ export default function gitInfo(pi: ExtensionAPI) {
     pollingFiber = undefined;
     const closing = runtime;
     runtime = undefined;
-    const fibers = [...backgroundFibers];
-    backgroundFibers.clear();
-    if (closing && fibers.length > 0) {
-      await closing.runPromise(Fiber.interruptAll(fibers));
-    }
     await closing?.dispose();
   });
 

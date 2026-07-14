@@ -29,7 +29,7 @@ Pi can use any model shown by `pi --list-models`. Prefer `provider/model-id`; a 
 ## Claude Code Harness
 
 **Harness:** `claude`
-**Prompt nicknames:** “claude”, “Claude Code”, “claude agent”, “claude subagent”
+**Prompt nicknames:** “claude”, “Claude Code”, “claude agent”, “claude subagent”, "cc"
 **Best default:** use the latest fable model on high reasoning. Do not default to anything else, if the user does not specify, use fable.
 
 | Model hint | Model               | Recommended effort |

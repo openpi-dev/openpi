@@ -149,7 +149,11 @@ export default function askUser(pi: ExtensionAPI) {
           let editMode = false;
           let cachedLines: string[] | undefined;
 
+          let settled = false;
+
           function finish(result: SelectionResult) {
+            if (settled) return;
+            settled = true;
             uiSignal.removeEventListener("abort", cancel);
             done(result);
           }
@@ -159,7 +163,7 @@ export default function askUser(pi: ExtensionAPI) {
           }
 
           uiSignal.addEventListener("abort", cancel, { once: true });
-          if (uiSignal.aborted) cancel();
+          if (uiSignal.aborted) queueMicrotask(cancel);
 
           const editorTheme: EditorTheme = {
             borderColor: (s) => theme.fg("accent", s),
@@ -334,7 +338,8 @@ export default function askUser(pi: ExtensionAPI) {
         if (Cause.hasInterruptsOnly(uiExit.cause)) {
           return reply(buildAskUserResultMessage({ kind: "cancelled" }));
         }
-        throw Cause.squash(uiExit.cause);
+        const [first] = Cause.prettyErrors(uiExit.cause);
+        throw new Error(first?.message ?? Cause.pretty(uiExit.cause));
       }
 
       const result = uiExit.value;

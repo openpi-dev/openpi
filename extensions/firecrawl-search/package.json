@@ -4,7 +4,8 @@
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit -p .",
-    "prepare": "effect-tsgo patch"
+    "prepare": "effect-tsgo patch",
+    "test": "node --test *.test.ts"
   },
   "dependencies": {
     "effect": "4.0.0-beta.98",

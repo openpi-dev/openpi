@@ -1,8 +1,9 @@
 import { spawn } from "node:child_process";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { Data, Effect, Result } from "effect";
+import { Cause, Data, Effect, Exit } from "effect";
 
 class ClipboardError extends Data.TaggedError("ClipboardError")<{
+  readonly message: string;
   readonly cause: Error;
 }> {}
 
@@ -41,7 +42,11 @@ function copyToClipboard(text: string) {
     });
 
     child.on("error", (error) =>
-      resume(Effect.fail(new ClipboardError({ cause: error }))),
+      resume(
+        Effect.fail(
+          new ClipboardError({ message: error.message, cause: error }),
+        ),
+      ),
     );
     child.on("close", (code) => {
       if (code === 0) {
@@ -50,6 +55,7 @@ function copyToClipboard(text: string) {
         resume(
           Effect.fail(
             new ClipboardError({
+              message: stderr.trim() || `pbcopy exited with code ${code}`,
               cause: new Error(
                 stderr.trim() || `pbcopy exited with code ${code}`,
               ),
@@ -68,11 +74,16 @@ function copyToClipboard(text: string) {
 }
 
 async function runClipboardCopy(text: string, signal: AbortSignal | undefined) {
-  const result = await Effect.runPromise(
-    Effect.result(copyToClipboard(text)),
+  const exit = await Effect.runPromiseExit(
+    copyToClipboard(text),
     signal ? { signal } : undefined,
   );
-  if (Result.isFailure(result)) throw result.failure.cause;
+  if (Exit.isSuccess(exit)) return;
+  if (Cause.hasInterruptsOnly(exit.cause)) {
+    throw new Error("Copy was cancelled.");
+  }
+  const [first] = Cause.prettyErrors(exit.cause);
+  throw new Error(first?.message ?? Cause.pretty(exit.cause));
 }
 
 export default function (pi: ExtensionAPI) {

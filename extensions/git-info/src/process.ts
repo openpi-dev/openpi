@@ -22,6 +22,11 @@ export class CommandRunner extends Context.Service<
   CommandRunnerShape
 >()("git-info/CommandRunner") {}
 
+function appendCommandFailure(stderr: string, command: string, error: Error) {
+  const failure = `Failed to run ${command}: ${error.message}`;
+  return stderr ? `${stderr.trimEnd()}\n${failure}` : failure;
+}
+
 export const CommandRunnerLive = Layer.effect(
   CommandRunner,
   Effect.gen(function* () {
@@ -67,9 +72,26 @@ export const CommandRunnerLive = Layer.effect(
               duration: timeout,
               orElse: () => Effect.succeed({ code: -1, stderr, stdout }),
             }),
-            Effect.orElseSucceed(() => ({ code: 1, stderr, stdout })),
+            Effect.catch((error) =>
+              Effect.succeed({
+                code: 1,
+                stderr: appendCommandFailure(stderr, command, error),
+                stdout,
+              }),
+            ),
           );
         }),
     });
   }),
 );
+
+export const runCommand = (
+  command: string,
+  args: string[],
+  cwd: string,
+  timeout: number,
+) =>
+  Effect.gen(function* () {
+    const commands = yield* CommandRunner;
+    return yield* commands.run(command, args, cwd, timeout);
+  });

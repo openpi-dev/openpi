@@ -7,7 +7,7 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
-import { CommandRunner } from "./process.ts";
+import { runCommand } from "./process.ts";
 
 const DIFF_SCROLL_STEP = 5;
 const MAX_DIFF_LINES = 20_000;
@@ -60,10 +60,7 @@ function cleanDisplayPath(path: string) {
 }
 
 const run = (cwd: string, args: string[]) =>
-  Effect.gen(function* () {
-    const commands = yield* CommandRunner;
-    return yield* commands.run("git", args, cwd, 10_000);
-  });
+  runCommand("git", args, cwd, 10_000);
 
 const loadFile = Effect.fn("git-info.loadFile")(function* (
   repoRoot: string,

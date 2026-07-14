@@ -5,7 +5,7 @@
   "scripts": {
     "check": "tsc --noEmit -p .",
     "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types process.test.ts"
+    "test": "node --test --experimental-strip-types process.test.ts refresh-coordinator.test.ts"
   },
   "devDependencies": {
     "@effect/tsgo": "^0.19.0",
