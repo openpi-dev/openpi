@@ -26,6 +26,7 @@ import type {
 import { SendError, SpawnError } from "../domain.ts";
 
 const REQUEST_TIMEOUT_MS = 30_000;
+const MODEL_LIST_TIMEOUT_MS = 5_000;
 const INTERRUPT_FALLBACK_MS = 1_500;
 const FORCE_KILL_AFTER_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 1_024;
@@ -828,10 +829,13 @@ const makeCodexSession = (
           capabilities: { experimentalApi: true },
         });
         writeMessage({ method: "initialized" });
+        // Approval policy and sandbox are deliberately NOT set: omitting
+        // them makes the thread inherit the user's own codex config.toml,
+        // so subagents run with exactly the permissions the user configured
+        // for their terminal. requestApproval below stays as the headless
+        // answer in case that config still asks.
         return request("thread/start", {
           cwd: task.cwd,
-          approvalPolicy: "never",
-          sandbox: "workspace-write",
           ephemeral: false,
           ...(task.model ? { model: task.model } : {}),
         });
@@ -853,8 +857,11 @@ const makeCodexSession = (
       nativeSessionId,
     };
     if (task.reasoningEffort) {
+      // Optional capability probe: never let a slow/unsupported model/list
+      // hold up the spawn (and its concurrency reservation) for the full
+      // request timeout; the unclamped preferred effort is a fine fallback.
       const modelList = yield* Effect.tryPromise(() =>
-        request("model/list", { includeHidden: true }),
+        request("model/list", { includeHidden: true }, MODEL_LIST_TIMEOUT_MS),
       ).pipe(Effect.orElseSucceed(() => undefined));
       state.effort = supportedCodexEffort(
         task.reasoningEffort,

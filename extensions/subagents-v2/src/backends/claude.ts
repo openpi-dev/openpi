@@ -309,8 +309,10 @@ const makeClaudeSession = (
           prompt: input,
           options: {
             cwd: task.cwd,
-            permissionMode: "bypassPermissions",
-            allowDangerouslySkipPermissions: true,
+            // Permissions are deliberately NOT set here: with settingSources
+            // omitted the SDK loads the user's own Claude Code settings
+            // (matching CLI defaults), so subagents run with exactly the
+            // permission mode the user configured for their terminal.
             includePartialMessages: true,
             abortController,
             ...(claudeBinary
