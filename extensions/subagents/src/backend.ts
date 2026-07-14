@@ -70,4 +70,4 @@ export interface SubagentBackend {
 export class BackendRegistry extends Context.Service<
   BackendRegistry,
   ReadonlyMap<BackendName, SubagentBackend>
->()("subagents-v2/BackendRegistry") {}
+>()("subagents/BackendRegistry") {}

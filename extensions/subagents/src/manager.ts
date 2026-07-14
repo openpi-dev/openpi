@@ -150,7 +150,7 @@ export interface SubagentManagerShape {
 export class SubagentManager extends Context.Service<
   SubagentManager,
   SubagentManagerShape
->()("subagents-v2/SubagentManager") {}
+>()("subagents/SubagentManager") {}
 
 // --- Implementation --------------------------------------------------------------
 

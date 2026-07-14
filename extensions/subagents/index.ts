@@ -1,5 +1,5 @@
 /**
- * Subagents v2 — spawn background subagents on one of three backends
+ * Subagents — spawn background subagents on one of three backends
  * (pi, Claude Code, Codex) unified behind a single Effect service interface.
  *
  * Tools (for the parent LLM):

@@ -855,7 +855,7 @@ const makeCodexSession = (
       try: async () => {
         await request("initialize", {
           clientInfo: {
-            name: "pi-subagents-v2",
+            name: "pi-subagents",
             title: "pi subagent",
             version: "2.0.0",
           },

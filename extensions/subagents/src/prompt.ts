@@ -1,4 +1,4 @@
-/** All model-facing strings for the subagents-v2 tools. */
+/** All model-facing strings for the subagents tools. */
 
 /** Describes subagent_spawn, including harnesses and the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =

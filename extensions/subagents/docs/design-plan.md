@@ -1,4 +1,4 @@
-# subagents-v2 — Design Plan
+# subagents — Design Plan
 
 A pi extension that fires off background subagents from a parent pi session, where each
 subagent can be powered by one of three backends — **pi** (in-process SDK session),
@@ -14,7 +14,7 @@ carried over. No real Claude/Codex process integration yet; the pi backend may a
 stubbed initially so the manager/UI/tool loop can be exercised end to end with zero
 external dependencies.
 
-**Location:** `/Users/davis/.pi/agent/extensions/subagents-v2/` — fully self-contained
+**Location:** `/Users/davis/.pi/agent/extensions/subagents/` — fully self-contained
 (no imports from `../shared` or `../subagents`; the handful of shared helpers v1 uses are
 copied in).
 
@@ -282,7 +282,7 @@ interface SubagentSession {
 // built by a Layer that collects the three backend layers. Adding a 4th backend = one
 // new file + one line in the registry layer.
 class BackendRegistry extends ServiceMap.Key<BackendRegistry,
-  ReadonlyMap<BackendName, SubagentBackend>>()("subagents-v2/BackendRegistry") {}
+  ReadonlyMap<BackendName, SubagentBackend>>()("subagents/BackendRegistry") {}
 ```
 
 Design choices worth calling out:
@@ -346,7 +346,7 @@ class SubagentManager extends ServiceMap.Key<SubagentManager, {
   disposeAll: Effect.Effect<void>;
   /** Synchronous read model for the TUI (see 3.6). */
   readonly view: SubagentReadModel;
-}>()("subagents-v2/SubagentManager") {}
+}>()("subagents/SubagentManager") {}
 ```
 
 Behavior preserved from v1, expressed in Effect terms:
@@ -440,7 +440,7 @@ that fakes a plausible session so the manager, tools, result delivery, and both 
 views are exercised end to end:
 
 - **spawn**: emits `MetaChanged` (backend-flavored model label + fake session file path
-  under `os.tmpdir()`, e.g. `.../subagents-v2-stub/sa-1.jsonl`, actually written with the
+  under `os.tmpdir()`, e.g. `.../subagents-stub/sa-1.jsonl`, actually written with the
   transcript so "full transcript in session file" pointers resolve), then `RunStarted`,
   then a scripted turn: 2–3 `AssistantDelta` batches on a timer (~200ms cadence so
   streaming is visible), one fake `ToolStart/Update/End` cycle (`bash` with an args
@@ -469,7 +469,7 @@ views are exercised end to end:
 ## 4. File/module layout
 
 ```
-/Users/davis/.pi/agent/extensions/subagents-v2/
+/Users/davis/.pi/agent/extensions/subagents/
 ├── package.json               # name, "effect": "^4.0.0-beta.x"; pi extension entry via pi.extensions
 ├── package-lock.json / node_modules/   (after npm install)
 ├── docs/

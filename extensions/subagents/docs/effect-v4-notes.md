@@ -523,7 +523,7 @@ tool-result errors instead of catching thrown `Cause` wrappers.
 
 ---
 
-## Architecture sketch for subagents-v2
+## Architecture sketch for subagents
 
 ```
 ManagedRuntime.make(Layer.mergeAll(NodeServices.layer, SubagentManagerLive))

@@ -1,5 +1,5 @@
 /**
- * Domain model for subagents-v2.
+ * Domain model for subagents.
  *
  * Everything downstream of a backend (manager, tools, UI) speaks only these
  * types. Backends translate their native streams (pi session events, Claude

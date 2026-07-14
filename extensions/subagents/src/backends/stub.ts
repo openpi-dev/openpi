@@ -37,7 +37,7 @@ export interface StubProfile {
   readonly cadenceMs: number;
 }
 
-const STUB_DIR = path.join(os.tmpdir(), "subagents-v2-stub");
+const STUB_DIR = path.join(os.tmpdir(), "subagents-stub");
 let sessionCounter = 0;
 
 export function makeStubBackend(profile: StubProfile): SubagentBackend {
