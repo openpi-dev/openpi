@@ -398,6 +398,9 @@ const makeCodexSession = (
       state.interruptTimer = undefined;
       state.activeRun = false;
       state.dispatching = false;
+      // A late turn/completed for this turn must not be misattributed to the
+      // next queued run (which starts with no activeTurnId to filter on).
+      if (state.activeTurnId) ignoredTurnIds.add(state.activeTurnId);
       state.activeTurnId = undefined;
       state.interruptRequested = false;
       tools.clear();
@@ -612,7 +615,16 @@ const makeCodexSession = (
         }
         case "turn/started": {
           const turn = record(params.turn);
-          state.activeTurnId = stringValue(turn?.id) ?? state.activeTurnId;
+          const startedId = stringValue(turn?.id);
+          // Only adopt a turn we are actually waiting on. A stale start from
+          // a run the interrupt fallback settled before its turn/start
+          // response arrived would otherwise capture activeTurnId and filter
+          // out every event of the real next turn.
+          if (!state.dispatching && startedId !== state.activeTurnId) {
+            if (startedId) ignoredTurnIds.add(startedId);
+            break;
+          }
+          state.activeTurnId = startedId ?? state.activeTurnId;
           state.dispatching = false;
           emit({ _tag: "RunStarted" });
           if (state.interruptRequested) sendInterrupt(state.runSerial);

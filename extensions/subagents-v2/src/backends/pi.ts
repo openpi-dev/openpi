@@ -354,7 +354,14 @@ const makePiSession = (
           excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
         });
         // Start child extension session hooks/resources in headless mode.
-        await session.bindExtensions({ mode: "print" });
+        // A rejection here would otherwise leak the freshly created session:
+        // the scope finalizer that owns cleanup is only registered later.
+        try {
+          await session.bindExtensions({ mode: "print" });
+        } catch (error) {
+          await shutdownAndDisposeChildSession(session);
+          throw error;
+        }
         return session;
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),

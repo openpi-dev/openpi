@@ -309,10 +309,15 @@ const makeClaudeSession = (
           prompt: input,
           options: {
             cwd: task.cwd,
-            // Permissions are deliberately NOT set here: with settingSources
-            // omitted the SDK loads the user's own Claude Code settings
-            // (matching CLI defaults), so subagents run with exactly the
-            // permission mode the user configured for their terminal.
+            // Permissions are deliberately NOT set here: the SDK loads the
+            // user's own Claude Code settings (matching CLI defaults), so
+            // subagents run with exactly the permission mode the user
+            // configured for their terminal. For cwds pi marked untrusted,
+            // restrict to user-level settings so an untrusted project's
+            // .claude/settings(.local).json cannot reconfigure the child.
+            ...(task.parent.projectTrusted
+              ? {}
+              : { settingSources: ["user" as const] }),
             includePartialMessages: true,
             abortController,
             ...(claudeBinary
@@ -538,6 +543,12 @@ const makeClaudeSession = (
 
     yield* Effect.addFinalizer(() =>
       Effect.promise(async () => {
+        // Settle before marking closed: the pump's finally skips settlement
+        // once closed, and every run must end in a RunSettled even when the
+        // scope closes mid-run.
+        if (state.activeRun) {
+          settle({ _tag: "Interrupted", partialText: partialText() });
+        }
         state.closed = true;
         input.end();
         abortController.abort();

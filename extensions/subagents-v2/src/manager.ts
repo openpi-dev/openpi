@@ -79,6 +79,9 @@ interface Entry {
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  /** Idle restart dispatched but RunStarted not folded yet; counts as running
+   * so concurrent restarts cannot race past the cap. */
+  restarting?: boolean;
 }
 
 // --- Read model ----------------------------------------------------------------
@@ -204,7 +207,9 @@ const makeManager = Effect.gen(function* () {
   });
 
   const runningCount = () =>
-    [...entries.values()].filter((e) => e.snapshot.status === "running").length;
+    [...entries.values()].filter(
+      (e) => e.snapshot.status === "running" || e.restarting === true,
+    ).length;
 
   const addInterest = (ids: ReadonlyArray<string>) => {
     for (const id of ids) waitInterest.set(id, (waitInterest.get(id) ?? 0) + 1);
@@ -243,6 +248,7 @@ const makeManager = Effect.gen(function* () {
 
   const settle = (entry: Entry, outcome: RunOutcome) => {
     const s = entry.snapshot;
+    entry.restarting = false;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
     switch (outcome._tag) {
@@ -282,6 +288,7 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     switch (event._tag) {
       case "RunStarted":
+        entry.restarting = false;
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
@@ -559,13 +566,24 @@ const makeManager = Effect.gen(function* () {
       // Restarting a settled subagent occupies a running slot again, so it
       // must respect the same cap as spawn. Steering an already-running one
       // does not consume additional capacity.
-      if (
-        entry.snapshot.status !== "running" &&
-        runningCount() + reserved >= MAX_RUNNING
-      ) {
-        return new SendError({
-          message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that.`,
-        });
+      if (entry.snapshot.status !== "running") {
+        if (runningCount() + reserved >= MAX_RUNNING) {
+          return new SendError({
+            message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that.`,
+          });
+        }
+        // Occupy the slot synchronously: the RunStarted that flips status
+        // arrives via the async pump, and two concurrent restarts must not
+        // both pass the check in that window. Cleared by RunStarted/settle,
+        // or here when the backend rejects the send.
+        entry.restarting = true;
+        return entry.session.send(text).pipe(
+          Effect.onError(() =>
+            Effect.sync(() => {
+              entry.restarting = false;
+            }),
+          ),
+        );
       }
       return entry.session.send(text);
     });
@@ -583,9 +601,14 @@ const makeManager = Effect.gen(function* () {
         ),
       { concurrency: "unbounded" },
     );
-    yield* Effect.forEach([...cleanups], (fiber) => Fiber.await(fiber), {
-      concurrency: "unbounded",
-    }).pipe(Effect.ignore);
+    // Pruning cleanups are detached; bound them like everything else so a
+    // stuck backend finalizer cannot block runtime shutdown indefinitely.
+    yield* Effect.forEach(
+      [...cleanups],
+      (fiber) =>
+        Fiber.await(fiber).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore),
+      { concurrency: "unbounded" },
+    ).pipe(Effect.ignore);
     yield* Effect.sync(() => notify());
   });
 
