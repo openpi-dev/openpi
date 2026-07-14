@@ -1,9 +1,10 @@
 /**
- * Subagents - spawn background pi threads from the parent agent.
+ * Subagents — spawn background subagents on one of three backends
+ * (pi, Claude Code, Codex) unified behind a single Effect service interface.
  *
  * Tools (for the parent LLM):
- * - subagent_spawn: fire-and-forget spawn (prompt, title, working_dir, model,
- *   provider, reasoning_effort). Max 4 running at once.
+ * - subagent_spawn: fire-and-forget spawn (prompt, title, agent, working_dir,
+ *   model, reasoning_effort). Max 4 running at once across all backends.
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
@@ -11,11 +12,16 @@
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
+ *
+ * Architecture: Effect v4 generators throughout (backends -> manager ->
+ * runtime); this file is the async boundary where tool handlers run effects
+ * against one shared ManagedRuntime. All three backends are real: pi runs
+ * in-process SDK sessions, claude drives the Claude Agent SDK, codex speaks
+ * JSON-RPC to a scoped `codex app-server` process.
  */
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { Model } from "@earendil-works/pi-ai";
 import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
@@ -26,29 +32,28 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
+  getAgentDir,
   getMarkdownTheme,
+  ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
-import { formatActivityStatus } from "../shared/activity-status.ts";
-import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
-import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
-  activeModel,
-  contextUsage,
-  finalOutput,
+  BACKEND_NAMES,
   formatElapsed,
-  latestOutput,
-  MAX_RUNNING,
-  type Subagent,
-  SubagentManager,
-  type ThinkingLevel,
-} from "./manager.ts";
+  latestText,
+  REASONING_EFFORTS,
+  type SubagentSnapshot,
+} from "./src/domain.ts";
+import {
+  formatActivityStatus,
+  formatContextUtilization,
+} from "./src/format.ts";
+import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
   buildSubagentSpawnResult,
-  buildSubagentTaskPrompt,
   SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
@@ -60,145 +65,144 @@ import {
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
-} from "./prompt.ts";
-import { createDeferredResultDelivery } from "./result-delivery.ts";
-import { openSubagentPicker } from "./takeover.ts";
+} from "./src/prompt.ts";
+import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import {
+  createSubagentRuntime,
+  runTool,
+  type SubagentRuntime,
+} from "./src/runtime.ts";
+import { openSubagentPicker } from "./src/ui/takeover.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
 const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 
-const THINKING_LEVELS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-
-function describeSubagent(sub: Subagent): string {
-  const model = activeModel(sub);
+function describeSubagent(snap: SubagentSnapshot) {
   const details = [
-    model ? `${model.provider}/${model.id}` : "?",
-    formatContextUtilization(contextUsage(sub)),
-    formatElapsed(sub),
-    sub.cwd,
+    `${snap.backend}: ${snap.meta.modelLabel ?? "?"}`,
+    formatContextUtilization(snap.usage),
+    formatElapsed(snap),
+    snap.cwd,
   ].filter(Boolean);
-  return `${sub.id} [${sub.status}] "${sub.title}" (${details.join(", ")})`;
+  return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
 function truncatedOutput(
-  sub: Subagent,
+  snap: SubagentSnapshot,
   maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
 ): string {
-  const output = finalOutput(sub) || "(no output)";
+  const output = snap.finalText || "(no output)";
   const truncation = truncateHead(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
   });
   let text = truncation.content;
   if (truncation.truncated) {
-    text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${sub.session.sessionFile ?? "?"}]`;
+    text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
   }
   return text;
 }
 
-function resolveModel(
-  ctx: ExtensionContext,
-  provider: string | undefined,
-  modelId: string | undefined,
-): Model<any> {
-  if (!provider && !modelId) {
-    if (!ctx.model)
-      throw new Error("No model is currently active to inherit from.");
-    return ctx.model;
+/**
+ * Same-directory children inherit the live parent decision. An alternate cwd
+ * is trusted only when pi's persisted trust store explicitly trusts it (or a
+ * containing directory); unreadable/invalid trust data fails closed.
+ */
+function resolveChildProjectTrust(options: {
+  parentCwd: string;
+  childCwd: string;
+  parentTrusted: boolean;
+}) {
+  if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
+    return options.parentTrusted;
   }
-  if (!modelId) {
-    throw new Error(
-      `Provider "${provider}" given without a model. Specify model too.`,
-    );
+  try {
+    const trustStore = new ProjectTrustStore(getAgentDir());
+    return trustStore.get(options.childCwd) === true;
+  } catch {
+    return false;
   }
-  const preferredProvider = provider ?? ctx.model?.provider;
-  if (preferredProvider) {
-    const found = ctx.modelRegistry.find(preferredProvider, modelId);
-    if (found) return found;
-  }
-  if (provider) {
-    throw new Error(`Unknown model "${provider}/${modelId}".`);
-  }
-  const matches = ctx.modelRegistry.getAll().filter((m) => m.id === modelId);
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    throw new Error(
-      `Model "${modelId}" exists in multiple providers (${matches.map((m) => m.provider).join(", ")}). Specify a provider.`,
-    );
-  }
-  throw new Error(`Unknown model "${modelId}".`);
 }
 
 export default function (pi: ExtensionAPI) {
-  const manager = new SubagentManager();
-  const resultDelivery = createDeferredResultDelivery<Subagent>();
+  let runtime: SubagentRuntime | undefined;
+  let managerPromise: Promise<SubagentManagerShape> | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
+  let unsubStatus: (() => void) | undefined;
+  const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
-  const updateStatus = () => {
+  const getRuntime = () => (runtime ??= createSubagentRuntime());
+
+  /** Resolve the manager service once per runtime and wire the extension hooks. */
+  const getManager = () => {
+    managerPromise ??= getRuntime()
+      .runPromise(SubagentManager)
+      .then((manager) => {
+        manager.view.setOnSettled(onSettled);
+        unsubStatus?.();
+        unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+        updateStatus(manager);
+        return manager;
+      });
+    return managerPromise;
+  };
+
+  const updateStatus = (manager: SubagentManagerShape) => {
     if (!ui) return;
-    const subs = manager.list();
+    const subs = manager.view.list();
     if (subs.length === 0) {
       ui.setStatus("subagents", undefined);
       return;
     }
-    const running = subs.filter((sub) => sub.status === "running").length;
-    const failed = subs.filter((sub) => sub.status === "error").length;
+    const running = subs.filter((snap) => snap.status === "running").length;
+    const failed = subs.filter((snap) => snap.status === "error").length;
     const done = subs.length - running - failed;
     ui.setStatus(
       "subagents",
-      formatActivityStatus(ui.theme, "subagents", { running, done, failed }),
+      formatActivityStatus(ui.theme, { running, done, failed }),
     );
   };
 
-  manager.addChangeListener(updateStatus);
-
-  const deliverResult = (sub: Subagent) => {
+  const deliverResult = (snap: SubagentSnapshot) => {
     pi.sendMessage(
       {
         customType: "subagent-result",
         content: buildSubagentResultMessage({
-          id: sub.id,
-          title: sub.title,
-          status: sub.status,
-          errorText: sub.errorText,
-          output: truncatedOutput(sub),
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          errorText: snap.errorText,
+          output: truncatedOutput(snap),
         }),
         display: true,
-        details: { id: sub.id, title: sub.title, status: sub.status },
+        details: { id: snap.id, title: snap.title, status: snap.status },
       },
       { deliverAs: "followUp", triggerTurn: true },
     );
   };
 
   const flushResults = () => {
-    for (const sub of resultDelivery.drain()) deliverResult(sub);
+    for (const snap of resultDelivery.drain()) deliverResult(snap);
   };
 
-  manager.onSettled = (sub, consumed) => {
+  const onSettled = (snap: SubagentSnapshot, consumed: boolean) => {
     if (consumed) {
-      resultDelivery.consume([sub.id]);
+      resultDelivery.consume([snap.id]);
       return;
     }
     // Keep the result retractable while the parent is working. A later
     // subagent_wait can consume it before agent_settled flushes follow-ups.
-    resultDelivery.defer(sub);
+    // Defer a copy: the live snapshot keeps mutating if the subagent is
+    // restarted before the deferred result flushes.
+    resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
     if (sessionContext?.isIdle()) flushResults();
   };
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
     if (ctx.hasUI) ui = ctx.ui;
-    updateStatus();
   });
 
   pi.on("agent_settled", flushResults);
@@ -206,8 +210,15 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
     resultDelivery.clear();
+    unsubStatus?.();
+    unsubStatus = undefined;
     ui?.setStatus("subagents", undefined);
-    await manager.disposeAll();
+    const closing = runtime;
+    runtime = undefined;
+    managerPromise = undefined;
+    // Disposing the runtime runs the manager finalizer, which tears down all
+    // subagent scopes (and, later, their real child processes).
+    await closing?.dispose();
   });
 
   // --- Tools -------------------------------------------------------------
@@ -222,8 +233,11 @@ export default function (pi: ExtensionAPI) {
       prompt: Type.String({
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
       }),
-      title: Type.String({
-        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.title,
+      name: Type.String({
+        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.name,
+      }),
+      harness: StringEnum(BACKEND_NAMES, {
+        description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.harness,
       }),
       working_dir: Type.Optional(
         Type.String({
@@ -235,60 +249,65 @@ export default function (pi: ExtensionAPI) {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
         }),
       ),
-      provider: Type.Optional(
-        Type.String({
-          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.provider,
-        }),
-      ),
       reasoning_effort: Type.Optional(
-        StringEnum(THINKING_LEVELS, {
+        StringEnum(REASONING_EFFORTS, {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
-      const model = resolveModel(ctx, params.provider, params.model);
-      const thinkingLevel = (params.reasoning_effort ??
-        pi.getThinkingLevel()) as ThinkingLevel;
+      const manager = await getManager();
+      const harness = params.harness;
 
       const cwd = path.resolve(ctx.cwd, params.working_dir ?? ".");
       if (!fs.existsSync(cwd) || !fs.statSync(cwd).isDirectory()) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
-      const title = params.title.trim().slice(0, 160) || "subagent";
-      const sub = await manager.spawn({
-        prompt: buildSubagentTaskPrompt(params.prompt),
-        title,
-        cwd,
-        model,
-        thinkingLevel,
-        modelRegistry: ctx.modelRegistry,
-        projectTrusted: resolveStandaloneChildProjectTrust({
-          parentCwd: ctx.cwd,
-          childCwd: cwd,
-          parentTrusted: ctx.isProjectTrusted(),
+      const title = params.name.trim().slice(0, 160) || "subagent";
+      const snap = await runTool(
+        getRuntime(),
+        manager.spawn(harness, {
+          prompt: params.prompt,
+          title,
+          cwd,
+          model: params.model,
+          reasoningEffort: params.reasoning_effort,
+          parent: {
+            parentCwd: ctx.cwd,
+            projectTrusted: resolveChildProjectTrust({
+              parentCwd: ctx.cwd,
+              childCwd: cwd,
+              parentTrusted: ctx.isProjectTrusted(),
+            }),
+            inheritedModel: ctx.model
+              ? { provider: ctx.model.provider, id: ctx.model.id }
+              : undefined,
+            inheritedThinkingLevel: pi.getThinkingLevel(),
+            modelRegistry: ctx.modelRegistry,
+          },
         }),
-      });
+      );
 
       return {
         content: [
           {
             type: "text",
             text: buildSubagentSpawnResult({
-              id: sub.id,
-              title: sub.title,
-              provider: model.provider,
-              model: model.id,
+              id: snap.id,
+              title: snap.title,
+              harness,
+              modelLabel: snap.meta.modelLabel ?? "?",
               cwd,
             }),
           },
         ],
         details: {
-          id: sub.id,
-          title: sub.title,
+          id: snap.id,
+          title: snap.title,
           cwd,
-          model: `${model.provider}/${model.id}`,
+          harness,
+          model: snap.meta.modelLabel,
         },
       };
     },
@@ -305,28 +324,30 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     async execute(_toolCallId, params, signal, onUpdate) {
+      const manager = await getManager();
       const ids = [...new Set(params.ids)];
       if (ids.length === 0)
         throw new Error("Provide at least one subagent id.");
-      const known = manager.list().map((sub) => sub.id);
-      const unknown = ids.filter((id) => !manager.get(id));
+      const known = manager.view.list().map((snap) => snap.id);
+      const unknown = ids.filter((id) => !manager.view.get(id));
       if (unknown.length > 0) {
         throw new Error(
           `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
         );
       }
 
-      await manager.waitFor(ids, signal, (pending) => {
-        onUpdate?.({
-          content: [
-            { type: "text", text: `Waiting for ${pending.join(", ")}...` },
-          ],
-          details: { pending },
-        });
-      });
-
-      if (signal?.aborted)
-        throw new Error("Wait aborted. Subagents keep running.");
+      await runTool(
+        getRuntime(),
+        manager.waitFor(ids, (pending) => {
+          onUpdate?.({
+            content: [
+              { type: "text", text: `Waiting for ${pending.join(", ")}...` },
+            ],
+            details: { pending },
+          });
+        }),
+        { signal, interruptMessage: "Wait aborted. Subagents keep running." },
+      );
 
       // Settlement may have happened before this wait began. Remove any
       // deferred automatic delivery now that the tool is returning the result.
@@ -335,24 +356,24 @@ export default function (pi: ExtensionAPI) {
       const sections: string[] = [];
       let remainingBytes = WAIT_OUTPUT_MAX_BYTES;
       for (const id of ids) {
-        const sub = manager.get(id);
-        if (!sub) {
+        const snap = manager.view.get(id);
+        if (!snap) {
           sections.push(`## ${id}\n\n(no longer tracked)`);
           continue;
         }
-        const verb = sub.status === "error" ? "failed" : "finished";
-        let section = `## ${sub.id} "${sub.title}" ${verb}`;
-        if (sub.errorText) section += `\nError: ${sub.errorText}`;
+        const verb = snap.status === "error" ? "failed" : "finished";
+        let section = `## ${snap.id} "${snap.title}" ${verb}`;
+        if (snap.errorText) section += `\nError: ${snap.errorText}`;
         const headerBytes = Buffer.byteLength(section, "utf8") + 2;
         const outputBudget = Math.max(
           512,
           Math.min(WAIT_PER_AGENT_MAX_BYTES, remainingBytes - headerBytes),
         );
-        section += `\n\n${truncatedOutput(sub, outputBudget)}`;
+        section += `\n\n${truncatedOutput(snap, outputBudget)}`;
         const sectionBytes = Buffer.byteLength(section, "utf8");
         if (sectionBytes > remainingBytes) {
           sections.push(
-            `## ${sub.id} "${sub.title}"\n\n[omitted: total wait output limit reached]`,
+            `## ${snap.id} "${snap.title}"\n\n[omitted: total wait output limit reached]`,
           );
           break;
         }
@@ -372,8 +393,8 @@ export default function (pi: ExtensionAPI) {
         content: [{ type: "text", text }],
         details: {
           results: ids.map((id) => {
-            const sub = manager.get(id);
-            return { id, title: sub?.title, status: sub?.status };
+            const snap = manager.view.get(id);
+            return { id, title: snap?.title, status: snap?.status };
           }),
         },
       };
@@ -390,42 +411,35 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     async execute(_toolCallId, params) {
+      const manager = await getManager();
       const ids = [...new Set(params.ids)];
       if (ids.length === 0)
         throw new Error("Provide at least one subagent id.");
 
-      const known = manager.list().map((sub) => sub.id);
-      const unknown = ids.filter((id) => !manager.get(id));
+      const known = manager.view.list().map((snap) => snap.id);
+      const unknown = ids.filter((id) => !manager.view.get(id));
       if (unknown.length > 0) {
         throw new Error(
           `Unknown subagent id(s): ${unknown.join(", ")}. Known: ${known.join(", ") || "none"}.`,
         );
       }
 
-      const running = ids
-        .map((id) => manager.get(id))
-        .filter((sub): sub is Subagent => sub?.status === "running");
+      const report = await runTool(getRuntime(), manager.cancel(ids));
 
-      // Mark these results as consumed before aborting so cancellation does not
-      // also enqueue duplicate automatic result messages into the parent.
-      const waitForSettled = manager.waitFor(running.map((sub) => sub.id));
-      await Promise.all(running.map((sub) => manager.abort(sub)));
-      await waitForSettled;
-
-      const lines = ids.map((id) => {
-        const sub = manager.get(id)!;
-        return running.includes(sub)
-          ? `Cancelled ${sub.id} "${sub.title}".`
-          : `${sub.id} "${sub.title}" was already ${sub.status}.`;
-      });
+      const lines = report.map((entry) =>
+        entry.cancelled
+          ? `Cancelled ${entry.id} "${entry.title}".`
+          : `${entry.id} "${entry.title}" was already ${entry.status}.`,
+      );
 
       return {
         content: [{ type: "text", text: lines.join("\n") }],
         details: {
-          results: ids.map((id) => {
-            const sub = manager.get(id)!;
-            return { id, title: sub.title, status: sub.status };
-          }),
+          results: report.map((entry) => ({
+            id: entry.id,
+            title: entry.title,
+            status: entry.status,
+          })),
         },
       };
     },
@@ -441,32 +455,30 @@ export default function (pi: ExtensionAPI) {
       }),
     }),
     async execute(_toolCallId, params) {
-      const sub = manager.get(params.id);
-      if (!sub) {
-        const known = manager.list().map((s) => s.id);
+      const manager = await getManager();
+      const snap = manager.view.get(params.id);
+      if (!snap) {
+        const known = manager.view.list().map((s) => s.id);
         throw new Error(
           `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
         );
       }
 
-      const turns = sub.session.messages.filter(
-        (msg) => (msg as { role?: string }).role === "assistant",
-      ).length;
-      let text = `${describeSubagent(sub)}\nTurns: ${turns}`;
-      if (sub.errorText) text += `\nError: ${sub.errorText}`;
+      let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
+      if (snap.errorText) text += `\nError: ${snap.errorText}`;
 
-      const output = latestOutput(sub);
+      const output = latestText(snap);
       if (output) {
         const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
         text += `\n\nLatest output:\n${preview.content}`;
         if (preview.truncated) text += "\n[...]";
-      } else if (sub.status === "running") {
+      } else if (snap.status === "running") {
         text += "\n\n(no text output yet)";
       }
 
       return {
         content: [{ type: "text", text }],
-        details: { id: sub.id, status: sub.status, turns },
+        details: { id: snap.id, status: snap.status, turns: snap.turns },
       };
     },
   });
@@ -477,18 +489,20 @@ export default function (pi: ExtensionAPI) {
     description: SUBAGENT_LIST_TOOL_DESCRIPTION,
     parameters: Type.Object({}),
     async execute() {
-      const subs = manager.list();
+      const manager = await getManager();
+      const subs = manager.view.list();
       const text =
         subs.length === 0
           ? "No subagents."
-          : subs.map((sub) => describeSubagent(sub)).join("\n");
+          : subs.map((snap) => describeSubagent(snap)).join("\n");
       return {
         content: [{ type: "text", text }],
         details: {
-          subagents: subs.map((sub) => ({
-            id: sub.id,
-            title: sub.title,
-            status: sub.status,
+          subagents: subs.map((snap) => ({
+            id: snap.id,
+            title: snap.title,
+            harness: snap.backend,
+            status: snap.status,
           })),
         },
       };
@@ -524,7 +538,6 @@ export default function (pi: ExtensionAPI) {
       if (expanded) {
         const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
         const container = new Text(header, 0, 0);
-        // Text can't hold children; render header + markdown via a simple approach:
         return {
           render: (width: number) => [
             ...container.render(width),
@@ -560,14 +573,15 @@ export default function (pi: ExtensionAPI) {
           );
         return;
       }
-      if (manager.size() === 0) {
+      const manager = await getManager();
+      if (manager.view.size() === 0) {
         ctx.ui.notify(
           "No subagents yet. The agent spawns them with subagent_spawn.",
           "info",
         );
         return;
       }
-      await openSubagentPicker(ctx, manager);
+      await openSubagentPicker(ctx, manager.view);
     },
   });
 }
