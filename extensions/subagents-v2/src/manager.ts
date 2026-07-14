@@ -254,12 +254,13 @@ const makeManager = Effect.gen(function* () {
       case "Failed":
         s.status = "error";
         s.errorText = bounded(outcome.errorText);
-        if (outcome.partialText) s.finalText = outcome.partialText;
+        // Never let a failed run report the previous run's successful output.
+        s.finalText = outcome.partialText ?? "";
         break;
       case "Interrupted":
         s.status = "error";
         s.errorText = "Run was aborted";
-        if (outcome.partialText) s.finalText = outcome.partialText;
+        s.finalText = outcome.partialText ?? "";
         break;
     }
     s.liveAssistant = undefined;
@@ -493,12 +494,16 @@ const makeManager = Effect.gen(function* () {
         Effect.result,
       );
       if (Result.isFailure(graceful)) {
-        yield* closeEntryScope(entry);
+        // Settle before closing the scope so the pump's stream-ended
+        // fallback ("Backend event stream ended unexpectedly") cannot win
+        // the race and report the wrong terminal reason.
         yield* Effect.sync(() => {
+          settle(entry, { _tag: "Interrupted" });
           entry.snapshot.errorText =
             "Abort deadline exceeded; session was force-disposed";
-          settle(entry, { _tag: "Interrupted" });
+          notify(entry.snapshot.id);
         });
+        yield* closeEntryScope(entry);
       }
     });
 
@@ -549,6 +554,17 @@ const makeManager = Effect.gen(function* () {
       if (!entry || disposed) {
         return new SendError({
           message: `Subagent "${id}" is no longer tracked.`,
+        });
+      }
+      // Restarting a settled subagent occupies a running slot again, so it
+      // must respect the same cap as spawn. Steering an already-running one
+      // does not consume additional capacity.
+      if (
+        entry.snapshot.status !== "running" &&
+        runningCount() + reserved >= MAX_RUNNING
+      ) {
+        return new SendError({
+          message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that.`,
         });
       }
       return entry.session.send(text);

@@ -168,6 +168,31 @@ test("pi spawn fails fast without the parent model registry", async () => {
   });
 });
 
+test("idle restarts respect the concurrency cap", async () => {
+  await withManager(async (manager, runtime) => {
+    // Settle one subagent, then fill all four slots with running ones.
+    const settled = await runTool(
+      runtime,
+      manager.spawn("claude", task("early finisher")),
+    );
+    await runTool(runtime, manager.waitFor([settled.id]));
+    await runTool(
+      runtime,
+      Effect.forEach(
+        [1, 2, 3, 4],
+        (n) => manager.spawn("codex", task(`Task ${n}`)),
+        { concurrency: "unbounded" },
+      ),
+    );
+    // Restarting the settled one would be a fifth concurrent run.
+    await assert.rejects(
+      runTool(runtime, manager.send(settled.id, "go again")),
+      /Max 4 subagents/,
+    );
+    assert.equal(manager.view.get(settled.id)?.status, "done");
+  });
+});
+
 test("send steers an idle subagent into another turn", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

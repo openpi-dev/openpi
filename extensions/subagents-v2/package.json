@@ -5,7 +5,8 @@
   "scripts": {
     "check": "tsc --noEmit -p .",
     "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types *.test.ts"
+    "test": "node --test --experimental-strip-types manager.test.ts result-delivery.test.ts",
+    "test:live": "node --test --experimental-strip-types claude.test.ts codex.test.ts"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.3.207",

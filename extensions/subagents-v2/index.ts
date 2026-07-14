@@ -15,7 +15,9 @@
  *
  * Architecture: Effect v4 generators throughout (backends -> manager ->
  * runtime); this file is the async boundary where tool handlers run effects
- * against one shared ManagedRuntime. Backend internals are currently stubbed.
+ * against one shared ManagedRuntime. All three backends are real: pi runs
+ * in-process SDK sessions, claude drives the Claude Agent SDK, codex speaks
+ * JSON-RPC to a scoped `codex app-server` process.
  */
 
 import * as fs from "node:fs";
@@ -192,7 +194,9 @@ export default function (pi: ExtensionAPI) {
     }
     // Keep the result retractable while the parent is working. A later
     // subagent_wait can consume it before agent_settled flushes follow-ups.
-    resultDelivery.defer(snap);
+    // Defer a copy: the live snapshot keeps mutating if the subagent is
+    // restarted before the deferred result flushes.
+    resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
     if (sessionContext?.isIdle()) flushResults();
   };
 

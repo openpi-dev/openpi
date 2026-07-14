@@ -26,6 +26,20 @@ async function claudeAvailable() {
   return Effect.runPromise(claudeBackend.available);
 }
 
+/** Rejecting deadline so a hung wait still reaches finally() and disposes. */
+function deadline<A>(operation: Promise<A>, timeoutMs: number) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`Live Claude test exceeded ${timeoutMs}ms`)),
+      timeoutMs,
+    );
+  });
+  return Promise.race([operation, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
 test(
   "Claude backend completes a live manager run",
   { timeout: 60_000 },
@@ -42,7 +56,7 @@ test(
         runtime,
         manager.spawn("claude", task("Reply with exactly: hello claude")),
       );
-      await runTool(runtime, manager.waitFor([started.id]));
+      await deadline(runTool(runtime, manager.waitFor([started.id])), 45_000);
 
       const done = manager.view.get(started.id);
       assert.equal(done?.status, "done");
@@ -90,7 +104,10 @@ test(
       assert.equal(manager.view.get(started.id)?.status, "running");
       assert.ok(manager.view.get(started.id)?.liveAssistant?.text);
 
-      const report = await runTool(runtime, manager.cancel([started.id]));
+      const report = await deadline(
+        runTool(runtime, manager.cancel([started.id])),
+        20_000,
+      );
 
       assert.equal(report[0]?.cancelled, true);
       assert.equal(manager.view.get(started.id)?.status, "error");

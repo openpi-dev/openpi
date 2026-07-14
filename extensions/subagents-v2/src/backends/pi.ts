@@ -364,6 +364,9 @@ const makePiSession = (
       closed: false,
       /** prompt() rejection for the active run; folded into RunSettled. */
       runError: undefined as string | undefined,
+      /** One terminal event per run: lifecycle, prompt-rejection, and abort
+       * fallbacks can all race to settle; the first wins. */
+      settled: false,
     };
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
@@ -412,6 +415,8 @@ const makePiSession = (
     };
 
     const settle = () => {
+      if (state.settled) return;
+      state.settled = true;
       const last = lastAssistantMessage(session);
       const partialText = finalOutput(session) || undefined;
       if (last?.stopReason === "aborted") {
@@ -449,6 +454,7 @@ const makePiSession = (
         case "agent_start":
           // Extensions may register tools between runs; guard new ones too.
           toolTimeout.apply(session);
+          state.settled = false;
           emit({ _tag: "RunStarted" });
           break;
         case "message_update": {
@@ -548,6 +554,7 @@ const makePiSession = (
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
       state.runError = undefined;
+      state.settled = false;
       emit({ _tag: "RunStarted" });
       void session.prompt(text).catch((error) => {
         state.runError = boundedError(error);
@@ -575,11 +582,12 @@ const makePiSession = (
           }
           if (session.isStreaming) {
             // Steer the active run via the SDK's queue; queue_update events
-            // render it, message_end(user) lands it in the transcript.
-            void session.steer(text).catch((error) => {
-              emit({ _tag: "BackendError", message: boundedError(error) });
-            });
-            return Effect.void;
+            // render it, message_end(user) lands it in the transcript. A
+            // rejected steer is a real send failure, not a diagnostic.
+            return Effect.tryPromise({
+              try: () => session.steer(text),
+              catch: (error) => new SendError({ message: boundedError(error) }),
+            }).pipe(Effect.asVoid);
           }
           return Effect.sync(() => startRun(text));
         }),
@@ -591,10 +599,17 @@ const makePiSession = (
           // Abort regardless.
         }
         await session.abort().catch(() => undefined);
-        // abort() resolving without a streaming run means no agent_settled
-        // will arrive; emit the terminal event so the run cannot look
-        // running forever.
-        if (!session.isStreaming) {
+        // Only resolve once streaming has actually stopped: reporting the
+        // interrupt as complete while the run keeps working would let the
+        // manager settle a run that is still mutating the workspace. The
+        // manager bounds this effect at 5s and force-disposes on timeout.
+        while (!state.closed && session.isStreaming) {
+          await new Promise((resolve) => setTimeout(resolve, 50));
+        }
+        // No streaming run means no agent_settled will arrive; emit the
+        // terminal event (once) so the run cannot look running forever.
+        if (!state.closed && !state.settled) {
+          state.settled = true;
           emit({ _tag: "RunSettled", outcome: { _tag: "Interrupted" } });
         }
       }),

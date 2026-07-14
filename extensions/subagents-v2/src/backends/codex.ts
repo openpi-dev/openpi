@@ -30,6 +30,8 @@ const MODEL_LIST_TIMEOUT_MS = 5_000;
 const INTERRUPT_FALLBACK_MS = 1_500;
 const FORCE_KILL_AFTER_MS = 2_000;
 const PREVIEW_MAX_LENGTH = 1_024;
+/** A protocol line larger than this without a newline means a broken peer. */
+const STDOUT_BUFFER_MAX_BYTES = 4 * 1024 * 1024;
 
 type JsonRecord = Record<string, unknown>;
 
@@ -304,6 +306,10 @@ const makeCodexSession = (
           cwd: task.cwd,
           env: process.env,
           stdio: ["pipe", "pipe", "pipe"],
+          // Own process group on POSIX so teardown can signal the whole
+          // tree: a wedged app-server must not orphan a still-running
+          // shell command it spawned.
+          detached: process.platform !== "win32",
         }),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
@@ -334,7 +340,6 @@ const makeCodexSession = (
     const tools = new Map<string, ToolState>();
     /** Turns locally settled by the interrupt fallback may still emit late events. */
     const ignoredTurnIds = new Set<string>();
-    const interruptedRuns = new Set<number>();
 
     const writeMessage = (message: JsonRecord) => {
       if (state.closed || !child.stdin.writable) return false;
@@ -447,14 +452,15 @@ const makeCodexSession = (
           const turnId = stringValue(turn?.id);
           if (!state.activeRun || serial !== state.runSerial) {
             if (turnId) {
+              // The run was already settled locally (interrupt fallback or
+              // failure), so whatever native turn this response describes is
+              // invisible work — stop it unconditionally.
               ignoredTurnIds.add(turnId);
-              if (interruptedRuns.has(serial)) {
-                void request(
-                  "turn/interrupt",
-                  { threadId, turnId },
-                  INTERRUPT_FALLBACK_MS,
-                ).catch(() => undefined);
-              }
+              void request(
+                "turn/interrupt",
+                { threadId, turnId },
+                INTERRUPT_FALLBACK_MS,
+              ).catch(() => undefined);
             }
             return;
           }
@@ -464,6 +470,7 @@ const makeCodexSession = (
         },
         (error) => {
           if (!state.activeRun || serial !== state.runSerial) return;
+          const errorText = boundedError(error);
           settleRun(
             state.interruptRequested
               ? {
@@ -472,11 +479,18 @@ const makeCodexSession = (
                 }
               : {
                   _tag: "Failed",
-                  errorText: boundedError(error),
+                  errorText,
                   partialText: state.finalText || undefined,
                 },
             serial,
           );
+          // A timed-out turn/start means a turn may be running that we can
+          // never see or interrupt (no turn id). That session cannot be
+          // trusted with further work — kill it; the exit handler reports
+          // the death. Explicit protocol rejections keep the session alive.
+          if (errorText.includes("timed out")) {
+            void terminateChild(child, () => state.exited);
+          }
         },
       );
     }
@@ -791,6 +805,13 @@ const makeCodexSession = (
         stdoutBuffer = stdoutBuffer.slice(newline + 1);
         handleLine(line);
       }
+      if (stdoutBuffer.length > STDOUT_BUFFER_MAX_BYTES) {
+        // A frame this large with no newline is protocol corruption, and an
+        // unbounded buffer is a memory leak. Session-fatal: the exit handler
+        // settles any active run.
+        stdoutBuffer = "";
+        void terminateChild(child, () => state.exited);
+      }
     });
     child.stderr.setEncoding("utf8");
     child.stderr.on("data", (chunk: string) => {
@@ -890,7 +911,6 @@ const makeCodexSession = (
       interrupt: Effect.promise(async () => {
         if (state.closed || !state.activeRun) return;
         const serial = state.runSerial;
-        interruptedRuns.add(serial);
         state.pendingPrompts = [];
         emit({ _tag: "QueueChanged", queued: [] });
         state.interruptRequested = true;
@@ -904,11 +924,34 @@ const makeCodexSession = (
               partialText:
                 state.finalText || state.lastAssistantText || undefined,
             });
+            // The server never acknowledged the interrupt, so the native
+            // turn may still be executing tools. A session that ignores
+            // interrupts cannot be trusted — kill it rather than let
+            // invisible work continue behind a "settled" run.
+            void terminateChild(child, () => state.exited);
           }
         }, INTERRUPT_FALLBACK_MS);
       }),
     } satisfies SubagentSession;
   });
+
+/** Signal the whole process group on POSIX so tool descendants (shell
+ * commands the app-server spawned) die with it; a wedged or force-killed
+ * server must not orphan a still-running command in the workspace. */
+function killTree(
+  child: ChildProcessWithoutNullStreams,
+  signal: NodeJS.Signals,
+) {
+  if (process.platform !== "win32" && child.pid) {
+    try {
+      process.kill(-child.pid, signal);
+      return;
+    } catch {
+      // Group may already be gone; fall through to the direct signal.
+    }
+  }
+  child.kill(signal);
+}
 
 /** SIGTERM is normally enough; the second deadline covers a wedged Rust process. */
 function terminateChild(
@@ -928,9 +971,9 @@ function terminateChild(
       resolve();
     };
     child.once("exit", finish);
-    child.kill("SIGTERM");
+    killTree(child, "SIGTERM");
     forceTimer = setTimeout(() => {
-      if (!exited()) child.kill("SIGKILL");
+      if (!exited()) killTree(child, "SIGKILL");
     }, FORCE_KILL_AFTER_MS);
     lastTimer = setTimeout(finish, FORCE_KILL_AFTER_MS + 500);
   });
