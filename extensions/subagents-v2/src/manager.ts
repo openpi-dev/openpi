@@ -510,7 +510,12 @@ const makeManager = Effect.gen(function* () {
             "Abort deadline exceeded; session was force-disposed";
           notify(entry.snapshot.id);
         });
-        yield* closeEntryScope(entry);
+        // Bound the close like disposeAll does: a stuck backend finalizer
+        // must not hang cancel after the run is already settled.
+        yield* closeEntryScope(entry).pipe(
+          Effect.timeout(STOP_TIMEOUT_MS),
+          Effect.ignore,
+        );
       }
     });
 
