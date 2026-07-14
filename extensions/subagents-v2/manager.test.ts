@@ -1,14 +1,52 @@
 /**
- * End-to-end smoke tests: manager + stub backends through the real
- * ManagedRuntime, exactly as the tool handlers drive them.
+ * End-to-end smoke tests: manager behavior through a real ManagedRuntime,
+ * exactly as the tool handlers drive it. The registry is test-only: scripted
+ * stub sessions registered under the claude/codex names (the production
+ * backends launch real processes and have their own live test files), plus
+ * the real pi backend for its cheap registry precondition.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
-import { Effect } from "effect";
-import type { ParentContext, SpawnTask } from "./src/domain.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
-import { createSubagentRuntime, runTool } from "./src/runtime.ts";
+import { Effect, Layer, ManagedRuntime } from "effect";
+import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
+import { piBackend } from "./src/backends/pi.ts";
+import { makeStubBackend } from "./src/backends/stub.ts";
+import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
+import {
+  SubagentManager,
+  SubagentManagerLive,
+  type SubagentManagerShape,
+} from "./src/manager.ts";
+import { runTool } from "./src/runtime.ts";
+
+const TestRegistryLive = Layer.sync(BackendRegistry, () => {
+  const backends: SubagentBackend[] = [
+    piBackend,
+    makeStubBackend({
+      backend: "claude",
+      defaultModelLabel: "claude/sonnet",
+      contextWindow: 200_000,
+      toolName: "Bash",
+      cadenceMs: 40,
+    }),
+    makeStubBackend({
+      backend: "codex",
+      defaultModelLabel: "codex/gpt-5-codex",
+      contextWindow: 272_000,
+      toolName: "shell",
+      cadenceMs: 30,
+    }),
+  ];
+  return new Map<BackendName, SubagentBackend>(
+    backends.map((backend) => [backend.name, backend]),
+  );
+});
+
+const createTestRuntime = () =>
+  ManagedRuntime.make(
+    SubagentManagerLive.pipe(Layer.provide(TestRegistryLive)),
+  );
 
 const parent: ParentContext = {
   parentCwd: process.cwd(),
@@ -22,10 +60,10 @@ function task(prompt: string): SpawnTask {
 async function withManager(
   run: (
     manager: SubagentManagerShape,
-    runtime: ReturnType<typeof createSubagentRuntime>,
+    runtime: ReturnType<typeof createTestRuntime>,
   ) => Promise<void>,
 ) {
-  const runtime = createSubagentRuntime();
+  const runtime = createTestRuntime();
   try {
     const manager = await runtime.runPromise(SubagentManager);
     await run(manager, runtime);

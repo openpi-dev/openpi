@@ -8,6 +8,7 @@
     "test": "node --test --experimental-strip-types *.test.ts"
   },
   "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.207",
     "@effect/platform-node": "4.0.0-beta.98",
     "effect": "4.0.0-beta.98"
   },
