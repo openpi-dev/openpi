@@ -16,7 +16,15 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
+import {
+  Context,
+  Deferred,
+  Effect,
+  Exit,
+  FiberSet,
+  Layer,
+  Scope,
+} from "effect";
 import {
   ConcurrencyLimitError,
   formatExit,
@@ -85,9 +93,9 @@ interface Entry {
   stdioClosed: boolean;
   /** A settle-after-spill-flush is in flight; don't start a second one. */
   settling: boolean;
-  /** Resolved (once) when the entry settles; used by the scope finalizer to
-   * bound its wait for the natural close→flush→settle path. */
-  settleWaiters: Array<() => void>;
+  /** Completed exactly once when the entry settles. Kill callers and the scope
+   * finalizer can all await the same result without missing a notification. */
+  settled: Deferred.Deferred<void>;
 }
 
 export interface StartOptions {
@@ -180,46 +188,54 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals) {
   }
 }
 
-/** SIGTERM → deadline → SIGKILL; resolves once exit is observed (or shortly
+/** Await the Node exit event without retaining a listener after interruption. */
+function awaitChildExit(child: ChildProcess, exited: () => boolean) {
+  return Effect.callback<void>((resume) => {
+    if (exited()) {
+      resume(Effect.void);
+      return;
+    }
+    const onExit = () => resume(Effect.void);
+    child.once("exit", onExit);
+    return Effect.sync(() => child.off("exit", onExit));
+  });
+}
+
+/** SIGTERM → deadline → SIGKILL; completes once exit is observed (or shortly
  * after the force kill, so teardown can never hang on a wedged process). */
 function terminateChild(child: ChildProcess, exited: () => boolean) {
-  if (exited()) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    let done = false;
-    let forceTimer: ReturnType<typeof setTimeout> | undefined;
-    let lastTimer: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
-      if (done) return;
-      done = true;
-      if (forceTimer) clearTimeout(forceTimer);
-      if (lastTimer) clearTimeout(lastTimer);
-      resolve();
-    };
-    child.once("exit", finish);
-    killTree(child, "SIGTERM");
-    forceTimer = setTimeout(() => {
-      if (!exited()) killTree(child, "SIGKILL");
-    }, FORCE_KILL_AFTER_MS);
-    lastTimer = setTimeout(finish, FORCE_KILL_AFTER_MS + 500);
+  return Effect.suspend(() => {
+    if (exited()) return Effect.void;
+    return Effect.gen(function* () {
+      yield* Effect.sync(() => killTree(child, "SIGTERM"));
+      yield* awaitChildExit(child, exited).pipe(
+        Effect.timeout(FORCE_KILL_AFTER_MS),
+        Effect.ignore,
+      );
+      if (exited()) return;
+      yield* Effect.sync(() => killTree(child, "SIGKILL"));
+      yield* awaitChildExit(child, exited).pipe(
+        Effect.timeout(500),
+        Effect.ignore,
+      );
+    });
   });
 }
 
 // --- Implementation --------------------------------------------------------------
 
 const makeManager = Effect.gen(function* () {
-  // Detached forker for sync contexts (read-model kills, pruning) that
-  // preserves the manager's services instead of using the global runtime.
-  const runDetached = Effect.runForkWith(yield* Effect.context());
+  // Scoped detached forker for sync contexts (read-model kills, process-event
+  // settlement, pruning). Completed fibers remove themselves; manager scope
+  // close interrupts any work that outlives the bounded disposeAll wait.
+  const cleanupFibers = yield* FiberSet.make();
+  const runCleanup = yield* FiberSet.runtime(cleanupFibers)();
 
   const entries = new Map<string, Entry>();
   /** ids with an in-flight kill() collecting the result (settle → consumed). */
   const killInterest = new Map<string, number>();
   const listeners = new Set<() => void>();
-  /** One-shot nextChange waiters, swapped out before invocation so waiters
-   * re-registering during notification are not visited in the same sweep. */
-  let changeWaiters: Array<() => void> = [];
   const idListeners = new Map<string, Set<() => void>>();
-  const cleanups = new Set<Fiber.Fiber<unknown>>();
   let counter = 0;
   let reserved = 0;
   let disposed = false;
@@ -228,9 +244,6 @@ const makeManager = Effect.gen(function* () {
     ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
 
   const notify = (id?: string) => {
-    const waiters = changeWaiters;
-    changeWaiters = [];
-    for (const waiter of waiters) waiter();
     for (const listener of [...listeners]) {
       try {
         listener();
@@ -248,37 +261,6 @@ const makeManager = Effect.gen(function* () {
       }
     }
   };
-
-  /**
-   * Resolves once `isDone()` is true, re-checking on every state change.
-   * The predicate is evaluated synchronously INSIDE the callback registration:
-   * a plain check-then-wait loop has an instruction boundary between the
-   * check and the waiter registration where the Effect scheduler may yield —
-   * if the final settle's notify() lands in that window the waiter would
-   * register after the last-ever change and wait forever.
-   * Interruption unregisters the waiter.
-   */
-  const awaitCondition = (isDone: () => boolean) =>
-    Effect.callback<void>((resume) => {
-      if (isDone()) {
-        resume(Effect.void);
-        return;
-      }
-      const waiter = () => {
-        if (isDone()) {
-          resume(Effect.void);
-          return;
-        }
-        // Not settled yet: re-register for the next change (waiters are
-        // one-shot; notify() swaps the list out before invoking).
-        changeWaiters.push(waiter);
-      };
-      changeWaiters.push(waiter);
-      return Effect.sync(() => {
-        const index = changeWaiters.indexOf(waiter);
-        if (index >= 0) changeWaiters.splice(index, 1);
-      });
-    });
 
   const runningCount = () =>
     [...entries.values()].filter((e) => e.snapshot.status === "running").length;
@@ -312,9 +294,7 @@ const makeManager = Effect.gen(function* () {
     for (const entry of candidates) {
       if (entries.size <= MAX_TRACKED) break;
       entries.delete(entry.snapshot.id);
-      const fiber = runDetached(closeEntryScope(entry));
-      cleanups.add(fiber);
-      fiber.addObserver(() => cleanups.delete(fiber));
+      runCleanup(closeEntryScope(entry));
     }
   };
 
@@ -323,28 +303,20 @@ const makeManager = Effect.gen(function* () {
   const flushSpillStreams = (entry: Entry) => {
     const streams = entry.spillStreams;
     entry.spillStreams = [];
-    if (streams.length === 0) return Promise.resolve();
-    return new Promise<void>((resolve) => {
-      let remaining = streams.length;
-      let done = false;
-      const finish = () => {
-        if (done) return;
-        done = true;
-        clearTimeout(timer);
-        resolve();
-      };
-      const timer = setTimeout(finish, SPILL_FLUSH_TIMEOUT_MS);
-      for (const stream of streams) {
-        try {
-          stream.end(() => {
-            if (--remaining === 0) finish();
-          });
-        } catch {
-          // Best effort; tmpdir contents are disposable.
-          if (--remaining === 0) finish();
-        }
-      }
-    });
+    return Effect.forEach(
+      streams,
+      (stream) =>
+        Effect.callback<void>((resume) => {
+          const done = () => resume(Effect.void);
+          try {
+            stream.end(done);
+          } catch {
+            // Best effort; tmpdir contents are disposable.
+            done();
+          }
+        }),
+      { concurrency: "unbounded", discard: true },
+    ).pipe(Effect.timeout(SPILL_FLUSH_TIMEOUT_MS), Effect.ignore);
   };
 
   /** Single settle path — idempotent; kill vs natural exit vs error races are
@@ -360,10 +332,11 @@ const makeManager = Effect.gen(function* () {
         : s.exitCode === 0
           ? "done"
           : "failed";
-    const waiters = entry.settleWaiters;
-    entry.settleWaiters = [];
-    for (const waiter of waiters) waiter();
+    // Completing the Deferred can immediately resume kill waiters, whose
+    // ensuring blocks release interest. Snapshot consumption first so the
+    // settle hook observes the interest that existed when settlement won.
     const consumed = (killInterest.get(s.id) ?? 0) > 0;
+    Deferred.doneUnsafe(entry.settled, Effect.void);
     notify(s.id);
     try {
       // During teardown, don't queue results into a shutting-down session.
@@ -380,7 +353,11 @@ const makeManager = Effect.gen(function* () {
   const settleAfterFlush = (entry: Entry) => {
     if (entry.settling || entry.snapshot.status !== "running") return;
     entry.settling = true;
-    void flushSpillStreams(entry).then(() => settle(entry));
+    runCleanup(
+      flushSpillStreams(entry).pipe(
+        Effect.andThen(Effect.sync(() => settle(entry))),
+      ),
+    );
   };
 
   const resolveSpillDir = () => {
@@ -501,6 +478,7 @@ const makeManager = Effect.gen(function* () {
         };
 
         const scope = yield* Scope.make();
+        const settled = yield* Deferred.make<void>();
         const entry: Entry = {
           snapshot,
           child,
@@ -515,7 +493,7 @@ const makeManager = Effect.gen(function* () {
           exited: false,
           stdioClosed: false,
           settling: false,
-          settleWaiters: [],
+          settled,
         };
 
         // Plain-callback stream plumbing (the codex-backend precedent):
@@ -563,26 +541,22 @@ const makeManager = Effect.gen(function* () {
         // runtime.dispose() all converge on closing this scope.
         yield* Scope.provide(
           Effect.addFinalizer(() =>
-            Effect.promise(async () => {
+            Effect.gen(function* () {
               // Only claim "killed" when we are actually about to signal a
               // live process; a natural exit that already happened (still
               // waiting on 'close') keeps its truthful done/failed status.
               entry.killRequested ||=
                 !entry.exited && entry.snapshot.status === "running";
-              await terminateChild(child, () => entry.exited);
+              yield* terminateChild(child, () => entry.exited);
               // Give the natural close→flush→settle path a bounded grace,
               // then force the settle: a grandchild holding the pipe open
               // (detached into a new group) must not leave the entry
               // "running" forever.
               if (entry.snapshot.status === "running") {
-                await new Promise<void>((resolve) => {
-                  if (entry.snapshot.status !== "running") return resolve();
-                  const timer = setTimeout(resolve, SETTLE_GRACE_MS);
-                  entry.settleWaiters.push(() => {
-                    clearTimeout(timer);
-                    resolve();
-                  });
-                });
+                yield* Deferred.await(entry.settled).pipe(
+                  Effect.timeout(SETTLE_GRACE_MS),
+                  Effect.ignore,
+                );
               }
               if (entry.snapshot.status === "running" && !entry.settling) {
                 // Force the settle ourselves. When `settling` is set, the
@@ -594,7 +568,7 @@ const makeManager = Effect.gen(function* () {
                     "stdio did not close after termination; output may be incomplete";
                 }
                 entry.settling = true;
-                await flushSpillStreams(entry);
+                yield* flushSpillStreams(entry);
                 settle(entry);
               }
             }),
@@ -655,14 +629,12 @@ const makeManager = Effect.gen(function* () {
       // Only claim the kill when the process is still alive; if it already
       // exited (waiting on stdio close) the natural status stays truthful.
       entry.killRequested ||= !entry.exited;
-      const fiber = runDetached(
+      runCleanup(
         closeEntryScope(entry).pipe(
           Effect.timeout(STOP_TIMEOUT_MS),
           Effect.ignore,
         ),
       );
-      cleanups.add(fiber);
-      fiber.addObserver(() => cleanups.delete(fiber));
     });
 
   const kill = (ids: ReadonlyArray<string>) =>
@@ -685,11 +657,13 @@ const makeManager = Effect.gen(function* () {
         yield* Effect.forEach(running, killEntry, {
           concurrency: "unbounded",
         });
-        // Resolve only after the exit/close events settled every snapshot.
-        // The detached finalizers force-settle within bounded time, so this
-        // always terminates.
-        yield* awaitCondition(
-          () => !running.some((entry) => entry.snapshot.status === "running"),
+        // Every caller waits on the entries that were running when its kill
+        // began. Deferred completion cannot be missed and supports concurrent
+        // overlapping/multi-id kill calls.
+        yield* Effect.forEach(
+          running,
+          (entry) => Deferred.await(entry.settled),
+          { concurrency: "unbounded", discard: true },
         );
         // Capture the report BEFORE the ensuring below releases interest and
         // prunes — a just-settled entry must not vanish out from under it.
@@ -732,14 +706,13 @@ const makeManager = Effect.gen(function* () {
         ),
       { concurrency: "unbounded" },
     );
-    // Pruning cleanups are detached; bound them like everything else so a
-    // wedged process cannot block runtime shutdown indefinitely.
-    yield* Effect.forEach(
-      [...cleanups],
-      (fiber) =>
-        Fiber.await(fiber).pipe(Effect.timeout(STOP_TIMEOUT_MS), Effect.ignore),
-      { concurrency: "unbounded" },
-    ).pipe(Effect.ignore);
+    // Detached kill/prune/flush work is scoped to the manager. Wait for it
+    // within the shutdown bound; the FiberSet finalizer interrupts anything
+    // still live when the manager scope closes, so cleanup cannot leak.
+    yield* FiberSet.awaitEmpty(cleanupFibers).pipe(
+      Effect.timeout(STOP_TIMEOUT_MS),
+      Effect.ignore,
+    );
     yield* Effect.sync(() => notify());
   });
 
@@ -768,7 +741,7 @@ const makeManager = Effect.gen(function* () {
       if (!entry) return;
       // UI-initiated kills are not "consumed": the killed result still flows
       // back to the model as a follow-up message (subagents precedent).
-      runDetached(killEntry(entry).pipe(Effect.ignore));
+      runCleanup(killEntry(entry).pipe(Effect.ignore));
     },
     setOnSettled: (hook) => {
       onSettled = hook;

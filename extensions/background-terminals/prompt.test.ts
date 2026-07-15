@@ -93,3 +93,21 @@ test("completion message reports kill vs exit and omits empty stderr", () => {
   assert.match(failed, /exited \(exit 3\)/);
   assert.match(failed, /stderr:\nboom/);
 });
+
+test("completion output is a shorter tail than the detailed status view", () => {
+  const output = Array.from(
+    { length: 100 },
+    (_, index) => `line-${index + 1}`,
+  ).join("\n");
+  const terminal = snap({
+    stdout: view({ text: output, totalBytes: Buffer.byteLength(output) }),
+  });
+
+  const completion = buildTerminalResultMessage(terminal);
+  const status = buildStatusResult(terminal);
+
+  assert.ok(!completion.includes("line-1\n"));
+  assert.match(completion, /line-100/);
+  assert.match(completion, /stdout truncated/);
+  assert.match(status, /line-1\n/);
+});

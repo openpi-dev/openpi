@@ -175,6 +175,93 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
   });
 });
 
+test(
+  "a SIGTERM-resistant child is escalated to SIGKILL within the teardown bound",
+  { skip: process.platform === "win32" },
+  async () => {
+    await withManager(async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.start({
+          command: `exec ${nodeCmd(
+            'process.on("SIGTERM", () => process.stdout.write("term\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+          )}`,
+          title: "term-resistant",
+          cwd,
+        }),
+      );
+      assert.ok(
+        await pollUntil(() =>
+          (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
+        ),
+        "child installed its SIGTERM handler",
+      );
+
+      const startedAt = Date.now();
+      const [result] = await runTool(runtime, manager.kill([snap.id]));
+      const elapsed = Date.now() - startedAt;
+
+      assert.equal(result.status, "killed");
+      assert.equal(manager.view.get(snap.id)?.signal, "SIGKILL");
+      assert.match(manager.view.get(snap.id)?.stdout.text ?? "", /term/);
+      assert.ok(elapsed >= 1_500, `SIGKILL was not immediate (${elapsed}ms)`);
+      assert.ok(
+        elapsed < 4_500,
+        `termination exceeded its bound (${elapsed}ms)`,
+      );
+    });
+  },
+);
+
+test("concurrent overlapping multi-id kills observe each settlement exactly once", async () => {
+  await withManager(async (manager, runtime) => {
+    const settled: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settled.push({ id: snap.id, consumed }),
+    );
+    const [first, second] = await runTool(
+      runtime,
+      Effect.forEach(
+        ["first", "second"],
+        (title) =>
+          manager.start({
+            command: nodeCmd("setInterval(() => {}, 1000)"),
+            title,
+            cwd,
+          }),
+        { concurrency: "unbounded" },
+      ),
+    );
+
+    const reports = await runTool(
+      runtime,
+      Effect.all(
+        [
+          manager.kill([first.id, second.id, first.id]),
+          manager.kill([second.id, first.id]),
+        ],
+        { concurrency: "unbounded" },
+      ),
+    );
+
+    assert.deepEqual(
+      reports.map((report) => report.map((entry) => entry.id)),
+      [
+        [first.id, second.id],
+        [second.id, first.id],
+      ],
+    );
+    assert.ok(reports.flat().every((entry) => entry.status === "killed"));
+    assert.deepEqual(
+      settled.sort((a, b) => a.id.localeCompare(b.id)),
+      [
+        { id: first.id, consumed: true },
+        { id: second.id, consumed: true },
+      ].sort((a, b) => a.id.localeCompare(b.id)),
+    );
+  });
+});
+
 test("kill terminates the whole process tree (grandchildren die)", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
@@ -456,13 +543,26 @@ test("aborting the kill wait does not cancel the termination", async () => {
     const snap = await runTool(
       runtime,
       manager.start({
-        command: nodeCmd("setInterval(() => {}, 1000)"),
+        command:
+          process.platform === "win32"
+            ? nodeCmd("setInterval(() => {}, 1000)")
+            : `exec ${nodeCmd(
+                'process.on("SIGTERM", () => process.stdout.write("term\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+              )}`,
         title: "abort-race",
         cwd,
       }),
     );
     const pid = snap.pid;
     assert.ok(pid);
+    if (process.platform !== "win32") {
+      assert.ok(
+        await pollUntil(() =>
+          (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
+        ),
+        "child installed its SIGTERM handler",
+      );
+    }
 
     // Abort the tool call immediately: the kill wait is interrupted, but the
     // SIGTERM→SIGKILL teardown must continue detached in the background.
@@ -476,6 +576,7 @@ test("aborting the kill wait does not cancel the termination", async () => {
 
     const { snap: after } = await settlement(manager, snap.id);
     assert.equal(after.status, "killed");
+    if (process.platform !== "win32") assert.equal(after.signal, "SIGKILL");
     assert.ok(await pollUntil(() => processGone(pid)), "process is gone");
   });
 });

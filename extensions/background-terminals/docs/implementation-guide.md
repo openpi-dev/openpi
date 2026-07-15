@@ -1,7 +1,7 @@
 # background-terminals — Implementation Guide
 
 > Research phase output. Written 2026-07-14 against:
-> - `effect@4.0.0-beta.98` (verified installed in `extensions/subagents/node_modules/effect`; the
+> - `effect@4.0.0-beta.98` (verified installed in this package's `node_modules/effect`; the
 >   `unstable/process` module exists there but we deliberately do NOT use it — see §6)
 > - `@earendil-works/pi-coding-agent@^0.80.6` docs at
 >   `/Users/davis/.vite-plus/js_runtime/node/24.18.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/`
@@ -263,12 +263,12 @@ export const TerminalManagerLive: Layer.Layer<TerminalManager> =
 
 - `const entries = new Map<string, Entry>()` — mutable snapshot per entry (readonly view out).
 - `const listeners = new Set<() => void>()` + `notify()` — any-change subscription for the
-  widget and `/ps` list (copy subagents' `notify`, including the try/catch per listener and
-  the one-shot `changeWaiters` swap for `nextChange`).
-- `const nextChange = Effect.callback<void>(...)` — used by `kill()` to wait for settlement
-  without polling (copy verbatim; note interruption unregisters the waiter).
-- `const runDetached = Effect.runForkWith(yield* Effect.context())` — for fire-and-forget
-  commands issued from the synchronous read model (`requestKill` from the UI).
+  widget and `/ps` list, with try/catch around each UI listener.
+- One `Deferred<void>` per entry, completed synchronously and exactly once by `settle()`.
+  Every `kill()` caller awaits the Deferreds for entries that were running when it began.
+- A scoped `FiberSet.runtime` bridge for fire-and-forget UI kills, process-event settlement,
+  and pruning. Completed fibers remove themselves; disposal waits for the set within a bound,
+  and scope close interrupts cleanup still live after that bound.
 - `let counter = 0` for ids; `let disposed = false`; `waitInterest` is NOT needed (there is no
   `bg_wait` tool in v1 — see §8 note), but the "consumed" concept still applies to `bg_kill`
   and `bg_status` so a settle isn't double-announced (§9.3).
@@ -287,16 +287,14 @@ pruned oldest-settled-first exactly like `pruneSettled()` (never prune running e
 Per effect-v4-extension-guide.md §0 the async core is Effect; per the codex backend precedent
 the Node stream plumbing stays plain callbacks. Concretely:
 
-- **Yes Effect:** the manager service/layer, `start` reservation, `kill` (timeout + escalation
-  + `nextChange` wait), `disposeAll` (parallel bounded teardown), `runTool` boundary,
-  `Effect.addFinalizer` for process teardown.
+- **Yes Effect:** the manager service/layer, `start` reservation, per-entry `Deferred`,
+  `kill` (timeout + escalation + Deferred wait), scoped `FiberSet` cleanup, `disposeAll`
+  (parallel bounded teardown), `runTool` boundary, and `Effect.addFinalizer`.
 - **Plain TS callbacks:** `child.stdout.on("data")`, `child.on("exit")` handlers mutate the
   entry snapshot and call `notify()` directly. This is exactly what the codex backend does with
   its JSON-RPC stdout pump (`codex.ts` lines ~820–860). Do NOT build a
   `Queue<SubagentEvent>`/pump-fiber pipeline here — subagents needs that because three
-  heterogeneous backends normalize into one event stream; a single spawn does not. A
-  `Deferred<void>` per entry ("exited") is optional; the simpler `nextChange` loop already
-  covers `kill()`'s wait.
+  heterogeneous backends normalize into one event stream; a single spawn does not.
 
 ## 6. Node child_process design (the core of `start`)
 
@@ -330,9 +328,9 @@ Decisions and rationale:
   tool description must say so — interactive commands will exit or hang, and `bg_kill` is the
   remedy).
 - **`detached: true` on POSIX** gives the child its own process group, so kill can signal
-  `-pid` and take down the whole tree (grandchildren from `npm run dev` etc.). Copy `killTree`
-  and `terminateChild` from codex.ts verbatim (SIGTERM → 5s → SIGKILL → resolve; the
-  fall-through to `child.kill(signal)` when the group is already gone; the `exited()` guard).
+  `-pid` and take down the whole tree (grandchildren from `npm run dev` etc.). `killTree`
+  keeps the direct-signal fallback when the group is gone. `terminateChild` uses Effect
+  callbacks/timeouts: SIGTERM now, SIGKILL after 2s if needed, then a final 500ms bound.
   Do NOT call `child.unref()` — we want the exit event, and pi owns the lifetime anyway.
 - **Spawn failure semantics.** `spawn()` itself rarely throws; ENOENT arrives via
   `child.once("error", ...)`. Wire the error handler *before* returning from `start`, and treat
@@ -364,21 +362,18 @@ child.once("exit", (code, signal) => {
   spawning an agent in another project; a shell command in another directory is equivalent to
   what the bash tool already allows).
 
-### 6.1 Why not `effect/unstable/process`?
+### 6.1 Why not `effect/unstable/process` yet?
 
-`ChildProcess.make` + `ChildProcessHandle` (streams for stdout/stderr, scoped kill) would work
-and is documented in effect-v4-notes.md §6. Two reasons to prefer raw `node:child_process`
-here, consistent with the house code:
+`ChildProcess.make` + `ChildProcessHandle` is the eventual target, but pinned beta.98
+cannot preserve the current process contract yet:
 
-1. The in-repo precedent for a **long-lived** child process (codex backend) uses raw spawn with
-   plain data callbacks; `unstable/*` modules "can break between v4 minors" (notes §Surprises
-   #9) and would add `@effect/platform-node` as a dependency for no capability we need.
-2. Our consumption is push-based accumulation into a mutable buffer + synchronous `notify()`,
-   not stream transformation. `Stream<Uint8Array>` would immediately be drained into the same
-   buffer via a pump fiber — pure ceremony.
+1. `forceKillAfter` does not correctly wait before SIGKILL on POSIX in this pin.
+2. `ChildProcessHandle.exitCode` does not expose the actual terminating signal, while the
+   public snapshot and model-facing output distinguish `SIGTERM` from `SIGKILL`.
 
-Keep process teardown in an `Effect.addFinalizer` inside the entry's scope regardless, so
-`Scope.close`/`runtime.dispose()` reliably kills it (see §7.5).
+This first pass therefore keeps raw spawn and stream callbacks, while moving termination
+waits, escalation deadlines, settlement coordination, and cleanup ownership into Effect.
+Do not add `@effect/platform-node` until both blockers can be resolved.
 
 ## 7. Output capture (`src/output.ts`)
 
@@ -447,21 +442,29 @@ Per entry, like subagents' `spawn` (manager.ts lines 385–466):
 
 ```ts
 const scope = yield* Scope.make();
+const settled = yield* Deferred.make<void>();
 // finalizer kills the tree; registered in the scope so BOTH kill() and disposeAll()
 // and runtime.dispose() converge on one teardown path:
 yield* Scope.provide(
-  Effect.addFinalizer(() => Effect.promise(() => terminateChild(child, () => entry.exited))),
+  Effect.addFinalizer(() =>
+    Effect.gen(function* () {
+      yield* terminateChild(child, () => entry.exited);
+      yield* Deferred.await(settled).pipe(
+        Effect.timeout(SETTLE_GRACE_MS),
+        Effect.ignore,
+      );
+      // If still running, flush output within its bound and settle here.
+    }),
+  ),
   scope,
 );
-entries.set(id, { snapshot, child, scope, stdoutBuf, stderrBuf, killRequested: false, exited: false });
+entries.set(id, { snapshot, child, scope, stdoutBuf, stderrBuf, settled });
 ```
 
 `kill(ids)` then is: mark `killRequested`, `Scope.close(entry.scope, Exit.void)` (bounded with
-`Effect.timeout(STOP_TIMEOUT_MS)` + `Effect.ignore` like `closeEntryScope`/`abortEntry`), then
-loop `while (running) yield* nextChange;` to resolve only after the exit event settled the
-snapshot — copy the shape of subagents `cancel` (manager.ts lines 522–561) including returning
-per-id `{ id, status, killed: boolean }` results and treating already-settled ids as no-ops
-rather than errors.
+`Effect.timeout(STOP_TIMEOUT_MS)` + `Effect.ignore`) in the scoped cleanup `FiberSet`, then
+await every captured entry's `Deferred`. Return per-id `{ id, status, killed: boolean }`
+results and treat already-settled ids as no-ops rather than errors.
 
 `disposeAll`: set `disposed = true`, snapshot `[...entries.values()]`, close every scope with
 `{ concurrency: "unbounded" }` and a 5s timeout each — verbatim subagents `disposeAll`
@@ -477,8 +480,9 @@ rather than errors.
   disappears; the only settle source is the `exit`/`error` listener.
 - **Settle during teardown** → `if (!disposed) onSettled?.(...)` so a result is never queued
   into a shutting-down session (subagents `settle`, manager.ts line 280).
-- **Tool AbortSignal during `bg_kill`'s wait** → interruption of `nextChange` unregisters the
-  waiter (its cleanup effect), and `Effect.ensuring` still releases bookkeeping.
+- **Tool AbortSignal during `bg_kill`'s wait** → interruption stops only that caller's
+  `Deferred.await`; the detached scope-close stays owned by the manager `FiberSet`, and
+  `Effect.ensuring` still releases bookkeeping.
 - **Late output after exit** → Node may still flush 'data' after 'exit' is observed in rare
   orderings; buffers accept pushes until `close` — harmless because settle doesn't freeze the
   buffer, and the UI just shows more text. (Optionally listen on `close` instead of `exit` to
@@ -570,8 +574,8 @@ Killing marks the settle consumed so the model doesn't also get the async comple
 
 **No `bg_wait` and no `bg_send`.** No stdin is a hard requirement. Blocking wait is
 deliberately omitted in v1: completion notification makes it redundant, and it would drag in
-subagents' full `waitInterest` machinery. If it's ever wanted, `manager` already has
-`nextChange` and the subagents `waitFor` is the template.
+subagents' full `waitInterest` machinery. If it's ever wanted, each entry already has a
+settlement `Deferred` and the subagents `waitFor` result shaping is the template.
 
 ## 9. Completion notification — exactly once, no polling, no turn races
 
@@ -751,7 +755,7 @@ export interface TerminalReadModel {
   size(): number;
   subscribe(listener: () => void): () => void;
   subscribeTo(id: string, listener: () => void): () => void;
-  requestKill(id: string): void;   // fire-and-forget via runDetached(kill([id]).pipe(Effect.ignore))
+  requestKill(id: string): void;   // fire-and-forget via the scoped FiberSet runtime
   setOnSettled(hook?: (snap: TerminalSnapshot, consumed: boolean) => void): void;
 }
 ```
@@ -827,6 +831,10 @@ tricks; they exist on any machine running pi)
 7. `disposeAll` (via `runtime.dispose()`) kills a running process and settles it as killed;
    no settle hook fires after dispose (`disposed` guard).
 8. pruning: exceed MAX_TRACKED with settled entries → oldest pruned, running never pruned.
+9. SIGTERM-resistant process → SIGKILL after the 2s grace, within the 5s close bound.
+10. aborted `bg_kill` wait → detached escalation still reaches SIGKILL and settles.
+11. overlapping multi-id kills → every caller observes every captured settlement; each
+    settle hook fires once and consumed state remains true.
 
 **`result-delivery.test.ts`** — consume-before-drain, drain-once (copy subagents' file).
 
@@ -872,12 +880,15 @@ tricks; they exist on any machine running pi)
     parallel tool calls race past it (manager.ts spawn comment).
 11. **Bound every teardown wait** — 5s timeout on scope closes, or a wedged child hangs
     `session_shutdown` (subagents `disposeAll` + `abortEntry` comments).
-12. **Tool output limits are a hard requirement** — unbounded stdout in a tool result causes
+12. **Snapshot kill interest before Deferred completion** — beta.98 can resume kill waiters
+    immediately; compute `consumed` before `Deferred.doneUnsafe` so their `ensuring`
+    blocks cannot release interest first.
+13. **Tool output limits are a hard requirement** — unbounded stdout in a tool result causes
     context overflow/compaction failures (docs Output Truncation). Truncate *everything* the
     model sees, including the completion message.
-13. **`prepareArguments` is not needed v1** — but never rename/retype `bg_*` parameters later
+14. **`prepareArguments` is not needed v1** — but never rename/retype `bg_*` parameters later
     without adding it (resumed sessions replay old tool calls; docs Tool Definition).
-14. **`hasUI`/`mode` guards** — widget + `/ps` must no-op gracefully in print/RPC modes.
+15. **`hasUI`/`mode` guards** — widget + `/ps` must no-op gracefully in print/RPC modes.
 
 ## 16. Acceptance checklist
 
@@ -897,7 +908,7 @@ tricks; they exist on any machine running pi)
 - [ ] `/ps` two-stage overlay: list (select/kill/open) → detail (metadata, stdout/stderr
       toggle, scroll, back), matching subagents/workflows interaction conventions and hint
       lines from `keybindings.getKeys`.
-- [ ] Kill terminates the whole process tree (SIGTERM → 5s → SIGKILL), records exit
+- [ ] Kill terminates the whole process tree (SIGTERM → 2s → SIGKILL), records exit
       code/signal, resolves only after settle.
 - [ ] `session_shutdown` (quit/reload/new/resume/fork) kills all processes within bounded
       time via `runtime.dispose()`; no orphans; no messages sent during teardown.
