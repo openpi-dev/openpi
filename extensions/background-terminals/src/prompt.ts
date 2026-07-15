@@ -7,6 +7,7 @@ import {
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
+import { MAX_RUNNING, type KillResult } from "./manager.ts";
 
 /** bg_status stdout tail. */
 export const STATUS_STDOUT_MAX = 16 * 1024;
@@ -24,7 +25,7 @@ export const BG_START_TOOL_DESCRIPTION =
   "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
   "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg_kill to stop a stuck one. " +
   `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); the full logs are captured to files and in the /ps viewer. ` +
-  "Max 8 background terminals can run at once.";
+  `Max ${MAX_RUNNING} background terminals can run at once.`;
 
 export const BG_START_PROMPT_SNIPPET =
   "Run a long-lived shell command in the background (dev servers, builds, watchers); output is captured and you're notified on exit";
@@ -123,24 +124,17 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
   return text;
 }
 
-export function buildKillReport(
-  results: ReadonlyArray<{
-    id: string;
-    title: string;
-    status: string;
-    killed: boolean;
-  }>,
-  finalById: (id: string) => TerminalSnapshot | undefined,
-) {
+export function buildKillReport(results: ReadonlyArray<KillResult>) {
   return results
     .map((entry) => {
-      const snap = finalById(entry.id);
       if (entry.killed) {
-        const how = snap ? ` (${formatExit(snap)})` : "";
-        return `Killed ${entry.id} "${entry.title}"${how}.`;
+        return `Killed ${entry.id} "${entry.title}" (${entry.exit}).`;
       }
-      const detail = snap ? ` (${formatExit(snap)})` : "";
-      return `${entry.id} "${entry.title}" was already ${entry.status}${detail}.`;
+      if (entry.wasRunning) {
+        // The natural exit won the race with the kill signal.
+        return `${entry.id} "${entry.title}" exited on its own before the kill landed (${entry.exit}).`;
+      }
+      return `${entry.id} "${entry.title}" was already ${entry.status} (${entry.exit}).`;
     })
     .join("\n");
 }

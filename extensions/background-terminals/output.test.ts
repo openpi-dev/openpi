@@ -23,15 +23,46 @@ test("head chunks are evicted past the cap and accounted as truncated", () => {
   assert.equal(view.truncatedBytes, 4);
 });
 
-test("a single chunk larger than the cap is kept whole", () => {
+test("a single chunk larger than the cap is trimmed to its tail — retention stays bounded", () => {
   const buf = new OutputBuffer(4);
   buf.push("0123456789");
-  assert.equal(buf.view().text, "0123456789");
-  assert.equal(buf.view().truncatedBytes, 0);
+  // Only the newest cap-worth of bytes is retained; the head is truncated.
+  assert.equal(buf.view().text, "6789");
+  assert.equal(buf.view().totalBytes, 10);
+  assert.equal(buf.view().truncatedBytes, 6);
   buf.push("x");
-  // Now the oversized head chunk is evictable (more than one chunk retained).
+  // "6789" + "x" exceeds the cap; the older whole chunk is evicted.
   assert.equal(buf.view().text, "x");
+  assert.equal(buf.view().totalBytes, 11);
   assert.equal(buf.view().truncatedBytes, 10);
+});
+
+test("an oversized chunk evicts everything retained before it", () => {
+  const buf = new OutputBuffer(8);
+  buf.push("abcd");
+  buf.push("0123456789"); // 10 bytes > cap: "abcd" evicted, chunk tail-trimmed
+  const view = buf.view();
+  assert.equal(view.text, "23456789");
+  assert.equal(view.totalBytes, 14);
+  assert.equal(view.truncatedBytes, 6);
+});
+
+test("an oversized chunk cut lands on a UTF-8 code point boundary", () => {
+  const buf = new OutputBuffer(5);
+  buf.push("ééééé"); // 10 bytes; naive cut at byte 5 would split an é
+  const view = buf.view();
+  assert.equal(view.text, "éé"); // 4 bytes retained (5 would split)
+  assert.equal(view.totalBytes, 10);
+  assert.equal(view.truncatedBytes, 6);
+  assert.ok(!view.text.includes("�"));
+});
+
+test("spill receives the complete oversized chunk before trimming", () => {
+  const spilled: string[] = [];
+  const buf = new OutputBuffer(4, (chunk) => spilled.push(chunk));
+  buf.push("0123456789");
+  assert.deepEqual(spilled, ["0123456789"]);
+  assert.equal(buf.view().text, "6789");
 });
 
 test("byte accounting uses UTF-8 byte length, not string length", () => {

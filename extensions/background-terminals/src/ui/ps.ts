@@ -17,7 +17,13 @@ import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, formatExit, type TerminalSnapshot } from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
-import { createOutputLineCache } from "./output-view.ts";
+import { createOutputLineCache, sanitizeText } from "./output-view.ts";
+
+/** One-line-safe rendering of model-provided text (titles, commands): a
+ * newline or control char inside a fixed-height row desyncs the renderer. */
+function oneLine(text: string): string {
+  return sanitizeText(text.replace(/\s+/g, " "));
+}
 
 function configuredKeys(
   keybindings: KeybindingsManager,
@@ -316,8 +322,8 @@ class TerminalDashboard implements Component {
       // Left: marker, status square, title, dim id
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const title = isSelected
-        ? theme.fg("accent", snap.title)
-        : theme.fg("text", snap.title);
+        ? theme.fg("accent", oneLine(snap.title))
+        : theme.fg("text", oneLine(snap.title));
       const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
 
       // Right: pid · elapsed · exit/status
@@ -507,7 +513,7 @@ class TerminalDetailView implements Component {
     lines.push(border);
     const header =
       `${statusGlyph(snap, theme)} ` +
-      theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
+      theme.fg("accent", theme.bold(`${snap.id} · ${oneLine(snap.title)}`)) +
       theme.fg(
         "muted",
         ` · ${snap.status} · ${formatElapsed(snap)} · pid ${snap.pid ?? "?"}`,
@@ -519,7 +525,7 @@ class TerminalDetailView implements Component {
     lines.push(truncateToWidth(header, width));
     lines.push(
       truncateToWidth(
-        theme.fg("dim", "$ ") + theme.fg("text", snap.command),
+        theme.fg("dim", "$ ") + theme.fg("text", oneLine(snap.command)),
         width,
       ),
     );
@@ -552,7 +558,10 @@ class TerminalDetailView implements Component {
     const noteRows: string[] = [];
     if (snap.errorText) {
       noteRows.push(
-        truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width),
+        truncateToWidth(
+          theme.fg("error", `error: ${oneLine(snap.errorText)}`),
+          width,
+        ),
       );
     }
     if (buffer.truncatedBytes > 0) {

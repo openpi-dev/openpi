@@ -19,6 +19,7 @@ import * as path from "node:path";
 import { Context, Effect, Exit, Fiber, Layer, Scope } from "effect";
 import {
   ConcurrencyLimitError,
+  formatExit,
   SpawnError,
   UnknownTerminalError,
   type TerminalSnapshot,
@@ -33,8 +34,14 @@ export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
 const STOP_TIMEOUT_MS = 5_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
-/** After exit, how long to wait for 'close' (stdio flush) before force-settling. */
-const CLOSE_GRACE_MS = 1_000;
+/** After termination, how long to wait for the natural close→flush→settle
+ * path before force-settling (a grandchild can hold the stdio pipes open). */
+const SETTLE_GRACE_MS = 1_000;
+/** Bound on waiting for spill WriteStreams to flush before settling; a hung
+ * filesystem must not leave an exited entry "running" (and kill() waiting).
+ * Terminate (≤2.5s) + settle grace (1s) + flush (1.5s) stays inside the 5s
+ * scope-close bound, so teardown remains bounded end to end. */
+const SPILL_FLUSH_TIMEOUT_MS = 1_500;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 
 function bounded(text: string) {
@@ -68,11 +75,19 @@ interface Entry {
   /** Set before signaling so a SIGTERM'd process that exits with a code still
    * reports "killed" — whichever settle lands first wins (settle is idempotent). */
   killRequested: boolean;
+  /** The child emitted 'error' (spawn failure etc.); settles as "failed".
+   * Kept separate from errorText, which also carries non-fatal notes
+   * (spill failures) that must not flip a clean exit to "failed". */
+  processErrored: boolean;
   /** 'exit' event observed (code/signal recorded). */
   exited: boolean;
   /** 'close' event observed (stdio flushed; the settle trigger). */
   stdioClosed: boolean;
-  closeWaiters: Array<() => void>;
+  /** A settle-after-spill-flush is in flight; don't start a second one. */
+  settling: boolean;
+  /** Resolved (once) when the entry settles; used by the scope finalizer to
+   * bound its wait for the natural close→flush→settle path. */
+  settleWaiters: Array<() => void>;
 }
 
 export interface StartOptions {
@@ -85,8 +100,14 @@ export interface KillResult {
   readonly id: string;
   readonly title: string;
   readonly status: TerminalStatus;
-  /** True when this call initiated the termination (entry was running). */
+  /** True when the entry was still running when this kill began. */
+  readonly wasRunning: boolean;
+  /** True when this call initiated the termination AND the entry settled as
+   * killed (a natural exit that won the race reports killed: false). */
   readonly killed: boolean;
+  /** Final exit rendering ("exit 0", "SIGTERM", ...) captured at settle time,
+   * so reports stay accurate even if the entry is pruned afterwards. */
+  readonly exit: string;
 }
 
 // --- Read model ----------------------------------------------------------------
@@ -228,15 +249,36 @@ const makeManager = Effect.gen(function* () {
     }
   };
 
-  /** Resolves on the next state change. Interruption unregisters the waiter. */
-  const nextChange = Effect.callback<void>((resume) => {
-    const waiter = () => resume(Effect.void);
-    changeWaiters.push(waiter);
-    return Effect.sync(() => {
-      const index = changeWaiters.indexOf(waiter);
-      if (index >= 0) changeWaiters.splice(index, 1);
+  /**
+   * Resolves once `isDone()` is true, re-checking on every state change.
+   * The predicate is evaluated synchronously INSIDE the callback registration:
+   * a plain check-then-wait loop has an instruction boundary between the
+   * check and the waiter registration where the Effect scheduler may yield —
+   * if the final settle's notify() lands in that window the waiter would
+   * register after the last-ever change and wait forever.
+   * Interruption unregisters the waiter.
+   */
+  const awaitCondition = (isDone: () => boolean) =>
+    Effect.callback<void>((resume) => {
+      if (isDone()) {
+        resume(Effect.void);
+        return;
+      }
+      const waiter = () => {
+        if (isDone()) {
+          resume(Effect.void);
+          return;
+        }
+        // Not settled yet: re-register for the next change (waiters are
+        // one-shot; notify() swaps the list out before invoking).
+        changeWaiters.push(waiter);
+      };
+      changeWaiters.push(waiter);
+      return Effect.sync(() => {
+        const index = changeWaiters.indexOf(waiter);
+        if (index >= 0) changeWaiters.splice(index, 1);
+      });
     });
-  });
 
   const runningCount = () =>
     [...entries.values()].filter((e) => e.snapshot.status === "running").length;
@@ -276,15 +318,33 @@ const makeManager = Effect.gen(function* () {
     }
   };
 
-  const closeSpillStreams = (entry: Entry) => {
-    for (const stream of entry.spillStreams) {
-      try {
-        stream.end();
-      } catch {
-        // Best effort; tmpdir contents are disposable.
-      }
-    }
+  /** End all spill streams; resolves when their buffers are flushed to disk
+   * (bounded), so a settle notification never points at a partial file. */
+  const flushSpillStreams = (entry: Entry) => {
+    const streams = entry.spillStreams;
     entry.spillStreams = [];
+    if (streams.length === 0) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let remaining = streams.length;
+      let done = false;
+      const finish = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve();
+      };
+      const timer = setTimeout(finish, SPILL_FLUSH_TIMEOUT_MS);
+      for (const stream of streams) {
+        try {
+          stream.end(() => {
+            if (--remaining === 0) finish();
+          });
+        } catch {
+          // Best effort; tmpdir contents are disposable.
+          if (--remaining === 0) finish();
+        }
+      }
+    });
   };
 
   /** Single settle path — idempotent; kill vs natural exit vs error races are
@@ -295,12 +355,14 @@ const makeManager = Effect.gen(function* () {
     s.settledAt = Date.now();
     s.status = entry.killRequested
       ? "killed"
-      : s.errorText !== undefined
+      : entry.processErrored
         ? "failed"
         : s.exitCode === 0
           ? "done"
           : "failed";
-    closeSpillStreams(entry);
+    const waiters = entry.settleWaiters;
+    entry.settleWaiters = [];
+    for (const waiter of waiters) waiter();
     const consumed = (killInterest.get(s.id) ?? 0) > 0;
     notify(s.id);
     try {
@@ -310,6 +372,15 @@ const makeManager = Effect.gen(function* () {
       // The parent session may be unavailable; settlement stays final.
     }
     pruneSettled();
+  };
+
+  /** Flush the spill files, then settle: the completion follow-up (and the
+   * kill() resolution) reference the spill path, so the full capture must be
+   * on disk before anyone is told about it. Idempotent via `settling`. */
+  const settleAfterFlush = (entry: Entry) => {
+    if (entry.settling || entry.snapshot.status !== "running") return;
+    entry.settling = true;
+    void flushSpillStreams(entry).then(() => settle(entry));
   };
 
   const resolveSpillDir = () => {
@@ -351,7 +422,9 @@ const makeManager = Effect.gen(function* () {
         spillPath,
         file,
         write: (chunk: string) => {
-          if (!broken) file.write(chunk);
+          // writableEnded guard: late 'data' after the settle flush must not
+          // error the ended stream (and falsely report the spill as broken).
+          if (!broken && !file.writableEnded) file.write(chunk);
         },
       };
     } catch {
@@ -438,9 +511,11 @@ const makeManager = Effect.gen(function* () {
             (file): file is fs.WriteStream => file !== undefined,
           ),
           killRequested: false,
+          processErrored: false,
           exited: false,
           stdioClosed: false,
-          closeWaiters: [],
+          settling: false,
+          settleWaiters: [],
         };
 
         // Plain-callback stream plumbing (the codex-backend precedent):
@@ -456,11 +531,14 @@ const makeManager = Effect.gen(function* () {
           stderrBuf.push(chunk);
           notify(id);
         });
-        // Spawn failures (ENOENT etc.) arrive via 'error', not a throw.
+        // Spawn failures (ENOENT etc.) arrive via 'error', not a throw. Node
+        // still emits 'close' afterwards (with a bogus errno as code), so
+        // record the failure here and let the close path do the one settle.
         child.once("error", (error) => {
+          entry.processErrored = true;
           snapshot.errorText ??= boundedError(error);
           entry.exited = true;
-          settle(entry);
+          settleAfterFlush(entry);
         });
         // Record code/signal on 'exit'; settle on 'close' so the completion
         // notification always carries the final flushed output.
@@ -472,12 +550,13 @@ const makeManager = Effect.gen(function* () {
         child.once("close", (code, signal) => {
           entry.exited = true;
           entry.stdioClosed = true;
-          snapshot.exitCode ??= code ?? undefined;
-          snapshot.signal ??= signal ?? undefined;
-          const waiters = entry.closeWaiters;
-          entry.closeWaiters = [];
-          for (const waiter of waiters) waiter();
-          settle(entry);
+          // Only trust close's code/signal when 'exit' never fired (a spawn
+          // 'error' close reports the errno, e.g. -2, as its code).
+          if (!entry.processErrored) {
+            snapshot.exitCode ??= code ?? undefined;
+            snapshot.signal ??= signal ?? undefined;
+          }
+          settleAfterFlush(entry);
         });
 
         // One teardown path: kill(), requestKill, pruning, disposeAll, and
@@ -485,38 +564,63 @@ const makeManager = Effect.gen(function* () {
         yield* Scope.provide(
           Effect.addFinalizer(() =>
             Effect.promise(async () => {
-              entry.killRequested ||= entry.snapshot.status === "running";
+              // Only claim "killed" when we are actually about to signal a
+              // live process; a natural exit that already happened (still
+              // waiting on 'close') keeps its truthful done/failed status.
+              entry.killRequested ||=
+                !entry.exited && entry.snapshot.status === "running";
               await terminateChild(child, () => entry.exited);
-              // Give stdio a bounded grace to flush + close, then force the
-              // settle: a grandchild holding the pipe open (detached into a
-              // new group) must not leave the entry "running" forever.
-              if (!entry.stdioClosed) {
+              // Give the natural close→flush→settle path a bounded grace,
+              // then force the settle: a grandchild holding the pipe open
+              // (detached into a new group) must not leave the entry
+              // "running" forever.
+              if (entry.snapshot.status === "running") {
                 await new Promise<void>((resolve) => {
-                  if (entry.stdioClosed) return resolve();
-                  const timer = setTimeout(resolve, CLOSE_GRACE_MS);
-                  entry.closeWaiters.push(() => {
+                  if (entry.snapshot.status !== "running") return resolve();
+                  const timer = setTimeout(resolve, SETTLE_GRACE_MS);
+                  entry.settleWaiters.push(() => {
                     clearTimeout(timer);
                     resolve();
                   });
                 });
               }
-              if (entry.snapshot.status === "running") {
-                entry.snapshot.errorText ??=
-                  "stdio did not close after termination; output may be incomplete";
+              if (entry.snapshot.status === "running" && !entry.settling) {
+                // Force the settle ourselves. When `settling` is set, the
+                // close path's flush→settle is already in flight (bounded by
+                // SPILL_FLUSH_TIMEOUT_MS) — settling here first would cite a
+                // spill file that is still being flushed.
+                if (!entry.stdioClosed) {
+                  entry.snapshot.errorText ??=
+                    "stdio did not close after termination; output may be incomplete";
+                }
+                entry.settling = true;
+                await flushSpillStreams(entry);
                 settle(entry);
               }
-              closeSpillStreams(entry);
             }),
           ),
           scope,
         );
 
+        // disposeAll may have swept the entries map while we were setting up;
+        // an entry added after the sweep would never be torn down. Close our
+        // own scope (kills the child) and fail instead (subagents precedent).
+        if (disposed) {
+          yield* closeEntryScope(entry);
+          return yield* new SpawnError({
+            message: "Background terminal manager shut down while starting.",
+          });
+        }
         entries.set(id, entry);
         notify(id);
         return snapshot as TerminalSnapshot;
       });
 
+      // Uninterruptible: between spawn() and entries.set there must be no
+      // window where an interrupt (tool abort, runtime dispose) leaves a
+      // live child that no scope/registry knows about. All steps are sync.
       return yield* doStart.pipe(
+        Effect.uninterruptible,
         Effect.ensuring(
           Effect.sync(() => {
             reserved--;
@@ -541,25 +645,38 @@ const makeManager = Effect.gen(function* () {
     );
 
   /** Kill one running entry: flag first (so the exit reports "killed"), then
-   * close the scope, whose finalizer terminates the tree and force-settles. */
+   * close the scope — whose finalizer terminates the tree and force-settles —
+   * in a DETACHED fiber. Once the flag is set the termination must actually
+   * happen; a tool abort interrupting the caller cannot cancel it (this is
+   * what makes "termination continues in the background" truthful). */
   const killEntry = (entry: Entry) =>
-    Effect.suspend(() => {
-      if (entry.snapshot.status !== "running") return Effect.void;
-      entry.killRequested = true;
-      return closeEntryScope(entry).pipe(
-        Effect.timeout(STOP_TIMEOUT_MS),
-        Effect.ignore,
+    Effect.sync(() => {
+      if (entry.snapshot.status !== "running") return;
+      // Only claim the kill when the process is still alive; if it already
+      // exited (waiting on stdio close) the natural status stays truthful.
+      entry.killRequested ||= !entry.exited;
+      const fiber = runDetached(
+        closeEntryScope(entry).pipe(
+          Effect.timeout(STOP_TIMEOUT_MS),
+          Effect.ignore,
+        ),
       );
+      cleanups.add(fiber);
+      fiber.addObserver(() => cleanups.delete(fiber));
     });
 
   const kill = (ids: ReadonlyArray<string>) =>
     Effect.suspend(() => {
       const unique = [...new Set(ids)];
-      const running = unique
-        .map((id) => entries.get(id))
-        .filter(
-          (entry): entry is Entry => entry?.snapshot.status === "running",
-        );
+      const byId = new Map(
+        unique
+          .map((id) => entries.get(id))
+          .filter((entry): entry is Entry => entry !== undefined)
+          .map((entry) => [entry.snapshot.id, entry]),
+      );
+      const running = [...byId.values()].filter(
+        (entry) => entry.snapshot.status === "running",
+      );
       const runningIds = running.map((entry) => entry.snapshot.id);
       // Mark consumed before signaling so this kill's settlements are not
       // ALSO queued as automatic follow-up messages to the model.
@@ -569,26 +686,34 @@ const makeManager = Effect.gen(function* () {
           concurrency: "unbounded",
         });
         // Resolve only after the exit/close events settled every snapshot.
-        while (running.some((entry) => entry.snapshot.status === "running")) {
-          yield* nextChange;
-        }
+        // The detached finalizers force-settle within bounded time, so this
+        // always terminates.
+        yield* awaitCondition(
+          () => !running.some((entry) => entry.snapshot.status === "running"),
+        );
+        // Capture the report BEFORE the ensuring below releases interest and
+        // prunes — a just-settled entry must not vanish out from under it.
+        return unique.map((id): KillResult => {
+          const snapshot = byId.get(id)?.snapshot;
+          const status = snapshot?.status ?? "killed";
+          const wasRunning = runningIds.includes(id);
+          return {
+            id,
+            title: snapshot?.title ?? "?",
+            status,
+            wasRunning,
+            // A natural exit can win the race with our SIGTERM; report what
+            // actually happened rather than claiming the kill did it.
+            killed: wasRunning && status === "killed",
+            exit: snapshot ? formatExit(snapshot) : "unknown",
+          };
+        });
       });
       return work.pipe(
         Effect.ensuring(
           Effect.sync(() => {
             releaseKillInterest(runningIds);
             pruneSettled();
-          }),
-        ),
-        Effect.map((): ReadonlyArray<KillResult> =>
-          unique.map((id) => {
-            const snapshot = entries.get(id)?.snapshot;
-            return {
-              id,
-              title: snapshot?.title ?? "?",
-              status: snapshot?.status ?? "killed",
-              killed: runningIds.includes(id),
-            };
           }),
         ),
       );

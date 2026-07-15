@@ -157,17 +157,21 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
     assert.equal(snap.status, "running");
 
     const report = await runTool(runtime, manager.kill([snap.id]));
-    assert.deepEqual(report, [
-      { id: snap.id, title: "immortal", status: "killed", killed: true },
-    ]);
+    assert.equal(report.length, 1);
+    assert.equal(report[0].id, snap.id);
+    assert.equal(report[0].title, "immortal");
+    assert.equal(report[0].status, "killed");
+    assert.equal(report[0].killed, true);
+    assert.equal(report[0].wasRunning, true);
+    assert.match(report[0].exit, /^SIG/);
     const after = manager.view.get(snap.id);
     assert.equal(after?.status, "killed");
     assert.ok(after?.signal);
 
     const second = await runTool(runtime, manager.kill([snap.id]));
-    assert.deepEqual(second, [
-      { id: snap.id, title: "immortal", status: "killed", killed: false },
-    ]);
+    assert.equal(second[0].killed, false);
+    assert.equal(second[0].wasRunning, false);
+    assert.equal(second[0].status, "killed");
   });
 });
 
@@ -353,6 +357,126 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     assert.equal(remaining.includes(settledIds[0]), false);
     // The latest settled entries survive.
     assert.equal(remaining.includes(settledIds[settledIds.length - 1]), true);
+  });
+});
+
+test("an unknown command settles failed with the shell's 127 exit code", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: "definitely-not-a-real-binary-12345",
+        title: "bogus",
+        cwd,
+      }),
+    );
+    const { snap: failed } = await settlement(manager, snap.id);
+    assert.equal(failed.status, "failed");
+    // sh -c wraps the command, so the shell reports "command not found".
+    assert.equal(failed.exitCode, 127);
+    assert.ok(
+      (failed.stderr.text ?? "").includes("not found"),
+      "stderr explains the failure",
+    );
+  });
+});
+
+test("a process 'error' event settles failed with errorText and no bogus exit code", async () => {
+  await withManager(async (manager, runtime) => {
+    // spawn() with a nonexistent cwd emits ENOENT via the 'error' event
+    // (the tool layer validates cwd; the manager must still be correct).
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: "true",
+        title: "bad-cwd",
+        cwd: "/definitely/not/a/real/dir-12345",
+      }),
+    );
+    const { snap: failed } = await settlement(manager, snap.id);
+    assert.equal(failed.status, "failed");
+    assert.match(failed.errorText ?? "", /ENOENT/);
+    // Node's 'close' after a spawn 'error' reports the errno (e.g. -2) as
+    // its code; that must not leak into exitCode.
+    assert.equal(failed.exitCode, undefined);
+    assert.equal(failed.signal, undefined);
+  });
+});
+
+test("the spill file holds the complete capture when the settle hook fires, beyond the in-memory cap", async () => {
+  await withManager(async (manager, runtime) => {
+    const chunk = 1 << 16; // 64 KiB per write
+    const writes = 48; // 3 MiB total > 2 MiB RETAINED_PER_STREAM
+    const totalBytes = chunk * writes;
+
+    let spillSizeAtSettle = -1;
+    const settledOnce = new Promise<TerminalSnapshot>((resolve) => {
+      manager.view.setOnSettled((snap) => {
+        // Measured inside the hook: the full capture must already be on disk
+        // when the completion follow-up (which cites this path) is queued.
+        if (snap.stdout.spillPath) {
+          spillSizeAtSettle = fs.statSync(snap.stdout.spillPath).size;
+        }
+        resolve(snap);
+      });
+    });
+
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(
+          `const s = "x".repeat(${chunk}); for (let i = 0; i < ${writes}; i++) process.stdout.write(s);`,
+        ),
+        title: "firehose",
+        cwd,
+      }),
+    );
+    const done = await settledOnce;
+    assert.equal(done.id, snap.id);
+    assert.equal(done.status, "done");
+    assert.equal(done.stdout.totalBytes, totalBytes);
+    // In-memory retention is bounded; the head was dropped.
+    assert.ok(done.stdout.truncatedBytes > 0, "head was truncated in memory");
+    assert.ok(
+      Buffer.byteLength(done.stdout.text) <= 2 * 1024 * 1024,
+      "retained text within the cap",
+    );
+    if (done.stdout.spillPath) {
+      assert.equal(
+        spillSizeAtSettle,
+        totalBytes,
+        "spill file was fully flushed before the settle hook",
+      );
+    }
+  });
+});
+
+test("aborting the kill wait does not cancel the termination", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setInterval(() => {}, 1000)"),
+        title: "abort-race",
+        cwd,
+      }),
+    );
+    const pid = snap.pid;
+    assert.ok(pid);
+
+    // Abort the tool call immediately: the kill wait is interrupted, but the
+    // SIGTERM→SIGKILL teardown must continue detached in the background.
+    const controller = new AbortController();
+    const killPromise = runTool(runtime, manager.kill([snap.id]), {
+      signal: controller.signal,
+      interruptMessage: "aborted",
+    });
+    controller.abort();
+    await assert.rejects(killPromise, /aborted/);
+
+    const { snap: after } = await settlement(manager, snap.id);
+    assert.equal(after.status, "killed");
+    assert.ok(await pollUntil(() => processGone(pid)), "process is gone");
   });
 });
 

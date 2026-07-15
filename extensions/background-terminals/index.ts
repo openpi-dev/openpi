@@ -52,6 +52,7 @@ import {
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
+import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
 
 const WIDGET_KEY = "background-terminals";
@@ -80,13 +81,20 @@ export default function (pi: ExtensionAPI) {
     return managerPromise;
   };
 
-  /** One-line widget directly above the editor, only while ≥1 is running. */
+  /** One-line widget directly above the editor, only while ≥1 is running.
+   * Called on every manager notification (including per-output-chunk), so it
+   * only touches setWidget when the running count actually changes —
+   * replacing the widget factory hundreds of times a second would churn
+   * component creation for no visible difference. */
+  let widgetRunning = 0;
   const updateWidget = (manager: TerminalManagerShape) => {
     if (!ui) return;
     try {
       const running = manager.view
         .list()
         .filter((snap) => snap.status === "running").length;
+      if (running === widgetRunning) return;
+      widgetRunning = running;
       if (running === 0) {
         ui.setWidget(WIDGET_KEY, undefined);
         return;
@@ -179,6 +187,7 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // UI may already be gone.
     }
+    widgetRunning = 0;
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
@@ -218,7 +227,10 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
-      const title = params.title.trim().slice(0, 80) || "terminal";
+      // Collapse whitespace (a newline inside a one-line UI row desyncs the
+      // TUI renderer) before bounding the length.
+      const title =
+        params.title.replace(/\s+/g, " ").trim().slice(0, 80) || "terminal";
       const snap = await runTool(
         getRuntime(),
         manager.start({ command, title, cwd }),
@@ -326,12 +338,7 @@ export default function (pi: ExtensionAPI) {
       resultDelivery.consume(ids);
 
       return {
-        content: [
-          {
-            type: "text",
-            text: buildKillReport(report, (id) => manager.view.get(id)),
-          },
-        ],
+        content: [{ type: "text", text: buildKillReport(report) }],
         details: {
           results: report.map((entry) => ({
             id: entry.id,
@@ -374,8 +381,9 @@ export default function (pi: ExtensionAPI) {
       const content =
         typeof message.content === "string" ? message.content : "";
       // Remove only the summary line; the Error line (when present) is part
-      // of the actual result and must remain visible.
-      const body = content.split("\n").slice(1).join("\n").trim();
+      // of the actual result and must remain visible. The body carries raw
+      // process output — sanitize ANSI/control chars or the transcript smears.
+      const body = sanitizeText(content.split("\n").slice(1).join("\n").trim());
 
       if (expanded) {
         const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
