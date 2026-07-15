@@ -346,15 +346,16 @@ Decisions and rationale:
 child.once("exit", (code, signal) => {
   finishOutput(entry);       // flush any pending partial decode
   settle(entry, {
-    status: entry.killRequested ? "killed" : code === 0 ? "done" : "failed",
+    status: entry.killSignaled ? "killed" : code === 0 ? "done" : "failed",
     exitCode: code ?? undefined,
     signal: signal ?? undefined,
   });
 });
 ```
 
-  `killRequested` is set by `kill()` before signaling so a SIGTERM'd process that exits with a
-  code (some shells translate) still reports `killed`. Settle is idempotent (§4).
+  `killSignaled` is set in the same synchronous effect that sends SIGTERM, so a process that
+  exits before signaling keeps its natural status while a signaled process reports `killed`.
+  Settle is idempotent (§4).
 - **cwd semantics.** The tool takes optional `working_dir`; resolve with
   `path.resolve(ctx.cwd, params.working_dir ?? ".")` and validate
   `fs.existsSync(cwd) && fs.statSync(cwd).isDirectory()` in the tool handler *before* touching
@@ -457,7 +458,7 @@ const settled = yield* Deferred.make<void>();
 yield* Scope.provide(
   Effect.addFinalizer(() =>
     Effect.gen(function* () {
-      yield* terminateChild(child, () => entry.stdioClosed);
+      yield* terminateChild(child, () => entry.stdioClosed, markKillSignaled);
       yield* Deferred.await(settled).pipe(
         Effect.timeout(SETTLE_GRACE_MS),
         Effect.ignore,
@@ -470,7 +471,7 @@ yield* Scope.provide(
 entries.set(id, { snapshot, child, scope, stdoutBuf, stderrBuf, settled });
 ```
 
-`kill(ids)` then is: mark `killRequested`, `Scope.close(entry.scope, Exit.void)` (bounded with
+`kill(ids)` then is: `Scope.close(entry.scope, Exit.void)` (bounded with
 `Effect.timeout(STOP_TIMEOUT_MS)` + `Effect.ignore`) in the scoped cleanup `FiberSet`, then
 await every captured entry's `Deferred`. Return per-id `{ id, status, killed: boolean }`
 results and treat already-settled ids as no-ops rather than errors.
@@ -484,7 +485,7 @@ results and treat already-settled ids as no-ops rather than errors.
 - **Spawn vs concurrent spawn past the cap** → synchronous reservation before first yield
   (`reserved++` inside `Effect.suspend`; decrement in `Effect.ensuring`).
 - **Kill vs natural exit** → idempotent `settle` with one authoritative precedence rule. If
-  kill begins while the shell is still live, set `killRequested` before signaling and report
+  kill reaches a live shell, set `killSignaled` in the same effect that signals it and report
   `killed`. If the shell's `exit` event was already observed, preserve its natural
   `done`/`failed` status even when cleanup must still signal descendants holding stdio open.
   A missing `close` after `exit` starts a bounded grace, then closes the entry scope so the
@@ -889,9 +890,9 @@ tricks; they exist on any machine running pi)
    process-group SIGTERM leaves node servers running after pi exits (codex.ts `killTree`
    comment).
 7. **Settle must be idempotent and single-sourced** — kill vs exit vs error events race;
-   `if (status !== "running") return` in settle. Set `killRequested` before signaling only
-   while the shell is live; an already-observed natural exit keeps `done`/`failed` even if its
-   surviving process group still needs cleanup.
+   `if (status !== "running") return` in settle. Set `killSignaled` atomically with SIGTERM
+   only while the shell is live; an already-observed natural exit keeps `done`/`failed` even
+   if its surviving process group still needs cleanup.
 8. **Never queue messages into a dying session** — `disposed` guard around `onSettled`, and
    try/catch around `pi.sendMessage` (workflows wraps its follow-up send in try/catch:
    "Session may be shutting down").

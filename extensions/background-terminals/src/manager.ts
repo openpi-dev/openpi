@@ -81,9 +81,9 @@ interface Entry {
   stdoutBuf: OutputBuffer;
   stderrBuf: OutputBuffer;
   spillStreams: fs.WriteStream[];
-  /** Set before signaling so a SIGTERM'd process that exits with a code still
-   * reports "killed" — whichever settle lands first wins (settle is idempotent). */
-  killRequested: boolean;
+  /** Set in the same synchronous effect that sends SIGTERM so a natural exit
+   * before signaling keeps its truthful status. */
+  killSignaled: boolean;
   /** The child emitted 'error' (spawn failure etc.); settles as "failed".
    * Kept separate from errorText, which also carries non-fatal notes
    * (spill failures) that must not flip a clean exit to "failed". */
@@ -241,11 +241,18 @@ function awaitChildClose(child: ChildProcess, closed: () => boolean) {
 /** SIGTERM → deadline → SIGKILL; waits for stdio closure rather than only the
  * shell's exit because descendants can keep the inherited pipes and process
  * group alive after the shell itself is gone. */
-function terminateChild(child: ChildProcess, closed: () => boolean) {
+function terminateChild(
+  child: ChildProcess,
+  closed: () => boolean,
+  onSignal: () => void,
+) {
   return Effect.suspend(() => {
     if (closed()) return Effect.void;
     return Effect.gen(function* () {
-      yield* Effect.sync(() => killTree(child, "SIGTERM"));
+      yield* Effect.sync(() => {
+        onSignal();
+        killTree(child, "SIGTERM");
+      });
       yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(FORCE_KILL_AFTER_MS),
         Effect.ignore,
@@ -380,7 +387,7 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
-    s.status = entry.killRequested
+    s.status = entry.killSignaled
       ? "killed"
       : entry.processErrored
         ? "failed"
@@ -577,7 +584,7 @@ const makeManager = Effect.gen(function* () {
           spillStreams: [stdoutSpill?.file, stderrSpill?.file].filter(
             (file): file is fs.WriteStream => file !== undefined,
           ),
-          killRequested: false,
+          killSignaled: false,
           processErrored: false,
           exited: false,
           stdioClosed: false,
@@ -639,9 +646,14 @@ const makeManager = Effect.gen(function* () {
               // Only claim "killed" when we are actually about to signal a
               // live process; a natural exit that already happened (still
               // waiting on 'close') keeps its truthful done/failed status.
-              entry.killRequested ||=
-                !entry.exited && entry.snapshot.status === "running";
-              yield* terminateChild(child, () => entry.stdioClosed);
+              yield* terminateChild(
+                child,
+                () => entry.stdioClosed,
+                () => {
+                  entry.killSignaled ||=
+                    !entry.exited && entry.snapshot.status === "running";
+                },
+              );
               // Give the natural close→flush→settle path a bounded grace,
               // then force the settle: a grandchild holding the pipe open
               // (detached into a new group) must not leave the entry
@@ -712,17 +724,14 @@ const makeManager = Effect.gen(function* () {
       },
     );
 
-  /** Kill one running entry: flag first (so the exit reports "killed"), then
-   * close the scope — whose finalizer terminates the tree and force-settles —
+  /** Kill one running entry: close the scope — whose finalizer marks the kill
+   * at the signal point, terminates the tree, and force-settles —
    * in a DETACHED fiber. Once the flag is set the termination must actually
    * happen; a tool abort interrupting the caller cannot cancel it (this is
    * what makes "termination continues in the background" truthful). */
   const killEntry = (entry: Entry) =>
     Effect.sync(() => {
       if (entry.snapshot.status !== "running") return;
-      // Only claim the kill when the process is still alive; if it already
-      // exited (waiting on stdio close) the natural status stays truthful.
-      entry.killRequested ||= !entry.exited;
       runCleanup(
         closeEntryScope(entry).pipe(
           Effect.timeout(STOP_TIMEOUT_MS),

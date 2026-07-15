@@ -377,6 +377,43 @@ test(
   },
 );
 
+test(
+  "kill preserves a natural exit observed before the signal point",
+  { skip: process.platform === "win32" },
+  async () => {
+    await withManager(async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.start({
+          command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+          title: "natural-race",
+          cwd,
+        }),
+      );
+      assert.ok(
+        await pollUntil(() =>
+          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+        ),
+      );
+      const match = /child:(\d+)/.exec(
+        manager.view.get(snap.id)?.stdout.text ?? "",
+      );
+      assert.ok(match);
+      const grandchild = Number(match[1]);
+      assert.ok(snap.pid);
+      assert.ok(await pollUntil(() => processGone(snap.pid!)));
+      assert.equal(manager.view.get(snap.id)?.status, "running");
+
+      const [result] = await runTool(runtime, manager.kill([snap.id]));
+      assert.equal(result.wasRunning, true);
+      assert.equal(result.killed, false);
+      assert.equal(result.status, "done");
+      assert.equal(result.exit, "exit 0");
+      assert.ok(await pollUntil(() => processGone(grandchild)));
+    });
+  },
+);
+
 test("concurrency cap rejects an extra start; a failed spawn releases its slot", async () => {
   await withManager(async (manager, runtime) => {
     const spawns = await runTool(
