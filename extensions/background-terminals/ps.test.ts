@@ -4,7 +4,11 @@ import {
   reconcileDashboardSelection,
   type DashboardSelection,
 } from "./src/ui/ps.ts";
-import { buildOutputLines, sanitizeText } from "./src/ui/output-view.ts";
+import {
+  buildOutputLines,
+  createOutputLineCache,
+  sanitizeText,
+} from "./src/ui/output-view.ts";
 
 test("dashboard selection follows its terminal id and falls back by row", () => {
   const selection: DashboardSelection = { id: "bt-7", index: 6 };
@@ -31,8 +35,30 @@ test("dashboard selection follows its terminal id and falls back by row", () => 
 
 test("sanitizeText strips ANSI, tabs, and control characters", () => {
   assert.equal(sanitizeText("\u001b[31mred\u001b[0m"), "red");
+  assert.equal(sanitizeText("\u001b[12345Cshifted"), "shifted");
+  assert.equal(sanitizeText("\u001b]0;window title\u0007output"), "output");
+  assert.equal(
+    sanitizeText("\u001b]8;;https://example.com\u001b\\link\u001b]8;;\u001b\\"),
+    "link",
+  );
   assert.equal(sanitizeText("a\tb"), "a  b");
   assert.equal(sanitizeText("a\u0007b\u0000c"), "abc");
+});
+
+test("output line cache reuses a version/width key and invalidates either dimension", () => {
+  const cache = createOutputLineCache();
+  const first = cache.get("first", 1, 80);
+  const sameKey = cache.get("different text is intentionally ignored", 1, 80);
+  assert.equal(sameKey, first);
+  assert.deepEqual(sameKey, ["first"]);
+
+  const newVersion = cache.get("second", 2, 80);
+  assert.notEqual(newVersion, first);
+  assert.deepEqual(newVersion, ["second"]);
+
+  const newWidth = cache.get("x".repeat(25), 2, 10);
+  assert.notEqual(newWidth, newVersion);
+  assert.ok(newWidth.length > 1);
 });
 
 test("buildOutputLines wraps long lines and keeps only the final CR segment", () => {

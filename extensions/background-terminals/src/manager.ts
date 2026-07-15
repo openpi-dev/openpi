@@ -93,6 +93,9 @@ interface Entry {
   stdioClosed: boolean;
   /** A settle-after-spill-flush is in flight; don't start a second one. */
   settling: boolean;
+  /** The shell exited without stdio closing; a bounded scope close is queued
+   * to reap descendants that still hold the inherited pipes open. */
+  exitCleanupStarted: boolean;
   /** Completed exactly once when the entry settles. Kill callers and the scope
    * finalizer can all await the same result without missing a notification. */
   settled: Deferred.Deferred<void>;
@@ -173,6 +176,31 @@ function shellInvocation(command: string) {
 /** Signal the whole process group on POSIX so descendants (servers a shell
  * command spawned) die with it; a wedged child must not orphan its tree. */
 function killTree(child: ChildProcess, signal: NodeJS.Signals) {
+  if (process.platform === "win32" && child.pid) {
+    try {
+      const killer = spawn(
+        "taskkill",
+        [
+          "/pid",
+          String(child.pid),
+          "/T",
+          ...(signal === "SIGKILL" ? ["/F"] : []),
+        ],
+        { stdio: "ignore", windowsHide: true },
+      );
+      killer.once("error", () => {
+        try {
+          child.kill(signal);
+        } catch {
+          // Process may already be gone.
+        }
+      });
+      killer.unref();
+      return;
+    } catch {
+      // Fall through to the direct signal when taskkill cannot be launched.
+    }
+  }
   if (process.platform !== "win32" && child.pid) {
     try {
       process.kill(-child.pid, signal);
@@ -188,33 +216,34 @@ function killTree(child: ChildProcess, signal: NodeJS.Signals) {
   }
 }
 
-/** Await the Node exit event without retaining a listener after interruption. */
-function awaitChildExit(child: ChildProcess, exited: () => boolean) {
+/** Await stdio closure without retaining a listener after interruption. */
+function awaitChildClose(child: ChildProcess, closed: () => boolean) {
   return Effect.callback<void>((resume) => {
-    if (exited()) {
+    if (closed()) {
       resume(Effect.void);
       return;
     }
-    const onExit = () => resume(Effect.void);
-    child.once("exit", onExit);
-    return Effect.sync(() => child.off("exit", onExit));
+    const onClose = () => resume(Effect.void);
+    child.once("close", onClose);
+    return Effect.sync(() => child.off("close", onClose));
   });
 }
 
-/** SIGTERM → deadline → SIGKILL; completes once exit is observed (or shortly
- * after the force kill, so teardown can never hang on a wedged process). */
-function terminateChild(child: ChildProcess, exited: () => boolean) {
+/** SIGTERM → deadline → SIGKILL; waits for stdio closure rather than only the
+ * shell's exit because descendants can keep the inherited pipes and process
+ * group alive after the shell itself is gone. */
+function terminateChild(child: ChildProcess, closed: () => boolean) {
   return Effect.suspend(() => {
-    if (exited()) return Effect.void;
+    if (closed()) return Effect.void;
     return Effect.gen(function* () {
       yield* Effect.sync(() => killTree(child, "SIGTERM"));
-      yield* awaitChildExit(child, exited).pipe(
+      yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(FORCE_KILL_AFTER_MS),
         Effect.ignore,
       );
-      if (exited()) return;
+      if (closed()) return;
       yield* Effect.sync(() => killTree(child, "SIGKILL"));
-      yield* awaitChildExit(child, exited).pipe(
+      yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(500),
         Effect.ignore,
       );
@@ -232,6 +261,12 @@ const makeManager = Effect.gen(function* () {
   const runCleanup = yield* FiberSet.runtime(cleanupFibers)();
 
   const entries = new Map<string, Entry>();
+  /** Small immutable tombstones preserve truthful kill reports if pruning
+   * races the tool boundary after an id was validated. */
+  const settledHistory = new Map<
+    string,
+    Pick<KillResult, "title" | "status" | "exit">
+  >();
   /** ids with an in-flight kill() collecting the result (settle → consumed). */
   const killInterest = new Map<string, number>();
   const listeners = new Set<() => void>();
@@ -316,7 +351,18 @@ const makeManager = Effect.gen(function* () {
           }
         }),
       { concurrency: "unbounded", discard: true },
-    ).pipe(Effect.timeout(SPILL_FLUSH_TIMEOUT_MS), Effect.ignore);
+    ).pipe(
+      Effect.timeoutOrElse({
+        duration: SPILL_FLUSH_TIMEOUT_MS,
+        orElse: () =>
+          Effect.sync(() => {
+            entry.stdoutBuf.spillPath = undefined;
+            entry.stderrBuf.spillPath = undefined;
+            entry.snapshot.errorText ??=
+              "Full-log spill flush timed out; full output may be incomplete";
+          }),
+      }),
+    );
   };
 
   /** Single settle path — idempotent; kill vs natural exit vs error races are
@@ -332,6 +378,11 @@ const makeManager = Effect.gen(function* () {
         : s.exitCode === 0
           ? "done"
           : "failed";
+    settledHistory.set(s.id, {
+      title: s.title,
+      status: s.status,
+      exit: formatExit(s),
+    });
     // Completing the Deferred can immediately resume kill waiters, whose
     // ensuring blocks release interest. Snapshot consumption first so the
     // settle hook observes the interest that existed when settlement won.
@@ -360,12 +411,33 @@ const makeManager = Effect.gen(function* () {
     );
   };
 
+  const scheduleExitCleanup = (entry: Entry) => {
+    if (entry.exitCleanupStarted) return;
+    entry.exitCleanupStarted = true;
+    runCleanup(
+      Effect.sleep(SETTLE_GRACE_MS).pipe(
+        Effect.andThen(
+          Effect.suspend(() =>
+            entry.snapshot.status === "running" && !entry.stdioClosed
+              ? closeEntryScope(entry).pipe(
+                  Effect.timeout(STOP_TIMEOUT_MS),
+                  Effect.ignore,
+                )
+              : Effect.void,
+          ),
+        ),
+      ),
+    );
+  };
+
   const resolveSpillDir = () => {
     if (spillDir !== undefined) return spillDir ?? undefined;
     try {
       const base = path.join(os.tmpdir(), "pi-background-terminals");
-      fs.mkdirSync(base, { recursive: true });
+      fs.mkdirSync(base, { recursive: true, mode: 0o700 });
+      fs.chmodSync(base, 0o700);
       spillDir = fs.mkdtempSync(path.join(base, "session-"));
+      fs.chmodSync(spillDir, 0o700);
     } catch {
       spillDir = null;
     }
@@ -381,7 +453,10 @@ const makeManager = Effect.gen(function* () {
     if (!dir) return undefined;
     const spillPath = path.join(dir, `${id}.${stream}.log`);
     try {
-      const file = fs.createWriteStream(spillPath, { flags: "a" });
+      const file = fs.createWriteStream(spillPath, {
+        flags: "a",
+        mode: 0o600,
+      });
       let broken = false;
       file.on("error", (error) => {
         broken = true;
@@ -493,6 +568,7 @@ const makeManager = Effect.gen(function* () {
           exited: false,
           stdioClosed: false,
           settling: false,
+          exitCleanupStarted: false,
           settled,
         };
 
@@ -524,6 +600,10 @@ const makeManager = Effect.gen(function* () {
           entry.exited = true;
           snapshot.exitCode = code ?? undefined;
           snapshot.signal = signal ?? undefined;
+          // A descendant can keep the pipes open after the shell exits. Give
+          // close a short natural grace, then close the scope to terminate
+          // the surviving process group and force a bounded settlement.
+          scheduleExitCleanup(entry);
         });
         child.once("close", (code, signal) => {
           entry.exited = true;
@@ -547,7 +627,7 @@ const makeManager = Effect.gen(function* () {
               // waiting on 'close') keeps its truthful done/failed status.
               entry.killRequested ||=
                 !entry.exited && entry.snapshot.status === "running";
-              yield* terminateChild(child, () => entry.exited);
+              yield* terminateChild(child, () => entry.stdioClosed);
               // Give the natural close→flush→settle path a bounded grace,
               // then force the settle: a grandchild holding the pipe open
               // (detached into a new group) must not leave the entry
@@ -669,17 +749,20 @@ const makeManager = Effect.gen(function* () {
         // prunes — a just-settled entry must not vanish out from under it.
         return unique.map((id): KillResult => {
           const snapshot = byId.get(id)?.snapshot;
-          const status = snapshot?.status ?? "killed";
+          const history = settledHistory.get(id);
+          const status = snapshot?.status ?? history?.status ?? "killed";
           const wasRunning = runningIds.includes(id);
           return {
             id,
-            title: snapshot?.title ?? "?",
+            title: snapshot?.title ?? history?.title ?? "?",
             status,
             wasRunning,
             // A natural exit can win the race with our SIGTERM; report what
             // actually happened rather than claiming the kill did it.
             killed: wasRunning && status === "killed",
-            exit: snapshot ? formatExit(snapshot) : "unknown",
+            exit: snapshot
+              ? formatExit(snapshot)
+              : (history?.exit ?? "unknown"),
           };
         });
       });
@@ -713,6 +796,11 @@ const makeManager = Effect.gen(function* () {
       Effect.timeout(STOP_TIMEOUT_MS),
       Effect.ignore,
     );
+    yield* Effect.sync(() => {
+      const dir = spillDir;
+      spillDir = null;
+      if (dir) fs.rmSync(dir, { recursive: true, force: true });
+    });
     yield* Effect.sync(() => notify());
   });
 

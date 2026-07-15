@@ -8,6 +8,8 @@
 
 import assert from "node:assert/strict";
 import * as fs from "node:fs";
+import * as os from "node:os";
+import * as path from "node:path";
 import test from "node:test";
 import { Effect } from "effect";
 import type { TerminalSnapshot } from "./src/domain.ts";
@@ -118,6 +120,13 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
         fs.readFileSync(done.stdout.spillPath, "utf8"),
         "out-line\n",
       );
+      if (process.platform !== "win32") {
+        assert.equal(fs.statSync(done.stdout.spillPath).mode & 0o777, 0o600);
+        assert.equal(
+          fs.statSync(path.dirname(done.stdout.spillPath)).mode & 0o777,
+          0o700,
+        );
+      }
     }
     if (done.stderr.spillPath) {
       assert.equal(
@@ -264,12 +273,14 @@ test("concurrent overlapping multi-id kills observe each settlement exactly once
 
 test("kill terminates the whole process tree (grandchildren die)", async () => {
   await withManager(async (manager, runtime) => {
+    const sentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-tree-test-"));
+    const sentinel = path.join(sentinelDir, "heartbeat");
     const snap = await runTool(
       runtime,
       manager.start({
         // sh spawns node in the background and prints the grandchild pid,
         // then waits forever so the group stays alive.
-        command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; wait`,
+        command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & echo "child:$!"; wait`,
         title: "tree",
         cwd,
       }),
@@ -287,14 +298,78 @@ test("kill terminates the whole process tree (grandchildren die)", async () => {
     assert.ok(match, "parsed grandchild pid");
     const grandchild = Number(match[1]);
     assert.equal(processGone(grandchild), false);
+    assert.ok(
+      await pollUntil(() => fs.existsSync(sentinel)),
+      "heartbeat exists",
+    );
+    const heartbeatBefore = fs.readFileSync(sentinel, "utf8");
+    assert.ok(
+      await pollUntil(
+        () => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore,
+      ),
+      "heartbeat belongs to the live grandchild",
+    );
 
     await runTool(runtime, manager.kill([snap.id]));
     assert.ok(
       await pollUntil(() => processGone(grandchild)),
       "grandchild process is gone after group kill",
     );
+    const stoppedAt = fs.readFileSync(sentinel, "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      fs.readFileSync(sentinel, "utf8"),
+      stoppedAt,
+      "the unique grandchild heartbeat stopped",
+    );
+    fs.rmSync(sentinelDir, { recursive: true, force: true });
   });
 });
+
+test(
+  "a shell exit with inherited pipes open settles naturally and reaps descendants",
+  { skip: process.platform === "win32" },
+  async () => {
+    await withManager(async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.start({
+          command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+          title: "exited-shell",
+          cwd,
+        }),
+      );
+      assert.ok(
+        await pollUntil(() =>
+          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+        ),
+        "descendant pid was printed",
+      );
+      const match = /child:(\d+)/.exec(
+        manager.view.get(snap.id)?.stdout.text ?? "",
+      );
+      assert.ok(match);
+      const grandchild = Number(match[1]);
+      assert.ok(snap.pid);
+      assert.ok(await pollUntil(() => processGone(snap.pid!)), "shell exited");
+      assert.equal(manager.view.get(snap.id)?.status, "running");
+
+      assert.ok(
+        await pollUntil(
+          () => manager.view.get(snap.id)?.status !== "running",
+          7_000,
+        ),
+        "entry settled after the bounded post-exit grace",
+      );
+      assert.equal(manager.view.get(snap.id)?.status, "done");
+      assert.equal(manager.view.get(snap.id)?.exitCode, 0);
+      assert.ok(
+        await pollUntil(() => processGone(grandchild)),
+        "surviving process-group descendant was reaped",
+      );
+    });
+  },
+);
 
 test("concurrency cap rejects an extra start; a failed spawn releases its slot", async () => {
   await withManager(async (manager, runtime) => {
@@ -444,7 +519,31 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     assert.equal(remaining.includes(settledIds[0]), false);
     // The latest settled entries survive.
     assert.equal(remaining.includes(settledIds[settledIds.length - 1]), true);
+
+    const [historical] = await runTool(runtime, manager.kill([settledIds[0]]));
+    assert.equal(historical.title, "quick-0");
+    assert.equal(historical.status, "done");
+    assert.equal(historical.wasRunning, false);
+    assert.equal(historical.killed, false);
   });
+});
+
+test("runtime disposal removes the private spill directory", async () => {
+  const runtime = createTerminalRuntime();
+  const manager = await runtime.runPromise(TerminalManager);
+  const snap = await runTool(
+    runtime,
+    manager.start({ command: "printf cleanup", title: "cleanup", cwd }),
+  );
+  const { snap: done } = await settlement(manager, snap.id);
+  const spillDir = done.stdout.spillPath
+    ? path.dirname(done.stdout.spillPath)
+    : undefined;
+  if (spillDir) assert.equal(fs.existsSync(spillDir), true);
+
+  await runtime.dispose();
+
+  if (spillDir) assert.equal(fs.existsSync(spillDir), false);
 });
 
 test("an unknown command settles failed with the shell's 127 exit code", async () => {

@@ -21,8 +21,8 @@ they run, check on them, and stop them. It can **never** write to a running proc
 processes are launched with `stdin: "ignore"`; there is no send/steer surface at all (this is
 the key simplification vs. subagents' `send()`).
 
-- Full stdout and stderr are captured **separately and completely** in memory (with an explicit
-  cap + spill-to-disk strategy, §7.6) so the user can inspect everything in the `/ps` viewer.
+- Full stdout and stderr are captured **separately and completely** in private spill files;
+  bounded in-memory tails keep `/ps` responsive (§7.4).
 - Tool responses to the model are **always truncated** with the pi truncation utilities.
 - When a process exits, the model is woken **exactly once** via `pi.sendMessage(...,
   { deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
@@ -318,8 +318,8 @@ const child = yield* Effect.try({
 
 Decisions and rationale:
 
-- **Shell execution.** The model supplies one `command` string; run it through a shell
-  (`/bin/sh -c` by default) so pipes/redirection work like the built-in bash tool. Honor the
+- **Shell execution.** The model supplies one `command` string; run it through the platform
+  shell (`/bin/sh -c` on POSIX, `cmd.exe /d /s /c` on Windows) so pipes/redirection work. Honor the
   user's configured shell if convenient (`~/.pi/agent/settings.json` has
   `"shellPath": ".../zsh-with-rc"`), but `/bin/sh` is an acceptable v1 — document which you
   pick in the tool description. Never `shell: true` with an args array (double-parse trap).
@@ -329,7 +329,8 @@ Decisions and rationale:
   remedy).
 - **`detached: true` on POSIX** gives the child its own process group, so kill can signal
   `-pid` and take down the whole tree (grandchildren from `npm run dev` etc.). `killTree`
-  keeps the direct-signal fallback when the group is gone. `terminateChild` uses Effect
+  keeps the direct-signal fallback when the group is gone; Windows uses `taskkill /T` and
+  adds `/F` for the force-kill phase. `terminateChild` uses Effect
   callbacks/timeouts: SIGTERM now, SIGKILL after 2s if needed, then a final 500ms bound.
   Do NOT call `child.unref()` — we want the exit event, and pi owns the lifetime anyway.
 - **Spawn failure semantics.** `spawn()` itself rarely throws; ENOENT arrives via
@@ -409,7 +410,13 @@ export class OutputBuffer {
 
   constructor(private maxRetainedBytes: number, private spill?: (chunk: string) => void) {}
 
-  push(chunk: string) { /* append; totalBytes += len; spill?.(chunk); evict head chunks while bytes > maxRetainedBytes, incrementing truncatedBytes */ }
+  push(chunk: string) {
+    /* Count and spill the complete chunk first. If the chunk alone exceeds
+       maxRetainedBytes, discard older retained chunks and UTF-8-safely trim
+       this chunk to its newest cap-sized tail. Otherwise append it and evict
+       older whole chunks until retained bytes fit. Every discarded byte
+       increments truncatedBytes; totalBytes counts the original input. */
+  }
   view(): OutputView { /* { text: this.chunks.join(""), totalBytes, truncatedBytes, spillPath } */ }
 }
 ```
@@ -425,14 +432,16 @@ reason). Resolution:
 - **In-memory retained cap: 2 MiB per stream per process** (so ≤ 8 procs × 2 streams × 2 MiB =
   32 MiB worst case). The newest output is always retained; the head is dropped.
 - **Spill-to-disk for the full capture** (this is what makes "full stdout/stderr" true even
-  past the cap): on entry creation, open two append-only files under
+  past the cap): create the shared/session directories with owner-only `0700` permissions,
+  then open two `0600` append-mode `WriteStream`s under
   `path.join(os.tmpdir(), "pi-background-terminals", sessionId, `${id}.stdout.log`)` (and
-  `.stderr.log`), append every chunk (fire-and-forget `fs.appendFile`, error → disable spill
-  and note it in `errorText`). The `/ps` detail view shows the in-memory tail and, when
-  `truncatedBytes > 0`, a header line "first N KiB dropped from view — full log:
-  <spillPath>"; the model's tool results reference the same path. Delete the session's spill
-  dir in `disposeAll` **only for settled entries older than the retention window**, or simply
-  leave them to the OS tmpdir cleaner (simplest, acceptable v1 — they're in tmpdir).
+  `.stderr.log`). A `WriteStream` serializes writes per stream; settlement ends and awaits
+  both streams behind a bounded flush barrier before publishing the result. A stream error or
+  flush timeout clears the affected full-log pointer and surfaces a bounded `errorText` note.
+  The `/ps` detail view shows the in-memory tail and, when `truncatedBytes > 0`, a header line
+  "first N KiB dropped from view — full log: <spillPath>"; model-facing results reference the
+  same path. `disposeAll` removes the private session spill directory after all entry scopes
+  and spill flushes complete, so secret-bearing logs do not outlive the owning pi session.
 - Precedent for "truncate + point at the full file": docs/extensions.md "Output Truncation"
   section recommends exactly this shape for tool results.
 
@@ -448,7 +457,7 @@ const settled = yield* Deferred.make<void>();
 yield* Scope.provide(
   Effect.addFinalizer(() =>
     Effect.gen(function* () {
-      yield* terminateChild(child, () => entry.exited);
+      yield* terminateChild(child, () => entry.stdioClosed);
       yield* Deferred.await(settled).pipe(
         Effect.timeout(SETTLE_GRACE_MS),
         Effect.ignore,
@@ -474,8 +483,12 @@ results and treat already-settled ids as no-ops rather than errors.
 
 - **Spawn vs concurrent spawn past the cap** → synchronous reservation before first yield
   (`reserved++` inside `Effect.suspend`; decrement in `Effect.ensuring`).
-- **Kill vs natural exit** → idempotent `settle`; `killRequested` decided *before* signaling;
-  whichever event lands first wins and the second is a no-op.
+- **Kill vs natural exit** → idempotent `settle` with one authoritative precedence rule. If
+  kill begins while the shell is still live, set `killRequested` before signaling and report
+  `killed`. If the shell's `exit` event was already observed, preserve its natural
+  `done`/`failed` status even when cleanup must still signal descendants holding stdio open.
+  A missing `close` after `exit` starts a bounded grace, then closes the entry scope so the
+  surviving process group is terminated and the entry cannot occupy a running slot forever.
 - **Exit event vs scope close ("stream ended unexpectedly")** → we have no pump, so this class
   disappears; the only settle source is the `exit`/`error` listener.
 - **Settle during teardown** → `if (!disposed) onSettled?.(...)` so a result is never queued
@@ -505,7 +518,7 @@ All model-facing strings live in `src/prompt.ts` (subagents convention). Registe
 
 ```ts
 parameters: Type.Object({
-  command: Type.String({ description: "Shell command line to run in the background (executed via sh -c). It receives no stdin (EOF immediately); interactive commands will not work." }),
+  command: Type.String({ description: "Shell command line to run in the background (sh -c on POSIX, cmd.exe /d /s /c on Windows). It receives no stdin (EOF immediately); interactive commands will not work." }),
   title: Type.String({ description: "Short human-readable name shown in listings and the UI" }),
   working_dir: Type.Optional(Type.String({ description: "Working directory (default: current working directory)" })),
 })
@@ -776,6 +789,9 @@ Consequences:
   `disposeAll` → every entry scope → `terminateChild` (SIGTERM→SIGKILL tree kill). This is
   the identical teardown in subagents index.ts lines 210–222; each scope close is bounded
   (5s timeout) so a wedged process cannot hang shutdown, and SIGKILL covers it anyway.
+- **Spill files do not survive the session either.** `disposeAll` first closes every entry
+  scope and awaits bounded spill flushes, then recursively removes its owner-only session
+  directory. Paths shown in the old transcript are intentionally session-lifetime pointers.
 - **No persistence / no resurrection.** Unlike workflows (which persists `workflow.json` and
   marks stale "running" runs as aborted on reload — dashboard.ts lines 286–297), v1 keeps no
   cross-session record: killed-on-shutdown processes simply disappear. Optionally append a
@@ -823,8 +839,10 @@ tricks; they exist on any machine running pi)
 2. non-zero exit → `failed`, exitCode captured.
 3. `kill` on a `setInterval` never-exiting script → `killed`, signal recorded, `kill()` only
    resolves after settle; second `kill` of same id reports already-settled, no error.
-4. process-tree termination: spawn `sh -c 'node -e "setInterval(()=>{},1e3)" & wait'`, kill,
-   assert the grandchild pid is gone (poll `process.kill(pid, 0)` throwing ESRCH).
+4. process-tree termination: spawn a grandchild that updates a unique heartbeat sentinel,
+   kill, then use bounded polling with an explicit timeout to confirm both that the process is
+   gone and that its unique sentinel stopped changing. The sentinel ties the assertion to the
+   spawned child so PID reuse cannot create a false pass.
 5. concurrency cap: cap+1 concurrent starts → last fails with ConcurrencyLimitError;
    reservation released on spawn failure (start a bogus binary → SpawnError → slot free).
 6. consumed semantics: settle during an in-flight `kill` reports `consumed: true`.
@@ -835,6 +853,8 @@ tricks; they exist on any machine running pi)
 10. aborted `bg_kill` wait → detached escalation still reaches SIGKILL and settles.
 11. overlapping multi-id kills → every caller observes every captured settlement; each
     settle hook fires once and consumed state remains true.
+12. shell `exit` without stdio `close` → bounded cleanup reaps the descendant holding the
+    pipes, preserves the shell's natural exit status, and releases the running slot.
 
 **`result-delivery.test.ts`** — consume-before-drain, drain-once (copy subagents' file).
 
@@ -869,8 +889,9 @@ tricks; they exist on any machine running pi)
    process-group SIGTERM leaves node servers running after pi exits (codex.ts `killTree`
    comment).
 7. **Settle must be idempotent and single-sourced** — kill vs exit vs error events race;
-   `if (status !== "running") return` in settle, decide `killed` via a flag set before
-   signaling.
+   `if (status !== "running") return` in settle. Set `killRequested` before signaling only
+   while the shell is live; an already-observed natural exit keeps `done`/`failed` even if its
+   surviving process group still needs cleanup.
 8. **Never queue messages into a dying session** — `disposed` guard around `onSettled`, and
    try/catch around `pi.sendMessage` (workflows wraps its follow-up send in try/catch:
    "Session may be shutting down").

@@ -21,7 +21,7 @@ import { createOutputLineCache, sanitizeText } from "./output-view.ts";
 
 /** One-line-safe rendering of model-provided text (titles, commands): a
  * newline or control char inside a fixed-height row desyncs the renderer. */
-function oneLine(text: string): string {
+function oneLine(text: string) {
   return sanitizeText(text.replace(/\s+/g, " "));
 }
 
@@ -32,7 +32,7 @@ function configuredKeys(
   return keybindings.getKeys(binding).join("/") || "unbound";
 }
 
-function statusGlyph(snap: TerminalSnapshot, theme: Theme): string {
+function statusGlyph(snap: TerminalSnapshot, theme: Theme) {
   switch (snap.status) {
     case "running":
       return theme.fg("warning", "■");
@@ -45,7 +45,7 @@ function statusGlyph(snap: TerminalSnapshot, theme: Theme): string {
   }
 }
 
-function statusWord(snap: TerminalSnapshot, theme: Theme): string {
+function statusWord(snap: TerminalSnapshot, theme: Theme) {
   switch (snap.status) {
     case "running":
       return theme.fg("warning", "running");
@@ -278,7 +278,7 @@ class TerminalDashboard implements Component {
     // Bottom border
     lines.push(
       theme.fg("border", "╰") +
-        theme.fg("border", "─".repeat(innerWidth)) +
+        theme.fg("border", "─".repeat(Math.max(0, innerWidth))) +
         theme.fg("border", "╯"),
     );
 

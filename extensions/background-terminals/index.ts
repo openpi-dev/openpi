@@ -137,13 +137,19 @@ export default function (pi: ExtensionAPI) {
         // when the current run settles. Either way exactly one delivery.
         { deliverAs: "followUp", triggerTurn: true },
       );
-    } catch {
-      // Session may be shutting down.
+      return true;
+    } catch (error) {
+      // Session may be shutting down, but retain the snapshot so any later
+      // agent-settled flush can retry instead of silently dropping it.
+      console.error("background-terminals: failed to deliver result", error);
+      return false;
     }
   };
 
   const flushResults = () => {
-    for (const snap of resultDelivery.drain()) deliverResult(snap);
+    for (const snap of resultDelivery.drain()) {
+      if (!deliverResult(snap)) resultDelivery.defer(snap);
+    }
   };
 
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {

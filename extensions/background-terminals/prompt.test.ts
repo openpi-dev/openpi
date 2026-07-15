@@ -2,10 +2,22 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { OutputView, TerminalSnapshot } from "./src/domain.ts";
 import {
+  BG_START_PARAMETER_DESCRIPTIONS,
+  BG_START_TOOL_DESCRIPTION,
   buildKillReport,
   buildStatusResult,
   buildTerminalResultMessage,
 } from "./src/prompt.ts";
+
+test("start descriptions identify the platform-specific shell contract", () => {
+  assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
+  assert.match(BG_START_TOOL_DESCRIPTION, /cmd\.exe \/d \/s \/c on Windows/);
+  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /sh -c on POSIX/);
+  assert.match(
+    BG_START_PARAMETER_DESCRIPTIONS.command,
+    /cmd\.exe \/d \/s \/c on Windows/,
+  );
+});
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
   return { text: "", totalBytes: 0, truncatedBytes: 0, ...overrides };
