@@ -1,8 +1,7 @@
-import assert from "node:assert/strict";
+import { assert, it } from "@effect/vitest";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
-import { Effect, Exit } from "effect";
+import { Effect } from "effect";
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   buildFdArgs,
@@ -17,6 +16,7 @@ import {
   releaseAsset,
   resolveBinary,
   TOOL_SPECS,
+  UnsupportedPlatformError,
   type BinaryEnv,
   type ReleaseAsset,
   type ResolvedBinary,
@@ -26,7 +26,7 @@ import { installNotifications } from "./index.ts";
 
 // --- argument construction -------------------------------------------------
 
-test("fd args: defaults list everything with the default limit", () => {
+it("fd args: defaults list everything with the default limit", () => {
   assert.deepEqual(buildFdArgs({}), [
     "--color=never",
     "--max-results",
@@ -36,7 +36,7 @@ test("fd args: defaults list everything with the default limit", () => {
   ]);
 });
 
-test("fd args: all options are translated and pattern stays behind --", () => {
+it("fd args: all options are translated and pattern stays behind --", () => {
   const args = buildFdArgs({
     pattern: "-rf",
     path: "@src",
@@ -65,13 +65,13 @@ test("fd args: all options are translated and pattern stays behind --", () => {
   ]);
 });
 
-test("fd args: out-of-range values are clamped", () => {
+it("fd args: out-of-range values are clamped", () => {
   const args = buildFdArgs({ max_depth: 500, limit: 1_000_000 });
-  assert.ok(args.includes("64"));
-  assert.ok(args.includes("10000"));
+  assert.isTrue(args.includes("64"));
+  assert.isTrue(args.includes("10000"));
 });
 
-test("rg args: defaults use smart-case and safe separators", () => {
+it("rg args: defaults use smart-case and safe separators", () => {
   assert.deepEqual(buildRgArgs({ pattern: "--help" }), [
     "--line-number",
     "--color=never",
@@ -85,7 +85,7 @@ test("rg args: defaults use smart-case and safe separators", () => {
   ]);
 });
 
-test("rg args: all options are translated", () => {
+it("rg args: all options are translated", () => {
   const args = buildRgArgs({
     pattern: "TODO",
     path: "@lib",
@@ -119,13 +119,13 @@ test("rg args: all options are translated", () => {
   ]);
 });
 
-test("rg args: case_sensitive false forces ignore-case", () => {
+it("rg args: case_sensitive false forces ignore-case", () => {
   const args = buildRgArgs({ pattern: "x", case_sensitive: false });
-  assert.ok(args.includes("--ignore-case"));
-  assert.ok(!args.includes("--smart-case"));
+  assert.isTrue(args.includes("--ignore-case"));
+  assert.isFalse(args.includes("--smart-case"));
 });
 
-test("path normalization strips leading @ and expands ~", () => {
+it("path normalization strips leading @ and expands ~", () => {
   assert.equal(normalizeSearchPath("@src/lib"), "src/lib");
   assert.equal(normalizeSearchPath("~"), homedir());
   assert.equal(normalizeSearchPath("~/projects"), join(homedir(), "projects"));
@@ -165,127 +165,172 @@ function makeEnv(options: {
 
 const darwinArm = { os: "darwin", arch: "arm64" } as const;
 
-test("binary resolution: system fd wins and nothing is installed", async () => {
-  const env = makeEnv({ available: ["fd"] });
-  const resolved = await Effect.runPromise(
-    resolveBinary(TOOL_SPECS.fd, "/repo/bin", darwinArm, env),
-  );
-  assert.deepEqual(resolved, { tool: "fd", command: "fd", source: "system" });
-  assert.equal(env.installs.length, 0);
-});
-
-test("binary resolution: fdfind is accepted as a system fd", async () => {
-  const env = makeEnv({ available: ["fdfind"] });
-  const resolved = await Effect.runPromise(
-    resolveBinary(TOOL_SPECS.fd, "/repo/bin", darwinArm, env),
-  );
-  assert.deepEqual(resolved, {
-    tool: "fd",
-    command: "fdfind",
-    source: "system",
-  });
-  assert.equal(env.installs.length, 0);
-});
-
-test("binary resolution: existing bin fallback is used silently", async () => {
-  const env = makeEnv({ available: ["/repo/bin/rg"] });
-  const resolved = await Effect.runPromise(
-    resolveBinary(TOOL_SPECS.rg, "/repo/bin", darwinArm, env),
-  );
-  assert.deepEqual(resolved, {
-    tool: "rg",
-    command: "/repo/bin/rg",
-    source: "bundled",
-  });
-  assert.equal(env.installs.length, 0);
-});
-
-test("binary resolution: missing everywhere triggers exactly one install", async () => {
-  const env = makeEnv({ available: [] });
-  const resolved = await Effect.runPromise(
-    resolveBinary(TOOL_SPECS.rg, "/repo/bin", darwinArm, env),
-  );
-  assert.equal(resolved.source, "installed");
-  assert.equal(resolved.command, "/repo/bin/rg");
-  assert.equal(env.installs.length, 1);
-  assert.match(
-    env.installs[0].url,
-    /^https:\/\/github\.com\/BurntSushi\/ripgrep\//,
-  );
-});
-
-test("binary resolution: install failure surfaces a typed error", async () => {
-  const env = makeEnv({ available: [], installShouldFail: true });
-  const exit = await Effect.runPromiseExit(
-    resolveBinary(TOOL_SPECS.fd, "/repo/bin", darwinArm, env),
-  );
-  assert.ok(Exit.isFailure(exit));
-});
-
-test("binary resolution: unsupported platform fails without installing", async () => {
-  const env = makeEnv({ available: [] });
-  const exit = await Effect.runPromiseExit(
-    resolveBinary(
+it.effect("binary resolution: system fd wins and nothing is installed", () =>
+  Effect.gen(function* () {
+    const env = makeEnv({ available: ["fd"] });
+    const resolved = yield* resolveBinary(
       TOOL_SPECS.fd,
       "/repo/bin",
-      { os: "linux", arch: "s390x" },
+      darwinArm,
       env,
-    ),
-  );
-  assert.ok(Exit.isFailure(exit));
-  assert.equal(env.installs.length, 0);
-});
+    );
 
-test("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
+    assert.deepEqual(resolved, {
+      tool: "fd",
+      command: "fd",
+      source: "system",
+    });
+    assert.equal(env.installs.length, 0);
+  }),
+);
+
+it.effect("binary resolution: fdfind is accepted as a system fd", () =>
+  Effect.gen(function* () {
+    const env = makeEnv({ available: ["fdfind"] });
+    const resolved = yield* resolveBinary(
+      TOOL_SPECS.fd,
+      "/repo/bin",
+      darwinArm,
+      env,
+    );
+
+    assert.deepEqual(resolved, {
+      tool: "fd",
+      command: "fdfind",
+      source: "system",
+    });
+    assert.equal(env.installs.length, 0);
+  }),
+);
+
+it.effect("binary resolution: existing bin fallback is used silently", () =>
+  Effect.gen(function* () {
+    const env = makeEnv({ available: ["/repo/bin/rg"] });
+    const resolved = yield* resolveBinary(
+      TOOL_SPECS.rg,
+      "/repo/bin",
+      darwinArm,
+      env,
+    );
+
+    assert.deepEqual(resolved, {
+      tool: "rg",
+      command: "/repo/bin/rg",
+      source: "bundled",
+    });
+    assert.equal(env.installs.length, 0);
+  }),
+);
+
+it.effect(
+  "binary resolution: missing everywhere triggers exactly one install",
+  () =>
+    Effect.gen(function* () {
+      const env = makeEnv({ available: [] });
+      const resolved = yield* resolveBinary(
+        TOOL_SPECS.rg,
+        "/repo/bin",
+        darwinArm,
+        env,
+      );
+
+      assert.equal(resolved.source, "installed");
+      assert.equal(resolved.command, "/repo/bin/rg");
+      assert.equal(env.installs.length, 1);
+      assert.match(
+        env.installs[0].url,
+        /^https:\/\/github\.com\/BurntSushi\/ripgrep\//,
+      );
+    }),
+);
+
+it.effect("binary resolution: install failure surfaces a typed error", () =>
+  Effect.gen(function* () {
+    const env = makeEnv({ available: [], installShouldFail: true });
+    const error = yield* Effect.flip(
+      resolveBinary(TOOL_SPECS.fd, "/repo/bin", darwinArm, env),
+    );
+
+    assert.instanceOf(error, InstallError);
+    assert.equal(error.message, "network down");
+  }),
+);
+
+it.effect(
+  "binary resolution: unsupported platform fails without installing",
+  () =>
+    Effect.gen(function* () {
+      const env = makeEnv({ available: [] });
+      const error = yield* Effect.flip(
+        resolveBinary(
+          TOOL_SPECS.fd,
+          "/repo/bin",
+          { os: "linux", arch: "s390x" },
+          env,
+        ),
+      );
+
+      assert.instanceOf(error, UnsupportedPlatformError);
+      assert.equal(env.installs.length, 0);
+    }),
+);
+
+it("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
   for (const os of ["darwin", "linux"] as const) {
     for (const arch of ["arm64", "x64"] as const) {
       for (const tool of ["fd", "rg"] as const) {
         const asset = releaseAsset(tool, { os, arch });
-        assert.ok(asset, `${tool} ${os}/${arch}`);
+        assert.isDefined(asset, `${tool} ${os}/${arch}`);
         assert.match(asset.url, /^https:\/\//);
-        assert.ok(asset.url.endsWith(asset.fileName));
+        assert.isTrue(asset.url.endsWith(asset.fileName));
         assert.match(asset.sha256, /^[a-f0-9]{64}$/);
       }
     }
   }
 });
 
-test("linux assets use statically linked musl builds", () => {
+it("linux assets use statically linked musl builds", () => {
   const asset = releaseAsset("fd", { os: "linux", arch: "x64" });
-  assert.ok(asset && asset.url.includes("unknown-linux-musl"));
+  assert.isTrue(asset?.url.includes("unknown-linux-musl"));
 });
 
-test("Intel macOS uses the latest fd release that publishes that target", () => {
+it("Intel macOS uses the latest fd release that publishes that target", () => {
   const asset = releaseAsset("fd", { os: "darwin", arch: "x64" });
   assert.equal(asset?.version, FD_INTEL_DARWIN_VERSION);
 });
 
-test("bounded downloads reject oversized declared and streamed bodies", async () => {
-  const request = HttpClientRequest.get("https://example.com/archive.tar.gz");
-  const declared = HttpClientResponse.fromWeb(
-    request,
-    new Response("small", {
-      headers: { "content-length": "100" },
-    }),
-  );
-  await assert.rejects(
-    Effect.runPromise(readBoundedResponse(declared, 10)),
-    /size limit/,
-  );
+it.effect(
+  "bounded downloads reject oversized declared and streamed bodies",
+  () =>
+    Effect.gen(function* () {
+      const request = HttpClientRequest.get(
+        "https://example.com/archive.tar.gz",
+      );
+      const declared = HttpClientResponse.fromWeb(
+        request,
+        new Response("small", {
+          headers: { "content-length": "100" },
+        }),
+      );
+      const declaredError = yield* Effect.flip(
+        readBoundedResponse(declared, 10),
+      );
+      assert.match(declaredError.message, /size limit/);
 
-  const streamed = HttpClientResponse.fromWeb(
-    request,
-    new Response("this body is too large"),
-  );
-  await assert.rejects(
-    Effect.runPromise(readBoundedResponse(streamed, 5)),
-    /size limit/,
-  );
-});
+      const streamed = HttpClientResponse.fromWeb(
+        request,
+        new Response("this body is too large"),
+      );
+      const streamedError = yield* Effect.flip(
+        readBoundedResponse(streamed, 5),
+      );
+      assert.match(streamedError.message, /size limit/);
+    }),
+);
 
 // --- notification policy ----------------------------------------------------
 
-test("notifications: only fresh installs notify", () => {
+it("notifications: only fresh installs notify", () => {
   const system: ResolvedBinary = {
     tool: "fd",
     command: "fd",
@@ -311,18 +356,18 @@ test("notifications: only fresh installs notify", () => {
 
 // --- output truncation -------------------------------------------------------
 
-test("output: small results pass through untouched", async () => {
+it("output: small results pass through untouched", async () => {
   const formatted = await formatOutput("a.ts\nb.ts\n", {
     tempPrefix: "pi-fd-",
     persistFullOutput: () => Promise.reject(new Error("should not persist")),
   });
   assert.equal(formatted.text, "a.ts\nb.ts");
   assert.equal(formatted.lineCount, 2);
-  assert.equal(formatted.truncated, false);
-  assert.equal(formatted.fullOutputPath, undefined);
+  assert.isFalse(formatted.truncated);
+  assert.isUndefined(formatted.fullOutputPath);
 });
 
-test("output: oversized results are truncated and persisted", async () => {
+it("output: oversized results are truncated and persisted", async () => {
   const bigOutput = Array.from({ length: 3000 }, (_, i) => `file-${i}.ts`).join(
     "\n",
   );
@@ -334,7 +379,7 @@ test("output: oversized results are truncated and persisted", async () => {
       return "/tmp/fake/output.txt";
     },
   });
-  assert.equal(formatted.truncated, true);
+  assert.isTrue(formatted.truncated);
   assert.equal(formatted.fullOutputPath, "/tmp/fake/output.txt");
   assert.equal(persisted, bigOutput);
   assert.match(formatted.text, /\[Output truncated: 2000 of 3000 lines/);
