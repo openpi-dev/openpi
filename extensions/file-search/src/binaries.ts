@@ -12,22 +12,15 @@
  * network. `liveBinaryEnv` is the real implementation.
  */
 
+import { NodeHttpClient, NodeServices } from "@effect/platform-node";
 import { execFile } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
-import {
-  chmod,
-  copyFile,
-  mkdir,
-  mkdtemp,
-  rename,
-  rm,
-  writeFile,
-} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
-import { Data, Effect } from "effect";
+import { Crypto, Data, Effect, Encoding, FileSystem, Stream } from "effect";
+import { FetchHttpClient, HttpClient } from "effect/unstable/http";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +30,7 @@ export const RG_VERSION = "15.2.0";
 
 const DOWNLOAD_TIMEOUT_MS = 30_000;
 const MAX_ARCHIVE_BYTES = 25 * 1024 * 1024;
+const MAX_DOWNLOAD_REDIRECTS = 10;
 
 const FD_SHA256: Readonly<Record<string, string>> = {
   "aarch64-apple-darwin":
@@ -232,34 +226,101 @@ function errorMessage(error: unknown) {
 }
 
 /** Read a response incrementally while enforcing the startup memory bound. */
-export async function readBoundedResponse(
-  response: Response,
+export function readBoundedResponse<E, R>(
+  response: {
+    readonly headers: Readonly<Record<string, string | undefined>>;
+    readonly stream: Stream.Stream<Uint8Array, E, R>;
+  },
   maxBytes = MAX_ARCHIVE_BYTES,
 ) {
-  const declaredLength = Number(response.headers.get("content-length"));
-  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
-    throw new Error(`download exceeds the ${maxBytes}-byte size limit`);
-  }
-  if (!response.body) throw new Error("download response had no body");
-
-  const reader = response.body.getReader();
-  const chunks: Uint8Array[] = [];
-  let totalBytes = 0;
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      totalBytes += value.byteLength;
-      if (totalBytes > maxBytes) {
-        await reader.cancel();
-        throw new Error(`download exceeds the ${maxBytes}-byte size limit`);
-      }
-      chunks.push(value);
+  return Effect.gen(function* () {
+    const declaredLength = Number(response.headers["content-length"]);
+    if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+      return yield* Effect.fail(
+        new Error(`download exceeds the ${maxBytes}-byte size limit`),
+      );
     }
-  } finally {
-    reader.releaseLock();
-  }
-  return Buffer.concat(chunks, totalBytes);
+
+    const result = yield* Stream.runFoldEffect(
+      response.stream,
+      () => ({ chunks: [] as Uint8Array[], totalBytes: 0 }),
+      (accumulator, chunk) => {
+        const totalBytes = accumulator.totalBytes + chunk.byteLength;
+        if (totalBytes > maxBytes) {
+          return Effect.fail(
+            new Error(`download exceeds the ${maxBytes}-byte size limit`),
+          );
+        }
+        return Effect.sync(() => {
+          accumulator.chunks.push(chunk);
+          accumulator.totalBytes = totalBytes;
+          return accumulator;
+        });
+      },
+    );
+
+    return Buffer.concat(result.chunks, result.totalBytes);
+  });
+}
+
+function downloadAsset(client: HttpClient.HttpClient, initialUrl: URL) {
+  const scopedClient = client.pipe(HttpClient.withScope);
+
+  return Effect.gen(function* () {
+    let url = initialUrl;
+
+    for (let redirects = 0; redirects <= MAX_DOWNLOAD_REDIRECTS; redirects++) {
+      if (url.protocol !== "https:") {
+        return yield* Effect.fail(
+          new Error(`refusing non-HTTPS download URL: ${url.href}`),
+        );
+      }
+
+      const result = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const response = yield* scopedClient.get(url);
+          if ([301, 302, 303, 307, 308].includes(response.status)) {
+            const location = response.headers.location;
+            if (!location) {
+              return yield* Effect.fail(
+                new Error(`redirect from ${url.href} had no location header`),
+              );
+            }
+            if (redirects === MAX_DOWNLOAD_REDIRECTS) {
+              return yield* Effect.fail(
+                new Error(
+                  `download exceeded ${MAX_DOWNLOAD_REDIRECTS} redirects`,
+                ),
+              );
+            }
+            if (!URL.canParse(location, url)) {
+              return yield* Effect.fail(
+                new Error(
+                  `download returned an invalid redirect URL: ${location}`,
+                ),
+              );
+            }
+            return { _tag: "Redirect" as const, url: new URL(location, url) };
+          }
+
+          if (response.status < 200 || response.status >= 300) {
+            return yield* Effect.fail(
+              new Error(`download failed with HTTP ${response.status}`),
+            );
+          }
+          return {
+            _tag: "Complete" as const,
+            bytes: yield* readBoundedResponse(response),
+          };
+        }),
+      );
+
+      if (result._tag === "Complete") return result.bytes;
+      url = result.url;
+    }
+
+    return yield* Effect.fail(new Error("download redirect handling failed"));
+  });
 }
 
 /** Real environment: probes via `--version`, installs via HTTPS + tar. */
@@ -279,69 +340,80 @@ export const liveBinaryEnv: BinaryEnv = {
       }
     }),
 
-  install: (asset, destination) =>
-    Effect.tryPromise({
-      try: async () => {
-        const url = new URL(asset.url);
-        if (url.protocol !== "https:") {
-          throw new Error(`refusing non-HTTPS download URL: ${asset.url}`);
-        }
-
-        const controller = new AbortController();
-        const timeout = setTimeout(
-          () => controller.abort(),
-          DOWNLOAD_TIMEOUT_MS,
+  install: (asset, destination) => {
+    const install = Effect.gen(function* () {
+      if (!URL.canParse(asset.url)) {
+        return yield* Effect.fail(
+          new Error(`invalid download URL: ${asset.url}`),
         );
-        let bytes: Buffer;
-        try {
-          const response = await fetch(asset.url, {
-            redirect: "follow",
-            signal: controller.signal,
-          });
-          if (!response.ok) {
-            throw new Error(`download failed with HTTP ${response.status}`);
-          }
-          if (new URL(response.url).protocol !== "https:") {
-            throw new Error(`refusing non-HTTPS redirect URL: ${response.url}`);
-          }
-          bytes = await readBoundedResponse(response);
-        } finally {
-          clearTimeout(timeout);
-        }
+      }
 
-        const digest = createHash("sha256").update(bytes).digest("hex");
-        if (digest !== asset.sha256) {
-          throw new Error(
+      const url = new URL(asset.url);
+      const client = yield* HttpClient.HttpClient;
+      const fs = yield* FileSystem.FileSystem;
+      const crypto = yield* Crypto.Crypto;
+      const bytes = yield* downloadAsset(client, url).pipe(
+        Effect.timeout(DOWNLOAD_TIMEOUT_MS),
+      );
+
+      const digestBytes = yield* crypto.digest("SHA-256", bytes);
+      const digest = Encoding.encodeHex(digestBytes);
+      if (digest !== asset.sha256) {
+        return yield* Effect.fail(
+          new Error(
             `SHA-256 mismatch for ${asset.fileName}: expected ${asset.sha256}, received ${digest}`,
+          ),
+        );
+      }
+
+      const workDir = yield* fs.makeTempDirectoryScoped({
+        prefix: "pi-file-search-",
+      });
+      const archivePath = join(workDir, asset.fileName);
+      yield* fs.writeFile(archivePath, bytes);
+
+      const tarExitCode = yield* Effect.scoped(
+        Effect.gen(function* () {
+          const tar = yield* ChildProcess.make(
+            "tar",
+            ["-xzf", archivePath, "-C", workDir],
+            { stdin: "ignore", stdout: "ignore", stderr: "ignore" },
           );
-        }
-
-        const workDir = await mkdtemp(join(tmpdir(), "pi-file-search-"));
-        try {
-          const archivePath = join(workDir, asset.fileName);
-          await writeFile(archivePath, bytes);
-          await execFileAsync("tar", ["-xzf", archivePath, "-C", workDir], {
-            timeout: 60_000,
-          });
-
-          const extracted = join(workDir, asset.archiveDir, asset.binaryName);
-          await mkdir(dirname(destination), { recursive: true });
-          const stagedDestination = `${destination}.${process.pid}.${randomUUID()}.tmp`;
-          try {
-            await copyFile(extracted, stagedDestination);
-            await chmod(stagedDestination, 0o755);
-            await rename(stagedDestination, destination);
-          } finally {
-            await rm(stagedDestination, { force: true });
-          }
-        } finally {
-          await rm(workDir, { recursive: true, force: true });
-        }
-      },
-      catch: (cause) =>
-        new InstallError({
-          message: `Failed to install ${asset.binaryName} ${asset.version} from ${asset.url}: ${errorMessage(cause)}`,
-          cause,
+          return yield* tar.exitCode;
         }),
-    }),
+      ).pipe(Effect.timeout(60_000));
+      if (tarExitCode !== ChildProcessSpawner.ExitCode(0)) {
+        return yield* Effect.fail(
+          new Error(`tar failed with exit code ${tarExitCode}`),
+        );
+      }
+
+      const extracted = join(workDir, asset.archiveDir, asset.binaryName);
+      yield* fs.makeDirectory(dirname(destination), { recursive: true });
+      const uuid = yield* crypto.randomUUIDv4;
+      const stagedDestination = `${destination}.${process.pid}.${uuid}.tmp`;
+      yield* Effect.addFinalizer(() =>
+        fs.remove(stagedDestination, { force: true }).pipe(Effect.orDie),
+      );
+      yield* fs.copyFile(extracted, stagedDestination);
+      yield* fs.chmod(stagedDestination, 0o755);
+      yield* fs.rename(stagedDestination, destination);
+    });
+
+    return install.pipe(
+      Effect.scoped,
+      Effect.provide(NodeServices.layer),
+      Effect.provide(NodeHttpClient.layerFetch),
+      Effect.provideService(FetchHttpClient.RequestInit, {
+        redirect: "manual",
+      }),
+      Effect.mapError(
+        (cause) =>
+          new InstallError({
+            message: `Failed to install ${asset.binaryName} ${asset.version} from ${asset.url}: ${errorMessage(cause)}`,
+            cause,
+          }),
+      ),
+    );
+  },
 };

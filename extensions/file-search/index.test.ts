@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { Effect, Exit } from "effect";
+import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   buildFdArgs,
   buildRgArgs,
@@ -260,13 +261,26 @@ test("Intel macOS uses the latest fd release that publishes that target", () => 
 });
 
 test("bounded downloads reject oversized declared and streamed bodies", async () => {
-  const declared = new Response("small", {
-    headers: { "content-length": "100" },
-  });
-  await assert.rejects(readBoundedResponse(declared, 10), /size limit/);
+  const request = HttpClientRequest.get("https://example.com/archive.tar.gz");
+  const declared = HttpClientResponse.fromWeb(
+    request,
+    new Response("small", {
+      headers: { "content-length": "100" },
+    }),
+  );
+  await assert.rejects(
+    Effect.runPromise(readBoundedResponse(declared, 10)),
+    /size limit/,
+  );
 
-  const streamed = new Response("this body is too large");
-  await assert.rejects(readBoundedResponse(streamed, 5), /size limit/);
+  const streamed = HttpClientResponse.fromWeb(
+    request,
+    new Response("this body is too large"),
+  );
+  await assert.rejects(
+    Effect.runPromise(readBoundedResponse(streamed, 5)),
+    /size limit/,
+  );
 });
 
 // --- notification policy ----------------------------------------------------
