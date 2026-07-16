@@ -13,6 +13,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   chmod,
   copyFile,
@@ -30,7 +31,33 @@ import { Data, Effect } from "effect";
 const execFileAsync = promisify(execFile);
 
 export const FD_VERSION = "10.4.2";
+export const FD_INTEL_DARWIN_VERSION = "10.3.0";
 export const RG_VERSION = "15.2.0";
+
+const DOWNLOAD_TIMEOUT_MS = 30_000;
+const MAX_ARCHIVE_BYTES = 25 * 1024 * 1024;
+
+const FD_SHA256: Readonly<Record<string, string>> = {
+  "aarch64-apple-darwin":
+    "623dc0afc81b92e4d4606b380d7bc91916ba7b97814263e554d50923a39e480a",
+  "x86_64-apple-darwin":
+    "50d30f13fe3d5914b14c4fff5abcbd4d0cdab4b855970a6956f4f006c17117a3",
+  "aarch64-unknown-linux-musl":
+    "f32d3657473fba74e2600babc8db0b93420d51169223b7e8143b2ed55d8fd9e8",
+  "x86_64-unknown-linux-musl":
+    "e3257d48e29a6be965187dbd24ce9af564e0fe67b3e73c9bdcd180f4ec11bdde",
+};
+
+const RG_SHA256: Readonly<Record<string, string>> = {
+  "aarch64-apple-darwin":
+    "3750b2e93f37e0c692657da574d7019a101c0084da05a790c83fd335bad973e4",
+  "x86_64-apple-darwin":
+    "af7825fcc69a2afc7a7aea55fc9af90e26421d8f20fe59df32e233c0b8a231c1",
+  "aarch64-unknown-linux-musl":
+    "800b1e7206afe799dfb5a6901f23147cfaabe0e52210538100f61e86e1740915",
+  "x86_64-unknown-linux-musl":
+    "33e15bcf1624b25cdd2a55813a47a2f95dbe126268203e76aa6a585d1e7b149c",
+};
 
 export type ToolName = "fd" | "rg";
 export type BinarySource = "system" | "bundled" | "installed";
@@ -60,6 +87,7 @@ export interface ReleaseAsset {
   readonly archiveDir: string;
   readonly binaryName: string;
   readonly version: string;
+  readonly sha256: string;
 }
 
 function targetTriple(target: PlatformTarget) {
@@ -85,17 +113,25 @@ export function releaseAsset(
   if (!triple) return undefined;
 
   if (tool === "fd") {
-    const archiveDir = `fd-v${FD_VERSION}-${triple}`;
+    const sha256 = FD_SHA256[triple];
+    if (!sha256) return undefined;
+    // fd 10.4.2 dropped the Intel macOS archive, so retain 10.3.0 there.
+    const version =
+      triple === "x86_64-apple-darwin" ? FD_INTEL_DARWIN_VERSION : FD_VERSION;
+    const archiveDir = `fd-v${version}-${triple}`;
     const fileName = `${archiveDir}.tar.gz`;
     return {
-      url: `https://github.com/sharkdp/fd/releases/download/v${FD_VERSION}/${fileName}`,
+      url: `https://github.com/sharkdp/fd/releases/download/v${version}/${fileName}`,
       fileName,
       archiveDir,
       binaryName: "fd",
-      version: FD_VERSION,
+      version,
+      sha256,
     };
   }
 
+  const sha256 = RG_SHA256[triple];
+  if (!sha256) return undefined;
   const archiveDir = `ripgrep-${RG_VERSION}-${triple}`;
   const fileName = `${archiveDir}.tar.gz`;
   return {
@@ -104,6 +140,7 @@ export function releaseAsset(
     archiveDir,
     binaryName: "rg",
     version: RG_VERSION,
+    sha256,
   };
 }
 
@@ -193,6 +230,37 @@ function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : String(error);
 }
 
+/** Read a response incrementally while enforcing the startup memory bound. */
+export async function readBoundedResponse(
+  response: Response,
+  maxBytes = MAX_ARCHIVE_BYTES,
+) {
+  const declaredLength = Number(response.headers.get("content-length"));
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    throw new Error(`download exceeds the ${maxBytes}-byte size limit`);
+  }
+  if (!response.body) throw new Error("download response had no body");
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      totalBytes += value.byteLength;
+      if (totalBytes > maxBytes) {
+        await reader.cancel();
+        throw new Error(`download exceeds the ${maxBytes}-byte size limit`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+  return Buffer.concat(chunks, totalBytes);
+}
+
 /** Real environment: probes via `--version`, installs via HTTPS + tar. */
 export const liveBinaryEnv: BinaryEnv = {
   probe: (command) =>
@@ -213,11 +281,34 @@ export const liveBinaryEnv: BinaryEnv = {
           throw new Error(`refusing non-HTTPS download URL: ${asset.url}`);
         }
 
-        const response = await fetch(asset.url, { redirect: "follow" });
-        if (!response.ok) {
-          throw new Error(`download failed with HTTP ${response.status}`);
+        const controller = new AbortController();
+        const timeout = setTimeout(
+          () => controller.abort(),
+          DOWNLOAD_TIMEOUT_MS,
+        );
+        let bytes: Buffer;
+        try {
+          const response = await fetch(asset.url, {
+            redirect: "follow",
+            signal: controller.signal,
+          });
+          if (!response.ok) {
+            throw new Error(`download failed with HTTP ${response.status}`);
+          }
+          if (new URL(response.url).protocol !== "https:") {
+            throw new Error(`refusing non-HTTPS redirect URL: ${response.url}`);
+          }
+          bytes = await readBoundedResponse(response);
+        } finally {
+          clearTimeout(timeout);
         }
-        const bytes = Buffer.from(await response.arrayBuffer());
+
+        const digest = createHash("sha256").update(bytes).digest("hex");
+        if (digest !== asset.sha256) {
+          throw new Error(
+            `SHA-256 mismatch for ${asset.fileName}: expected ${asset.sha256}, received ${digest}`,
+          );
+        }
 
         const workDir = await mkdtemp(join(tmpdir(), "pi-file-search-"));
         try {

@@ -13,6 +13,7 @@ import { join } from "node:path";
 export const FD_DEFAULT_LIMIT = 1000;
 export const FD_MAX_LIMIT = 10_000;
 export const FD_MAX_DEPTH_LIMIT = 64;
+export const RG_DEFAULT_COUNT_LIMIT = 100;
 export const RG_MAX_COUNT_LIMIT = 1000;
 export const RG_MAX_CONTEXT = 20;
 
@@ -108,12 +109,12 @@ export function buildRgArgs(params: RgToolParams) {
   }
   if (params.glob) args.push("--glob", params.glob);
   if (params.file_type) args.push("--type", params.file_type);
-  if (params.limit !== undefined) {
-    args.push(
-      "--max-count",
-      String(clamp(params.limit, 1, RG_MAX_COUNT_LIMIT)),
-    );
-  }
+  args.push(
+    "--max-count",
+    String(
+      clamp(params.limit ?? RG_DEFAULT_COUNT_LIMIT, 1, RG_MAX_COUNT_LIMIT),
+    ),
+  );
   args.push("--", params.pattern);
   const path = optionalPath(params.path);
   if (path) args.push(path);

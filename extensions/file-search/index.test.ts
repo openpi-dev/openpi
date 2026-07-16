@@ -10,7 +10,9 @@ import {
   normalizeSearchPath,
 } from "./src/args.ts";
 import {
+  FD_INTEL_DARWIN_VERSION,
   InstallError,
+  readBoundedResponse,
   releaseAsset,
   resolveBinary,
   TOOL_SPECS,
@@ -75,6 +77,8 @@ test("rg args: defaults use smart-case and safe separators", () => {
     "--no-heading",
     "--with-filename",
     "--smart-case",
+    "--max-count",
+    "100",
     "--",
     "--help",
   ]);
@@ -239,6 +243,7 @@ test("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
         assert.ok(asset, `${tool} ${os}/${arch}`);
         assert.match(asset.url, /^https:\/\//);
         assert.ok(asset.url.endsWith(asset.fileName));
+        assert.match(asset.sha256, /^[a-f0-9]{64}$/);
       }
     }
   }
@@ -247,6 +252,21 @@ test("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
 test("linux assets use statically linked musl builds", () => {
   const asset = releaseAsset("fd", { os: "linux", arch: "x64" });
   assert.ok(asset && asset.url.includes("unknown-linux-musl"));
+});
+
+test("Intel macOS uses the latest fd release that publishes that target", () => {
+  const asset = releaseAsset("fd", { os: "darwin", arch: "x64" });
+  assert.equal(asset?.version, FD_INTEL_DARWIN_VERSION);
+});
+
+test("bounded downloads reject oversized declared and streamed bodies", async () => {
+  const declared = new Response("small", {
+    headers: { "content-length": "100" },
+  });
+  await assert.rejects(readBoundedResponse(declared, 10), /size limit/);
+
+  const streamed = new Response("this body is too large");
+  await assert.rejects(readBoundedResponse(streamed, 5), /size limit/);
 });
 
 // --- notification policy ----------------------------------------------------

@@ -85,7 +85,7 @@ export interface FdToolDetails {
 
 export interface RgToolDetails {
   readonly binarySource: BinarySource;
-  readonly matchingLines: number;
+  readonly outputLines: number;
   readonly truncated: boolean;
   readonly fullOutputPath?: string;
 }
@@ -141,7 +141,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     args: string[],
     signal: AbortSignal | undefined,
     ctx: ExtensionContext,
-  ): Promise<SearchOutcome> {
+  ) {
     const state = await ensureInitialized();
     if (!state.ok) {
       throw new Error(`The ${tool} tool is unavailable: ${state.message}`);
@@ -285,7 +285,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
           content: [{ type: "text", text: "No matches found" }],
           details: {
             binarySource: outcome.binarySource,
-            matchingLines: 0,
+            outputLines: 0,
             truncated: false,
           },
         } satisfies AgentToolResult<RgToolDetails>;
@@ -298,7 +298,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
         content: [{ type: "text", text: formatted.text }],
         details: {
           binarySource: outcome.binarySource,
-          matchingLines: formatted.lineCount,
+          outputLines: formatted.lineCount,
           truncated: formatted.truncated,
           fullOutputPath: formatted.fullOutputPath,
         },
@@ -323,12 +323,12 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     renderResult(result, { expanded, isPartial }, theme) {
       if (isPartial) return new Text(theme.fg("warning", "Searching..."), 0, 0);
       const details = result.details;
-      if (!details || details.matchingLines === 0) {
+      if (!details || details.outputLines === 0) {
         return new Text(theme.fg("dim", "No matches found"), 0, 0);
       }
       let text = theme.fg(
         "success",
-        `${details.matchingLines} matching ${details.matchingLines === 1 ? "line" : "lines"}`,
+        `${details.outputLines} output ${details.outputLines === 1 ? "line" : "lines"}`,
       );
       if (details.truncated) text += theme.fg("warning", " (truncated)");
       if (expanded)
@@ -389,14 +389,14 @@ function fdParameters() {
       Type.Boolean({ description: FD_PARAMETER_DESCRIPTIONS.hidden }),
     ),
     max_depth: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: FD_PARAMETER_DESCRIPTIONS.max_depth,
         minimum: 1,
         maximum: FD_MAX_DEPTH_LIMIT,
       }),
     ),
     limit: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: FD_PARAMETER_DESCRIPTIONS.limit,
         minimum: 1,
         maximum: FD_MAX_LIMIT,
@@ -427,14 +427,14 @@ function rgParameters() {
       Type.Boolean({ description: RG_PARAMETER_DESCRIPTIONS.hidden }),
     ),
     context: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: RG_PARAMETER_DESCRIPTIONS.context,
         minimum: 0,
         maximum: RG_MAX_CONTEXT,
       }),
     ),
     limit: Type.Optional(
-      Type.Number({
+      Type.Integer({
         description: RG_PARAMETER_DESCRIPTIONS.limit,
         minimum: 1,
         maximum: RG_MAX_COUNT_LIMIT,

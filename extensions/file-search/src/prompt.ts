@@ -25,7 +25,7 @@ export const FD_PARAMETER_DESCRIPTIONS = {
 };
 
 export const RG_TOOL_DESCRIPTION =
-  "Search file contents with ripgrep. Uses smart-case matching and respects .gitignore by default. Output is limited to 2000 lines or 50KB; complete truncated output is saved to a temporary file.";
+  "Search file contents with ripgrep. Uses smart-case matching, respects .gitignore by default, and returns at most 100 matches per file unless a different limit is given. Output is limited to 2000 lines or 50KB; complete truncated output is saved to a temporary file.";
 
 export const RG_PROMPT_SNIPPET =
   "Search file contents with ripgrep (fast regex content search).";
@@ -48,5 +48,5 @@ export const RG_PARAMETER_DESCRIPTIONS = {
   fixed_strings: "Treat pattern as a literal string instead of a regex.",
   hidden: "Search hidden files and directories. Defaults to false.",
   context: "Lines of context to show around each match (0-20).",
-  limit: "Maximum matches per file (1-1000).",
+  limit: "Maximum matches per file (1-1000). Defaults to 100.",
 };
