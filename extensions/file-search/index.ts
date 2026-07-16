@@ -47,13 +47,11 @@ import {
   RG_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 
-type InitState =
-  | {
-      readonly ok: true;
-      readonly fd: ResolvedBinary;
-      readonly rg: ResolvedBinary;
-    }
+type BinaryState =
+  | { readonly ok: true; readonly binary: ResolvedBinary }
   | { readonly ok: false; readonly message: string };
+
+type InitState = Readonly<Record<"fd" | "rg", BinaryState>>;
 
 /** Human-readable install notice, shown only for fresh downloads. */
 export function installNotifications(binaries: readonly ResolvedBinary[]) {
@@ -100,24 +98,25 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     initPromise ??= (async () => {
       const binDir = repositoryBinDir();
       const target = currentTarget();
-      const program = Effect.all(
-        [
-          resolveBinary(TOOL_SPECS.fd, binDir, target, liveBinaryEnv),
-          resolveBinary(TOOL_SPECS.rg, binDir, target, liveBinaryEnv),
-        ],
-        { concurrency: 2 },
-      );
-
-      const exit = await Effect.runPromiseExit(program);
-      if (Exit.isSuccess(exit)) {
-        const [fd, rg] = exit.value;
-        return { ok: true as const, fd, rg };
-      }
-      const [first] = Cause.prettyErrors(exit.cause);
-      return {
-        ok: false as const,
-        message: first?.message ?? Cause.pretty(exit.cause),
+      const resolveTool = async (tool: "fd" | "rg") => {
+        const exit = await Effect.runPromiseExit(
+          resolveBinary(TOOL_SPECS[tool], binDir, target, liveBinaryEnv),
+        );
+        if (Exit.isSuccess(exit)) {
+          return { ok: true as const, binary: exit.value };
+        }
+        const [first] = Cause.prettyErrors(exit.cause);
+        return {
+          ok: false as const,
+          message: first?.message ?? Cause.pretty(exit.cause),
+        };
       };
+
+      const [fd, rg] = await Promise.all([
+        resolveTool("fd"),
+        resolveTool("rg"),
+      ]);
+      return { fd, rg };
     })();
     return initPromise;
   }
@@ -126,12 +125,19 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     const state = await ensureInitialized();
     if (!ctx.hasUI || notified) return;
     notified = true;
-    if (!state.ok) {
-      ctx.ui.notify(`file-search setup failed: ${state.message}`, "error");
-      return;
-    }
-    for (const message of installNotifications([state.fd, state.rg])) {
+    const available = Object.values(state).flatMap((toolState) =>
+      toolState.ok ? [toolState.binary] : [],
+    );
+    for (const message of installNotifications(available)) {
       ctx.ui.notify(message, "info");
+    }
+    for (const [tool, toolState] of Object.entries(state)) {
+      if (!toolState.ok) {
+        ctx.ui.notify(
+          `file-search ${tool} setup failed: ${toolState.message}`,
+          "error",
+        );
+      }
     }
   });
 
@@ -143,10 +149,11 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     ctx: ExtensionContext,
   ) {
     const state = await ensureInitialized();
-    if (!state.ok) {
-      throw new Error(`The ${tool} tool is unavailable: ${state.message}`);
+    const toolState = state[tool];
+    if (!toolState.ok) {
+      throw new Error(`The ${tool} tool is unavailable: ${toolState.message}`);
     }
-    const binary = tool === "fd" ? state.fd : state.rg;
+    const binary = toolState.binary;
 
     const binarySource = binary.source;
     const program = Effect.tryPromise({

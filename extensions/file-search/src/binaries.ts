@@ -13,12 +13,13 @@
  */
 
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import {
   chmod,
   copyFile,
   mkdir,
   mkdtemp,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
@@ -166,8 +167,8 @@ export class InstallError extends Data.TaggedError("InstallError")<{
 }> {}
 
 export interface BinaryEnv {
-  /** True when the executable exists and runs (`--version` succeeds). */
-  readonly probe: (command: string) => Effect.Effect<boolean>;
+  /** True when the executable runs and supports the flags this tool requires. */
+  readonly probe: (command: string, tool: ToolName) => Effect.Effect<boolean>;
   /** Download and place a release binary at the destination path. */
   readonly install: (
     asset: ReleaseAsset,
@@ -192,13 +193,13 @@ export function resolveBinary(
 ): Effect.Effect<ResolvedBinary, UnsupportedPlatformError | InstallError> {
   return Effect.gen(function* () {
     for (const command of spec.systemCommands) {
-      if (yield* env.probe(command)) {
+      if (yield* env.probe(command, spec.tool)) {
         return { tool: spec.tool, command, source: "system" as const };
       }
     }
 
     const bundled = join(binDir, spec.binaryName);
-    if (yield* env.probe(bundled)) {
+    if (yield* env.probe(bundled, spec.tool)) {
       return { tool: spec.tool, command: bundled, source: "bundled" as const };
     }
 
@@ -211,7 +212,7 @@ export function resolveBinary(
 
     yield* env.install(asset, bundled);
 
-    if (!(yield* env.probe(bundled))) {
+    if (!(yield* env.probe(bundled, spec.tool))) {
       return yield* new InstallError({
         message: `${spec.tool} ${asset.version} was installed to ${bundled} but failed to run.`,
       });
@@ -263,10 +264,15 @@ export async function readBoundedResponse(
 
 /** Real environment: probes via `--version`, installs via HTTPS + tar. */
 export const liveBinaryEnv: BinaryEnv = {
-  probe: (command) =>
+  probe: (command, tool) =>
     Effect.promise(async () => {
       try {
-        await execFileAsync(command, ["--version"], { timeout: 5_000 });
+        const args =
+          tool === "fd" ? ["--max-results", "1", "--", ""] : ["--version"];
+        await execFileAsync(command, args, {
+          cwd: tmpdir(),
+          timeout: 5_000,
+        });
         return true;
       } catch {
         return false;
@@ -320,8 +326,14 @@ export const liveBinaryEnv: BinaryEnv = {
 
           const extracted = join(workDir, asset.archiveDir, asset.binaryName);
           await mkdir(dirname(destination), { recursive: true });
-          await copyFile(extracted, destination);
-          await chmod(destination, 0o755);
+          const stagedDestination = `${destination}.${process.pid}.${randomUUID()}.tmp`;
+          try {
+            await copyFile(extracted, stagedDestination);
+            await chmod(stagedDestination, 0o755);
+            await rename(stagedDestination, destination);
+          } finally {
+            await rm(stagedDestination, { force: true });
+          }
         } finally {
           await rm(workDir, { recursive: true, force: true });
         }
