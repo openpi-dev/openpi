@@ -10,8 +10,9 @@ export function deriveBtwTitle(prompt: string) {
     ?.trim();
   const title = firstLine?.replace(/\s+/g, " ") ?? "";
   if (!title) return "by the way";
-  if (title.length <= BTW_TITLE_MAX_LENGTH) return title;
-  return `${title.slice(0, BTW_TITLE_MAX_LENGTH - 1)}…`;
+  const codePoints = Array.from(title);
+  if (codePoints.length <= BTW_TITLE_MAX_LENGTH) return title;
+  return `${codePoints.slice(0, BTW_TITLE_MAX_LENGTH - 1).join("")}…`;
 }
 
 /** User asides remain visible in the dashboard but hidden from model tools. */

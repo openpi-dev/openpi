@@ -16,6 +16,11 @@ test("deriveBtwTitle uses the first non-empty line and bounds the title", () => 
   const title = deriveBtwTitle("x".repeat(BTW_TITLE_MAX_LENGTH + 10));
   assert.equal(title.length, BTW_TITLE_MAX_LENGTH);
   assert.equal(title, `${"x".repeat(BTW_TITLE_MAX_LENGTH - 1)}…`);
+
+  const emojiTitle = deriveBtwTitle(
+    `${"x".repeat(BTW_TITLE_MAX_LENGTH - 2)}😀 more`,
+  );
+  assert.equal(emojiTitle, `${"x".repeat(BTW_TITLE_MAX_LENGTH - 2)}😀…`);
 });
 
 test("only model-origin snapshots are visible to model-facing tools", () => {
