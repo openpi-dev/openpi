@@ -1,7 +1,8 @@
+import { NodeServices } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { Effect } from "effect";
+import { dirname, join } from "node:path";
+import { Effect, FileSystem } from "effect";
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   buildFdArgs,
@@ -21,8 +22,9 @@ import {
   type ReleaseAsset,
   type ResolvedBinary,
 } from "./src/binaries.ts";
-import { formatOutput } from "./src/output.ts";
-import { installNotifications } from "./index.ts";
+import { formatCapturedOutput, formatOutput } from "./src/output.ts";
+import { executeSearchProcess } from "./src/process.ts";
+import { installNotifications, makeBinaryInitializers } from "./index.ts";
 
 // --- argument construction -------------------------------------------------
 
@@ -67,8 +69,15 @@ it("fd args: all options are translated and pattern stays behind --", () => {
 
 it("fd args: out-of-range values are clamped", () => {
   const args = buildFdArgs({ max_depth: 500, limit: 1_000_000 });
-  assert.isTrue(args.includes("64"));
-  assert.isTrue(args.includes("10000"));
+  assert.deepEqual(args, [
+    "--color=never",
+    "--max-depth",
+    "64",
+    "--max-results",
+    "10000",
+    "--",
+    "",
+  ]);
 });
 
 it("rg args: defaults use smart-case and safe separators", () => {
@@ -275,6 +284,22 @@ it.effect(
     }),
 );
 
+it.effect("binary resolution: one failed tool does not disable the other", () =>
+  Effect.gen(function* () {
+    const env = makeEnv({
+      available: ["rg"],
+      installShouldFail: true,
+    });
+    const initializers = makeBinaryInitializers("/repo/bin", darwinArm, env);
+
+    const fdError = yield* Effect.flip(initializers.fd);
+    const rg = yield* initializers.rg;
+
+    assert.instanceOf(fdError, InstallError);
+    assert.deepEqual(rg, { tool: "rg", command: "rg", source: "system" });
+  }),
+);
+
 it("release assets cover macOS and Linux on arm64 and x64 over HTTPS", () => {
   for (const os of ["darwin", "linux"] as const) {
     for (const arch of ["arm64", "x64"] as const) {
@@ -355,6 +380,32 @@ it("notifications: only fresh installs notify", () => {
 });
 
 // --- output truncation -------------------------------------------------------
+
+it.effect("process output is streamed to a complete spill file", () =>
+  Effect.gen(function* () {
+    const result = yield* executeSearchProcess({
+      command: process.execPath,
+      args: ["-e", 'process.stdout.write("line\\n".repeat(3000))'],
+      cwd: process.cwd(),
+      tempPrefix: "pi-search-test-",
+    });
+    const formatted = formatCapturedOutput(result.output);
+
+    assert.equal(result.code, 0);
+    assert.isTrue(formatted.truncated);
+    assert.equal(formatted.lineCount, 3000);
+    assert.match(formatted.text, /2000 of 3000 lines/);
+    assert.isDefined(formatted.fullOutputPath);
+
+    const fs = yield* FileSystem.FileSystem;
+    const fullOutput = yield* fs.readFileString(formatted.fullOutputPath);
+    assert.equal(fullOutput, "line\n".repeat(3000));
+    yield* fs.remove(dirname(formatted.fullOutputPath), {
+      recursive: true,
+      force: true,
+    });
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
 
 it("output: small results pass through untouched", async () => {
   const formatted = await formatOutput("a.ts\nb.ts\n", {

@@ -9,6 +9,7 @@
  * before executing, and report a clear error if it failed.
  */
 
+import { NodeServices } from "@effect/platform-node";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -32,10 +33,12 @@ import {
   repositoryBinDir,
   resolveBinary,
   TOOL_SPECS,
+  type BinaryEnv,
   type BinarySource,
+  type PlatformTarget,
   type ResolvedBinary,
 } from "./src/binaries.ts";
-import { formatOutput } from "./src/output.ts";
+import { formatCapturedOutput, type CapturedOutput } from "./src/output.ts";
 import {
   FD_PARAMETER_DESCRIPTIONS,
   FD_PROMPT_GUIDELINES,
@@ -46,8 +49,22 @@ import {
   RG_PROMPT_SNIPPET,
   RG_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
+import { discardCapturedOutput, executeSearchProcess } from "./src/process.ts";
 
-type InitState = Readonly<Record<"fd" | "rg", ResolvedBinary>>;
+export function makeBinaryInitializers(
+  binDir: string,
+  target: PlatformTarget,
+  env: BinaryEnv,
+) {
+  return {
+    fd: Effect.runSync(
+      Effect.cached(resolveBinary(TOOL_SPECS.fd, binDir, target, env)),
+    ),
+    rg: Effect.runSync(
+      Effect.cached(resolveBinary(TOOL_SPECS.rg, binDir, target, env)),
+    ),
+  };
+}
 
 /** Human-readable install notice, shown only for fresh downloads. */
 export function installNotifications(binaries: readonly ResolvedBinary[]) {
@@ -65,7 +82,7 @@ class SearchError extends Data.TaggedError("SearchError")<{
 }> {}
 
 interface SearchOutcome {
-  readonly stdout: string;
+  readonly output: CapturedOutput;
   readonly noMatches: boolean;
   readonly binarySource: BinarySource;
 }
@@ -99,45 +116,38 @@ function unwrapToolExit<A, E>(exit: Exit.Exit<A, E>, tool: "fd" | "rg") {
   throw new Error(causeMessage(exit.cause));
 }
 
-function formatOutputEffect(output: string, tempPrefix: string) {
-  return Effect.tryPromise({
-    try: () => formatOutput(output, { tempPrefix }),
-    catch: (cause) =>
-      new SearchError({
-        message: `Could not format search output: ${cause instanceof Error ? cause.message : String(cause)}`,
-      }),
-  });
-}
-
 export default function fileSearchTools(pi: ExtensionAPI) {
   let notified = false;
 
-  const ensureInitialized = Effect.runSync(
-    Effect.cached(
-      Effect.gen(function* () {
-        const binDir = repositoryBinDir();
-        const target = currentTarget();
-        const [fd, rg] = yield* Effect.all(
-          [
-            resolveBinary(TOOL_SPECS.fd, binDir, target, liveBinaryEnv),
-            resolveBinary(TOOL_SPECS.rg, binDir, target, liveBinaryEnv),
-          ],
-          { concurrency: "unbounded" },
-        );
-        return { fd, rg } satisfies InitState;
-      }),
-    ),
-  );
+  const binDir = repositoryBinDir();
+  const target = currentTarget();
+  const initializers = makeBinaryInitializers(binDir, target, liveBinaryEnv);
 
   pi.on("session_start", async (_event, ctx) => {
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
-        const state = yield* ensureInitialized;
+        const initialized = yield* Effect.all(
+          {
+            fd: Effect.exit(initializers.fd),
+            rg: Effect.exit(initializers.rg),
+          },
+          { concurrency: "unbounded" },
+        );
         if (!ctx.hasUI || notified) return;
 
         notified = true;
-        for (const message of installNotifications(Object.values(state))) {
-          ctx.ui.notify(message, "info");
+        for (const tool of ["fd", "rg"] as const) {
+          const toolExit = initialized[tool];
+          if (Exit.isSuccess(toolExit)) {
+            for (const message of installNotifications([toolExit.value])) {
+              ctx.ui.notify(message, "info");
+            }
+          } else {
+            ctx.ui.notify(
+              `file-search ${tool} setup failed: ${causeMessage(toolExit.cause)}`,
+              "error",
+            );
+          }
         }
       }),
     );
@@ -151,51 +161,50 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     }
   });
 
-  /** Await init, run the binary via pi.exec with argument arrays, classify exit. */
+  /** Await init, stream the binary output to disk, and classify its exit. */
   function runSearch(tool: "fd" | "rg", args: string[], ctx: ExtensionContext) {
     return Effect.gen(function* () {
-      const state = yield* ensureInitialized;
-      const binary = state[tool];
-      const result = yield* Effect.tryPromise({
-        try: (signal) =>
-          pi.exec(binary.command, args, {
-            cwd: ctx.cwd,
-            signal,
-          }),
-        catch: (cause) =>
-          new SearchError({
-            message: cause instanceof Error ? cause.message : String(cause),
-          }),
-      }).pipe(
-        Effect.timeout(EXEC_TIMEOUT_MS),
-        Effect.mapError((error) =>
-          error._tag === "TimeoutError"
-            ? new SearchError({ message: `${tool} timed out.` })
-            : error,
-        ),
-      );
+      const binary = yield* initializers[tool];
+      const result = yield* executeSearchProcess({
+        command: binary.command,
+        args,
+        cwd: ctx.cwd,
+        tempPrefix: `pi-${tool}-`,
+      });
 
-      if (result.killed) {
-        return yield* new SearchError({ message: `${tool} was cancelled.` });
-      }
       // ripgrep exits 1 for "no matches"; fd exits 0 even with no results.
-      if (tool === "rg" && result.code === 1 && !result.stdout.trim()) {
+      if (tool === "rg" && result.code === 1 && result.output.lineCount === 0) {
         return {
-          stdout: "",
+          output: result.output,
           noMatches: true,
           binarySource: binary.source,
         } satisfies SearchOutcome;
       }
       if (result.code !== 0) {
+        yield* discardCapturedOutput(result.output);
         const detail = result.stderr.trim() || `exit code ${result.code}`;
         return yield* new SearchError({ message: `${tool} failed: ${detail}` });
       }
       return {
-        stdout: result.stdout,
-        noMatches: !result.stdout.trim(),
+        output: result.output,
+        noMatches: result.output.lineCount === 0,
         binarySource: binary.source,
       } satisfies SearchOutcome;
-    });
+    }).pipe(
+      Effect.timeout(EXEC_TIMEOUT_MS),
+      Effect.mapError((error) => {
+        if (error instanceof SearchError) return error;
+        return new SearchError({
+          message:
+            error._tag === "TimeoutError"
+              ? `${tool} timed out.`
+              : error instanceof Error
+                ? error.message
+                : String(error),
+        });
+      }),
+      Effect.provide(NodeServices.layer),
+    );
   }
 
   pi.registerTool<ReturnType<typeof fdParameters>, FdToolDetails>({
@@ -221,7 +230,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
             } satisfies AgentToolResult<FdToolDetails>;
           }
 
-          const formatted = yield* formatOutputEffect(outcome.stdout, "pi-fd-");
+          const formatted = formatCapturedOutput(outcome.output);
           return {
             content: [{ type: "text", text: formatted.text }],
             details: {
@@ -292,7 +301,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
             } satisfies AgentToolResult<RgToolDetails>;
           }
 
-          const formatted = yield* formatOutputEffect(outcome.stdout, "pi-rg-");
+          const formatted = formatCapturedOutput(outcome.output);
           return {
             content: [{ type: "text", text: formatted.text }],
             details: {
