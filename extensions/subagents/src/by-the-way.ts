@@ -18,4 +18,3 @@ export function deriveBtwTitle(prompt: string) {
 export function isModelVisible(snap: { readonly origin: SubagentOrigin }) {
   return snap.origin === "model";
 }
-
