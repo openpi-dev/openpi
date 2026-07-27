@@ -11,7 +11,7 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-  "Pick the subagent harness deliberately: pi unless you have a reason to prefer Claude Code or Codex (e.g. the user asked for one, or the task suits that harness).",
+  "Use the pi harness by default so the child inherits this Pi environment. Use Claude Code or Codex only when the user explicitly requests that external harness.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
 ];
 
@@ -21,11 +21,11 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
   harness:
-    'Harness to run the subagent on: "pi" (in-process pi session; inherits this environment), "claude" (Claude Code), or "codex" (Codex CLI). Choose deliberately per task.',
+    'Harness to run the subagent on: "pi" (default; in-process Pi session that inherits this environment), "claude" (Claude Code), or "codex" (Codex CLI). Use an external harness only when the user explicitly requests it.',
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    'Model hint, interpreted by the chosen harness (pi: "provider/model-id" or model id; claude: model alias like "sonnet"/"opus"; codex: model slug). Omit for the harness default (pi inherits the current model).',
+    "Optional explicit model hint, interpreted by the chosen harness. Omit by default: Pi inherits the current model, while external harnesses use their own configured default. Never guess or hardcode a model name.",
   reasoningEffort:
     "Reasoning effort on a shared scale; the harness maps it to its nearest native equivalent (pi thinking level, codex reasoning effort, claude thinking budget). Omit for the harness default (pi inherits the current level).",
 };

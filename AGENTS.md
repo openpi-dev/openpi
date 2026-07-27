@@ -8,3 +8,4 @@
 - Any future extension or update that introduces a user-selectable model, feature toggle, permission, concurrency limit, theme/UI preference, or other package-owned choice must update all of: `extensions/setup/`, `extensions/shared/setup-config.ts`, the no-argument `/my-pi-setup` status output, and `SETUP.md`.
 - Installation must remain side-effect-safe: no provider/model names hardcoded as defaults, no model calls before explicit configuration, and expensive or privileged behavior must be opt-in.
 - Natural language is interpreted by the active model. The configuration tool should expose only the smallest typed state needed to persist the result; avoid adding a parser or a proliferation of subcommands.
+- Subagent product defaults are Pi-native: use the `pi` harness and inherit the parent model/thinking level. Keep Claude Code and Codex as explicit compatibility paths only; do not add hardcoded model preferences for any harness.

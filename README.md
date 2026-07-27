@@ -8,7 +8,7 @@ This setup is fairly opinionated. It:
 - updates the bottom bar to have the info I prefer to see
 - adds `/sessions` with search and conversation preview
 - adds background terminals + ui to manage them
-- adds subagents to pi
+- adds isolated Pi subagents that inherit the parent model by default, with Claude Code and Codex retained only as explicit compatibility options
 - adds workflows to pi
 - adds `/context-pivot` for deliberate same-session phase changes without conflicting with the `/handoff` skill
 - adds an ask user tool, which lets the model ask multiple choice questions
