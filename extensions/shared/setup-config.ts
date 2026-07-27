@@ -43,7 +43,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
-  summaries: { enabled: true },
+  summaries: { enabled: false },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
@@ -77,7 +77,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
 
   const summaries = isRecord(value.summaries) ? value.summaries : {};
   const enabled =
-    typeof summaries.enabled === "boolean" ? summaries.enabled : true;
+    typeof summaries.enabled === "boolean" ? summaries.enabled : false;
   const rawModel = isRecord(summaries.model) ? summaries.model : undefined;
   const model =
     rawModel &&

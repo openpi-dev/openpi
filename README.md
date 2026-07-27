@@ -315,7 +315,7 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续模型上下文。
 
-默认使用本地规则生成，不调用模型。用户可以显式选择任何当前 Pi Registry 中可用的低成本模型来改善摘要质量。
+默认关闭。用户可通过 `/my-pi-setup` 显式选择当前 Pi Registry 中任意可用模型生成摘要，或启用不调用模型的本地 fallback。
 
 ---
 
@@ -407,9 +407,9 @@ pi install ~/work/my-pi-setup
 无参数时显示当前状态和示例；后面直接跟自然语言即可：
 
 ```text
-/my-pi-setup 摘要使用 seal/deepseek-v4-flash，关闭推理
+/my-pi-setup 开启摘要，使用 seal/deepseek-v4-flash，关闭推理
+/my-pi-setup 开启本地 fallback 摘要，不调用模型
 /my-pi-setup 关闭自动摘要
-/my-pi-setup 摘要改用本地 fallback，不调用模型
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
 /my-pi-setup 隐藏大标题
@@ -426,7 +426,7 @@ pi install ~/work/my-pi-setup
 
 | 配置                     |                          默认值 |
 | ------------------------ | ------------------------------: |
-| Run Recap                | 开启，本地 fallback，不调用模型 |
+| Run Recap                | 默认关闭；运行 `/my-pi-setup` 选择模型或本地 fallback |
 | Workflow 并发            |                               8 |
 | Workflow 最大 Agent 调用 |                             128 |
 | 大型 Header              |                            关闭 |
@@ -510,7 +510,7 @@ pi install ~/work/my-pi-setup
 <details>
 <summary><strong>安装后会自动调用额外模型吗？</strong></summary>
 
-不会。Run Recap 默认使用本地 fallback；Pi Subagent 只有在任务实际触发时才运行，并默认继承当前模型。仓库不预设私有 Provider，也不替用户选择付费模型。
+不会。Run Recap 默认关闭，只有用户通过 `/my-pi-setup` 显式选择模型后才会调用摘要模型；也可显式启用不调用模型的本地 fallback。Pi Subagent 只有在任务实际触发时才运行，并默认继承当前模型。
 
 </details>
 

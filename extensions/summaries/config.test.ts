@@ -8,11 +8,11 @@ import {
 
 const defaultUi = { showHeader: false, customFooter: true };
 
-test("setup defaults to enabled local recaps without model calls", () => {
+test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    "Run recaps: local fallback (no model calls)\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on",
+    "Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on",
   );
 });
 
@@ -61,6 +61,7 @@ test("setup config accepts model choices and drops malformed models", () => {
 
 test("workflow limits default safely and accept configured fan-out", () => {
   assert.deepEqual(parseSetupConfig({}), DEFAULT_SETUP_CONFIG);
+  assert.equal(parseSetupConfig({ summaries: {} }).summaries.enabled, false);
   assert.deepEqual(
     parseSetupConfig({
       workflows: { concurrency: 16, maxAgentCalls: 256 },
