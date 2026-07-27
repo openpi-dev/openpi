@@ -258,6 +258,5 @@ export function buildFallbackRecap(entries: readonly SessionEntry[]) {
 
   return {
     recap: `The main-agent run completed.${activity}${result}`.trim(),
-    next: "Review the completed work above and continue if anything remains.",
   };
 }

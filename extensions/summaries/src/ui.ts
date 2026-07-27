@@ -32,13 +32,15 @@ class RecapCard {
         color: (text) => this.theme.fg("customMessageText", text),
       }),
     );
-    box.addChild(
-      new Text(
-        `${this.theme.fg("accent", this.theme.bold("Next:"))} ${this.theme.fg("customMessageText", this.data.next)}`,
-        0,
-        0,
-      ),
-    );
+    if (this.data.next) {
+      box.addChild(
+        new Text(
+          `${this.theme.fg("accent", this.theme.bold("Next:"))} ${this.theme.fg("customMessageText", this.data.next)}`,
+          0,
+          0,
+        ),
+      );
+    }
     if (this.expanded) {
       const source = `${this.data.provider}/${this.data.model} · ${this.data.reasoning}${this.data.fallback ? " · local fallback" : ""}`;
       box.addChild(new Text(this.theme.fg("dim", source), 0, 1));

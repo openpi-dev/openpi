@@ -19,6 +19,16 @@ test("parses strict recap JSON", () => {
   );
 });
 
+test("accepts a completed recap without a next action", () => {
+  assert.deepEqual(parseRecapResponse('{"recap":"Everything is pushed."}'), {
+    recap: "Everything is pushed.",
+  });
+  assert.deepEqual(
+    parseRecapResponse('{"recap":"Everything is pushed.","next":""}'),
+    { recap: "Everything is pushed." },
+  );
+});
+
 test("defensively extracts fenced or surrounded JSON and normalizes Next", () => {
   assert.deepEqual(
     parseRecapResponse(
@@ -33,10 +43,6 @@ test("defensively extracts fenced or surrounded JSON and normalizes Next", () =>
 
 test("rejects malformed or incomplete output", () => {
   assert.throws(() => parseRecapResponse("not json"), /valid recap JSON/);
-  assert.throws(
-    () => parseRecapResponse('{"recap":"missing next"}'),
-    /valid recap JSON/,
-  );
   assert.throws(
     () =>
       parseRecapResponse(

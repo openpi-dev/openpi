@@ -14,7 +14,7 @@ class SummaryError extends Data.TaggedError("SummaryError")<{
 
 export interface RunRecap {
   readonly recap: string;
-  readonly next: string;
+  readonly next?: string;
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -39,22 +39,24 @@ function cleanField(value: string, maxLength: number) {
 function parseCandidate(candidate: string) {
   try {
     const value: unknown = JSON.parse(candidate);
+    if (!isRecord(value) || typeof value.recap !== "string") {
+      return undefined;
+    }
+    const keys = Object.keys(value).sort().join(",");
     if (
-      !isRecord(value) ||
-      Object.keys(value).sort().join(",") !== "next,recap" ||
-      typeof value.recap !== "string" ||
-      typeof value.next !== "string"
+      (keys !== "recap" && keys !== "next,recap") ||
+      ("next" in value && typeof value.next !== "string")
     ) {
       return undefined;
     }
 
     const recap = cleanField(value.recap, RECAP_MAX_LENGTH);
-    const next = cleanField(
-      value.next.replace(/^next\s*:\s*/i, ""),
-      NEXT_MAX_LENGTH,
-    );
-    if (!recap || !next) return undefined;
-    return { recap, next } satisfies RunRecap;
+    if (!recap) return undefined;
+    const next =
+      typeof value.next === "string"
+        ? cleanField(value.next.replace(/^next\s*:\s*/i, ""), NEXT_MAX_LENGTH)
+        : undefined;
+    return { recap, ...(next ? { next } : {}) } satisfies RunRecap;
   } catch {
     return undefined;
   }
