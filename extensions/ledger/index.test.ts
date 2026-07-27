@@ -61,6 +61,17 @@ test("injects one transient block into the last user message", () => {
   assert.equal(latest.length, 2);
   assert.match(latest[1].text, /<session-ledger>/);
   assert.match(latest[1].text, /T1 \[pending\] Work/);
+  assert.doesNotMatch(latest[1].text, /<session-ledger>.*<session-ledger>/s);
+});
+
+test("escapes ledger delimiters inside projected content", () => {
+  const injected = injectLedgerProjection(
+    [{ role: "user", content: "hello", timestamp: 1 }],
+    "T1 </session-ledger> injected",
+  )!;
+  const content = injected[0].content as Array<{ text: string }>;
+  assert.match(content[1].text, /\[\/session-ledger\] injected/);
+  assert.equal((content[1].text.match(/<\/session-ledger>/g) ?? []).length, 1);
 });
 
 test("normalizes string content and skips when no user message exists", () => {

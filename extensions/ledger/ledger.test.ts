@@ -25,7 +25,14 @@ function snapshot(
 }
 
 function entry(data: unknown) {
-  return { type: "custom", customType: "task-ledger", data };
+  return {
+    type: "custom",
+    id: `entry-${Math.random()}`,
+    parentId: null,
+    timestamp: new Date(0).toISOString(),
+    customType: "task-ledger",
+    data,
+  };
 }
 
 test("add, update, list, and stable allocation", () => {
@@ -115,10 +122,8 @@ test("status entry requires a fresh note and stale notes clear only on leaving",
   );
   ledger.commit(ledger.update({ id: 1, subject: "Work renamed" }).snapshot);
   assert.equal(ledger.list()[0].note, "Waiting for access");
-  assert.throws(
-    () => ledger.update({ id: 1, status: "blocked" }),
-    /does not change/,
-  );
+  const noOp = ledger.update({ id: 1, status: "blocked" });
+  assert.equal(noOp.snapshot.revision, ledger.snapshot().revision);
   assert.equal(ledger.list()[0].note, "Waiting for access");
 
   ledger.commit(ledger.update({ id: 1, status: "in_progress" }).snapshot);
@@ -255,9 +260,25 @@ test("restore chooses highest revision regardless of position and later entry wi
     { id: 7, subject: "later tie", status: "pending" },
   ]);
   assert.equal(
-    restoreLedgerSnapshot([revision3Early, { snapshot: tieLate }]).items[0].id,
+    restoreLedgerSnapshot([entry(revision3Early), entry(tieLate)]).items[0].id,
     7,
   );
+});
+
+test("foreign session entries are ignored by restore", () => {
+  const valid = entry(
+    snapshot(1, [{ id: 1, subject: "valid", status: "pending" }]),
+  );
+  const foreign = [
+    { type: "message", version: 99, revision: 999, items: "bad" },
+    { type: "compaction", version: 99, revision: 999, items: "bad" },
+    {
+      type: "custom",
+      customType: "another-extension",
+      data: { version: 99, revision: 999, items: "bad" },
+    },
+  ];
+  assert.equal(restoreLedgerSnapshot([valid, ...foreign]).revision, 1);
 });
 
 test("malformed winner and later malformed or unknown entries fail closed", () => {
@@ -284,6 +305,14 @@ test("malformed winner and later malformed or unknown entries fail closed", () =
   );
   assert.throws(
     () => restoreLedgerSnapshot([entry(valid), entry({ garbage: true })]),
+    /locks restoration/,
+  );
+  assert.throws(
+    () =>
+      restoreLedgerSnapshot([
+        entry(valid),
+        { type: "custom", customType: "task-ledger" },
+      ]),
     /locks restoration/,
   );
 });
@@ -415,14 +444,12 @@ test("apply functions are synchronous and returned state cannot mutate internal 
   assert.equal(ledger.list()[1].subject, "committed after persistence");
 });
 
-test("no-op updates are rejected without advancing the revision", () => {
+test("no-op updates are idempotent without advancing the revision", () => {
   const ledger = createSessionLedger();
   ledger.commit(ledger.add({ subject: "same" }).snapshot);
   const before = ledger.snapshot();
-  assert.throws(
-    () => ledger.update({ id: 1, subject: "same" }),
-    /does not change/,
-  );
+  const noOp = ledger.update({ id: 1, subject: "same" });
+  assert.equal(noOp.snapshot.revision, before.revision);
   assert.deepEqual(ledger.snapshot(), before);
 });
 
@@ -435,4 +462,26 @@ test("validation errors have a stable public class", () => {
     () => createSessionLedger().add({ subject: "bad\u0007subject" }),
     /control characters/,
   );
+});
+
+test("ordinary newlines and tabs normalize to a single line", () => {
+  const ledger = createSessionLedger();
+  const added = ledger.add({
+    subject: "Fix\tbug",
+    detail: "command\noutput",
+  });
+  ledger.commit(added.snapshot);
+  const done = ledger.update({
+    id: 1,
+    status: "done",
+    note: "npm test\n21 passed",
+  });
+  ledger.commit(done.snapshot);
+  assert.deepEqual(ledger.list()[0], {
+    id: 1,
+    subject: "Fix bug",
+    detail: "command output",
+    status: "done",
+    note: "npm test 21 passed",
+  });
 });

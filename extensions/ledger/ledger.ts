@@ -228,7 +228,7 @@ export function applyLedgerUpdate(
     changed.status === previous.status &&
     changed.note === previous.note
   ) {
-    fail(`update does not change T${update.id}`);
+    return { snapshot: base, items: cloneItems([previous]) };
   }
 
   const items = base.items.slice();
@@ -427,33 +427,33 @@ function validateItem(value: unknown, path: string): LedgerItem {
   if (!isRecord(value)) fail(`${path} must be an object`);
   assertExactKeys(value, ITEM_KEYS, path);
   assertPositiveInteger(value.id, `${path}.id`);
-  assertText(
+  const subject = normalizeText(
     value.subject,
     `${path}.subject`,
     LEDGER_LIMITS.subjectChars,
     true,
   );
   const status = validateStatus(value.status, `${path}.status`);
-  if (hasOwn(value, "detail")) {
-    assertText(
-      value.detail,
-      `${path}.detail`,
-      LEDGER_LIMITS.detailChars,
-      false,
-    );
-  }
-  if (hasOwn(value, "note")) {
-    assertText(value.note, `${path}.note`, LEDGER_LIMITS.noteChars, true);
-  }
-  if (REQUIRED_NOTE_STATUSES.has(status) && !hasOwn(value, "note")) {
+  const detail = hasOwn(value, "detail")
+    ? normalizeText(
+        value.detail,
+        `${path}.detail`,
+        LEDGER_LIMITS.detailChars,
+        false,
+      )
+    : undefined;
+  const note = hasOwn(value, "note")
+    ? normalizeText(value.note, `${path}.note`, LEDGER_LIMITS.noteChars, true)
+    : undefined;
+  if (REQUIRED_NOTE_STATUSES.has(status) && note === undefined) {
     fail(`${path}.note is required for ${status}`);
   }
   return {
     id: value.id as number,
-    subject: value.subject as string,
-    ...(hasOwn(value, "detail") ? { detail: value.detail as string } : {}),
+    subject,
+    ...(detail !== undefined ? { detail } : {}),
     status,
-    ...(hasOwn(value, "note") ? { note: value.note as string } : {}),
+    ...(note !== undefined ? { note } : {}),
   };
 }
 
@@ -476,30 +476,17 @@ function extractLedgerPayload(entry: unknown): {
   found: boolean;
   value?: unknown;
 } {
-  if (!isRecord(entry)) return { found: false };
   if (
-    hasOwn(entry, "version") ||
-    (hasOwn(entry, "revision") && hasOwn(entry, "items"))
+    !isRecord(entry) ||
+    entry.type !== "custom" ||
+    entry.customType !== LEDGER_ENTRY_TYPE
   ) {
-    return { found: true, value: entry };
+    return { found: false };
   }
-  if (hasOwn(entry, "snapshot")) {
-    if (
-      entry.type === undefined ||
-      entry.type === LEDGER_ENTRY_TYPE ||
-      entry.customType === LEDGER_ENTRY_TYPE
-    ) {
-      return { found: true, value: entry.snapshot };
-    }
-  }
-  const isLedgerEnvelope =
-    entry.type === LEDGER_ENTRY_TYPE ||
-    entry.customType === LEDGER_ENTRY_TYPE ||
-    (entry.type === "custom" && entry.customType === LEDGER_ENTRY_TYPE);
-  if (isLedgerEnvelope && hasOwn(entry, "data")) {
-    return { found: true, value: entry.data };
-  }
-  return { found: false };
+  return {
+    found: true,
+    value: hasOwn(entry, "data") ? entry.data : undefined,
+  };
 }
 
 function declaredRevision(value: unknown) {
@@ -523,19 +510,21 @@ function assertSnapshotBytes(snapshot: LedgerSnapshot) {
   }
 }
 
-function assertText(
+function normalizeText(
   value: unknown,
   path: string,
   maxChars: number,
   requireNonBlank: boolean,
 ) {
   if (typeof value !== "string") fail(`${path} must be a string`);
-  if (/\p{Cc}/u.test(value))
+  const normalized = singleLine(value);
+  if (/\p{Cc}/u.test(normalized))
     fail(`${path} must not contain control characters`);
-  if (charCount(value) > maxChars)
+  if (charCount(normalized) > maxChars)
     fail(`${path} exceeds ${maxChars} characters`);
-  if (requireNonBlank && value.trim().length === 0)
+  if (requireNonBlank && normalized.trim().length === 0)
     fail(`${path} must not be blank`);
+  return normalized;
 }
 
 function assertPositiveInteger(value: unknown, path: string) {

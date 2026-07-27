@@ -48,6 +48,8 @@ export function injectLedgerProjection(
   messages: readonly unknown[],
   projection: string,
 ) {
+  // Keep this pure for direct tests. Pi already supplies the context hook a
+  // deep copy, so this is defensive rather than required by the runtime.
   const next = structuredClone(messages) as Array<{
     role?: string;
     content?: unknown;
@@ -55,9 +57,12 @@ export function injectLedgerProjection(
   for (let index = next.length - 1; index >= 0; index--) {
     const message = next[index];
     if (message.role !== "user") continue;
+    const safeProjection = projection
+      .replaceAll("<session-ledger>", "[session-ledger]")
+      .replaceAll("</session-ledger>", "[/session-ledger]");
     const block = {
       type: "text",
-      text: `\n\n<session-ledger>\n${projection}\n</session-ledger>`,
+      text: `\n\n<session-ledger>\n${safeProjection}\n</session-ledger>`,
     };
     if (typeof message.content === "string") {
       message.content = [{ type: "text", text: message.content }, block];
@@ -110,16 +115,30 @@ export default function sessionLedger(pi: ExtensionAPI) {
     return undefined;
   };
 
+  const notifyProblem = (ctx: ExtensionContext) => {
+    const problem = problemMessage();
+    if (!problem) {
+      notifiedProblem = undefined;
+      return;
+    }
+    if (ctx.hasUI && notifiedProblem !== problem) {
+      notifiedProblem = problem;
+      ctx.ui.notify(problem, "warning");
+    }
+  };
+
   const assertAvailable = () => {
     const problem = problemMessage();
     if (problem) throw new Error(problem);
   };
 
   const persistThenCommit = (candidate: LedgerSnapshot) => {
+    if (candidate.revision === snapshot().revision) return false;
     // Keep this path synchronous. An await here would let sibling tool calls
     // reorder state and persistence, recreating the upstream Todo lost-update bug.
     pi.appendEntry(LEDGER_ENTRY_TYPE, candidate);
     ledger.commit(candidate);
+    return true;
   };
 
   const toolDetails = (
@@ -222,9 +241,16 @@ export default function sessionLedger(pi: ExtensionAPI) {
       execute(_id, params) {
         assertAvailable();
         const mutation = applyLedgerUpdate(snapshot(), params);
-        persistThenCommit(mutation.snapshot);
+        const changed = persistThenCommit(mutation.snapshot);
         return Promise.resolve({
-          content: [{ type: "text" as const, text: `Updated T${params.id}.` }],
+          content: [
+            {
+              type: "text" as const,
+              text: changed
+                ? `Updated T${params.id}.`
+                : `T${params.id} already has that state; no update recorded.`,
+            },
+          ],
           details: toolDetails("update", mutation.items),
         });
       },
@@ -257,11 +283,15 @@ export default function sessionLedger(pi: ExtensionAPI) {
         assertAvailable();
         const filter = params satisfies LedgerFilter;
         const items = ledger.list(filter);
+        const preview = items.slice(0, 5);
+        const rendered = ledger.render(filter, 3_800);
+        const text =
+          rendered.endsWith("…") || items.length > preview.length
+            ? `${rendered}\nShowing a bounded view of ${items.length} matched item(s); filter by status or id for a narrower result.`
+            : rendered;
         return Promise.resolve({
-          content: [
-            { type: "text" as const, text: ledger.render(filter, 4_000) },
-          ],
-          details: toolDetails("list", items),
+          content: [{ type: "text" as const, text }],
+          details: toolDetails("list", preview),
         });
       },
       renderCall(_args, theme) {
@@ -296,11 +326,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     activeRun = false;
     frozenProjection = "";
     registerTools();
-    const problem = problemMessage();
-    if (problem && ctx.hasUI && notifiedProblem !== problem) {
-      notifiedProblem = problem;
-      ctx.ui.notify(problem, "warning");
-    }
+    notifyProblem(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
@@ -308,6 +334,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     coldRun = true;
     activeRun = false;
     frozenProjection = "";
+    notifyProblem(ctx);
   });
 
   pi.on("session_compact", () => {
