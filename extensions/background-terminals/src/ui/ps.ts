@@ -15,7 +15,12 @@ import type {
 import { formatSize } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
-import { formatElapsed, formatExit, type TerminalSnapshot } from "../domain.ts";
+import {
+  formatDuration,
+  formatElapsed,
+  formatExit,
+  type TerminalSnapshot,
+} from "../domain.ts";
 import type { TerminalReadModel } from "../manager.ts";
 import { createOutputLineCache, sanitizeText } from "./output-view.ts";
 
@@ -42,6 +47,8 @@ function statusGlyph(snap: TerminalSnapshot, theme: Theme) {
       return theme.fg("error", "■");
     case "killed":
       return theme.fg("muted", "■");
+    case "timed_out":
+      return theme.fg("error", "■");
   }
 }
 
@@ -55,6 +62,8 @@ function statusWord(snap: TerminalSnapshot, theme: Theme) {
       return theme.fg("error", "failed");
     case "killed":
       return theme.fg("muted", "killed");
+    case "timed_out":
+      return theme.fg("error", "timed out");
   }
 }
 
@@ -334,8 +343,14 @@ class TerminalDashboard implements Component {
         snap.status === "running"
           ? statusWord(snap, theme)
           : theme.fg("muted", formatExit(snap)),
+        snap.status === "running" && snap.timeoutAt !== undefined
+          ? theme.fg(
+              "warning",
+              `${formatDuration((snap.timeoutAt - Date.now()) / 1_000)} left`,
+            )
+          : "",
       ];
-      const right = `${rightParts.join(dot)} `;
+      const right = `${rightParts.filter(Boolean).join(dot)} `;
 
       const rightWidth = visibleWidth(right);
       const leftMax = Math.max(0, width - rightWidth - 2);
@@ -520,6 +535,12 @@ class TerminalDetailView implements Component {
       ) +
       (snap.status !== "running"
         ? theme.fg("muted", ` · ${formatExit(snap)}`)
+        : "") +
+      (snap.status === "running" && snap.timeoutAt !== undefined
+        ? theme.fg(
+            "warning",
+            ` · ${formatDuration((snap.timeoutAt - Date.now()) / 1_000)} remaining`,
+          )
         : "") +
       theme.fg("dim", ` · ${snap.cwd}`);
     lines.push(truncateToWidth(header, width));

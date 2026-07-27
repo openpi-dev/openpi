@@ -17,6 +17,11 @@ test("start descriptions identify the platform-specific shell contract", () => {
     BG_START_PARAMETER_DESCRIPTIONS.command,
     /cmd\.exe \/d \/s \/c on Windows/,
   );
+  assert.match(BG_START_TOOL_DESCRIPTION, /timeout_seconds/);
+  assert.match(
+    BG_START_PARAMETER_DESCRIPTIONS.timeoutSeconds,
+    /Optional runtime limit/,
+  );
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
@@ -88,12 +93,17 @@ test("status result marks head-truncated output with a pointer at the full log",
   assert.match(text, /Full log: \/tmp\/bt-1\.stdout\.log/);
 });
 
-test("completion message reports kill vs exit and omits empty stderr", () => {
+test("completion message reports kill, timeout, or exit and omits empty stderr", () => {
   const killed = buildTerminalResultMessage(
     snap({ status: "killed", exitCode: undefined, signal: "SIGTERM" }),
   );
   assert.match(killed, /was killed after/);
   assert.ok(!killed.includes("stderr"), "empty stderr section omitted");
+
+  const timedOut = buildTerminalResultMessage(
+    snap({ status: "timed_out", exitCode: undefined, signal: "SIGTERM" }),
+  );
+  assert.match(timedOut, /timed out after/);
 
   const failed = buildTerminalResultMessage(
     snap({

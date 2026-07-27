@@ -8,10 +8,12 @@
 
 import { Data } from "effect";
 
-export type TerminalStatus = "running" | "done" | "failed" | "killed";
-// "done"   = exited with code 0
-// "failed" = exited non-zero, or a spawn-level runtime error after start
-// "killed" = terminated by bg_kill, the /ps UI, or session teardown
+export type TerminalStatus =
+  "running" | "done" | "failed" | "killed" | "timed_out";
+// "done"      = exited with code 0
+// "failed"    = exited non-zero, or a spawn-level runtime error after start
+// "killed"    = terminated by bg_kill, the /ps UI, or session teardown
+// "timed_out" = exceeded its optional runtime deadline
 
 /** Read-only view over one captured output stream (stdout or stderr). */
 export interface OutputView {
@@ -38,8 +40,10 @@ export interface TerminalSnapshot {
   readonly status: TerminalStatus;
   /** Date.now() at spawn. */
   readonly createdAt: number;
-  /** Date.now() at settle (exit/kill). */
+  /** Date.now() at settle (exit/kill/timeout). */
   readonly settledAt?: number;
+  /** Optional runtime deadline. Undefined means the process may run indefinitely. */
+  readonly timeoutAt?: number;
   /** Set when the process exited via exit code (exactly one of exitCode/signal). */
   readonly exitCode?: number;
   /** Set when the process was terminated by a signal, e.g. "SIGTERM". */
@@ -50,19 +54,27 @@ export interface TerminalSnapshot {
   readonly stderr: OutputView;
 }
 
-export function formatElapsed(snap: TerminalSnapshot) {
-  const end = snap.settledAt ?? Date.now();
-  const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = totalSeconds % 60;
+export function formatDuration(totalSeconds: number) {
+  const bounded = Math.max(0, Math.round(totalSeconds));
+  const hours = Math.floor(bounded / 3600);
+  const minutes = Math.floor((bounded % 3600) / 60);
+  const seconds = bounded % 60;
+  if (hours > 0) return `${hours}h${minutes.toString().padStart(2, "0")}m`;
   return minutes > 0
     ? `${minutes}m${seconds.toString().padStart(2, "0")}s`
     : `${seconds}s`;
 }
 
+export function formatElapsed(snap: TerminalSnapshot) {
+  const end = snap.settledAt ?? Date.now();
+  const totalSeconds = Math.max(0, Math.round((end - snap.createdAt) / 1000));
+  return formatDuration(totalSeconds);
+}
+
 /** "exit 0", "exit 137", "SIGTERM", or "running". */
 export function formatExit(snap: TerminalSnapshot) {
   if (snap.status === "running") return "running";
+  if (snap.status === "timed_out") return "timed out";
   if (snap.signal) return snap.signal;
   if (snap.exitCode !== undefined) return `exit ${snap.exitCode}`;
   return snap.status;

@@ -6,7 +6,12 @@ import {
   formatSize,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
-import { formatElapsed, formatExit, type TerminalSnapshot } from "./domain.ts";
+import {
+  formatDuration,
+  formatElapsed,
+  formatExit,
+  type TerminalSnapshot,
+} from "./domain.ts";
 import { MAX_RUNNING, type KillResult } from "./manager.ts";
 
 /** bg_status stdout tail. */
@@ -27,6 +32,7 @@ export const BG_START_TOOL_DESCRIPTION =
   "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
   "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg_kill to stop a stuck one. " +
   `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); the full logs are captured to files and in the /ps viewer. ` +
+  "Set timeout_seconds for finite work such as builds or tests; omit it for servers and watchers. " +
   `Max ${MAX_RUNNING} background terminals can run at once.`;
 
 export const BG_START_PROMPT_SNIPPET =
@@ -36,6 +42,7 @@ export const BG_START_PROMPT_GUIDELINES = [
   "Use bg_start for commands expected to run long or indefinitely (servers, watch modes, long builds); use the regular bash tool for quick commands.",
   "bg_start processes receive no stdin — never start a command that requires interactive input.",
   "After bg_start, keep working; the exit result arrives automatically. Use bg_status only when you need current output before continuing.",
+  "For finite background work (builds, tests, migrations), give bg_start a realistic timeout_seconds. Omit timeout_seconds for servers and watch modes that should run indefinitely.",
 ];
 
 export const BG_START_PARAMETER_DESCRIPTIONS = {
@@ -43,6 +50,8 @@ export const BG_START_PARAMETER_DESCRIPTIONS = {
     "Shell command line to run in the background (sh -c on POSIX, cmd.exe /d /s /c on Windows). It receives no stdin (EOF immediately); interactive commands will not work.",
   title: "Short human-readable name shown in listings and the UI",
   workingDir: "Working directory (default: current working directory)",
+  timeoutSeconds:
+    "Optional runtime limit in seconds (1 to 604800). On expiry the process tree is terminated and reported as timed out. Omit for servers and watchers.",
 };
 
 export const BG_STATUS_TOOL_DESCRIPTION =
@@ -65,7 +74,7 @@ export const BG_KILL_PARAMETER_DESCRIPTIONS = {
 export function buildStartResult(snap: TerminalSnapshot) {
   return (
     `Started background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}, ${snap.cwd}).\n` +
-    `It runs in the background with no stdin. You'll get a message when it exits, ` +
+    `It runs in the background with no stdin${snap.timeoutAt === undefined ? "" : ` and will time out in ${formatDuration((snap.timeoutAt - snap.createdAt) / 1_000)}`}. You'll get a message when it exits, ` +
     `or use bg_status(id: "${snap.id}") to peek, bg_kill to stop it, bg_list to see all.`
   );
 }
@@ -76,9 +85,12 @@ export function describeTerminal(snap: TerminalSnapshot) {
     `pid ${snap.pid ?? "?"}`,
     formatElapsed(snap),
     snap.status === "running" ? "exit -" : formatExit(snap),
+    snap.status === "running" && snap.timeoutAt !== undefined
+      ? `${formatDuration((snap.timeoutAt - Date.now()) / 1_000)} remaining`
+      : "",
     snap.cwd,
     `stdout ${formatSize(snap.stdout.totalBytes)}, stderr ${formatSize(snap.stderr.totalBytes)}`,
-  ];
+  ].filter(Boolean);
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
@@ -116,7 +128,11 @@ export function buildStatusResult(snap: TerminalSnapshot) {
 /** The async completion follow-up injected into the model's context. */
 export function buildTerminalResultMessage(snap: TerminalSnapshot) {
   const how =
-    snap.status === "killed" ? "was killed" : `exited (${formatExit(snap)})`;
+    snap.status === "timed_out"
+      ? "timed out"
+      : snap.status === "killed"
+        ? "was killed"
+        : `exited (${formatExit(snap)})`;
   let text = `Background terminal ${snap.id} "${snap.title}" ${how} after ${formatElapsed(snap)}.`;
   if (snap.errorText) text += `\nError: ${snap.errorText}`;
   text += `\n\n${outputSection("stdout", snap.stdout, RESULT_STDOUT_MAX, RESULT_STDOUT_MAX_LINES)}`;

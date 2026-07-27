@@ -153,6 +153,26 @@ test("non-zero exit settles as failed with the exit code", async () => {
   });
 });
 
+test("optional deadline terminates the process tree and settles timed_out", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd("setInterval(() => {}, 1000)"),
+        title: "bounded",
+        cwd,
+        timeoutSeconds: 0.05,
+      }),
+    );
+    assert.ok(snap.timeoutAt);
+
+    const { snap: timedOut } = await settlement(manager, snap.id);
+    assert.equal(timedOut.status, "timed_out");
+    assert.ok(timedOut.signal);
+    assert.ok(timedOut.settledAt);
+  });
+});
+
 test("kill settles a never-exiting process as killed and resolves after settle; repeat kill is a no-op", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

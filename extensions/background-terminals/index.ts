@@ -221,6 +221,13 @@ export default function (pi: ExtensionAPI) {
           description: BG_START_PARAMETER_DESCRIPTIONS.workingDir,
         }),
       ),
+      timeout_seconds: Type.Optional(
+        Type.Number({
+          minimum: 1,
+          maximum: 604_800,
+          description: BG_START_PARAMETER_DESCRIPTIONS.timeoutSeconds,
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const manager = await getManager();
@@ -239,12 +246,23 @@ export default function (pi: ExtensionAPI) {
         params.title.replace(/\s+/g, " ").trim().slice(0, 80) || "terminal";
       const snap = await runTool(
         getRuntime(),
-        manager.start({ command, title, cwd }),
+        manager.start({
+          command,
+          title,
+          cwd,
+          timeoutSeconds: params.timeout_seconds,
+        }),
       );
 
       return {
         content: [{ type: "text", text: buildStartResult(snap) }],
-        details: { id: snap.id, title: snap.title, cwd, pid: snap.pid },
+        details: {
+          id: snap.id,
+          title: snap.title,
+          cwd,
+          pid: snap.pid,
+          timeoutAt: snap.timeoutAt,
+        },
       };
     },
   });
@@ -278,6 +296,7 @@ export default function (pi: ExtensionAPI) {
           pid: snap.pid,
           exitCode: snap.exitCode,
           signal: snap.signal,
+          timeoutAt: snap.timeoutAt,
         },
       };
     },
@@ -303,6 +322,7 @@ export default function (pi: ExtensionAPI) {
             title: snap.title,
             status: snap.status,
             pid: snap.pid,
+            timeoutAt: snap.timeoutAt,
           })),
         },
       };
@@ -371,14 +391,18 @@ export default function (pi: ExtensionAPI) {
       };
       const failed = details.status === "failed";
       const killed = details.status === "killed";
-      const icon = failed
-        ? theme.fg("error", "x")
+      const timedOut = details.status === "timed_out";
+      const icon =
+        failed || timedOut
+          ? theme.fg("error", "x")
+          : killed
+            ? theme.fg("muted", "■")
+            : theme.fg("success", "■");
+      const how = timedOut
+        ? "timed out"
         : killed
-          ? theme.fg("muted", "■")
-          : theme.fg("success", "■");
-      const how = killed
-        ? "killed"
-        : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
+          ? "killed"
+          : (details.signal ?? `exit ${details.exitCode ?? "?"}`);
       const header =
         `${icon} ` +
         theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +

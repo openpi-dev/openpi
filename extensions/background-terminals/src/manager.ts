@@ -86,6 +86,9 @@ interface Entry {
   /** Set in the same synchronous effect that sends SIGTERM so a natural exit
    * before signaling keeps its truthful status. */
   killSignaled: boolean;
+  /** Deadline won the race and initiated termination. */
+  timedOut: boolean;
+  timeoutTimer?: ReturnType<typeof setTimeout>;
   /** The child emitted 'error' (spawn failure etc.); settles as "failed".
    * Kept separate from errorText, which also carries non-fatal notes
    * (spill failures) that must not flip a clean exit to "failed". */
@@ -108,6 +111,8 @@ export interface StartOptions {
   readonly command: string;
   readonly title: string;
   readonly cwd: string;
+  /** Optional runtime limit in seconds. Omit for an indefinite server/watcher. */
+  readonly timeoutSeconds?: number;
 }
 
 export interface KillResult {
@@ -389,13 +394,17 @@ const makeManager = Effect.gen(function* () {
     const s = entry.snapshot;
     if (s.status !== "running") return;
     s.settledAt = Date.now();
-    s.status = entry.killSignaled
-      ? "killed"
-      : entry.processErrored
-        ? "failed"
-        : s.exitCode === 0
-          ? "done"
-          : "failed";
+    s.status = entry.timedOut
+      ? "timed_out"
+      : entry.killSignaled
+        ? "killed"
+        : entry.processErrored
+          ? "failed"
+          : s.exitCode === 0
+            ? "done"
+            : "failed";
+    if (entry.timeoutTimer) clearTimeout(entry.timeoutTimer);
+    entry.timeoutTimer = undefined;
     settledHistory.set(s.id, {
       title: s.title,
       status: s.status,
@@ -593,6 +602,10 @@ const makeManager = Effect.gen(function* () {
           pid: child.pid,
           status: "running",
           createdAt: Date.now(),
+          timeoutAt:
+            options.timeoutSeconds === undefined
+              ? undefined
+              : Date.now() + options.timeoutSeconds * 1_000,
           get stdout() {
             return stdoutBuf.view();
           },
@@ -613,6 +626,7 @@ const makeManager = Effect.gen(function* () {
             (file): file is fs.WriteStream => file !== undefined,
           ),
           killSignaled: false,
+          timedOut: false,
           processErrored: false,
           exited: false,
           stdioClosed: false,
@@ -620,6 +634,24 @@ const makeManager = Effect.gen(function* () {
           exitCleanupStarted: false,
           settled,
         };
+
+        if (options.timeoutSeconds !== undefined) {
+          entry.timeoutTimer = setTimeout(() => {
+            if (entry.snapshot.status !== "running") return;
+            // If the shell exited naturally just before the deadline, preserve
+            // that result; bounded exit cleanup will reap descendants holding
+            // inherited stdio open.
+            if (entry.exited) return;
+            entry.timedOut = true;
+            runCleanup(
+              closeEntryScope(entry).pipe(
+                Effect.timeout(STOP_TIMEOUT_MS),
+                Effect.ignore,
+              ),
+            );
+          }, options.timeoutSeconds * 1_000);
+          entry.timeoutTimer.unref?.();
+        }
 
         // Plain-callback stream plumbing (the codex-backend precedent):
         // setEncoding's internal StringDecoder is multibyte-safe across
@@ -679,7 +711,9 @@ const makeManager = Effect.gen(function* () {
                 () => entry.stdioClosed,
                 () => {
                   entry.killSignaled ||=
-                    !entry.exited && entry.snapshot.status === "running";
+                    !entry.timedOut &&
+                    !entry.exited &&
+                    entry.snapshot.status === "running";
                 },
               );
               // Give the natural close→flush→settle path a bounded grace,

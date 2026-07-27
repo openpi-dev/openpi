@@ -14,10 +14,11 @@ Call `bg_start` with:
 - `command`: shell command to run
 - `title`: short recognizable label
 - `working_dir`: project directory when different from the current directory
+- `timeout_seconds`: optional deadline for finite work such as builds, tests, or migrations; omit for servers and watchers
 
 Background commands receive no stdin. Never use them for interactive prompts.
 
-After starting, continue useful work instead of polling. The terminal sends one completion message when it exits.
+After starting, continue useful work instead of polling. The terminal sends one completion message when it exits or times out.
 
 ## Inspect and stop
 
