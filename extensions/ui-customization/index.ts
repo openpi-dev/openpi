@@ -185,10 +185,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
           invalidate() {},
           render(width: number) {
             const directory = theme.fg("text", formatDirectory(ctx.cwd));
-            const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
-            let git = gitInfo.branch
-              ? `${gitInfo.branch} · ${gitInfo.changedFiles} ${fileLabel} changed`
-              : "";
+            let git = gitInfo.branch ?? "";
 
             if (gitInfo.pullRequest) {
               const prLabel = `PR #${gitInfo.pullRequest.number}`;
@@ -198,19 +195,23 @@ export default function uiCustomization(pi: ExtensionAPI) {
               git += ` · ${linkedPr}`;
             }
 
-            const contextPercent =
-              modelInfo.contextPercent === null
-                ? "?"
-                : `${Math.round(modelInfo.contextPercent)}`;
             const contextWindow =
               modelInfo.contextWindow > 0
                 ? formatTokens(modelInfo.contextWindow)
-                : "?";
+                : "";
+            const contextUsage =
+              modelInfo.contextPercent === null
+                ? contextWindow
+                  ? `ctx ${contextWindow}`
+                  : ""
+                : `${Math.round(modelInfo.contextPercent)}%${contextWindow ? `/${contextWindow}` : ""}`;
             const tps =
               modelInfo.tokensPerSecond === null
                 ? "— tok/s"
                 : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-            const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
+            const usage = [contextUsage, `$${modelInfo.cost.toFixed(2)}`, tps]
+              .filter(Boolean)
+              .join(" · ");
             const model = modelInfo.provider
               ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
               : modelInfo.modelId;
