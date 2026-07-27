@@ -23,8 +23,20 @@ Add the included theme to `~/.pi/agent/settings.json` while keeping your existin
 
 Pi will load the extensions, skills, and theme from their directories the next time it starts.
 
-## Commands added by this fork
+## Configure this package
+
+Use the single package-owned command. With no arguments it shows the current configuration and examples; with arguments it treats the rest as a natural-language request:
+
+```text
+/my-pi-setup
+/my-pi-setup 摘要使用 seal/deepseek-v4-flash，关闭推理
+/my-pi-setup 关闭自动摘要
+/my-pi-setup 摘要改用本地 fallback，不调用模型
+```
+
+Run recaps default to the local fallback, so installation causes no extra model calls. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
+
+## Other commands added by this fork
 
 - `/sessions` searches and previews project sessions before switching.
 - `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires roughly 30,000 context tokens; use the separate `/handoff` skill when work should move to a genuinely new session.
-- `/summary-model` changes the model used for recap cards. The default is `seal/deepseek-v4-flash` with reasoning off.

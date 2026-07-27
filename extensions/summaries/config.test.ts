@@ -1,40 +1,52 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { DEFAULT_SUMMARY_CONFIG, parseSummaryConfig } from "./src/config.ts";
+import {
+  DEFAULT_SETUP_CONFIG,
+  formatSetupConfig,
+  parseSetupConfig,
+} from "../shared/setup-config.ts";
 
-test("summary config defaults to low-cost Seal DeepSeek Flash", () => {
-  assert.deepEqual(parseSummaryConfig(undefined), DEFAULT_SUMMARY_CONFIG);
-  assert.deepEqual(DEFAULT_SUMMARY_CONFIG, {
-    provider: "seal",
-    model: "deepseek-v4-flash",
-    reasoning: "off",
-  });
+test("setup defaults to enabled local recaps without model calls", () => {
+  assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
+  assert.equal(
+    formatSetupConfig(parseSetupConfig(undefined)),
+    "Run recaps: local fallback (no model calls)",
+  );
 });
 
-test("summary config accepts valid private overrides and rejects partial corruption", () => {
-  assert.deepEqual(
-    parseSummaryConfig({
-      provider: " anthropic ",
-      model: " claude-sonnet ",
-      reasoning: "high",
-    }),
-    {
-      provider: "anthropic",
-      model: "claude-sonnet",
-      reasoning: "high",
+test("setup config accepts model choices and drops malformed models", () => {
+  const configured = parseSetupConfig({
+    summaries: {
+      enabled: true,
+      model: {
+        provider: " seal ",
+        model: " deepseek-v4-flash ",
+        reasoning: "off",
+      },
     },
+  });
+  assert.deepEqual(configured, {
+    summaries: {
+      enabled: true,
+      model: {
+        provider: "seal",
+        model: "deepseek-v4-flash",
+        reasoning: "off",
+      },
+    },
+  });
+  assert.equal(
+    formatSetupConfig(configured),
+    "Run recaps: seal/deepseek-v4-flash · off",
   );
 
   assert.deepEqual(
-    parseSummaryConfig({ provider: "", model: 42, reasoning: "turbo" }),
-    DEFAULT_SUMMARY_CONFIG,
-  );
-  assert.deepEqual(
-    parseSummaryConfig({
-      provider: "anthropic",
-      model: 42,
-      reasoning: "high",
+    parseSetupConfig({
+      summaries: {
+        enabled: false,
+        model: { provider: "", model: 42, reasoning: "turbo" },
+      },
     }),
-    DEFAULT_SUMMARY_CONFIG,
+    { summaries: { enabled: false } },
   );
 });

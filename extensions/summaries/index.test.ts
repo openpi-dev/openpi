@@ -3,7 +3,7 @@ import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import summariesExtension from "./index.ts";
 
-test("registers only the recap renderer, command, and bounded lifecycle hooks", () => {
+test("registers only the recap renderer and bounded lifecycle hooks", () => {
   const events = new Set<string>();
   const renderers = new Set<string>();
   const commands = new Set<string>();
@@ -25,5 +25,5 @@ test("registers only the recap renderer, command, and bounded lifecycle hooks", 
     ]),
   );
   assert.deepEqual(renderers, new Set(["summary-recap"]));
-  assert.deepEqual(commands, new Set(["summary-model"]));
+  assert.deepEqual(commands, new Set());
 });

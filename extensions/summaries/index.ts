@@ -2,7 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { loadSummaryConfig, saveSummaryConfig } from "./src/config.ts";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import { summarizeRun } from "./src/summarizer.ts";
 import {
   buildFallbackRecap,
@@ -10,12 +10,7 @@ import {
   getRunEntries,
   serializeRunTranscript,
 } from "./src/transcript.ts";
-import {
-  openModelPicker,
-  openReasoningPicker,
-  renderRecap,
-  type RecapEntryData,
-} from "./src/ui.ts";
+import { renderRecap, type RecapEntryData } from "./src/ui.ts";
 
 const RECAP_ENTRY_TYPE = "summary-recap";
 const STATUS_KEY = "summaries";
@@ -81,31 +76,43 @@ export default function (pi: ExtensionAPI) {
     );
     if (entries.length === 0) return;
 
-    const config = loadSummaryConfig();
+    const setup = loadSetupConfig();
+    if (!setup.summaries.enabled) return;
+    const config = setup.summaries.model;
     const controller = new AbortController();
     statusContext = ctx;
     const task = (async () => {
       let recap: RecapEntryData;
-      try {
-        const generated = await summarizeRun({
-          modelRegistry: ctx.modelRegistry,
-          config,
-          transcript: serializeRunTranscript(entries),
-          signal: controller.signal,
-        });
-        recap = { ...generated, ...config };
-      } catch (error) {
-        if (controller.signal.aborted || !sessionActive) return;
+      if (!config) {
         recap = {
           ...buildFallbackRecap(entries),
-          ...config,
+          provider: "local",
+          model: "fallback",
+          reasoning: "off",
           fallback: true,
         };
-        const detail = error instanceof Error ? ` ${error.message}` : "";
-        ctx.ui.notify(
-          `The summary model failed; showing a concise local fallback.${detail}`,
-          "warning",
-        );
+      } else {
+        try {
+          const generated = await summarizeRun({
+            modelRegistry: ctx.modelRegistry,
+            config,
+            transcript: serializeRunTranscript(entries),
+            signal: controller.signal,
+          });
+          recap = { ...generated, ...config };
+        } catch (error) {
+          if (controller.signal.aborted || !sessionActive) return;
+          recap = {
+            ...buildFallbackRecap(entries),
+            ...config,
+            fallback: true,
+          };
+          const detail = error instanceof Error ? ` ${error.message}` : "";
+          ctx.ui.notify(
+            `The summary model failed; showing a concise local fallback.${detail}`,
+            "warning",
+          );
+        }
       }
 
       if (!sessionActive || controller.signal.aborted) return;
@@ -134,51 +141,5 @@ export default function (pi: ExtensionAPI) {
     activeSummaries.clear();
     statusContext?.ui.setStatus(STATUS_KEY, undefined);
     statusContext = undefined;
-  });
-
-  pi.registerCommand("summary-model", {
-    description: "Choose the model and reasoning level used for run recaps",
-    handler: async (_args, ctx) => {
-      if (ctx.mode !== "tui") {
-        if (ctx.hasUI) {
-          ctx.ui.notify(
-            "Summary model selection is only available in the TUI.",
-            "error",
-          );
-        }
-        return;
-      }
-
-      const current = loadSummaryConfig();
-      const model = await openModelPicker(ctx, current);
-      if (!model) return;
-
-      const reasoning = await openReasoningPicker(
-        ctx,
-        model,
-        current.reasoning,
-      );
-      if (!reasoning) return;
-
-      const config = {
-        provider: model.provider,
-        model: model.id,
-        reasoning,
-      };
-      try {
-        await saveSummaryConfig(config);
-      } catch {
-        ctx.ui.notify(
-          "Could not save the private summary model config.",
-          "error",
-        );
-        return;
-      }
-
-      ctx.ui.notify(
-        `Summary model: ${config.provider}/${config.model} · ${config.reasoning}`,
-        "info",
-      );
-    },
   });
 }

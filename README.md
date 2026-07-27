@@ -13,7 +13,8 @@ This setup is fairly opinionated. It:
 - adds `/context-pivot` for deliberate same-session phase changes without conflicting with the `/handoff` skill
 - adds an ask user tool, which lets the model ask multiple choice questions
 - adds first-class `fd` (file discovery) and `rg` (content search) tools
-- writes low-cost per-run recap cards with `seal/deepseek-v4-flash` by default
+- writes per-run recap cards locally by default, with an optional user-selected summary model
+- provides one natural-language configuration entry point: `/my-pi-setup [request]`
 
 Notable fork changes:
 

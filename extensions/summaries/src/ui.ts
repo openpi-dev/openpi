@@ -1,17 +1,6 @@
-import {
-  getMarkdownTheme,
-  ThinkingSelectorComponent,
-  type ExtensionCommandContext,
-  type Theme,
-} from "@earendil-works/pi-coding-agent";
-import {
-  getSupportedThinkingLevels,
-  type Api,
-  type Model,
-  type ModelThinkingLevel,
-} from "@earendil-works/pi-ai";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import { Box, Markdown, Text } from "@earendil-works/pi-tui";
-import type { ReasoningLevel, SummaryConfig } from "./config.ts";
+import type { ReasoningLevel } from "./config.ts";
 import type { RunRecap } from "./summarizer.ts";
 
 export interface RecapEntryData extends RunRecap {
@@ -68,54 +57,4 @@ export function renderRecap(
   if (!data)
     return new Text(theme.fg("warning", "Run recap unavailable"), 0, 0);
   return new RecapCard(data, theme, expanded);
-}
-
-export async function openModelPicker(
-  ctx: ExtensionCommandContext,
-  _config: SummaryConfig,
-) {
-  const models = [...ctx.modelRegistry.getAvailable()].sort((a, b) =>
-    `${a.provider}/${a.id}`.localeCompare(`${b.provider}/${b.id}`),
-  );
-  if (models.length === 0) {
-    ctx.ui.notify(
-      "No configured models are available for run recaps.",
-      "warning",
-    );
-    return undefined;
-  }
-  const labels = models.map((model) => `${model.provider}/${model.id}`);
-  const selected = await ctx.ui.select("Summary model", labels);
-  return selected === undefined ? undefined : models[labels.indexOf(selected)];
-}
-
-export function openReasoningPicker(
-  ctx: ExtensionCommandContext,
-  model: Model<Api>,
-  current: ReasoningLevel,
-) {
-  const supported = getSupportedThinkingLevels(model);
-  const selectedCurrent = supported.includes(current)
-    ? current
-    : (supported[0] ?? "off");
-
-  return ctx.ui.custom<ModelThinkingLevel | undefined>(
-    (tui, _theme, _keybindings, done) => {
-      const selector = new ThinkingSelectorComponent(
-        selectedCurrent,
-        supported,
-        (level) => done(level),
-        () => done(undefined),
-      );
-      const list = selector.getSelectList();
-      return {
-        render: (width) => selector.render(width),
-        invalidate: () => selector.invalidate(),
-        handleInput: (data) => {
-          list.handleInput(data);
-          tui.requestRender();
-        },
-      };
-    },
-  );
 }

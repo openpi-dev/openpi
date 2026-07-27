@@ -12,8 +12,8 @@ settings.json
 trust.json
 models.json
 models-store.json
-extensions/summaries/config.private.json
-extensions/summaries/config.private.json.*.tmp
+my-pi-setup.json
+my-pi-setup.json.*.tmp
 
 # Environment variables and secrets
 .env
