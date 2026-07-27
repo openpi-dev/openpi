@@ -34,6 +34,7 @@ Use the single package-owned command. With no arguments the current model starts
 /my-pi-setup 关闭自动摘要
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
+/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 /my-pi-setup 关闭自定义状态栏
 ```
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import uiCustomization from "./index.ts";
+import uiCustomization, { buildFooterContent } from "./index.ts";
 import {
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
@@ -72,6 +72,7 @@ test("shows context capacity without a misleading unknown percentage", () => {
     contextTokens: null,
     contextWindow: 1_000_000,
     contextPercent: null,
+    cachePercent: 82.4,
     cost: 4.03,
     tokensPerSecond: null,
     generating: false,
@@ -80,6 +81,39 @@ test("shows context capacity without a misleading unknown percentage", () => {
   const footer = harness.render().join("\n");
   assert.match(footer, /ctx 1\.0m/);
   assert.doesNotMatch(footer, /\?%/);
+});
+
+test("renders only selected footer items", () => {
+  const content = buildFooterContent(
+    {
+      provider: "seal",
+      modelId: "gpt-5.6-sol",
+      modelName: "GPT-5.6 Sol",
+      thinking: "high",
+      contextTokens: 250_000,
+      contextWindow: 1_000_000,
+      contextPercent: 25,
+      cachePercent: 82.4,
+      cost: 4.03,
+      tokensPerSecond: 41,
+      generating: false,
+    },
+    {
+      isRepository: true,
+      branch: "main",
+      changedFiles: 7,
+      pullRequest: null,
+    },
+    ["model", "context", "cache"],
+  );
+
+  assert.deepEqual(content, {
+    showCwd: false,
+    model: "seal/gpt-5.6-sol",
+    usage: "25%/1.0m · cache 82%",
+    git: "",
+    showActivity: false,
+  });
 });
 
 test("shows the branch but omits changed-file counts", () => {

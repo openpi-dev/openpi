@@ -16,6 +16,33 @@ export const REASONING_LEVELS = [
 
 export type ReasoningLevel = (typeof REASONING_LEVELS)[number];
 
+export const FOOTER_ITEMS = [
+  "cwd",
+  "model",
+  "thinking",
+  "context",
+  "cache",
+  "cost",
+  "throughput",
+  "git",
+  "pr",
+  "activity",
+] as const;
+
+export type FooterItem = (typeof FOOTER_ITEMS)[number];
+
+export const DEFAULT_FOOTER_ITEMS: readonly FooterItem[] = [
+  "cwd",
+  "model",
+  "thinking",
+  "context",
+  "cost",
+  "throughput",
+  "git",
+  "pr",
+  "activity",
+];
+
 export interface SummaryModelConfig {
   readonly provider: string;
   readonly model: string;
@@ -39,6 +66,7 @@ export interface MyPiSetupConfig {
   readonly ui: {
     readonly showHeader: boolean;
     readonly customFooter: boolean;
+    readonly footerItems: readonly FooterItem[];
   };
 }
 
@@ -51,6 +79,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   ui: {
     showHeader: false,
     customFooter: true,
+    footerItems: DEFAULT_FOOTER_ITEMS,
   },
 };
 
@@ -62,6 +91,15 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
   typeof value === "string" &&
   REASONING_LEVELS.includes(value as ReasoningLevel);
+
+const isFooterItem = (value: unknown): value is FooterItem =>
+  typeof value === "string" && FOOTER_ITEMS.includes(value as FooterItem);
+
+function parseFooterItems(value: unknown): readonly FooterItem[] {
+  if (!Array.isArray(value)) return DEFAULT_FOOTER_ITEMS;
+  const items = [...new Set(value.filter(isFooterItem))];
+  return items.length > 0 ? items : DEFAULT_FOOTER_ITEMS;
+}
 
 function boundedInteger(value: unknown, fallback: number, maximum: number) {
   return typeof value === "number" &&
@@ -113,6 +151,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
+      footerItems: parseFooterItems(ui.footerItems),
     },
   };
 }
@@ -151,6 +190,6 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   return [
     summary,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
-    `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${config.ui.customFooter ? "on" : "off"}`,
+    `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${config.ui.customFooter ? `on (${config.ui.footerItems.join(", ")})` : "off"}`,
   ].join("\n");
 }

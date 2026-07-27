@@ -11,24 +11,31 @@ import {
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
-function getSessionCost(ctx: ExtensionContext) {
+function getSessionMetrics(ctx: ExtensionContext) {
   let cost = 0;
+  let cacheRead = 0;
+  let promptTokens = 0;
 
   for (const entry of ctx.sessionManager.getBranch()) {
+    let usage;
     if (entry.type === "message") {
       const message = entry.message;
-      if (message.role === "assistant") cost += message.usage.cost.total;
-      else if (message.role === "toolResult") {
-        cost += message.usage?.cost.total ?? 0;
+      if (message.role === "assistant" || message.role === "toolResult") {
+        usage = message.usage;
       }
-      continue;
+    } else if (entry.type === "compaction" || entry.type === "branch_summary") {
+      usage = entry.usage;
     }
-    if (entry.type === "compaction" || entry.type === "branch_summary") {
-      cost += entry.usage?.cost.total ?? 0;
-    }
+    if (!usage) continue;
+    cost += usage.cost.total;
+    cacheRead += usage.cacheRead;
+    promptTokens += usage.input + usage.cacheRead + usage.cacheWrite;
   }
 
-  return cost;
+  return {
+    cost,
+    cachePercent: promptTokens > 0 ? (cacheRead / promptTokens) * 100 : null,
+  };
 }
 
 function estimateContentTokens(characters: number) {
@@ -54,6 +61,7 @@ export default function modelInfo(pi: ExtensionAPI) {
     currentContext = ctx;
     const model = ctx.model;
     const usage = ctx.getContextUsage();
+    const metrics = getSessionMetrics(ctx);
 
     state = {
       ...state,
@@ -64,7 +72,8 @@ export default function modelInfo(pi: ExtensionAPI) {
       contextTokens: usage?.tokens ?? null,
       contextWindow: usage?.contextWindow ?? model?.contextWindow ?? 0,
       contextPercent: usage?.percent ?? null,
-      cost: getSessionCost(ctx),
+      cachePercent: metrics.cachePercent,
+      cost: metrics.cost,
     };
     publish();
   }

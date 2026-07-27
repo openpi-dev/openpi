@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  FOOTER_ITEMS,
   formatSetupConfig,
   loadSetupConfig,
   MAX_WORKFLOW_AGENT_CALLS,
@@ -68,6 +69,14 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Whether to replace Pi's footer with the package dashboard footer. Defaults to true; omit to preserve the current value.",
         }),
       ),
+      ui_footer_items: Type.Optional(
+        Type.Array(StringEnum(FOOTER_ITEMS), {
+          minItems: 1,
+          uniqueItems: true,
+          description:
+            "Dashboard footer items to display, in this order: cwd, model, thinking, context, cache, cost, throughput, git, pr, activity. Omit to preserve the current selection.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const modelFields = [
@@ -118,6 +127,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
         ui: {
           showHeader: params.ui_show_header ?? current.ui.showHeader,
           customFooter: params.ui_custom_footer ?? current.ui.customFooter,
+          footerItems: params.ui_footer_items ?? current.ui.footerItems,
         },
       };
       await saveSetupConfig(config);
@@ -162,7 +172,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
             "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
             "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
-            "3. UI: large header and custom footer preferences.",
+            "3. UI: large header, custom footer, and which footer items to show. Available footer items are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, PR, and background activity. Recommend the current compact default unless the user asks to customize it.",
             "",
             "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
           ];

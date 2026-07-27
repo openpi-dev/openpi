@@ -130,7 +130,7 @@ Context Pivot 在同一 Session 内切换阶段；Handoff 负责真正跨 Sessio
 </td>
 <td width="33%" valign="top">
 <strong>Stay observable</strong><br/><br/>
-Footer 持续展示 Model、Context、Cost、Throughput、Git、PR 与后台活动。
+Footer 可选择展示目录、Model、Thinking、Context、缓存命中率、Cost、Throughput、Git、PR 与后台活动。
 </td>
 <td width="33%" valign="top">
 <strong>Configure naturally</strong><br/><br/>
@@ -287,19 +287,40 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 ### 8. 高密度终端 Dashboard
 
-默认 Footer 持续展示：
+默认 Footer 使用紧凑的两行布局：
 
 ```text
 ~/project                         provider/model · thinking
-34%/1M · $0.18 · ~52 tok/s        main · 3 files changed · PR #42
+34%/1M · $0.18 · ~52 tok/s                     main · PR #42
 ```
 
-并在其后保留 Subagents、Workflows 等扩展状态。
+可通过 `/my-pi-setup` 按项选择：
+
+| 项目 | 内容 |
+| --- | --- |
+| `cwd` | 当前工作目录 |
+| `model` | Provider / Model |
+| `thinking` | 当前 Thinking 档位 |
+| `context` | Context 占用与容量；占用未知时仅显示容量 |
+| `cache` | Session 已报告的 Prompt Cache 命中率 |
+| `cost` | Session 累计成本 |
+| `throughput` | 当前运行的估算 Token 速度 |
+| `git` | 当前分支 |
+| `pr` | 当前分支对应的 PR |
+| `activity` | Subagents、Workflows、后台终端等活动状态 |
+
+例如：
+
+```text
+/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
+```
+
+未选中的项目不渲染；选中 `activity` 时，扩展状态继续显示在两行 Dashboard 后。
 
 - Context 与模型信息直接来自 Pi Runtime；
 - 成本累计 Assistant、嵌套 Tool、Compaction 和 Branch Summary 的已记录 Usage；
 - Token 速度用 `~` 明确标记为流式估算；
-- Git 每 5 秒刷新，并在输入或工具结束后立即刷新；
+- Git 每 5 秒刷新，并在输入或工具结束后立即刷新；默认仅显示分支和 PR，不显示变更文件数；
 - `/lg` 浏览本地文件与 Diff；
 - `/pr` 刷新当前分支对应的 GitHub PR；
 - 大型 ASCII Header 默认关闭；
@@ -413,6 +434,7 @@ pi install ~/work/my-pi-setup
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
 /my-pi-setup 隐藏大标题
+/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 /my-pi-setup 关闭自定义状态栏
 ```
 

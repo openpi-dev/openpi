@@ -11,7 +11,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { loadSetupConfig } from "../shared/setup-config.ts";
+import { loadSetupConfig, type FooterItem } from "../shared/setup-config.ts";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
@@ -20,6 +20,8 @@ import {
   REFRESH_CHANNEL,
   isGitInfoState,
   isModelInfoState,
+  type GitInfoState,
+  type ModelInfoState,
 } from "../shared/dashboard-state.ts";
 
 type Rgb = [number, number, number];
@@ -113,6 +115,61 @@ function center(text: string, width: number) {
   return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
 }
 
+export function buildFooterContent(
+  modelInfo: ModelInfoState,
+  gitInfo: GitInfoState,
+  selectedItems: readonly FooterItem[],
+  formatPullRequest: (number: number, url: string) => string = (number) =>
+    `PR #${number}`,
+) {
+  const items = new Set(selectedItems);
+  const contextWindow =
+    modelInfo.contextWindow > 0 ? formatTokens(modelInfo.contextWindow) : "";
+  const context =
+    modelInfo.contextPercent === null
+      ? contextWindow
+        ? `ctx ${contextWindow}`
+        : ""
+      : `${Math.round(modelInfo.contextPercent)}%${contextWindow ? `/${contextWindow}` : ""}`;
+  const throughput =
+    modelInfo.tokensPerSecond === null
+      ? "— tok/s"
+      : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
+
+  return {
+    showCwd: items.has("cwd"),
+    model: [
+      items.has("model")
+        ? modelInfo.provider
+          ? `${modelInfo.provider}/${modelInfo.modelId}`
+          : modelInfo.modelId
+        : "",
+      items.has("thinking") ? modelInfo.thinking : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    usage: [
+      items.has("context") ? context : "",
+      items.has("cache") && modelInfo.cachePercent !== null
+        ? `cache ${Math.round(modelInfo.cachePercent)}%`
+        : "",
+      items.has("cost") ? `$${modelInfo.cost.toFixed(2)}` : "",
+      items.has("throughput") ? throughput : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    git: [
+      items.has("git") ? (gitInfo.branch ?? "") : "",
+      items.has("pr") && gitInfo.pullRequest
+        ? formatPullRequest(gitInfo.pullRequest.number, gitInfo.pullRequest.url)
+        : "",
+    ]
+      .filter(Boolean)
+      .join(" · "),
+    showActivity: items.has("activity"),
+  };
+}
+
 function columns(left: string, right: string, width: number) {
   if (!right) return truncateToWidth(left, width);
 
@@ -184,52 +241,45 @@ export default function uiCustomization(pi: ExtensionAPI) {
         return {
           invalidate() {},
           render(width: number) {
-            const directory = theme.fg("text", formatDirectory(ctx.cwd));
-            let git = gitInfo.branch ?? "";
+            const content = buildFooterContent(
+              modelInfo,
+              gitInfo,
+              config.footerItems,
+              (number, url) => {
+                const label = `PR #${number}`;
+                return getCapabilities().hyperlinks
+                  ? hyperlink(label, url)
+                  : label;
+              },
+            );
+            const directory = content.showCwd
+              ? theme.fg("text", formatDirectory(ctx.cwd))
+              : "";
 
-            if (gitInfo.pullRequest) {
-              const prLabel = `PR #${gitInfo.pullRequest.number}`;
-              const linkedPr = getCapabilities().hyperlinks
-                ? hyperlink(prLabel, gitInfo.pullRequest.url)
-                : prLabel;
-              git += ` · ${linkedPr}`;
-            }
+            const lines: string[] = [];
+            const top = columns(
+              directory,
+              theme.fg("muted", content.model),
+              width,
+            );
+            if (top) lines.push(top);
+            const bottom = columns(
+              theme.fg("muted", content.usage),
+              theme.fg("muted", content.git),
+              width,
+            );
+            if (bottom) lines.push(bottom);
 
-            const contextWindow =
-              modelInfo.contextWindow > 0
-                ? formatTokens(modelInfo.contextWindow)
-                : "";
-            const contextUsage =
-              modelInfo.contextPercent === null
-                ? contextWindow
-                  ? `ctx ${contextWindow}`
-                  : ""
-                : `${Math.round(modelInfo.contextPercent)}%${contextWindow ? `/${contextWindow}` : ""}`;
-            const tps =
-              modelInfo.tokensPerSecond === null
-                ? "— tok/s"
-                : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-            const usage = [contextUsage, `$${modelInfo.cost.toFixed(2)}`, tps]
-              .filter(Boolean)
-              .join(" · ");
-            const model = modelInfo.provider
-              ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
-              : modelInfo.modelId;
-
-            const lines = [
-              columns(directory, theme.fg("muted", model), width),
-              columns(theme.fg("muted", usage), theme.fg("muted", git), width),
-            ];
-
-            // Extension statuses render after the two dashboard lines, one per row.
-            const statuses = footerData.getExtensionStatuses();
-            const statusLines = Array.from(statuses.entries())
-              .sort(([a], [b]) => a.localeCompare(b))
-              .flatMap(([, text]) => text.split("\n"));
-            for (const statusLine of statusLines) {
-              lines.push(
-                truncateToWidth(statusLine, width, theme.fg("dim", "...")),
-              );
+            if (content.showActivity) {
+              const statuses = footerData.getExtensionStatuses();
+              const statusLines = Array.from(statuses.entries())
+                .sort(([a], [b]) => a.localeCompare(b))
+                .flatMap(([, text]) => text.split("\n"));
+              for (const statusLine of statusLines) {
+                lines.push(
+                  truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+                );
+              }
             }
 
             return lines;

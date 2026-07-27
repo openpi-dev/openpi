@@ -10,6 +10,7 @@ export interface ModelInfoState {
   contextTokens: number | null;
   contextWindow: number;
   contextPercent: number | null;
+  cachePercent: number | null;
   cost: number;
   tokensPerSecond: number | null;
   generating: boolean;
@@ -37,6 +38,7 @@ export function emptyModelInfoState(): ModelInfoState {
     contextTokens: null,
     contextWindow: 0,
     contextPercent: null,
+    cachePercent: null,
     cost: 0,
     tokensPerSecond: null,
     generating: false,
@@ -71,6 +73,7 @@ export function isModelInfoState(value: unknown): value is ModelInfoState {
     isNullableNumber(value.contextTokens) &&
     typeof value.contextWindow === "number" &&
     isNullableNumber(value.contextPercent) &&
+    isNullableNumber(value.cachePercent) &&
     typeof value.cost === "number" &&
     isNullableNumber(value.tokensPerSecond) &&
     typeof value.generating === "boolean"
