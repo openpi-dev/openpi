@@ -135,38 +135,40 @@ export default function myPiSetup(pi: ExtensionAPI) {
       "View or change this package's configuration in natural language",
     handler: async (args, ctx) => {
       const request = args.trim();
-      if (!request) {
-        ctx.ui.notify(
-          [
-            formatSetupConfig(loadSetupConfig()),
+      const currentConfiguration = formatSetupConfig(loadSetupConfig());
+      const currentModel = ctx.model
+        ? `${ctx.model.provider}/${ctx.model.id}`
+        : "unavailable";
+      const currentThinking = pi.getThinkingLevel();
+
+      const prompt = request
+        ? [
+            "Configure the installed my-pi-setup package according to this request:",
+            request,
             "",
-            "Run recaps are off until you explicitly choose how to enable them:",
-            "- Model recap: choose any available provider/model and reasoning level.",
-            "- Local fallback: no model calls; only tool counts plus the capped final response.",
+            "Current configuration:",
+            currentConfiguration,
             "",
-            "Examples:",
-            "/my-pi-setup 开启摘要，使用 seal/deepseek-v4-flash，关闭推理",
-            "/my-pi-setup 开启本地 fallback 摘要，不调用模型",
-            "/my-pi-setup 关闭自动摘要",
-            "/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个",
-            "/my-pi-setup 显示大标题",
-            "/my-pi-setup 关闭自定义状态栏",
-          ].join("\n"),
-          "info",
-        );
-        return;
-      }
+            "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
+          ]
+        : [
+            "Guide me through configuring the installed my-pi-setup package interactively.",
+            "",
+            "Current configuration:",
+            currentConfiguration,
+            `Current Pi model: ${currentModel}`,
+            `Current Pi thinking level: ${currentThinking}`,
+            "",
+            "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
+            "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
+            "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
+            "3. UI: large header and custom footer preferences.",
+            "",
+            "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
+          ];
 
       pi.sendUserMessage(
-        [
-          "Configure the installed my-pi-setup package according to this request:",
-          request,
-          "",
-          "Current configuration:",
-          formatSetupConfig(loadSetupConfig()),
-          "",
-          "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
-        ].join("\n"),
+        prompt.join("\n"),
         ctx.isIdle() ? undefined : { deliverAs: "followUp" },
       );
     },

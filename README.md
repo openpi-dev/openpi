@@ -404,7 +404,7 @@ pi install ~/work/my-pi-setup
 /my-pi-setup
 ```
 
-无参数时显示当前状态和示例；后面直接跟自然语言即可：
+无参数时由当前模型通过 `ask_user` 引导完成 Recap、Workflow 和 UI 配置；后面直接跟自然语言则只修改指定设置：
 
 ```text
 /my-pi-setup 开启摘要，使用 seal/deepseek-v4-flash，关闭推理

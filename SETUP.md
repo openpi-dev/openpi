@@ -25,7 +25,7 @@ Pi will load the extensions, skills, and theme from their directories the next t
 
 ## Configure this package
 
-Use the single package-owned command. With no arguments it shows the current configuration and examples; with arguments it treats the rest as a natural-language request:
+Use the single package-owned command. With no arguments the current model starts an interactive `ask_user` setup for recaps, workflow limits, and UI; with arguments it treats the rest as a targeted natural-language request:
 
 ```text
 /my-pi-setup
