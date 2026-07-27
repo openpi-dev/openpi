@@ -4,12 +4,42 @@ import { Type } from "typebox";
 import {
   FOOTER_ITEMS,
   formatSetupConfig,
+  hasSavedSetupConfig,
   loadSetupConfig,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
   saveSetupConfig,
 } from "../shared/setup-config.ts";
+
+export function shouldStartInteractiveSetup(
+  request: string,
+  savedConfigExists: boolean,
+) {
+  return request.length === 0 && !savedConfigExists;
+}
+
+export function buildInteractiveSetupPrompt(options: {
+  currentConfiguration: string;
+  currentModel: string;
+  currentThinking: string;
+}) {
+  return [
+    "Guide me through configuring the installed my-pi-setup package interactively.",
+    "",
+    "Current configuration:",
+    options.currentConfiguration,
+    `Current Pi model: ${options.currentModel}`,
+    `Current Pi thinking level: ${options.currentThinking}`,
+    "",
+    "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
+    "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
+    "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
+    "3. UI: large header, custom footer, and which footer metrics to show. Available configurable metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR. Subagent, Workflow, and background-terminal activity is core operational status and always remains visible whenever the custom footer is enabled. Recommend the current compact default unless the user asks to customize it.",
+    "",
+    "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
+  ];
+}
 
 export default function myPiSetup(pi: ExtensionAPI) {
   pi.registerTool({
@@ -146,6 +176,20 @@ export default function myPiSetup(pi: ExtensionAPI) {
     handler: async (args, ctx) => {
       const request = args.trim();
       const currentConfiguration = formatSetupConfig(loadSetupConfig());
+      const savedConfigExists = hasSavedSetupConfig();
+      if (!request && savedConfigExists) {
+        ctx.ui.notify(
+          [
+            currentConfiguration,
+            "",
+            "Configuration is already saved. Pass a natural-language change after /my-pi-setup to update only that setting.",
+            "Example: /my-pi-setup Footer 加上缓存命中率",
+          ].join("\n"),
+          "info",
+        );
+        return;
+      }
+
       const currentModel = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : "unavailable";
@@ -161,21 +205,11 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "",
             "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
           ]
-        : [
-            "Guide me through configuring the installed my-pi-setup package interactively.",
-            "",
-            "Current configuration:",
+        : buildInteractiveSetupPrompt({
             currentConfiguration,
-            `Current Pi model: ${currentModel}`,
-            `Current Pi thinking level: ${currentThinking}`,
-            "",
-            "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
-            "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
-            "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
-            "3. UI: large header, custom footer, and which footer metrics to show. Available configurable metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR. Subagent, Workflow, and background-terminal activity is core operational status and always remains visible whenever the custom footer is enabled. Recommend the current compact default unless the user asks to customize it.",
-            "",
-            "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
-          ];
+            currentModel,
+            currentThinking,
+          });
 
       pi.sendUserMessage(
         prompt.join("\n"),

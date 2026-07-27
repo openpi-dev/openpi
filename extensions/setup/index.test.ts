@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import setupExtension from "./index.ts";
+import setupExtension, {
+  buildInteractiveSetupPrompt,
+  shouldStartInteractiveSetup,
+} from "./index.ts";
 
 test("registers one natural-language setup command and one constrained tool", () => {
   const commands = new Set<string>();
@@ -17,29 +20,19 @@ test("registers one natural-language setup command and one constrained tool", ()
   assert.deepEqual(tools, new Set(["configure_my_pi_setup"]));
 });
 
-test("starts an interactive model-guided setup when invoked without arguments", async () => {
-  let handler: ((args: string, ctx: unknown) => Promise<void>) | undefined;
-  let message = "";
-  const api = {
-    registerTool: () => undefined,
-    registerCommand: (
-      _name: string,
-      command: { handler: (args: string, ctx: unknown) => Promise<void> },
-    ) => {
-      handler = command.handler;
-    },
-    getThinkingLevel: () => "high",
-    sendUserMessage: (text: string) => {
-      message = text;
-    },
-  } as unknown as ExtensionAPI;
+test("only starts the interactive wizard before the first saved setup", () => {
+  assert.equal(shouldStartInteractiveSetup("", false), true);
+  assert.equal(shouldStartInteractiveSetup("", true), false);
+  assert.equal(shouldStartInteractiveSetup("显示大标题", false), false);
+  assert.equal(shouldStartInteractiveSetup("显示大标题", true), false);
+});
 
-  setupExtension(api);
-  assert.ok(handler);
-  await handler("", {
-    isIdle: () => true,
-    model: { provider: "seal", id: "gpt-5.6-sol" },
-  });
+test("builds a model-guided first-run setup prompt", () => {
+  const message = buildInteractiveSetupPrompt({
+    currentConfiguration: "Run recaps: disabled",
+    currentModel: "seal/gpt-5.6-sol",
+    currentThinking: "high",
+  }).join("\n");
 
   assert.match(message, /Guide me through configuring/);
   assert.match(message, /Use ask_user/);

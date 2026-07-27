@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
@@ -152,6 +152,10 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       footerItems: parseFooterItems(ui.footerItems),
     },
   };
+}
+
+export function hasSavedSetupConfig() {
+  return existsSync(SETUP_CONFIG_PATH);
 }
 
 export function loadSetupConfig() {
