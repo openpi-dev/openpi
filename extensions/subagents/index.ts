@@ -35,6 +35,7 @@ import {
   formatSize,
   getAgentDir,
   getMarkdownTheme,
+  keyHint,
   ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
@@ -75,6 +76,10 @@ import {
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
+import {
+  renderWaitResult,
+  type WaitResultDetails,
+} from "./src/ui/wait-result.ts";
 
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
@@ -447,6 +452,17 @@ export default function (pi: ExtensionAPI) {
         },
       };
     },
+    renderResult(result, { expanded, isPartial }, theme) {
+      const first = result.content[0];
+      const content = first?.type === "text" ? first.text : "(no output)";
+      if (isPartial) return new Text(theme.fg("warning", content), 0, 0);
+      return renderWaitResult(
+        content,
+        result.details as WaitResultDetails | undefined,
+        expanded,
+        theme,
+      );
+    },
   });
 
   pi.registerTool({
@@ -615,7 +631,7 @@ export default function (pi: ExtensionAPI) {
       for (const line of previewLines)
         text += `\n${theme.fg("toolOutput", line)}`;
       if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+        text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
       return new Text(text, 0, 0);
     },
   );
@@ -660,7 +676,7 @@ export default function (pi: ExtensionAPI) {
       for (const line of lines.slice(0, 8))
         text += `\n${theme.fg("toolOutput", line)}`;
       if (lines.length > 8)
-        text += `\n${theme.fg("dim", "... (ctrl+o to expand)")}`;
+        text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
       return new Text(text, 0, 0);
     },
   );
