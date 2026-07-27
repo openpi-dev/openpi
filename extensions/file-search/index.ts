@@ -10,6 +10,8 @@
  */
 
 import { NodeServices } from "@effect/platform-node";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type {
   AgentToolResult,
   ExtensionAPI,
@@ -17,7 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Cause, Data, Effect, Exit } from "effect";
-import { Type } from "typebox";
+import { Type, type Static } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
 import {
   buildFdArgs,
@@ -118,6 +120,13 @@ function unwrapToolExit<A, E>(exit: Exit.Exit<A, E>, tool: "fd" | "rg") {
 
 export default function fileSearchTools(pi: ExtensionAPI) {
   let notified = false;
+  const resultDirectories = new Set<string>();
+
+  const rememberOutput = (output: CapturedOutput) => {
+    if (output.fullOutputPath) {
+      resultDirectories.add(path.dirname(output.fullOutputPath));
+    }
+  };
 
   const binDir = repositoryBinDir();
   const target = currentTarget();
@@ -207,6 +216,17 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     );
   }
 
+  pi.on("session_shutdown", () => {
+    for (const directory of resultDirectories) {
+      try {
+        fs.rmSync(directory, { recursive: true, force: true });
+      } catch {
+        // Temporary search artifacts are best-effort cleanup.
+      }
+    }
+    resultDirectories.clear();
+  });
+
   pi.registerTool<ReturnType<typeof fdParameters>, FdToolDetails>({
     name: "fd",
     label: "Find Files",
@@ -230,6 +250,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
             } satisfies AgentToolResult<FdToolDetails>;
           }
 
+          rememberOutput(outcome.output);
           const formatted = formatCapturedOutput(outcome.output);
           return {
             content: [{ type: "text", text: formatted.text }],
@@ -285,6 +306,26 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     promptSnippet: RG_PROMPT_SNIPPET,
     promptGuidelines: RG_PROMPT_GUIDELINES,
     parameters: rgParameters(),
+    prepareArguments(args) {
+      if (!args || typeof args !== "object") {
+        return args as Static<ReturnType<typeof rgParameters>>;
+      }
+      const input = args as {
+        limit?: unknown;
+        max_matches_per_file?: unknown;
+      };
+      if (
+        input.max_matches_per_file === undefined &&
+        typeof input.limit === "number"
+      ) {
+        const { limit, ...rest } = input;
+        return {
+          ...rest,
+          max_matches_per_file: limit,
+        } as Static<ReturnType<typeof rgParameters>>;
+      }
+      return args as Static<ReturnType<typeof rgParameters>>;
+    },
 
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
       const exit = await Effect.runPromiseExit(
@@ -301,6 +342,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
             } satisfies AgentToolResult<RgToolDetails>;
           }
 
+          rememberOutput(outcome.output);
           const formatted = formatCapturedOutput(outcome.output);
           return {
             content: [{ type: "text", text: formatted.text }],
@@ -445,9 +487,9 @@ function rgParameters() {
         maximum: RG_MAX_CONTEXT,
       }),
     ),
-    limit: Type.Optional(
+    max_matches_per_file: Type.Optional(
       Type.Integer({
-        description: RG_PARAMETER_DESCRIPTIONS.limit,
+        description: RG_PARAMETER_DESCRIPTIONS.max_matches_per_file,
         minimum: 1,
         maximum: RG_MAX_COUNT_LIMIT,
       }),

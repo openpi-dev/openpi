@@ -104,7 +104,7 @@ it("rg args: all options are translated", () => {
     fixed_strings: true,
     hidden: true,
     context: 2,
-    limit: 10,
+    max_matches_per_file: 10,
   });
   assert.deepEqual(args, [
     "--line-number",
@@ -126,6 +126,12 @@ it("rg args: all options are translated", () => {
     "TODO",
     "lib",
   ]);
+});
+
+it("rg args: legacy limit remains compatible", () => {
+  const args = buildRgArgs({ pattern: "needle", limit: 7 });
+  const maxCount = args.indexOf("--max-count");
+  assert.deepEqual(args.slice(maxCount, maxCount + 2), ["--max-count", "7"]);
 });
 
 it("rg args: case_sensitive false forces ignore-case", () => {

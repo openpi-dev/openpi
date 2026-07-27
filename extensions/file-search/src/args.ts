@@ -89,6 +89,9 @@ export interface RgToolParams {
   fixed_strings?: boolean;
   hidden?: boolean;
   context?: number;
+  /** Current public name. */
+  max_matches_per_file?: number;
+  /** Legacy stored tool calls; normalized before execution. */
   limit?: number;
 }
 
@@ -112,7 +115,11 @@ export function buildRgArgs(params: RgToolParams) {
   args.push(
     "--max-count",
     String(
-      clamp(params.limit ?? RG_DEFAULT_COUNT_LIMIT, 1, RG_MAX_COUNT_LIMIT),
+      clamp(
+        params.max_matches_per_file ?? params.limit ?? RG_DEFAULT_COUNT_LIMIT,
+        1,
+        RG_MAX_COUNT_LIMIT,
+      ),
     ),
   );
   args.push("--", params.pattern);
