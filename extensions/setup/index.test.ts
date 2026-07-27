@@ -1,10 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import setupExtension, {
-  buildInteractiveSetupPrompt,
-  shouldStartInteractiveSetup,
-} from "./index.ts";
+import setupExtension, { buildInteractiveSetupPrompt } from "./index.ts";
 
 test("registers one natural-language setup command and one constrained tool", () => {
   const commands = new Set<string>();
@@ -20,26 +17,40 @@ test("registers one natural-language setup command and one constrained tool", ()
   assert.deepEqual(tools, new Set(["configure_my_pi_setup"]));
 });
 
-test("only starts the interactive wizard before the first saved setup", () => {
-  assert.equal(shouldStartInteractiveSetup("", false), true);
-  assert.equal(shouldStartInteractiveSetup("", true), false);
-  assert.equal(shouldStartInteractiveSetup("显示大标题", false), false);
-  assert.equal(shouldStartInteractiveSetup("显示大标题", true), false);
-});
-
-test("builds a model-guided first-run setup prompt", () => {
+test("builds a model-guided first-run setup prompt with impacts", () => {
   const message = buildInteractiveSetupPrompt({
     currentConfiguration: "Run recaps: disabled",
     currentModel: "seal/gpt-5.6-sol",
     currentThinking: "high",
+    savedConfigExists: false,
   }).join("\n");
 
-  assert.match(message, /Guide me through configuring/);
+  assert.match(message, /This is the first setup/);
   assert.match(message, /Use ask_user/);
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
-  assert.match(message, /Current Pi thinking level: high/);
+  assert.match(message, /local fallback.*mechanical output/);
+  assert.match(message, /concurrency controls simultaneous agents/);
+  assert.match(message, /large header costs vertical space/);
   assert.match(message, /cache hit rate/);
-  assert.match(message, /which footer metrics to show/);
-  assert.match(message, /activity is core operational status/);
-  assert.match(message, /call configure_my_pi_setup once/);
+  assert.match(message, /activity.*core status/);
+  assert.match(message, /call configure_my_pi_setup at most once/);
+});
+
+test("builds a focused review prompt when configuration already exists", () => {
+  const message = buildInteractiveSetupPrompt({
+    currentConfiguration:
+      "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls",
+    currentModel: "seal/gpt-5.6-sol",
+    currentThinking: "high",
+    savedConfigExists: true,
+  }).join("\n");
+
+  assert.match(message, /already been configured/);
+  assert.match(message, /Explain the current settings/);
+  assert.match(
+    message,
+    /keep them or change Recaps, Workflow limits, UI\/Footer/,
+  );
+  assert.match(message, /keeps the current settings, do not call/);
+  assert.doesNotMatch(message, /This is the first setup/);
 });

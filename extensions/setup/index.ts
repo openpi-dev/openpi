@@ -12,18 +12,22 @@ import {
   saveSetupConfig,
 } from "../shared/setup-config.ts";
 
-export function shouldStartInteractiveSetup(
-  request: string,
-  savedConfigExists: boolean,
-) {
-  return request.length === 0 && !savedConfigExists;
-}
-
 export function buildInteractiveSetupPrompt(options: {
   currentConfiguration: string;
   currentModel: string;
   currentThinking: string;
+  savedConfigExists: boolean;
 }) {
+  const configurationState = options.savedConfigExists
+    ? [
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, or review everything.",
+        "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
+      ]
+    : [
+        "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
+        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer.",
+      ];
+
   return [
     "Guide me through configuring the installed my-pi-setup package interactively.",
     "",
@@ -31,13 +35,17 @@ export function buildInteractiveSetupPrompt(options: {
     options.currentConfiguration,
     `Current Pi model: ${options.currentModel}`,
     `Current Pi thinking level: ${options.currentThinking}`,
+    `Saved configuration exists: ${options.savedConfigExists ? "yes" : "no"}`,
     "",
-    "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
-    "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
-    "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
-    "3. UI: large header, custom footer, and which footer metrics to show. Available configurable metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR. Subagent, Workflow, and background-terminal activity is core operational status and always remains visible whenever the custom footer is enabled. Recommend the current compact default unless the user asks to customize it.",
+    ...configurationState,
     "",
-    "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
+    "Before asking, briefly explain what can be configured and the practical impact:",
+    "- Run recaps: disabled (no recap), local fallback (no model call but mechanical output), or model-generated (better recap with an extra model call). A model recap also chooses provider/model and thinking level.",
+    "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
+    "- UI: the large header costs vertical space; the custom footer provides a compact dashboard. Configurable footer metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR.",
+    "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
+    "",
+    "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
 }
 
@@ -177,19 +185,6 @@ export default function myPiSetup(pi: ExtensionAPI) {
       const request = args.trim();
       const currentConfiguration = formatSetupConfig(loadSetupConfig());
       const savedConfigExists = hasSavedSetupConfig();
-      if (!request && savedConfigExists) {
-        ctx.ui.notify(
-          [
-            currentConfiguration,
-            "",
-            "Configuration is already saved. Pass a natural-language change after /my-pi-setup to update only that setting.",
-            "Example: /my-pi-setup Footer 加上缓存命中率",
-          ].join("\n"),
-          "info",
-        );
-        return;
-      }
-
       const currentModel = ctx.model
         ? `${ctx.model.provider}/${ctx.model.id}`
         : "unavailable";
@@ -209,6 +204,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             currentConfiguration,
             currentModel,
             currentThinking,
+            savedConfigExists,
           });
 
       pi.sendUserMessage(
