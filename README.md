@@ -238,7 +238,23 @@ Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作�
 
 每次冷启动或 Context Pivot 后，Ledger 只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
 
-### 5. Context Pivot：同一 Session，切换工作阶段
+### 5. Session Goal：有边界的自主继续
+
+```text
+/goal status
+/goal <目标>
+/goal pause | resume | clear
+```
+
+Session Goal 是当前分支上的一个持久目标，不是待办列表。只有用户明确要求自主推进时才应通过 `goal_set` 或 `/goal <目标>` 创建；`goal_status` 只读，工作 Agent 不能自行宣告完成。每个 Goal 必须有可观察的成功条件，并由当前 Session 的模型与认证在每次 `agent_settled` 后进行一次无工具外部判定。
+
+默认上限是 40 个已结算 Goal Turn、连续 8 次无进展、120 分钟活跃时间；可选父 Agent Token 预算至少 1000。父 Run 的 Assistant input+output `totalTokens` 在可可靠归属时计入预算；Judge Token 单独展示，不消耗可选父 Run 预算。硬上限始终优先，等待外部证据时采用 5 秒到 5 分钟的退避。
+
+Goal 状态跟随当前 Session 分支持久化。`/reload`、恢复 Session、Fork 或 `/tree` 后，原先的 `active / waiting` 会立即持久化降级为 `paused`，必须由用户执行 `/goal resume`，不会在重启后静默消耗 Token。自动延续在 print/json 模式中关闭，Pi 子 Session 也不会获得 Goal 工具。
+
+Goal 与 Ledger 分工明确：Goal 负责“继续到什么可验证结果、何时停止”；Ledger 只记录多个工作项。Goal 最多一次读取当前分支的 Ledger 活跃 T 编号作为行动提醒，但 Ledger 状态不是完成证据。
+
+### 6. Context Pivot：同一 Session，切换工作阶段
 
 ```text
 /context-pivot 从调研切换到实现，先完成 API 主链路
@@ -313,17 +329,17 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 可通过 `/my-pi-setup` 按项选择：
 
-| 项目 | 内容 |
-| --- | --- |
-| `cwd` | 当前工作目录 |
-| `model` | Provider / Model |
-| `thinking` | 当前 Thinking 档位 |
-| `context` | Context 占用与容量；占用未知时仅显示容量 |
-| `cache` | Session 已报告的 Prompt Cache 命中率 |
-| `cost` | Session 累计成本 |
-| `throughput` | 当前运行的估算 Token 速度 |
-| `git` | 当前分支 |
-| `pr` | 当前分支对应的 PR |
+| 项目         | 内容                                     |
+| ------------ | ---------------------------------------- |
+| `cwd`        | 当前工作目录                             |
+| `model`      | Provider / Model                         |
+| `thinking`   | 当前 Thinking 档位                       |
+| `context`    | Context 占用与容量；占用未知时仅显示容量 |
+| `cache`      | Session 已报告的 Prompt Cache 命中率     |
+| `cost`       | Session 累计成本                         |
+| `throughput` | 当前运行的估算 Token 速度                |
+| `git`        | 当前分支                                 |
+| `pr`         | 当前分支对应的 PR                        |
 
 Subagents、Workflows 和后台终端状态属于基础可观察性，不是可选指标：只要自定义 Footer 开启，就会按需自动出现；没有活动时不占行。
 
@@ -464,14 +480,14 @@ pi install ~/work/my-pi-setup
 
 安装默认值：
 
-| 配置                     |                          默认值 |
-| ------------------------ | ------------------------------: |
+| 配置                     |                                                默认值 |
+| ------------------------ | ----------------------------------------------------: |
 | Run Recap                | 默认关闭；运行 `/my-pi-setup` 选择模型或本地 fallback |
-| Workflow 并发            |                               8 |
-| Workflow 最大 Agent 调用 |                             128 |
-| 大型 Header              |                            关闭 |
-| Dashboard Footer         |                            开启 |
-| 主题                     |              不修改用户现有选择 |
+| Workflow 并发            |                                                     8 |
+| Workflow 最大 Agent 调用 |                                                   128 |
+| 大型 Header              |                                                  关闭 |
+| Dashboard Footer         |                                                  开启 |
+| 主题                     |                                    不修改用户现有选择 |
 
 ---
 
@@ -486,6 +502,7 @@ pi install ~/work/my-pi-setup
 | `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
 | `/workflows`                | 查看 Workflow 运行、阶段和产物               |
 | `/ledger`                   | 查看当前 Session 的工作意图台账              |
+| `/goal ...`                 | 设置、查看、暂停、恢复或清除有界自主 Goal    |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
 | `/lg`                       | 浏览 Working Tree 改动和 Diff                |
 | `/pr`                       | 刷新当前分支的 GitHub PR 信息                |
@@ -498,7 +515,8 @@ pi install ~/work/my-pi-setup
 | `bg_start`, `bg_status`, `bg_list`, `bg_kill`                                           | 后台进程生命周期                      |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
 | `workflow`                                                                              | 动态多阶段 Agent 编排                 |
-| `ledger_add`, `ledger_update`, `ledger_list`                                             | Session 工作意图台账                  |
+| `ledger_add`, `ledger_update`, `ledger_list`                                            | Session 工作意图台账                  |
+| `goal_set`, `goal_status`                                                               | 显式设置或只读查询有界 Session Goal   |
 | `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
 | `ask_user`                                                                              | 结构化用户决策                        |
 | `fd`, `rg`                                                                              | 文件发现与内容搜索                    |

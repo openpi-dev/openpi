@@ -40,7 +40,15 @@ Use the single package-owned command. With no arguments, the current model expla
 
 Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
+## Session Goal and Ledger
+
+`/goal status`, `/goal <objective>`, `/goal pause`, `/goal resume`, and `/goal clear` control one branch-scoped bounded autonomous objective. Interactive `/goal <objective>` asks for an observable success condition; model callers use `goal_set` with that condition explicitly. Defaults are 40 settled goal turns, 8 consecutive no-progress judgments, and 120 active minutes; an optional parent-run token budget must be at least 1000. The current session model/auth performs a no-tool external judgment after each settlement. Evaluator tokens are reported separately from the optional parent-run budget.
+
+A restored, reloaded, forked, or tree-navigated active/waiting Goal is persisted as paused and requires `/goal resume`; print/json automation is inert. Session Ledger remains advisory multi-item work intent. A Goal can include active Ledger T keys once as an action reminder, but Ledger state never proves completion. No `/my-pi-setup` setting is needed because the judge uses the current model.
+
 ## Other commands added by this fork
 
 - `/sessions` searches and previews project sessions before switching.
+- `/ledger` inspects branch-scoped advisory work items.
+- `/goal ...` controls the persistent bounded autonomous session objective.
 - `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires roughly 30,000 context tokens; use the separate `/handoff` skill when work should move to a genuinely new session.

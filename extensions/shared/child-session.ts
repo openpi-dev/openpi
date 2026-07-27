@@ -22,6 +22,8 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "ledger_add",
   "ledger_update",
   "ledger_list",
+  "goal_set",
+  "goal_status",
 ] as const;
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
