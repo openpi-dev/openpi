@@ -31,7 +31,7 @@ function textFromContent(content: unknown) {
 export default function (pi: ExtensionAPI) {
   pi.registerCommand("copy-all", {
     description:
-      "Copy all previous user and assistant messages in this thread to the clipboard",
+      "Copy the current branch's visible user and assistant conversation to the clipboard",
     handler: async (_args, ctx) => {
       await ctx.waitForIdle();
 
@@ -54,8 +54,12 @@ export default function (pi: ExtensionAPI) {
         return;
       }
 
-      await copyToClipboard(sections.join("\n\n---\n\n"));
-      ctx.ui.notify(`Copied ${sections.length} messages to clipboard`, "info");
+      const conversation = sections.join("\n\n---\n\n");
+      await copyToClipboard(conversation);
+      ctx.ui.notify(
+        `Copied ${sections.length} visible messages (${conversation.length.toLocaleString()} characters) from the current branch`,
+        "info",
+      );
     },
   });
 }
