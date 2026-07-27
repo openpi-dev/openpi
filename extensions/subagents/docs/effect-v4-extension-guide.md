@@ -9,8 +9,8 @@
 > `@effect/tsgo@0.19.0`, `typescript@7.0.2` (checked 2026-07-13, in `extensions/subagents`).
 > `npm run check` there passes clean — use it as the reference implementation.
 >
-> Audience: the agents migrating `firecrawl-search`, `ask-user`, `model-info`,
-> `git-info`, `ui-customization`, and `copy-all`.
+> Audience: the agents migrating `ask-user`, `model-info`, `git-info`,
+> `ui-customization`, and `copy-all`.
 
 ---
 
@@ -25,8 +25,8 @@ Reach for Effect only where you actually get something from it:
 
 - **Yes:** async work that needs typed errors, cancellation via the tool `AbortSignal`,
   timeouts, retries/polling, or a resource whose lifetime must outlive one call
-  (child process, subscription) → child processes (`git-info`, `copy-all`), the
-  Firecrawl SDK calls (`firecrawl-search`), git/gh polling (`git-info`).
+  (child process, subscription) → child processes (`git-info`, `copy-all`),
+  git/gh polling (`git-info`).
 - **No / barely:** pure TUI popups and rendering (`ask-user`, `ui-customization`),
   cross-extension channel plumbing, cost/token bookkeeping (`model-info`). These are
   synchronous or already-Promise UI code; wrapping them in Effect adds ceremony and no
@@ -223,34 +223,7 @@ the child-process / concurrency APIs live in `effect-v4-notes.md` — don't re-d
 
 ---
 
-## 4. Recipe: wrapping a Promise SDK (firecrawl-search)
-
-The Firecrawl client is Promise-based. Wrap each call in `Effect.tryPromise` with a typed
-error; the callback receives an `AbortSignal` tied to fiber interruption — forward it to any
-SDK that accepts one so tool cancellation propagates.
-
-```ts
-import { Data, Effect } from "effect";
-
-class FirecrawlError extends Data.TaggedError("FirecrawlError")<{
-  readonly cause: unknown;
-}> {}
-
-const search = (client: Firecrawl, query: string) =>
-  Effect.tryPromise({
-    try: (signal) => client.search(query, {/* …, signal? if supported */}),
-    catch: (cause) => new FirecrawlError({ cause }),
-  });
-```
-
-There's no `Layer` here unless you want the client as a service. For a single tool this is
-fine to call directly through `runTool` (or even plain `Effect.runPromiseExit`, §2). Keep the
-existing `.env`/API-key reading and result truncation as plain TS — no reason to Effect-ify
-string trimming.
-
----
-
-## 5. Recipe: child processes + timeout + polling (git-info, copy-all)
+## 4. Recipe: child processes + timeout + polling (git-info, copy-all)
 
 `git-info` shells out to `git`/`gh` with per-command timeouts and polls on an interval;
 `copy-all` pipes text into `pbcopy`. Two viable levels — pick the lightest that fits.
