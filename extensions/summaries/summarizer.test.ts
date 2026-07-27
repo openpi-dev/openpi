@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { SUMMARY_SYSTEM_PROMPT } from "./src/prompt.ts";
 import { parseRecapResponse, reasoningOptions } from "./src/summarizer.ts";
+
+test("requires recap fields to match the initiating user prompt language", () => {
+  assert.match(SUMMARY_SYSTEM_PROMPT, /same language as the user's prompt/);
+  assert.match(SUMMARY_SYSTEM_PROMPT, /tool output, source code, logs/);
+});
 
 test("omits reasoning when configured off", () => {
   assert.deepEqual(reasoningOptions("off"), {});
