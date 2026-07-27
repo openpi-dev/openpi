@@ -307,7 +307,8 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 | `throughput` | 当前运行的估算 Token 速度 |
 | `git` | 当前分支 |
 | `pr` | 当前分支对应的 PR |
-| `activity` | Subagents、Workflows、后台终端等活动状态 |
+
+Subagents、Workflows 和后台终端状态属于基础可观察性，不是可选指标：只要自定义 Footer 开启，就会按需自动出现；没有活动时不占行。
 
 例如：
 
@@ -315,7 +316,7 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 /my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 ```
 
-未选中的项目不渲染；选中 `activity` 时，扩展状态继续显示在两行 Dashboard 后。
+未选中的指标不渲染；运行中的 Subagent、Workflow 和后台终端状态始终显示在 Dashboard 后。
 
 - Context 与模型信息直接来自 Pi Runtime；
 - 成本累计 Assistant、嵌套 Tool、Compaction 和 Branch Summary 的已记录 Usage；

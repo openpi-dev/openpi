@@ -166,7 +166,6 @@ export function buildFooterContent(
     ]
       .filter(Boolean)
       .join(" · "),
-    showActivity: items.has("activity"),
   };
 }
 
@@ -270,16 +269,16 @@ export default function uiCustomization(pi: ExtensionAPI) {
             );
             if (bottom) lines.push(bottom);
 
-            if (content.showActivity) {
-              const statuses = footerData.getExtensionStatuses();
-              const statusLines = Array.from(statuses.entries())
-                .sort(([a], [b]) => a.localeCompare(b))
-                .flatMap(([, text]) => text.split("\n"));
-              for (const statusLine of statusLines) {
-                lines.push(
-                  truncateToWidth(statusLine, width, theme.fg("dim", "...")),
-                );
-              }
+            // Operational status is part of the footer's core lifecycle UI,
+            // not an optional metric: running work must remain observable.
+            const statuses = footerData.getExtensionStatuses();
+            const statusLines = Array.from(statuses.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .flatMap(([, text]) => text.split("\n"));
+            for (const statusLine of statusLines) {
+              lines.push(
+                truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+              );
             }
 
             return lines;

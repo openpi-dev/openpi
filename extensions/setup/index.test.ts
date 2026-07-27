@@ -46,6 +46,7 @@ test("starts an interactive model-guided setup when invoked without arguments", 
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
   assert.match(message, /Current Pi thinking level: high/);
   assert.match(message, /cache hit rate/);
-  assert.match(message, /which footer items to show/);
+  assert.match(message, /which footer metrics to show/);
+  assert.match(message, /activity is core operational status/);
   assert.match(message, /call configure_my_pi_setup once/);
 });

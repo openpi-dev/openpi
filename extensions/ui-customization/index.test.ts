@@ -53,10 +53,10 @@ function createHarness() {
 
   return {
     listeners,
-    render: () => {
+    render: (statuses: ReadonlyMap<string, string> = new Map()) => {
       assert.ok(footerFactory);
       return footerFactory({ requestRender: () => undefined }, identityTheme, {
-        getExtensionStatuses: () => new Map(),
+        getExtensionStatuses: () => statuses,
       }).render(120);
     },
   };
@@ -112,8 +112,14 @@ test("renders only selected footer items", () => {
     model: "seal/gpt-5.6-sol",
     usage: "25%/1.0m · cache 82%",
     git: "",
-    showActivity: false,
   });
+});
+
+test("always renders operational activity while custom footer is enabled", () => {
+  const footer = createHarness()
+    .render(new Map([["subagents", "1 running"]]))
+    .join("\n");
+  assert.match(footer, /1 running/);
 });
 
 test("shows the branch but omits changed-file counts", () => {

@@ -26,7 +26,6 @@ export const FOOTER_ITEMS = [
   "throughput",
   "git",
   "pr",
-  "activity",
 ] as const;
 
 export type FooterItem = (typeof FOOTER_ITEMS)[number];
@@ -40,7 +39,6 @@ export const DEFAULT_FOOTER_ITEMS: readonly FooterItem[] = [
   "throughput",
   "git",
   "pr",
-  "activity",
 ];
 
 export interface SummaryModelConfig {

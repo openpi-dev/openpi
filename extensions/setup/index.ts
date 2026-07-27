@@ -74,7 +74,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
           minItems: 1,
           uniqueItems: true,
           description:
-            "Dashboard footer items to display, in this order: cwd, model, thinking, context, cache, cost, throughput, git, pr, activity. Omit to preserve the current selection.",
+            "Dashboard footer metrics to display, in this order: cwd, model, thinking, context, cache, cost, throughput, git, pr. Operational activity remains visible whenever the custom footer is enabled. Omit to preserve the current selection.",
         }),
       ),
     }),
@@ -172,7 +172,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Use ask_user instead of merely printing setup instructions. Collect these preferences:",
             "1. Run recaps: disabled, local fallback without model calls, or model-generated. If model-generated is selected, offer the current Pi model and thinking level as the recommended default, and ask a follow-up only if another model is wanted.",
             "2. Workflow fan-out: keep the current limits or choose new concurrency and total-call limits.",
-            "3. UI: large header, custom footer, and which footer items to show. Available footer items are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, PR, and background activity. Recommend the current compact default unless the user asks to customize it.",
+            "3. UI: large header, custom footer, and which footer metrics to show. Available configurable metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR. Subagent, Workflow, and background-terminal activity is core operational status and always remains visible whenever the custom footer is enabled. Recommend the current compact default unless the user asks to customize it.",
             "",
             "Prefer one ask_user call with up to three independent questions. Do not change configuration until the choices are clear. Then call configure_my_pi_setup once with the final choices, preserving anything the user did not change. Do not edit configuration files directly.",
           ];

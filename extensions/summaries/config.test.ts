@@ -15,7 +15,6 @@ const defaultFooterItems = [
   "throughput",
   "git",
   "pr",
-  "activity",
 ];
 const defaultUi = {
   showHeader: false,
@@ -27,7 +26,7 @@ test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    "Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr, activity)",
+    "Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)",
   );
 });
 
@@ -56,7 +55,7 @@ test("setup config accepts model choices and drops malformed models", () => {
   });
   assert.equal(
     formatSetupConfig(configured),
-    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr, activity)",
+    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)",
   );
 
   assert.deepEqual(
