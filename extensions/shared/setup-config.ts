@@ -30,6 +30,9 @@ export const FOOTER_ITEMS = [
 
 export type FooterItem = (typeof FOOTER_ITEMS)[number];
 
+export const SUBAGENT_RESULT_DISPLAYS = ["full", "compact"] as const;
+export type SubagentResultDisplay = (typeof SUBAGENT_RESULT_DISPLAYS)[number];
+
 export const DEFAULT_FOOTER_ITEMS: readonly FooterItem[] = [
   "cwd",
   "model",
@@ -65,6 +68,7 @@ export interface MyPiSetupConfig {
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerItems: readonly FooterItem[];
+    readonly subagentResultDisplay: SubagentResultDisplay;
   };
 }
 
@@ -78,6 +82,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     showHeader: false,
     customFooter: true,
     footerItems: DEFAULT_FOOTER_ITEMS,
+    subagentResultDisplay: "full",
   },
 };
 
@@ -150,6 +155,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
       footerItems: parseFooterItems(ui.footerItems),
+      subagentResultDisplay: SUBAGENT_RESULT_DISPLAYS.includes(
+        ui.subagentResultDisplay as SubagentResultDisplay,
+      )
+        ? (ui.subagentResultDisplay as SubagentResultDisplay)
+        : "full",
     },
   };
 }
@@ -193,5 +203,6 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     summary,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${config.ui.customFooter ? `on (${config.ui.footerItems.join(", ")})` : "off"}`,
+    `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
   ].join("\n");
 }

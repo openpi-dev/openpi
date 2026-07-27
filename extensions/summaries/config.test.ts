@@ -20,13 +20,14 @@ const defaultUi = {
   showHeader: false,
   customFooter: true,
   footerItems: defaultFooterItems,
+  subagentResultDisplay: "full",
 };
 
 test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    "Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)",
+    "Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)\nSubagent results: full by default",
   );
 });
 
@@ -55,7 +56,7 @@ test("setup config accepts model choices and drops malformed models", () => {
   });
   assert.equal(
     formatSetupConfig(configured),
-    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)",
+    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on (cwd, model, thinking, context, cost, throughput, git, pr)\nSubagent results: full by default",
   );
 
   assert.deepEqual(
@@ -98,6 +99,7 @@ test("UI defaults to a compact header and dashboard footer", () => {
       showHeader: true,
       customFooter: false,
       footerItems: defaultFooterItems,
+      subagentResultDisplay: "full",
     },
   );
   assert.deepEqual(
@@ -111,5 +113,15 @@ test("UI defaults to a compact header and dashboard footer", () => {
   assert.deepEqual(
     parseSetupConfig({ ui: { footerItems: [] } }).ui.footerItems,
     defaultFooterItems,
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { subagentResultDisplay: "compact" } }).ui
+      .subagentResultDisplay,
+    "compact",
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { subagentResultDisplay: "unknown" } }).ui
+      .subagentResultDisplay,
+    "full",
   );
 });

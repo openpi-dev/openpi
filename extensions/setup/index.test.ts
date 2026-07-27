@@ -33,6 +33,8 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /large header costs vertical space/);
   assert.match(message, /cache hit rate/);
   assert.match(message, /activity.*core status/);
+  assert.match(message, /Subagent result display/);
+  assert.match(message, /Recommend compact/);
   assert.match(message, /call configure_my_pi_setup at most once/);
 });
 
@@ -49,7 +51,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Recaps, Workflow limits, UI\/Footer/,
+    /keep them or change Recaps, Workflow limits, UI\/Footer, Subagent result display/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.doesNotMatch(message, /This is the first setup/);

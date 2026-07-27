@@ -70,6 +70,7 @@ import {
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   createSubagentRuntime,
   runTool,
@@ -459,7 +460,7 @@ export default function (pi: ExtensionAPI) {
       return renderWaitResult(
         content,
         result.details as WaitResultDetails | undefined,
-        expanded,
+        expanded || loadSetupConfig().ui.subagentResultDisplay === "full",
         theme,
       );
     },
@@ -611,7 +612,7 @@ export default function (pi: ExtensionAPI) {
       // is part of the actual result and must remain visible.
       const body = content.split("\n").slice(1).join("\n").trim();
 
-      if (expanded) {
+      if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
         const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
         const container = new Text(header, 0, 0);
         return {
@@ -656,7 +657,7 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean)
         .join("\n\n");
 
-      if (expanded) {
+      if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
         const md = new Markdown(body, 0, 0, getMarkdownTheme());
         const container = new Text(header, 0, 0);
         return {

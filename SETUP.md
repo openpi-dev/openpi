@@ -38,7 +38,7 @@ Use the single package-owned command. With no arguments, the current model expla
 /my-pi-setup 关闭自定义状态栏
 ```
 
-Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
+Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews and expand them with `app.tools.expand` (`Ctrl+O` by default). Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
 ## Session Goal and Ledger
 

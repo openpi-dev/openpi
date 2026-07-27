@@ -10,6 +10,7 @@ import {
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
   saveSetupConfig,
+  SUBAGENT_RESULT_DISPLAYS,
 } from "../shared/setup-config.ts";
 
 export function buildInteractiveSetupPrompt(options: {
@@ -20,7 +21,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, Subagent result display, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -44,6 +45,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer provides a compact dashboard. Configurable footer metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
+    "- Subagent result display: full preserves the existing behavior and shows complete results by default; compact shows a bounded preview and lets the user expand it with the configured app.tools.expand key (Ctrl+O by default). Recommend compact for users who do not usually inspect implementation details.",
     "",
     "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
@@ -54,7 +56,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps and workflow fan-out. Preserve current values for settings the user did not ask to change.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer, and Subagent result display. Preserve current values for settings the user did not ask to change.",
     parameters: Type.Object({
       summaries_enabled: Type.Optional(
         Type.Boolean({
@@ -115,6 +117,12 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Dashboard footer metrics to display, in this order: cwd, model, thinking, context, cache, cost, throughput, git, pr. Operational activity remains visible whenever the custom footer is enabled. Omit to preserve the current selection.",
         }),
       ),
+      subagent_result_display: Type.Optional(
+        StringEnum(SUBAGENT_RESULT_DISPLAYS, {
+          description:
+            "How completed Subagent results render by default: full preserves complete output; compact shows a bounded preview that can be expanded with app.tools.expand. Omit to preserve the current value.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const modelFields = [
@@ -166,6 +174,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
           showHeader: params.ui_show_header ?? current.ui.showHeader,
           customFooter: params.ui_custom_footer ?? current.ui.customFooter,
           footerItems: params.ui_footer_items ?? current.ui.footerItems,
+          subagentResultDisplay:
+            params.subagent_result_display ?? current.ui.subagentResultDisplay,
         },
       };
       await saveSetupConfig(config);
