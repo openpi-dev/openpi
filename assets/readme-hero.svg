@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="420" viewBox="0 0 1200 420" role="img" aria-labelledby="title desc">
+  <title id="title">My Pi Setup</title>
+  <desc id="desc">A Pi-native multi-agent coding environment with background terminals, subagents, workflows, and clean context management.</desc>
+  <rect width="1200" height="420" rx="24" fill="#0d1117"/>
+  <rect x="1" y="1" width="1198" height="418" rx="23" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <g opacity="0.7" stroke="#21262d" stroke-width="1">
+    <path d="M0 70H1200M0 140H1200M0 210H1200M0 280H1200M0 350H1200"/>
+    <path d="M100 0V420M200 0V420M300 0V420M400 0V420M500 0V420M600 0V420M700 0V420M800 0V420M900 0V420M1000 0V420M1100 0V420"/>
+  </g>
+
+  <g transform="translate(68 62)">
+    <rect width="74" height="30" rx="15" fill="#13233a" stroke="#2f81f7"/>
+    <circle cx="17" cy="15" r="5" fill="#3fb950"/>
+    <text x="30" y="20" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600">PI</text>
+
+    <text x="0" y="105" fill="#e6edf3" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="58" font-weight="750" letter-spacing="-1">My Pi Setup</text>
+    <text x="0" y="150" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="21">Small harness. Deep extensions. Clean context.</text>
+
+    <g transform="translate(0 190)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+      <rect width="170" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="18" cy="17" r="4" fill="#3fb950"/>
+      <text x="31" y="22" fill="#c9d1d9">background tasks</text>
+
+      <rect x="182" width="156" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="200" cy="17" r="4" fill="#2f81f7"/>
+      <text x="213" y="22" fill="#c9d1d9">Pi subagents</text>
+
+      <rect x="350" width="151" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="368" cy="17" r="4" fill="#d2a8ff"/>
+      <text x="381" y="22" fill="#c9d1d9">workflows</text>
+    </g>
+
+    <g transform="translate(0 238)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+      <rect width="160" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="18" cy="17" r="4" fill="#d29922"/>
+      <text x="31" y="22" fill="#c9d1d9">context pivot</text>
+
+      <rect x="172" width="164" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="190" cy="17" r="4" fill="#79c0ff"/>
+      <text x="203" y="22" fill="#c9d1d9">session browser</text>
+
+      <rect x="348" width="153" height="34" rx="8" fill="#161b22" stroke="#30363d"/>
+      <circle cx="366" cy="17" r="4" fill="#ff7b72"/>
+      <text x="379" y="22" fill="#c9d1d9">run recaps</text>
+    </g>
+  </g>
+
+  <g transform="translate(710 62)">
+    <rect width="422" height="296" rx="16" fill="#010409" stroke="#30363d" stroke-width="2"/>
+    <circle cx="22" cy="22" r="5" fill="#f85149"/>
+    <circle cx="40" cy="22" r="5" fill="#d29922"/>
+    <circle cx="58" cy="22" r="5" fill="#3fb950"/>
+    <path d="M0 44H422" stroke="#21262d"/>
+
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">
+      <text x="24" y="78" fill="#7d8590">$ pi</text>
+      <text x="24" y="108" fill="#79c0ff">main</text>
+      <path d="M66 103H111" stroke="#30363d" stroke-width="2"/>
+      <circle cx="118" cy="103" r="7" fill="#2f81f7"/>
+      <text x="136" y="108" fill="#e6edf3">orchestrate</text>
+
+      <path d="M118 110V145M118 145H64M118 145H208M118 145H334" fill="none" stroke="#30363d" stroke-width="2"/>
+
+      <rect x="24" y="146" width="112" height="48" rx="8" fill="#161b22" stroke="#30363d"/>
+      <text x="38" y="166" fill="#3fb950">■ terminal</text>
+      <text x="38" y="184" fill="#7d8590">dev server</text>
+
+      <rect x="151" y="146" width="112" height="48" rx="8" fill="#161b22" stroke="#30363d"/>
+      <text x="165" y="166" fill="#2f81f7">■ agent</text>
+      <text x="165" y="184" fill="#7d8590">audit auth</text>
+
+      <rect x="278" y="146" width="120" height="48" rx="8" fill="#161b22" stroke="#30363d"/>
+      <text x="292" y="166" fill="#d2a8ff">■ workflow</text>
+      <text x="292" y="184" fill="#7d8590">scan → report</text>
+
+      <path d="M80 194V228M207 194V228M338 194V228M80 228H338" fill="none" stroke="#30363d" stroke-width="2"/>
+      <circle cx="207" cy="228" r="7" fill="#3fb950"/>
+      <text x="24" y="264" fill="#7d8590">context</text>
+      <rect x="90" y="249" width="226" height="14" rx="7" fill="#21262d"/>
+      <rect x="90" y="249" width="82" height="14" rx="7" fill="#2f81f7"/>
+      <text x="329" y="263" fill="#e6edf3">36%</text>
+      <text x="24" y="286" fill="#3fb950">✓ settled · clean handoff</text>
+    </g>
+  </g>
+</svg>
