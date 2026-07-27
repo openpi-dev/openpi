@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { MAX_AGENT_CALLS, RunController } from "./controller.ts";
+import { RunController } from "./controller.ts";
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -47,14 +47,15 @@ test("RunController propagates invocation cancellation without aborting the run"
 });
 
 test("RunController enforces call budget and aborts queued tasks", async () => {
-  const controller = new RunController(undefined, 1);
+  const maxAgentCalls = 7;
+  const controller = new RunController(undefined, 1, maxAgentCalls);
   const blocker = controller.schedule(
     (signal) =>
       new Promise<void>((resolve) =>
         signal.addEventListener("abort", () => resolve(), { once: true }),
       ),
   );
-  const queued = Array.from({ length: MAX_AGENT_CALLS - 1 }, () =>
+  const queued = Array.from({ length: maxAgentCalls - 1 }, () =>
     controller.schedule(async () => "queued"),
   );
   await assert.rejects(

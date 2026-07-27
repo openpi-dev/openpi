@@ -32,9 +32,10 @@ Use the single package-owned command. With no arguments it shows the current con
 /my-pi-setup 摘要使用 seal/deepseek-v4-flash，关闭推理
 /my-pi-setup 关闭自动摘要
 /my-pi-setup 摘要改用本地 fallback，不调用模型
+/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 ```
 
-Run recaps default to the local fallback, so installation causes no extra model calls. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
+Run recaps default to the local fallback, so installation causes no extra model calls. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
 ## Other commands added by this fork
 

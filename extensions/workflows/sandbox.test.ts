@@ -14,12 +14,15 @@ function run(
     signal: abort.signal,
     onAgent: async (prompt) => ({ ok: true, output: `reply:${prompt}` }),
     onPhase: () => {},
+    maxConcurrency: 8,
     ...overrides,
   });
 }
 
 test("sandbox exposes only workflow capabilities and validates results", async () => {
   const phases: string[] = [];
+  let active = 0;
+  let peak = 0;
   const result = await run(
     `
       phase("Gather");
@@ -34,7 +37,17 @@ test("sandbox exposes only workflow capabilities and validates results", async (
         fetchType: typeof fetch,
       };
     `,
-    { onPhase: (title) => phases.push(title) },
+    {
+      maxConcurrency: 2,
+      onPhase: (title) => phases.push(title),
+      onAgent: async (prompt) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active--;
+        return { ok: true, output: `reply:${prompt}` };
+      },
+    },
   );
   assert.deepEqual(result, {
     replies: ["reply:one", "reply:two"],
@@ -43,6 +56,7 @@ test("sandbox exposes only workflow capabilities and validates results", async (
     fetchType: "undefined",
   });
   assert.deepEqual(phases, ["Gather"]);
+  assert.equal(peak, 2);
 });
 
 test("sandbox result serialization handles cycles and bigint", async () => {

@@ -37,6 +37,7 @@ export interface RunWorkflowSandboxOptions {
     signal: AbortSignal,
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
+  maxConcurrency: number;
 }
 
 function byteLength(value: string) {
@@ -290,6 +291,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         token,
         source: options.source,
         argsJson,
+        maxConcurrency: options.maxConcurrency,
       },
       (error) => {
         if (error) finish(error);

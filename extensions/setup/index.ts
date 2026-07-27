@@ -4,6 +4,8 @@ import { Type } from "typebox";
 import {
   formatSetupConfig,
   loadSetupConfig,
+  MAX_WORKFLOW_AGENT_CALLS,
+  MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
   saveSetupConfig,
 } from "../shared/setup-config.ts";
@@ -13,11 +15,20 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Currently configures run recaps: enable or disable them, and optionally choose the summary provider, model, and reasoning level. Omit provider/model/reasoning to use the free local fallback without model calls.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps and workflow fan-out. Preserve current values for settings the user did not ask to change.",
     parameters: Type.Object({
-      summaries_enabled: Type.Boolean({
-        description: "Whether run recap cards are enabled.",
-      }),
+      summaries_enabled: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether run recap cards are enabled. Omit to preserve the current value.",
+        }),
+      ),
+      summary_use_local_fallback: Type.Optional(
+        Type.Boolean({
+          description:
+            "Set true to clear the configured summary model and use local fallback. Omit unless requested.",
+        }),
+      ),
       summary_provider: Type.Optional(
         Type.String({ description: "Configured Pi provider id." }),
       ),
@@ -27,6 +38,22 @@ export default function myPiSetup(pi: ExtensionAPI) {
       summary_reasoning: Type.Optional(
         StringEnum(REASONING_LEVELS, {
           description: "Reasoning level for the summary model.",
+        }),
+      ),
+      workflow_concurrency: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_WORKFLOW_CONCURRENCY,
+          description:
+            "Maximum simultaneously running agents in each workflow (default 8, hard maximum 64). Omit to preserve the current value.",
+        }),
+      ),
+      workflow_max_agent_calls: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_WORKFLOW_AGENT_CALLS,
+          description:
+            "Maximum total agent() calls in each workflow (default 128, hard maximum 1024). Omit to preserve the current value.",
         }),
       ),
     }),
@@ -45,7 +72,9 @@ export default function myPiSetup(pi: ExtensionAPI) {
         );
       }
 
-      let model;
+      const current = loadSetupConfig();
+      let model = current.summaries.model;
+      if (params.summary_use_local_fallback) model = undefined;
       if (params.summary_provider && params.summary_model) {
         const resolved = ctx.modelRegistry.find(
           params.summary_provider,
@@ -65,8 +94,14 @@ export default function myPiSetup(pi: ExtensionAPI) {
 
       const config = {
         summaries: {
-          enabled: params.summaries_enabled,
+          enabled: params.summaries_enabled ?? current.summaries.enabled,
           ...(model ? { model } : {}),
+        },
+        workflows: {
+          concurrency:
+            params.workflow_concurrency ?? current.workflows.concurrency,
+          maxAgentCalls:
+            params.workflow_max_agent_calls ?? current.workflows.maxAgentCalls,
         },
       };
       await saveSetupConfig(config);
@@ -93,6 +128,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "/my-pi-setup 摘要使用 seal/deepseek-v4-flash，关闭推理",
             "/my-pi-setup 关闭自动摘要",
             "/my-pi-setup 摘要改用本地 fallback，不调用模型",
+            "/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个",
           ].join("\n"),
           "info",
         );
@@ -104,7 +140,10 @@ export default function myPiSetup(pi: ExtensionAPI) {
           "Configure the installed my-pi-setup package according to this request:",
           request,
           "",
-          "Use configure_my_pi_setup to apply it. Interpret the request from the available Pi models and current configuration. Do not edit configuration files directly.",
+          "Current configuration:",
+          formatSetupConfig(loadSetupConfig()),
+          "",
+          "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
         ].join("\n"),
         ctx.isIdle() ? undefined : { deliverAs: "followUp" },
       );

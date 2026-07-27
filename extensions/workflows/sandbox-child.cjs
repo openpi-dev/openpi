@@ -100,15 +100,18 @@ const BOOTSTRAP = String.raw`
     return results;
   }
 
+  const maxConcurrency = globalThis.__maxConcurrency;
+  delete globalThis.__maxConcurrency;
+
   async function parallel(items, options = {}) {
     if (!Array.isArray(items)) throw new Error("parallel() expects an array of zero-argument agent thunks");
     const requested = options && typeof options.concurrency === "number"
       ? Math.floor(options.concurrency)
-      : 4;
+      : maxConcurrency;
     if (!Number.isFinite(requested) || requested < 1) {
       throw new Error("parallel(): concurrency must be a positive integer");
     }
-    const concurrency = Math.min(4, requested);
+    const concurrency = Math.min(maxConcurrency, requested);
     return mapLimited(items, concurrency, (item) => {
       if (typeof item !== "function") {
         throw new Error("parallel() items must be zero-argument functions");
@@ -178,14 +181,17 @@ process.on("message", (message) => {
       message.kind !== "init" ||
       typeof message.token !== "string" ||
       typeof message.source !== "string" ||
-      typeof message.argsJson !== "string"
+      typeof message.argsJson !== "string" ||
+      !Number.isSafeInteger(message.maxConcurrency) ||
+      message.maxConcurrency < 1 ||
+      message.maxConcurrency > 64
     ) {
       process.exitCode = 1;
       return;
     }
     initialized = true;
     token = message.token;
-    run(message.source, message.argsJson);
+    run(message.source, message.argsJson, message.maxConcurrency);
     return;
   }
   if (message.token !== token || message.kind !== "agentResult") return;
@@ -202,10 +208,11 @@ process.on("message", (message) => {
     );
 });
 
-function run(source, argsJson) {
+function run(source, argsJson, maxConcurrency) {
   try {
     const sandbox = Object.create(null);
     sandbox.__argsJson = argsJson;
+    sandbox.__maxConcurrency = maxConcurrency;
     sandbox.__hostBridge = (kind, payloadJson) => {
       if (kind === "phase") {
         send({ kind: "phase", payloadJson });

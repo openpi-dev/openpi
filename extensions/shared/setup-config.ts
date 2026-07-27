@@ -22,15 +22,28 @@ export interface SummaryModelConfig {
   readonly reasoning: ReasoningLevel;
 }
 
+export const DEFAULT_WORKFLOW_CONCURRENCY = 8;
+export const DEFAULT_WORKFLOW_MAX_AGENT_CALLS = 128;
+export const MAX_WORKFLOW_CONCURRENCY = 64;
+export const MAX_WORKFLOW_AGENT_CALLS = 1_024;
+
 export interface MyPiSetupConfig {
   readonly summaries: {
     readonly enabled: boolean;
     readonly model?: SummaryModelConfig;
   };
+  readonly workflows: {
+    readonly concurrency: number;
+    readonly maxAgentCalls: number;
+  };
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   summaries: { enabled: true },
+  workflows: {
+    concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
+    maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+  },
 };
 
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
@@ -42,35 +55,50 @@ const isReasoningLevel = (value: unknown): value is ReasoningLevel =>
   typeof value === "string" &&
   REASONING_LEVELS.includes(value as ReasoningLevel);
 
-export function parseSetupConfig(value: unknown): MyPiSetupConfig {
-  if (!isRecord(value) || !isRecord(value.summaries)) {
-    return DEFAULT_SETUP_CONFIG;
-  }
+function boundedInteger(value: unknown, fallback: number, maximum: number) {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= 1 &&
+    value <= maximum
+    ? value
+    : fallback;
+}
 
-  const summaries = value.summaries;
+export function parseSetupConfig(value: unknown): MyPiSetupConfig {
+  if (!isRecord(value)) return DEFAULT_SETUP_CONFIG;
+
+  const summaries = isRecord(value.summaries) ? value.summaries : {};
   const enabled =
     typeof summaries.enabled === "boolean" ? summaries.enabled : true;
-  if (!isRecord(summaries.model)) return { summaries: { enabled } };
+  const rawModel = isRecord(summaries.model) ? summaries.model : undefined;
+  const model =
+    rawModel &&
+    typeof rawModel.provider === "string" &&
+    rawModel.provider.trim() &&
+    typeof rawModel.model === "string" &&
+    rawModel.model.trim() &&
+    isReasoningLevel(rawModel.reasoning)
+      ? {
+          provider: rawModel.provider.trim(),
+          model: rawModel.model.trim(),
+          reasoning: rawModel.reasoning,
+        }
+      : undefined;
 
-  const model = summaries.model;
-  if (
-    typeof model.provider !== "string" ||
-    !model.provider.trim() ||
-    typeof model.model !== "string" ||
-    !model.model.trim() ||
-    !isReasoningLevel(model.reasoning)
-  ) {
-    return { summaries: { enabled } };
-  }
-
+  const workflows = isRecord(value.workflows) ? value.workflows : {};
   return {
-    summaries: {
-      enabled,
-      model: {
-        provider: model.provider.trim(),
-        model: model.model.trim(),
-        reasoning: model.reasoning,
-      },
+    summaries: { enabled, ...(model ? { model } : {}) },
+    workflows: {
+      concurrency: boundedInteger(
+        workflows.concurrency,
+        DEFAULT_WORKFLOW_CONCURRENCY,
+        MAX_WORKFLOW_CONCURRENCY,
+      ),
+      maxAgentCalls: boundedInteger(
+        workflows.maxAgentCalls,
+        DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+        MAX_WORKFLOW_AGENT_CALLS,
+      ),
     },
   };
 }
@@ -101,10 +129,13 @@ export async function saveSetupConfig(config: MyPiSetupConfig) {
 }
 
 export function formatSetupConfig(config = loadSetupConfig()) {
-  if (!config.summaries.enabled) return "Run recaps: disabled";
-  if (!config.summaries.model) {
-    return "Run recaps: local fallback (no model calls)";
-  }
-  const model = config.summaries.model;
-  return `Run recaps: ${model.provider}/${model.model} · ${model.reasoning}`;
+  const summary = !config.summaries.enabled
+    ? "Run recaps: disabled"
+    : config.summaries.model
+      ? `Run recaps: ${config.summaries.model.provider}/${config.summaries.model.model} · ${config.summaries.model.reasoning}`
+      : "Run recaps: local fallback (no model calls)";
+  return [
+    summary,
+    `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
+  ].join("\n");
 }

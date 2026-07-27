@@ -1,5 +1,9 @@
-const DEFAULT_CONCURRENCY = 4;
-export const MAX_AGENT_CALLS = 32;
+import {
+  DEFAULT_WORKFLOW_CONCURRENCY,
+  DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+  MAX_WORKFLOW_AGENT_CALLS,
+  MAX_WORKFLOW_CONCURRENCY,
+} from "../shared/setup-config.ts";
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 function abortError(signal: AbortSignal) {
@@ -78,15 +82,24 @@ class Semaphore {
 export class RunController {
   private readonly abortController = new AbortController();
   private readonly semaphore: Semaphore;
+  private readonly maxAgentCalls: number;
   private readonly tasks = new Set<Promise<unknown>>();
   private callCount = 0;
   private sealed = false;
   private parentAbort?: () => void;
   private parentSignal?: AbortSignal;
 
-  constructor(parentSignal?: AbortSignal, concurrency = DEFAULT_CONCURRENCY) {
+  constructor(
+    parentSignal?: AbortSignal,
+    concurrency = DEFAULT_WORKFLOW_CONCURRENCY,
+    maxAgentCalls = DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+  ) {
     this.semaphore = new Semaphore(
-      Math.max(1, Math.min(DEFAULT_CONCURRENCY, Math.floor(concurrency))),
+      Math.max(1, Math.min(MAX_WORKFLOW_CONCURRENCY, Math.floor(concurrency))),
+    );
+    this.maxAgentCalls = Math.max(
+      1,
+      Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(maxAgentCalls)),
     );
     if (parentSignal) {
       this.parentSignal = parentSignal;
@@ -113,10 +126,10 @@ export class RunController {
   ): Promise<T> {
     if (this.sealed) return Promise.reject(new Error("Workflow is settling"));
     if (this.signal.aborted) return Promise.reject(abortError(this.signal));
-    if (this.callCount >= MAX_AGENT_CALLS) {
+    if (this.callCount >= this.maxAgentCalls) {
       return Promise.reject(
         new Error(
-          `Workflow exceeded the limit of ${MAX_AGENT_CALLS} agent calls`,
+          `Workflow exceeded the limit of ${this.maxAgentCalls} agent calls`,
         ),
       );
     }

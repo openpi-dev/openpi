@@ -34,6 +34,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
@@ -414,7 +415,12 @@ export default function workflows(pi: ExtensionAPI) {
 
       // Background runs survive Esc on the parent turn, but all runs are
       // aborted and settled during session shutdown.
-      const controller = new RunController(background ? undefined : signal);
+      const workflowConfig = loadSetupConfig().workflows;
+      const controller = new RunController(
+        background ? undefined : signal,
+        workflowConfig.concurrency,
+        workflowConfig.maxAgentCalls,
+      );
 
       // Each concurrent child gets its own extension runtime. All children use
       // the parent cwd and live trust decision.
@@ -629,6 +635,7 @@ export default function workflows(pi: ExtensionAPI) {
             signal: controller.signal,
             onAgent: agentFn,
             onPhase: phaseFn,
+            maxConcurrency: workflowConfig.concurrency,
           });
         } catch (error) {
           details.error = errorText(error);
