@@ -20,21 +20,35 @@
 </p>
 
 <p align="center">
-  <a href="#快速安装"><strong>快速安装</strong></a> ·
+  <a href="#60-秒开始"><strong>60 秒开始</strong></a> ·
   <a href="#核心能力">核心能力</a> ·
+  <a href="#它和普通-pi-配置有什么不同">为什么选它</a> ·
   <a href="#命令速查">命令速查</a> ·
   <a href="#一个入口完成配置">自然语言配置</a> ·
-  <a href="#为什么这样设计">设计原则</a>
+  <a href="#faq">FAQ</a>
 </p>
 
 <br />
 
-<p align="center">
-  <img src="assets/pi-setup.jpeg" alt="My Pi Setup terminal interface" width="920" />
-</p>
+## 60 秒开始
 
-> [!NOTE]
-> 截图展示完整视觉效果；大型 Pi 标题现在默认关闭，可通过 `/my-pi-setup 显示大标题` 开启。GitHub Dark 主题也是可选项。
+```bash
+pi install git:github.com/tt-a1i/my-pi-setup
+```
+
+重启 Pi，或者在当前 Session 运行 `/reload`。安装默认不会切换主题、不会指定模型，也不会额外调用摘要模型。
+
+然后只需要正常描述任务：
+
+```text
+启动前端 dev server，然后用两个 Pi 子代理分别检查 API 主链路和测试覆盖；
+结果回来后汇总风险，不要阻塞等待。
+```
+
+Pi 会把长期进程放到后台，启动独立 Context 的子 Agent，并在结果完成时自动继续。所有后台状态都可以从 Footer、`/ps`、`/subagents` 和 `/workflows` 查看。
+
+> [!TIP]
+> `subagent_spawn` 会立即返回。主 Agent 应继续做其他工作，而不是立刻调用 `subagent_wait`；子 Agent 结束后会自动回传。只有后续步骤确实依赖结果时才需要等待。
 
 ---
 
@@ -60,6 +74,35 @@ My Pi Setup 把这些能力组织成一套一致的 Pi-native 工作流：
   ├─ Context Pivot ──── 同一 Session 内从旧阶段切换到干净的新阶段
   └─ Run Recap ──────── 每轮结束后的可读回顾卡片，不污染模型上下文
 ```
+
+---
+
+## 适合谁
+
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>适合</strong><br/><br/>
+
+- 已经把 Pi 当作主力 Coding Agent；
+- 同时运行服务、测试、调研和实现；
+- 希望用同一套 Provider、模型和 Skills 扩展多个 Agent；
+- 关心 Context 卫生、可观察性和可回放产物；
+- 喜欢强能力默认值，但不希望插件替自己决定模型。
+
+</td>
+<td width="50%" valign="top">
+<strong>可能不适合</strong><br/><br/>
+
+- 只需要一次性问答或单文件修改；
+- 希望所有能力都由一个云端平台托管；
+- 不想让 Agent 启动本地进程；
+- 需要 Windows 上与 macOS/Linux 完全一致的自动二进制体验；
+- 更偏好极简原生 Pi，且不需要后台任务或多 Agent。
+
+</td>
+</tr>
+</table>
 
 ---
 
@@ -121,7 +164,7 @@ bg_start({
 
 ### 2. Pi-native Subagents
 
-主 Agent 可以把自包含任务交给独立的 Pi Session：
+主 Agent 可以把自包含任务交给独立的 Pi Session。Spawn 是后台操作，不会占住主 Agent；结果完成后自动回传：
 
 ```text
 subagent_spawn({
@@ -142,6 +185,8 @@ subagent_spawn({
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
 Claude Code 与 Codex Backend 仍作为兼容入口保留，但只有用户明确要求时才使用；仓库不为外部 Harness 写死模型偏好。
+
+> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。
 
 ### 3. 动态 Multi-Agent Workflows
 
@@ -274,7 +319,43 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
 
 ---
 
-## 快速安装
+## 它和普通 Pi 配置有什么不同
+
+| 常见做法                             | My Pi Setup                                                |
+| ------------------------------------ | ---------------------------------------------------------- |
+| 长命令占住 Bash Tool，Agent 原地等待 | 后台终端立即返回，退出时自动通知                           |
+| 把调研、实现、测试全塞进一个 Context | 独立 Pi Subagent 隔离噪音，父模型与工具自然继承            |
+| 多 Agent 只是并行发 Prompt           | Workflow 支持阶段、依赖、结构化结果、Artifact 与 Dashboard |
+| Context 快满时被动 Compact           | Context Pivot 在阶段变化时主动建立干净工作面               |
+| 每个插件一套配置命令                 | `/my-pi-setup` 用自然语言统一配置                          |
+| 插件默认绑定作者的模型和 Provider    | 不写死模型；默认继承当前 Pi，摘要默认零模型调用            |
+| 后台任务只能看一条最终输出           | Terminal、Subagent、Workflow 都可实时观察、取消和接管      |
+
+### 一条完整路径
+
+```text
+用户目标
+  ↓
+主 Agent 理解任务并启动 dev server
+  ↓
+并行 Pi Subagents：代码追踪 / 测试审计 / 文档核验
+  ↓
+主 Agent 继续处理确定性工作，不原地等待
+  ↓
+结果自动回传；需要多阶段综合时交给 Workflow
+  ↓
+调研结束后 Context Pivot 到实现阶段
+  ↓
+测试、Git、Context、成本与后台状态持续显示在 Footer
+  ↓
+本轮结束生成不进入模型 Context 的 Recap
+```
+
+这套设计的重点不是“工具更多”，而是让后台任务、Agent 和 Context 都有清晰的所有权与生命周期。
+
+---
+
+## 完整安装说明
 
 ### 要求
 
@@ -414,6 +495,58 @@ pi install ~/work/my-pi-setup
 ### 约束错误，而不是约束能力
 
 默认并发足够高，并允许用户继续放宽；同时保留机械上限、输出上限、调用预算和沙箱边界，防止错误脚本无限扩张。
+
+---
+
+## FAQ
+
+<details>
+<summary><strong>Pi Subagent 会阻塞主 Agent 吗？</strong></summary>
+
+不会。`subagent_spawn` 立即返回，子 Agent 在后台独立运行，结束后自动回传结果。只有主 Agent 主动调用 `subagent_wait` 时，当前 Tool Call 才会等待；这应该只用于真正依赖子 Agent 结果的步骤。
+
+</details>
+
+<details>
+<summary><strong>安装后会自动调用额外模型吗？</strong></summary>
+
+不会。Run Recap 默认使用本地 fallback；Pi Subagent 只有在任务实际触发时才运行，并默认继承当前模型。仓库不预设私有 Provider，也不替用户选择付费模型。
+
+</details>
+
+<details>
+<summary><strong>必须安装 Claude Code 或 Codex CLI 吗？</strong></summary>
+
+不需要。核心路径是 Pi-native。Claude Code 与 Codex 只是显式兼容 Backend；如果用户没有明确要求，模型应使用 `pi` harness。
+
+</details>
+
+<details>
+<summary><strong>为什么既有 Subagent，又有 Workflow？</strong></summary>
+
+Subagent 适合一项自包含委派；Workflow 适合多阶段、有依赖关系、需要结构化汇总的任务。前者可以被用户接管继续，后者强调自动编排与可回放产物。
+
+</details>
+
+<details>
+<summary><strong>配置和升级会互相覆盖吗？</strong></summary>
+
+包代码与用户配置分离。用户配置保存在 `~/.pi/agent/my-pi-setup.json`，模型认证和 Pi 设置仍归 Pi 自己管理；更新仓库不会重写这些文件。
+
+</details>
+
+<details>
+<summary><strong>后台服务会不会变成孤儿进程？</strong></summary>
+
+正常的 `/new`、`/resume`、`/fork`、`/reload` 和退出都会触发 Session Shutdown；扩展会终止后台进程树并清理日志。后台终端也支持手动 `bg_kill` 和 `/ps` 管理。
+
+</details>
+
+### 项目状态
+
+这是一个持续实际使用的个人发行版，而不是 API 稳定承诺。每次改动都会经过 TypeScript、格式检查和专项测试；上游 Pi API 变化时会优先保持 Session 生命周期、结果去重和资源清理等核心不变量。
+
+欢迎通过 Issue 提交真实工作流、兼容性问题和可复现 Bug。新增功能应优先复用 Pi 原生能力，并遵守 [`AGENTS.md`](AGENTS.md) 中的单一配置入口与 Pi-native 默认约束。
 
 ---
 
