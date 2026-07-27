@@ -1,6 +1,6 @@
 # Session Task Ledger — Research and Proposed Design
 
-Status: research proposal; not implemented.
+Status: research proposal; not implemented. The original v1 mechanics below require revision before implementation; see [TASKS_EVALUATION.md](TASKS_EVALUATION.md) for the multi-model design review and current ruling.
 
 ## Decision
 
