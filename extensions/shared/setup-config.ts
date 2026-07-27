@@ -36,6 +36,10 @@ export interface MyPiSetupConfig {
     readonly concurrency: number;
     readonly maxAgentCalls: number;
   };
+  readonly ui: {
+    readonly showHeader: boolean;
+    readonly customFooter: boolean;
+  };
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
@@ -43,6 +47,10 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+  },
+  ui: {
+    showHeader: false,
+    customFooter: true,
   },
 };
 
@@ -86,6 +94,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       : undefined;
 
   const workflows = isRecord(value.workflows) ? value.workflows : {};
+  const ui = isRecord(value.ui) ? value.ui : {};
   return {
     summaries: { enabled, ...(model ? { model } : {}) },
     workflows: {
@@ -99,6 +108,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
         MAX_WORKFLOW_AGENT_CALLS,
       ),
+    },
+    ui: {
+      showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
+      customFooter:
+        typeof ui.customFooter === "boolean" ? ui.customFooter : true,
     },
   };
 }
@@ -137,5 +151,6 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   return [
     summary,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
+    `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${config.ui.customFooter ? "on" : "off"}`,
   ].join("\n");
 }

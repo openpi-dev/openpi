@@ -56,6 +56,18 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Maximum total agent() calls in each workflow (default 128, hard maximum 1024). Omit to preserve the current value.",
         }),
       ),
+      ui_show_header: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether to show the large decorative Pi header. Defaults to false; omit to preserve the current value.",
+        }),
+      ),
+      ui_custom_footer: Type.Optional(
+        Type.Boolean({
+          description:
+            "Whether to replace Pi's footer with the package dashboard footer. Defaults to true; omit to preserve the current value.",
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const modelFields = [
@@ -103,6 +115,10 @@ export default function myPiSetup(pi: ExtensionAPI) {
           maxAgentCalls:
             params.workflow_max_agent_calls ?? current.workflows.maxAgentCalls,
         },
+        ui: {
+          showHeader: params.ui_show_header ?? current.ui.showHeader,
+          customFooter: params.ui_custom_footer ?? current.ui.customFooter,
+        },
       };
       await saveSetupConfig(config);
       const text = formatSetupConfig(config);
@@ -129,6 +145,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "/my-pi-setup 关闭自动摘要",
             "/my-pi-setup 摘要改用本地 fallback，不调用模型",
             "/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个",
+            "/my-pi-setup 显示大标题",
+            "/my-pi-setup 关闭自定义状态栏",
           ].join("\n"),
           "info",
         );

@@ -11,6 +11,7 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
@@ -152,82 +153,91 @@ export default function uiCustomization(pi: ExtensionAPI) {
 
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
+    const config = loadSetupConfig().ui;
 
-    ctx.ui.setHeader((tui) => {
-      requestRender = () => tui.requestRender();
+    if (config.showHeader) {
+      ctx.ui.setHeader((tui) => {
+        requestRender = () => tui.requestRender();
 
-      return {
-        render(width: number) {
-          const art = TITLE_LINES.map((line, row) =>
-            center(gradientText(line, row * 0.045), width),
-          );
-          const subtitle = center(
-            `${BOLD}${gradientText(title, 0.18)}${RESET}`,
-            width,
-          );
-          return ["", ...art, subtitle, ""];
-        },
-        invalidate() {},
-      };
-    });
-
-    ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
-      requestRender = () => tui.requestRender();
-
-      return {
-        invalidate() {},
-        render(width: number) {
-          const directory = theme.fg("text", formatDirectory(ctx.cwd));
-          const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
-          let git = gitInfo.branch
-            ? `${gitInfo.branch} · ${gitInfo.changedFiles} ${fileLabel} changed`
-            : "";
-
-          if (gitInfo.pullRequest) {
-            const prLabel = `PR #${gitInfo.pullRequest.number}`;
-            const linkedPr = getCapabilities().hyperlinks
-              ? hyperlink(prLabel, gitInfo.pullRequest.url)
-              : prLabel;
-            git += ` · ${linkedPr}`;
-          }
-
-          const contextPercent =
-            modelInfo.contextPercent === null
-              ? "?"
-              : `${Math.round(modelInfo.contextPercent)}`;
-          const contextWindow =
-            modelInfo.contextWindow > 0
-              ? formatTokens(modelInfo.contextWindow)
-              : "?";
-          const tps =
-            modelInfo.tokensPerSecond === null
-              ? "— tok/s"
-              : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-          const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
-          const model = modelInfo.provider
-            ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
-            : modelInfo.modelId;
-
-          const lines = [
-            columns(directory, theme.fg("muted", model), width),
-            columns(theme.fg("muted", usage), theme.fg("muted", git), width),
-          ];
-
-          // Extension statuses render after the two dashboard lines, one per row.
-          const statuses = footerData.getExtensionStatuses();
-          const statusLines = Array.from(statuses.entries())
-            .sort(([a], [b]) => a.localeCompare(b))
-            .flatMap(([, text]) => text.split("\n"));
-          for (const statusLine of statusLines) {
-            lines.push(
-              truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+        return {
+          render(width: number) {
+            const art = TITLE_LINES.map((line, row) =>
+              center(gradientText(line, row * 0.045), width),
             );
-          }
+            const subtitle = center(
+              `${BOLD}${gradientText(title, 0.18)}${RESET}`,
+              width,
+            );
+            return ["", ...art, subtitle, ""];
+          },
+          invalidate() {},
+        };
+      });
+    } else {
+      ctx.ui.setHeader(undefined);
+    }
 
-          return lines;
-        },
-      };
-    });
+    if (config.customFooter) {
+      ctx.ui.setFooter((tui, theme, footerData: ReadonlyFooterDataProvider) => {
+        requestRender = () => tui.requestRender();
+
+        return {
+          invalidate() {},
+          render(width: number) {
+            const directory = theme.fg("text", formatDirectory(ctx.cwd));
+            const fileLabel = gitInfo.changedFiles === 1 ? "file" : "files";
+            let git = gitInfo.branch
+              ? `${gitInfo.branch} · ${gitInfo.changedFiles} ${fileLabel} changed`
+              : "";
+
+            if (gitInfo.pullRequest) {
+              const prLabel = `PR #${gitInfo.pullRequest.number}`;
+              const linkedPr = getCapabilities().hyperlinks
+                ? hyperlink(prLabel, gitInfo.pullRequest.url)
+                : prLabel;
+              git += ` · ${linkedPr}`;
+            }
+
+            const contextPercent =
+              modelInfo.contextPercent === null
+                ? "?"
+                : `${Math.round(modelInfo.contextPercent)}`;
+            const contextWindow =
+              modelInfo.contextWindow > 0
+                ? formatTokens(modelInfo.contextWindow)
+                : "?";
+            const tps =
+              modelInfo.tokensPerSecond === null
+                ? "— tok/s"
+                : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
+            const usage = `${contextPercent}%/${contextWindow} · $${modelInfo.cost.toFixed(2)} · ${tps}`;
+            const model = modelInfo.provider
+              ? `${modelInfo.provider}/${modelInfo.modelId} · ${modelInfo.thinking}`
+              : modelInfo.modelId;
+
+            const lines = [
+              columns(directory, theme.fg("muted", model), width),
+              columns(theme.fg("muted", usage), theme.fg("muted", git), width),
+            ];
+
+            // Extension statuses render after the two dashboard lines, one per row.
+            const statuses = footerData.getExtensionStatuses();
+            const statusLines = Array.from(statuses.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .flatMap(([, text]) => text.split("\n"));
+            for (const statusLine of statusLines) {
+              lines.push(
+                truncateToWidth(statusLine, width, theme.fg("dim", "...")),
+              );
+            }
+
+            return lines;
+          },
+        };
+      });
+    } else {
+      ctx.ui.setFooter(undefined);
+    }
 
     ctx.ui.setTitle(`pi · ${title}`);
     pi.events.emit(REFRESH_CHANNEL, undefined);

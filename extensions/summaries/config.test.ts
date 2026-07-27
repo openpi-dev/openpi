@@ -6,11 +6,13 @@ import {
   parseSetupConfig,
 } from "../shared/setup-config.ts";
 
+const defaultUi = { showHeader: false, customFooter: true };
+
 test("setup defaults to enabled local recaps without model calls", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    "Run recaps: local fallback (no model calls)\nWorkflows: 8 concurrent agents · 128 total calls",
+    "Run recaps: local fallback (no model calls)\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on",
   );
 });
 
@@ -35,10 +37,11 @@ test("setup config accepts model choices and drops malformed models", () => {
       },
     },
     workflows: { concurrency: 8, maxAgentCalls: 128 },
+    ui: defaultUi,
   });
   assert.equal(
     formatSetupConfig(configured),
-    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls",
+    "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on",
   );
 
   assert.deepEqual(
@@ -51,6 +54,7 @@ test("setup config accepts model choices and drops malformed models", () => {
     {
       summaries: { enabled: false },
       workflows: { concurrency: 8, maxAgentCalls: 128 },
+      ui: defaultUi,
     },
   );
 });
@@ -68,5 +72,13 @@ test("workflow limits default safely and accept configured fan-out", () => {
       workflows: { concurrency: 65, maxAgentCalls: 1_025 },
     }).workflows,
     { concurrency: 8, maxAgentCalls: 128 },
+  );
+});
+
+test("UI defaults to a compact header and dashboard footer", () => {
+  assert.deepEqual(parseSetupConfig({}).ui, defaultUi);
+  assert.deepEqual(
+    parseSetupConfig({ ui: { showHeader: true, customFooter: false } }).ui,
+    { showHeader: true, customFooter: false },
   );
 });
