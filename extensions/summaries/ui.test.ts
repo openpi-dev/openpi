@@ -24,6 +24,23 @@ test("does not render Next when no concrete action remains", () => {
   assert.doesNotMatch(component.render(100).join("\n"), /Next:/);
 });
 
+test("omits model metadata and avoids blank spacer rows", () => {
+  const component = renderRecap(
+    {
+      recap: "Everything is pushed.",
+      provider: "seal",
+      model: "deepseek-v4-flash",
+      reasoning: "off",
+    },
+    true,
+    theme,
+  );
+  const output = component.render(100).join("\n");
+
+  assert.doesNotMatch(output, /seal|deepseek|off|local fallback/);
+  assert.doesNotMatch(output, /\n\s*\n/);
+});
+
 test("renders Next when a concrete action remains", () => {
   const component = renderRecap(
     {
