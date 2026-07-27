@@ -221,7 +221,24 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 
 默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
 
-### 4. Context Pivot：同一 Session，切换工作阶段
+### 4. Session Ledger：跨 Turn 记住未完成工作
+
+```text
+/ledger
+```
+
+Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作意图：
+
+- `ledger_add` 增加一条或多条工作项；
+- `ledger_update` 更新 `pending / in_progress / blocked / done / dropped`；
+- `ledger_list` 按 ID 或状态读取；
+- `blocked / done / dropped` 必须留下阻塞条件、可检查证据或放弃原因；
+- 状态跟随 Pi Session 分支，在 `/reload`、`/resume`、`/tree`、`/fork` 和 Context Pivot 后恢复；
+- Ledger 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
+
+每次冷启动或 Context Pivot 后，Ledger 只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
+
+### 5. Context Pivot：同一 Session，切换工作阶段
 
 ```text
 /context-pivot 从调研切换到实现，先完成 API 主链路
@@ -244,7 +261,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 
 为避免无意义压缩，Context Pivot 仅在约 30K Context Tokens 后启用。
 
-### 5. Session 搜索与预览
+### 6. Session 搜索与预览
 
 ```text
 /sessions
@@ -258,7 +275,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 - 当前项目与全部 Workspace 之间切换；
 - 选中后直接调用 Pi 的安全 Session Switch 生命周期。
 
-### 6. 模型可以真正“问用户”
+### 7. 模型可以真正“问用户”
 
 `ask_user` 不是普通文本提问，而是模型可调用的结构化 TUI：
 
@@ -272,7 +289,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 
 Prompt 约束它只询问真正会改变结果、又无法从代码和上下文推断的决策；禁止用它问“是否继续”。
 
-### 7. 一等文件搜索工具
+### 8. 一等文件搜索工具
 
 模型直接获得结构化 `fd` 与 `rg`：
 
@@ -285,7 +302,7 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 `rg.max_matches_per_file` 明确表达它是“每个文件”的限制，不会让模型误以为是全局上限。
 
-### 8. 高密度终端 Dashboard
+### 9. 高密度终端 Dashboard
 
 默认 Footer 使用紧凑的两行布局：
 
@@ -327,7 +344,7 @@ Subagents、Workflows 和后台终端状态属于基础可观察性，不是可�
 - 大型 ASCII Header 默认关闭；
 - Footer 可以通过统一配置关闭，恢复 Pi 原生 Footer。
 
-### 9. Run Recap，不占主 Context
+### 10. Run Recap，不占主 Context
 
 每轮 Agent 完整结束后，聊天中会出现一张 Recap 卡片：
 
@@ -468,6 +485,7 @@ pi install ~/work/my-pi-setup
 | `/subagents`                | 查看、取消或接管子 Agent                     |
 | `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
 | `/workflows`                | 查看 Workflow 运行、阶段和产物               |
+| `/ledger`                   | 查看当前 Session 的工作意图台账              |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
 | `/lg`                       | 浏览 Working Tree 改动和 Diff                |
 | `/pr`                       | 刷新当前分支的 GitHub PR 信息                |
@@ -480,6 +498,7 @@ pi install ~/work/my-pi-setup
 | `bg_start`, `bg_status`, `bg_list`, `bg_kill`                                           | 后台进程生命周期                      |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
 | `workflow`                                                                              | 动态多阶段 Agent 编排                 |
+| `ledger_add`, `ledger_update`, `ledger_list`                                             | Session 工作意图台账                  |
 | `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
 | `ask_user`                                                                              | 结构化用户决策                        |
 | `fd`, `rg`                                                                              | 文件发现与内容搜索                    |
@@ -581,6 +600,7 @@ extensions/
 ├── background-terminals/  # 长进程、日志、/ps
 ├── subagents/             # Pi / Claude Code / Codex Backend + /subagents
 ├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
+├── ledger/                # Session 工作意图台账
 ├── context-pivot/         # 定向 Compaction
 ├── sessions/              # Session 搜索、预览、切换
 ├── ask-user/              # 结构化用户输入

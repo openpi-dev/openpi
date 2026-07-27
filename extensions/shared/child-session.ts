@@ -8,7 +8,7 @@ import {
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 
-const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
+export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
 /** Tools that headless children must not receive. Everything else stays enabled. */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
@@ -19,6 +19,9 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_list",
   "workflow",
   "ask_user",
+  "ledger_add",
+  "ledger_update",
+  "ledger_list",
 ] as const;
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
@@ -92,7 +95,8 @@ export interface DisposableChildSession {
 
 const childShutdowns = new WeakMap<object, Promise<void>>();
 
-function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
+/** Await an operation but never longer than `timeoutMs`; never rejects. */
+export function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<void>((resolve) => {
     timer = setTimeout(resolve, timeoutMs);

@@ -12,7 +12,9 @@ Method: three independent structured reviews, three cross-examinations, then an 
 
 ## Verdict
 
-**Revise, then implement a deliberately smaller v1.**
+**Implemented after revision as `extensions/ledger/`.**
+
+Implementation correction: model-visible projection is not injected on every request. It is frozen only for cold runs after session start, tree navigation, or compaction/Context Pivot, then reused byte-identically within that run and removed after settlement. This avoids accumulating persistent messages and reduces repeated cache-prefix divergence. Persistence uses synchronous `pi.appendEntry("task-ledger", snapshot)` before the in-memory commit.
 
 The need is real: My Pi Setup has Subagents and Workflows for execution and Context Pivot for context hygiene, but no durable, branch-correct record of work intent across turns and compaction. A Session Task Ledger fills that seam if it remains advisory and does not execute or schedule work.
 

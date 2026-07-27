@@ -106,6 +106,9 @@ test("child denylist keeps extension and workflow structured tools available", a
         "subagent_list",
         "workflow",
         "ask_user",
+        "ledger_add",
+        "ledger_update",
+        "ledger_list",
       ],
     );
     const allTools = new Set(session.getAllTools().map((tool) => tool.name));

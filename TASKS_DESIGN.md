@@ -1,6 +1,6 @@
 # Session Task Ledger — Research and Proposed Design
 
-Status: research proposal; not implemented. The original v1 mechanics below require revision before implementation; see [TASKS_EVALUATION.md](TASKS_EVALUATION.md) for the multi-model design review and current ruling.
+Status: implemented as `extensions/ledger/` after the multi-model revisions in [TASKS_EVALUATION.md](TASKS_EVALUATION.md). Historical alternatives below explain the design path; the implementation and evaluation document are authoritative for current behavior.
 
 ## Decision
 
