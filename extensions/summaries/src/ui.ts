@@ -20,12 +20,8 @@ class RecapCard {
 
   render(width: number) {
     const box = new Box(1, 0, (text) => this.theme.bg("customMessageBg", text));
-    const title =
-      this.theme.fg("accent", "✦ ") +
-      this.theme.fg("customMessageLabel", this.theme.bold("Run recap"));
-    box.addChild(new Text(title, 0, 0));
     box.addChild(
-      new Markdown(this.data.recap, 0, 0, getMarkdownTheme(), {
+      new Markdown(`Recap: ${this.data.recap}`, 0, 0, getMarkdownTheme(), {
         color: (text) => this.theme.fg("customMessageText", text),
       }),
     );

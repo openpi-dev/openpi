@@ -37,7 +37,8 @@ test("omits model metadata and avoids blank spacer rows", () => {
   );
   const output = component.render(100).join("\n");
 
-  assert.doesNotMatch(output, /seal|deepseek|off|local fallback/);
+  assert.match(output, /Recap: Everything is pushed\./);
+  assert.doesNotMatch(output, /Run recap|✦|seal|deepseek|off|local fallback/);
   assert.doesNotMatch(output, /\n\s*\n/);
 });
 
