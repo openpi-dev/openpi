@@ -21,7 +21,7 @@ import {
   type GitInfoRuntime,
 } from "./src/runtime.ts";
 
-const POLL_INTERVAL_MS = 3_000;
+const POLL_INTERVAL_MS = 5_000;
 const GIT_TIMEOUT_MS = 3_000;
 const GH_TIMEOUT_MS = 10_000;
 

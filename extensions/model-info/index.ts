@@ -15,8 +15,16 @@ function getSessionCost(ctx: ExtensionContext) {
   let cost = 0;
 
   for (const entry of ctx.sessionManager.getBranch()) {
-    if (entry.type === "message" && entry.message.role === "assistant") {
-      cost += entry.message.usage.cost.total;
+    if (entry.type === "message") {
+      const message = entry.message;
+      if (message.role === "assistant") cost += message.usage.cost.total;
+      else if (message.role === "toolResult") {
+        cost += message.usage?.cost.total ?? 0;
+      }
+      continue;
+    }
+    if (entry.type === "compaction" || entry.type === "branch_summary") {
+      cost += entry.usage?.cost.total ?? 0;
     }
   }
 
