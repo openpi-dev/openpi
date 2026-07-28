@@ -7,17 +7,16 @@ import type {
 import {
   GoalController,
   countAssistantTokens,
-  fenceMatches,
-  waitingBackoffMs,
+  lastAssistantStopReason,
 } from "./controller.ts";
 import { createGoalSnapshot, transitionGoal } from "./state.ts";
 
 function harness(options: { sendMessage?: () => void } = {}) {
-  const entries: unknown[] = [];
-  const messages: unknown[] = [];
+  const entries: { customType: string; data: unknown }[] = [];
+  const messages: { message: unknown; options: unknown }[] = [];
   const pi = {
     appendEntry(customType: string, data: unknown) {
-      entries.push({ type: "custom", customType, data });
+      entries.push({ customType, data });
     },
     sendMessage(message: unknown, sendOptions: unknown) {
       options.sendMessage?.();
@@ -45,205 +44,384 @@ function harness(options: { sendMessage?: () => void } = {}) {
   };
 }
 
-function active(now = 100) {
+function active(now = 100, tokenBudget?: number) {
   return createGoalSnapshot(
-    { objective: "Do work", condition: "Tests pass" },
+    { objective: "Do work", tokenBudget },
     0,
     now,
     "goal_ctrl_1",
   );
 }
 
-test("wait backoff is exponential and capped", () => {
-  assert.equal(waitingBackoffMs(1), 5_000);
-  assert.equal(waitingBackoffMs(2), 10_000);
-  assert.equal(waitingBackoffMs(20), 300_000);
-});
+function assistant(totalTokens: number, stopReason = "stop") {
+  return {
+    role: "assistant",
+    usage: { totalTokens },
+    stopReason,
+  };
+}
 
-test("fence includes epoch, id, and revision", () => {
-  const goal = active();
-  const fence = { epoch: 3, id: goal.id, revision: goal.revision };
-  assert.equal(fenceMatches(fence, 3, goal), true);
-  assert.equal(fenceMatches(fence, 4, goal), false);
-  assert.equal(fenceMatches(fence, 3, { ...goal, revision: 2 }), false);
-  assert.equal(fenceMatches(fence, 3, { ...goal, id: "goal_ctrl_2" }), false);
-});
-
-test("parent token accounting uses only reliable assistant usage after baseline", () => {
-  const message = (role: string, tokens?: number) => ({
-    type: "message",
-    message: {
-      role,
-      ...(tokens === undefined ? {} : { usage: { totalTokens: tokens } }),
-    },
-  });
+test("assistant accounting matches Codex non-cached input plus output and falls back for legacy usage", () => {
   assert.equal(
-    countAssistantTokens(
-      [
-        message("assistant", 99),
-        message("user"),
-        message("assistant", 12),
-        message("assistant"),
-      ],
-      1,
-    ),
-    12,
+    countAssistantTokens([
+      {
+        role: "assistant",
+        usage: { input: 7, output: 3, cacheRead: 90, totalTokens: 100 },
+        stopReason: "stop",
+      },
+      { type: "message", message: assistant(8) },
+      { role: "user", content: "x" },
+    ]),
+    18,
   );
-  assert.equal(countAssistantTokens([], 1), 0);
+  assert.equal(lastAssistantStopReason([assistant(1, "aborted")]), "aborted");
 });
 
-test("restore demotes running goal persist-before-memory and print mode stays inert", async () => {
+test("v2 active goals survive restore while v1 active goals migrate to a durably paused v2 state", () => {
   const h = harness();
   h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
-  const controller = new GoalController(h.pi, {
-    now: () => 200,
-    evaluate: async () => {
-      throw new Error("must not run");
+  const controller = new GoalController(h.pi, { now: () => 200 });
+  controller.restore(h.ctx);
+  assert.equal(controller.snapshot()?.status, "active");
+  assert.equal(h.entries.length, 0);
+
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: {
+        version: 1,
+        revision: 1,
+        id: "legacy_ctrl_1",
+        objective: "Legacy work",
+        condition: "Tests pass",
+        status: "active",
+        createdAt: 100,
+        updatedAt: 100,
+        activeMs: 0,
+        activeSince: 100,
+        maxTurns: 40,
+        noProgressCap: 8,
+        wallClockMinutes: 120,
+        iterations: 0,
+        parentTokens: 0,
+        evaluatorTokens: 0,
+        noProgressCount: 0,
+        evaluatorFailures: 0,
+        waitCount: 0,
+        ledgerReminderUsed: false,
+      },
     },
-  });
-  controller.restore(h.ctx, true);
+  ]);
+  controller.restore(h.ctx);
   assert.equal(controller.snapshot()?.status, "paused");
-  assert.equal(h.entries.length, 1);
-
-  const print = { ...h.ctx, mode: "print" } as ExtensionContext;
-  controller.restore(print, false);
-  await controller.settled(print);
-  assert.equal(h.messages.length, 0);
+  assert.equal(h.entries.at(-1)?.customType, "session-goal");
+  assert.equal((h.entries.at(-1)?.data as { version: number }).version, 2);
 });
 
-test("kickoff immediately starts the first worker without judging or consuming a turn", async () => {
+test("kickoff queues one Codex-style continuation without consuming usage", () => {
   const h = harness();
-  let evaluations = 0;
   h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
-  const controller = new GoalController(h.pi, {
-    now: () => 101,
-    evaluate: async () => {
-      evaluations++;
-      throw new Error("the setup action is not worker evidence");
-    },
-  });
-  controller.restore(h.ctx, false);
+  const controller = new GoalController(h.pi, { now: () => 101 });
+  controller.restore(h.ctx);
 
   assert.equal(controller.kickoff(h.ctx), true);
   assert.equal(controller.kickoff(h.ctx), false);
   assert.equal(h.messages.length, 1);
-  assert.equal(controller.snapshot()?.iterations, 0);
-  assert.equal(evaluations, 0);
-  assert.equal(
-    (
-      h.messages[0] as { message: { content: string } }
-    ).message.content.includes("Objective: Do work"),
-    true,
-  );
-});
-
-test("kickoff during goal_set queues a follow-up and never judges the setup run", async () => {
-  const h = harness();
-  let evaluations = 0;
-  h.setIdle(false);
-  const goal = active();
-  const goalEntry = { type: "custom", customType: "session-goal", data: goal };
-  const assistantEntry = (tokens: number) => ({
-    type: "message",
-    message: { role: "assistant", usage: { totalTokens: tokens } },
-  });
-  h.setBranch([goalEntry]);
-  const controller = new GoalController(h.pi, {
-    now: () => 101,
-    evaluate: async () => {
-      evaluations++;
-      return {
-        judge: {
-          met: false,
-          impossible: false,
-          progress: true,
-          waiting: false,
-          reason: "worker made progress",
-        },
-        tokens: 1,
-      };
-    },
-  });
-  controller.restore(h.ctx, false);
-
-  assert.equal(controller.kickoff(h.ctx), true);
-  assert.equal(h.messages.length, 1);
-  assert.deepEqual((h.messages[0] as { options: unknown }).options, {
+  assert.deepEqual(h.messages[0]?.options, {
     triggerTurn: true,
     deliverAs: "followUp",
   });
-  h.setIdle(true);
-  h.setBranch([goalEntry, assistantEntry(999)]);
-  await controller.settled(h.ctx);
-  assert.equal(h.messages.length, 1);
-  assert.equal(controller.snapshot()?.iterations, 0);
-  assert.equal(controller.snapshot()?.parentTokens, 0);
-  assert.equal(evaluations, 0);
-
-  controller.beforeAgentStart(h.ctx);
-  h.setBranch([goalEntry, assistantEntry(999), assistantEntry(5)]);
-  await controller.settled(h.ctx);
-  assert.equal(controller.snapshot()?.iterations, 1);
-  assert.equal(controller.snapshot()?.parentTokens, 5);
-  assert.equal(evaluations, 1);
-  assert.equal(h.messages.length, 2);
+  const content = (h.messages[0]?.message as { content: string }).content;
+  assert.match(content, /Completion audit:/);
+  assert.match(content, /call update_goal with status "complete"/);
+  assert.equal(controller.snapshot()?.tokensUsed, 0);
+  assert.equal(controller.snapshot()?.continuationCount, 1);
 });
 
-test("resume plus kickoff immediately authorizes the next autonomous turn", () => {
+test("a goal created during a busy run accounts post-create work and continues after the absorbed steer", () => {
   const h = harness();
+  let now = 100;
+  h.setIdle(false);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+  controller.agentStarted();
+  controller.messageEnded(assistant(100));
+  controller.replace(active(now));
+
+  assert.equal(controller.kickoff(h.ctx), true);
+  assert.deepEqual(h.messages[0]?.options, {
+    triggerTurn: true,
+    deliverAs: "steer",
+  });
+  now = 1_100;
+  controller.messageEnded(assistant(5));
+  controller.agentEnded([assistant(100), assistant(5)]);
+  h.setIdle(true);
+  controller.settled(h.ctx);
+
+  assert.equal(controller.snapshot()?.tokensUsed, 5);
+  assert.equal(controller.snapshot()?.timeUsedSeconds, 1);
+  assert.equal(h.messages.length, 2);
+  assert.deepEqual(h.messages[1]?.options, {
+    triggerTurn: true,
+    deliverAs: "followUp",
+  });
+});
+
+test("a settled active goal accounts tokens and time then dispatches exactly one continuation", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([
+    { type: "custom", customType: "session-goal", data: active(now) },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+  controller.agentStarted();
+  now = 2_250;
+  controller.agentEnded([assistant(25)]);
+  controller.settled(h.ctx);
+
+  assert.equal(controller.snapshot()?.tokensUsed, 25);
+  assert.equal(controller.snapshot()?.timeUsedSeconds, 2);
+  assert.equal(controller.snapshot()?.status, "active");
+  assert.equal(h.messages.length, 1);
+  controller.settled(h.ctx);
+  assert.equal(h.messages.length, 1);
+});
+
+test("user interruption pauses, provider errors block, usage errors limit, and overflow retry aborts do neither", () => {
+  for (const [reason, expected] of [
+    ["aborted", "paused"],
+    ["error", "blocked"],
+  ] as const) {
+    const h = harness();
+    let now = 100;
+    h.setBranch([
+      { type: "custom", customType: "session-goal", data: active() },
+    ]);
+    const controller = new GoalController(h.pi, { now: () => now });
+    controller.restore(h.ctx);
+    controller.agentStarted();
+    now = 200;
+    controller.agentEnded([assistant(1, reason)]);
+    controller.settled(h.ctx);
+    assert.equal(controller.snapshot()?.status, expected);
+    assert.equal(h.messages.length, 0);
+  }
+
+  const usage = harness();
+  let now = 100;
+  usage.setBranch([
+    { type: "custom", customType: "session-goal", data: active() },
+  ]);
+  const usageController = new GoalController(usage.pi, { now: () => now });
+  usageController.restore(usage.ctx);
+  usageController.agentStarted();
+  usageController.agentEnded([
+    {
+      ...assistant(1, "error"),
+      errorMessage: "You have hit your usage limit.",
+    },
+  ]);
+  usageController.settled(usage.ctx);
+  assert.equal(usageController.snapshot()?.status, "usage_limited");
+
+  const retry = harness();
+  now = 100;
+  retry.setBranch([
+    { type: "custom", customType: "session-goal", data: active() },
+  ]);
+  const controller = new GoalController(retry.pi, { now: () => now });
+  controller.restore(retry.ctx);
+  controller.agentStarted();
+  controller.agentEnded([assistant(1, "aborted")]);
+  controller.compacted(true);
+  now = 200;
+  controller.settled(retry.ctx);
+  assert.equal(controller.snapshot()?.status, "active");
+  assert.equal(retry.messages.length, 1);
+});
+
+test("crossing a token budget marks the goal limited and sends only a wrap-up turn", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: active(now, 10),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+  controller.agentStarted();
+  controller.messageEnded(assistant(12));
+  now = 200;
+  controller.toolFinished(h.ctx);
+
+  assert.equal(controller.snapshot()?.status, "budget_limited");
+  assert.equal(h.messages.length, 1);
+  assert.match(
+    (h.messages[0]?.message as { content: string }).content,
+    /do not start new substantive work/,
+  );
+  controller.agentEnded([assistant(12)]);
+  controller.settled(h.ctx);
+  controller.agentStarted();
+  controller.agentEnded([assistant(5)]);
+  controller.settled(h.ctx);
+  assert.equal(h.messages.length, 1);
+});
+
+test("editing uses a plain continuation when idle and objective-updated steering while busy", () => {
+  const idle = harness();
+  idle.setBranch([
+    { type: "custom", customType: "session-goal", data: active() },
+  ]);
+  const idleController = new GoalController(idle.pi, { now: () => 101 });
+  idleController.restore(idle.ctx);
+  idleController.edit("new idle objective", idle.ctx);
+  assert.equal(
+    (idle.messages[0]?.message as { details: { kind: string } }).details.kind,
+    "continuation",
+  );
+
+  const busy = harness();
+  busy.setIdle(false);
+  busy.setBranch([
+    { type: "custom", customType: "session-goal", data: active() },
+  ]);
+  const busyController = new GoalController(busy.pi, { now: () => 101 });
+  busyController.restore(busy.ctx);
+  busyController.agentStarted();
+  busyController.edit("new busy objective", busy.ctx);
+  assert.equal(
+    (busy.messages[0]?.message as { details: { kind: string } }).details.kind,
+    "objective_updated",
+  );
+});
+
+test("busy editing a complete goal tracks only post-edit work and keeps the loop running", () => {
+  const h = harness();
+  let now = 100;
   h.setIdle(false);
   h.setBranch([
     {
       type: "custom",
       customType: "session-goal",
-      data: transitionGoal(active(), "paused", 101, "restored"),
+      data: transitionGoal(active(98), "complete", 99, "done"),
     },
   ]);
-  const controller = new GoalController(h.pi, { now: () => 102 });
-  controller.restore(h.ctx, false);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+  controller.agentStarted();
+  controller.messageEnded(assistant(100));
 
-  assert.equal(controller.resume()?.status, "active");
-  assert.equal(controller.kickoff(h.ctx), true);
-  assert.equal(h.messages.length, 1);
-  assert.deepEqual((h.messages[0] as { options: unknown }).options, {
-    triggerTurn: true,
-    deliverAs: "followUp",
-  });
+  controller.edit("revived objective", h.ctx);
+  now = 1_100;
+  controller.messageEnded(assistant(5));
+  controller.agentEnded([assistant(100), assistant(5)]);
+  h.setIdle(true);
+  controller.settled(h.ctx);
+
+  assert.equal(controller.snapshot()?.status, "active");
+  assert.equal(controller.snapshot()?.tokensUsed, 5);
+  assert.equal(controller.snapshot()?.timeUsedSeconds, 1);
+  assert.equal(h.messages.length, 2);
+  assert.equal(
+    (h.messages[0]?.message as { details: { kind: string } }).details.kind,
+    "objective_updated",
+  );
+  assert.equal(
+    (h.messages[1]?.message as { details: { kind: string } }).details.kind,
+    "continuation",
+  );
 });
 
-test("kickoff remains inert outside TUI/RPC automation and enforces hard limits", () => {
-  const printHarness = harness();
-  printHarness.setBranch([
-    { type: "custom", customType: "session-goal", data: active() },
-  ]);
-  const printController = new GoalController(printHarness.pi, {
-    now: () => 101,
-  });
-  printController.restore(
-    { ...printHarness.ctx, mode: "print" } as ExtensionContext,
-    false,
-  );
-  assert.equal(printController.kickoff(printHarness.ctx), false);
-  assert.equal(printHarness.messages.length, 0);
+test("fork deferral survives restore until explicit input releases it", () => {
+  const h = harness();
+  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
+  const controller = new GoalController(h.pi, { now: () => 101 });
+  controller.restore(h.ctx, true);
+  assert.equal(controller.snapshot()?.deferContinuation, true);
+  assert.equal(controller.kickoff(h.ctx), false);
+  assert.equal(controller.releaseDeferredContinuation(), true);
+  assert.equal(controller.snapshot()?.deferContinuation, undefined);
+  assert.equal(controller.kickoff(h.ctx), true);
+});
 
-  const limitedHarness = harness();
-  limitedHarness.setBranch([
+test("model completion flushes current assistant usage into its tool result without double accounting", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+  controller.agentStarted();
+  const finalAssistant = {
+    role: "assistant",
+    usage: { input: 7, output: 2, cacheRead: 90, totalTokens: 99 },
+    stopReason: "stop",
+  };
+  now = 1_100;
+  controller.messageEnded(finalAssistant);
+  controller.updateFromModel("complete");
+  assert.equal(controller.snapshot()?.tokensUsed, 9);
+  assert.equal(controller.snapshot()?.timeUsedSeconds, 1);
+
+  controller.agentEnded([finalAssistant]);
+  now = 1_300;
+  controller.settled(h.ctx);
+  assert.equal(controller.snapshot()?.status, "complete");
+  assert.equal(controller.snapshot()?.tokensUsed, 9);
+  assert.equal(controller.snapshot()?.timeUsedSeconds, 1);
+  assert.equal(h.messages.length, 0);
+});
+
+test("model blocking cannot demote a budget-limited goal", () => {
+  const h = harness();
+  h.setBranch([
     {
       type: "custom",
       customType: "session-goal",
-      data: { ...active(), iterations: 40 },
+      data: transitionGoal(active(), "budget_limited", 101, "budget"),
     },
   ]);
-  const limitedController = new GoalController(limitedHarness.pi, {
-    now: () => 101,
-  });
-  limitedController.restore(limitedHarness.ctx, false);
-  assert.equal(limitedController.kickoff(limitedHarness.ctx), false);
-  assert.equal(limitedController.snapshot()?.status, "max_iterations");
-  assert.equal(limitedHarness.messages.length, 0);
+  const controller = new GoalController(h.pi, { now: () => 102 });
+  controller.restore(h.ctx);
+  assert.equal(controller.updateFromModel("blocked")?.status, "budget_limited");
+  assert.equal(h.entries.length, 0);
 });
 
-test("a failed kickoff dispatch persists a paused state", () => {
+test("resume accepts paused, blocked, and usage-limited but not budget-limited", () => {
+  for (const status of ["paused", "blocked", "usage_limited"] as const) {
+    const h = harness();
+    h.setBranch([
+      {
+        type: "custom",
+        customType: "session-goal",
+        data: transitionGoal(active(), status, 101, status),
+      },
+    ]);
+    const controller = new GoalController(h.pi, { now: () => 102 });
+    controller.restore(h.ctx);
+    assert.equal(controller.resume()?.status, "active");
+  }
+
+  const h = harness();
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: transitionGoal(active(), "budget_limited", 101, "budget"),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => 102 });
+  controller.restore(h.ctx);
+  assert.throws(() => controller.resume(), /cannot resume/);
+});
+
+test("failed continuation dispatch durably pauses the active goal", () => {
   const h = harness({
     sendMessage() {
       throw new Error("dispatch failed");
@@ -251,167 +429,7 @@ test("a failed kickoff dispatch persists a paused state", () => {
   });
   h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
   const controller = new GoalController(h.pi, { now: () => 101 });
-  controller.restore(h.ctx, false);
-
+  controller.restore(h.ctx);
   assert.throws(() => controller.kickoff(h.ctx), /dispatch failed/);
   assert.equal(controller.snapshot()?.status, "paused");
-  assert.match(controller.snapshot()?.reason ?? "", /could not be dispatched/);
-  assert.equal(h.messages.length, 0);
-});
-
-test("successful judge admits at most one follow-up and writes ledger reminder marker first", async () => {
-  const h = harness();
-  const goal = active();
-  h.setBranch([
-    { type: "custom", customType: "session-goal", data: goal },
-    {
-      type: "custom",
-      customType: "task-ledger",
-      data: {
-        version: 1,
-        revision: 1,
-        nextId: 2,
-        items: [{ id: 1, subject: "Run focused tests", status: "pending" }],
-      },
-    },
-  ]);
-  const controller = new GoalController(h.pi, {
-    now: (() => {
-      let now = 100;
-      return () => ++now;
-    })(),
-    evaluate: async () => ({
-      judge: {
-        met: false,
-        impossible: false,
-        progress: true,
-        waiting: false,
-        reason: "progress",
-      },
-      tokens: 7,
-    }),
-  });
-  controller.restore(h.ctx, false);
-  controller.beforeAgentStart(h.ctx);
-  await controller.settled(h.ctx);
-  assert.equal(h.messages.length, 1);
-  assert.equal(controller.snapshot()?.ledgerReminderUsed, true);
-  const reminderEntry = h.entries.findIndex(
-    (entry) =>
-      (entry as { data?: { ledgerReminderUsed?: boolean } }).data
-        ?.ledgerReminderUsed === true,
-  );
-  assert.equal(reminderEntry >= 0, true);
-  assert.equal(
-    (
-      h.messages[0] as { message: { content: string } }
-    ).message.content.includes("T1"),
-    true,
-  );
-  await controller.settled(h.ctx);
-  assert.equal(h.messages.length, 1);
-});
-
-test("extension-triggered continuation runs settle and continue again", async () => {
-  const h = harness();
-  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
-  const controller = new GoalController(h.pi, {
-    now: (() => {
-      let now = 100;
-      return () => ++now;
-    })(),
-    evaluate: async () => ({
-      judge: {
-        met: false,
-        impossible: false,
-        progress: true,
-        waiting: false,
-        reason: "more work remains",
-      },
-      tokens: 1,
-    }),
-  });
-  controller.restore(h.ctx, false);
-
-  // This boundary represents agent_start, which fires for both ordinary and
-  // extension-triggered runs (unlike before_agent_start).
-  controller.beforeAgentStart(h.ctx);
-  await controller.settled(h.ctx);
-  assert.equal(h.messages.length, 1);
-  assert.equal(controller.snapshot()?.iterations, 1);
-
-  controller.beforeAgentStart(h.ctx);
-  await controller.settled(h.ctx);
-  assert.equal(h.messages.length, 2);
-  assert.equal(controller.snapshot()?.iterations, 2);
-});
-
-test("new run invalidates stale evaluator and wakes waiting goal", async () => {
-  const h = harness();
-  let resolveEvaluation!: (value: {
-    judge: {
-      met: boolean;
-      impossible: boolean;
-      progress: boolean;
-      waiting: boolean;
-      reason: string;
-    };
-    tokens: number;
-  }) => void;
-  const controller = new GoalController(h.pi, {
-    now: (() => {
-      let now = 100;
-      return () => ++now;
-    })(),
-    evaluate: () => new Promise((resolve) => (resolveEvaluation = resolve)),
-  });
-  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
-  controller.restore(h.ctx, false);
-  controller.beforeAgentStart(h.ctx);
-  const settling = controller.settled(h.ctx);
-  controller.beforeAgentStart(h.ctx);
-  resolveEvaluation({
-    judge: {
-      met: true,
-      impossible: false,
-      progress: true,
-      waiting: false,
-      reason: "stale",
-    },
-    tokens: 1,
-  });
-  await settling;
-  assert.notEqual(controller.snapshot()?.status, "achieved");
-
-  const waiting = transitionGoal(
-    controller.snapshot()!,
-    "waiting",
-    102,
-    "wait",
-  );
-  controller.replace(waiting);
-  controller.beforeAgentStart(h.ctx);
-  assert.equal(controller.snapshot()?.status, "active");
-});
-
-test("three evaluator failures pause without changing stall count", async () => {
-  const h = harness();
-  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
-  const controller = new GoalController(h.pi, {
-    now: (() => {
-      let now = 100;
-      return () => ++now;
-    })(),
-    evaluate: async () => {
-      throw new Error("judge unavailable");
-    },
-  });
-  controller.restore(h.ctx, false);
-  for (let index = 0; index < 3; index++) {
-    controller.beforeAgentStart(h.ctx);
-    await controller.settled(h.ctx);
-  }
-  assert.equal(controller.snapshot()?.status, "paused");
-  assert.equal(controller.snapshot()?.noProgressCount, 0);
-  assert.equal(controller.snapshot()?.evaluatorFailures, 3);
 });

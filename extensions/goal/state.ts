@@ -1,72 +1,42 @@
 export const GOAL_ENTRY_TYPE = "session-goal";
 export const GOAL_STATUSES = [
   "active",
-  "waiting",
   "paused",
-  "achieved",
-  "impossible",
-  "stalled",
+  "blocked",
+  "usage_limited",
   "budget_limited",
-  "max_iterations",
+  "complete",
   "cleared",
 ] as const;
 
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
 export interface GoalSnapshot {
-  version: 1;
+  version: 2;
   revision: number;
   id: string;
   objective: string;
-  condition: string;
   status: GoalStatus;
+  tokenBudget?: number;
+  tokensUsed: number;
+  timeUsedSeconds: number;
   createdAt: number;
   updatedAt: number;
-  activeMs: number;
-  activeSince?: number;
-  maxTurns: number;
-  noProgressCap: number;
-  wallClockMinutes: number;
-  tokenBudget?: number;
-  iterations: number;
-  parentTokens: number;
-  evaluatorTokens: number;
-  noProgressCount: number;
-  evaluatorFailures: number;
-  waitCount: number;
-  ledgerReminderUsed: boolean;
   reason?: string;
+  deferContinuation?: boolean;
+  continuationCount?: number;
 }
 
 export interface GoalInput {
   objective: string;
-  condition: string;
-  maxTurns?: number;
-  noProgressCap?: number;
-  wallClockMinutes?: number;
   tokenBudget?: number;
 }
 
-export interface GoalJudge {
-  met: boolean;
-  impossible: boolean;
-  progress: boolean;
-  waiting: boolean;
-  reason: string;
-}
-
-export const GOAL_DEFAULTS = Object.freeze({
-  maxTurns: 40,
-  noProgressCap: 8,
-  wallClockMinutes: 120,
-});
-
 export const GOAL_LIMITS = Object.freeze({
-  textChars: 500,
+  objectiveChars: 4_000,
   reasonChars: 500,
-  maxTurns: 200,
-  noProgressCap: 50,
-  snapshotBytes: 16_384,
+  snapshotBytes: 32_768,
+  emergencyContinuations: 1_000,
 });
 
 const SNAPSHOT_KEYS = new Set([
@@ -74,31 +44,22 @@ const SNAPSHOT_KEYS = new Set([
   "revision",
   "id",
   "objective",
-  "condition",
   "status",
+  "tokenBudget",
+  "tokensUsed",
+  "timeUsedSeconds",
   "createdAt",
   "updatedAt",
-  "activeMs",
-  "activeSince",
-  "maxTurns",
-  "noProgressCap",
-  "wallClockMinutes",
-  "tokenBudget",
-  "iterations",
-  "parentTokens",
-  "evaluatorTokens",
-  "noProgressCount",
-  "evaluatorFailures",
-  "waitCount",
-  "ledgerReminderUsed",
   "reason",
+  "deferContinuation",
+  "continuationCount",
 ]);
-const ACTIVE_STATUSES = new Set<GoalStatus>(["active", "waiting"]);
-const UNFINISHED_STATUSES = new Set<GoalStatus>([
-  "active",
-  "waiting",
+const RESUMABLE_STATUSES = new Set<GoalStatus>([
   "paused",
+  "blocked",
+  "usage_limited",
 ]);
+const TERMINAL_STATUSES = new Set<GoalStatus>(["complete", "cleared"]);
 
 export class GoalValidationError extends Error {
   constructor(message: string) {
@@ -114,12 +75,34 @@ export class GoalRestoreError extends Error {
   }
 }
 
-export function isGoalUnfinished(goal: GoalSnapshot) {
-  return UNFINISHED_STATUSES.has(goal.status);
+export function isGoalVisible(
+  goal: GoalSnapshot | undefined,
+): goal is GoalSnapshot {
+  return goal !== undefined && goal.status !== "cleared";
 }
 
-export function isGoalRunning(goal: GoalSnapshot) {
-  return ACTIVE_STATUSES.has(goal.status);
+export function isGoalUnfinished(goal: GoalSnapshot) {
+  return !TERMINAL_STATUSES.has(goal.status);
+}
+
+export function isGoalActive(goal: GoalSnapshot) {
+  return goal.status === "active";
+}
+
+export function canResumeGoal(goal: GoalSnapshot) {
+  return RESUMABLE_STATUSES.has(goal.status);
+}
+
+export function normalizeGoalObjective(value: unknown) {
+  if (typeof value !== "string") fail("goal objective must be a string");
+  const objective = value.trim();
+  if (!objective) fail("goal objective must not be empty");
+  if (Array.from(objective).length > GOAL_LIMITS.objectiveChars) {
+    fail(
+      `goal objective must be at most ${GOAL_LIMITS.objectiveChars} characters`,
+    );
+  }
+  return objective;
 }
 
 export function createGoalSnapshot(
@@ -129,198 +112,112 @@ export function createGoalSnapshot(
   id: string,
 ) {
   if (!isRecord(input)) fail("goal input must be an object");
-  assertExactKeys(
-    input,
-    new Set([
-      "objective",
-      "condition",
-      "maxTurns",
-      "noProgressCap",
-      "wallClockMinutes",
-      "tokenBudget",
-    ]),
-    "goal input",
-  );
-  const { objective, condition } = normalizeGoalContract(
-    input.objective,
-    input.condition,
-  );
+  assertExactKeys(input, new Set(["objective", "tokenBudget"]), "goal input");
   assertNonNegativeInteger(revision, "revision");
   assertTimestamp(now, "now");
-  if (typeof id !== "string" || !/^[A-Za-z0-9_-]{8,100}$/.test(id)) {
-    fail("id must contain 8..100 URL-safe characters");
-  }
-  const maxTurns = input.maxTurns ?? GOAL_DEFAULTS.maxTurns;
-  const noProgressCap = input.noProgressCap ?? GOAL_DEFAULTS.noProgressCap;
-  const wallClockMinutes =
-    input.wallClockMinutes ?? GOAL_DEFAULTS.wallClockMinutes;
-  assertBoundedPositiveInteger(maxTurns, "maxTurns", GOAL_LIMITS.maxTurns);
-  assertBoundedPositiveInteger(
-    noProgressCap,
-    "noProgressCap",
-    GOAL_LIMITS.noProgressCap,
-  );
-  assertPositiveInteger(wallClockMinutes, "wallClockMinutes");
+  assertId(id);
   if (input.tokenBudget !== undefined) {
     assertPositiveInteger(input.tokenBudget, "tokenBudget");
-    if (input.tokenBudget < 1_000) fail("tokenBudget must be at least 1000");
   }
 
   return validateGoalSnapshot({
-    version: 1,
+    version: 2,
     revision: increment(revision, "revision"),
     id,
-    objective,
-    condition,
+    objective: normalizeGoalObjective(input.objective),
     status: "active",
-    createdAt: now,
-    updatedAt: now,
-    activeMs: 0,
-    activeSince: now,
-    maxTurns,
-    noProgressCap,
-    wallClockMinutes,
     ...(input.tokenBudget === undefined
       ? {}
       : { tokenBudget: input.tokenBudget }),
-    iterations: 0,
-    parentTokens: 0,
-    evaluatorTokens: 0,
-    noProgressCount: 0,
-    evaluatorFailures: 0,
-    waitCount: 0,
-    ledgerReminderUsed: false,
+    tokensUsed: 0,
+    timeUsedSeconds: 0,
+    createdAt: now,
+    updatedAt: now,
   });
-}
-
-export function normalizeGoalContract(objective: unknown, condition: unknown) {
-  const normalizedObjective = normalizeText(objective, "objective", true);
-  const normalizedCondition = normalizeText(condition, "condition", true);
-  if (
-    normalizedObjective.localeCompare(normalizedCondition, "en", {
-      sensitivity: "base",
-    }) === 0
-  ) {
-    fail("success condition must be distinct from the objective");
-  }
-  return {
-    objective: normalizedObjective,
-    condition: normalizedCondition,
-  };
 }
 
 export function validateGoalSnapshot(value: unknown): GoalSnapshot {
   if (!isRecord(value)) fail("snapshot must be an object");
   assertExactKeys(value, SNAPSHOT_KEYS, "snapshot");
-  if (value.version !== 1)
+  if (value.version !== 2) {
     fail(`unsupported snapshot version: ${String(value.version)}`);
-  assertNonNegativeInteger(value.revision, "snapshot.revision");
-  if (
-    typeof value.id !== "string" ||
-    !/^[A-Za-z0-9_-]{8,100}$/.test(value.id)
-  ) {
-    fail("snapshot.id is invalid");
   }
-  const objective = normalizeText(value.objective, "snapshot.objective", true);
-  const condition = normalizeText(value.condition, "snapshot.condition", true);
+  assertNonNegativeInteger(value.revision, "snapshot.revision");
+  assertId(value.id);
+  const objective = normalizeGoalObjective(value.objective);
   if (!GOAL_STATUSES.includes(value.status as GoalStatus)) {
     fail("snapshot.status is invalid");
   }
   const status = value.status as GoalStatus;
-  assertTimestamp(value.createdAt, "snapshot.createdAt");
-  assertTimestamp(value.updatedAt, "snapshot.updatedAt");
-  const createdAt = value.createdAt as number;
-  const updatedAt = value.updatedAt as number;
-  if (updatedAt < createdAt) fail("snapshot.updatedAt precedes createdAt");
-  assertNonNegativeInteger(value.activeMs, "snapshot.activeMs");
-  if (ACTIVE_STATUSES.has(status)) {
-    assertTimestamp(value.activeSince, "snapshot.activeSince");
-    if ((value.activeSince as number) < createdAt)
-      fail("snapshot.activeSince precedes createdAt");
-  } else if (hasOwn(value, "activeSince")) {
-    fail("snapshot.activeSince is only valid while active or waiting");
-  }
-  assertBoundedPositiveInteger(
-    value.maxTurns,
-    "snapshot.maxTurns",
-    GOAL_LIMITS.maxTurns,
-  );
-  assertBoundedPositiveInteger(
-    value.noProgressCap,
-    "snapshot.noProgressCap",
-    GOAL_LIMITS.noProgressCap,
-  );
-  assertPositiveInteger(value.wallClockMinutes, "snapshot.wallClockMinutes");
   if (hasOwn(value, "tokenBudget")) {
     assertPositiveInteger(value.tokenBudget, "snapshot.tokenBudget");
-    if ((value.tokenBudget as number) < 1_000)
-      fail("snapshot.tokenBudget must be at least 1000");
   }
-  for (const key of [
-    "iterations",
-    "parentTokens",
-    "evaluatorTokens",
-    "noProgressCount",
-    "evaluatorFailures",
-    "waitCount",
-  ] as const) {
-    assertNonNegativeInteger(value[key], `snapshot.${key}`);
+  assertNonNegativeInteger(value.tokensUsed, "snapshot.tokensUsed");
+  assertNonNegativeInteger(value.timeUsedSeconds, "snapshot.timeUsedSeconds");
+  assertTimestamp(value.createdAt, "snapshot.createdAt");
+  assertTimestamp(value.updatedAt, "snapshot.updatedAt");
+  if ((value.updatedAt as number) < (value.createdAt as number)) {
+    fail("snapshot.updatedAt precedes createdAt");
   }
-  // A malformed historical snapshot must not claim more turns than its cap.
-  if ((value.iterations as number) > (value.maxTurns as number))
-    fail("snapshot.iterations exceeds maxTurns");
-  if (typeof value.ledgerReminderUsed !== "boolean")
-    fail("snapshot.ledgerReminderUsed must be boolean");
   const reason = hasOwn(value, "reason")
-    ? normalizeText(value.reason, "snapshot.reason", true)
+    ? normalizeReason(value.reason)
     : undefined;
+  if (
+    hasOwn(value, "deferContinuation") &&
+    typeof value.deferContinuation !== "boolean"
+  ) {
+    fail("snapshot.deferContinuation must be boolean");
+  }
+  if (hasOwn(value, "continuationCount")) {
+    assertNonNegativeInteger(
+      value.continuationCount,
+      "snapshot.continuationCount",
+    );
+  }
 
   const snapshot: GoalSnapshot = {
-    version: 1,
+    version: 2,
     revision: value.revision as number,
     id: value.id,
     objective,
-    condition,
     status,
-    createdAt,
-    updatedAt,
-    activeMs: value.activeMs as number,
-    ...(ACTIVE_STATUSES.has(status)
-      ? { activeSince: value.activeSince as number }
-      : {}),
-    maxTurns: value.maxTurns as number,
-    noProgressCap: value.noProgressCap as number,
-    wallClockMinutes: value.wallClockMinutes as number,
     ...(hasOwn(value, "tokenBudget")
       ? { tokenBudget: value.tokenBudget as number }
       : {}),
-    iterations: value.iterations as number,
-    parentTokens: value.parentTokens as number,
-    evaluatorTokens: value.evaluatorTokens as number,
-    noProgressCount: value.noProgressCount as number,
-    evaluatorFailures: value.evaluatorFailures as number,
-    waitCount: value.waitCount as number,
-    ledgerReminderUsed: value.ledgerReminderUsed,
+    tokensUsed: value.tokensUsed as number,
+    timeUsedSeconds: value.timeUsedSeconds as number,
+    createdAt: value.createdAt as number,
+    updatedAt: value.updatedAt as number,
     ...(reason === undefined ? {} : { reason }),
+    ...(value.deferContinuation === true ? { deferContinuation: true } : {}),
+    ...(hasOwn(value, "continuationCount")
+      ? { continuationCount: value.continuationCount as number }
+      : {}),
   };
   assertSnapshotBytes(snapshot);
   return snapshot;
 }
 
-export function restoreGoalSnapshot(
+export interface RestoredGoalState {
+  snapshot?: GoalSnapshot;
+  migrated: boolean;
+}
+
+export function restoreGoalState(
   entries: readonly unknown[],
-): GoalSnapshot | undefined {
+): RestoredGoalState {
   const candidates = entries.flatMap((entry, position) => {
     const payload = extractGoalPayload(entry);
     return payload.found ? [{ payload: payload.value, position }] : [];
   });
-  if (candidates.length === 0) return undefined;
+  if (candidates.length === 0) return { migrated: false };
 
   let winner:
     | {
         position: number;
         revision: number;
         snapshot?: GoalSnapshot;
+        migrated: boolean;
         error?: Error;
       }
     | undefined;
@@ -329,9 +226,15 @@ export function restoreGoalSnapshot(
   for (const candidate of candidates) {
     const revision = declaredRevision(candidate.payload);
     let snapshot: GoalSnapshot | undefined;
+    let migrated = false;
     let error: Error | undefined;
     try {
-      snapshot = validateGoalSnapshot(candidate.payload);
+      if (isRecord(candidate.payload) && candidate.payload.version === 1) {
+        snapshot = migrateV1Snapshot(candidate.payload);
+        migrated = true;
+      } else {
+        snapshot = validateGoalSnapshot(candidate.payload);
+      }
     } catch (caught) {
       error = caught instanceof Error ? caught : new Error(String(caught));
       malformedPositions.push(candidate.position);
@@ -342,12 +245,19 @@ export function restoreGoalSnapshot(
       revision > winner.revision ||
       (revision === winner.revision && candidate.position > winner.position)
     ) {
-      winner = { position: candidate.position, revision, snapshot, error };
+      winner = {
+        position: candidate.position,
+        revision,
+        snapshot,
+        migrated,
+        error,
+      };
     }
   }
 
-  if (!winner)
+  if (!winner) {
     throw new GoalRestoreError("goal history contains no ranked snapshot");
+  }
   if (malformedPositions.some((position) => position > winner.position)) {
     throw new GoalRestoreError(
       "a later malformed goal entry locks restoration",
@@ -358,7 +268,12 @@ export function restoreGoalSnapshot(
       `winning goal revision ${winner.revision} is malformed: ${winner.error?.message ?? "invalid snapshot"}`,
     );
   }
-  return winner.snapshot;
+  return { snapshot: winner.snapshot, migrated: winner.migrated };
+}
+
+export function restoreGoalSnapshot(entries: readonly unknown[]) {
+  const { snapshot } = restoreGoalState(entries);
+  return isGoalVisible(snapshot) ? snapshot : undefined;
 }
 
 export function transitionGoal(
@@ -368,174 +283,208 @@ export function transitionGoal(
   reason?: string,
 ) {
   const base = validateGoalSnapshot(current);
-  assertTimestamp(now, "now");
-  if (now < base.updatedAt) fail("now precedes snapshot.updatedAt");
-  const wasRunning = ACTIVE_STATUSES.has(base.status);
-  const willRun = ACTIVE_STATUSES.has(status);
-  const activeMs =
-    wasRunning && !willRun
-      ? safeAdd(base.activeMs, now - (base.activeSince as number), "activeMs")
-      : base.activeMs;
-  const { activeSince: _activeSince, reason: _reason, ...stable } = base;
+  assertTimestampAfter(now, base.updatedAt);
+  const { reason: _reason, deferContinuation: _defer, ...stable } = base;
   return validateGoalSnapshot({
     ...stable,
     revision: increment(base.revision, "revision"),
     status,
     updatedAt: now,
-    activeMs,
-    ...(willRun ? { activeSince: wasRunning ? base.activeSince : now } : {}),
-    ...(reason === undefined
-      ? {}
-      : { reason: normalizeText(reason, "reason", true) }),
+    ...(reason === undefined ? {} : { reason: normalizeReason(reason) }),
   });
 }
 
-export function recordGoalSettlement(
+export function editGoalObjective(
   current: GoalSnapshot,
-  parentTokens: number,
+  objective: unknown,
   now: number,
 ) {
   const base = validateGoalSnapshot(current);
-  if (!isGoalRunning(base)) fail("only a running goal can settle");
-  assertNonNegativeInteger(parentTokens, "parentTokens");
+  assertTimestampAfter(now, base.updatedAt);
+  let status: GoalStatus =
+    base.status === "complete" || base.status === "budget_limited"
+      ? "active"
+      : base.status;
+  if (
+    status === "active" &&
+    base.tokenBudget !== undefined &&
+    base.tokensUsed >= base.tokenBudget
+  ) {
+    status = "budget_limited";
+  }
+  const { reason: _reason, deferContinuation: _defer, ...stable } = base;
+  return validateGoalSnapshot({
+    ...stable,
+    revision: increment(base.revision, "revision"),
+    objective: normalizeGoalObjective(objective),
+    status,
+    updatedAt: now,
+  });
+}
+
+export function recordGoalProgress(
+  current: GoalSnapshot,
+  tokens: number,
+  elapsedSeconds: number,
+  now: number,
+) {
+  const base = validateGoalSnapshot(current);
+  if (base.status === "cleared") fail("a cleared goal cannot record progress");
+  assertNonNegativeInteger(tokens, "tokens");
+  assertNonNegativeInteger(elapsedSeconds, "elapsedSeconds");
+  assertTimestampAfter(now, base.updatedAt);
   return validateGoalSnapshot({
     ...base,
     revision: increment(base.revision, "revision"),
+    tokensUsed: safeAdd(base.tokensUsed, tokens, "tokensUsed"),
+    timeUsedSeconds: safeAdd(
+      base.timeUsedSeconds,
+      elapsedSeconds,
+      "timeUsedSeconds",
+    ),
     updatedAt: now,
-    iterations: increment(base.iterations, "iterations"),
-    parentTokens: safeAdd(base.parentTokens, parentTokens, "parentTokens"),
   });
 }
 
-export function applyGoalJudge(
+export function markContinuationDispatched(current: GoalSnapshot, now: number) {
+  const base = validateGoalSnapshot(current);
+  if (base.status !== "active") {
+    fail("only an active goal can dispatch a continuation");
+  }
+  assertTimestampAfter(now, base.updatedAt);
+  return validateGoalSnapshot({
+    ...base,
+    revision: increment(base.revision, "revision"),
+    continuationCount: increment(
+      base.continuationCount ?? 0,
+      "continuationCount",
+    ),
+    updatedAt: now,
+  });
+}
+
+export function setContinuationDeferred(
   current: GoalSnapshot,
-  judge: GoalJudge,
-  evaluatorTokens: number,
+  deferred: boolean,
   now: number,
 ) {
   const base = validateGoalSnapshot(current);
-  assertNonNegativeInteger(evaluatorTokens, "evaluatorTokens");
-  if (judge.met) {
-    return withEvaluatorTokens(
-      transitionGoal(base, "achieved", now, judge.reason),
-      evaluatorTokens,
-      0,
-    );
+  if (Boolean(base.deferContinuation) === deferred) return base;
+  assertTimestampAfter(now, base.updatedAt);
+  const { deferContinuation: _defer, ...stable } = base;
+  return validateGoalSnapshot({
+    ...stable,
+    revision: increment(base.revision, "revision"),
+    updatedAt: now,
+    ...(deferred ? { deferContinuation: true } : {}),
+  });
+}
+
+export function budgetLimitTransition(goal: GoalSnapshot, now: number) {
+  const checked = validateGoalSnapshot(goal);
+  if (
+    checked.status !== "active" ||
+    checked.tokenBudget === undefined ||
+    checked.tokensUsed < checked.tokenBudget
+  ) {
+    return undefined;
   }
-  if (judge.impossible) {
-    return withEvaluatorTokens(
-      transitionGoal(base, "impossible", now, judge.reason),
-      evaluatorTokens,
-      0,
-    );
-  }
-  if (judge.waiting) {
-    const waiting = transitionGoal(base, "waiting", now, judge.reason);
-    return withEvaluatorTokens(
-      validateGoalSnapshot({
-        ...waiting,
-        waitCount: increment(base.waitCount, "waitCount"),
-      }),
-      evaluatorTokens,
-      0,
-    );
-  }
-  const noProgressCount = judge.progress
-    ? 0
-    : increment(base.noProgressCount, "noProgressCount");
-  const status = noProgressCount >= base.noProgressCap ? "stalled" : "active";
-  const judged = transitionGoal(base, status, now, judge.reason);
-  return withEvaluatorTokens(
-    validateGoalSnapshot({
-      ...judged,
-      noProgressCount,
-      waitCount: judge.progress ? 0 : base.waitCount,
-    }),
-    evaluatorTokens,
-    0,
+  return transitionGoal(
+    checked,
+    "budget_limited",
+    now,
+    `Reached the ${checked.tokenBudget}-token goal budget.`,
   );
 }
 
-export function recordEvaluatorFailure(current: GoalSnapshot, now: number) {
-  const base = validateGoalSnapshot(current);
-  const failures = increment(base.evaluatorFailures, "evaluatorFailures");
-  const next =
-    failures >= 3
-      ? transitionGoal(
-          base,
-          "paused",
-          now,
-          "Paused after 3 consecutive evaluator failures.",
-        )
-      : transitionGoal(base, base.status, now, base.reason);
-  return validateGoalSnapshot({ ...next, evaluatorFailures: failures });
-}
-
-export function markLedgerReminderUsed(current: GoalSnapshot, now: number) {
-  const base = validateGoalSnapshot(current);
-  if (base.ledgerReminderUsed) return base;
-  return validateGoalSnapshot({
-    ...base,
-    revision: increment(base.revision, "revision"),
-    updatedAt: now,
-    ledgerReminderUsed: true,
-  });
-}
-
-export function activeDurationMs(goal: GoalSnapshot, now: number) {
+export function emergencyLimitTransition(goal: GoalSnapshot, now: number) {
   const checked = validateGoalSnapshot(goal);
-  const live = isGoalRunning(checked)
-    ? Math.max(0, now - (checked.activeSince as number))
-    : 0;
-  return checked.activeMs + live;
-}
-
-export function hardLimitTransition(goal: GoalSnapshot, now: number) {
-  const checked = validateGoalSnapshot(goal);
-  if (checked.iterations >= checked.maxTurns) {
-    return transitionGoal(
-      checked,
-      "max_iterations",
-      now,
-      `Reached the ${checked.maxTurns}-turn limit.`,
-    );
-  }
   if (
-    checked.tokenBudget !== undefined &&
-    checked.parentTokens >= checked.tokenBudget
+    checked.status !== "active" ||
+    (checked.continuationCount ?? 0) < GOAL_LIMITS.emergencyContinuations
   ) {
-    return transitionGoal(
-      checked,
-      "budget_limited",
-      now,
-      `Reached the ${checked.tokenBudget}-token parent-run budget.`,
-    );
+    return undefined;
   }
-  if (activeDurationMs(checked, now) >= checked.wallClockMinutes * 60_000) {
-    return transitionGoal(
-      checked,
-      "budget_limited",
-      now,
-      `Reached the ${checked.wallClockMinutes}-minute active wall-clock limit.`,
-    );
-  }
-  return undefined;
+  return transitionGoal(
+    checked,
+    "blocked",
+    now,
+    "Stopped after the internal continuation safety limit.",
+  );
 }
 
-function withEvaluatorTokens(
-  snapshot: GoalSnapshot,
-  tokens: number,
-  evaluatorFailures: number,
-) {
+function migrateV1Snapshot(value: Record<string, unknown>) {
+  assertNonNegativeInteger(value.revision, "legacy.revision");
+  assertId(value.id);
+  const objective = normalizeGoalObjective(value.objective);
+  const condition =
+    typeof value.condition === "string" ? value.condition.trim() : "";
+  const combined =
+    condition &&
+    condition.localeCompare(objective, "en", { sensitivity: "base" })
+      ? `${objective}\n\nSuccess criteria: ${condition}`
+      : objective;
+  const migratedObjective =
+    Array.from(combined).length <= GOAL_LIMITS.objectiveChars
+      ? combined
+      : objective;
+  assertTimestamp(value.createdAt, "legacy.createdAt");
+  assertTimestamp(value.updatedAt, "legacy.updatedAt");
+  if ((value.updatedAt as number) < (value.createdAt as number)) {
+    fail("legacy.updatedAt precedes createdAt");
+  }
+  assertNonNegativeInteger(value.activeMs, "legacy.activeMs");
+  const tokensUsed = nonNegativeIntegerOrZero(value.parentTokens);
+  const continuationCount = nonNegativeIntegerOrZero(value.iterations);
+  const status = migrateV1Status(value.status);
+  if (value.tokenBudget !== undefined) {
+    assertPositiveInteger(value.tokenBudget, "legacy.tokenBudget");
+  }
+  const reason =
+    typeof value.reason === "string" && value.reason.trim()
+      ? normalizeReason(value.reason)
+      : status === "paused" &&
+          ["active", "waiting"].includes(String(value.status))
+        ? "Paused once while migrating the legacy goal; run /goal resume to continue."
+        : undefined;
+
   return validateGoalSnapshot({
-    ...snapshot,
-    evaluatorTokens: safeAdd(
-      snapshot.evaluatorTokens,
-      tokens,
-      "evaluatorTokens",
-    ),
-    evaluatorFailures,
+    version: 2,
+    revision: increment(value.revision as number, "revision"),
+    id: value.id,
+    objective: migratedObjective,
+    status,
+    ...(value.tokenBudget === undefined
+      ? {}
+      : { tokenBudget: value.tokenBudget }),
+    tokensUsed,
+    timeUsedSeconds: Math.floor((value.activeMs as number) / 1_000),
+    createdAt: value.createdAt,
+    updatedAt: value.updatedAt,
+    ...(reason === undefined ? {} : { reason }),
+    ...(continuationCount > 0 ? { continuationCount } : {}),
   });
+}
+
+function migrateV1Status(value: unknown): GoalStatus {
+  switch (value) {
+    case "active":
+    case "waiting":
+    case "paused":
+      return "paused";
+    case "achieved":
+      return "complete";
+    case "impossible":
+    case "stalled":
+      return "blocked";
+    case "budget_limited":
+    case "max_iterations":
+      return "budget_limited";
+    case "cleared":
+      return "cleared";
+    default:
+      fail("legacy.status is invalid");
+  }
 }
 
 function extractGoalPayload(entry: unknown): {
@@ -559,16 +508,14 @@ function declaredRevision(value: unknown) {
     : undefined;
 }
 
-function normalizeText(value: unknown, path: string, nonBlank: boolean) {
-  if (typeof value !== "string") fail(`${path} must be a string`);
-  const normalized = value.replace(/\s+/gu, " ").trim();
-  if (/\p{Cc}/u.test(normalized))
-    fail(`${path} must not contain control characters`);
-  const length = Array.from(normalized).length;
-  if (nonBlank && length === 0) fail(`${path} must not be blank`);
-  if (length > GOAL_LIMITS.textChars)
-    fail(`${path} exceeds ${GOAL_LIMITS.textChars} characters`);
-  return normalized;
+function normalizeReason(value: unknown) {
+  if (typeof value !== "string") fail("reason must be a string");
+  const reason = value.replace(/\s+/gu, " ").trim();
+  if (!reason) fail("reason must not be blank");
+  if (Array.from(reason).length > GOAL_LIMITS.reasonChars) {
+    fail(`reason exceeds ${GOAL_LIMITS.reasonChars} characters`);
+  }
+  return reason;
 }
 
 function assertSnapshotBytes(snapshot: GoalSnapshot) {
@@ -590,27 +537,37 @@ function assertExactKeys(
   }
 }
 
+function assertId(value: unknown): asserts value is string {
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{8,100}$/.test(value)) {
+    fail("id must contain 8..100 URL-safe characters");
+  }
+}
+
 function assertTimestamp(value: unknown, path: string) {
   assertNonNegativeInteger(value, path);
 }
 
-function assertPositiveInteger(value: unknown, path: string) {
-  if (!Number.isSafeInteger(value) || (value as number) < 1)
-    fail(`${path} must be a positive safe integer`);
+function assertTimestampAfter(value: unknown, previous: number) {
+  assertTimestamp(value, "now");
+  if ((value as number) < previous) fail("now precedes snapshot.updatedAt");
 }
 
-function assertBoundedPositiveInteger(
-  value: unknown,
-  path: string,
-  maximum: number,
-) {
-  assertPositiveInteger(value, path);
-  if ((value as number) > maximum) fail(`${path} exceeds ${maximum}`);
+function assertPositiveInteger(value: unknown, path: string) {
+  if (!Number.isSafeInteger(value) || (value as number) < 1) {
+    fail(`${path} must be a positive safe integer`);
+  }
 }
 
 function assertNonNegativeInteger(value: unknown, path: string) {
-  if (!Number.isSafeInteger(value) || (value as number) < 0)
+  if (!Number.isSafeInteger(value) || (value as number) < 0) {
     fail(`${path} must be a non-negative safe integer`);
+  }
+}
+
+function nonNegativeIntegerOrZero(value: unknown) {
+  return Number.isSafeInteger(value) && (value as number) >= 0
+    ? (value as number)
+    : 0;
 }
 
 function increment(value: number, path: string) {
@@ -619,14 +576,16 @@ function increment(value: number, path: string) {
 
 function safeAdd(left: number, right: number, path: string) {
   const result = left + right;
-  if (!Number.isSafeInteger(result) || result < 0)
+  if (!Number.isSafeInteger(result) || result < 0) {
     fail(`${path} exhausted safe integers`);
+  }
   return result;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== "object" || value === null || Array.isArray(value))
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
     return false;
+  }
   const prototype = Object.getPrototypeOf(value);
   return prototype === Object.prototype || prototype === null;
 }

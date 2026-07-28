@@ -2,157 +2,121 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { projectLedger, restoreLedgerSnapshot } from "../ledger/ledger.ts";
-import { evaluateGoal, type EvaluationResult } from "./evaluator.ts";
+import {
+  budgetLimitPrompt,
+  continuationPrompt,
+  objectiveUpdatedPrompt,
+} from "./prompts.ts";
 import {
   GOAL_ENTRY_TYPE,
   GoalRestoreError,
-  applyGoalJudge,
-  hardLimitTransition,
-  isGoalRunning,
-  markLedgerReminderUsed,
-  recordEvaluatorFailure,
-  recordGoalSettlement,
-  restoreGoalSnapshot,
+  budgetLimitTransition,
+  canResumeGoal,
+  editGoalObjective,
+  emergencyLimitTransition,
+  isGoalActive,
+  isGoalVisible,
+  markContinuationDispatched,
+  recordGoalProgress,
+  restoreGoalState,
+  setContinuationDeferred,
   transitionGoal,
   validateGoalSnapshot,
   type GoalSnapshot,
 } from "./state.ts";
 
 export const GOAL_CONTINUATION_TYPE = "goal-continuation";
-export const WAIT_MIN_MS = 5_000;
-export const WAIT_MAX_MS = 300_000;
 
-export interface GoalFence {
-  epoch: number;
-  id: string;
-  revision: number;
-}
+type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
 export interface GoalControllerOptions {
   now?: () => number;
-  evaluate?: (options: {
-    ctx: ExtensionContext;
-    goal: GoalSnapshot;
-    signal: AbortSignal;
-  }) => Promise<EvaluationResult>;
-  schedule?: (
-    callback: () => void,
-    delay: number,
-  ) => ReturnType<typeof setTimeout>;
   createId?: () => string;
 }
 
-export function waitingBackoffMs(waitCount: number) {
-  const exponent = Math.max(0, Math.min(16, waitCount - 1));
-  return Math.min(WAIT_MAX_MS, WAIT_MIN_MS * 2 ** exponent);
-}
-
-export function fenceMatches(
-  fence: GoalFence,
-  epoch: number,
-  goal: GoalSnapshot | undefined,
-) {
-  return (
-    goal !== undefined &&
-    fence.epoch === epoch &&
-    fence.id === goal.id &&
-    fence.revision === goal.revision
-  );
-}
-
-export function countAssistantTokens(
-  entries: readonly unknown[],
-  baselineLength: number,
-) {
-  if (
-    !Number.isSafeInteger(baselineLength) ||
-    baselineLength < 0 ||
-    baselineLength > entries.length
-  ) {
-    return 0;
-  }
+export function countAssistantTokens(messages: readonly unknown[]) {
   let total = 0;
-  for (const entry of entries.slice(baselineLength)) {
-    if (!isRecord(entry) || entry.type !== "message") continue;
-    const message = entry.message;
-    if (!isRecord(message) || message.role !== "assistant") continue;
-    const usage = message.usage;
-    if (!isRecord(usage)) continue;
-    const tokens = usage.totalTokens;
-    if (Number.isSafeInteger(tokens) && (tokens as number) >= 0) {
-      total += tokens as number;
-      if (!Number.isSafeInteger(total)) return 0;
-    }
+  for (const item of messages) {
+    const message = unwrapMessage(item);
+    if (!message || message.role !== "assistant") continue;
+    const tokens = assistantGoalTokens(message);
+    total += tokens;
+    if (!Number.isSafeInteger(total)) return 0;
   }
   return total;
 }
 
-export function ledgerReminder(
-  sessionManager: ExtensionContext["sessionManager"],
-) {
-  try {
-    const projection = projectLedger(
-      restoreLedgerSnapshot(sessionManager.getBranch()),
-    );
-    if (!projection) return "";
-    return Array.from(projection).slice(0, 800).join("");
-  } catch {
-    return "";
-  }
+export function lastAssistantStopReason(messages: readonly unknown[]) {
+  return lastAssistantMessage(messages)?.stopReason as
+    AssistantStopReason | undefined;
+}
+
+export function isUsageLimitError(messages: readonly unknown[]) {
+  const message = lastAssistantMessage(messages);
+  if (!message || message.stopReason !== "error") return false;
+  const diagnosticText = Array.isArray(message.diagnostics)
+    ? message.diagnostics
+        .flatMap((diagnostic) =>
+          isRecord(diagnostic) && isRecord(diagnostic.error)
+            ? [diagnostic.error.message, diagnostic.error.code]
+            : [],
+        )
+        .join(" ")
+    : "";
+  const text = `${String(message.errorMessage ?? "")} ${diagnosticText}`;
+  return /usage(?:_|\s+)limit|insufficient_quota|quota (?:has been )?exceeded|billing limit/iu.test(
+    text,
+  );
 }
 
 export class GoalController {
   private readonly pi: ExtensionAPI;
   private goal: GoalSnapshot | undefined;
   private lockedReason: string | undefined;
-  private epoch = 0;
-  private evaluator: AbortController | undefined;
-  private timer: ReturnType<typeof setTimeout> | undefined;
-  private continuationPending = false;
-  private baselineLength = 0;
   private automationEnabled = false;
-  private evaluating = false;
+  private continuationPending = false;
+  private trackedGoalId: string | undefined;
+  private trackedStartedAt: number | undefined;
+  private trackedTokens = 0;
+  private currentRunObservedTokens = 0;
+  private currentRunFlushedTokens = 0;
+  private trackedFromRunStart = false;
+  private accountingGoalId: string | undefined;
+  private elapsedRemainderMs = 0;
+  private lastStopReason: AssistantStopReason | undefined;
+  private lastErrorWasUsageLimit = false;
+  private suppressAbortedStop = false;
   private readonly now: () => number;
-  private readonly evaluate: NonNullable<GoalControllerOptions["evaluate"]>;
-  private readonly schedule: NonNullable<GoalControllerOptions["schedule"]>;
   readonly createId: () => string;
 
   constructor(pi: ExtensionAPI, options: GoalControllerOptions = {}) {
     this.pi = pi;
     this.now = options.now ?? Date.now;
-    this.evaluate = options.evaluate ?? evaluateGoal;
-    this.schedule = options.schedule ?? setTimeout;
     this.createId = options.createId ?? (() => crypto.randomUUID());
   }
 
   snapshot() {
-    return this.goal ? structuredClone(this.goal) : undefined;
+    return isGoalVisible(this.goal) ? structuredClone(this.goal) : undefined;
+  }
+
+  revision() {
+    return this.goal?.revision ?? 0;
   }
 
   problem() {
     return this.lockedReason;
   }
 
-  isEvaluating() {
-    return this.evaluating;
-  }
-
-  restore(ctx: ExtensionContext, demoteRunning: boolean) {
-    this.invalidate();
+  restore(ctx: ExtensionContext, deferActive = false) {
+    this.resetRuntime();
     this.automationEnabled = ctx.mode !== "print" && ctx.mode !== "json";
     try {
-      this.goal = restoreGoalSnapshot(ctx.sessionManager.getBranch());
+      const restored = restoreGoalState(ctx.sessionManager.getBranch());
+      this.goal = restored.snapshot;
       this.lockedReason = undefined;
-      if (demoteRunning && this.goal && isGoalRunning(this.goal)) {
-        this.persist(
-          transitionGoal(
-            this.goal,
-            "paused",
-            this.now(),
-            "Paused after session restore or branch navigation; run /goal resume to continue.",
-          ),
-        );
+      if (restored.migrated && this.goal) this.persist(this.goal);
+      if (deferActive && this.goal?.status === "active") {
+        this.persist(setContinuationDeferred(this.goal, true, this.now()));
       }
     } catch (error) {
       this.goal = undefined;
@@ -165,181 +129,308 @@ export class GoalController {
 
   replace(candidate: GoalSnapshot) {
     this.assertUnlocked();
-    this.invalidate();
+    this.continuationPending = false;
+    if (this.goal?.id !== candidate.id) this.resetAccountingClock();
     this.persist(candidate);
+    return this.snapshot();
+  }
+
+  edit(objective: string, ctx: ExtensionContext) {
+    this.assertUnlocked();
+    const current = this.requireVisibleGoal();
+    this.flushTrackedProgress();
+    this.persist(
+      editGoalObjective(this.goal ?? current, objective, this.now()),
+    );
+    if (this.goal?.status === "active") {
+      this.continuationPending = false;
+      if (!ctx.isIdle()) this.beginTracking(this.goal);
+      this.dispatchPrompt(
+        ctx,
+        ctx.isIdle() ? "continuation" : "objective_updated",
+        true,
+      );
+    }
+    return this.snapshot();
   }
 
   pause(reason = "Paused by user.") {
     this.assertUnlocked();
-    if (!this.goal) throw new Error("No session goal is set.");
-    if (!isGoalRunning(this.goal)) return this.snapshot();
-    this.invalidate();
-    this.persist(transitionGoal(this.goal, "paused", this.now(), reason));
+    const current = this.requireVisibleGoal();
+    if (current.status === "paused") return this.snapshot();
+    if (current.status !== "active") {
+      throw new Error(`Goal cannot pause from ${current.status}.`);
+    }
+    this.flushTrackedProgress();
+    this.continuationPending = false;
+    this.persist(
+      transitionGoal(this.goal ?? current, "paused", this.now(), reason),
+    );
+    this.resetAccountingClock();
     return this.snapshot();
   }
 
   resume() {
     this.assertUnlocked();
-    if (!this.goal) throw new Error("No session goal is set.");
-    if (this.goal.status !== "paused") {
-      throw new Error(`Goal cannot resume from ${this.goal.status}.`);
+    const current = this.requireVisibleGoal();
+    if (!canResumeGoal(current)) {
+      throw new Error(`Goal cannot resume from ${current.status}.`);
     }
-    this.invalidate();
+    this.continuationPending = false;
+    this.resetAccountingClock();
     this.persist(
-      transitionGoal(this.goal, "active", this.now(), "Resumed by user."),
+      transitionGoal(current, "active", this.now(), "Resumed by user."),
     );
+    return this.snapshot();
+  }
+
+  updateFromModel(status: "complete" | "blocked") {
+    this.assertUnlocked();
+    const current = this.requireVisibleGoal();
+    if (
+      current.status === status ||
+      (current.status === "budget_limited" && status === "blocked")
+    ) {
+      return this.snapshot();
+    }
+    this.flushTrackedProgress();
+    this.continuationPending = false;
+    this.persist(
+      transitionGoal(
+        this.goal ?? current,
+        status,
+        this.now(),
+        status === "complete"
+          ? "Marked complete by the goal agent."
+          : "Marked blocked by the goal agent.",
+      ),
+    );
+    this.resetAccountingClock();
     return this.snapshot();
   }
 
   clear() {
     this.assertUnlocked();
-    if (!this.goal) return undefined;
-    this.invalidate();
-    if (this.goal.status === "cleared") return this.snapshot();
+    if (!isGoalVisible(this.goal)) return false;
+    this.flushTrackedProgress();
+    this.continuationPending = false;
     this.persist(
       transitionGoal(this.goal, "cleared", this.now(), "Cleared by user."),
     );
-    return this.snapshot();
+    this.resetAccountingClock();
+    return true;
   }
 
   kickoff(ctx: ExtensionContext) {
     this.assertUnlocked();
-    if (!this.goal) throw new Error("No session goal is set.");
-    if (this.goal.status !== "active") {
-      throw new Error(`Goal cannot start from ${this.goal.status}.`);
+    const current = this.requireVisibleGoal();
+    if (current.status !== "active") {
+      throw new Error(`Goal cannot start from ${current.status}.`);
     }
-    return this.admitContinuation(ctx, true);
+    if (!ctx.isIdle()) this.beginTracking(current);
+    return this.dispatchPrompt(ctx, "continuation", true);
   }
 
-  beforeAgentStart(ctx: ExtensionContext) {
-    this.clearTimer();
-    this.evaluator?.abort();
-    this.evaluator = undefined;
-    this.evaluating = false;
+  continueWhenIdle(ctx: ExtensionContext) {
+    return this.dispatchPrompt(ctx, "continuation", false);
+  }
+
+  releaseDeferredContinuation() {
+    if (this.goal?.status !== "active" || !this.goal.deferContinuation) {
+      return false;
+    }
+    this.persist(setContinuationDeferred(this.goal, false, this.now()));
+    return true;
+  }
+
+  agentStarted() {
     this.continuationPending = false;
-    this.epoch++;
-    this.baselineLength = ctx.sessionManager.getBranch().length;
-    if (this.goal?.status === "waiting") {
-      this.persist(
-        transitionGoal(
-          this.goal,
-          "active",
-          this.now(),
-          "New agent evidence woke the waiting goal.",
-        ),
-      );
+    this.lastStopReason = undefined;
+    this.lastErrorWasUsageLimit = false;
+    this.suppressAbortedStop = false;
+    this.currentRunObservedTokens = 0;
+    this.currentRunFlushedTokens = 0;
+    if (!this.goal || !isGoalActive(this.goal) || this.goal.deferContinuation) {
+      if (!this.trackedGoalId) this.resetTrackedRun();
+      else this.trackedFromRunStart = true;
+      return;
     }
+    this.beginTracking(this.goal, true);
   }
 
-  async settled(ctx: ExtensionContext) {
+  messageEnded(message: unknown) {
+    const unwrapped = unwrapMessage(message);
+    if (!unwrapped || unwrapped.role !== "assistant") return;
+    this.currentRunObservedTokens = safeTokenAdd(
+      this.currentRunObservedTokens,
+      assistantGoalTokens(unwrapped),
+    );
+  }
+
+  agentEnded(messages: readonly unknown[]) {
+    if (!this.trackedGoalId) return;
+    const observed = this.trackedFromRunStart
+      ? Math.max(this.currentRunObservedTokens, countAssistantTokens(messages))
+      : this.currentRunObservedTokens;
+    this.trackedTokens = safeTokenAdd(
+      this.trackedTokens,
+      Math.max(0, observed - this.currentRunFlushedTokens),
+    );
+    this.currentRunObservedTokens = 0;
+    this.currentRunFlushedTokens = 0;
+    this.lastStopReason = lastAssistantStopReason(messages);
+    this.lastErrorWasUsageLimit = isUsageLimitError(messages);
+  }
+
+  toolFinished(ctx: ExtensionContext) {
     if (
-      !this.automationEnabled ||
+      !this.trackedGoalId ||
       !this.goal ||
-      !isGoalRunning(this.goal) ||
-      this.evaluator ||
-      this.continuationPending
+      this.goal.id !== this.trackedGoalId ||
+      this.goal.status !== "active"
     ) {
       return;
     }
+    this.flushTrackedProgress();
+    if (!this.goal || this.goal.status !== "active") return;
+    const budgetLimited = budgetLimitTransition(this.goal, this.now());
+    if (!budgetLimited) return;
+    this.persist(budgetLimited);
+    this.resetAccountingClock();
+    this.dispatchPrompt(ctx, "budget_limit", true);
+  }
 
-    const beforeSettlementLimit = hardLimitTransition(this.goal, this.now());
-    if (beforeSettlementLimit) {
-      this.persist(beforeSettlementLimit);
+  compacted(willRetry: boolean) {
+    if (willRetry && this.lastStopReason === "aborted") {
+      this.suppressAbortedStop = true;
+    }
+  }
+
+  settled(ctx: ExtensionContext) {
+    const trackedGoalId = this.trackedGoalId;
+    if (trackedGoalId) this.continuationPending = false;
+    const stopReason = this.lastStopReason;
+    const errorWasUsageLimit = this.lastErrorWasUsageLimit;
+    const suppressAbortedStop = this.suppressAbortedStop;
+
+    if (!trackedGoalId || !this.goal || this.goal.id !== trackedGoalId) {
+      this.resetTrackedRun();
       return;
     }
-    const parentTokens = countAssistantTokens(
-      ctx.sessionManager.getBranch(),
-      this.baselineLength,
-    );
-    this.persist(recordGoalSettlement(this.goal, parentTokens, this.now()));
-    const limited = hardLimitTransition(this.goal, this.now());
-    if (limited) {
-      this.persist(limited);
-      return;
-    }
 
-    const abort = new AbortController();
-    this.evaluator = abort;
-    this.evaluating = true;
-    const fence = this.fence();
-    try {
-      const result = await this.evaluate({
-        ctx,
-        goal: this.goal,
-        signal: abort.signal,
-      });
-      if (!fenceMatches(fence, this.epoch, this.goal)) return;
+    this.flushTrackedProgress();
+    this.resetTrackedRun();
+    if (!this.goal || this.goal.id !== trackedGoalId) return;
+    if (
+      this.goal.status === "budget_limited" &&
+      stopReason === "error" &&
+      errorWasUsageLimit
+    ) {
       this.persist(
-        applyGoalJudge(this.goal, result.judge, result.tokens, this.now()),
+        transitionGoal(
+          this.goal,
+          "usage_limited",
+          this.now(),
+          "Stopped after the active turn hit a usage limit.",
+        ),
       );
-      const postJudgeLimit = hardLimitTransition(this.goal, this.now());
-      if (postJudgeLimit) {
-        this.persist(postJudgeLimit);
-        return;
-      }
-      if (this.goal.status === "active") this.admitContinuation(ctx);
-      else if (this.goal.status === "waiting") this.armWaiting(ctx);
-    } catch {
-      if (abort.signal.aborted || !fenceMatches(fence, this.epoch, this.goal))
-        return;
-      this.persist(recordEvaluatorFailure(this.goal, this.now()));
-      if (this.goal.status === "active") this.admitContinuation(ctx);
-      else if (this.goal.status === "waiting") this.armWaiting(ctx);
-    } finally {
-      if (this.evaluator === abort) this.evaluator = undefined;
-      this.evaluating = false;
+      this.resetAccountingClock();
+      return;
     }
+    if (this.goal.status !== "active") return;
+
+    const budgetLimited = budgetLimitTransition(this.goal, this.now());
+    if (budgetLimited) {
+      this.persist(budgetLimited);
+      this.resetAccountingClock();
+      this.dispatchPrompt(ctx, "budget_limit", true);
+      return;
+    }
+    if (stopReason === "aborted" && !suppressAbortedStop) {
+      this.persist(
+        transitionGoal(
+          this.goal,
+          "paused",
+          this.now(),
+          "Paused after the active turn was interrupted.",
+        ),
+      );
+      this.resetAccountingClock();
+      return;
+    }
+    if (stopReason === "error") {
+      this.persist(
+        transitionGoal(
+          this.goal,
+          errorWasUsageLimit ? "usage_limited" : "blocked",
+          this.now(),
+          errorWasUsageLimit
+            ? "Stopped after the active turn hit a usage limit."
+            : "Blocked after the active turn ended with an error.",
+        ),
+      );
+      this.resetAccountingClock();
+      return;
+    }
+
+    const emergencyLimited = emergencyLimitTransition(this.goal, this.now());
+    if (emergencyLimited) {
+      this.persist(emergencyLimited);
+      this.resetAccountingClock();
+      return;
+    }
+    this.continueWhenIdle(ctx);
   }
 
   shutdown() {
     this.automationEnabled = false;
-    this.invalidate();
+    this.resetRuntime();
   }
 
-  private admitContinuation(ctx: ExtensionContext, allowFollowUpQueue = false) {
-    if (
-      !this.automationEnabled ||
-      !this.goal ||
-      this.goal.status !== "active" ||
-      this.continuationPending ||
-      (!allowFollowUpQueue && !ctx.isIdle())
-    ) {
+  private dispatchPrompt(
+    ctx: ExtensionContext,
+    kind: "continuation" | "objective_updated" | "budget_limit",
+    allowBusy: boolean,
+  ) {
+    if (!this.automationEnabled || !this.goal || this.continuationPending) {
       return false;
     }
-    const limited = hardLimitTransition(this.goal, this.now());
-    if (limited) {
-      this.persist(limited);
+    if (!allowBusy && !ctx.isIdle()) return false;
+    if (kind !== "budget_limit") {
+      if (this.goal.status !== "active" || this.goal.deferContinuation) {
+        return false;
+      }
+      const emergencyLimited = emergencyLimitTransition(this.goal, this.now());
+      if (emergencyLimited) {
+        this.persist(emergencyLimited);
+        return false;
+      }
+      this.persist(markContinuationDispatched(this.goal, this.now()));
+    } else if (this.goal.status !== "budget_limited") {
       return false;
     }
 
-    let reminder = "";
-    if (!this.goal.ledgerReminderUsed) {
-      reminder = ledgerReminder(ctx.sessionManager);
-      if (reminder) {
-        // Admission is forbidden until the one-shot marker is durable.
-        this.persist(markLedgerReminderUsed(this.goal, this.now()));
-      }
-    }
+    if (kind === "budget_limit") this.beginTracking(this.goal);
+    const goal = this.goal;
+    const content =
+      kind === "continuation"
+        ? continuationPrompt(goal)
+        : kind === "objective_updated"
+          ? objectiveUpdatedPrompt(goal)
+          : budgetLimitPrompt(goal);
     this.continuationPending = true;
-    const objective = this.goal.objective;
-    const condition = this.goal.condition;
-    const reminderText = reminder
-      ? `\nAdvisory ledger keys (not completion proof):\n${reminder}`
-      : "";
     try {
       this.pi.sendMessage(
         {
           customType: GOAL_CONTINUATION_TYPE,
           display: true,
-          content: `Continue the session goal autonomously. Objective: ${objective}. Success: ${condition}. Inspect current evidence, take the smallest useful next action, verify it, and stop this turn when no safe immediate action remains.${reminderText}`,
-          details: {
-            goalId: this.goal.id,
-            revision: this.goal.revision,
-            iteration: this.goal.iterations + 1,
-            maxTurns: this.goal.maxTurns,
-          },
+          content,
+          details: { kind, goalId: goal.id, revision: goal.revision },
         },
-        { triggerTurn: true, deliverAs: "followUp" },
+        {
+          triggerTurn: true,
+          deliverAs: ctx.isIdle() ? "followUp" : "steer",
+        },
       );
       return true;
     } catch (error) {
@@ -358,57 +449,86 @@ export class GoalController {
     }
   }
 
-  private armWaiting(ctx: ExtensionContext) {
-    if (!this.goal || this.goal.status !== "waiting" || this.timer) return;
-    const fence = this.fence();
-    const delay = waitingBackoffMs(this.goal.waitCount);
-    this.timer = this.schedule(() => {
-      this.timer = undefined;
-      if (!fenceMatches(fence, this.epoch, this.goal)) return;
-      if (!ctx.isIdle()) return;
-      const goal = this.goal;
-      if (!goal) return;
-      this.persist(
-        transitionGoal(
-          goal,
-          "active",
-          this.now(),
-          "Waiting backoff elapsed; checking for new evidence.",
-        ),
-      );
-      this.admitContinuation(ctx);
-    }, delay);
-    this.timer.unref?.();
-  }
-
-  private fence(): GoalFence {
-    if (!this.goal) throw new Error("No goal for fence.");
-    return {
-      epoch: this.epoch,
-      id: this.goal.id,
-      revision: this.goal.revision,
-    };
-  }
-
   private persist(candidate: GoalSnapshot) {
     const checked = validateGoalSnapshot(candidate);
-    // appendEntry is synchronous; memory changes only after durable append.
     this.pi.appendEntry(GOAL_ENTRY_TYPE, checked);
     this.goal = checked;
   }
 
-  private invalidate() {
-    this.epoch++;
-    this.evaluator?.abort();
-    this.evaluator = undefined;
-    this.evaluating = false;
-    this.clearTimer();
-    this.continuationPending = false;
+  private beginTracking(goal: GoalSnapshot, fromRunStart = false) {
+    if (this.accountingGoalId !== goal.id) {
+      this.accountingGoalId = goal.id;
+      this.elapsedRemainderMs = 0;
+    }
+    if (this.trackedGoalId !== goal.id) {
+      this.trackedGoalId = goal.id;
+      this.trackedStartedAt = this.now();
+      this.trackedTokens = 0;
+      this.currentRunFlushedTokens = fromRunStart
+        ? 0
+        : this.currentRunObservedTokens;
+      this.trackedFromRunStart = fromRunStart;
+    } else if (fromRunStart) {
+      this.trackedFromRunStart = true;
+    }
   }
 
-  private clearTimer() {
-    if (this.timer) clearTimeout(this.timer);
-    this.timer = undefined;
+  private flushTrackedProgress() {
+    if (
+      !this.trackedGoalId ||
+      !this.goal ||
+      this.goal.id !== this.trackedGoalId ||
+      this.goal.status === "cleared"
+    ) {
+      return;
+    }
+    const unflushedCurrentTokens = Math.max(
+      0,
+      this.currentRunObservedTokens - this.currentRunFlushedTokens,
+    );
+    const tokens = safeTokenAdd(this.trackedTokens, unflushedCurrentTokens);
+    const now = this.now();
+    const elapsedMs =
+      this.trackedStartedAt === undefined
+        ? 0
+        : Math.max(0, now - this.trackedStartedAt);
+    const totalElapsedMs = this.elapsedRemainderMs + elapsedMs;
+    const elapsedSeconds = Math.floor(totalElapsedMs / 1_000);
+    this.elapsedRemainderMs = totalElapsedMs % 1_000;
+    if (tokens > 0 || elapsedSeconds > 0) {
+      this.persist(recordGoalProgress(this.goal, tokens, elapsedSeconds, now));
+    }
+    this.trackedTokens = 0;
+    this.currentRunFlushedTokens = this.currentRunObservedTokens;
+    this.trackedStartedAt = now;
+  }
+
+  private requireVisibleGoal() {
+    if (!isGoalVisible(this.goal)) throw new Error("No goal is currently set.");
+    return this.goal;
+  }
+
+  private resetRuntime() {
+    this.continuationPending = false;
+    this.resetTrackedRun();
+    this.resetAccountingClock();
+  }
+
+  private resetTrackedRun() {
+    this.trackedGoalId = undefined;
+    this.trackedStartedAt = undefined;
+    this.trackedTokens = 0;
+    this.currentRunObservedTokens = 0;
+    this.currentRunFlushedTokens = 0;
+    this.trackedFromRunStart = false;
+    this.lastStopReason = undefined;
+    this.lastErrorWasUsageLimit = false;
+    this.suppressAbortedStop = false;
+  }
+
+  private resetAccountingClock() {
+    this.accountingGoalId = undefined;
+    this.elapsedRemainderMs = 0;
   }
 
   private assertUnlocked() {
@@ -418,6 +538,53 @@ export class GoalController {
       );
     }
   }
+}
+
+function assistantGoalTokens(message: Record<string, unknown>) {
+  const usage = message.usage;
+  if (!isRecord(usage)) return 0;
+  const input = usage.input;
+  const output = usage.output;
+  if (
+    Number.isSafeInteger(input) &&
+    (input as number) >= 0 &&
+    Number.isSafeInteger(output) &&
+    (output as number) >= 0
+  ) {
+    return safeTokenAdd(input as number, output as number);
+  }
+  const total = usage.totalTokens;
+  return Number.isSafeInteger(total) && (total as number) >= 0
+    ? (total as number)
+    : 0;
+}
+
+function lastAssistantMessage(messages: readonly unknown[]) {
+  for (let index = messages.length - 1; index >= 0; index--) {
+    const message = unwrapMessage(messages[index]);
+    if (!message || message.role !== "assistant") continue;
+    if (
+      message.stopReason === "stop" ||
+      message.stopReason === "length" ||
+      message.stopReason === "toolUse" ||
+      message.stopReason === "error" ||
+      message.stopReason === "aborted"
+    ) {
+      return message;
+    }
+  }
+  return undefined;
+}
+
+function unwrapMessage(value: unknown) {
+  if (!isRecord(value)) return undefined;
+  if (value.role) return value;
+  return isRecord(value.message) ? value.message : undefined;
+}
+
+function safeTokenAdd(left: number, right: number) {
+  const result = left + right;
+  return Number.isSafeInteger(result) && result >= 0 ? result : left;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

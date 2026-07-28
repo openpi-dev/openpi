@@ -238,21 +238,21 @@ Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作�
 
 每次冷启动或 Context Pivot 后，Ledger 只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
 
-### 5. Session Goal：有边界的自主继续
+### 5. Session Goal：Codex 风格的持久自主目标
 
 ```text
-/goal status
+/goal
 /goal <目标>
-/goal pause | resume | clear
+/goal edit | pause | resume | clear
 ```
 
-Session Goal 是当前分支上的一个持久完成目标，不是待办列表，也不是“永远运行直到手动停止”的无界循环。只有用户明确要求自主推进时才应通过 `goal_set` 或 `/goal <目标>` 创建；`goal_status` 只读，工作 Agent 不能自行宣告完成。目标和成功条件会先经过独立、无工具的 Contract Judge：条件必须描述有限终态以及能从 Session 输出观察到的证据；重复目标、持续活动、仅靠人工停止或无法验证的条件会在写入前被拒绝。Contract Judge 不可用或返回格式错误时同样 fail-closed。
+Session Goal 与当前 OpenAI Codex Goal 的操作语义对齐。`/goal <目标>` 直接创建并立即开始，不再追加“成功条件”输入，也不经过外部 Contract Judge；目标正文最多 4000 字符，应自行包含结果、证据与约束。模型只在用户或 system/developer 明确要求持久自主目标时调用 `create_goal`，可用 `get_goal` 读取状态，并在严格证据审计证明全部完成后调用 `update_goal({ status: "complete" })`。只有同一阻塞连续出现至少三个 Goal Turn 且确实无法继续时，模型才可标记 `blocked`。
 
-Contract 通过并持久化后，首个 Worker Turn 会立即启动；如果 `goal_set` 发生在已有 Run 中，则使用 Pi `followUp` 队列等当前 Run 结束后启动。设置 Goal 的 Run 不计入 Goal Turn，也不会单独触发完成判定；后续 Judge 仍可把分支中已有的可观察事实作为背景证据。此后当前 Session 的模型与认证在每个 Worker `agent_settled` 后进行无工具外部判定。默认上限是 40 个已结算 Goal Turn、连续 8 次无进展、120 分钟活跃时间；可选父 Agent Token 预算至少 1000。父 Run 的 Assistant input+output `totalTokens` 在可可靠归属时计入预算；Judge Token 单独展示，不消耗可选父 Run 预算。硬上限始终优先，等待外部证据时采用 5 秒到 5 分钟的退避。
+Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_budget` 只要求为正数；达到预算后状态变为 `budget_limited`，系统只追加一次收尾 Turn，不再启动实质工作。运行中按 Codex 口径统计 Goal Assistant 的非缓存输入加输出 Token 和耗时。`/goal` 展示 Status、Objective、Time used、Tokens used、可选 Token budget，以及当前状态可用命令；`/goal edit` 预填现有目标并保留预算和用量；已经耗尽的预算不会因编辑而重新激活。未完成目标被 `/goal <新目标>` 替换前会显示 `Replace current goal / Cancel`，已完成目标则直接替换。
 
-Goal 状态跟随当前 Session 分支持久化。`/reload`、恢复 Session、Fork 或 `/tree` 后，原先的 `active / waiting` 会立即持久化降级为 `paused`，不会在重启后静默消耗 Token；用户执行 `/goal resume` 时会重新检查 Contract，通过后立即恢复自主运行，不需要再发送一个 Prompt；旧版本留下的无效 Goal 仍可清除，但不能绕过新规则恢复。自动延续在 print/json 模式中关闭，Pi 子 Session 也不会获得 Goal 工具。运行状态只在 Footer 保留一条有界摘要，完整目标和条件通过 `/goal status` 查看。
+状态为 `active / paused / blocked / usage_limited / budget_limited / complete`。用户负责 pause、resume、edit、clear；模型只能 complete 或 blocked；系统负责预算和运行错误状态。Esc/Ctrl+C 导致的 Assistant `aborted` 会暂停 Goal，Assistant `error` 会阻塞 Goal。活动 Goal 在 `/reload` 或 Session 恢复后继续；Fork 和 `/tree` 为避免继承后立刻执行，会等第一次显式用户输入后再继续。恢复 paused、blocked 或 usage-limited Goal 时会询问是否 Resume。旧 v1 Goal 首次迁移时把 active/waiting 降为 paused，并尽量把原成功条件折入 Objective。
 
-Goal 与 Ledger 分工明确：Goal 负责“继续到什么可验证结果、何时停止”；Ledger 只记录多个工作项。Goal 最多一次读取当前分支的 Ledger 活跃 T 编号作为行动提醒，但 Ledger 状态不是完成证据。
+另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Ledger 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
 
 ### 6. Context Pivot：同一 Session，切换工作阶段
 
@@ -502,7 +502,7 @@ pi install ~/work/my-pi-setup
 | `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
 | `/workflows`                | 查看 Workflow 运行、阶段和产物               |
 | `/ledger`                   | 查看当前 Session 的工作意图台账              |
-| `/goal ...`                 | 设置、查看、暂停、恢复或清除有界自主 Goal    |
+| `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal    |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
 | `/lg`                       | 浏览 Working Tree 改动和 Diff                |
 | `/pr`                       | 刷新当前分支的 GitHub PR 信息                |
@@ -516,7 +516,7 @@ pi install ~/work/my-pi-setup
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
 | `workflow`                                                                              | 动态多阶段 Agent 编排                 |
 | `ledger_add`, `ledger_update`, `ledger_list`                                            | Session 工作意图台账                  |
-| `goal_set`, `goal_status`                                                               | 显式设置或只读查询有界 Session Goal   |
+| `get_goal`, `create_goal`, `update_goal`                                                | 读取、创建或完成/阻塞 Session Goal    |
 | `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
 | `ask_user`                                                                              | 结构化用户决策                        |
 | `fd`, `rg`                                                                              | 文件发现与内容搜索                    |
