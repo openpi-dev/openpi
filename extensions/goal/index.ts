@@ -91,7 +91,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   const updateUi = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
-    const goal = controller.snapshot();
+    const goal = controller.footerSnapshot();
     const footer = goal ? goalFooterText(goal) : "";
     ctx.ui.setStatus(
       "session-goal",
@@ -396,9 +396,28 @@ export default function sessionGoal(pi: ExtensionAPI) {
   });
 
   pi.on("input", (event) => {
-    if (event.source === "interactive" || event.source === "rpc") {
-      controller.releaseDeferredContinuation();
+    if (event.source === "extension") {
+      const sanitized = controller.sanitizeCompletionMarkerImages(event.images);
+      return sanitized.changed
+        ? {
+            action: "transform" as const,
+            text: event.text,
+            images: sanitized.images,
+          }
+        : { action: "continue" as const };
     }
+    const sanitized = controller.sanitizeCompletionMarkerImages(event.images);
+    const marker = controller.prepareExplicitInput();
+    return marker === undefined && !sanitized.changed
+      ? { action: "continue" as const }
+      : {
+          action: "transform" as const,
+          text: event.text,
+          images:
+            marker === undefined
+              ? sanitized.images
+              : [...sanitized.images, marker],
+        };
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -406,8 +425,15 @@ export default function sessionGoal(pi: ExtensionAPI) {
     updateUi(ctx);
   });
 
-  pi.on("message_end", (event) => {
-    controller.messageEnded(event.message);
+  pi.on("message_end", (event, ctx) => {
+    const result = controller.messageEnded(event.message);
+    if (!result) return;
+    if (result.footerChanged) updateUi(ctx);
+    return { message: result.message as typeof event.message };
+  });
+
+  pi.on("turn_end", () => {
+    controller.turnEnded();
   });
 
   pi.on("tool_execution_end", (_event, ctx) => {
@@ -426,6 +452,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   pi.on("agent_settled", (_event, ctx) => {
     controller.settled(ctx);
+    controller.settledWithoutAcknowledgement();
     updateUi(ctx);
   });
 

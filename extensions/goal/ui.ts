@@ -61,6 +61,7 @@ export function goalFooterText(goal: GoalSnapshot) {
         ? "Goal abandoned"
         : `Goal unmet (${formatTokensCompact(goal.tokensUsed)} / ${formatTokensCompact(goal.tokenBudget)} tokens)`;
     case "complete": {
+      if (goal.completionAcknowledged) return "";
       const usage =
         goal.tokenBudget === undefined
           ? formatGoalElapsedSeconds(goal.timeUsedSeconds)

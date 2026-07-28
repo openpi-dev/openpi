@@ -252,7 +252,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 
 状态为 `active / paused / blocked / usage_limited / budget_limited / complete`。用户负责 pause、resume、edit、clear；模型只能 complete 或 blocked；系统负责预算和运行错误状态。Esc/Ctrl+C 导致的 Assistant `aborted` 会暂停 Goal，Assistant `error` 会阻塞 Goal。活动 Goal 在 `/reload` 或 Session 恢复后继续；Fork 和 `/tree` 为避免继承后立刻执行，会等第一次显式用户输入后再继续。恢复 paused、blocked 或 usage-limited Goal 时会询问是否 Resume。旧 v1 Goal 首次迁移时把 active/waiting 降为 paused，并尽量把原成功条件折入 Objective。
 
-另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Tasks 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
+另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。完成提示会保留到用户下一次显式输入，随后只隐藏 Footer、仍可通过 `/goal` 查看完成记录；这个确认状态随 Session 分支持久化。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Tasks 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
 
 ### 6. Context Pivot：同一 Session，切换工作阶段
 

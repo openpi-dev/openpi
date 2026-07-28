@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   GoalRestoreError,
+  acknowledgeGoalCompletion,
   budgetLimitTransition,
   createGoalSnapshot,
   editGoalObjective,
@@ -191,6 +192,26 @@ test("progress accounting, deferral, continuation count, and token budget are du
   assert.equal(dispatched.continuationCount, 1);
 });
 
+test("completion acknowledgement is durable, idempotent, and complete-only", () => {
+  const complete = transitionGoal(goal(), "complete", NOW + 1, "done");
+  const acknowledged = acknowledgeGoalCompletion(complete, NOW + 2);
+  assert.equal(acknowledged.completionAcknowledged, true);
+  assert.equal(acknowledged.revision, complete.revision + 1);
+  assert.deepEqual(
+    acknowledgeGoalCompletion(acknowledged, NOW + 3),
+    acknowledged,
+  );
+  assert.deepEqual(acknowledgeGoalCompletion(goal(), NOW + 1), goal());
+  assert.throws(
+    () =>
+      validateGoalSnapshot({
+        ...goal(),
+        completionAcknowledged: true,
+      }),
+    /only a complete goal/,
+  );
+});
+
 test("editing preserves running and stopped statuses but reactivates complete or budget-limited goals", () => {
   assert.equal(editGoalObjective(goal(), "new", NOW + 1).status, "active");
   assert.equal(
@@ -201,14 +222,17 @@ test("editing preserves running and stopped statuses but reactivates complete or
     ).status,
     "blocked",
   );
-  assert.equal(
-    editGoalObjective(
-      transitionGoal(goal(), "complete", NOW + 1, "done"),
-      "new",
-      NOW + 2,
-    ).status,
-    "active",
+  const acknowledgedComplete = acknowledgeGoalCompletion(
+    transitionGoal(goal(), "complete", NOW + 1, "done"),
+    NOW + 2,
   );
+  const editedComplete = editGoalObjective(
+    acknowledgedComplete,
+    "new",
+    NOW + 3,
+  );
+  assert.equal(editedComplete.status, "active");
+  assert.equal(editedComplete.completionAcknowledged, undefined);
   assert.equal(
     editGoalObjective(
       transitionGoal(goal(), "budget_limited", NOW + 1, "budget"),

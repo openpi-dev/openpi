@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createGoalSnapshot, transitionGoal } from "./state.ts";
+import {
+  acknowledgeGoalCompletion,
+  createGoalSnapshot,
+  transitionGoal,
+} from "./state.ts";
 import {
   formatGoalElapsedSeconds,
   formatTokensCompact,
@@ -50,10 +54,9 @@ test("footer never exposes the objective or legacy turn counters", () => {
     goalFooterText(transitionGoal(goal, "budget_limited", 2, "budget")),
     "Goal unmet (12.5K / 50K tokens)",
   );
-  assert.equal(
-    goalFooterText(transitionGoal(goal, "complete", 2, "done")),
-    "Goal achieved (12.5K tokens)",
-  );
+  const complete = transitionGoal(goal, "complete", 2, "done");
+  assert.equal(goalFooterText(complete), "Goal achieved (12.5K tokens)");
+  assert.equal(goalFooterText(acknowledgeGoalCompletion(complete, 3)), "");
   assert.equal(
     goalFooterText(
       transitionGoal(

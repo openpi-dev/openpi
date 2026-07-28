@@ -9,7 +9,7 @@ import sessionGoal, {
   parseGoalCommand,
   statusText,
 } from "./index.ts";
-import { createGoalSnapshot } from "./state.ts";
+import { createGoalSnapshot, transitionGoal } from "./state.ts";
 
 test("goal command matches the current Codex surface", () => {
   assert.deepEqual(parseGoalCommand(""), { action: "status" });
@@ -168,9 +168,11 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
       branch = value;
     },
     async emit(event: string, data: Record<string, unknown> = {}) {
+      const results: unknown[] = [];
       for (const handler of handlers.get(event) ?? []) {
-        await handler({ type: event, ...data }, ctx);
+        results.push(await handler({ type: event, ...data }, ctx));
       }
+      return results;
     },
   };
 }
@@ -270,6 +272,74 @@ test("slash command creates directly, confirms unfinished replacement, edits, pa
   assert.equal(h.notifications.at(-1), "Goal cleared");
   await command.handler("clear", h.ctx);
   assert.match(h.notifications.at(-1) ?? "", /No goal to clear/);
+});
+
+test("the next explicit user message durably hides an achieved footer without clearing goal history", async () => {
+  const complete = transitionGoal(
+    createGoalSnapshot(
+      { objective: "Finished goal" },
+      0,
+      1,
+      "goal_index_complete",
+    ),
+    "complete",
+    2,
+    "done",
+  );
+  const h = extensionHarness({
+    branch: [{ type: "custom", customType: "session-goal", data: complete }],
+  });
+  await h.emit("session_start", { reason: "reload" });
+  assert.equal(h.statuses.at(-1), "Goal achieved (0s)");
+
+  await h.emit("input", { source: "extension", text: "automatic" });
+  assert.equal(h.entries.length, 0);
+  assert.equal(h.statuses.at(-1), "Goal achieved (0s)");
+
+  const transformed = await h.emit("input", {
+    source: "interactive",
+    text: "next request",
+  });
+  const inputTransform = transformed.at(-1) as any;
+  assert.equal(inputTransform.text, "next request");
+  assert.equal(
+    inputTransform.images[0].mimeType,
+    "application/x-pi-goal-completion-ack",
+  );
+  assert.equal(h.entries.length, 0, "input may still be handled or queued");
+  assert.equal(h.statuses.at(-1), "Goal achieved (0s)");
+  await h.emit("agent_start");
+  await h.emit("turn_start");
+  assert.equal(h.entries.length, 0);
+  const replacements = await h.emit("message_end", {
+    message: {
+      role: "user",
+      content: [
+        { type: "text", text: "next request" },
+        inputTransform.images[0],
+      ],
+    },
+  });
+  assert.deepEqual((replacements.at(-1) as any).message.content, [
+    { type: "text", text: "next request" },
+  ]);
+  assert.equal(h.statuses.at(-1), undefined);
+  assert.equal(h.entries.length, 0, "message_end precedes user persistence");
+  await h.emit("turn_end");
+  assert.equal(h.entries.length, 1);
+  assert.equal((h.entries[0]?.data as any).status, "complete");
+  assert.equal((h.entries[0]?.data as any).completionAcknowledged, true);
+
+  const reloaded = extensionHarness({
+    branch: [
+      { type: "custom", customType: "session-goal", data: complete },
+      { type: "custom", customType: "session-goal", data: h.entries[0]!.data },
+    ],
+  });
+  await reloaded.emit("session_start", { reason: "reload" });
+  assert.equal(reloaded.statuses.at(-1), undefined);
+  await reloaded.commands.get("goal")!.handler("", reloaded.ctx);
+  assert.match(reloaded.notifications.at(-1) ?? "", /Status: complete/);
 });
 
 test("restored active goals auto-continue, stopped goals prompt, and forks defer until explicit input", async () => {

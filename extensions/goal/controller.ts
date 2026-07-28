@@ -1,3 +1,4 @@
+import type { ImageContent } from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -10,6 +11,7 @@ import {
 import {
   GOAL_ENTRY_TYPE,
   GoalRestoreError,
+  acknowledgeGoalCompletion,
   budgetLimitTransition,
   canResumeGoal,
   editGoalObjective,
@@ -75,6 +77,8 @@ export class GoalController {
   private lockedReason: string | undefined;
   private automationEnabled = false;
   private continuationPending = false;
+  private completionAcknowledgementPending = false;
+  private readonly completionInputMarkers = new Set<string>();
   private trackedGoalId: string | undefined;
   private trackedStartedAt: number | undefined;
   private trackedTokens = 0;
@@ -97,6 +101,17 @@ export class GoalController {
 
   snapshot() {
     return isGoalVisible(this.goal) ? structuredClone(this.goal) : undefined;
+  }
+
+  footerSnapshot() {
+    const current = this.snapshot();
+    if (
+      current?.status === "complete" &&
+      this.completionAcknowledgementPending
+    ) {
+      return { ...current, completionAcknowledged: true as const };
+    }
+    return current;
   }
 
   revision() {
@@ -130,6 +145,8 @@ export class GoalController {
   replace(candidate: GoalSnapshot) {
     this.assertUnlocked();
     this.continuationPending = false;
+    this.completionInputMarkers.clear();
+    this.completionAcknowledgementPending = false;
     if (this.goal?.id !== candidate.id) this.resetAccountingClock();
     this.persist(candidate);
     return this.snapshot();
@@ -235,6 +252,38 @@ export class GoalController {
     return this.dispatchPrompt(ctx, "continuation", false);
   }
 
+  sanitizeCompletionMarkerImages(images: readonly ImageContent[] = []) {
+    let changed = false;
+    const sanitized = images.filter((image) => {
+      if (image.mimeType !== GOAL_COMPLETION_MARKER_MIME) return true;
+      changed = true;
+      this.completionInputMarkers.delete(image.data);
+      return false;
+    });
+    return { images: sanitized, changed };
+  }
+
+  prepareExplicitInput() {
+    let marker: ImageContent | undefined;
+    if (this.goal?.status === "complete" && !this.goal.completionAcknowledged) {
+      const data = crypto.randomUUID();
+      if (this.completionInputMarkers.size >= 32) {
+        const oldest = this.completionInputMarkers.values().next().value;
+        if (oldest !== undefined) this.completionInputMarkers.delete(oldest);
+      }
+      this.completionInputMarkers.add(data);
+      marker = {
+        type: "image",
+        data,
+        mimeType: GOAL_COMPLETION_MARKER_MIME,
+      };
+    }
+    if (this.goal?.status === "active" && this.goal.deferContinuation) {
+      this.persist(setContinuationDeferred(this.goal, false, this.now()));
+    }
+    return marker;
+  }
+
   releaseDeferredContinuation() {
     if (this.goal?.status !== "active" || !this.goal.deferContinuation) {
       return false;
@@ -260,11 +309,35 @@ export class GoalController {
 
   messageEnded(message: unknown) {
     const unwrapped = unwrapMessage(message);
-    if (!unwrapped || unwrapped.role !== "assistant") return;
+    if (!unwrapped) return undefined;
+    if (unwrapped.role === "user") {
+      const sanitized = stripKnownMarkers(
+        unwrapped,
+        this.completionInputMarkers,
+      );
+      if (!sanitized) return undefined;
+      if (sanitized.matchedTrackedMarker) {
+        this.completionAcknowledgementPending = true;
+      }
+      return {
+        message: sanitized.message,
+        footerChanged: sanitized.matchedTrackedMarker,
+      };
+    }
+    if (unwrapped.role !== "assistant") return undefined;
     this.currentRunObservedTokens = safeTokenAdd(
       this.currentRunObservedTokens,
       assistantGoalTokens(unwrapped),
     );
+    return undefined;
+  }
+
+  turnEnded() {
+    this.persistPendingCompletionAcknowledgement();
+  }
+
+  settledWithoutAcknowledgement() {
+    this.completionInputMarkers.clear();
   }
 
   agentEnded(messages: readonly unknown[]) {
@@ -385,6 +458,19 @@ export class GoalController {
   shutdown() {
     this.automationEnabled = false;
     this.resetRuntime();
+  }
+
+  private persistPendingCompletionAcknowledgement() {
+    if (
+      !this.completionAcknowledgementPending ||
+      this.goal?.status !== "complete" ||
+      this.goal.completionAcknowledged
+    ) {
+      this.completionAcknowledgementPending = false;
+      return;
+    }
+    this.persist(acknowledgeGoalCompletion(this.goal, this.now()));
+    this.completionAcknowledgementPending = false;
   }
 
   private dispatchPrompt(
@@ -510,6 +596,8 @@ export class GoalController {
 
   private resetRuntime() {
     this.continuationPending = false;
+    this.completionInputMarkers.clear();
+    this.completionAcknowledgementPending = false;
     this.resetTrackedRun();
     this.resetAccountingClock();
   }
@@ -580,6 +668,35 @@ function unwrapMessage(value: unknown) {
   if (!isRecord(value)) return undefined;
   if (value.role) return value;
   return isRecord(value.message) ? value.message : undefined;
+}
+
+export const GOAL_COMPLETION_MARKER_MIME =
+  "application/x-pi-goal-completion-ack";
+
+function stripKnownMarkers(
+  message: Record<string, unknown>,
+  markers: Set<string>,
+) {
+  if (!Array.isArray(message.content)) return undefined;
+  let matchedTrackedMarker = false;
+  let foundPrivateMarker = false;
+  const content = message.content.filter((part) => {
+    if (
+      !isRecord(part) ||
+      part.type !== "image" ||
+      part.mimeType !== GOAL_COMPLETION_MARKER_MIME
+    ) {
+      return true;
+    }
+    foundPrivateMarker = true;
+    if (typeof part.data === "string" && markers.delete(part.data)) {
+      matchedTrackedMarker = true;
+    }
+    return false;
+  });
+  return foundPrivateMarker
+    ? { message: { ...message, content }, matchedTrackedMarker }
+    : undefined;
 }
 
 function safeTokenAdd(left: number, right: number) {

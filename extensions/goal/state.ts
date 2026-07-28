@@ -25,6 +25,7 @@ export interface GoalSnapshot {
   reason?: string;
   deferContinuation?: boolean;
   continuationCount?: number;
+  completionAcknowledged?: boolean;
 }
 
 export interface GoalInput {
@@ -53,6 +54,7 @@ const SNAPSHOT_KEYS = new Set([
   "reason",
   "deferContinuation",
   "continuationCount",
+  "completionAcknowledged",
 ]);
 const RESUMABLE_STATUSES = new Set<GoalStatus>([
   "paused",
@@ -174,6 +176,15 @@ export function validateGoalSnapshot(value: unknown): GoalSnapshot {
       "snapshot.continuationCount",
     );
   }
+  if (
+    hasOwn(value, "completionAcknowledged") &&
+    value.completionAcknowledged !== true
+  ) {
+    fail("snapshot.completionAcknowledged must be true when present");
+  }
+  if (value.completionAcknowledged === true && status !== "complete") {
+    fail("only a complete goal can acknowledge completion");
+  }
 
   const snapshot: GoalSnapshot = {
     version: 2,
@@ -192,6 +203,9 @@ export function validateGoalSnapshot(value: unknown): GoalSnapshot {
     ...(value.deferContinuation === true ? { deferContinuation: true } : {}),
     ...(hasOwn(value, "continuationCount")
       ? { continuationCount: value.continuationCount as number }
+      : {}),
+    ...(value.completionAcknowledged === true
+      ? { completionAcknowledged: true }
       : {}),
   };
   assertSnapshotBytes(snapshot);
@@ -284,7 +298,12 @@ export function transitionGoal(
 ) {
   const base = validateGoalSnapshot(current);
   assertTimestampAfter(now, base.updatedAt);
-  const { reason: _reason, deferContinuation: _defer, ...stable } = base;
+  const {
+    reason: _reason,
+    deferContinuation: _defer,
+    completionAcknowledged: _acknowledged,
+    ...stable
+  } = base;
   return validateGoalSnapshot({
     ...stable,
     revision: increment(base.revision, "revision"),
@@ -312,13 +331,30 @@ export function editGoalObjective(
   ) {
     status = "budget_limited";
   }
-  const { reason: _reason, deferContinuation: _defer, ...stable } = base;
+  const {
+    reason: _reason,
+    deferContinuation: _defer,
+    completionAcknowledged: _acknowledged,
+    ...stable
+  } = base;
   return validateGoalSnapshot({
     ...stable,
     revision: increment(base.revision, "revision"),
     objective: normalizeGoalObjective(objective),
     status,
     updatedAt: now,
+  });
+}
+
+export function acknowledgeGoalCompletion(current: GoalSnapshot, now: number) {
+  const base = validateGoalSnapshot(current);
+  if (base.status !== "complete" || base.completionAcknowledged) return base;
+  assertTimestampAfter(now, base.updatedAt);
+  return validateGoalSnapshot({
+    ...base,
+    revision: increment(base.revision, "revision"),
+    updatedAt: now,
+    completionAcknowledged: true,
   });
 }
 

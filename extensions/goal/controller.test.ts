@@ -338,6 +338,91 @@ test("busy editing a complete goal tracks only post-edit work and keeps the loop
   );
 });
 
+test("completion acknowledgement follows a tagged user message and persists after it", () => {
+  const h = harness();
+  const complete = transitionGoal(active(98), "complete", 99, "done");
+  h.setBranch([{ type: "custom", customType: "session-goal", data: complete }]);
+  const controller = new GoalController(h.pi, { now: () => 100 });
+  controller.restore(h.ctx);
+
+  const transformed = controller.prepareExplicitInput();
+  assert.equal(transformed?.mimeType, "application/x-pi-goal-completion-ack");
+  assert.equal(controller.footerSnapshot()?.completionAcknowledged, undefined);
+  assert.equal(h.entries.length, 0);
+
+  const result = controller.messageEnded({
+    role: "user",
+    content: [{ type: "text", text: "next" }, transformed],
+  });
+  assert.deepEqual((result?.message as any).content, [
+    { type: "text", text: "next" },
+  ]);
+  assert.equal(controller.footerSnapshot()?.completionAcknowledged, true);
+  assert.equal(h.entries.length, 0);
+  controller.turnEnded();
+  assert.equal(controller.snapshot()?.completionAcknowledged, true);
+  assert.equal(h.entries.length, 1);
+});
+
+test("handled explicit input does not acknowledge a later extension user message", () => {
+  const h = harness();
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: transitionGoal(active(98), "complete", 99, "done"),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => 100 });
+  controller.restore(h.ctx);
+  controller.prepareExplicitInput();
+
+  assert.equal(
+    controller.messageEnded({ role: "user", content: "extension kickoff" }),
+    undefined,
+  );
+  assert.equal(controller.footerSnapshot()?.completionAcknowledged, undefined);
+  assert.equal(h.entries.length, 0);
+  const stale = controller.prepareExplicitInput();
+  controller.settledWithoutAcknowledgement();
+  const fresh = controller.prepareExplicitInput();
+  const resubmitted = controller.messageEnded({
+    role: "user",
+    content: [{ type: "text", text: "dequeued" }, stale, fresh],
+  });
+  assert.equal(resubmitted?.footerChanged, true);
+  assert.deepEqual((resubmitted?.message as any).content, [
+    { type: "text", text: "dequeued" },
+  ]);
+});
+
+test("an extension-reinjected tagged input cannot acknowledge after its correlation settles", () => {
+  const h = harness();
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: transitionGoal(active(98), "complete", 99, "done"),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => 100 });
+  controller.restore(h.ctx);
+  const intercepted = controller.prepareExplicitInput();
+  const sanitized = controller.sanitizeCompletionMarkerImages([intercepted!]);
+  assert.equal(sanitized.changed, true);
+  assert.deepEqual(sanitized.images, []);
+
+  const result = controller.messageEnded({
+    role: "user",
+    content: [{ type: "text", text: "handled then reinjected" }, intercepted],
+  });
+  assert.deepEqual((result?.message as any).content, [
+    { type: "text", text: "handled then reinjected" },
+  ]);
+  assert.equal(result?.footerChanged, false);
+  assert.equal(controller.footerSnapshot()?.completionAcknowledged, undefined);
+});
+
 test("fork deferral survives restore until explicit input releases it", () => {
   const h = harness();
   h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
