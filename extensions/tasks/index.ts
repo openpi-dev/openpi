@@ -7,46 +7,46 @@ import type {
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
-  LEDGER_ENTRY_TYPE,
-  LEDGER_LIMITS,
-  LEDGER_STATUSES,
-  LedgerRestoreError,
-  applyLedgerAdd,
-  applyLedgerUpdate,
-  createSessionLedger,
-  emptyLedgerSnapshot,
-  projectLedger,
-  restoreLedgerSnapshot,
-  type LedgerFilter,
-  type LedgerItem,
-  type LedgerSnapshot,
-} from "./ledger.ts";
+  TASKS_ENTRY_TYPE,
+  TASKS_LIMITS,
+  TASK_STATUSES,
+  TaskRestoreError,
+  applyTaskAdd,
+  applyTaskUpdate,
+  createSessionTasks,
+  emptyTaskSnapshot,
+  projectTasks,
+  restoreTaskSnapshot,
+  type TaskFilter,
+  type TaskItem,
+  type TaskSnapshot,
+} from "./tasks.ts";
 import {
-  openLedgerScreen,
+  openTasksScreen,
   renderTaskWidget,
   renderToolResult,
-  type LedgerToolDetails,
+  type TaskToolDetails,
 } from "./ui.ts";
 
-const TOOL_NAMES = ["ledger_add", "ledger_update", "ledger_list"] as const;
-const TASK_WIDGET_KEY = "session-ledger-tasks";
+const TOOL_NAMES = ["tasks_add", "tasks_update", "tasks_list"] as const;
+const TASK_WIDGET_KEY = "session-tasks-panel";
 const CONFLICT_NAMES = new Set(["todo", "TodoWrite", "update_plan"]);
 const TOOL_PURPOSE =
   "Records session work intent. It does not execute, schedule, or delegate work.";
 
-export interface LedgerConflict {
+export interface TaskConflict {
   name: string;
   source?: string;
 }
 
-export function findLedgerConflict(tools: readonly ToolInfo[]) {
+export function findTaskConflict(tools: readonly ToolInfo[]) {
   const conflict = tools.find((tool) => CONFLICT_NAMES.has(tool.name));
   if (!conflict) return undefined;
   const source = conflict.sourceInfo?.path || conflict.sourceInfo?.source;
-  return { name: conflict.name, source } satisfies LedgerConflict;
+  return { name: conflict.name, source } satisfies TaskConflict;
 }
 
-export function injectLedgerProjection(
+export function injectTaskProjection(
   messages: readonly unknown[],
   projection: string,
 ) {
@@ -60,11 +60,11 @@ export function injectLedgerProjection(
     const message = next[index];
     if (message.role !== "user") continue;
     const safeProjection = projection
-      .replaceAll("<session-ledger>", "[session-ledger]")
-      .replaceAll("</session-ledger>", "[/session-ledger]");
+      .replaceAll("<session-tasks>", "[session-tasks]")
+      .replaceAll("</session-tasks>", "[/session-tasks]");
     const block = {
       type: "text",
-      text: `\n\n<session-ledger>\n${safeProjection}\n</session-ledger>`,
+      text: `\n\n<session-tasks>\n${safeProjection}\n</session-tasks>`,
     };
     if (typeof message.content === "string") {
       message.content = [{ type: "text", text: message.content }, block];
@@ -78,14 +78,14 @@ export function injectLedgerProjection(
   return undefined;
 }
 
-export function ledgerConflictMessage(conflict: LedgerConflict) {
-  return `Session ledger disabled because tool “${conflict.name}” is already registered${conflict.source ? ` by ${conflict.source}` : ""}. Disable the other Todo/plan extension and run /reload.`;
+export function taskConflictMessage(conflict: TaskConflict) {
+  return `Session tasks disabled because tool “${conflict.name}” is already registered${conflict.source ? ` by ${conflict.source}` : ""}. Disable the other Todo/plan extension and run /reload.`;
 }
 
-export default function sessionLedger(pi: ExtensionAPI) {
-  let ledger = createSessionLedger();
+export default function sessionTasks(pi: ExtensionAPI) {
+  let tasks = createSessionTasks();
   let lockedReason: string | undefined;
-  let conflict: LedgerConflict | undefined;
+  let conflict: TaskConflict | undefined;
   let toolsRegistered = false;
   let coldRun = true;
   let activeRun = false;
@@ -95,7 +95,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
-  const snapshot = () => ledger.snapshot();
+  const snapshot = () => tasks.snapshot();
 
   const hasActionableTasks = () =>
     snapshot().items.some(
@@ -136,23 +136,23 @@ export default function sessionLedger(pi: ExtensionAPI) {
 
   const restore = (ctx: ExtensionContext) => {
     try {
-      ledger = createSessionLedger(
-        restoreLedgerSnapshot(ctx.sessionManager.getBranch()),
+      tasks = createSessionTasks(
+        restoreTaskSnapshot(ctx.sessionManager.getBranch()),
       );
       lockedReason = undefined;
     } catch (error) {
-      ledger = createSessionLedger(emptyLedgerSnapshot());
+      tasks = createSessionTasks(emptyTaskSnapshot());
       lockedReason =
-        error instanceof LedgerRestoreError || error instanceof Error
+        error instanceof TaskRestoreError || error instanceof Error
           ? error.message
           : String(error);
     }
   };
 
   const problemMessage = () => {
-    if (conflict) return ledgerConflictMessage(conflict);
+    if (conflict) return taskConflictMessage(conflict);
     if (lockedReason) {
-      return `Session ledger is locked because its newest snapshot is invalid: ${lockedReason}. Navigate to a clean branch or start a new session.`;
+      return `Session tasks are locked because their newest snapshot is invalid: ${lockedReason}. Navigate to a clean branch or start a new session.`;
     }
     return undefined;
   };
@@ -174,20 +174,20 @@ export default function sessionLedger(pi: ExtensionAPI) {
     if (problem) throw new Error(problem);
   };
 
-  const persistThenCommit = (candidate: LedgerSnapshot) => {
+  const persistThenCommit = (candidate: TaskSnapshot) => {
     if (candidate.revision === snapshot().revision) return false;
     // Keep this path synchronous. An await here would let sibling tool calls
     // reorder state and persistence, recreating the upstream Todo lost-update bug.
-    pi.appendEntry(LEDGER_ENTRY_TYPE, candidate);
-    ledger.commit(candidate);
+    pi.appendEntry(TASKS_ENTRY_TYPE, candidate);
+    tasks.commit(candidate);
     updateTaskWidget();
     return true;
   };
 
   const toolDetails = (
-    action: LedgerToolDetails["action"],
-    items: LedgerItem[],
-  ): LedgerToolDetails => ({
+    action: TaskToolDetails["action"],
+    items: TaskItem[],
+  ): TaskToolDetails => ({
     action,
     items,
     total: snapshot().items.length,
@@ -199,33 +199,33 @@ export default function sessionLedger(pi: ExtensionAPI) {
     toolsRegistered = true;
 
     pi.registerTool({
-      name: "ledger_add",
-      label: "Ledger Add",
-      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session ledger. Use this only for work spanning multiple agent runs or user turns, or for an explicit user task list.`,
+      name: "tasks_add",
+      label: "Tasks Add",
+      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session tasks. Use this only for work spanning multiple agent runs or user turns, or for an explicit user task list.`,
       promptSnippet:
-        "Add stable work-intent items to the current session ledger",
+        "Add stable work-intent items to the current session tasks",
       promptGuidelines: [
-        "Use ledger_add only for work spanning multiple agent runs or user turns, or when the user explicitly provides a task list; do not use it as a per-step scratchpad within one run.",
-        "Ledger tools record advisory intent only; Subagents and Workflows execute work, while files, git, tests, tool results, artifacts, and user confirmation remain truth.",
+        "Use tasks_add only for work spanning multiple agent runs or user turns, or when the user explicitly provides a task list; do not use it as a per-step scratchpad within one run.",
+        "Task tools record advisory intent only; Subagents and Workflows execute work, while files, git, tests, tool results, artifacts, and user confirmation remain truth.",
       ],
       parameters: Type.Object({
         items: Type.Array(
           Type.Object({
             subject: Type.String({
               minLength: 1,
-              maxLength: LEDGER_LIMITS.subjectChars,
+              maxLength: TASKS_LIMITS.subjectChars,
               description: "Short imperative description.",
             }),
             detail: Type.Optional(
-              Type.String({ maxLength: LEDGER_LIMITS.detailChars }),
+              Type.String({ maxLength: TASKS_LIMITS.detailChars }),
             ),
           }),
-          { minItems: 1, maxItems: LEDGER_LIMITS.addBatch },
+          { minItems: 1, maxItems: TASKS_LIMITS.addBatch },
         ),
       }),
       execute(_id, params) {
         assertAvailable();
-        const mutation = applyLedgerAdd(snapshot(), params.items);
+        const mutation = applyTaskAdd(snapshot(), params.items);
         persistThenCommit(mutation.snapshot);
         return Promise.resolve({
           content: [
@@ -239,14 +239,14 @@ export default function sessionLedger(pi: ExtensionAPI) {
       },
       renderCall(args, theme) {
         return new Text(
-          `${theme.fg("toolTitle", theme.bold("ledger_add"))} ${theme.fg("muted", `${args.items.length} item(s)`)}`,
+          `${theme.fg("toolTitle", theme.bold("tasks_add"))} ${theme.fg("muted", `${args.items.length} item(s)`)}`,
           0,
           0,
         );
       },
       renderResult(result, options, theme) {
         return renderToolResult(
-          result.details as LedgerToolDetails | undefined,
+          result.details as TaskToolDetails | undefined,
           options.expanded,
           theme,
         );
@@ -254,36 +254,36 @@ export default function sessionLedger(pi: ExtensionAPI) {
     });
 
     pi.registerTool({
-      name: "ledger_update",
-      label: "Ledger Update",
-      description: `${TOOL_PURPOSE} Patch one ledger item by numeric ID. blocked, done, and dropped status changes require a fresh note explaining the blocker, observable evidence, or drop reason.`,
-      promptSnippet: "Update one session ledger item by stable ID",
+      name: "tasks_update",
+      label: "Tasks Update",
+      description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked, done, and dropped status changes require a fresh note explaining the blocker, observable evidence, or drop reason.`,
+      promptSnippet: "Update one session task item by stable ID",
       promptGuidelines: [
-        "Keep ledger_update status current when tracked work materially changes, but avoid ceremonial status churn.",
-        "Before setting a ledger item to done, include a note citing an observable check, artifact, commit, tool result, or user confirmation; the ledger records this claim but does not verify it.",
+        "Keep tasks_update status current when tracked work materially changes, but avoid ceremonial status churn.",
+        "Before setting a task item to done, include a note citing an observable check, artifact, commit, tool result, or user confirmation; Tasks record this claim but do not verify it.",
       ],
       parameters: Type.Object({
         id: Type.Integer({ minimum: 1 }),
         subject: Type.Optional(
-          Type.String({ minLength: 1, maxLength: LEDGER_LIMITS.subjectChars }),
+          Type.String({ minLength: 1, maxLength: TASKS_LIMITS.subjectChars }),
         ),
         detail: Type.Optional(
           Type.Union([
-            Type.String({ maxLength: LEDGER_LIMITS.detailChars }),
+            Type.String({ maxLength: TASKS_LIMITS.detailChars }),
             Type.Null(),
           ]),
         ),
-        status: Type.Optional(StringEnum(LEDGER_STATUSES)),
+        status: Type.Optional(StringEnum(TASK_STATUSES)),
         note: Type.Optional(
           Type.Union([
-            Type.String({ maxLength: LEDGER_LIMITS.noteChars }),
+            Type.String({ maxLength: TASKS_LIMITS.noteChars }),
             Type.Null(),
           ]),
         ),
       }),
       execute(_id, params) {
         assertAvailable();
-        const mutation = applyLedgerUpdate(snapshot(), params);
+        const mutation = applyTaskUpdate(snapshot(), params);
         const changed = persistThenCommit(mutation.snapshot);
         return Promise.resolve({
           content: [
@@ -299,14 +299,14 @@ export default function sessionLedger(pi: ExtensionAPI) {
       },
       renderCall(args, theme) {
         return new Text(
-          `${theme.fg("toolTitle", theme.bold("ledger_update"))} ${theme.fg("accent", `T${args.id}`)}${args.status ? ` ${theme.fg("muted", args.status)}` : ""}`,
+          `${theme.fg("toolTitle", theme.bold("tasks_update"))} ${theme.fg("accent", `T${args.id}`)}${args.status ? ` ${theme.fg("muted", args.status)}` : ""}`,
           0,
           0,
         );
       },
       renderResult(result, options, theme) {
         return renderToolResult(
-          result.details as LedgerToolDetails | undefined,
+          result.details as TaskToolDetails | undefined,
           options.expanded,
           theme,
         );
@@ -314,20 +314,20 @@ export default function sessionLedger(pi: ExtensionAPI) {
     });
 
     pi.registerTool({
-      name: "ledger_list",
-      label: "Ledger List",
-      description: `${TOOL_PURPOSE} Read current session ledger items, optionally filtered by ID and status.`,
-      promptSnippet: "List current session work-intent ledger items",
+      name: "tasks_list",
+      label: "Tasks List",
+      description: `${TOOL_PURPOSE} Read current session task items, optionally filtered by ID and status.`,
+      promptSnippet: "List current session work-intent task items",
       parameters: Type.Object({
         id: Type.Optional(Type.Integer({ minimum: 1 })),
-        status: Type.Optional(StringEnum(LEDGER_STATUSES)),
+        status: Type.Optional(StringEnum(TASK_STATUSES)),
       }),
       execute(_id, params) {
         assertAvailable();
-        const filter = params satisfies LedgerFilter;
-        const items = ledger.list(filter);
+        const filter = params satisfies TaskFilter;
+        const items = tasks.list(filter);
         const preview = items.slice(0, 5);
-        const rendered = ledger.render(filter, 3_800);
+        const rendered = tasks.render(filter, 3_800);
         const text =
           rendered.endsWith("…") || items.length > preview.length
             ? `${rendered}\nShowing a bounded view of ${items.length} matched item(s); filter by status or id for a narrower result.`
@@ -338,11 +338,11 @@ export default function sessionLedger(pi: ExtensionAPI) {
         });
       },
       renderCall(_args, theme) {
-        return new Text(theme.fg("toolTitle", theme.bold("ledger_list")), 0, 0);
+        return new Text(theme.fg("toolTitle", theme.bold("tasks_list")), 0, 0);
       },
       renderResult(result, options, theme) {
         return renderToolResult(
-          result.details as LedgerToolDetails | undefined,
+          result.details as TaskToolDetails | undefined,
           options.expanded,
           theme,
         );
@@ -350,8 +350,8 @@ export default function sessionLedger(pi: ExtensionAPI) {
     });
   };
 
-  pi.registerCommand("ledger", {
-    description: "Inspect the current session work-intent ledger",
+  pi.registerCommand("tasks", {
+    description: "Inspect the current session work-intent tasks",
     handler: async (args, ctx) => {
       const problem = problemMessage();
       if (problem) {
@@ -370,7 +370,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
         return;
       }
-      await openLedgerScreen(ctx, snapshot());
+      await openTasksScreen(ctx, snapshot());
     },
   });
 
@@ -392,7 +392,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     ui = ctx.hasUI ? ctx.ui : undefined;
     uiMode = ctx.hasUI ? ctx.mode : undefined;
     restore(ctx);
-    conflict = findLedgerConflict(pi.getAllTools());
+    conflict = findTaskConflict(pi.getAllTools());
     coldRun = true;
     activeRun = false;
     frozenProjection = "";
@@ -418,7 +418,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
   pi.on("agent_start", () => {
     activeRun = true;
     if (coldRun) {
-      frozenProjection = !problemMessage() ? projectLedger(snapshot()) : "";
+      frozenProjection = !problemMessage() ? projectTasks(snapshot()) : "";
       coldRun = false;
     }
   });
@@ -430,7 +430,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
 
   pi.on("context", (event) => {
     if (!activeRun || !frozenProjection || problemMessage()) return;
-    const messages = injectLedgerProjection(event.messages, frozenProjection);
+    const messages = injectTaskProjection(event.messages, frozenProjection);
     if (messages) return { messages: messages as typeof event.messages };
   });
 
@@ -445,4 +445,4 @@ export default function sessionLedger(pi: ExtensionAPI) {
   });
 }
 
-export { TOOL_NAMES as LEDGER_TOOL_NAMES };
+export { TOOL_NAMES as TASK_TOOL_NAMES };

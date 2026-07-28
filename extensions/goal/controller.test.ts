@@ -109,7 +109,6 @@ test("v2 active goals survive restore while v1 active goals migrate to a durably
         noProgressCount: 0,
         evaluatorFailures: 0,
         waitCount: 0,
-        ledgerReminderUsed: false,
       },
     },
   ]);

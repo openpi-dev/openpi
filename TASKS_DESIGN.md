@@ -1,14 +1,14 @@
-# Session Task Ledger — Research and Proposed Design
+# Session Tasks — Research and Proposed Design
 
-Status: implemented as `extensions/ledger/` after the multi-model revisions in [TASKS_EVALUATION.md](TASKS_EVALUATION.md). Historical alternatives below explain the design path; the implementation and evaluation document are authoritative for current behavior.
+Status: implemented as `extensions/tasks/` after the multi-model revisions in [TASKS_EVALUATION.md](TASKS_EVALUATION.md). Historical alternatives below explain the design path; the implementation and evaluation document are authoritative for current behavior.
 
 ## Decision
 
-My Pi Setup should add a **session-scoped Task Ledger**, but it should not copy Maka wholesale and should not replace Subagents or Workflows.
+My Pi Setup should add **session-scoped Tasks**, but it should not copy Maka wholesale and should not replace Subagents or Workflows.
 
-The ledger answers: **what work remains, what is active or blocked, and what evidence supports completion?**
+Session Tasks answer: **what work remains, what is active or blocked, and what evidence supports completion?**
 
-It does not execute work. Subagents execute one delegated task; Workflows execute staged fan-out; the Task Ledger records user/model intent across turns, compaction, resume, and branch navigation.
+They do not execute work. Subagents execute one delegated task; Workflows execute staged fan-out; Session Tasks record user/model intent across turns, compaction, resume, and branch navigation.
 
 ## Primary-source findings
 
@@ -18,7 +18,7 @@ Anthropic migrated from replace-all `TodoWrite` to ID-addressed Task tools. The 
 
 - `TaskCreate` adds an item;
 - `TaskUpdate` patches one item by `taskId`;
-- `TaskList` and `TaskGet` read the ledger;
+- `TaskList` and `TaskGet` read the task list;
 - create input supports `subject`, `description`, `activeForm`, `metadata`;
 - update additionally supports status, `addBlocks`, `addBlockedBy`, `owner`, and deletion;
 - status is `pending`, `in_progress`, `completed`, with `deleted` as removal;
@@ -55,7 +55,7 @@ Codex is the right model for **small ephemeral progress plans**, not durable cro
 
 ### Maka Agent
 
-Maka's implemented Session Task Ledger is deliberately separate from its Headless `TaskRun`, Goal, Workflow, AgentRun, and RuntimeEvent concepts.
+Maka's implemented Session Tasks are deliberately separate from its Headless `TaskRun`, Goal, Workflow, AgentRun, and RuntimeEvent concepts.
 
 Strong ideas worth preserving:
 
@@ -65,7 +65,7 @@ Strong ideas worth preserving:
 - completion/failure/blocking require evidence or a reason;
 - parent verifies child success before marking a task complete;
 - model-visible task context is bounded;
-- task tools mutate local ledger state and do not dispatch work.
+- task tools mutate local task state and do not dispatch work.
 
 Sources:
 
@@ -78,7 +78,7 @@ Maka's event-sourced JSONL store, UUID + hierarchical keys, resume-trust classif
 
 ### Pi extension capabilities
 
-Pi already provides the right persistence semantics for a session ledger:
+Pi already provides the right persistence semantics for session tasks:
 
 - `pi.appendEntry()` persists extension data but does not put it into model context;
 - tool-result `details` can preserve state along the active session branch;
@@ -99,7 +99,7 @@ The upstream Todo example stores a complete snapshot in tool-result details and 
 
 ### Scope
 
-Implement a session-owned coordination ledger.
+Implement a session-owned task list for coordination.
 
 Non-goals:
 
@@ -166,13 +166,13 @@ Task completion remains advisory and must cite an observable check, artifact, co
 ### Deep module
 
 ```ts
-interface TaskLedger {
+interface SessionTasks {
   execute(command: TaskCommand): TaskResult;
   snapshot(): TaskSnapshot;
   renderPrompt(maxChars?: number): string;
 }
 
-function restoreTaskLedger(branchEntries: readonly SessionEntry[]): TaskLedger;
+function restoreTaskSnapshot(branchEntries: readonly SessionEntry[]): TaskSnapshot;
 ```
 
 One interface hides allocation, transition validation, limits, evidence rules, redaction, filtering, prompt budgeting, and persistence snapshots. Do not add a repository seam before a second persistence adapter exists.
@@ -195,15 +195,15 @@ Why four rather than one polymorphic `tasks` tool:
 - read tools can remain compact while mutations return only changed tasks;
 - no ambiguous action-dependent optional-field schema.
 
-All mutations use sequential execution. Cap the ledger (proposed 100 tasks), subjects (200 chars), descriptions/evidence (1,000 chars), and prompt projection (4,000 chars).
+All mutations use sequential execution. Cap the task list (proposed 100 tasks), subjects (200 chars), descriptions/evidence (1,000 chars), and prompt projection (4,000 chars).
 
 ### Prompt policy
 
-Do not inject an empty ledger. When active tasks exist, add a bounded per-run message in `before_agent_start`:
+Do not inject an empty task list. When active tasks exist, add a bounded per-run message in `before_agent_start`:
 
 ```text
 Current session tasks (advisory; real tool/filesystem/test evidence wins):
-T2 [in_progress] Implement task ledger
+T2 [in_progress] Implement tasks
 T3 [blocked] Verify branch restore — needs a fork test
 Use task_list/task_get for full details.
 ```
@@ -242,7 +242,7 @@ No external `tasks.json` is needed.
 
 ### Subagent/Workflow integration
 
-V1 should not delay the ledger for integration, but reserve optional owner fields.
+V1 should not delay integration of Session Tasks, but reserve optional owner fields.
 
 A later v1.1 can add `task_id` to `subagent_spawn`:
 
@@ -252,13 +252,13 @@ A later v1.1 can add `task_id` to `subagent_spawn`:
 - parent reviews output and calls `task_update(... completed, completion_evidence)`;
 - child failure can mark failed with the actual error.
 
-Do not give child Pi sessions Task tools initially; add all four names to the child denylist. The parent owns its session ledger.
+Do not give child Pi sessions Task tools initially; add all four names to the child denylist. The parent owns its session tasks.
 
 Workflow linking should remain manual until there is a clear one-task-to-one-run ownership model.
 
 ## Recommended delivery sequence
 
-1. Pure TaskLedger module and transition tests.
+1. Pure SessionTasks module and transition tests.
 2. Four tools with branch-correct snapshot persistence.
 3. Bounded `before_agent_start` projection and prompt tests.
 4. Compact renderers, `/tasks`, Footer activity.
@@ -270,4 +270,4 @@ Workflow linking should remain manual until there is a clear one-task-to-one-run
 
 Codex demonstrates that a replace-all checklist is sufficient for short runs but lacks stable identity. Claude demonstrates the ecosystem shift toward ID-addressed incremental Tasks. Maka demonstrates the value of evidence and explicit blocked/failed states, while also showing how quickly the subsystem can become a runtime of its own.
 
-The proposed v1 takes the useful middle: **branch-correct, stable, evidence-aware session Tasks behind a small interface, without creating a second Workflow or durable runtime.**
+The proposed v1 takes the useful middle: **branch-correct, stable, evidence-aware session tasks behind a small interface, without creating a second Workflow or durable runtime.**

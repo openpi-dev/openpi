@@ -52,7 +52,6 @@ function legacy(overrides: Record<string, unknown> = {}) {
     noProgressCount: 0,
     evaluatorFailures: 0,
     waitCount: 0,
-    ledgerReminderUsed: false,
     ...overrides,
   };
 }

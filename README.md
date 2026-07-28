@@ -221,22 +221,22 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 
 默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
 
-### 4. Session Ledger：跨 Turn 记住未完成工作
+### 4. Session Tasks：跨 Turn 记住未完成工作
 
 ```text
-/ledger
+/tasks
 ```
 
-Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作意图：
+Session Tasks 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作意图：
 
-- `ledger_add` 增加一条或多条工作项；
-- `ledger_update` 更新 `pending / in_progress / blocked / done / dropped`；
-- `ledger_list` 按 ID 或状态读取；
+- `tasks_add` 增加一条或多条工作项；
+- `tasks_update` 更新 `pending / in_progress / blocked / done / dropped`；
+- `tasks_list` 按 ID 或状态读取；
 - `blocked / done / dropped` 必须留下阻塞条件、可检查证据或放弃原因；
 - 状态跟随 Pi Session 分支，在 `/reload`、`/resume`、`/tree`、`/fork` 和 Context Pivot 后恢复；
-- Ledger 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
+- Tasks 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
 
-Ledger 会像 Claude Code Tasks 一样，把未完成工作持久显示在输入框上方：默认展示完成进度和优先级最高的两项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/ledger hide|show|toggle` 可隐藏和恢复，`/ledger` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Ledger 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
+Tasks 会像 Claude Code Tasks 一样，把未完成工作持久显示在输入框上方：默认展示完成进度和优先级最高的两项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/tasks hide|show|toggle` 可隐藏和恢复，`/tasks` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Tasks 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Tasks 会拒绝注册，避免两套规划工具同时误导模型。
 
 ### 5. Session Goal：Codex 风格的持久自主目标
 
@@ -252,7 +252,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 
 状态为 `active / paused / blocked / usage_limited / budget_limited / complete`。用户负责 pause、resume、edit、clear；模型只能 complete 或 blocked；系统负责预算和运行错误状态。Esc/Ctrl+C 导致的 Assistant `aborted` 会暂停 Goal，Assistant `error` 会阻塞 Goal。活动 Goal 在 `/reload` 或 Session 恢复后继续；Fork 和 `/tree` 为避免继承后立刻执行，会等第一次显式用户输入后再继续。恢复 paused、blocked 或 usage-limited Goal 时会询问是否 Resume。旧 v1 Goal 首次迁移时把 active/waiting 降为 paused，并尽量把原成功条件折入 Objective。
 
-另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Ledger 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
+另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Tasks 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
 
 ### 6. Context Pivot：同一 Session，切换工作阶段
 
@@ -501,7 +501,7 @@ pi install ~/work/my-pi-setup
 | `/subagents`                | 查看、取消或接管子 Agent                     |
 | `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
 | `/workflows`                | 查看 Workflow 运行、阶段和产物               |
-| `/ledger`                   | 查看当前 Session 的工作意图台账              |
+| `/tasks`                   | 查看当前 Session 的任务列表                  |
 | `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal    |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
 | `/lg`                       | 浏览 Working Tree 改动和 Diff                |
@@ -515,7 +515,7 @@ pi install ~/work/my-pi-setup
 | `bg_start`, `bg_status`, `bg_list`, `bg_kill`                                           | 后台进程生命周期                      |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
 | `workflow`                                                                              | 动态多阶段 Agent 编排                 |
-| `ledger_add`, `ledger_update`, `ledger_list`                                            | Session 工作意图台账                  |
+| `tasks_add`, `tasks_update`, `tasks_list`                                            | Session 持久任务                      |
 | `get_goal`, `create_goal`, `update_goal`                                                | 读取、创建或完成/阻塞 Session Goal    |
 | `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
 | `ask_user`                                                                              | 结构化用户决策                        |
@@ -618,7 +618,7 @@ extensions/
 ├── background-terminals/  # 长进程、日志、/ps
 ├── subagents/             # Pi / Claude Code / Codex Backend + /subagents
 ├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
-├── ledger/                # Session 工作意图台账
+├── tasks/                 # Session 持久任务
 ├── context-pivot/         # 定向 Compaction
 ├── sessions/              # Session 搜索、预览、切换
 ├── ask-user/              # 结构化用户输入

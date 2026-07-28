@@ -11,9 +11,9 @@ import {
   type Component,
   type TUI,
 } from "@earendil-works/pi-tui";
-import type { LedgerItem, LedgerSnapshot } from "./ledger.ts";
+import type { TaskItem, TaskSnapshot } from "./tasks.ts";
 
-const STATUS_ICON: Record<LedgerItem["status"], string> = {
+const STATUS_ICON: Record<TaskItem["status"], string> = {
   pending: "○",
   in_progress: "●",
   blocked: "!",
@@ -21,7 +21,7 @@ const STATUS_ICON: Record<LedgerItem["status"], string> = {
   dropped: "×",
 };
 
-const TASK_WIDGET_ORDER: Record<LedgerItem["status"], number> = {
+const TASK_WIDGET_ORDER: Record<TaskItem["status"], number> = {
   in_progress: 0,
   blocked: 1,
   pending: 2,
@@ -31,19 +31,19 @@ const TASK_WIDGET_ORDER: Record<LedgerItem["status"], number> = {
 
 const TASK_WIDGET_LIMIT = 2;
 
-export interface LedgerToolDetails {
+export interface TaskToolDetails {
   action: "add" | "update" | "list";
-  items: LedgerItem[];
+  items: TaskItem[];
   total: number;
   revision: number;
 }
 
-export function renderLedgerRows(
-  items: readonly LedgerItem[],
+export function renderTaskRows(
+  items: readonly TaskItem[],
   theme: Theme,
   width: number,
 ) {
-  if (items.length === 0) return [theme.fg("dim", "No ledger items.")];
+  if (items.length === 0) return [theme.fg("dim", "No task items.")];
   return items.flatMap((item) => {
     const color =
       item.status === "done"
@@ -90,7 +90,7 @@ export function renderLedgerRows(
 }
 
 export function renderTaskWidget(
-  snapshot: LedgerSnapshot,
+  snapshot: TaskSnapshot,
   theme: Theme,
   width: number,
 ) {
@@ -108,7 +108,7 @@ export function renderTaskWidget(
   const header =
     theme.fg("warning", "↳ ") +
     theme.fg("text", theme.bold(`Tasks ${completed}/${tracked.length}`)) +
-    theme.fg("dim", " · ctrl+shift+t to hide · /ledger to view");
+    theme.fg("dim", " · ctrl+shift+t to hide · /tasks to view");
   const visible = actionable.slice(0, TASK_WIDGET_LIMIT);
   const lines = [truncateToWidth(header, width)];
   for (const [index, item] of visible.entries()) {
@@ -138,13 +138,13 @@ export function renderTaskWidget(
 }
 
 export function renderToolResult(
-  details: LedgerToolDetails | undefined,
+  details: TaskToolDetails | undefined,
   expanded: boolean,
   theme: Theme,
 ): Component {
-  if (!details) return new Text(theme.fg("dim", "Ledger updated."), 0, 0);
+  if (!details) return new Text(theme.fg("dim", "Tasks updated."), 0, 0);
   const items = expanded ? details.items : details.items.slice(0, 5);
-  const rows = renderLedgerRows(items, theme, 120);
+  const rows = renderTaskRows(items, theme, 120);
   if (!expanded && details.items.length > items.length) {
     rows.push(theme.fg("dim", `… ${details.items.length - items.length} more`));
   }
@@ -154,19 +154,19 @@ export function renderToolResult(
   return new Text(rows.join("\n"), 0, 0);
 }
 
-class LedgerScreen implements Component {
+class TasksScreen implements Component {
   private offset = 0;
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly keybindings: KeybindingsManager;
-  private readonly snapshot: LedgerSnapshot;
+  private readonly snapshot: TaskSnapshot;
   private readonly done: () => void;
 
   constructor(
     tui: TUI,
     theme: Theme,
     keybindings: KeybindingsManager,
-    snapshot: LedgerSnapshot,
+    snapshot: TaskSnapshot,
     done: () => void,
   ) {
     this.tui = tui;
@@ -209,14 +209,14 @@ class LedgerScreen implements Component {
   }
 
   render(width: number) {
-    const body = renderLedgerRows(this.snapshot.items, this.theme, width - 4);
+    const body = renderTaskRows(this.snapshot.items, this.theme, width - 4);
     const rows = Math.max(8, (this.tui.terminal.rows || 30) - 8);
     const maxOffset = Math.max(0, body.length - rows);
     this.offset = Math.min(this.offset, maxOffset);
     const visible = body.slice(this.offset, this.offset + rows);
     const lines = [
       truncateToWidth(
-        `${this.theme.fg("accent", this.theme.bold("Session ledger"))} ${this.theme.fg("dim", `· ${this.snapshot.items.length} items · revision ${this.snapshot.revision}`)}`,
+        `${this.theme.fg("accent", this.theme.bold("Session tasks"))} ${this.theme.fg("dim", `· ${this.snapshot.items.length} items · revision ${this.snapshot.revision}`)}`,
         width,
       ),
       this.theme.fg("border", "─".repeat(Math.max(0, width))),
@@ -235,17 +235,17 @@ class LedgerScreen implements Component {
   invalidate() {}
 }
 
-export async function openLedgerScreen(
+export async function openTasksScreen(
   ctx: ExtensionCommandContext,
-  snapshot: LedgerSnapshot,
+  snapshot: TaskSnapshot,
 ) {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI)
-      ctx.ui.notify(`${snapshot.items.length} ledger item(s)`, "info");
+      ctx.ui.notify(`${snapshot.items.length} task item(s)`, "info");
     return;
   }
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) =>
-      new LedgerScreen(tui, theme, keybindings, snapshot, () => done()),
+      new TasksScreen(tui, theme, keybindings, snapshot, () => done()),
   );
 }

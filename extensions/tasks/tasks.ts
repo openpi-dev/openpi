@@ -1,5 +1,5 @@
-export const LEDGER_ENTRY_TYPE = "task-ledger";
-export const LEDGER_STATUSES = [
+export const TASKS_ENTRY_TYPE = "session-tasks";
+export const TASK_STATUSES = [
   "pending",
   "in_progress",
   "blocked",
@@ -7,49 +7,49 @@ export const LEDGER_STATUSES = [
   "dropped",
 ] as const;
 
-export type LedgerStatus = (typeof LEDGER_STATUSES)[number];
+export type TaskStatus = (typeof TASK_STATUSES)[number];
 
-export interface LedgerItem {
+export interface TaskItem {
   id: number;
   subject: string;
   detail?: string;
-  status: LedgerStatus;
+  status: TaskStatus;
   note?: string;
 }
 
-export interface LedgerSnapshot {
+export interface TaskSnapshot {
   version: 1;
   revision: number;
   nextId: number;
-  items: LedgerItem[];
+  items: TaskItem[];
 }
 
-export interface LedgerAddInput {
+export interface TaskAddInput {
   subject: string;
   detail?: string;
-  status?: LedgerStatus;
+  status?: TaskStatus;
   note?: string;
 }
 
-export interface LedgerUpdateInput {
+export interface TaskUpdateInput {
   id: number;
   subject?: string;
   detail?: string | null;
-  status?: LedgerStatus;
+  status?: TaskStatus;
   note?: string | null;
 }
 
-export interface LedgerFilter {
+export interface TaskFilter {
   id?: number;
-  status?: LedgerStatus;
+  status?: TaskStatus;
 }
 
-export interface LedgerMutation {
-  snapshot: LedgerSnapshot;
-  items: LedgerItem[];
+export interface TaskMutation {
+  snapshot: TaskSnapshot;
+  items: TaskItem[];
 }
 
-export const LEDGER_LIMITS = Object.freeze({
+export const TASKS_LIMITS = Object.freeze({
   subjectChars: 120,
   detailChars: 500,
   noteChars: 500,
@@ -60,7 +60,7 @@ export const LEDGER_LIMITS = Object.freeze({
   renderedListChars: 16_384,
 });
 
-const REQUIRED_NOTE_STATUSES = new Set<LedgerStatus>([
+const REQUIRED_NOTE_STATUSES = new Set<TaskStatus>([
   "blocked",
   "done",
   "dropped",
@@ -70,39 +70,39 @@ const ITEM_KEYS = new Set(["id", "subject", "detail", "status", "note"]);
 const ADD_KEYS = new Set(["subject", "detail", "status", "note"]);
 const UPDATE_KEYS = new Set(["id", "subject", "detail", "status", "note"]);
 const PROJECTION_HEADER =
-  "Session ledger: advisory context, not an instruction to resume unrelated work. " +
+  "Session tasks: advisory context, not an instruction to resume unrelated work. " +
   "Real files, git, tests, tools, artifacts, and user confirmation are truth. " +
-  "Use ledger_list for details. After compaction/pivot, coordinate with this ledger instead of recreating items.";
+  "Use tasks_list for details. After compaction/pivot, coordinate with these tasks instead of recreating items.";
 
-export class LedgerValidationError extends Error {
+export class TaskValidationError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "LedgerValidationError";
+    this.name = "TaskValidationError";
   }
 }
 
-export class LedgerRestoreError extends Error {
+export class TaskRestoreError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "LedgerRestoreError";
+    this.name = "TaskRestoreError";
   }
 }
 
-export interface SessionLedger {
-  add(input: LedgerAddInput | readonly LedgerAddInput[]): LedgerMutation;
-  update(input: LedgerUpdateInput): LedgerMutation;
-  list(filter?: LedgerFilter): LedgerItem[];
-  snapshot(): LedgerSnapshot;
+export interface SessionTasks {
+  add(input: TaskAddInput | readonly TaskAddInput[]): TaskMutation;
+  update(input: TaskUpdateInput): TaskMutation;
+  list(filter?: TaskFilter): TaskItem[];
+  snapshot(): TaskSnapshot;
   project(): string;
-  render(filter?: LedgerFilter, maxChars?: number): string;
-  commit(snapshot: LedgerSnapshot): void;
+  render(filter?: TaskFilter, maxChars?: number): string;
+  commit(snapshot: TaskSnapshot): void;
 }
 
-export function emptyLedgerSnapshot(): LedgerSnapshot {
+export function emptyTaskSnapshot(): TaskSnapshot {
   return { version: 1, revision: 0, nextId: 1, items: [] };
 }
 
-export function validateLedgerSnapshot(value: unknown): LedgerSnapshot {
+export function validateTaskSnapshot(value: unknown): TaskSnapshot {
   if (!isRecord(value)) fail("snapshot must be an object");
   assertExactKeys(value, SNAPSHOT_KEYS, "snapshot");
   if (value.version !== 1)
@@ -110,14 +110,14 @@ export function validateLedgerSnapshot(value: unknown): LedgerSnapshot {
   assertNonNegativeInteger(value.revision, "snapshot.revision");
   assertPositiveInteger(value.nextId, "snapshot.nextId");
   if (!Array.isArray(value.items)) fail("snapshot.items must be an array");
-  if (value.items.length > LEDGER_LIMITS.items) {
-    fail(`snapshot.items exceeds ${LEDGER_LIMITS.items}`);
+  if (value.items.length > TASKS_LIMITS.items) {
+    fail(`snapshot.items exceeds ${TASKS_LIMITS.items}`);
   }
 
   const ids = new Set<number>();
   const items = value.items.map((item, index) => {
     const checked = validateItem(item, `snapshot.items[${index}]`);
-    if (ids.has(checked.id)) fail(`duplicate ledger id: ${checked.id}`);
+    if (ids.has(checked.id)) fail(`duplicate task id: ${checked.id}`);
     ids.add(checked.id);
     return checked;
   });
@@ -125,7 +125,7 @@ export function validateLedgerSnapshot(value: unknown): LedgerSnapshot {
   if (items.some((item) => item.id >= nextId)) {
     fail("snapshot.nextId must be greater than every item id");
   }
-  const snapshot: LedgerSnapshot = {
+  const snapshot: TaskSnapshot = {
     version: 1,
     revision: value.revision as number,
     nextId,
@@ -135,17 +135,17 @@ export function validateLedgerSnapshot(value: unknown): LedgerSnapshot {
   return snapshot;
 }
 
-export function applyLedgerAdd(
-  current: LedgerSnapshot,
-  additions: readonly LedgerAddInput[],
-): LedgerMutation {
-  const base = validateLedgerSnapshot(current);
+export function applyTaskAdd(
+  current: TaskSnapshot,
+  additions: readonly TaskAddInput[],
+): TaskMutation {
+  const base = validateTaskSnapshot(current);
   if (additions.length < 1) fail("add requires at least one item");
-  if (additions.length > LEDGER_LIMITS.addBatch) {
-    fail(`add batch exceeds ${LEDGER_LIMITS.addBatch}`);
+  if (additions.length > TASKS_LIMITS.addBatch) {
+    fail(`add batch exceeds ${TASKS_LIMITS.addBatch}`);
   }
-  if (base.items.length + additions.length > LEDGER_LIMITS.items) {
-    fail(`ledger exceeds ${LEDGER_LIMITS.items} items`);
+  if (base.items.length + additions.length > TASKS_LIMITS.items) {
+    fail(`task list exceeds ${TASKS_LIMITS.items} items`);
   }
 
   let nextId = base.nextId;
@@ -167,7 +167,7 @@ export function applyLedgerAdd(
     return item;
   });
 
-  const candidate = validateLedgerSnapshot({
+  const candidate = validateTaskSnapshot({
     version: 1,
     revision: increment(base.revision, "snapshot revision"),
     nextId,
@@ -176,11 +176,11 @@ export function applyLedgerAdd(
   return { snapshot: candidate, items: cloneItems(added) };
 }
 
-export function applyLedgerUpdate(
-  current: LedgerSnapshot,
-  update: LedgerUpdateInput,
-): LedgerMutation {
-  const base = validateLedgerSnapshot(current);
+export function applyTaskUpdate(
+  current: TaskSnapshot,
+  update: TaskUpdateInput,
+): TaskMutation {
+  const base = validateTaskSnapshot(current);
   if (!isRecord(update)) fail("update must be an object");
   assertExactKeys(update, UPDATE_KEYS, "update");
   assertPositiveInteger(update.id, "update.id");
@@ -188,7 +188,7 @@ export function applyLedgerUpdate(
     fail("update must change at least one field");
 
   const index = base.items.findIndex((item) => item.id === update.id);
-  if (index < 0) fail(`ledger item T${update.id} does not exist`);
+  if (index < 0) fail(`task item T${update.id} does not exist`);
   const previous = base.items[index];
   const status = hasOwn(update, "status")
     ? validateStatus(update.status, "update.status")
@@ -233,7 +233,7 @@ export function applyLedgerUpdate(
 
   const items = base.items.slice();
   items[index] = changed;
-  const candidate = validateLedgerSnapshot({
+  const candidate = validateTaskSnapshot({
     version: 1,
     revision: increment(base.revision, "snapshot revision"),
     nextId: base.nextId,
@@ -242,20 +242,18 @@ export function applyLedgerUpdate(
   return { snapshot: candidate, items: cloneItems([changed]) };
 }
 
-export function restoreLedgerSnapshot(
-  entries: readonly unknown[],
-): LedgerSnapshot {
+export function restoreTaskSnapshot(entries: readonly unknown[]): TaskSnapshot {
   const candidates = entries.flatMap((entry, position) => {
-    const payload = extractLedgerPayload(entry);
+    const payload = extractTasksPayload(entry);
     return payload.found ? [{ payload: payload.value, position }] : [];
   });
-  if (candidates.length === 0) return emptyLedgerSnapshot();
+  if (candidates.length === 0) return emptyTaskSnapshot();
 
   let winner:
     | {
         position: number;
         revision: number;
-        snapshot?: LedgerSnapshot;
+        snapshot?: TaskSnapshot;
         error?: Error;
       }
     | undefined;
@@ -269,15 +267,15 @@ export function restoreLedgerSnapshot(
     const unknownVersion = version !== undefined && version !== 1;
     if (unknownVersion) unknownVersions.push(candidate.position);
 
-    let snapshot: LedgerSnapshot | undefined;
+    let snapshot: TaskSnapshot | undefined;
     let error: Error | undefined;
     if (unknownVersion) {
-      error = new LedgerRestoreError(
+      error = new TaskRestoreError(
         `unsupported snapshot version: ${String(version)}`,
       );
     } else {
       try {
-        snapshot = validateLedgerSnapshot(candidate.payload);
+        snapshot = validateTaskSnapshot(candidate.payload);
         nextIdHighWater = Math.max(nextIdHighWater, snapshot.nextId);
       } catch (caught) {
         error = caught instanceof Error ? caught : new Error(String(caught));
@@ -297,21 +295,19 @@ export function restoreLedgerSnapshot(
   }
 
   if (!winner) {
-    throw new LedgerRestoreError(
-      "ledger history contains no restorable snapshot",
-    );
+    throw new TaskRestoreError("task history contains no restorable snapshot");
   }
   if (
     unknownVersions.some((position) => position > winner.position) ||
     unrankedMalformed.some((position) => position > winner.position)
   ) {
-    throw new LedgerRestoreError(
-      "a later unknown or malformed ledger entry locks restoration",
+    throw new TaskRestoreError(
+      "a later unknown or malformed task entry locks restoration",
     );
   }
   if (!winner.snapshot) {
-    throw new LedgerRestoreError(
-      `winning ledger revision ${winner.revision} is malformed: ${winner.error?.message ?? "invalid snapshot"}`,
+    throw new TaskRestoreError(
+      `winning task revision ${winner.revision} is malformed: ${winner.error?.message ?? "invalid snapshot"}`,
     );
   }
 
@@ -324,12 +320,12 @@ export function restoreLedgerSnapshot(
     winner.snapshot.nextId,
     increment(maxId, "item id"),
   );
-  return validateLedgerSnapshot({ ...winner.snapshot, nextId });
+  return validateTaskSnapshot({ ...winner.snapshot, nextId });
 }
 
-export function projectLedger(snapshot: LedgerSnapshot): string {
-  const checked = validateLedgerSnapshot(snapshot);
-  const rank: Record<LedgerStatus, number> = {
+export function projectTasks(snapshot: TaskSnapshot): string {
+  const checked = validateTaskSnapshot(snapshot);
+  const rank: Record<TaskStatus, number> = {
     in_progress: 0,
     blocked: 1,
     pending: 2,
@@ -344,17 +340,17 @@ export function projectLedger(snapshot: LedgerSnapshot): string {
   let output = PROJECTION_HEADER;
   for (const item of actionable) {
     const line = `\nT${item.id} [${item.status}] ${singleLine(item.subject)}`;
-    if (charCount(output + line) > LEDGER_LIMITS.projectionChars) break;
+    if (charCount(output + line) > TASKS_LIMITS.projectionChars) break;
     output += line;
   }
-  return takeChars(output, LEDGER_LIMITS.projectionChars);
+  return takeChars(output, TASKS_LIMITS.projectionChars);
 }
 
-export function listLedgerItems(
-  snapshot: LedgerSnapshot,
-  filter: LedgerFilter = {},
-): LedgerItem[] {
-  const checked = validateLedgerSnapshot(snapshot);
+export function listTaskItems(
+  snapshot: TaskSnapshot,
+  filter: TaskFilter = {},
+): TaskItem[] {
+  const checked = validateTaskSnapshot(snapshot);
   validateFilter(filter);
   return cloneItems(
     checked.items.filter(
@@ -365,19 +361,19 @@ export function listLedgerItems(
   );
 }
 
-export function renderLedgerList(
-  snapshot: LedgerSnapshot,
-  filter: LedgerFilter = {},
-  maxChars: number = LEDGER_LIMITS.renderedListChars,
+export function renderTaskList(
+  snapshot: TaskSnapshot,
+  filter: TaskFilter = {},
+  maxChars: number = TASKS_LIMITS.renderedListChars,
 ): string {
   if (!Number.isSafeInteger(maxChars) || maxChars < 1) {
     fail("maxChars must be a positive safe integer");
   }
-  const bound = Math.min(maxChars, LEDGER_LIMITS.renderedListChars);
-  const items = listLedgerItems(snapshot, filter);
+  const bound = Math.min(maxChars, TASKS_LIMITS.renderedListChars);
+  const items = listTaskItems(snapshot, filter);
   const text =
     items.length === 0
-      ? "No ledger items."
+      ? "No task items."
       : items
           .map((item) => {
             const lines = [
@@ -393,44 +389,44 @@ export function renderLedgerList(
   return takeChars(text, bound);
 }
 
-export function createSessionLedger(
-  initial: LedgerSnapshot = emptyLedgerSnapshot(),
-): SessionLedger {
-  let current = cloneSnapshot(validateLedgerSnapshot(initial));
+export function createSessionTasks(
+  initial: TaskSnapshot = emptyTaskSnapshot(),
+): SessionTasks {
+  let current = cloneSnapshot(validateTaskSnapshot(initial));
   return {
     add(input) {
       const additions = Array.isArray(input) ? input : [input];
-      return cloneMutation(applyLedgerAdd(current, additions));
+      return cloneMutation(applyTaskAdd(current, additions));
     },
     update(input) {
-      return cloneMutation(applyLedgerUpdate(current, input));
+      return cloneMutation(applyTaskUpdate(current, input));
     },
     list(filter) {
-      return listLedgerItems(current, filter);
+      return listTaskItems(current, filter);
     },
     snapshot() {
       return cloneSnapshot(current);
     },
     project() {
-      return projectLedger(current);
+      return projectTasks(current);
     },
     render(filter, maxChars) {
-      return renderLedgerList(current, filter, maxChars);
+      return renderTaskList(current, filter, maxChars);
     },
     commit(snapshot) {
-      current = cloneSnapshot(validateLedgerSnapshot(snapshot));
+      current = cloneSnapshot(validateTaskSnapshot(snapshot));
     },
   };
 }
 
-function validateItem(value: unknown, path: string): LedgerItem {
+function validateItem(value: unknown, path: string): TaskItem {
   if (!isRecord(value)) fail(`${path} must be an object`);
   assertExactKeys(value, ITEM_KEYS, path);
   assertPositiveInteger(value.id, `${path}.id`);
   const subject = normalizeText(
     value.subject,
     `${path}.subject`,
-    LEDGER_LIMITS.subjectChars,
+    TASKS_LIMITS.subjectChars,
     true,
   );
   const status = validateStatus(value.status, `${path}.status`);
@@ -438,12 +434,12 @@ function validateItem(value: unknown, path: string): LedgerItem {
     ? normalizeText(
         value.detail,
         `${path}.detail`,
-        LEDGER_LIMITS.detailChars,
+        TASKS_LIMITS.detailChars,
         false,
       )
     : undefined;
   const note = hasOwn(value, "note")
-    ? normalizeText(value.note, `${path}.note`, LEDGER_LIMITS.noteChars, true)
+    ? normalizeText(value.note, `${path}.note`, TASKS_LIMITS.noteChars, true)
     : undefined;
   if (REQUIRED_NOTE_STATUSES.has(status) && note === undefined) {
     fail(`${path}.note is required for ${status}`);
@@ -457,14 +453,14 @@ function validateItem(value: unknown, path: string): LedgerItem {
   };
 }
 
-function validateStatus(value: unknown, path: string): LedgerStatus {
-  if (!LEDGER_STATUSES.includes(value as LedgerStatus)) {
-    fail(`${path} must be a valid ledger status`);
+function validateStatus(value: unknown, path: string): TaskStatus {
+  if (!TASK_STATUSES.includes(value as TaskStatus)) {
+    fail(`${path} must be a valid task status`);
   }
-  return value as LedgerStatus;
+  return value as TaskStatus;
 }
 
-function validateFilter(filter: LedgerFilter) {
+function validateFilter(filter: TaskFilter) {
   if (!isRecord(filter)) fail("filter must be an object");
   assertExactKeys(filter, new Set(["id", "status"]), "filter");
   if (filter.id !== undefined) assertPositiveInteger(filter.id, "filter.id");
@@ -472,14 +468,14 @@ function validateFilter(filter: LedgerFilter) {
     validateStatus(filter.status, "filter.status");
 }
 
-function extractLedgerPayload(entry: unknown): {
+function extractTasksPayload(entry: unknown): {
   found: boolean;
   value?: unknown;
 } {
   if (
     !isRecord(entry) ||
     entry.type !== "custom" ||
-    entry.customType !== LEDGER_ENTRY_TYPE
+    entry.customType !== TASKS_ENTRY_TYPE
   ) {
     return { found: false };
   }
@@ -501,11 +497,11 @@ function declaredVersion(value: unknown) {
   return value.version;
 }
 
-function assertSnapshotBytes(snapshot: LedgerSnapshot) {
+function assertSnapshotBytes(snapshot: TaskSnapshot) {
   const bytes = new TextEncoder().encode(JSON.stringify(snapshot)).byteLength;
-  if (bytes > LEDGER_LIMITS.snapshotBytes) {
+  if (bytes > TASKS_LIMITS.snapshotBytes) {
     fail(
-      `serialized snapshot exceeds ${LEDGER_LIMITS.snapshotBytes} UTF-8 bytes`,
+      `serialized snapshot exceeds ${TASKS_LIMITS.snapshotBytes} UTF-8 bytes`,
     );
   }
 }
@@ -581,15 +577,15 @@ function singleLine(value: string) {
   return value.replace(/\s+/gu, " ").trim();
 }
 
-function cloneItems(items: readonly LedgerItem[]) {
+function cloneItems(items: readonly TaskItem[]) {
   return items.map((item) => ({ ...item }));
 }
 
-function cloneSnapshot(snapshot: LedgerSnapshot): LedgerSnapshot {
+function cloneSnapshot(snapshot: TaskSnapshot): TaskSnapshot {
   return { ...snapshot, items: cloneItems(snapshot.items) };
 }
 
-function cloneMutation(mutation: LedgerMutation): LedgerMutation {
+function cloneMutation(mutation: TaskMutation): TaskMutation {
   return {
     snapshot: cloneSnapshot(mutation.snapshot),
     items: cloneItems(mutation.items),
@@ -597,5 +593,5 @@ function cloneMutation(mutation: LedgerMutation): LedgerMutation {
 }
 
 function fail(message: string): never {
-  throw new LedgerValidationError(message);
+  throw new TaskValidationError(message);
 }

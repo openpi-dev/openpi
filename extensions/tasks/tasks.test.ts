@@ -2,25 +2,25 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
-  LEDGER_LIMITS,
-  LedgerRestoreError,
-  LedgerValidationError,
-  applyLedgerAdd,
-  createSessionLedger,
-  emptyLedgerSnapshot,
-  projectLedger,
-  renderLedgerList,
-  restoreLedgerSnapshot,
-  validateLedgerSnapshot,
-  type LedgerSnapshot,
-  type LedgerStatus,
-} from "./ledger.ts";
+  TASKS_LIMITS,
+  TaskRestoreError,
+  TaskValidationError,
+  applyTaskAdd,
+  createSessionTasks,
+  emptyTaskSnapshot,
+  projectTasks,
+  renderTaskList,
+  restoreTaskSnapshot,
+  validateTaskSnapshot,
+  type TaskSnapshot,
+  type TaskStatus,
+} from "./tasks.ts";
 
 function snapshot(
   revision: number,
-  items: LedgerSnapshot["items"] = [],
+  items: TaskSnapshot["items"] = [],
   nextId = items.reduce((maximum, item) => Math.max(maximum, item.id), 0) + 1,
-): LedgerSnapshot {
+): TaskSnapshot {
   return { version: 1, revision, nextId, items };
 }
 
@@ -30,29 +30,29 @@ function entry(data: unknown) {
     id: `entry-${Math.random()}`,
     parentId: null,
     timestamp: new Date(0).toISOString(),
-    customType: "task-ledger",
+    customType: "session-tasks",
     data,
   };
 }
 
 test("add, update, list, and stable allocation", () => {
-  const ledger = createSessionLedger();
-  const added = ledger.add([
+  const tasks = createSessionTasks();
+  const added = tasks.add([
     { subject: "First", detail: "one" },
     { subject: "Second" },
   ]);
-  ledger.commit(added.snapshot);
+  tasks.commit(added.snapshot);
   assert.deepEqual(
     added.items.map((item) => item.id),
     [1, 2],
   );
   assert.equal(added.snapshot.revision, 1);
 
-  ledger.commit(ledger.update({ id: 1, subject: "First revised" }).snapshot);
-  const third = ledger.add({ subject: "Third" });
-  ledger.commit(third.snapshot);
+  tasks.commit(tasks.update({ id: 1, subject: "First revised" }).snapshot);
+  const third = tasks.add({ subject: "Third" });
+  tasks.commit(third.snapshot);
   assert.equal(third.items[0].id, 3);
-  assert.deepEqual(ledger.list({ id: 1 }), [
+  assert.deepEqual(tasks.list({ id: 1 }), [
     {
       id: 1,
       subject: "First revised",
@@ -60,11 +60,11 @@ test("add, update, list, and stable allocation", () => {
       status: "pending",
     },
   ]);
-  assert.equal(ledger.snapshot().revision, 3);
+  assert.equal(tasks.snapshot().revision, 3);
 });
 
 test("all status transitions are allowed and multiple items may be in progress", () => {
-  const statuses: LedgerStatus[] = [
+  const statuses: TaskStatus[] = [
     "pending",
     "in_progress",
     "blocked",
@@ -83,10 +83,10 @@ test("all status transitions are allowed and multiple items may be in progress",
             : {}),
         },
       ]);
-      const ledger = createSessionLedger(initial);
+      const tasks = createSessionTasks(initial);
       if (to !== from) {
-        ledger.commit(
-          ledger.update({
+        tasks.commit(
+          tasks.update({
             id: 1,
             status: to,
             ...(["blocked", "done", "dropped"].includes(to)
@@ -95,82 +95,82 @@ test("all status transitions are allowed and multiple items may be in progress",
           }).snapshot,
         );
       }
-      assert.equal(ledger.list()[0].status, to);
+      assert.equal(tasks.list()[0].status, to);
     }
   }
 
-  const ledger = createSessionLedger();
-  ledger.commit(ledger.add([{ subject: "A" }, { subject: "B" }]).snapshot);
-  ledger.commit(ledger.update({ id: 1, status: "in_progress" }).snapshot);
-  ledger.commit(ledger.update({ id: 2, status: "in_progress" }).snapshot);
-  assert.equal(ledger.list({ status: "in_progress" }).length, 2);
+  const tasks = createSessionTasks();
+  tasks.commit(tasks.add([{ subject: "A" }, { subject: "B" }]).snapshot);
+  tasks.commit(tasks.update({ id: 1, status: "in_progress" }).snapshot);
+  tasks.commit(tasks.update({ id: 2, status: "in_progress" }).snapshot);
+  assert.equal(tasks.list({ status: "in_progress" }).length, 2);
 });
 
 test("status entry requires a fresh note and stale notes clear only on leaving", () => {
-  const ledger = createSessionLedger();
-  ledger.commit(ledger.add({ subject: "Work" }).snapshot);
+  const tasks = createSessionTasks();
+  tasks.commit(tasks.add({ subject: "Work" }).snapshot);
   for (const status of ["blocked", "done", "dropped"] as const) {
     assert.throws(
-      () => ledger.update({ id: 1, status }),
+      () => tasks.update({ id: 1, status }),
       /fresh note is required/,
     );
   }
 
-  ledger.commit(
-    ledger.update({ id: 1, status: "blocked", note: "Waiting for access" })
+  tasks.commit(
+    tasks.update({ id: 1, status: "blocked", note: "Waiting for access" })
       .snapshot,
   );
-  ledger.commit(ledger.update({ id: 1, subject: "Work renamed" }).snapshot);
-  assert.equal(ledger.list()[0].note, "Waiting for access");
-  const noOp = ledger.update({ id: 1, status: "blocked" });
-  assert.equal(noOp.snapshot.revision, ledger.snapshot().revision);
-  assert.equal(ledger.list()[0].note, "Waiting for access");
+  tasks.commit(tasks.update({ id: 1, subject: "Work renamed" }).snapshot);
+  assert.equal(tasks.list()[0].note, "Waiting for access");
+  const noOp = tasks.update({ id: 1, status: "blocked" });
+  assert.equal(noOp.snapshot.revision, tasks.snapshot().revision);
+  assert.equal(tasks.list()[0].note, "Waiting for access");
 
-  ledger.commit(ledger.update({ id: 1, status: "in_progress" }).snapshot);
-  assert.equal(ledger.list()[0].note, undefined);
-  ledger.commit(
-    ledger.update({ id: 1, status: "done", note: "tests passed" }).snapshot,
+  tasks.commit(tasks.update({ id: 1, status: "in_progress" }).snapshot);
+  assert.equal(tasks.list()[0].note, undefined);
+  tasks.commit(
+    tasks.update({ id: 1, status: "done", note: "tests passed" }).snapshot,
   );
-  ledger.commit(
-    ledger.update({ id: 1, status: "pending", note: "reopened intentionally" })
+  tasks.commit(
+    tasks.update({ id: 1, status: "pending", note: "reopened intentionally" })
       .snapshot,
   );
-  assert.equal(ledger.list()[0].note, "reopened intentionally");
+  assert.equal(tasks.list()[0].note, "reopened intentionally");
 });
 
 test("strict snapshot validation rejects unknown fields, bad notes, duplicate IDs, limits, and bytes", () => {
   assert.throws(
     () =>
-      validateLedgerSnapshot({
-        ...emptyLedgerSnapshot(),
+      validateTaskSnapshot({
+        ...emptyTaskSnapshot(),
         extra: true,
       }),
     /unknown field/,
   );
   assert.throws(
     () =>
-      validateLedgerSnapshot(
+      validateTaskSnapshot(
         snapshot(1, [{ id: 1, subject: "Blocked", status: "blocked" }]),
       ),
     /note is required/,
   );
   assert.throws(
     () =>
-      validateLedgerSnapshot(
+      validateTaskSnapshot(
         snapshot(1, [
           { id: 1, subject: "A", status: "pending" },
           { id: 1, subject: "B", status: "pending" },
         ]),
       ),
-    /duplicate ledger id/,
+    /duplicate task id/,
   );
   assert.throws(
     () =>
-      validateLedgerSnapshot(
+      validateTaskSnapshot(
         snapshot(1, [
           {
             id: 1,
-            subject: "x".repeat(LEDGER_LIMITS.subjectChars + 1),
+            subject: "x".repeat(TASKS_LIMITS.subjectChars + 1),
             status: "pending",
           },
         ]),
@@ -179,7 +179,7 @@ test("strict snapshot validation rejects unknown fields, bad notes, duplicate ID
   );
   assert.throws(
     () =>
-      validateLedgerSnapshot(
+      validateTaskSnapshot(
         snapshot(1, [{ id: 2, subject: "bad nextId", status: "pending" }], 2),
       ),
     /nextId must be greater/,
@@ -195,14 +195,14 @@ test("strict snapshot validation rejects unknown fields, bad notes, duplicate ID
     })),
     101,
   );
-  assert.throws(() => validateLedgerSnapshot(tooLarge), /UTF-8 bytes/);
+  assert.throws(() => validateTaskSnapshot(tooLarge), /UTF-8 bytes/);
 });
 
 test("batch and item caps are enforced", () => {
   assert.throws(
     () =>
-      applyLedgerAdd(
-        emptyLedgerSnapshot(),
+      applyTaskAdd(
+        emptyTaskSnapshot(),
         Array.from({ length: 21 }, (_, index) => ({ subject: `T${index}` })),
       ),
     /batch exceeds 20/,
@@ -217,15 +217,15 @@ test("batch and item caps are enforced", () => {
     101,
   );
   assert.throws(
-    () => applyLedgerAdd(full, [{ subject: "overflow" }]),
+    () => applyTaskAdd(full, [{ subject: "overflow" }]),
     /100 items/,
   );
 });
 
-test("oversized candidate is rejected before mutable ledger commit", () => {
-  const ledger = createSessionLedger();
-  ledger.commit(
-    ledger.add(
+test("oversized candidate is rejected before mutable task-state commit", () => {
+  const tasks = createSessionTasks();
+  tasks.commit(
+    tasks.add(
       Array.from({ length: 20 }, (_, index) => ({
         subject: `Seed ${index}`,
         detail: "a".repeat(220),
@@ -233,14 +233,14 @@ test("oversized candidate is rejected before mutable ledger commit", () => {
       })),
     ).snapshot,
   );
-  const before = ledger.snapshot();
+  const before = tasks.snapshot();
   const huge = Array.from({ length: 20 }, (_, index) => ({
     subject: `Huge ${index}`,
     detail: "界".repeat(500),
     note: "界".repeat(500),
   }));
-  assert.throws(() => ledger.add(huge), /UTF-8 bytes/);
-  assert.deepEqual(ledger.snapshot(), before);
+  assert.throws(() => tasks.add(huge), /UTF-8 bytes/);
+  assert.deepEqual(tasks.snapshot(), before);
 });
 
 test("restore chooses highest revision regardless of position and later entry wins ties", () => {
@@ -251,8 +251,7 @@ test("restore chooses highest revision regardless of position and later entry wi
     { id: 2, subject: "revision two", status: "pending" },
   ]);
   assert.equal(
-    restoreLedgerSnapshot([entry(revision3Early), entry(revision2Late)])
-      .revision,
+    restoreTaskSnapshot([entry(revision3Early), entry(revision2Late)]).revision,
     3,
   );
 
@@ -260,7 +259,7 @@ test("restore chooses highest revision regardless of position and later entry wi
     { id: 7, subject: "later tie", status: "pending" },
   ]);
   assert.equal(
-    restoreLedgerSnapshot([entry(revision3Early), entry(tieLate)]).items[0].id,
+    restoreTaskSnapshot([entry(revision3Early), entry(tieLate)]).items[0].id,
     7,
   );
 });
@@ -278,66 +277,66 @@ test("foreign session entries are ignored by restore", () => {
       data: { version: 99, revision: 999, items: "bad" },
     },
   ];
-  assert.equal(restoreLedgerSnapshot([valid, ...foreign]).revision, 1);
+  assert.equal(restoreTaskSnapshot([valid, ...foreign]).revision, 1);
 });
 
 test("malformed winner and later malformed or unknown entries fail closed", () => {
   const valid = snapshot(5, [{ id: 5, subject: "valid", status: "pending" }]);
   assert.throws(
     () =>
-      restoreLedgerSnapshot([
+      restoreTaskSnapshot([
         entry(valid),
         entry({ version: 1, revision: 6, nextId: 6, items: "bad" }),
       ]),
-    LedgerRestoreError,
+    TaskRestoreError,
   );
   assert.throws(
-    () => restoreLedgerSnapshot([entry(valid), entry({ version: 2 })]),
+    () => restoreTaskSnapshot([entry(valid), entry({ version: 2 })]),
     /locks restoration/,
   );
   assert.throws(
     () =>
-      restoreLedgerSnapshot([
+      restoreTaskSnapshot([
         entry(valid),
         entry({ version: 2, revision: 99, nextId: 100, items: [] }),
       ]),
-    /winning ledger revision 99 is malformed/,
+    /winning task revision 99 is malformed/,
   );
   assert.throws(
-    () => restoreLedgerSnapshot([entry(valid), entry({ garbage: true })]),
+    () => restoreTaskSnapshot([entry(valid), entry({ garbage: true })]),
     /locks restoration/,
   );
   assert.throws(
     () =>
-      restoreLedgerSnapshot([
+      restoreTaskSnapshot([
         entry(valid),
-        { type: "custom", customType: "task-ledger" },
+        { type: "custom", customType: "session-tasks" },
       ]),
     /locks restoration/,
   );
 });
 
 test("restore high-water nextId prevents ID rewind", () => {
-  const restored = restoreLedgerSnapshot([
+  const restored = restoreTaskSnapshot([
     entry(snapshot(3, [], 80)),
     entry(snapshot(4, [{ id: 42, subject: "high id", status: "pending" }], 43)),
   ]);
   assert.equal(restored.nextId, 80);
   assert.equal(
-    createSessionLedger(restored).add({ subject: "next" }).items[0].id,
+    createSessionTasks(restored).add({ subject: "next" }).items[0].id,
     80,
   );
 });
 
 test("concurrent sibling completion order survives reload by monotonic revision", () => {
-  const ledger = createSessionLedger();
-  const first = ledger.add({ subject: "first completed mutation" }).snapshot;
-  ledger.commit(first);
-  const second = ledger.add({ subject: "second completed mutation" }).snapshot;
-  ledger.commit(second);
+  const tasks = createSessionTasks();
+  const first = tasks.add({ subject: "first completed mutation" }).snapshot;
+  tasks.commit(first);
+  const second = tasks.add({ subject: "second completed mutation" }).snapshot;
+  tasks.commit(second);
 
   // A session writer may place sibling results out of completion order.
-  const restored = restoreLedgerSnapshot([entry(second), entry(first)]);
+  const restored = restoreTaskSnapshot([entry(second), entry(first)]);
   assert.equal(restored.revision, 2);
   assert.deepEqual(
     restored.items.map((item) => item.subject),
@@ -352,32 +351,29 @@ test("branch slices model new, resume, tree, fork, and context-pivot semantics",
     { id: 1, subject: "right", status: "blocked", note: "branch reason" },
   ]);
 
-  assert.deepEqual(restoreLedgerSnapshot([]), emptyLedgerSnapshot()); // /new
+  assert.deepEqual(restoreTaskSnapshot([]), emptyTaskSnapshot()); // /new
   assert.equal(
-    restoreLedgerSnapshot([entry(root), entry(left)]).items[0].subject,
+    restoreTaskSnapshot([entry(root), entry(left)]).items[0].subject,
     "left",
   ); // resume/tree
-  assert.equal(restoreLedgerSnapshot([entry(root)]).nextId, 2); // fork at root
+  assert.equal(restoreTaskSnapshot([entry(root)]).nextId, 2); // fork at root
   assert.equal(
-    restoreLedgerSnapshot([
-      entry(root),
-      { type: "context-pivot" },
-      entry(right),
-    ]).items[0].subject,
+    restoreTaskSnapshot([entry(root), { type: "context-pivot" }, entry(right)])
+      .items[0].subject,
     "right",
   );
 });
 
 test("projection is empty without actionable work, prioritized, advisory, and bounded", () => {
-  assert.equal(projectLedger(emptyLedgerSnapshot()), "");
+  assert.equal(projectTasks(emptyTaskSnapshot()), "");
   assert.equal(
-    projectLedger(
+    projectTasks(
       snapshot(1, [{ id: 1, subject: "finished", status: "done", note: "ok" }]),
     ),
     "",
   );
 
-  const projected = projectLedger(
+  const projected = projectTasks(
     snapshot(1, [
       { id: 1, subject: "pending", status: "pending" },
       { id: 2, subject: "blocked", status: "blocked", note: "reason" },
@@ -394,7 +390,7 @@ test("projection is empty without actionable work, prioritized, advisory, and bo
     projected,
     /Real files, git, tests, tools, artifacts, and user confirmation are truth/,
   );
-  assert.match(projected, /ledger_list/);
+  assert.match(projected, /tasks_list/);
   assert.match(projected, /compaction\/pivot/);
   assert.ok(projected.indexOf("T3") < projected.indexOf("T2"));
   assert.ok(projected.indexOf("T2") < projected.indexOf("T1"));
@@ -413,71 +409,71 @@ test("render list supports combined id/status filters and character bounds", () 
     },
   ]);
   assert.equal(
-    renderLedgerList(state, { id: 2, status: "blocked" }),
+    renderTaskList(state, { id: 2, status: "blocked" }),
     "T2 [blocked] two\n  detail: detail\n  note: reason",
   );
   assert.equal(
-    renderLedgerList(state, { id: 2, status: "pending" }),
-    "No ledger items.",
+    renderTaskList(state, { id: 2, status: "pending" }),
+    "No task items.",
   );
-  assert.equal(Array.from(renderLedgerList(state, {}, 12)).length, 12);
+  assert.equal(Array.from(renderTaskList(state, {}, 12)).length, 12);
 });
 
 test("apply functions are synchronous and returned state cannot mutate internal state", () => {
-  const ledger = createSessionLedger();
-  const result = ledger.add({ subject: "immutable" });
+  const tasks = createSessionTasks();
+  const result = tasks.add({ subject: "immutable" });
   assert.equal(result instanceof Promise, false);
   assert.equal(
-    ledger.list().length,
+    tasks.list().length,
     0,
     "candidate must not commit before persistence",
   );
-  ledger.commit(result.snapshot);
+  tasks.commit(result.snapshot);
   result.snapshot.items[0].subject = "external mutation";
   result.items[0].subject = "external mutation";
-  assert.equal(ledger.list()[0].subject, "immutable");
+  assert.equal(tasks.list()[0].subject, "immutable");
 
-  const candidate = applyLedgerAdd(ledger.snapshot(), [
+  const candidate = applyTaskAdd(tasks.snapshot(), [
     { subject: "committed after persistence" },
   ]).snapshot;
-  ledger.commit(candidate);
-  assert.equal(ledger.list()[1].subject, "committed after persistence");
+  tasks.commit(candidate);
+  assert.equal(tasks.list()[1].subject, "committed after persistence");
 });
 
 test("no-op updates are idempotent without advancing the revision", () => {
-  const ledger = createSessionLedger();
-  ledger.commit(ledger.add({ subject: "same" }).snapshot);
-  const before = ledger.snapshot();
-  const noOp = ledger.update({ id: 1, subject: "same" });
+  const tasks = createSessionTasks();
+  tasks.commit(tasks.add({ subject: "same" }).snapshot);
+  const before = tasks.snapshot();
+  const noOp = tasks.update({ id: 1, subject: "same" });
   assert.equal(noOp.snapshot.revision, before.revision);
-  assert.deepEqual(ledger.snapshot(), before);
+  assert.deepEqual(tasks.snapshot(), before);
 });
 
 test("validation errors have a stable public class", () => {
   assert.throws(
-    () => createSessionLedger().add({ subject: "" }),
-    LedgerValidationError,
+    () => createSessionTasks().add({ subject: "" }),
+    TaskValidationError,
   );
   assert.throws(
-    () => createSessionLedger().add({ subject: "bad\u0007subject" }),
+    () => createSessionTasks().add({ subject: "bad\u0007subject" }),
     /control characters/,
   );
 });
 
 test("ordinary newlines and tabs normalize to a single line", () => {
-  const ledger = createSessionLedger();
-  const added = ledger.add({
+  const tasks = createSessionTasks();
+  const added = tasks.add({
     subject: "Fix\tbug",
     detail: "command\noutput",
   });
-  ledger.commit(added.snapshot);
-  const done = ledger.update({
+  tasks.commit(added.snapshot);
+  const done = tasks.update({
     id: 1,
     status: "done",
     note: "npm test\n21 passed",
   });
-  ledger.commit(done.snapshot);
-  assert.deepEqual(ledger.list()[0], {
+  tasks.commit(done.snapshot);
+  assert.deepEqual(tasks.list()[0], {
     id: 1,
     subject: "Fix bug",
     detail: "command output",

@@ -1,4 +1,4 @@
-# Session Task Ledger — Multi-model Evaluation
+# Session Tasks — Multi-model Evaluation
 
 Date: 2026-07-27
 
@@ -12,11 +12,11 @@ Method: three independent structured reviews, three cross-examinations, then an 
 
 ## Verdict
 
-**Implemented after revision as `extensions/ledger/`.**
+**Implemented after revision as `extensions/tasks/`.**
 
-Implementation correction: model-visible projection is not injected on every request. It is frozen only for cold runs after session start, tree navigation, or compaction/Context Pivot, then reused byte-identically within that run and removed after settlement. This avoids accumulating persistent messages and reduces repeated cache-prefix divergence. Persistence uses synchronous `pi.appendEntry("task-ledger", snapshot)` before the in-memory commit.
+Implementation correction: model-visible projection is not injected on every request. It is frozen only for cold runs after session start, tree navigation, or compaction/Context Pivot, then reused byte-identically within that run and removed after settlement. This avoids accumulating persistent messages and reduces repeated cache-prefix divergence. Persistence uses synchronous `pi.appendEntry("session-tasks", snapshot)` before the in-memory commit.
 
-The need is real: My Pi Setup has Subagents and Workflows for execution and Context Pivot for context hygiene, but no durable, branch-correct record of work intent across turns and compaction. A Session Task Ledger fills that seam if it remains advisory and does not execute or schedule work.
+The need is real: My Pi Setup has Subagents and Workflows for execution and Context Pivot for context hygiene, but no durable, branch-correct record of work intent across turns and compaction. Session Tasks fill that seam if they remain advisory and do not execute or schedule work.
 
 The original `TASKS_DESIGN.md` gets the responsibility boundary right, but three implementation mechanisms need correction:
 
@@ -67,43 +67,43 @@ Sol pushed for the smallest useful model:
 
 ### 1. Vocabulary and tools
 
-Use **ledger** vocabulary to avoid collision with Claude's historic Task-as-agent meaning and with the existing `subagent_spawn` surface:
+Use **tasks** vocabulary to avoid collision with Claude's historic Task-as-agent meaning and with the existing `subagent_spawn` surface:
 
 ```text
-ledger_add
-ledger_update
-ledger_list
+tasks_add
+tasks_update
+tasks_list
 ```
 
 Each description starts with:
 
 > Records session work intent. It does not execute, schedule, or delegate work.
 
-No `ledger_get` in v1. `ledger_list` can accept an optional ID/status filter.
+No `tasks_get` in v1. `tasks_list` can accept an optional ID/status filter.
 
 ### 2. State model
 
 ```ts
-type LedgerStatus =
+type TaskStatus =
   | "pending"
   | "in_progress"
   | "blocked"
   | "done"
   | "dropped";
 
-interface LedgerItem {
+interface TaskItem {
   id: number;
   subject: string;
   detail?: string;
-  status: LedgerStatus;
+  status: TaskStatus;
   note?: string;
 }
 
-interface LedgerSnapshot {
+interface TaskSnapshot {
   version: 1;
   revision: number;
   nextId: number;
-  items: LedgerItem[];
+  items: TaskItem[];
 }
 ```
 
@@ -112,7 +112,7 @@ Rulings:
 - multiple `in_progress` items are legal;
 - any status may transition to any other status;
 - `blocked`, `done`, and `dropped` require a note;
-- `done` notes should cite observable evidence, but the ledger must not claim it verified the evidence;
+- `done` notes should cite observable evidence, but Session Tasks must not claim the evidence was verified;
 - leaving a terminal/blocked state clears its old note unless a new note is supplied;
 - `nextId = max(persistedNextId, maxItemId + 1)` during restore;
 - IDs are branch-local references (`T1`, `T2`), not global identities.
@@ -122,7 +122,7 @@ Rulings:
 Use Pi session custom entries:
 
 ```ts
-pi.appendEntry("task-ledger", snapshot)
+pi.appendEntry("session-tasks", snapshot)
 ```
 
 Why:
@@ -148,10 +148,10 @@ in_progress > blocked > pending
 
 The projection must say:
 
-- ledger state is advisory context, not an instruction to resume unrelated work;
+- task state is advisory context, not an instruction to resume unrelated work;
 - real files, git, tests, tools, artifacts, and user confirmation are truth;
-- use `ledger_list` for details;
-- after compaction/pivot, coordinate with the existing ledger instead of recreating items.
+- use `tasks_list` for details;
+- after compaction/pivot, coordinate with the existing task list instead of recreating items.
 
 This keeps dynamic state at the tail and preserves the stable prompt prefix for caching.
 
@@ -159,19 +159,19 @@ This keeps dynamic state at the tail and preserves the stable prompt prefix for 
 
 No v1 business coupling:
 
-- no `task_id`/ledger ID on `subagent_spawn`;
+- no `task_id`/task ID on `subagent_spawn`;
 - no owner field;
 - no automatic status change from Subagent/Workflow outcomes;
-- only the parent session updates the ledger after reviewing results.
+- only the parent session updates task state after reviewing results.
 
-All three ledger tools must be denied to Pi children and Workflow children. Before adding them, remove the duplicate private denylist in `extensions/subagents/src/backends/pi.ts` and reuse `extensions/shared/child-session.ts` as the single source.
+All three task tools must be denied to Pi children and Workflow children. Before adding them, remove the duplicate private denylist in `extensions/subagents/src/backends/pi.ts` and reuse `extensions/shared/child-session.ts` as the single source.
 
 ### 6. UI
 
 V1 includes:
 
 - compact tool rendering;
-- read-only `/ledger` command showing notes/evidence;
+- read-only `/tasks` command showing notes/evidence;
 - no permanent panel and no Footer count initially.
 
 Open task count is advisory intent, not running operational work. It should not be mixed with the Footer's always-visible Subagent/Workflow/background-process status until dogfooding proves value.
@@ -184,7 +184,7 @@ This machine currently has:
 ~/.pi/agent/extensions/todo.ts
 ```
 
-It registers `todo` and `/todos`. Shipping both creates overlapping planning surfaces. Before enabling ledger tools, either remove/disable the old Todo extension or implement a startup conflict gate that withholds the ledger and explains the conflict.
+It registers `todo` and `/todos`. Shipping both creates overlapping planning surfaces. Before enabling task tools, either remove/disable the old Todo extension or implement a startup conflict gate that withholds the task tools and explains the conflict.
 
 ## Required tests
 
@@ -196,8 +196,8 @@ It registers `todo` and `/todos`. Shipping both creates overlapping planning sur
 6. Out-of-order entry position with monotonic revision restores correctly.
 7. Concurrent sibling mutations survive reload.
 8. `/tree`, `/fork`, `/new`, `/resume`, and Context Pivot branch semantics.
-9. Empty ledger produces no context mutation; active projection is tail-appended and ≤800 chars.
-10. Ledger tools are denied to both Pi Subagents and Workflow children through one shared policy.
+9. An empty task list produces no context mutation; active projection is tail-appended and ≤800 chars.
+10. Task tools are denied to both Pi Subagents and Workflow children through one shared policy.
 
 ## Dogfood gate and kill criteria
 
@@ -207,7 +207,7 @@ Track:
 
 - mutation calls per completed item (target ≤3);
 - duplicate items after pivot (target 0);
-- ledger-entry bytes as a share of session JSONL (target <5%);
+- tasks-entry bytes as a share of session JSONL (target <5%);
 - proportion of `done` notes with checkable evidence (target ≥70%).
 
 Delete or collapse the extension back to a Codex-style replace-all checklist if stable IDs and `blocked` state show no observable benefit, or if status churn/evidence theater dominates usage.
@@ -216,9 +216,9 @@ Delete or collapse the extension back to a Codex-style replace-all checklist if 
 
 1. Deduplicate child tool policy.
 2. Resolve the installed Todo conflict.
-3. Implement and test the pure ledger module.
+3. Implement and test the pure tasks module.
 4. Add custom-entry persistence and branch restoration.
 5. Add three tools and transient context projection.
 6. Add child denylist entries.
-7. Add compact renderers and `/ledger`.
+7. Add compact renderers and `/tasks`.
 8. Dogfood, measure, then decide whether to keep or delete it.

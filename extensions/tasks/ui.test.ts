@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderLedgerRows, renderTaskWidget, renderToolResult } from "./ui.ts";
+import { renderTaskRows, renderTaskWidget, renderToolResult } from "./ui.ts";
 
 const theme = {
   fg: (_name: string, text: string) => text,
@@ -10,7 +10,7 @@ const theme = {
 } as unknown as Theme;
 
 test("renders status, detail, and auditable note labels", () => {
-  const rows = renderLedgerRows(
+  const rows = renderTaskRows(
     [
       {
         id: 1,
@@ -21,7 +21,7 @@ test("renders status, detail, and auditable note labels", () => {
       },
       {
         id: 2,
-        subject: "Ship ledger",
+        subject: "Ship tasks",
         status: "done",
         note: "15 tests passed",
       },

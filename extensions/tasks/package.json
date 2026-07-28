@@ -1,5 +1,5 @@
 {
-  "name": "session-ledger",
+  "name": "session-tasks",
   "private": true,
   "type": "module",
   "scripts": {

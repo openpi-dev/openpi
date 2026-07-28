@@ -40,7 +40,7 @@ Use the single package-owned command. With no arguments, the current model expla
 
 Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews. Write/Edit content and diffs default to a compact eight-line preview because file mutations are frequently verbose; set them to full if desired. Compact views expand with `app.tools.expand` (`Ctrl+O` by default). Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
-## Session Goal and Ledger
+## Session Goal and Tasks
 
 `/goal`, `/goal <objective>`, `/goal edit`, `/goal pause`, `/goal resume`, and `/goal clear` implement a branch-scoped persistent objective with the current OpenAI Codex Goal semantics. `/goal <objective>` starts immediately with no second success-condition prompt or admission judge; the objective can contain up to 4000 characters. `/goal` shows status, objective, elapsed time, consumed tokens, optional token budget, and status-specific command hints. Replacing unfinished work requires `Replace current goal` confirmation, while a complete goal is replaced silently. Editing preserves usage and the optional budget; it reactivates complete or budget-limited goals only when the preserved budget is not already exhausted.
 
@@ -48,11 +48,11 @@ Model callers use `get_goal`, `create_goal`, and `update_goal`. `create_goal` is
 
 There are no normal user-facing Turn, no-progress, or wall-clock caps; a hidden 1000-continuation circuit breaker exists only to stop runaway automation. An optional `token_budget` must only be positive. Goal non-cached Assistant input-plus-output Token and elapsed-time usage are persisted; crossing the budget marks `budget_limited` and queues one wrap-up Turn. Active goals continue after reload/resume. Fork and tree navigation defer inherited active continuation until the first explicit user input; paused, blocked, and usage-limited goals remain stopped and can prompt for Resume. A v1 active/waiting goal migrates once to paused. Assistant aborts pause an active goal and Assistant errors block it. Print/json automation is inert. Footer text mirrors Codex (`Pursuing goal (…)`, resume hints, `Goal unmet`, `Goal achieved`) without showing the objective or legacy Turn counts.
 
-Session Ledger remains advisory multi-item work intent and does not determine Goal completion. Its active items persist in a compact Claude Code-style panel above the editor; `Ctrl+Shift+T` or `/ledger hide|show|toggle` controls visibility, while `/ledger` opens the full list. No `/my-pi-setup` setting or secondary judge model is required.
+Session Tasks remain advisory multi-item work intent and do not determine Goal completion. Active items persist in a compact Claude Code-style panel above the editor; `Ctrl+Shift+T` or `/tasks hide|show|toggle` controls visibility, while `/tasks` opens the full list. No `/my-pi-setup` setting or secondary judge model is required.
 
 ## Other commands added by this fork
 
 - `/sessions` searches and previews project sessions before switching.
-- `/ledger` inspects branch-scoped advisory work items.
+- `/tasks` inspects branch-scoped advisory work items.
 - `/goal ...` controls the persistent autonomous session objective.
 - `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires roughly 30,000 context tokens; use the separate `/handoff` skill when work should move to a genuinely new session.
