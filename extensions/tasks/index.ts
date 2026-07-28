@@ -187,11 +187,13 @@ export default function sessionTasks(pi: ExtensionAPI) {
   const toolDetails = (
     action: TaskToolDetails["action"],
     items: TaskItem[],
+    batchClosed = false,
   ): TaskToolDetails => ({
     action,
     items,
     total: snapshot().items.length,
     revision: snapshot().revision,
+    ...(batchClosed ? { batchClosed: true } : {}),
   });
 
   const registerTools = () => {
@@ -283,18 +285,26 @@ export default function sessionTasks(pi: ExtensionAPI) {
       }),
       execute(_id, params) {
         assertAvailable();
-        const mutation = applyTaskUpdate(snapshot(), params);
+        const before = snapshot();
+        const closesBatch = mutationWillCloseBatch(
+          before,
+          params.id,
+          params.status,
+        );
+        const mutation = applyTaskUpdate(before, params);
         const changed = persistThenCommit(mutation.snapshot);
         return Promise.resolve({
           content: [
             {
               type: "text" as const,
               text: changed
-                ? `Updated T${params.id}.`
+                ? closesBatch
+                  ? `${params.status === "dropped" ? "Dropped" : "Completed"} T${params.id}. Task batch closed; the next tasks_add starts again at T1.`
+                  : `Updated T${params.id}.`
                 : `T${params.id} already has that state; no update recorded.`,
             },
           ],
-          details: toolDetails("update", mutation.items),
+          details: toolDetails("update", mutation.items, closesBatch),
         });
       },
       renderCall(args, theme) {
@@ -446,3 +456,15 @@ export default function sessionTasks(pi: ExtensionAPI) {
 }
 
 export { TOOL_NAMES as TASK_TOOL_NAMES };
+
+function mutationWillCloseBatch(
+  snapshot: TaskSnapshot,
+  id: number,
+  status: TaskItem["status"] | undefined,
+) {
+  if (status !== "done" && status !== "dropped") return false;
+  return snapshot.items.every(
+    (item) =>
+      item.id === id || item.status === "done" || item.status === "dropped",
+  );
+}

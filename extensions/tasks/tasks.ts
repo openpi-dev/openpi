@@ -167,12 +167,14 @@ export function applyTaskAdd(
     return item;
   });
 
-  const candidate = validateTaskSnapshot({
-    version: 1,
-    revision: increment(base.revision, "snapshot revision"),
-    nextId,
-    items: [...base.items, ...added],
-  });
+  const candidate = closeCompletedTaskBatch(
+    validateTaskSnapshot({
+      version: 1,
+      revision: increment(base.revision, "snapshot revision"),
+      nextId,
+      items: [...base.items, ...added],
+    }),
+  );
   return { snapshot: candidate, items: cloneItems(added) };
 }
 
@@ -233,12 +235,14 @@ export function applyTaskUpdate(
 
   const items = base.items.slice();
   items[index] = changed;
-  const candidate = validateTaskSnapshot({
-    version: 1,
-    revision: increment(base.revision, "snapshot revision"),
-    nextId: base.nextId,
-    items,
-  });
+  const candidate = closeCompletedTaskBatch(
+    validateTaskSnapshot({
+      version: 1,
+      revision: increment(base.revision, "snapshot revision"),
+      nextId: base.nextId,
+      items,
+    }),
+  );
   return { snapshot: candidate, items: cloneItems([changed]) };
 }
 
@@ -259,7 +263,11 @@ export function restoreTaskSnapshot(entries: readonly unknown[]): TaskSnapshot {
     | undefined;
   const unknownVersions: number[] = [];
   const unrankedMalformed: number[] = [];
-  let nextIdHighWater = 1;
+  const validSnapshots: Array<{
+    position: number;
+    revision: number;
+    snapshot: TaskSnapshot;
+  }> = [];
 
   for (const candidate of candidates) {
     const revision = declaredRevision(candidate.payload);
@@ -276,7 +284,13 @@ export function restoreTaskSnapshot(entries: readonly unknown[]): TaskSnapshot {
     } else {
       try {
         snapshot = validateTaskSnapshot(candidate.payload);
-        nextIdHighWater = Math.max(nextIdHighWater, snapshot.nextId);
+        if (revision !== undefined) {
+          validSnapshots.push({
+            position: candidate.position,
+            revision,
+            snapshot,
+          });
+        }
       } catch (caught) {
         error = caught instanceof Error ? caught : new Error(String(caught));
       }
@@ -311,16 +325,34 @@ export function restoreTaskSnapshot(entries: readonly unknown[]): TaskSnapshot {
     );
   }
 
-  const maxId = winner.snapshot.items.reduce(
+  const current = closeCompletedTaskBatch(winner.snapshot);
+  if (isTaskBatchReset(current)) return current;
+
+  const latestClosedBatchRevision = validSnapshots.reduce(
+    (latest, candidate) =>
+      candidate.revision < winner.revision &&
+      (isTaskBatchComplete(candidate.snapshot) ||
+        isTaskBatchReset(candidate.snapshot))
+        ? Math.max(latest, candidate.revision)
+        : latest,
+    -1,
+  );
+  const nextIdHighWater = validSnapshots
+    .filter((candidate) => candidate.revision > latestClosedBatchRevision)
+    .reduce(
+      (highWater, candidate) => Math.max(highWater, candidate.snapshot.nextId),
+      1,
+    );
+  const maxId = current.items.reduce(
     (maximum, item) => Math.max(maximum, item.id),
     0,
   );
   const nextId = Math.max(
     nextIdHighWater,
-    winner.snapshot.nextId,
+    current.nextId,
     increment(maxId, "item id"),
   );
-  return validateTaskSnapshot({ ...winner.snapshot, nextId });
+  return validateTaskSnapshot({ ...current, nextId });
 }
 
 export function projectTasks(snapshot: TaskSnapshot): string {
@@ -417,6 +449,26 @@ export function createSessionTasks(
       current = cloneSnapshot(validateTaskSnapshot(snapshot));
     },
   };
+}
+
+export function isTaskBatchComplete(snapshot: TaskSnapshot) {
+  const checked = validateTaskSnapshot(snapshot);
+  return (
+    checked.items.length > 0 &&
+    checked.items.every(
+      (item) => item.status === "done" || item.status === "dropped",
+    )
+  );
+}
+
+function closeCompletedTaskBatch(snapshot: TaskSnapshot) {
+  const checked = validateTaskSnapshot(snapshot);
+  if (!isTaskBatchComplete(checked)) return checked;
+  return validateTaskSnapshot({ ...checked, nextId: 1, items: [] });
+}
+
+function isTaskBatchReset(snapshot: TaskSnapshot) {
+  return snapshot.items.length === 0 && snapshot.nextId === 1;
 }
 
 function validateItem(value: unknown, path: string): TaskItem {

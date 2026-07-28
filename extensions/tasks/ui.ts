@@ -29,13 +29,14 @@ const TASK_WIDGET_ORDER: Record<TaskItem["status"], number> = {
   dropped: 4,
 };
 
-const TASK_WIDGET_LIMIT = 2;
+const TASK_WIDGET_LIMIT = 3;
 
 export interface TaskToolDetails {
   action: "add" | "update" | "list";
   items: TaskItem[];
   total: number;
   revision: number;
+  batchClosed?: boolean;
 }
 
 export function renderTaskRows(
@@ -105,10 +106,16 @@ export function renderTaskWidget(
     );
   if (actionable.length === 0) return [];
 
+  const remaining = actionable.length;
   const header =
-    theme.fg("warning", "↳ ") +
-    theme.fg("text", theme.bold(`Tasks ${completed}/${tracked.length}`)) +
-    theme.fg("dim", " · ctrl+shift+t to hide · /tasks to view");
+    theme.fg("accent", "◆ ") +
+    theme.fg("text", theme.bold("Tasks")) +
+    theme.fg("dim", "  ") +
+    theme.fg("success", `${completed}/${tracked.length}`) +
+    theme.fg(
+      "dim",
+      `  ·  ${remaining} remaining  ·  /tasks  ·  ctrl+shift+t hide`,
+    );
   const visible = actionable.slice(0, TASK_WIDGET_LIMIT);
   const lines = [truncateToWidth(header, width)];
   for (const [index, item] of visible.entries()) {
@@ -118,10 +125,10 @@ export function renderTaskWidget(
         : item.status === "blocked"
           ? "error"
           : "muted";
-    const branch = index === visible.length - 1 ? "└" : "├";
+    const branch = index === visible.length - 1 ? "╰─" : "├─";
     lines.push(
       truncateToWidth(
-        `  ${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg(item.status === "pending" ? "muted" : "text", item.subject)}`,
+        `${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg(item.status === "pending" ? "muted" : "text", item.subject)}`,
         width,
       ),
     );
@@ -129,7 +136,7 @@ export function renderTaskWidget(
   if (actionable.length > visible.length) {
     lines.push(
       truncateToWidth(
-        `    ${theme.fg("dim", `… ${actionable.length - visible.length} more`)}`,
+        `   ${theme.fg("dim", `… ${actionable.length - visible.length} more tasks`)}`,
         width,
       ),
     );
@@ -148,9 +155,16 @@ export function renderToolResult(
   if (!expanded && details.items.length > items.length) {
     rows.push(theme.fg("dim", `… ${details.items.length - items.length} more`));
   }
-  rows.push(
-    theme.fg("dim", `${details.total} total · revision ${details.revision}`),
-  );
+  if (details.batchClosed) {
+    rows.push(
+      theme.fg("success", "✓ Batch complete") +
+        theme.fg("dim", " · next request starts at T1"),
+    );
+  } else {
+    rows.push(
+      theme.fg("dim", `${details.total} total · revision ${details.revision}`),
+    );
+  }
   return new Text(rows.join("\n"), 0, 0);
 }
 

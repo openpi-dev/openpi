@@ -227,7 +227,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 /tasks
 ```
 
-Session Tasks 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作意图：
+Session Tasks 用稳定 ID 记录当前需求跨多个 Agent Run 或用户回合的工作意图。它不是 Session 历史账本：当前批次全部进入 `done / dropped` 后立即关闭并隐藏；下一次 `tasks_add` 自动开启新批次，编号重新从 T1 开始：
 
 - `tasks_add` 增加一条或多条工作项；
 - `tasks_update` 更新 `pending / in_progress / blocked / done / dropped`；
@@ -236,7 +236,7 @@ Session Tasks 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作意
 - 状态跟随 Pi Session 分支，在 `/reload`、`/resume`、`/tree`、`/fork` 和 Context Pivot 后恢复；
 - Tasks 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
 
-Tasks 会像 Claude Code Tasks 一样，把未完成工作持久显示在输入框上方：默认展示完成进度和优先级最高的两项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/tasks hide|show|toggle` 可隐藏和恢复，`/tasks` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Tasks 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Tasks 会拒绝注册，避免两套规划工具同时误导模型。
+Tasks 会像 Claude Code Tasks 一样，把当前批次持久显示在输入框上方：清晰展示批次进度、剩余数量和优先级最高的三项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/tasks hide|show|toggle` 可隐藏和恢复，`/tasks` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Tasks 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Tasks 会拒绝注册，避免两套规划工具同时误导模型。
 
 ### 5. Session Goal：Codex 风格的持久自主目标
 

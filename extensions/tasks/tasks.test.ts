@@ -63,6 +63,41 @@ test("add, update, list, and stable allocation", () => {
   assert.equal(tasks.snapshot().revision, 3);
 });
 
+test("completed batches reset immediately and the next batch restarts at T1", () => {
+  const tasks = createSessionTasks();
+  tasks.commit(
+    tasks.add([{ subject: "Build" }, { subject: "Verify" }]).snapshot,
+  );
+  tasks.commit(
+    tasks.update({ id: 1, status: "done", note: "implementation complete" })
+      .snapshot,
+  );
+  assert.deepEqual(
+    tasks.list().map((item) => item.id),
+    [1, 2],
+  );
+
+  const closed = tasks.update({
+    id: 2,
+    status: "done",
+    note: "tests passed",
+  });
+  assert.deepEqual(closed.items, [
+    { id: 2, subject: "Verify", status: "done", note: "tests passed" },
+  ]);
+  tasks.commit(closed.snapshot);
+  assert.deepEqual(tasks.snapshot(), {
+    version: 1,
+    revision: 3,
+    nextId: 1,
+    items: [],
+  });
+
+  const next = tasks.add({ subject: "New request" });
+  assert.equal(next.items[0]?.id, 1);
+  assert.equal(next.snapshot.revision, 4);
+});
+
 test("all status transitions are allowed and multiple items may be in progress", () => {
   const statuses: TaskStatus[] = [
     "pending",
@@ -94,8 +129,14 @@ test("all status transitions are allowed and multiple items may be in progress",
               : {}),
           }).snapshot,
         );
+        if (to === "done" || to === "dropped") {
+          assert.deepEqual(tasks.list(), []);
+        } else {
+          assert.equal(tasks.list()[0].status, to);
+        }
+      } else {
+        assert.equal(tasks.list()[0].status, to);
       }
-      assert.equal(tasks.list()[0].status, to);
     }
   }
 
@@ -108,7 +149,9 @@ test("all status transitions are allowed and multiple items may be in progress",
 
 test("status entry requires a fresh note and stale notes clear only on leaving", () => {
   const tasks = createSessionTasks();
-  tasks.commit(tasks.add({ subject: "Work" }).snapshot);
+  tasks.commit(
+    tasks.add([{ subject: "Work" }, { subject: "Keep batch open" }]).snapshot,
+  );
   for (const status of ["blocked", "done", "dropped"] as const) {
     assert.throws(
       () => tasks.update({ id: 1, status }),
@@ -135,7 +178,7 @@ test("status entry requires a fresh note and stale notes clear only on leaving",
     tasks.update({ id: 1, status: "pending", note: "reopened intentionally" })
       .snapshot,
   );
-  assert.equal(tasks.list()[0].note, "reopened intentionally");
+  assert.equal(tasks.list({ id: 1 })[0].note, "reopened intentionally");
 });
 
 test("strict snapshot validation rejects unknown fields, bad notes, duplicate IDs, limits, and bytes", () => {
@@ -316,7 +359,52 @@ test("malformed winner and later malformed or unknown entries fail closed", () =
   );
 });
 
-test("restore high-water nextId prevents ID rewind", () => {
+test("restore closes legacy terminal-only batches and restarts their IDs", () => {
+  const restored = restoreTaskSnapshot([
+    entry(
+      snapshot(
+        3,
+        [
+          { id: 1, subject: "done", status: "done", note: "verified" },
+          { id: 2, subject: "dropped", status: "dropped", note: "obsolete" },
+        ],
+        3,
+      ),
+    ),
+  ]);
+  assert.deepEqual(restored, {
+    version: 1,
+    revision: 3,
+    nextId: 1,
+    items: [],
+  });
+  assert.equal(
+    createSessionTasks(restored).add({ subject: "next request" }).items[0].id,
+    1,
+  );
+});
+
+test("reload after a legacy completed batch keeps the new batch numbering local", () => {
+  const legacyClosed = snapshot(
+    7,
+    [{ id: 79, subject: "old done", status: "done", note: "verified" }],
+    80,
+  );
+  const newBatch = snapshot(
+    8,
+    [{ id: 1, subject: "new request", status: "pending" }],
+    2,
+  );
+  const restored = restoreTaskSnapshot([entry(legacyClosed), entry(newBatch)]);
+  assert.equal(restored.nextId, 2);
+  assert.equal(
+    createSessionTasks(restored).add({ subject: "second new task" }).items[0]
+      .id,
+    2,
+  );
+});
+
+test("restore high-water nextId prevents ID rewind inside an active batch", () => {
   const restored = restoreTaskSnapshot([
     entry(snapshot(3, [], 80)),
     entry(snapshot(4, [{ id: 42, subject: "high id", status: "pending" }], 43)),
@@ -462,10 +550,13 @@ test("validation errors have a stable public class", () => {
 
 test("ordinary newlines and tabs normalize to a single line", () => {
   const tasks = createSessionTasks();
-  const added = tasks.add({
-    subject: "Fix\tbug",
-    detail: "command\noutput",
-  });
+  const added = tasks.add([
+    {
+      subject: "Fix\tbug",
+      detail: "command\noutput",
+    },
+    { subject: "Keep batch open" },
+  ]);
   tasks.commit(added.snapshot);
   const done = tasks.update({
     id: 1,

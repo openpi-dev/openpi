@@ -27,6 +27,7 @@ function widgetHarness(
   const commands = new Map<string, any>();
   const widgets: Array<unknown> = [];
   const notifications: string[] = [];
+  const entries: Array<{ customType: string; data: any }> = [];
   let branch = initialBranch;
   let allTools = initialTools;
   let shortcutKey: string | undefined;
@@ -42,7 +43,9 @@ function widgetHarness(
     },
     on: (event: string, handler: (event: any, ctx: any) => unknown) =>
       handlers.set(event, [...(handlers.get(event) ?? []), handler]),
-    appendEntry() {},
+    appendEntry(customType: string, data: any) {
+      entries.push({ customType, data });
+    },
   } as unknown as ExtensionAPI;
   const ctx = {
     mode,
@@ -59,6 +62,7 @@ function widgetHarness(
     commands,
     widgets,
     notifications,
+    entries,
     ctx,
     shortcutKey: () => shortcutKey,
     shortcut: () => shortcut,
@@ -93,7 +97,7 @@ test("persistent task widget restores, updates after tool mutations, and toggles
   assert.equal(h.shortcutKey(), "ctrl+shift+t");
   assert.equal(typeof h.widgets.at(-1), "function");
 
-  await h.tools
+  const completed = await h.tools
     .get("tasks_update")
     .execute(
       "u1",
@@ -103,6 +107,14 @@ test("persistent task widget restores, updates after tool mutations, and toggles
       h.ctx,
     );
   assert.equal(h.widgets.at(-1), undefined);
+  assert.deepEqual(h.entries.at(-1)?.data, {
+    version: 1,
+    revision: 2,
+    nextId: 1,
+    items: [],
+  });
+  assert.match(completed.content[0]?.text ?? "", /batch closed/);
+  assert.equal((completed as any).details.batchClosed, true);
 
   await h.tools
     .get("tasks_add")
@@ -114,6 +126,7 @@ test("persistent task widget restores, updates after tool mutations, and toggles
       h.ctx,
     );
   assert.equal(typeof h.widgets.at(-1), "function");
+  assert.equal(h.entries.at(-1)?.data.items[0]?.id, 1);
 
   await h.shortcut()?.(h.ctx);
   assert.equal(h.widgets.at(-1), undefined);
