@@ -186,7 +186,7 @@ subagent_spawn({
 
 Claude Code 与 Codex Backend 仍作为兼容入口保留，但只有用户明确要求时才使用；仓库不为外部 Harness 写死模型偏好。
 
-> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。结果展示默认保留原有完整模式；若通过 `/my-pi-setup` 选择紧凑模式，长结果只展示一个全局有界预览，并可用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）展开完整 Markdown。极端输出仍受 Session 字节和行数上限保护。
+> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Write/Edit 的内容和 Diff 默认只展示前 8 行。两类结果都可通过 `/my-pi-setup` 切换完整/紧凑模式，紧凑视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）展开全文。极端输出仍受 Session 字节和行数上限保护。
 
 ### 3. 动态 Multi-Agent Workflows
 

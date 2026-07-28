@@ -2,6 +2,7 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  DETAIL_DISPLAYS,
   FOOTER_ITEMS,
   formatSetupConfig,
   hasSavedSetupConfig,
@@ -10,7 +11,6 @@ import {
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
   saveSetupConfig,
-  SUBAGENT_RESULT_DISPLAYS,
 } from "../shared/setup-config.ts";
 
 export function buildInteractiveSetupPrompt(options: {
@@ -21,7 +21,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, Subagent result display, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -45,7 +45,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer provides a compact dashboard. Configurable footer metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
-    "- Subagent result display: full preserves the existing behavior and shows complete results by default; compact shows a bounded preview and lets the user expand it with the configured app.tools.expand key (Ctrl+O by default). Recommend compact for users who do not usually inspect implementation details.",
+    "- Result detail display: Subagent results default to full for compatibility, while Write/Edit content and diffs default to compact. Compact shows a bounded preview and lets the user expand it with the configured app.tools.expand key (Ctrl+O by default). Recommend compact for users who do not usually inspect implementation details.",
     "",
     "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
@@ -56,7 +56,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer, and Subagent result display. Preserve current values for settings the user did not ask to change.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer, and result detail display. Preserve current values for settings the user did not ask to change.",
     parameters: Type.Object({
       summaries_enabled: Type.Optional(
         Type.Boolean({
@@ -118,9 +118,15 @@ export default function myPiSetup(pi: ExtensionAPI) {
         }),
       ),
       subagent_result_display: Type.Optional(
-        StringEnum(SUBAGENT_RESULT_DISPLAYS, {
+        StringEnum(DETAIL_DISPLAYS, {
           description:
             "How completed Subagent results render by default: full preserves complete output; compact shows a bounded preview that can be expanded with app.tools.expand. Omit to preserve the current value.",
+        }),
+      ),
+      file_mutation_display: Type.Optional(
+        StringEnum(DETAIL_DISPLAYS, {
+          description:
+            "How Write/Edit content and diffs render by default: compact shows the first few rendered lines and expands with app.tools.expand; full preserves Pi's complete rendering. Omit to preserve the current value.",
         }),
       ),
     }),
@@ -176,6 +182,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
           footerItems: params.ui_footer_items ?? current.ui.footerItems,
           subagentResultDisplay:
             params.subagent_result_display ?? current.ui.subagentResultDisplay,
+          fileMutationDisplay:
+            params.file_mutation_display ?? current.ui.fileMutationDisplay,
         },
       };
       await saveSetupConfig(config);
