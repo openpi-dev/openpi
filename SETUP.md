@@ -48,7 +48,7 @@ Model callers use `get_goal`, `create_goal`, and `update_goal`. `create_goal` is
 
 There are no normal user-facing Turn, no-progress, or wall-clock caps; a hidden 1000-continuation circuit breaker exists only to stop runaway automation. An optional `token_budget` must only be positive. Goal non-cached Assistant input-plus-output Token and elapsed-time usage are persisted; crossing the budget marks `budget_limited` and queues one wrap-up Turn. Active goals continue after reload/resume. Fork and tree navigation defer inherited active continuation until the first explicit user input; paused, blocked, and usage-limited goals remain stopped and can prompt for Resume. A v1 active/waiting goal migrates once to paused. Assistant aborts pause an active goal and Assistant errors block it. Print/json automation is inert. Footer text mirrors Codex (`Pursuing goal (…)`, resume hints, `Goal unmet`, `Goal achieved`) without showing the objective or legacy Turn counts.
 
-Session Ledger remains advisory multi-item work intent and does not determine Goal completion. No `/my-pi-setup` setting or secondary judge model is required.
+Session Ledger remains advisory multi-item work intent and does not determine Goal completion. Its active items persist in a compact Claude Code-style panel above the editor; `Ctrl+Shift+T` or `/ledger hide|show|toggle` controls visibility, while `/ledger` opens the full list. No `/my-pi-setup` setting or secondary judge model is required.
 
 ## Other commands added by this fork
 

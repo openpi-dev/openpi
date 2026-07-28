@@ -1,6 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import sessionLedger, {
   findLedgerConflict,
   injectLedgerProjection,
   ledgerConflictMessage,
@@ -11,6 +15,177 @@ const sourceInfo = (path: string) => ({
   source: path,
   scope: "user" as const,
   origin: "top-level" as const,
+});
+
+function widgetHarness(
+  initialBranch: unknown[] = [],
+  initialTools: unknown[] = [],
+  mode: "tui" | "rpc" = "tui",
+) {
+  const handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
+  const tools = new Map<string, any>();
+  const commands = new Map<string, any>();
+  const widgets: Array<unknown> = [];
+  const notifications: string[] = [];
+  let branch = initialBranch;
+  let allTools = initialTools;
+  let shortcutKey: string | undefined;
+  let shortcut: ((ctx: ExtensionContext) => Promise<void>) | undefined;
+  const pi = {
+    getAllTools: () => allTools,
+    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerCommand: (name: string, command: any) =>
+      commands.set(name, command),
+    registerShortcut: (key: string, options: { handler: typeof shortcut }) => {
+      shortcutKey = key;
+      shortcut = options.handler;
+    },
+    on: (event: string, handler: (event: any, ctx: any) => unknown) =>
+      handlers.set(event, [...(handlers.get(event) ?? []), handler]),
+    appendEntry() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    mode,
+    hasUI: true,
+    sessionManager: { getBranch: () => branch },
+    ui: {
+      notify: (message: string) => notifications.push(message),
+      setWidget: (_key: string, content: unknown) => widgets.push(content),
+    },
+  } as unknown as ExtensionContext;
+  sessionLedger(pi);
+  return {
+    tools,
+    commands,
+    widgets,
+    notifications,
+    ctx,
+    shortcutKey: () => shortcutKey,
+    shortcut: () => shortcut,
+    setBranch: (value: unknown[]) => {
+      branch = value;
+    },
+    setAllTools: (value: unknown[]) => {
+      allTools = value;
+    },
+    emit: async (event: string) => {
+      for (const handler of handlers.get(event) ?? []) {
+        await handler({ type: event }, ctx);
+      }
+    },
+  };
+}
+
+test("persistent task widget restores, updates after tool mutations, and toggles", async () => {
+  const h = widgetHarness([
+    {
+      type: "custom",
+      customType: "task-ledger",
+      data: {
+        version: 1,
+        revision: 1,
+        nextId: 2,
+        items: [{ id: 1, subject: "Existing task", status: "pending" }],
+      },
+    },
+  ]);
+  await h.emit("session_start");
+  assert.equal(h.shortcutKey(), "ctrl+shift+t");
+  assert.equal(typeof h.widgets.at(-1), "function");
+
+  await h.tools
+    .get("ledger_update")
+    .execute(
+      "u1",
+      { id: 1, status: "done", note: "verified" },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+  assert.equal(h.widgets.at(-1), undefined);
+
+  await h.tools
+    .get("ledger_add")
+    .execute(
+      "a1",
+      { items: [{ subject: "Next task" }] },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+  assert.equal(typeof h.widgets.at(-1), "function");
+
+  await h.shortcut()?.(h.ctx);
+  assert.equal(h.widgets.at(-1), undefined);
+  await h.shortcut()?.(h.ctx);
+  assert.equal(typeof h.widgets.at(-1), "function");
+
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "task-ledger",
+      data: {
+        version: 1,
+        revision: 3,
+        nextId: 3,
+        items: [
+          { id: 1, subject: "Existing task", status: "done", note: "verified" },
+          { id: 2, subject: "Next task", status: "done", note: "verified" },
+        ],
+      },
+    },
+  ]);
+  await h.emit("session_tree");
+  assert.equal(h.widgets.at(-1), undefined);
+  await h.emit("session_shutdown");
+  assert.equal(h.widgets.at(-1), undefined);
+});
+
+test("task panel commands report actual visibility and conflicts block the shortcut", async () => {
+  const empty = widgetHarness();
+  await empty.emit("session_start");
+  await empty.commands.get("ledger").handler("show", empty.ctx);
+  assert.equal(
+    empty.notifications.at(-1),
+    "Task panel enabled; it will appear when active tasks exist.",
+  );
+
+  const conflictTool = {
+    name: "TodoWrite",
+    description: "foreign todo",
+    parameters: {},
+    sourceInfo: sourceInfo("/tmp/todo.ts"),
+  };
+  const conflicted = widgetHarness([], [conflictTool]);
+  await conflicted.emit("session_start");
+  const before = conflicted.widgets.length;
+  await conflicted.shortcut()?.(conflicted.ctx);
+  assert.equal(conflicted.widgets.length, before);
+  assert.match(conflicted.notifications.at(-1) ?? "", /ledger disabled/i);
+
+  const rpc = widgetHarness(
+    [
+      {
+        type: "custom",
+        customType: "task-ledger",
+        data: {
+          version: 1,
+          revision: 1,
+          nextId: 2,
+          items: [{ id: 1, subject: "RPC task", status: "pending" }],
+        },
+      },
+    ],
+    [],
+    "rpc",
+  );
+  await rpc.emit("session_start");
+  await rpc.commands.get("ledger").handler("show", rpc.ctx);
+  assert.equal(rpc.widgets.length, 0);
+  assert.equal(
+    rpc.notifications.at(-1),
+    "Task panel is available only in interactive TUI mode.",
+  );
 });
 
 test("detects foreign Todo/plan tools and reports their source", () => {

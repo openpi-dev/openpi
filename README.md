@@ -236,7 +236,7 @@ Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作�
 - 状态跟随 Pi Session 分支，在 `/reload`、`/resume`、`/tree`、`/fork` 和 Context Pivot 后恢复；
 - Ledger 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
 
-每次冷启动或 Context Pivot 后，Ledger 只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
+Ledger 会像 Claude Code Tasks 一样，把未完成工作持久显示在输入框上方：默认展示完成进度和优先级最高的两项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/ledger hide|show|toggle` 可隐藏和恢复，`/ledger` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Ledger 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Ledger 会拒绝注册，避免两套规划工具同时误导模型。
 
 ### 5. Session Goal：Codex 风格的持久自主目标
 

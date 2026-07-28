@@ -4,7 +4,7 @@ import type {
   ExtensionContext,
   ToolInfo,
 } from "@earendil-works/pi-coding-agent";
-import { Text } from "@earendil-works/pi-tui";
+import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   LEDGER_ENTRY_TYPE,
@@ -23,11 +23,13 @@ import {
 } from "./ledger.ts";
 import {
   openLedgerScreen,
+  renderTaskWidget,
   renderToolResult,
   type LedgerToolDetails,
 } from "./ui.ts";
 
 const TOOL_NAMES = ["ledger_add", "ledger_update", "ledger_list"] as const;
+const TASK_WIDGET_KEY = "session-ledger-tasks";
 const CONFLICT_NAMES = new Set(["todo", "TodoWrite", "update_plan"]);
 const TOOL_PURPOSE =
   "Records session work intent. It does not execute, schedule, or delegate work.";
@@ -89,8 +91,48 @@ export default function sessionLedger(pi: ExtensionAPI) {
   let activeRun = false;
   let frozenProjection = "";
   let notifiedProblem: string | undefined;
+  let taskWidgetVisible = true;
+  let ui: ExtensionContext["ui"] | undefined;
+  let uiMode: ExtensionContext["mode"] | undefined;
 
   const snapshot = () => ledger.snapshot();
+
+  const hasActionableTasks = () =>
+    snapshot().items.some(
+      (item) =>
+        item.status === "pending" ||
+        item.status === "in_progress" ||
+        item.status === "blocked",
+    );
+
+  const updateTaskWidget = (ctx?: ExtensionContext) => {
+    if (ctx?.hasUI) {
+      ui = ctx.ui;
+      uiMode = ctx.mode;
+    }
+    if (!ui || uiMode !== "tui") return false;
+    const current = snapshot();
+    const shown =
+      taskWidgetVisible && !problemMessage() && hasActionableTasks();
+    if (!shown) {
+      ui.setWidget(TASK_WIDGET_KEY, undefined);
+      return false;
+    }
+    ui.setWidget(TASK_WIDGET_KEY, (_tui, theme) => ({
+      render: (width) => renderTaskWidget(current, theme, width),
+      invalidate() {},
+    }));
+    return true;
+  };
+
+  const taskWidgetFeedback = (shown: boolean) =>
+    shown
+      ? "Task panel shown."
+      : uiMode !== "tui"
+        ? "Task panel is available only in interactive TUI mode."
+        : taskWidgetVisible
+          ? "Task panel enabled; it will appear when active tasks exist."
+          : "Task panel hidden.";
 
   const restore = (ctx: ExtensionContext) => {
     try {
@@ -138,6 +180,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     // reorder state and persistence, recreating the upstream Todo lost-update bug.
     pi.appendEntry(LEDGER_ENTRY_TYPE, candidate);
     ledger.commit(candidate);
+    updateTaskWidget();
     return true;
   };
 
@@ -309,17 +352,45 @@ export default function sessionLedger(pi: ExtensionAPI) {
 
   pi.registerCommand("ledger", {
     description: "Inspect the current session work-intent ledger",
-    handler: async (_args, ctx) => {
+    handler: async (args, ctx) => {
       const problem = problemMessage();
       if (problem) {
         if (ctx.hasUI) ctx.ui.notify(problem, "warning");
+        return;
+      }
+      const action = args.trim().toLowerCase();
+      if (action === "hide" || action === "show" || action === "toggle") {
+        taskWidgetVisible =
+          action === "show"
+            ? true
+            : action === "hide"
+              ? false
+              : !taskWidgetVisible;
+        const shown = updateTaskWidget(ctx);
+        if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
         return;
       }
       await openLedgerScreen(ctx, snapshot());
     },
   });
 
+  pi.registerShortcut(Key.ctrlShift("t"), {
+    description: "Hide or show the persistent task panel",
+    handler: async (ctx) => {
+      const problem = problemMessage();
+      if (problem) {
+        if (ctx.hasUI) ctx.ui.notify(problem, "warning");
+        return;
+      }
+      taskWidgetVisible = !taskWidgetVisible;
+      const shown = updateTaskWidget(ctx);
+      if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
+    },
+  });
+
   pi.on("session_start", (_event, ctx) => {
+    ui = ctx.hasUI ? ctx.ui : undefined;
+    uiMode = ctx.hasUI ? ctx.mode : undefined;
     restore(ctx);
     conflict = findLedgerConflict(pi.getAllTools());
     coldRun = true;
@@ -327,6 +398,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     frozenProjection = "";
     registerTools();
     notifyProblem(ctx);
+    updateTaskWidget(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
@@ -335,6 +407,7 @@ export default function sessionLedger(pi: ExtensionAPI) {
     activeRun = false;
     frozenProjection = "";
     notifyProblem(ctx);
+    updateTaskWidget(ctx);
   });
 
   pi.on("session_compact", () => {
@@ -359,6 +432,16 @@ export default function sessionLedger(pi: ExtensionAPI) {
     if (!activeRun || !frozenProjection || problemMessage()) return;
     const messages = injectLedgerProjection(event.messages, frozenProjection);
     if (messages) return { messages: messages as typeof event.messages };
+  });
+
+  pi.on("session_shutdown", () => {
+    try {
+      ui?.setWidget(TASK_WIDGET_KEY, undefined);
+    } catch {
+      // The interactive UI may already be disposed.
+    }
+    ui = undefined;
+    uiMode = undefined;
   });
 }
 

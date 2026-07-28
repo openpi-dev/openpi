@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
-import { renderLedgerRows, renderToolResult } from "./ui.ts";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { renderLedgerRows, renderTaskWidget, renderToolResult } from "./ui.ts";
 
 const theme = {
   fg: (_name: string, text: string) => text,
@@ -31,6 +32,58 @@ test("renders status, detail, and auditable note labels", () => {
   assert.match(rows, /T1 \[blocked\] Verify restore/);
   assert.match(rows, /Blocked: Needs a clean fixture/);
   assert.match(rows, /Evidence: 15 tests passed/);
+});
+
+test("persistent task widget matches a compact Claude-style task panel", () => {
+  const lines = renderTaskWidget(
+    {
+      version: 1,
+      revision: 4,
+      nextId: 5,
+      items: [
+        { id: 1, subject: "Finished setup", status: "done", note: "passed" },
+        { id: 2, subject: "Implement task panel", status: "in_progress" },
+        { id: 3, subject: "Verify rendering", status: "pending" },
+        { id: 4, subject: "Dropped idea", status: "dropped", note: "unused" },
+      ],
+    },
+    theme,
+    100,
+  );
+  assert.equal(lines.length, 3);
+  assert.match(lines[0]!, /Tasks 1\/3/);
+  assert.match(lines[0]!, /ctrl\+shift\+t to hide/);
+  assert.match(lines[1]!, /T2 Implement task panel/);
+  assert.match(lines[2]!, /T3 Verify rendering/);
+  assert.equal(lines.join("\n").includes("Finished setup"), false);
+  assert.equal(lines.join("\n").includes("Dropped idea"), false);
+  const narrow = renderTaskWidget(
+    {
+      version: 1,
+      revision: 1,
+      nextId: 3,
+      items: [
+        { id: 1, subject: "检查中文宽度与 ANSI 颜色", status: "in_progress" },
+        { id: 2, subject: "Second task", status: "pending" },
+      ],
+    },
+    theme,
+    18,
+  );
+  assert.ok(narrow.every((line) => visibleWidth(line) <= 18));
+  assert.deepEqual(
+    renderTaskWidget(
+      {
+        version: 1,
+        revision: 1,
+        nextId: 2,
+        items: [{ id: 1, subject: "Done", status: "done", note: "ok" }],
+      },
+      theme,
+      100,
+    ),
+    [],
+  );
 });
 
 test("collapsed tool results remain bounded", () => {

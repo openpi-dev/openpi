@@ -21,6 +21,16 @@ const STATUS_ICON: Record<LedgerItem["status"], string> = {
   dropped: "×",
 };
 
+const TASK_WIDGET_ORDER: Record<LedgerItem["status"], number> = {
+  in_progress: 0,
+  blocked: 1,
+  pending: 2,
+  done: 3,
+  dropped: 4,
+};
+
+const TASK_WIDGET_LIMIT = 2;
+
 export interface LedgerToolDetails {
   action: "add" | "update" | "list";
   items: LedgerItem[];
@@ -77,6 +87,54 @@ export function renderLedgerRows(
     }
     return rows;
   });
+}
+
+export function renderTaskWidget(
+  snapshot: LedgerSnapshot,
+  theme: Theme,
+  width: number,
+) {
+  const tracked = snapshot.items.filter((item) => item.status !== "dropped");
+  const completed = tracked.filter((item) => item.status === "done").length;
+  const actionable = tracked
+    .filter((item) => item.status !== "done")
+    .sort(
+      (left, right) =>
+        TASK_WIDGET_ORDER[left.status] - TASK_WIDGET_ORDER[right.status] ||
+        left.id - right.id,
+    );
+  if (actionable.length === 0) return [];
+
+  const header =
+    theme.fg("warning", "↳ ") +
+    theme.fg("text", theme.bold(`Tasks ${completed}/${tracked.length}`)) +
+    theme.fg("dim", " · ctrl+shift+t to hide · /ledger to view");
+  const visible = actionable.slice(0, TASK_WIDGET_LIMIT);
+  const lines = [truncateToWidth(header, width)];
+  for (const [index, item] of visible.entries()) {
+    const color =
+      item.status === "in_progress"
+        ? "warning"
+        : item.status === "blocked"
+          ? "error"
+          : "muted";
+    const branch = index === visible.length - 1 ? "└" : "├";
+    lines.push(
+      truncateToWidth(
+        `  ${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg(item.status === "pending" ? "muted" : "text", item.subject)}`,
+        width,
+      ),
+    );
+  }
+  if (actionable.length > visible.length) {
+    lines.push(
+      truncateToWidth(
+        `    ${theme.fg("dim", `… ${actionable.length - visible.length} more`)}`,
+        width,
+      ),
+    );
+  }
+  return lines;
 }
 
 export function renderToolResult(
