@@ -141,8 +141,10 @@ export function createGoalSnapshot(
     ]),
     "goal input",
   );
-  const objective = normalizeText(input.objective, "objective", true);
-  const condition = normalizeText(input.condition, "condition", true);
+  const { objective, condition } = normalizeGoalContract(
+    input.objective,
+    input.condition,
+  );
   assertNonNegativeInteger(revision, "revision");
   assertTimestamp(now, "now");
   if (typeof id !== "string" || !/^[A-Za-z0-9_-]{8,100}$/.test(id)) {
@@ -189,6 +191,22 @@ export function createGoalSnapshot(
     waitCount: 0,
     ledgerReminderUsed: false,
   });
+}
+
+export function normalizeGoalContract(objective: unknown, condition: unknown) {
+  const normalizedObjective = normalizeText(objective, "objective", true);
+  const normalizedCondition = normalizeText(condition, "condition", true);
+  if (
+    normalizedObjective.localeCompare(normalizedCondition, "en", {
+      sensitivity: "base",
+    }) === 0
+  ) {
+    fail("success condition must be distinct from the objective");
+  }
+  return {
+    objective: normalizedObjective,
+    condition: normalizedCondition,
+  };
 }
 
 export function validateGoalSnapshot(value: unknown): GoalSnapshot {

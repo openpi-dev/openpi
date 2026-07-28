@@ -246,11 +246,11 @@ Session Ledger 用稳定 ID 记录跨多个 Agent Run 或用户回合的工作�
 /goal pause | resume | clear
 ```
 
-Session Goal 是当前分支上的一个持久目标，不是待办列表。只有用户明确要求自主推进时才应通过 `goal_set` 或 `/goal <目标>` 创建；`goal_status` 只读，工作 Agent 不能自行宣告完成。每个 Goal 必须有可观察的成功条件，并由当前 Session 的模型与认证在每次 `agent_settled` 后进行一次无工具外部判定。
+Session Goal 是当前分支上的一个持久完成目标，不是待办列表，也不是“永远运行直到手动停止”的无界循环。只有用户明确要求自主推进时才应通过 `goal_set` 或 `/goal <目标>` 创建；`goal_status` 只读，工作 Agent 不能自行宣告完成。目标和成功条件会先经过独立、无工具的 Contract Judge：条件必须描述有限终态以及能从 Session 输出观察到的证据；重复目标、持续活动、仅靠人工停止或无法验证的条件会在写入前被拒绝。Contract Judge 不可用或返回格式错误时同样 fail-closed。
 
-默认上限是 40 个已结算 Goal Turn、连续 8 次无进展、120 分钟活跃时间；可选父 Agent Token 预算至少 1000。父 Run 的 Assistant input+output `totalTokens` 在可可靠归属时计入预算；Judge Token 单独展示，不消耗可选父 Run 预算。硬上限始终优先，等待外部证据时采用 5 秒到 5 分钟的退避。
+Contract 通过并持久化后，首个 Worker Turn 会立即启动；如果 `goal_set` 发生在已有 Run 中，则使用 Pi `followUp` 队列等当前 Run 结束后启动。设置 Goal 的 Run 不计入 Goal Turn，也不会单独触发完成判定；后续 Judge 仍可把分支中已有的可观察事实作为背景证据。此后当前 Session 的模型与认证在每个 Worker `agent_settled` 后进行无工具外部判定。默认上限是 40 个已结算 Goal Turn、连续 8 次无进展、120 分钟活跃时间；可选父 Agent Token 预算至少 1000。父 Run 的 Assistant input+output `totalTokens` 在可可靠归属时计入预算；Judge Token 单独展示，不消耗可选父 Run 预算。硬上限始终优先，等待外部证据时采用 5 秒到 5 分钟的退避。
 
-Goal 状态跟随当前 Session 分支持久化。`/reload`、恢复 Session、Fork 或 `/tree` 后，原先的 `active / waiting` 会立即持久化降级为 `paused`，必须由用户执行 `/goal resume`，不会在重启后静默消耗 Token。自动延续在 print/json 模式中关闭，Pi 子 Session 也不会获得 Goal 工具。
+Goal 状态跟随当前 Session 分支持久化。`/reload`、恢复 Session、Fork 或 `/tree` 后，原先的 `active / waiting` 会立即持久化降级为 `paused`，不会在重启后静默消耗 Token；用户执行 `/goal resume` 时会重新检查 Contract，通过后立即恢复自主运行，不需要再发送一个 Prompt；旧版本留下的无效 Goal 仍可清除，但不能绕过新规则恢复。自动延续在 print/json 模式中关闭，Pi 子 Session 也不会获得 Goal 工具。运行状态只在 Footer 保留一条有界摘要，完整目标和条件通过 `/goal status` 查看。
 
 Goal 与 Ledger 分工明确：Goal 负责“继续到什么可验证结果、何时停止”；Ledger 只记录多个工作项。Goal 最多一次读取当前分支的 Ledger 活跃 T 编号作为行动提醒，但 Ledger 状态不是完成证据。
 

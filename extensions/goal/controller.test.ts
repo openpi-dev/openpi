@@ -12,15 +12,16 @@ import {
 } from "./controller.ts";
 import { createGoalSnapshot, transitionGoal } from "./state.ts";
 
-function harness() {
+function harness(options: { sendMessage?: () => void } = {}) {
   const entries: unknown[] = [];
   const messages: unknown[] = [];
   const pi = {
     appendEntry(customType: string, data: unknown) {
       entries.push({ type: "custom", customType, data });
     },
-    sendMessage(message: unknown, options: unknown) {
-      messages.push({ message, options });
+    sendMessage(message: unknown, sendOptions: unknown) {
+      options.sendMessage?.();
+      messages.push({ message, options: sendOptions });
     },
   } as unknown as ExtensionAPI;
   let branch: unknown[] = [];
@@ -107,6 +108,154 @@ test("restore demotes running goal persist-before-memory and print mode stays in
   const print = { ...h.ctx, mode: "print" } as ExtensionContext;
   controller.restore(print, false);
   await controller.settled(print);
+  assert.equal(h.messages.length, 0);
+});
+
+test("kickoff immediately starts the first worker without judging or consuming a turn", async () => {
+  const h = harness();
+  let evaluations = 0;
+  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
+  const controller = new GoalController(h.pi, {
+    now: () => 101,
+    evaluate: async () => {
+      evaluations++;
+      throw new Error("the setup action is not worker evidence");
+    },
+  });
+  controller.restore(h.ctx, false);
+
+  assert.equal(controller.kickoff(h.ctx), true);
+  assert.equal(controller.kickoff(h.ctx), false);
+  assert.equal(h.messages.length, 1);
+  assert.equal(controller.snapshot()?.iterations, 0);
+  assert.equal(evaluations, 0);
+  assert.equal(
+    (
+      h.messages[0] as { message: { content: string } }
+    ).message.content.includes("Objective: Do work"),
+    true,
+  );
+});
+
+test("kickoff during goal_set queues a follow-up and never judges the setup run", async () => {
+  const h = harness();
+  let evaluations = 0;
+  h.setIdle(false);
+  const goal = active();
+  const goalEntry = { type: "custom", customType: "session-goal", data: goal };
+  const assistantEntry = (tokens: number) => ({
+    type: "message",
+    message: { role: "assistant", usage: { totalTokens: tokens } },
+  });
+  h.setBranch([goalEntry]);
+  const controller = new GoalController(h.pi, {
+    now: () => 101,
+    evaluate: async () => {
+      evaluations++;
+      return {
+        judge: {
+          met: false,
+          impossible: false,
+          progress: true,
+          waiting: false,
+          reason: "worker made progress",
+        },
+        tokens: 1,
+      };
+    },
+  });
+  controller.restore(h.ctx, false);
+
+  assert.equal(controller.kickoff(h.ctx), true);
+  assert.equal(h.messages.length, 1);
+  assert.deepEqual((h.messages[0] as { options: unknown }).options, {
+    triggerTurn: true,
+    deliverAs: "followUp",
+  });
+  h.setIdle(true);
+  h.setBranch([goalEntry, assistantEntry(999)]);
+  await controller.settled(h.ctx);
+  assert.equal(h.messages.length, 1);
+  assert.equal(controller.snapshot()?.iterations, 0);
+  assert.equal(controller.snapshot()?.parentTokens, 0);
+  assert.equal(evaluations, 0);
+
+  controller.beforeAgentStart(h.ctx);
+  h.setBranch([goalEntry, assistantEntry(999), assistantEntry(5)]);
+  await controller.settled(h.ctx);
+  assert.equal(controller.snapshot()?.iterations, 1);
+  assert.equal(controller.snapshot()?.parentTokens, 5);
+  assert.equal(evaluations, 1);
+  assert.equal(h.messages.length, 2);
+});
+
+test("resume plus kickoff immediately authorizes the next autonomous turn", () => {
+  const h = harness();
+  h.setIdle(false);
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: transitionGoal(active(), "paused", 101, "restored"),
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => 102 });
+  controller.restore(h.ctx, false);
+
+  assert.equal(controller.resume()?.status, "active");
+  assert.equal(controller.kickoff(h.ctx), true);
+  assert.equal(h.messages.length, 1);
+  assert.deepEqual((h.messages[0] as { options: unknown }).options, {
+    triggerTurn: true,
+    deliverAs: "followUp",
+  });
+});
+
+test("kickoff remains inert outside TUI/RPC automation and enforces hard limits", () => {
+  const printHarness = harness();
+  printHarness.setBranch([
+    { type: "custom", customType: "session-goal", data: active() },
+  ]);
+  const printController = new GoalController(printHarness.pi, {
+    now: () => 101,
+  });
+  printController.restore(
+    { ...printHarness.ctx, mode: "print" } as ExtensionContext,
+    false,
+  );
+  assert.equal(printController.kickoff(printHarness.ctx), false);
+  assert.equal(printHarness.messages.length, 0);
+
+  const limitedHarness = harness();
+  limitedHarness.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: { ...active(), iterations: 40 },
+    },
+  ]);
+  const limitedController = new GoalController(limitedHarness.pi, {
+    now: () => 101,
+  });
+  limitedController.restore(limitedHarness.ctx, false);
+  assert.equal(limitedController.kickoff(limitedHarness.ctx), false);
+  assert.equal(limitedController.snapshot()?.status, "max_iterations");
+  assert.equal(limitedHarness.messages.length, 0);
+});
+
+test("a failed kickoff dispatch persists a paused state", () => {
+  const h = harness({
+    sendMessage() {
+      throw new Error("dispatch failed");
+    },
+  });
+  h.setBranch([{ type: "custom", customType: "session-goal", data: active() }]);
+  const controller = new GoalController(h.pi, { now: () => 101 });
+  controller.restore(h.ctx, false);
+
+  assert.throws(() => controller.kickoff(h.ctx), /dispatch failed/);
+  assert.equal(controller.snapshot()?.status, "paused");
+  assert.match(controller.snapshot()?.reason ?? "", /could not be dispatched/);
   assert.equal(h.messages.length, 0);
 });
 

@@ -79,8 +79,30 @@ test("creates exact bounded defaults and rejects invalid text and limits", () =>
     /at least 1000/,
   );
   assert.throws(
+    () =>
+      createGoalSnapshot(
+        { objective: "Keep researching", condition: " Keep   researching " },
+        0,
+        NOW,
+        "goal_test_2",
+      ),
+    /success condition must be distinct from the objective/,
+  );
+  assert.throws(
     () => validateGoalSnapshot({ ...created, extra: true }),
     /unknown field/,
+  );
+});
+
+test("historical duplicate contracts remain restorable so users can clear them", () => {
+  const first = goal();
+  const legacy = validateGoalSnapshot({
+    ...first,
+    condition: first.objective,
+  });
+  assert.equal(
+    restoreGoalSnapshot([entry(legacy)])?.condition,
+    first.objective,
   );
 });
 

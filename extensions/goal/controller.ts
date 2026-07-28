@@ -202,6 +202,15 @@ export class GoalController {
     return this.snapshot();
   }
 
+  kickoff(ctx: ExtensionContext) {
+    this.assertUnlocked();
+    if (!this.goal) throw new Error("No session goal is set.");
+    if (this.goal.status !== "active") {
+      throw new Error(`Goal cannot start from ${this.goal.status}.`);
+    }
+    return this.admitContinuation(ctx, true);
+  }
+
   beforeAgentStart(ctx: ExtensionContext) {
     this.clearTimer();
     this.evaluator?.abort();
@@ -287,13 +296,13 @@ export class GoalController {
     this.invalidate();
   }
 
-  private admitContinuation(ctx: ExtensionContext) {
+  private admitContinuation(ctx: ExtensionContext, allowFollowUpQueue = false) {
     if (
       !this.automationEnabled ||
       !this.goal ||
       this.goal.status !== "active" ||
       this.continuationPending ||
-      !ctx.isIdle()
+      (!allowFollowUpQueue && !ctx.isIdle())
     ) {
       return false;
     }
@@ -317,16 +326,36 @@ export class GoalController {
     const reminderText = reminder
       ? `\nAdvisory ledger keys (not completion proof):\n${reminder}`
       : "";
-    this.pi.sendMessage(
-      {
-        customType: GOAL_CONTINUATION_TYPE,
-        display: true,
-        content: `Continue the session goal autonomously. Objective: ${objective}. Success: ${condition}. Inspect current evidence, take the smallest useful next action, verify it, and stop this turn when no safe immediate action remains.${reminderText}`,
-        details: { goalId: this.goal.id, revision: this.goal.revision },
-      },
-      { triggerTurn: true, deliverAs: "followUp" },
-    );
-    return true;
+    try {
+      this.pi.sendMessage(
+        {
+          customType: GOAL_CONTINUATION_TYPE,
+          display: true,
+          content: `Continue the session goal autonomously. Objective: ${objective}. Success: ${condition}. Inspect current evidence, take the smallest useful next action, verify it, and stop this turn when no safe immediate action remains.${reminderText}`,
+          details: {
+            goalId: this.goal.id,
+            revision: this.goal.revision,
+            iteration: this.goal.iterations + 1,
+            maxTurns: this.goal.maxTurns,
+          },
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+      return true;
+    } catch (error) {
+      this.continuationPending = false;
+      if (this.goal?.status === "active") {
+        this.persist(
+          transitionGoal(
+            this.goal,
+            "paused",
+            this.now(),
+            "Paused because the next autonomous turn could not be dispatched.",
+          ),
+        );
+      }
+      throw error;
+    }
   }
 
   private armWaiting(ctx: ExtensionContext) {
