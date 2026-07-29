@@ -230,6 +230,8 @@ export function loadRunEntries(
   active: Map<string, WorkflowDetails>,
   sessionId: string,
   referencedRunIds: ReadonlySet<string>,
+  /** Hide runs that finished before this timestamp; live runs always show. */
+  startedSince = 0,
 ): RunEntry[] {
   let names: string[] = [];
   try {
@@ -251,6 +253,7 @@ export function loadRunEntries(
       const details = normalizeDetails(runId, raw);
       if (
         details &&
+        details.startedAt >= startedSince &&
         (details.sessionId === sessionId || referencedRunIds.has(runId))
       ) {
         const runDir = path.join(runsDir(), runId);
@@ -384,6 +387,7 @@ export class WorkflowDashboard {
   private getActive: () => Map<string, WorkflowDetails>;
   private sessionId: string;
   private referencedRunIds: ReadonlySet<string>;
+  private startedSince: number;
   private close: () => void;
 
   constructor(
@@ -393,6 +397,7 @@ export class WorkflowDashboard {
     getActive: () => Map<string, WorkflowDetails>,
     sessionId: string,
     referencedRunIds: ReadonlySet<string>,
+    startedSince: number,
     close: () => void,
     initialRunId?: string,
   ) {
@@ -402,6 +407,7 @@ export class WorkflowDashboard {
     this.getActive = getActive;
     this.sessionId = sessionId;
     this.referencedRunIds = referencedRunIds;
+    this.startedSince = startedSince;
     this.close = close;
     this.refresh();
     if (initialRunId) {
@@ -440,6 +446,7 @@ export class WorkflowDashboard {
       this.getActive(),
       this.sessionId,
       this.referencedRunIds,
+      this.startedSince,
     );
     if (selected) {
       const index = this.entries.findIndex((e) => e.runId === selected);
@@ -709,7 +716,7 @@ export class WorkflowDashboard {
       lines.push(
         ...this.panel(
           "Runs",
-          [theme.fg("dim", " no workflow runs yet")],
+          [theme.fg("dim", " no workflow runs for this request")],
           width,
           panelHeight,
         ),
@@ -1037,6 +1044,7 @@ export async function showWorkflowDashboard(
   ctx: ExtensionContext,
   getActive: () => Map<string, WorkflowDetails>,
   initialRunId?: string,
+  startedSince = 0,
 ): Promise<void> {
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
@@ -1047,6 +1055,7 @@ export async function showWorkflowDashboard(
         getActive,
         ctx.sessionManager.getSessionId(),
         sessionWorkflowRunIds(ctx),
+        startedSince,
         () => {
           dashboard.dispose();
           done(undefined);

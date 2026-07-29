@@ -173,6 +173,7 @@ function listRuns(
   activeRuns: Map<string, WorkflowDetails>,
   sessionId: string,
   referencedRunIds: ReadonlySet<string>,
+  startedSince = 0,
 ): RunSummary[] {
   const base = path.join(getAgentDir(), "workflows");
   let names: string[] = [];
@@ -201,7 +202,11 @@ function listRuns(
       const parsed = JSON.parse(
         fs.readFileSync(path.join(base, runId, "workflow.json"), "utf8"),
       ) as Partial<WorkflowDetails>;
-      if (parsed.sessionId !== sessionId && !referencedRunIds.has(runId)) {
+      const startedAt = parsed.startedAt ?? 0;
+      if (
+        startedAt < startedSince ||
+        (parsed.sessionId !== sessionId && !referencedRunIds.has(runId))
+      ) {
         continue;
       }
       const agents = parsed.agents ?? [];
@@ -263,6 +268,11 @@ export default function workflows(pi: ExtensionAPI) {
   let lastUi: ExtensionContext["ui"] | undefined;
   let completedRuns = 0;
   let failedRuns = 0;
+  /**
+   * Start of the current request. The dashboard reports the work belonging to
+   * it, not the whole session's run history.
+   */
+  let turnStartedAt = 0;
   const updateIndicator = () => {
     const ui = lastUi;
     if (!ui) return;
@@ -292,11 +302,13 @@ export default function workflows(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.hasUI) lastUi = ctx.ui;
+    turnStartedAt = 0;
     updateIndicator();
   });
 
   pi.on("input", (event) => {
     if (event.source === "extension") return;
+    turnStartedAt = Date.now();
     if (completedRuns === 0 && failedRuns === 0) return;
     completedRuns = 0;
     failedRuns = 0;
@@ -332,9 +344,16 @@ export default function workflows(pi: ExtensionAPI) {
       "List workflow runs (`/workflows <runId>` for one run's detail)",
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
+      // An explicit run id is a deliberate lookup, so it reaches session history.
+      const startedSince = arg ? 0 : turnStartedAt;
       if (ctx.mode === "tui") {
         lastUi = ctx.ui;
-        await showWorkflowDashboard(ctx, activeDetails, arg || undefined);
+        await showWorkflowDashboard(
+          ctx,
+          activeDetails,
+          arg || undefined,
+          startedSince,
+        );
         // Opening the dashboard acknowledges finished runs.
         completedRuns = 0;
         failedRuns = 0;
@@ -346,9 +365,10 @@ export default function workflows(pi: ExtensionAPI) {
         activeDetails(),
         ctx.sessionManager.getSessionId(),
         sessionWorkflowRunIds(ctx),
+        startedSince,
       );
       if (runs.length === 0) {
-        ctx.ui.notify("No workflow runs yet.", "info");
+        ctx.ui.notify("No workflow runs for this request.", "info");
         return;
       }
       if (arg) {
