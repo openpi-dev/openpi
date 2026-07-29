@@ -443,7 +443,7 @@ export default function (pi: ExtensionAPI) {
           0,
         );
       }
-      const meta = [details.harness, details.model, details.id]
+      const meta = [details.harness, details.model]
         .filter(Boolean)
         .join(" \u00b7 ");
       return new Text(

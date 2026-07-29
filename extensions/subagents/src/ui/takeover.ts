@@ -316,12 +316,12 @@ class SubagentDashboard implements Component {
       const index = start + i;
       const isSelected = index === this.selection.index;
 
-      // Left: marker, status square, title, dim id
+      // Left: marker, status square, title
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
       const title = isSelected
         ? theme.fg("accent", snap.title)
         : theme.fg("text", snap.title);
-      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title} ${theme.fg("dim", snap.id)}`;
+      const left = ` ${marker} ${statusGlyph(snap, theme)} ${title}`;
 
       // Right: backend · model · context utilization · elapsed · status
       const utilization = formatContextUtilization(snap.usage);
@@ -515,7 +515,7 @@ class TakeoverView implements Component, Focusable {
     const utilization = formatContextUtilization(snap.usage);
     const header =
       `${statusGlyph(snap, theme)} ` +
-      theme.fg("accent", theme.bold(`${snap.id} · ${snap.title}`)) +
+      theme.fg("accent", theme.bold(snap.title)) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
       (this.options?.badge
         ? theme.fg("muted", ` · ${this.options.badge}`)
