@@ -411,7 +411,25 @@ export function loadSetupConfig() {
   }
 }
 
+/**
+ * Refuse to overwrite a file we could not read. A save always starts from
+ * `loadSetupConfig()`, which degrades an unreadable document to defaults, so
+ * writing anyway would silently replace every saved preference. Rendering
+ * paths keep degrading; only the writer fails closed.
+ */
+function assertReadableSetupConfig() {
+  if (!existsSync(SETUP_CONFIG_PATH)) return;
+  try {
+    JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `Refusing to overwrite unreadable config at ${SETUP_CONFIG_PATH} (${error instanceof Error ? error.message : String(error)}). Fix the file, or delete it to start from defaults, then retry.`,
+    );
+  }
+}
+
 export async function saveSetupConfig(config: MyPiSetupConfig) {
+  assertReadableSetupConfig();
   const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
   await mkdir(getAgentDir(), { recursive: true });
   try {
