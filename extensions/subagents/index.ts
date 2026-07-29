@@ -39,7 +39,7 @@ import {
   ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
+import { Container, Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
@@ -87,6 +87,13 @@ import {
 const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
 const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
+
+interface SpawnResultDetails {
+  readonly id?: string;
+  readonly title?: string;
+  readonly harness?: string;
+  readonly model?: string;
+}
 
 interface SubagentFinishedData {
   readonly id: string;
@@ -214,7 +221,7 @@ export default function (pi: ExtensionAPI) {
     const running = subs.filter((snap) => snap.status === "running");
     for (const snap of running.slice(0, MAX_STATUS_ROWS)) {
       lines.push(
-        `  ${theme.fg("warning", "\u25a0")} ${snap.title} ${theme.fg("dim", formatElapsed(snap))}`,
+        `  ${theme.fg("warning", "\u25cb")} ${snap.title} ${theme.fg("dim", formatElapsed(snap))}`,
       );
     }
     if (running.length > MAX_STATUS_ROWS) {
@@ -422,6 +429,31 @@ export default function (pi: ExtensionAPI) {
         },
       };
     },
+    renderResult(result, _options, theme) {
+      const details = result.details as SpawnResultDetails | undefined;
+      if (!details?.id) {
+        const first = result.content[0];
+        return new Text(first?.type === "text" ? first.text : "(no output)");
+      }
+      const container = new Container();
+      container.addChild(
+        new Text(
+          `${theme.fg("success", "\u25cf")} ${theme.bold(`Agent launched \u00b7 ${details.title ?? details.id}`)}`,
+        ),
+      );
+      container.addChild(
+        new Text(
+          theme.fg(
+            "muted",
+            `  ${[details.harness, details.model, details.id].filter(Boolean).join(" \u00b7 ")}`,
+          ),
+        ),
+      );
+      container.addChild(
+        new Text(theme.fg("dim", "  /subagents to view, take over, or stop")),
+      );
+      return container;
+    },
   });
 
   pi.registerTool({
@@ -519,7 +551,20 @@ export default function (pi: ExtensionAPI) {
     renderResult(result, { expanded, isPartial }, theme) {
       const first = result.content[0];
       const content = first?.type === "text" ? first.text : "(no output)";
-      if (isPartial) return new Text(theme.fg("warning", content), 0, 0);
+      if (isPartial) {
+        const pending = (result.details as { pending?: string[] } | undefined)
+          ?.pending?.length;
+        return new Text(
+          theme.fg(
+            "warning",
+            pending
+              ? `\u273b Waiting for ${pending} subagent${pending === 1 ? "" : "s"} to finish`
+              : content,
+          ),
+          0,
+          0,
+        );
+      }
       return renderWaitResult(
         content,
         result.details as WaitResultDetails | undefined,
