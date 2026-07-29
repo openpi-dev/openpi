@@ -9,7 +9,7 @@
 <p align="center">
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.82+" src="https://img.shields.io/badge/Pi-0.82%2B-2f81f7?style=flat-square"></a>
   <a href="https://github.com/tt-a1i/my-pi-setup/actions"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-153%20passing-3fb950?style=flat-square">
+  <img alt="Tests" src="https://img.shields.io/badge/tests-passing-3fb950?style=flat-square">
   <img alt="Configuration" src="https://img.shields.io/badge/config-natural%20language-d2a8ff?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-see%20notices-7d8590?style=flat-square">
 </p>
@@ -277,7 +277,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 
 为避免无意义压缩，Context Pivot 仅在约 30K Context Tokens 后启用。
 
-### 6. Session 搜索与预览
+### 7. Session 搜索与预览
 
 ```text
 /sessions
@@ -291,7 +291,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 - 当前项目与全部 Workspace 之间切换；
 - 选中后直接调用 Pi 的安全 Session Switch 生命周期。
 
-### 7. 模型可以真正“问用户”
+### 8. 模型可以真正“问用户”
 
 `ask_user` 不是普通文本提问，而是模型可调用的结构化 TUI：
 
@@ -305,7 +305,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 
 Prompt 约束它只询问真正会改变结果、又无法从代码和上下文推断的决策；禁止用它问“是否继续”。
 
-### 8. 一等文件搜索工具
+### 9. 一等文件搜索工具
 
 模型直接获得结构化 `fd` 与 `rg`：
 
@@ -318,7 +318,7 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 `rg.max_matches_per_file` 明确表达它是“每个文件”的限制，不会让模型误以为是全局上限。
 
-### 9. 高密度终端 Dashboard
+### 10. 高密度终端 Dashboard
 
 默认 Footer 使用一行 `powerline` 布局：
 
@@ -374,7 +374,7 @@ Subagents、Workflows 和后台终端状态属于基础可观察性，不是可�
 - 大型 ASCII Header 默认关闭；
 - Footer 可以通过统一配置关闭，恢复 Pi 原生 Footer。
 
-### 10. Run Recap，不占主 Context
+### 11. Run Recap，不占主 Context
 
 每轮 Agent 完整结束后，聊天中会出现一张 Recap 卡片：
 
