@@ -25,6 +25,7 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "get_goal",
   "create_goal",
   "update_goal",
+  "configure_my_pi_setup",
 ] as const;
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */

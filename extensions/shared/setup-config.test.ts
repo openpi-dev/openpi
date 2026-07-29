@@ -14,6 +14,7 @@ const {
   SETUP_CONFIG_PATH,
   loadSetupConfig,
   saveSetupConfig,
+  updateSetupConfig,
 } = await import("./setup-config.ts");
 
 test("an unreadable config blocks the write and survives untouched", async () => {
@@ -45,4 +46,37 @@ test("a readable or absent config saves normally", async () => {
 
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
   assert.deepEqual(loadSetupConfig(), DEFAULT_SETUP_CONFIG);
+});
+
+test("an update patches the document as it is on disk, not as it was read", async () => {
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+
+  // Another session changes a different field after this one loaded.
+  const stale = loadSetupConfig();
+  await saveSetupConfig({
+    ...stale,
+    workflows: { ...stale.workflows, concurrency: 17 },
+  });
+
+  const { config, replaced } = await updateSetupConfig((current) => ({
+    ...current,
+    summaries: { ...current.summaries, enabled: false },
+  }));
+  assert.equal(config.workflows.concurrency, 17);
+  assert.equal(config.summaries.enabled, false);
+  assert.deepEqual(replaced, []);
+});
+
+test("a stored value that had to be normalized is reported, not hidden", async () => {
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ workflows: { concurrency: "12" }, ui: { showHeader: 3 } }),
+  );
+
+  const { config, replaced } = await updateSetupConfig((current) => current);
+  assert.equal(
+    config.workflows.concurrency,
+    DEFAULT_SETUP_CONFIG.workflows.concurrency,
+  );
+  assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
 });

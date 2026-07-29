@@ -31,7 +31,7 @@ export const BG_START_TOOL_DESCRIPTION =
   "Start a long-running shell command as a background terminal (executed via the platform shell — sh -c on POSIX, cmd.exe /d /s /c on Windows). " +
   "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
   "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg_kill to stop a stuck one. " +
-  `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); the full logs are captured to files and in the /ps viewer. ` +
+  `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); output is captured to a log file when one can be opened, and to the /ps viewer. ` +
   "Set timeout_seconds for finite work such as builds or tests; omit it for servers and watchers. " +
   `Max ${MAX_RUNNING} background terminals can run at once.`;
 
@@ -111,7 +111,9 @@ function outputSection(
   if (truncation.truncated || view.truncatedBytes > 0) {
     const where = view.spillPath
       ? `Full log: ${view.spillPath}`
-      : "Full output in the /ps viewer";
+      : view.truncatedBytes > 0
+        ? `${formatSize(view.truncatedBytes)} of older output was dropped: no full log for this terminal`
+        : "Full output in the /ps viewer";
     text += `\n[${label} truncated: showing last ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${where}]`;
   }
   return text;

@@ -670,6 +670,7 @@ export default function workflows(pi: ExtensionAPI) {
             onAgent: agentFn,
             onPhase: phaseFn,
             maxConcurrency: workflowConfig.concurrency,
+            maxAgentCalls: workflowConfig.maxAgentCalls,
           });
         } catch (error) {
           details.error = errorText(error);

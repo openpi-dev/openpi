@@ -296,14 +296,28 @@ interface SessionStats {
   del: number;
 }
 
+/**
+ * Module scope: these outlive a session, which is the point (the picker is
+ * reopened constantly), but they are capped so a long-lived process cannot
+ * accumulate one entry per session forever.
+ */
+const MAX_CACHED_STATS = 256;
 const statsCache = new Map<string, SessionStats>();
 const statsLoading = new Set<string>();
 
+/** A stuck git call must not hold its key in statsLoading for the process's life. */
+const GIT_STATS_TIMEOUT_MS = 3_000;
+
 const execGit = (args: string[], cwd: string): Promise<string> =>
   new Promise((resolve) => {
-    execFile("git", args, { cwd, encoding: "utf8" }, (error, stdout) => {
-      resolve(error ? "" : stdout);
-    });
+    execFile(
+      "git",
+      args,
+      { cwd, encoding: "utf8", timeout: GIT_STATS_TIMEOUT_MS },
+      (error, stdout) => {
+        resolve(error ? "" : stdout);
+      },
+    );
   });
 
 const loadSessionStats = (
@@ -334,32 +348,41 @@ const loadSessionStats = (
     isLatestForCwd
       ? execGit(["diff", "--numstat"], session.cwd)
       : Promise.resolve(""),
-  ]).then(([logOut, diffOut]) => {
-    let added = 0;
-    let deleted = 0;
-    const parseOut = (out: string) => {
-      const lines = out.split("\n");
-      for (const line of lines) {
-        const parts = line.trim().split(/\s+/);
-        if (parts.length >= 2) {
-          const a = parseInt(parts[0], 10);
-          const d = parseInt(parts[1], 10);
-          if (!isNaN(a)) added += a;
-          if (!isNaN(d)) deleted += d;
+  ])
+    .then(([logOut, diffOut]) => {
+      let added = 0;
+      let deleted = 0;
+      const parseOut = (out: string) => {
+        const lines = out.split("\n");
+        for (const line of lines) {
+          const parts = line.trim().split(/\s+/);
+          if (parts.length >= 2) {
+            const a = parseInt(parts[0], 10);
+            const d = parseInt(parts[1], 10);
+            if (!isNaN(a)) added += a;
+            if (!isNaN(d)) deleted += d;
+          }
         }
+      };
+      parseOut(logOut);
+      parseOut(diffOut);
+
+      const mod = Math.min(added, deleted);
+      const add = added - mod;
+      const del = deleted - mod;
+
+      if (statsCache.size >= MAX_CACHED_STATS) {
+        const oldest = statsCache.keys().next().value;
+        if (oldest !== undefined) statsCache.delete(oldest);
       }
-    };
-    parseOut(logOut);
-    parseOut(diffOut);
-
-    const mod = Math.min(added, deleted);
-    const add = added - mod;
-    const del = deleted - mod;
-
-    statsCache.set(key, { add, mod, del });
-    statsLoading.delete(key);
-    tui.requestRender();
-  });
+      statsCache.set(key, { add, mod, del });
+      tui.requestRender();
+    })
+    .finally(() => {
+      // Always release the key: a retained loading marker would block every
+      // later retry for this session.
+      statsLoading.delete(key);
+    });
 };
 
 const formatItemLabel = (

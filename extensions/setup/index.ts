@@ -11,6 +11,7 @@ import {
   formatSetupConfig,
   hasSavedSetupConfig,
   loadSetupConfig,
+  updateSetupConfig,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
@@ -182,76 +183,98 @@ export default function myPiSetup(pi: ExtensionAPI) {
         );
       }
 
-      const current = loadSetupConfig();
-      let model = current.summaries.model;
-      if (params.summary_use_local_fallback) model = undefined;
-      if (params.summary_provider && params.summary_model) {
-        const resolved = ctx.modelRegistry.find(
-          params.summary_provider,
-          params.summary_model,
+      if (
+        params.summary_use_local_fallback &&
+        (params.summary_provider || params.summary_model)
+      ) {
+        throw new Error(
+          "summary_use_local_fallback clears the recap model, so it cannot be combined with summary_provider or summary_model. Send one or the other.",
         );
-        if (!resolved) {
-          throw new Error(
-            `Unknown configured model: ${params.summary_provider}/${params.summary_model}`,
-          );
-        }
-        model = {
-          provider: resolved.provider,
-          model: resolved.id,
-          reasoning: params.summary_reasoning!,
-        };
       }
 
-      const footer = applyFooterConfig(
-        {
-          footerStyle: current.ui.footerStyle,
-          footerLines: current.ui.footerLines,
-        },
-        {
-          ...(params.ui_footer_preset !== undefined
-            ? { preset: params.ui_footer_preset as FooterPreset }
-            : {}),
-          ...(params.ui_footer_style !== undefined
-            ? { style: params.ui_footer_style as FooterStyle }
-            : {}),
-          ...(params.ui_footer_lines !== undefined
-            ? {
-                lines: params.ui_footer_lines as FooterLayoutItem[][],
-              }
-            : {}),
-          ...(params.ui_footer_items !== undefined
-            ? { items: params.ui_footer_items }
-            : {}),
-        },
-      );
+      const buildConfig = (current: MyPiSetupConfig) => {
+        let model = current.summaries.model;
+        if (params.summary_use_local_fallback) model = undefined;
+        if (params.summary_provider && params.summary_model) {
+          const resolved = ctx.modelRegistry.find(
+            params.summary_provider,
+            params.summary_model,
+          );
+          if (!resolved) {
+            throw new Error(
+              `Unknown configured model: ${params.summary_provider}/${params.summary_model}`,
+            );
+          }
+          model = {
+            provider: resolved.provider,
+            model: resolved.id,
+            reasoning: params.summary_reasoning!,
+          };
+        }
 
-      const config: MyPiSetupConfig = {
-        summaries: {
-          enabled: params.summaries_enabled ?? current.summaries.enabled,
-          ...(model ? { model } : {}),
-        },
-        workflows: {
-          concurrency:
-            params.workflow_concurrency ?? current.workflows.concurrency,
-          maxAgentCalls:
-            params.workflow_max_agent_calls ?? current.workflows.maxAgentCalls,
-        },
-        ui: {
-          showHeader: params.ui_show_header ?? current.ui.showHeader,
-          customFooter: params.ui_custom_footer ?? current.ui.customFooter,
-          ...footer,
-          subagentResultDisplay:
-            params.subagent_result_display ?? current.ui.subagentResultDisplay,
-          fileMutationDisplay:
-            params.file_mutation_display ?? current.ui.fileMutationDisplay,
-        },
+        const footer = applyFooterConfig(
+          {
+            footerStyle: current.ui.footerStyle,
+            footerLines: current.ui.footerLines,
+          },
+          {
+            ...(params.ui_footer_preset !== undefined
+              ? { preset: params.ui_footer_preset as FooterPreset }
+              : {}),
+            ...(params.ui_footer_style !== undefined
+              ? { style: params.ui_footer_style as FooterStyle }
+              : {}),
+            ...(params.ui_footer_lines !== undefined
+              ? {
+                  lines: params.ui_footer_lines as FooterLayoutItem[][],
+                }
+              : {}),
+            ...(params.ui_footer_items !== undefined
+              ? { items: params.ui_footer_items }
+              : {}),
+          },
+        );
+
+        const config: MyPiSetupConfig = {
+          summaries: {
+            enabled: params.summaries_enabled ?? current.summaries.enabled,
+            ...(model ? { model } : {}),
+          },
+          workflows: {
+            concurrency:
+              params.workflow_concurrency ?? current.workflows.concurrency,
+            maxAgentCalls:
+              params.workflow_max_agent_calls ??
+              current.workflows.maxAgentCalls,
+          },
+          ui: {
+            showHeader: params.ui_show_header ?? current.ui.showHeader,
+            customFooter: params.ui_custom_footer ?? current.ui.customFooter,
+            ...footer,
+            subagentResultDisplay:
+              params.subagent_result_display ??
+              current.ui.subagentResultDisplay,
+            fileMutationDisplay:
+              params.file_mutation_display ?? current.ui.fileMutationDisplay,
+          },
+        };
+        return config;
       };
-      await saveSetupConfig(config);
+
+      // Patch the document as it is on disk now, not as it was when this call
+      // started, and report any stored value that had to be normalized.
+      const { config, replaced } = await updateSetupConfig(buildConfig);
       pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, config);
       const text = formatSetupConfig(config);
-      if (ctx.hasUI) ctx.ui.notify(text, "info");
+      const note =
+        replaced.length > 0
+          ? ` Replaced invalid stored values: ${replaced.join(", ")}.`
+          : "";
+      if (ctx.hasUI) ctx.ui.notify(`${text}${note}`, "info");
       return {
-        content: [{ type: "text", text: `Updated my Pi setup. ${text}` }],
+        content: [
+          { type: "text", text: `Updated my Pi setup. ${text}${note}` },
+        ],
         details: config,
       };
     },

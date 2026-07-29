@@ -15,6 +15,7 @@ function run(
     onAgent: async (prompt) => ({ ok: true, output: `reply:${prompt}` }),
     onPhase: () => {},
     maxConcurrency: 8,
+    maxAgentCalls: 128,
     ...overrides,
   });
 }
@@ -146,4 +147,36 @@ test("workflow cancellation aborts a pending agent request", async () => {
   controller.abort(new Error("cancel fixture"));
   await assert.rejects(pending, /Workflow was aborted/);
   assert.equal(requestAborted, true);
+});
+
+test("the sandbox budget is the configured budget, not a lower hidden one", async () => {
+  const source = `
+    let n = 0;
+    for (let i = 0; i < 40; i++) n += (await agent("x")).output.length;
+    return n;
+  `;
+  // A run configured for 128 calls must not die at some other number.
+  const generous = await run(source, { maxAgentCalls: 128 });
+  assert.equal(typeof generous, "number");
+
+  await assert.rejects(
+    run(source, { maxAgentCalls: 5 }),
+    /agent request budget/,
+  );
+});
+
+test("a promise handed to workflow code cannot reach the host realm", async () => {
+  // .then() used to return a host-realm promise, whose constructor chain leads
+  // to the host Function and therefore past the context's codeGeneration ban.
+  const escaped = await run(`
+    const chained = agent("x").then(() => 0);
+    await chained;
+    try {
+      const F = chained.constructor.constructor;
+      return typeof F("return process")();
+    } catch {
+      return "denied";
+    }
+  `);
+  assert.equal(escaped, "denied");
 });

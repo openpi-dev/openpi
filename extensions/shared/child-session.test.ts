@@ -112,6 +112,7 @@ test("child denylist keeps extension and workflow structured tools available", a
         "get_goal",
         "create_goal",
         "update_goal",
+        "configure_my_pi_setup",
       ],
     );
     const allTools = new Set(session.getAllTools().map((tool) => tool.name));

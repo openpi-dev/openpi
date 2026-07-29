@@ -417,10 +417,10 @@ export function loadSetupConfig() {
  * writing anyway would silently replace every saved preference. Rendering
  * paths keep degrading; only the writer fails closed.
  */
-function assertReadableSetupConfig() {
-  if (!existsSync(SETUP_CONFIG_PATH)) return;
+function readDocumentForWrite() {
+  if (!existsSync(SETUP_CONFIG_PATH)) return undefined;
   try {
-    JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+    return JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")) as unknown;
   } catch (error) {
     throw new Error(
       `Refusing to overwrite unreadable config at ${SETUP_CONFIG_PATH} (${error instanceof Error ? error.message : String(error)}). Fix the file, or delete it to start from defaults, then retry.`,
@@ -428,8 +428,29 @@ function assertReadableSetupConfig() {
   }
 }
 
+/**
+ * Known fields whose on-disk value normalization had to replace. Absent fields
+ * are not reported: only a value the user wrote and will silently lose.
+ */
+function replacedFields(
+  raw: unknown,
+  normalized: unknown,
+  path = "",
+): string[] {
+  if (!isRecord(raw) || !isRecord(normalized)) {
+    return JSON.stringify(raw) === JSON.stringify(normalized) ? [] : [path];
+  }
+  const paths: string[] = [];
+  for (const [key, value] of Object.entries(normalized)) {
+    if (!(key in raw)) continue;
+    const here = path ? `${path}.${key}` : key;
+    paths.push(...replacedFields(raw[key], value, here));
+  }
+  return paths;
+}
+
 export async function saveSetupConfig(config: MyPiSetupConfig) {
-  assertReadableSetupConfig();
+  readDocumentForWrite();
   const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
   await mkdir(getAgentDir(), { recursive: true });
   try {
@@ -463,3 +484,19 @@ export function formatSetupConfig(config = loadSetupConfig()) {
 }
 
 export { isFooterItem, isFooterLayoutItem, isFooterStyle, isFooterPreset };
+
+/**
+ * Read-modify-write against the document as it is on disk right now, so a
+ * config changed by another session since this one loaded it is patched
+ * rather than replaced wholesale. Returns the fields whose stored value was
+ * invalid and had to be normalized, so the caller can say so out loud.
+ */
+export async function updateSetupConfig(
+  mutate: (current: MyPiSetupConfig) => MyPiSetupConfig,
+) {
+  const raw = readDocumentForWrite();
+  const current = parseSetupConfig(raw);
+  const config = mutate(current);
+  await saveSetupConfig(config);
+  return { config, replaced: replacedFields(raw, current) };
+}

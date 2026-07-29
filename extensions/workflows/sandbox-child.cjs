@@ -64,7 +64,11 @@ const BOOTSTRAP = String.raw`
           return started;
         }
         inFlight.add(id);
-        started = callHost("agent", payload)
+        // Re-wrap in a context-realm promise: chaining a host promise would
+        // expose the host Function constructor through .constructor.constructor.
+        started = new Promise((resolve, reject) => {
+          callHost("agent", payload).then(resolve, reject);
+        })
           .then((json) => JSON.parse(json))
           .finally(() => inFlight.delete(id));
       }

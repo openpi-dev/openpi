@@ -2,13 +2,13 @@ import { randomBytes } from "node:crypto";
 import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import { MAX_WORKFLOW_AGENT_CALLS } from "../shared/setup-config.ts";
 import { safeStringify, toSerializable } from "./serialization.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_ARGS_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_AGENT_MESSAGE_BYTES = 512 * 1024;
-const MAX_AGENT_REQUESTS = 32;
 
 export interface SandboxAgentOptions {
   label?: unknown;
@@ -38,6 +38,8 @@ export interface RunWorkflowSandboxOptions {
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
   maxConcurrency: number;
+  /** Same budget the controller enforces; the sandbox is the outer guard. */
+  maxAgentCalls: number;
 }
 
 function byteLength(value: string) {
@@ -92,6 +94,11 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       new Error(`Workflow script exceeds the ${MAX_SOURCE_BYTES} byte limit`),
     );
   }
+
+  const maxAgentRequests = Math.max(
+    1,
+    Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(options.maxAgentCalls)),
+  );
 
   const argsJson = safeStringify(
     { defined: options.args !== undefined, value: options.args },
@@ -220,7 +227,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           finish(new Error("Workflow sandbox sent an invalid agent request"));
           return;
         }
-        if (requestIds.has(payload.id) || ++requestCount > MAX_AGENT_REQUESTS) {
+        if (requestIds.has(payload.id) || ++requestCount > maxAgentRequests) {
           finish(
             new Error("Workflow sandbox exceeded its agent request budget"),
           );
