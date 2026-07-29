@@ -215,6 +215,13 @@ export default function modelInfo(pi: ExtensionAPI) {
 
   pi.on("turn_end", (_event, ctx) => refresh(ctx));
 
+  // Compaction and branch moves rewrite history, so the cached percentage is
+  // stale the moment they land. Pi reports unknown occupancy until the next
+  // assistant reply, which is the honest state to show.
+  pi.on("session_compact", (_event, ctx) => refresh(ctx));
+
+  pi.on("session_tree", (_event, ctx) => refresh(ctx));
+
   pi.on("agent_settled", (_event, ctx) => {
     state = { ...state, generating: false };
     refresh(ctx);

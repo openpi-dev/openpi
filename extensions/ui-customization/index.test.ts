@@ -68,7 +68,7 @@ function createHarness() {
   };
 }
 
-test("shows context capacity without a misleading unknown percentage", () => {
+test("marks context occupancy unknown instead of guessing a percentage", () => {
   const harness = createHarness();
   harness.listeners.get(MODEL_INFO_CHANNEL)?.({
     provider: "seal",
@@ -85,8 +85,7 @@ test("shows context capacity without a misleading unknown percentage", () => {
   });
 
   const footer = harness.render().join("\n");
-  assert.match(footer, /ctx 1\.0m/);
-  assert.doesNotMatch(footer, /\?%/);
+  assert.match(footer, /\?%\/1\.0m/);
 });
 
 test("renders only selected footer items", () => {

@@ -162,7 +162,8 @@ export function buildSegmentCatalog(
   const contextText =
     modelInfo.contextPercent === null
       ? contextWindow
-        ? `ctx ${contextWindow}`
+        ? // Occupancy is unknown right after compaction, until the next reply.
+          `?%/${contextWindow}`
         : ""
       : `${Math.round(modelInfo.contextPercent)}%${contextWindow ? `/${contextWindow}` : ""}`;
 
