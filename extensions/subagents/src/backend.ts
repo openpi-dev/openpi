@@ -1,11 +1,11 @@
 /**
- * The unified backend interface: one `SubagentBackend` per agent runtime
- * (pi, Claude Code, Codex), all producing the same `SubagentSession` shape.
+ * The backend interface: one `SubagentBackend` per agent runtime, all
+ * producing the same `SubagentSession` shape. The interface survives the
+ * single-backend world because the manager, the UI, and the tests all depend
+ * on it rather than on the pi session directly.
  *
- * Real implementations in ./backends/:
- * - pi: in-process `createAgentSession()` via the pi SDK.
- * - claude: `@anthropic-ai/claude-agent-sdk` `query()` in streaming-input mode.
- * - codex: `codex app-server` child process speaking JSON-RPC over stdio.
+ * - pi (./backends/pi.ts): in-process `createAgentSession()` via the pi SDK.
+ * - stub (./backends/stub.ts): scripted sessions, test-only.
  */
 
 import type { Effect, Scope, Stream } from "effect";

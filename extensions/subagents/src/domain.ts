@@ -2,25 +2,23 @@
  * Domain model for subagents.
  *
  * Everything downstream of a backend (manager, tools, UI) speaks only these
- * types. Backends translate their native streams (pi session events, Claude
- * Agent SDK messages, Codex app-server JSON-RPC notifications) into the
+ * types. A backend translates its native stream (pi session events) into the
  * normalized `SubagentEvent` union.
  */
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
 
-export const BACKEND_NAMES = ["pi", "claude", "codex"] as const;
-export type BackendName = (typeof BACKEND_NAMES)[number];
+export const BACKEND_NAMES = ["pi"] as const;
+/** "stub" is a test-only backend name; it is never offered to the model. */
+export type BackendName = (typeof BACKEND_NAMES)[number] | "stub";
 
 /** Who initiated the session. User asides stay out of model-facing tooling. */
 export type SubagentOrigin = "model" | "btw";
 
 /**
- * Shared reasoning-effort scale (pi's thinking levels). Each backend maps a
- * value to its nearest native equivalent: pi uses it directly, codex
- * translates to its reasoning-effort slugs, claude translates to thinking
- * budgets. Omitted = backend default (pi inherits the parent level).
+ * Reasoning-effort scale; these are pi's thinking levels, used directly as the
+ * level. Omitted = inherit the parent session's level.
  */
 export const REASONING_EFFORTS = [
   "off",
@@ -53,9 +51,8 @@ export interface SpawnTask {
   readonly title: string;
   readonly cwd: string;
   /**
-   * Generic model hint, interpreted per backend:
-   * pi: "provider/model-id" or bare model id; claude: model alias;
-   * codex: model slug. Omitted = backend default / inherit.
+   * Model hint: "provider/model-id", or a bare model id resolved against the
+   * parent's provider. Omitted = inherit the parent model.
    */
   readonly model?: string;
   /** Shared effort scale; each backend maps it to its native equivalent. */
@@ -65,13 +62,13 @@ export interface SpawnTask {
 
 export interface SubagentMeta {
   readonly backend: BackendName;
-  /** Display label, e.g. "anthropic/claude-opus-4-5" or "gpt-5-codex". */
+  /** Display label, e.g. "seal/kimi-k3". */
   readonly modelLabel?: string;
   /** Context window capacity for utilization display, when known. */
   readonly contextWindow?: number;
-  /** pi session file / Claude projects JSONL / Codex rollout path. */
+  /** Child session file on disk. */
   readonly sessionFilePath?: string;
-  /** Claude session id / Codex conversation id. */
+  /** Native session id reported by the backend. */
   readonly nativeSessionId?: string;
 }
 

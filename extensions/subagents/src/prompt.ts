@@ -1,17 +1,16 @@
 /** All model-facing strings for the subagents tools. */
 
-/** Describes subagent_spawn, including harnesses and the fixed concurrency cap. */
+/** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless agent with its own context window and the selected harness's normal host permissions. You choose the harness it runs on: pi (in-process pi session, inherits this environment's tools and config), claude (Claude Code), or codex (Codex CLI). Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once across all harnesses.";
+  "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
-  "Spawn a background subagent on a chosen harness (pi, Claude Code, or Codex; own context, normal tools) for a self-contained task";
+  "Spawn a background subagent (own context, normal tools) for a self-contained task";
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-  "Use the pi harness by default so the child inherits this Pi environment. Use Claude Code or Codex only when the user explicitly requests that external harness.",
   "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
 ];
 
@@ -21,13 +20,13 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
   harness:
-    'Harness to run the subagent on: "pi" (default; in-process Pi session that inherits this environment), "claude" (Claude Code), or "codex" (Codex CLI). Use an external harness only when the user explicitly requests it.',
+    'Harness to run the subagent on. Only "pi" exists: an in-process Pi session that inherits this environment.',
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
-    "Optional explicit model hint, interpreted by the chosen harness. Omit by default: Pi inherits the current model, while external harnesses use their own configured default. Never guess or hardcode a model name.",
+    'Optional model override, as "provider/model-id" or a bare id resolved against the current provider. Omit to inherit the current model; never guess a model name.',
   reasoningEffort:
-    "Reasoning effort on a shared scale; the harness maps it to its nearest native equivalent (pi thinking level, codex reasoning effort, claude thinking budget). Omit for the harness default (pi inherits the current level).",
+    "Thinking level for the child. Omit to inherit the current level.",
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */

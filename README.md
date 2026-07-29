@@ -184,8 +184,6 @@ subagent_spawn({
 - 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
-Claude Code 与 Codex Backend 仍作为兼容入口保留，但只有用户明确要求时才使用；仓库不为外部 Harness 写死模型偏好。
-
 > `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Write/Edit 的内容和 Diff 默认只展示前 8 行。两类结果都可通过 `/my-pi-setup` 切换完整/紧凑模式，紧凑视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）展开全文。极端输出仍受 Session 字节和行数上限保护。
 
 ### 3. 动态 Multi-Agent Workflows
@@ -593,13 +591,6 @@ pi install ~/work/my-pi-setup
 </details>
 
 <details>
-<summary><strong>必须安装 Claude Code 或 Codex CLI 吗？</strong></summary>
-
-不需要。核心路径是 Pi-native。Claude Code 与 Codex 只是显式兼容 Backend；如果用户没有明确要求，模型应使用 `pi` harness。
-
-</details>
-
-<details>
 <summary><strong>为什么既有 Subagent，又有 Workflow？</strong></summary>
 
 Subagent 适合一项自包含委派；Workflow 适合多阶段、有依赖关系、需要结构化汇总的任务。前者可以被用户接管继续，后者强调自动编排与可回放产物。
@@ -634,7 +625,7 @@ Subagent 适合一项自包含委派；Workflow 适合多阶段、有依赖关�
 extensions/
 ├── setup/                 # /my-pi-setup 与受限配置工具
 ├── background-terminals/  # 长进程、日志、/ps
-├── subagents/             # Pi / Claude Code / Codex Backend + /subagents
+├── subagents/             # Pi-native Backend + /subagents
 ├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
 ├── tasks/                 # Session 持久任务
 ├── context-pivot/         # 定向 Compaction
