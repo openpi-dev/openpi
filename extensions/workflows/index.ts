@@ -256,7 +256,10 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
 
-  /** Finished counts remain visible until the dashboard acknowledges them. */
+  /**
+   * Finished counts are an unread notice: opening the dashboard or sending the
+   * next explicit request acknowledges them.
+   */
   let lastUi: ExtensionContext["ui"] | undefined;
   let completedRuns = 0;
   let failedRuns = 0;
@@ -289,6 +292,14 @@ export default function workflows(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.hasUI) lastUi = ctx.ui;
+    updateIndicator();
+  });
+
+  pi.on("input", (event) => {
+    if (event.source === "extension") return;
+    if (completedRuns === 0 && failedRuns === 0) return;
+    completedRuns = 0;
+    failedRuns = 0;
     updateIndicator();
   });
 

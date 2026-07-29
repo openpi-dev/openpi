@@ -51,8 +51,10 @@ import {
 } from "./src/domain.ts";
 import {
   formatActivityStatus,
-  formatContextUtilization,
-} from "./src/format.ts";
+  hasActivity,
+  unreadActivityCounts,
+} from "../shared/activity-status.ts";
+import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
@@ -149,6 +151,11 @@ export default function (pi: ExtensionAPI) {
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  /**
+   * Settled subagents are an unread notice: the user's next explicit request
+   * acknowledges everything that had already finished.
+   */
+  let settledAcknowledgedAt = 0;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -169,17 +176,15 @@ export default function (pi: ExtensionAPI) {
 
   const updateStatus = (manager: SubagentManagerShape) => {
     if (!ui) return;
-    const subs = manager.view.list();
-    if (subs.length === 0) {
-      ui.setStatus("subagents", undefined);
-      return;
-    }
-    const running = subs.filter((snap) => snap.status === "running").length;
-    const failed = subs.filter((snap) => snap.status === "error").length;
-    const done = subs.length - running - failed;
+    const counts = unreadActivityCounts(
+      manager.view.list(),
+      settledAcknowledgedAt,
+    );
     ui.setStatus(
       "subagents",
-      formatActivityStatus(ui.theme, { running, done, failed }),
+      hasActivity(counts)
+        ? formatActivityStatus(ui.theme, "subagents", counts)
+        : undefined,
     );
   };
 
@@ -248,7 +253,16 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;
+    settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
+  });
+
+  // A new explicit request starts a fresh unread window: previously finished
+  // subagents stop being reported, running ones keep reporting.
+  pi.on("input", (event) => {
+    if (event.source === "extension") return;
+    settledAcknowledgedAt = Date.now();
+    managerPromise?.then(updateStatus).catch(() => undefined);
   });
 
   pi.on("agent_settled", flushResults);

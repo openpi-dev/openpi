@@ -1,9 +1,7 @@
 /**
- * Formatting helpers (self-contained copies of the v1 shared helpers:
- * context-utilization + activity-status).
+ * Formatting helpers (self-contained copy of the v1 shared
+ * context-utilization helper).
  */
-
-import type { Theme } from "@earendil-works/pi-coding-agent";
 
 export interface ContextUtilization {
   /** Current conversation context occupancy; undefined while unknown. */
@@ -47,28 +45,4 @@ export function formatContextUtilization(usage: ContextUtilization) {
   if (capacity === undefined) return "";
   const percent = contextPercent(usage);
   return `${percent === undefined ? "?" : percent}%/${formatCompactTokens(capacity)}`;
-}
-
-interface ActivityCounts {
-  running: number;
-  done: number;
-  failed: number;
-}
-
-const SQUARE = "■";
-
-export function formatActivityStatus(theme: Theme, counts: ActivityCounts) {
-  const parts: string[] = [];
-  if (counts.running > 0) {
-    parts.push(theme.fg("warning", `${SQUARE} ${counts.running} running`));
-  }
-  if (counts.done > 0) {
-    parts.push(theme.fg("success", `${SQUARE} ${counts.done} done`));
-  }
-  if (counts.failed > 0) {
-    parts.push(theme.fg("error", `${SQUARE} ${counts.failed} failed`));
-  }
-  parts.push(theme.fg("accent", "/subagents") + theme.fg("dim", " to view"));
-
-  return `${theme.fg("muted", "subagents:")} ${parts.join(theme.fg("dim", " · "))}`;
 }
