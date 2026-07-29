@@ -88,6 +88,13 @@ const SUBAGENT_OUTPUT_MAX_BYTES = 24 * 1024;
 const WAIT_OUTPUT_MAX_BYTES = 48 * 1024;
 const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 
+interface SubagentFinishedData {
+  readonly id: string;
+  readonly title: string;
+  readonly status: SubagentSnapshot["status"];
+  readonly elapsed: string;
+}
+
 interface BtwResultData {
   readonly id: string;
   readonly title: string;
@@ -156,6 +163,8 @@ export default function (pi: ExtensionAPI) {
    * acknowledges everything that had already finished.
    */
   let settledAcknowledgedAt = 0;
+  /** Ticks the elapsed time on the live rows while subagents are running. */
+  let statusTicker: ReturnType<typeof setInterval> | undefined;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -174,18 +183,49 @@ export default function (pi: ExtensionAPI) {
     return managerPromise;
   };
 
+  /** Live rows beyond this crowd out the conversation. */
+  const MAX_STATUS_ROWS = 5;
+
+  const startStatusTicker = (manager: SubagentManagerShape) => {
+    if (statusTicker) return;
+    // Elapsed time advances without any manager event, so redraw on a timer.
+    statusTicker = setInterval(() => updateStatus(manager), 1_000);
+    statusTicker.unref?.();
+  };
+
+  const stopStatusTicker = () => {
+    if (!statusTicker) return;
+    clearInterval(statusTicker);
+    statusTicker = undefined;
+  };
+
   const updateStatus = (manager: SubagentManagerShape) => {
     if (!ui) return;
-    const counts = unreadActivityCounts(
-      manager.view.list(),
-      settledAcknowledgedAt,
-    );
-    ui.setStatus(
-      "subagents",
-      hasActivity(counts)
-        ? formatActivityStatus(ui.theme, "subagents", counts)
-        : undefined,
-    );
+    const theme = ui.theme;
+    const subs = manager.view.list();
+    const counts = unreadActivityCounts(subs, settledAcknowledgedAt);
+    if (!hasActivity(counts)) {
+      stopStatusTicker();
+      ui.setStatus("subagents", undefined);
+      return;
+    }
+
+    const lines = [formatActivityStatus(theme, "subagents", counts)];
+    const running = subs.filter((snap) => snap.status === "running");
+    for (const snap of running.slice(0, MAX_STATUS_ROWS)) {
+      lines.push(
+        `  ${theme.fg("warning", "\u25a0")} ${snap.title} ${theme.fg("dim", formatElapsed(snap))}`,
+      );
+    }
+    if (running.length > MAX_STATUS_ROWS) {
+      lines.push(
+        theme.fg("dim", `  \u2026 +${running.length - MAX_STATUS_ROWS} more`),
+      );
+    }
+    ui.setStatus("subagents", lines.join("\n"));
+
+    if (running.length > 0) startStatusTicker(manager);
+    else stopStatusTicker();
   };
 
   const deliverResult = (snap: SubagentSnapshot) => {
@@ -239,6 +279,14 @@ export default function (pi: ExtensionAPI) {
       deliverBtwResult({ ...snap, meta: { ...snap.meta } });
       return;
     }
+    // Mark the finish in the transcript. The result itself reaches the model
+    // separately; this line is for the reader watching the run.
+    pi.appendEntry<SubagentFinishedData>("subagent-finished", {
+      id: snap.id,
+      title: snap.title,
+      status: snap.status,
+      elapsed: formatElapsed(snap),
+    });
     if (consumed) {
       resultDelivery.consume([snap.id]);
       return;
@@ -269,6 +317,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
+    stopStatusTicker();
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
@@ -648,6 +697,21 @@ export default function (pi: ExtensionAPI) {
       if (body.split("\n").length > 8)
         text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
       return new Text(text, 0, 0);
+    },
+  );
+
+  pi.registerEntryRenderer<SubagentFinishedData>(
+    "subagent-finished",
+    (entry, _options, theme) => {
+      const data = entry.data;
+      const failed = data?.status === "error";
+      return new Text(
+        `${theme.fg(failed ? "error" : "success", "\u25cf")} ` +
+          theme.fg(
+            "muted",
+            `Agent "${data?.title ?? "?"}" ${failed ? "failed" : "finished"} \u00b7 ${data?.elapsed ?? "?"}`,
+          ),
+      );
     },
   );
 
