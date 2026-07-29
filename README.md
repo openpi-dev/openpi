@@ -644,6 +644,7 @@ extensions/
 ├── summaries/             # Run Recap
 ├── git-info/              # Git / PR 与 /lg
 ├── model-info/            # Model / Context / Cost / Throughput
+├── turn-time/             # 每次请求结束后的耗时行
 ├── ui-customization/      # Header / Footer / Terminal title
 ├── copy-all/              # 可见对话复制
 └── shared/                # Child session、配置、状态与超时策略
