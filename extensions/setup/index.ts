@@ -2,8 +2,12 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  applyFooterConfig,
   DETAIL_DISPLAYS,
   FOOTER_ITEMS,
+  FOOTER_LAYOUT_ITEMS,
+  FOOTER_PRESETS,
+  FOOTER_STYLES,
   formatSetupConfig,
   hasSavedSetupConfig,
   loadSetupConfig,
@@ -11,6 +15,11 @@ import {
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
   saveSetupConfig,
+  SETUP_CONFIG_CHANGED_CHANNEL,
+  type FooterLayoutItem,
+  type FooterPreset,
+  type FooterStyle,
+  type MyPiSetupConfig,
 } from "../shared/setup-config.ts";
 
 export function buildInteractiveSetupPrompt(options: {
@@ -43,9 +52,15 @@ export function buildInteractiveSetupPrompt(options: {
     "Before asking, briefly explain what can be configured and the practical impact:",
     "- Run recaps: disabled (no recap), local fallback (no model call but mechanical output), or model-generated (better recap with an extra model call). A model recap also chooses provider/model and thinking level.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    "- UI: the large header costs vertical space; the custom footer provides a compact dashboard. Configurable footer metrics are cwd, model, thinking, context, cache hit rate, cost, throughput, git branch, and PR.",
+    "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Result detail display: Subagent results default to full for compatibility, while Write/Edit content and diffs default to compact. Compact shows a bounded preview and lets the user expand it with the configured app.tools.expand key (Ctrl+O by default). Recommend compact for users who do not usually inspect implementation details.",
+    "",
+    "Natural-language footer examples the user might ask for:",
+    '- "switch footer to powerline" → ui_footer_preset=powerline',
+    '- "use mono powerline" → ui_footer_preset=powerline-mono',
+    '- "compact footer" → ui_footer_preset=compact',
+    '- "two custom lines: cwd flex model / context cost flex git" → ui_footer_lines=[["cwd","flex","model"],["context","cost","flex","git"]]',
     "",
     "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
@@ -56,7 +71,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer, and result detail display. Preserve current values for settings the user did not ask to change.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), and result detail display. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
     parameters: Type.Object({
       summaries_enabled: Type.Optional(
         Type.Boolean({
@@ -109,12 +124,34 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Whether to replace Pi's footer with the package dashboard footer. Defaults to true; omit to preserve the current value.",
         }),
       ),
+      ui_footer_preset: Type.Optional(
+        StringEnum(FOOTER_PRESETS, {
+          description:
+            "Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.",
+        }),
+      ),
+      ui_footer_style: Type.Optional(
+        StringEnum(FOOTER_STYLES, {
+          description:
+            "Footer visual style: plain (Pi theme separators), powerline (ANSI256 colored blocks with  seams), powerline-mono (high-contrast gray powerline). Nerd Font improves separator glyphs only. Omit to preserve the current style (or the preset's style when a preset is applied).",
+        }),
+      ),
+      ui_footer_lines: Type.Optional(
+        Type.Array(
+          Type.Array(StringEnum(FOOTER_LAYOUT_ITEMS), { minItems: 1 }),
+          {
+            minItems: 1,
+            description:
+              "Declarative multi-line footer layout. Each row is an ordered list of metrics (cwd, model, thinking, context, cache, cost, throughput, git, pr) plus at most one flex for left/right alignment. Unknown/duplicate metrics are dropped; empty result falls back to the default. Cannot be combined with ui_footer_items.",
+          },
+        ),
+      ),
       ui_footer_items: Type.Optional(
         Type.Array(StringEnum(FOOTER_ITEMS), {
           minItems: 1,
           uniqueItems: true,
           description:
-            "Dashboard footer metrics to display, in this order: cwd, model, thinking, context, cache, cost, throughput, git, pr. Operational activity remains visible whenever the custom footer is enabled. Omit to preserve the current selection.",
+            "Legacy flat footer metric selection. Mapped onto the default one-line skeleton (metrics not listed are hidden). Prefer ui_footer_lines for custom multi-line layouts. Cannot be combined with ui_footer_lines. Operational activity remains visible whenever the custom footer is enabled. Omit to preserve the current selection.",
         }),
       ),
       subagent_result_display: Type.Optional(
@@ -165,7 +202,30 @@ export default function myPiSetup(pi: ExtensionAPI) {
         };
       }
 
-      const config = {
+      const footer = applyFooterConfig(
+        {
+          footerStyle: current.ui.footerStyle,
+          footerLines: current.ui.footerLines,
+        },
+        {
+          ...(params.ui_footer_preset !== undefined
+            ? { preset: params.ui_footer_preset as FooterPreset }
+            : {}),
+          ...(params.ui_footer_style !== undefined
+            ? { style: params.ui_footer_style as FooterStyle }
+            : {}),
+          ...(params.ui_footer_lines !== undefined
+            ? {
+                lines: params.ui_footer_lines as FooterLayoutItem[][],
+              }
+            : {}),
+          ...(params.ui_footer_items !== undefined
+            ? { items: params.ui_footer_items }
+            : {}),
+        },
+      );
+
+      const config: MyPiSetupConfig = {
         summaries: {
           enabled: params.summaries_enabled ?? current.summaries.enabled,
           ...(model ? { model } : {}),
@@ -179,7 +239,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
         ui: {
           showHeader: params.ui_show_header ?? current.ui.showHeader,
           customFooter: params.ui_custom_footer ?? current.ui.customFooter,
-          footerItems: params.ui_footer_items ?? current.ui.footerItems,
+          ...footer,
           subagentResultDisplay:
             params.subagent_result_display ?? current.ui.subagentResultDisplay,
           fileMutationDisplay:
@@ -187,6 +247,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
         },
       };
       await saveSetupConfig(config);
+      pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, config);
       const text = formatSetupConfig(config);
       if (ctx.hasUI) ctx.ui.notify(text, "info");
       return {
@@ -215,6 +276,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "",
             "Current configuration:",
             currentConfiguration,
+            "",
+            "Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Nerd Font only affects powerline separator glyphs. Changes apply immediately in the active TUI session.",
             "",
             "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
           ]

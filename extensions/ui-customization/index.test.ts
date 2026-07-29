@@ -6,6 +6,7 @@ import {
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
 } from "../shared/dashboard-state.ts";
+import { SETUP_CONFIG_CHANGED_CHANNEL } from "../shared/setup-config.ts";
 
 const identityTheme = {
   fg: (_name: string, text: string) => text,
@@ -23,6 +24,7 @@ function createHarness() {
         render(width: number): string[];
       })
     | undefined;
+  let setFooterCount = 0;
 
   const api = {
     events: {
@@ -44,6 +46,7 @@ function createHarness() {
     ui: {
       setHeader: () => undefined,
       setFooter: (factory: typeof footerFactory) => {
+        setFooterCount += 1;
         footerFactory = factory;
       },
       setTitle: () => undefined,
@@ -53,6 +56,9 @@ function createHarness() {
 
   return {
     listeners,
+    hooks,
+    ctx,
+    setFooterCount: () => setFooterCount,
     render: (statuses: ReadonlyMap<string, string> = new Map()) => {
       assert.ok(footerFactory);
       return footerFactory({ requestRender: () => undefined }, identityTheme, {
@@ -134,4 +140,19 @@ test("shows the branch but omits changed-file counts", () => {
   const footer = harness.render().join("\n");
   assert.match(footer, /main/);
   assert.doesNotMatch(footer, /files? changed|7 files/);
+});
+
+test("config change event reinstalls footer for the active session", () => {
+  const harness = createHarness();
+  const before = harness.setFooterCount();
+  harness.listeners.get(SETUP_CONFIG_CHANGED_CHANNEL)?.({});
+  assert.ok(harness.setFooterCount() > before);
+});
+
+test("session_shutdown clears active session so config events do not reinstall", () => {
+  const harness = createHarness();
+  harness.hooks.get("session_shutdown")?.({}, harness.ctx);
+  const before = harness.setFooterCount();
+  harness.listeners.get(SETUP_CONFIG_CHANGED_CHANNEL)?.({});
+  assert.equal(harness.setFooterCount(), before);
 });

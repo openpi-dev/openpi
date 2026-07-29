@@ -34,11 +34,15 @@ Use the single package-owned command. With no arguments, the current model expla
 /my-pi-setup 关闭自动摘要
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
+/my-pi-setup 切换 Footer 为 powerline
+/my-pi-setup 用 mono powerline Footer
+/my-pi-setup Footer 用 compact
+/my-pi-setup Footer 两行：cwd flex model / context cost flex git
 /my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 /my-pi-setup 关闭自定义状态栏
 ```
 
-Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews. Write/Edit content and diffs default to a compact eight-line preview because file mutations are frequently verbose; set them to full if desired. Compact views expand with `app.tools.expand` (`Ctrl+O` by default). Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
+Run recaps default to off. Run `/my-pi-setup` to explicitly choose an available summary model or enable the no-model local fallback. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on with a one-line Powerline layout (`cwd model thinking context cache cost throughput |flex| git pr`). Footer presets are `powerline`, `powerline-mono`, and `compact`; style can also be set independently to `plain`, `powerline`, or `powerline-mono`. Custom layouts use a 2D `footerLines` array with at most one `flex` per row for left/right alignment. Nerd Font only affects powerline separator glyphs (``); metric text stays readable without it. Footer changes apply immediately in the active TUI session. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews. Write/Edit content and diffs default to a compact eight-line preview because file mutations are frequently verbose; set them to full if desired. Compact views expand with `app.tools.expand` (`Ctrl+O` by default). Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
 ## Session Goal and Tasks
 

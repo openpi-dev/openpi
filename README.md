@@ -130,7 +130,7 @@ Context Pivot 在同一 Session 内切换阶段；Handoff 负责真正跨 Sessio
 </td>
 <td width="33%" valign="top">
 <strong>Stay observable</strong><br/><br/>
-Footer 可选择展示目录、Model、Thinking、Context、缓存命中率、Cost、Throughput、Git、PR 与后台活动。
+Footer 支持 preset / style / 多行 flex 布局，可展示目录、Model、Thinking、Context、缓存命中率、Cost、Throughput、Git、PR 与后台活动。
 </td>
 <td width="33%" valign="top">
 <strong>Configure naturally</strong><br/><br/>
@@ -320,14 +320,15 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 
 ### 9. 高密度终端 Dashboard
 
-默认 Footer 使用紧凑的两行布局：
+默认 Footer 使用一行 `powerline` 布局：
 
 ```text
-~/project                         provider/model · thinking
-34%/1M · $0.18 · ~52 tok/s                     main · PR #42
+cwd  model  thinking  context  cache  cost  throughput   git  PR
 ```
 
-可通过 `/my-pi-setup` 按项选择：
+也可切换到灰阶 `powerline-mono`，或一行 `compact` 纯文本布局。行过窄时按优先级隐藏次要指标（cwd/model/context 优先保留），而不是只从尾部截断。
+
+可通过 `/my-pi-setup` 选择 preset、style，或自定义 `footerLines`（需要时可使用多行；每行最多一个 `flex`）：
 
 | 项目         | 内容                                     |
 | ------------ | ---------------------------------------- |
@@ -340,18 +341,31 @@ Prompt 约束它只询问真正会改变结果、又无法从代码和上下文�
 | `throughput` | 当前运行的估算 Token 速度                |
 | `git`        | 当前分支                                 |
 | `pr`         | 当前分支对应的 PR                        |
+| `flex`       | 布局分隔：左侧与右侧对齐                 |
+
+| Preset           | 效果                              |
+| ---------------- | --------------------------------- |
+| `powerline`      | 默认单行 ANSI256 色块 + `` 转场 |
+| `powerline-mono` | 单行高对比灰阶 Powerline          |
+| `compact`        | 单行 plain 纯文本                  |
+
+Nerd Font 只影响 Powerline 分隔符观感，不是硬依赖；没有该字体时文字指标仍然完整可读。配置保存后，活动 TUI Session 会立即重新安装 Footer。
 
 Subagents、Workflows 和后台终端状态属于基础可观察性，不是可选指标：只要自定义 Footer 开启，就会按需自动出现；没有活动时不占行。
 
 例如：
 
 ```text
+/my-pi-setup 切换 Footer 为 powerline
+/my-pi-setup 用 mono powerline Footer
+/my-pi-setup Footer 用 compact
+/my-pi-setup Footer 两行：cwd flex model / context cost flex git
 /my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 ```
 
 未选中的指标不渲染；运行中的 Subagent、Workflow 和后台终端状态始终显示在 Dashboard 后。
 
-- Context 与模型信息直接来自 Pi Runtime；
+- Context 与模型信息直接来自 Pi Runtime；Context ≥70% 警告色、≥90% 错误色；
 - 成本累计 Assistant、嵌套 Tool、Compaction 和 Branch Summary 的已记录 Usage；
 - Token 速度用 `~` 明确标记为流式估算；
 - Git 每 5 秒刷新，并在输入或工具结束后立即刷新；默认仅显示分支和 PR，不显示变更文件数；
@@ -468,6 +482,10 @@ pi install ~/work/my-pi-setup
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
 /my-pi-setup 隐藏大标题
+/my-pi-setup 切换 Footer 为 powerline
+/my-pi-setup 用 mono powerline Footer
+/my-pi-setup Footer 用 compact
+/my-pi-setup Footer 两行：cwd flex model / context cost flex git
 /my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 /my-pi-setup 关闭自定义状态栏
 ```

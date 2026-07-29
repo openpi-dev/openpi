@@ -1,5 +1,3 @@
-import { homedir } from "node:os";
-import { relative } from "node:path";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -11,7 +9,10 @@ import {
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import { loadSetupConfig, type FooterItem } from "../shared/setup-config.ts";
+import {
+  loadSetupConfig,
+  SETUP_CONFIG_CHANGED_CHANNEL,
+} from "../shared/setup-config.ts";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
@@ -23,6 +24,9 @@ import {
   type GitInfoState,
   type ModelInfoState,
 } from "../shared/dashboard-state.ts";
+import { formatDirectory, renderFooter } from "./footer.ts";
+
+export { buildFooterContent, formatDirectory, renderFooter } from "./footer.ts";
 
 type Rgb = [number, number, number];
 
@@ -44,21 +48,6 @@ const TITLE_LINES = [
   "  ██║      ██║ ",
   "  ╚═╝      ╚═╝ ",
 ];
-// eslint-disable-next-line no-control-regex
-const OSC_PATTERN =
-  /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
-// eslint-disable-next-line no-control-regex
-const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
-// eslint-disable-next-line no-control-regex
-const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
-
-function sanitizeTerminalLabel(text: string) {
-  return text
-    .replace(OSC_PATTERN, "")
-    .replace(CSI_PATTERN, "")
-    .replace(ESCAPE_PATTERN, "")
-    .replace(/[\u0000-\u001f\u007f-\u009f]/g, "");
-}
 
 function mix(a: number, b: number, amount: number) {
   return Math.round(a + (b - a) * amount);
@@ -97,96 +86,9 @@ function gradientText(text: string, phase: number) {
     .join("");
 }
 
-function formatTokens(tokens: number) {
-  if (tokens < 1_000) return `${tokens}`;
-  if (tokens < 1_000_000) return `${Math.round(tokens / 1_000)}k`;
-  return `${(tokens / 1_000_000).toFixed(1)}m`;
-}
-
-function formatDirectory(cwd: string) {
-  const home = homedir();
-  if (cwd === home) return "~";
-  const display = cwd.startsWith(`${home}/`) ? `~/${relative(home, cwd)}` : cwd;
-  return sanitizeTerminalLabel(display);
-}
-
 function center(text: string, width: number) {
   const padding = Math.max(0, Math.floor((width - visibleWidth(text)) / 2));
   return truncateToWidth(`${" ".repeat(padding)}${text}`, width);
-}
-
-export function buildFooterContent(
-  modelInfo: ModelInfoState,
-  gitInfo: GitInfoState,
-  selectedItems: readonly FooterItem[],
-  formatPullRequest: (number: number, url: string) => string = (number) =>
-    `PR #${number}`,
-) {
-  const items = new Set(selectedItems);
-  const contextWindow =
-    modelInfo.contextWindow > 0 ? formatTokens(modelInfo.contextWindow) : "";
-  const context =
-    modelInfo.contextPercent === null
-      ? contextWindow
-        ? `ctx ${contextWindow}`
-        : ""
-      : `${Math.round(modelInfo.contextPercent)}%${contextWindow ? `/${contextWindow}` : ""}`;
-  const throughput =
-    modelInfo.tokensPerSecond === null
-      ? "— tok/s"
-      : `~${Math.round(modelInfo.tokensPerSecond)} tok/s`;
-
-  return {
-    showCwd: items.has("cwd"),
-    model: [
-      items.has("model")
-        ? modelInfo.provider
-          ? `${modelInfo.provider}/${modelInfo.modelId}`
-          : modelInfo.modelId
-        : "",
-      items.has("thinking") ? modelInfo.thinking : "",
-    ]
-      .filter(Boolean)
-      .join(" · "),
-    usage: [
-      items.has("context") ? context : "",
-      items.has("cache") && modelInfo.cachePercent !== null
-        ? `cache ${Math.round(modelInfo.cachePercent)}%`
-        : "",
-      items.has("cost") ? `$${modelInfo.cost.toFixed(2)}` : "",
-      items.has("throughput") ? throughput : "",
-    ]
-      .filter(Boolean)
-      .join(" · "),
-    git: [
-      items.has("git") ? (gitInfo.branch ?? "") : "",
-      items.has("pr") && gitInfo.pullRequest
-        ? formatPullRequest(gitInfo.pullRequest.number, gitInfo.pullRequest.url)
-        : "",
-    ]
-      .filter(Boolean)
-      .join(" · "),
-  };
-}
-
-function columns(left: string, right: string, width: number) {
-  if (!right) return truncateToWidth(left, width);
-
-  const naturalGap = width - visibleWidth(left) - visibleWidth(right);
-  if (naturalGap >= 1) return `${left}${" ".repeat(naturalGap)}${right}`;
-
-  const leftWidth = Math.max(1, Math.floor(width * 0.45));
-  const rightWidth = Math.max(1, width - leftWidth - 1);
-  const fittedLeft = truncateToWidth(left, leftWidth);
-  const fittedRight = truncateToWidth(right, rightWidth);
-  const gap = Math.max(
-    1,
-    width - visibleWidth(fittedLeft) - visibleWidth(fittedRight),
-  );
-  return truncateToWidth(
-    `${fittedLeft}${" ".repeat(gap)}${fittedRight}`,
-    width,
-  );
 }
 
 export default function uiCustomization(pi: ExtensionAPI) {
@@ -194,6 +96,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let modelInfo = emptyModelInfoState();
   let gitInfo = emptyGitInfoState();
   let requestRender: (() => void) | undefined;
+  let activeSession: ExtensionContext | undefined;
 
   const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
     if (!isModelInfoState(value)) return;
@@ -204,6 +107,13 @@ export default function uiCustomization(pi: ExtensionAPI) {
   const stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
     if (!isGitInfoState(value)) return;
     gitInfo = value;
+    requestRender?.();
+  });
+
+  // Kept for process lifetime so configure_my_pi_setup still refreshes later sessions.
+  pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
+    if (!activeSession || activeSession.mode !== "tui") return;
+    install(activeSession);
     requestRender?.();
   });
 
@@ -240,48 +150,27 @@ export default function uiCustomization(pi: ExtensionAPI) {
         return {
           invalidate() {},
           render(width: number) {
-            const content = buildFooterContent(
+            const statuses = footerData.getExtensionStatuses();
+            const statusLines = Array.from(statuses.entries())
+              .sort(([a], [b]) => a.localeCompare(b))
+              .flatMap(([, text]) => text.split("\n"));
+
+            return renderFooter({
+              cwd: ctx.cwd,
               modelInfo,
               gitInfo,
-              config.footerItems,
-              (number, url) => {
+              style: config.footerStyle,
+              lines: config.footerLines,
+              width,
+              theme,
+              formatPullRequest: (number, url) => {
                 const label = `PR #${number}`;
                 return getCapabilities().hyperlinks
                   ? hyperlink(label, url)
                   : label;
               },
-            );
-            const directory = content.showCwd
-              ? theme.fg("text", formatDirectory(ctx.cwd))
-              : "";
-
-            const lines: string[] = [];
-            const top = columns(
-              directory,
-              theme.fg("muted", content.model),
-              width,
-            );
-            if (top) lines.push(top);
-            const bottom = columns(
-              theme.fg("muted", content.usage),
-              theme.fg("muted", content.git),
-              width,
-            );
-            if (bottom) lines.push(bottom);
-
-            // Operational status is part of the footer's core lifecycle UI,
-            // not an optional metric: running work must remain observable.
-            const statuses = footerData.getExtensionStatuses();
-            const statusLines = Array.from(statuses.entries())
-              .sort(([a], [b]) => a.localeCompare(b))
-              .flatMap(([, text]) => text.split("\n"));
-            for (const statusLine of statusLines) {
-              lines.push(
-                truncateToWidth(statusLine, width, theme.fg("dim", "...")),
-              );
-            }
-
-            return lines;
+              statuses: statusLines,
+            });
           },
         };
       });
@@ -297,10 +186,14 @@ export default function uiCustomization(pi: ExtensionAPI) {
     title = formatDirectory(ctx.cwd);
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
+    activeSession = ctx;
     install(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    // Drop the session pointer first so a late config event cannot reinstall
+    // against a shut-down context. The config listener stays armed for later sessions.
+    activeSession = undefined;
     stopModelListener();
     stopGitListener();
     requestRender = undefined;

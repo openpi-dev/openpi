@@ -31,7 +31,9 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /local fallback.*mechanical output/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
-  assert.match(message, /cache hit rate/);
+  assert.match(message, /powerline.*powerline-mono.*compact/);
+  assert.match(message, /Nerd Font/);
+  assert.match(message, /ui_footer_preset=powerline/);
   assert.match(message, /activity.*core status/);
   assert.match(message, /Result detail display/);
   assert.match(message, /Write\/Edit.*default to compact/);
