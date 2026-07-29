@@ -203,8 +203,9 @@ function listRuns(
         fs.readFileSync(path.join(base, runId, "workflow.json"), "utf8"),
       ) as Partial<WorkflowDetails>;
       const startedAt = parsed.startedAt ?? 0;
+      const touchedAt = Math.max(startedAt, parsed.finishedAt ?? 0);
       if (
-        startedAt < startedSince ||
+        touchedAt < startedSince ||
         (parsed.sessionId !== sessionId && !referencedRunIds.has(runId))
       ) {
         continue;
@@ -303,6 +304,8 @@ export default function workflows(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     if (ctx.hasUI) lastUi = ctx.ui;
     turnStartedAt = 0;
+    completedRuns = 0;
+    failedRuns = 0;
     updateIndicator();
   });
 

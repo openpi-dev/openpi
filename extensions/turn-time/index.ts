@@ -30,15 +30,17 @@ export default function (pi: ExtensionAPI) {
 
   pi.registerEntryRenderer<TurnTimeData>(
     "turn-time",
-    (entry, _options, theme) =>
-      new Text(
+    (entry, _options, theme) => {
+      const ms = entry.data?.ms;
+      return new Text(
         theme.fg(
           "dim",
-          `✳ Worked for ${formatTurnDuration(entry.data?.ms ?? 0)}`,
+          `✳ Worked for ${ms === undefined ? "?" : formatTurnDuration(ms)}`,
         ),
         1,
         0,
-      ),
+      );
+    },
   );
 
   pi.on("agent_start", () => {

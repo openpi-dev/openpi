@@ -23,7 +23,7 @@ test("running work always reports; settled work only until the next request", ()
     done: 2,
     failed: 1,
   });
-  // A request at t=100 acknowledges everything settled up to that point.
+  // A request at t=100 acknowledges everything that settled before it.
   assert.deepEqual(unreadActivityCounts(items, 100), {
     running: 1,
     done: 1,
@@ -39,7 +39,9 @@ test("running work always reports; settled work only until the next request", ()
 test("acknowledged settled work leaves no status line", () => {
   const settled = [{ status: "done" as const, settledAt: 10 }];
   assert.equal(hasActivity(unreadActivityCounts(settled, 0)), true);
-  assert.equal(hasActivity(unreadActivityCounts(settled, 10)), false);
+  // Same millisecond as the request: the user cannot have read it yet.
+  assert.equal(hasActivity(unreadActivityCounts(settled, 10)), true);
+  assert.equal(hasActivity(unreadActivityCounts(settled, 11)), false);
   assert.equal(hasActivity(unreadActivityCounts([], 0)), false);
 });
 

@@ -14,8 +14,8 @@ const SQUARE = "■";
  * Settled work is an unread notice, not a session tally: `done`/`failed` stay
  * visible until the user's next explicit request acknowledges them, while
  * running work is always reported. `acknowledgedAt` is the timestamp of that
- * last explicit request. A settled item without a timestamp stays unread
- * rather than being silently swallowed.
+ * last explicit request. A settle in that same millisecond, or one carrying no
+ * timestamp, stays unread rather than being silently swallowed.
  */
 export function unreadActivityCounts(
   items: readonly {
@@ -32,7 +32,7 @@ export function unreadActivityCounts(
       running += 1;
       continue;
     }
-    if (item.settledAt !== undefined && item.settledAt <= acknowledgedAt)
+    if (item.settledAt !== undefined && item.settledAt < acknowledgedAt)
       continue;
     if (item.status === "error") failed += 1;
     else done += 1;

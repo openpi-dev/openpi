@@ -13,7 +13,11 @@ const { loadRunEntries } = await import("./dashboard.ts");
 
 const SESSION = "session-1";
 
-function writeRun(runId: string, startedAt: number) {
+function writeRun(
+  runId: string,
+  startedAt: number,
+  finishedAt = startedAt + 1_000,
+) {
   const dir = join(agentDir, "workflows", runId);
   mkdirSync(dir, { recursive: true });
   writeFileSync(
@@ -24,7 +28,7 @@ function writeRun(runId: string, startedAt: number) {
       name: runId,
       status: "completed",
       startedAt,
-      finishedAt: startedAt + 1_000,
+      finishedAt,
       agents: [],
       phases: [],
     }),
@@ -68,4 +72,14 @@ test("a run still executing stays visible even if it began earlier", () => {
   ).map((entry) => entry.runId);
   assert.ok(runIds.includes("wf_live"));
   assert.ok(!runIds.includes("wf_old"));
+});
+
+test("a background run that settles during this request is reported by it", () => {
+  // Started under the previous request, finished under this one.
+  writeRun("wf_spanning", 1_000, 5_000);
+
+  const runIds = loadRunEntries(new Map(), SESSION, new Set(), 4_000).map(
+    (entry) => entry.runId,
+  );
+  assert.ok(runIds.includes("wf_spanning"));
 });

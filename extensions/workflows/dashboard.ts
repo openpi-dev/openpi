@@ -230,7 +230,7 @@ export function loadRunEntries(
   active: Map<string, WorkflowDetails>,
   sessionId: string,
   referencedRunIds: ReadonlySet<string>,
-  /** Hide runs that finished before this timestamp; live runs always show. */
+  /** Hide runs untouched by the current request; live runs always show. */
   startedSince = 0,
 ): RunEntry[] {
   let names: string[] = [];
@@ -251,9 +251,13 @@ export function loadRunEntries(
         fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"),
       );
       const details = normalizeDetails(runId, raw);
+      const touchedAt = Math.max(
+        details?.startedAt ?? 0,
+        details?.finishedAt ?? 0,
+      );
       if (
         details &&
-        details.startedAt >= startedSince &&
+        touchedAt >= startedSince &&
         (details.sessionId === sessionId || referencedRunIds.has(runId))
       ) {
         const runDir = path.join(runsDir(), runId);
