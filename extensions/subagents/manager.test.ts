@@ -1,15 +1,14 @@
 /**
  * End-to-end smoke tests: manager behavior through a real ManagedRuntime,
- * exactly as the tool handlers drive it. The registry is test-only: scripted
- * a scripted stub backend, plus the real pi backend for its cheap registry
- * precondition.
+ * exactly as the tool handlers drive it. The registry is test-only: the
+ * scripted stub stands in for pi, whose own preconditions are covered in
+ * pi-backend.test.ts.
  */
 
 import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
-import { piBackend } from "./src/backends/pi.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
 import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
 import {
@@ -21,9 +20,8 @@ import { runTool } from "./src/runtime.ts";
 
 const TestRegistryLive = Layer.sync(BackendRegistry, () => {
   const backends: SubagentBackend[] = [
-    piBackend,
     makeStubBackend({
-      backend: "stub",
+      backend: "pi",
       defaultModelLabel: "stub/sonnet",
       contextWindow: 200_000,
       toolName: "Bash",
@@ -73,10 +71,10 @@ test("stub subagent completes and delivers a final result", async () => {
 
     const snap = await runTool(
       runtime,
-      manager.spawn("stub", task("Say hello to the tests")),
+      manager.spawn("pi", task("Say hello to the tests")),
     );
     assert.equal(snap.status, "running");
-    assert.equal(snap.backend, "stub");
+    assert.equal(snap.backend, "pi");
     assert.ok(snap.meta.sessionFilePath);
 
     await runTool(runtime, manager.waitFor([snap.id]));
@@ -85,7 +83,7 @@ test("stub subagent completes and delivers a final result", async () => {
     assert.equal(done.status, "done");
     assert.match(
       done.finalText,
-      /\[stub:stub\] completed: Say hello to the tests/,
+      /\[stub:pi\] completed: Say hello to the tests/,
     );
     assert.ok(done.turns >= 2);
     assert.ok(done.transcript.some((item) => item.kind === "toolResult"));
@@ -103,7 +101,7 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
 
     const snap = await runTool(
       runtime,
-      manager.spawn("stub", task("FAIL: blow up please")),
+      manager.spawn("pi", task("FAIL: blow up please")),
     );
     // Poll without wait-interest so the settle is delivered unconsumed.
     while (manager.view.get(snap.id)?.status === "running") {
@@ -120,7 +118,7 @@ test("cancel interrupts a running stub subagent", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
-      manager.spawn("stub", task("Long running task")),
+      manager.spawn("pi", task("Long running task")),
     );
     const report = await runTool(runtime, manager.cancel([snap.id]));
     assert.deepEqual(report, [
@@ -139,11 +137,11 @@ test("spawn origin propagates to ids, snapshots, and settlement", async () => {
 
     const model = await runTool(
       runtime,
-      manager.spawn("stub", task("model task")),
+      manager.spawn("pi", task("model task")),
     );
     const btw = await runTool(
       runtime,
-      manager.spawn("stub", { ...task("side question"), origin: "btw" }),
+      manager.spawn("pi", { ...task("side question"), origin: "btw" }),
     );
 
     assert.match(model.id, /^sa-/);
@@ -172,7 +170,7 @@ test("the global concurrency cap includes by-the-way sessions", async () => {
     ];
     const spawns = await runTool(
       runtime,
-      Effect.forEach(tasks, (spawnTask) => manager.spawn("stub", spawnTask), {
+      Effect.forEach(tasks, (spawnTask) => manager.spawn("pi", spawnTask), {
         concurrency: "unbounded",
       }),
     );
@@ -180,7 +178,7 @@ test("the global concurrency cap includes by-the-way sessions", async () => {
     await assert.rejects(
       runTool(
         runtime,
-        manager.spawn("stub", {
+        manager.spawn("pi", {
           ...task("another side question"),
           origin: "btw",
         }),
@@ -196,27 +194,27 @@ test("the concurrency cap rejects a fifth running subagent", async () => {
       runtime,
       Effect.forEach(
         [1, 2, 3, 4],
-        (n) => manager.spawn("stub", task(`Task ${n}`)),
+        (n) => manager.spawn("pi", task(`Task ${n}`)),
         { concurrency: "unbounded" },
       ),
     );
     assert.equal(spawns.length, 4);
     await assert.rejects(
-      runTool(runtime, manager.spawn("stub", task("Task 5"))),
+      runTool(runtime, manager.spawn("pi", task("Task 5"))),
       /Max 4 subagents/,
     );
   });
 });
 
-test("pi spawn fails fast without the parent model registry", async () => {
+test("a refused spawn releases its concurrency reservation", async () => {
   await withManager(async (manager, runtime) => {
     await assert.rejects(
-      runTool(runtime, manager.spawn("pi", task("needs a registry"))),
-      /model registry/,
+      runTool(runtime, manager.spawn("pi", task("SPAWNFAIL: refuse me"))),
+      /refused to spawn/,
     );
     // The failed spawn must release its concurrency reservation.
-    const snap = await runTool(runtime, manager.spawn("stub", task("ok")));
-    assert.equal(snap.backend, "stub");
+    const snap = await runTool(runtime, manager.spawn("pi", task("ok")));
+    assert.equal(snap.backend, "pi");
   });
 });
 
@@ -225,14 +223,14 @@ test("idle restarts respect the concurrency cap", async () => {
     // Settle one subagent, then fill all four slots with running ones.
     const settled = await runTool(
       runtime,
-      manager.spawn("stub", task("early finisher")),
+      manager.spawn("pi", task("early finisher")),
     );
     await runTool(runtime, manager.waitFor([settled.id]));
     await runTool(
       runtime,
       Effect.forEach(
         [1, 2, 3, 4],
-        (n) => manager.spawn("stub", task(`Task ${n}`)),
+        (n) => manager.spawn("pi", task(`Task ${n}`)),
         { concurrency: "unbounded" },
       ),
     );
@@ -249,7 +247,7 @@ test("send steers an idle subagent into another turn", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
-      manager.spawn("stub", task("First turn")),
+      manager.spawn("pi", task("First turn")),
     );
     await runTool(runtime, manager.waitFor([snap.id]));
     const afterFirst = manager.view.get(snap.id);

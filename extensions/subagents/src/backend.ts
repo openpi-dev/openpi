@@ -19,13 +19,6 @@ import type {
   SubagentMeta,
 } from "./domain.ts";
 
-export interface BackendCapabilities {
-  /** Can send() steer a live run (vs. only starting a fresh run when idle). */
-  readonly steering: boolean;
-  readonly modelSelection: boolean;
-  readonly reasoningEffort: boolean;
-}
-
 /**
  * A live subagent session. The manager is the single consumer of `events`;
  * it folds them into the `SubagentSnapshot` everything else reads.
@@ -53,7 +46,6 @@ export interface SubagentSession {
 
 export interface SubagentBackend {
   readonly name: BackendName;
-  readonly capabilities: BackendCapabilities;
   /** Probe availability (binary on PATH, SDK importable, credentials). */
   readonly available: Effect.Effect<boolean>;
   /**

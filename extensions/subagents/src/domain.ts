@@ -10,8 +10,7 @@ import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
 
 export const BACKEND_NAMES = ["pi"] as const;
-/** "stub" is a test-only backend name; it is never offered to the model. */
-export type BackendName = (typeof BACKEND_NAMES)[number] | "stub";
+export type BackendName = (typeof BACKEND_NAMES)[number];
 
 /** Who initiated the session. User asides stay out of model-facing tooling. */
 export type SubagentOrigin = "model" | "btw";

@@ -1,6 +1,6 @@
 /**
- * Scripted stub sessions shared by all three backend implementations while
- * the real integrations are pending. A stub session:
+ * Scripted stub sessions, test-only: they stand in for the pi backend so the
+ * manager can be driven without a real child session. A stub session:
  *
  * - streams a plausible turn (thinking deltas, one fake tool cycle, text
  *   deltas, usage ramp, a final assistant message, RunSettled) over a few
@@ -8,7 +8,8 @@
  * - supports send() while running (queued-steer rendering) and while idle
  *   (fresh run);
  * - supports interrupt (RunSettled Interrupted -> status "error", matching v1);
- * - fails the run when the prompt starts with "FAIL:" (error-path testing);
+ * - fails the run when the prompt starts with "FAIL:", and refuses to spawn
+ *   at all when it starts with "SPAWNFAIL:" (error-path testing);
  * - appends every event to a JSONL "session file" in tmpdir so the
  *   "full transcript in session file" pointers resolve.
  */
@@ -26,7 +27,7 @@ import type {
   SubagentEvent,
   SubagentMeta,
 } from "../domain.ts";
-import { SendError } from "../domain.ts";
+import { SendError, SpawnError } from "../domain.ts";
 
 export interface StubProfile {
   readonly backend: BackendName;
@@ -43,14 +44,12 @@ let sessionCounter = 0;
 export function makeStubBackend(profile: StubProfile): SubagentBackend {
   return {
     name: profile.backend,
-    capabilities: {
-      steering: true,
-      modelSelection: true,
-      reasoningEffort: true,
-    },
     // Real impls probe binary-on-PATH / SDK import / credentials here.
     available: Effect.succeed(true),
-    spawn: (task) => makeStubSession(profile, task),
+    spawn: (task) =>
+      task.prompt.startsWith("SPAWNFAIL:")
+        ? Effect.fail(new SpawnError({ message: "stub refused to spawn" }))
+        : makeStubSession(profile, task),
   };
 }
 
