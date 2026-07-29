@@ -36,6 +36,8 @@ export default function (pi: ExtensionAPI) {
           "dim",
           `✳ Worked for ${formatTurnDuration(entry.data?.ms ?? 0)}`,
         ),
+        1,
+        0,
       ),
   );
 

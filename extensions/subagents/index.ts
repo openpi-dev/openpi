@@ -39,7 +39,7 @@ import {
   ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Text } from "@earendil-works/pi-tui";
+import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
@@ -429,30 +429,28 @@ export default function (pi: ExtensionAPI) {
         },
       };
     },
+    renderCall() {
+      // The result line already names the agent; a bare tool header adds nothing.
+      return new Text("");
+    },
     renderResult(result, _options, theme) {
       const details = result.details as SpawnResultDetails | undefined;
       if (!details?.id) {
         const first = result.content[0];
-        return new Text(first?.type === "text" ? first.text : "(no output)");
+        return new Text(
+          first?.type === "text" ? first.text : "(no output)",
+          0,
+          0,
+        );
       }
-      const container = new Container();
-      container.addChild(
-        new Text(
-          `${theme.fg("success", "\u25cf")} ${theme.bold(`Agent launched \u00b7 ${details.title ?? details.id}`)}`,
-        ),
+      const meta = [details.harness, details.model, details.id]
+        .filter(Boolean)
+        .join(" \u00b7 ");
+      return new Text(
+        `${theme.fg("success", "\u25cf")} ${theme.bold(details.title ?? details.id)} ${theme.fg("dim", meta)}`,
+        0,
+        0,
       );
-      container.addChild(
-        new Text(
-          theme.fg(
-            "muted",
-            `  ${[details.harness, details.model, details.id].filter(Boolean).join(" \u00b7 ")}`,
-          ),
-        ),
-      );
-      container.addChild(
-        new Text(theme.fg("dim", "  /subagents to view, take over, or stop")),
-      );
-      return container;
     },
   });
 
@@ -756,6 +754,8 @@ export default function (pi: ExtensionAPI) {
             "muted",
             `Agent "${data?.title ?? "?"}" ${failed ? "failed" : "finished"} \u00b7 ${data?.elapsed ?? "?"}`,
           ),
+        1,
+        0,
       );
     },
   );
