@@ -44,8 +44,6 @@ let sessionCounter = 0;
 export function makeStubBackend(profile: StubProfile): SubagentBackend {
   return {
     name: profile.backend,
-    // Real impls probe binary-on-PATH / SDK import / credentials here.
-    available: Effect.succeed(true),
     spawn: (task) =>
       task.prompt.startsWith("SPAWNFAIL:")
         ? Effect.fail(new SpawnError({ message: "stub refused to spawn" }))
@@ -83,7 +81,6 @@ const makeStubSession = (
         modelLabel: task.model ?? profile.defaultModelLabel,
         contextWindow: profile.contextWindow,
         sessionFilePath: sessionFile,
-        nativeSessionId: sessionId,
       } satisfies SubagentMeta as SubagentMeta,
       pending: [] as string[],
       turnCount: 0,

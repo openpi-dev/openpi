@@ -548,7 +548,7 @@ pi install ~/work/my-pi-setup
 
 ### 没有隐式模型消费
 
-仓库不写死私有 Provider 或模型名。Summary 默认不调用模型；Pi Subagent 默认继承父模型；外部 Harness 只有用户明确要求时才启用。
+仓库不写死私有 Provider 或模型名。Summary 默认不调用模型；Subagent 默认继承父 Session 的模型与思考等级。
 
 ### Context 是资源，不是垃圾桶
 

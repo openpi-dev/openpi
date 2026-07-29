@@ -5,9 +5,11 @@ subagent can be powered by one of three backends — **pi** (in-process SDK sess
 **Claude Code** (`@anthropic-ai/claude-agent-sdk`), or **Codex** (`codex app-server`) —
 unified behind a single Effect v4 service interface.
 
-> **Status:** this document describes the original v1 plan (stubbed backends). All
-> three backends are now REAL implementations — see `src/backends/{pi,claude,codex}.ts`.
-> The stub machinery survives in `src/backends/stub.ts` for the manager test registry.
+> **Status: historical.** This document describes the original three-backend plan.
+> The Claude Code and Codex backends were removed in `ce8b04f`; pi is the only
+> backend, and `src/backends/stub.ts` remains for the manager test registry.
+> Read this for the reasoning behind the manager and event model, not for the
+> current backend surface.
 
 **Scope of the first version:** interface design + stubbed backend internals + the v1 UI
 carried over. No real Claude/Codex process integration yet; the pi backend may also stay

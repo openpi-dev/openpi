@@ -54,7 +54,7 @@ export interface SpawnTask {
    * parent's provider. Omitted = inherit the parent model.
    */
   readonly model?: string;
-  /** Shared effort scale; each backend maps it to its native equivalent. */
+  /** Thinking level for the child; omitted inherits the parent level. */
   readonly reasoningEffort?: ReasoningEffort;
   readonly parent: ParentContext;
 }
@@ -67,8 +67,6 @@ export interface SubagentMeta {
   readonly contextWindow?: number;
   /** Child session file on disk. */
   readonly sessionFilePath?: string;
-  /** Native session id reported by the backend. */
-  readonly nativeSessionId?: string;
 }
 
 // --- Transcript ------------------------------------------------------------
@@ -129,8 +127,7 @@ export type RunOutcome =
 /**
  * Normalized activity stream. Previews (`argsPreview`, `outputPreview`) are
  * pre-flattened single-line strings because the UI only ever renders one
- * sanitized line, which keeps three different native tool-result shapes out
- * of the interface.
+ * sanitized line.
  */
 export type SubagentEvent =
   // lifecycle (a session can run multiple turns via send())

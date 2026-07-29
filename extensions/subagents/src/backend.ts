@@ -46,8 +46,6 @@ export interface SubagentSession {
 
 export interface SubagentBackend {
   readonly name: BackendName;
-  /** Probe availability (binary on PATH, SDK importable, credentials). */
-  readonly available: Effect.Effect<boolean>;
   /**
    * Spawn a session. Scoped: closing the scope interrupts/kills the
    * underlying session or process and ends `events`. Fire-and-forget

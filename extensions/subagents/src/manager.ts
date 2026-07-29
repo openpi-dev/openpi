@@ -447,13 +447,6 @@ const makeManager = Effect.gen(function* () {
             message: `Unknown backend "${backendName}".`,
           });
         }
-        const available = yield* backend.available;
-        if (!available) {
-          return yield* new BackendUnavailableError({
-            message: `Backend "${backendName}" is not available on this machine (binary/SDK/credentials missing).`,
-          });
-        }
-
         const scope = yield* Scope.make();
         const session = yield* Scope.provide(backend.spawn(task), scope).pipe(
           Effect.onError(() => Scope.close(scope, Exit.void)),

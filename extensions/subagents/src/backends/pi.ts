@@ -507,7 +507,5 @@ const makePiSession = (
 
 export const piBackend: SubagentBackend = {
   name: "pi",
-  // In-process SDK: always available.
-  available: Effect.succeed(true),
   spawn: makePiSession,
 };
