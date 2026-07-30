@@ -14,11 +14,14 @@ import {
   acknowledgeGoalCompletion,
   budgetLimitTransition,
   canResumeGoal,
+  clearBlockedAudit,
   editGoalObjective,
   emergencyLimitTransition,
   isGoalActive,
   isGoalVisible,
   markContinuationDispatched,
+  normalizeGoalReason,
+  recordBlockedAudit,
   recordGoalProgress,
   restoreGoalState,
   setContinuationDeferred,
@@ -31,9 +34,22 @@ export const GOAL_CONTINUATION_TYPE = "goal-continuation";
 
 type AssistantStopReason = "stop" | "length" | "toolUse" | "error" | "aborted";
 
+const BLOCKED_GOAL_TURN_MINIMUM = 3;
+
 export interface GoalControllerOptions {
   now?: () => number;
   createId?: () => string;
+}
+
+export interface GoalModelUpdate {
+  goal: GoalSnapshot;
+  message: string;
+  blockedAudit?: {
+    blocker: string;
+    consecutiveTurns: number;
+    requiredTurns: number;
+    accepted: boolean;
+  };
 }
 
 export function countAssistantTokens(messages: readonly unknown[]) {
@@ -201,14 +217,42 @@ export class GoalController {
     return this.snapshot();
   }
 
-  updateFromModel(status: "complete" | "blocked") {
+  updateFromModel(status: "complete" | "blocked", blocker?: unknown) {
     this.assertUnlocked();
     const current = this.requireVisibleGoal();
-    if (
-      current.status === status ||
-      (current.status === "budget_limited" && status === "blocked")
-    ) {
-      return this.snapshot();
+    if (status === "blocked" && blocker === undefined) {
+      throw new Error("Blocked goal updates require a blocker description.");
+    }
+    const normalizedBlocker =
+      status === "blocked" ? normalizeGoalReason(blocker) : undefined;
+    if (current.status === status) {
+      return this.modelUpdate(current, `Goal is already ${status}.`);
+    }
+    if (current.status === "budget_limited" && status === "blocked") {
+      return this.modelUpdate(
+        current,
+        "Goal remains limited by budget; blocked cannot replace that status.",
+      );
+    }
+    if (status === "blocked") {
+      const recorded = recordBlockedAudit(
+        current,
+        normalizedBlocker,
+        this.now(),
+      );
+      if (recorded.recorded) this.persist(recorded.snapshot);
+      if (recorded.audit.consecutiveTurns < BLOCKED_GOAL_TURN_MINIMUM) {
+        return this.modelUpdate(
+          this.goal ?? recorded.snapshot,
+          `Blocker recorded for goal turn ${recorded.audit.consecutiveTurns} of ${BLOCKED_GOAL_TURN_MINIMUM}; the goal remains active. Continue working until the same blocker recurs on ${BLOCKED_GOAL_TURN_MINIMUM} consecutive distinct goal turns.`,
+          {
+            blocker: recorded.audit.blocker,
+            consecutiveTurns: recorded.audit.consecutiveTurns,
+            requiredTurns: BLOCKED_GOAL_TURN_MINIMUM,
+            accepted: false,
+          },
+        );
+      }
     }
     this.flushTrackedProgress();
     this.continuationPending = false;
@@ -219,11 +263,22 @@ export class GoalController {
         this.now(),
         status === "complete"
           ? "Marked complete by the goal agent."
-          : "Marked blocked by the goal agent.",
+          : normalizedBlocker,
       ),
     );
     this.resetAccountingClock();
-    return this.snapshot();
+    return this.modelUpdate(
+      this.goal!,
+      status === "complete" ? "Goal marked complete." : "Goal marked blocked.",
+      status === "blocked"
+        ? {
+            blocker: normalizedBlocker!,
+            consecutiveTurns: BLOCKED_GOAL_TURN_MINIMUM,
+            requiredTurns: BLOCKED_GOAL_TURN_MINIMUM,
+            accepted: true,
+          }
+        : undefined,
+    );
   }
 
   clear() {
@@ -412,6 +467,7 @@ export class GoalController {
     }
     if (this.goal.status !== "active") return;
 
+    this.resetUnreportedBlockedAudit();
     const budgetLimited = budgetLimitTransition(this.goal, this.now());
     if (budgetLimited) {
       this.persist(budgetLimited);
@@ -458,6 +514,28 @@ export class GoalController {
   shutdown() {
     this.automationEnabled = false;
     this.resetRuntime();
+  }
+
+  private modelUpdate(
+    goal: GoalSnapshot,
+    message: string,
+    blockedAudit?: GoalModelUpdate["blockedAudit"],
+  ) {
+    return {
+      goal: structuredClone(goal),
+      message,
+      ...(blockedAudit === undefined ? {} : { blockedAudit }),
+    };
+  }
+
+  private resetUnreportedBlockedAudit() {
+    if (!this.goal?.blockedAudit) return;
+    if (
+      this.goal.blockedAudit.lastTurn === (this.goal.continuationCount ?? 0)
+    ) {
+      return;
+    }
+    this.persist(clearBlockedAudit(this.goal, this.now()));
   }
 
   private persistPendingCompletionAcknowledgement() {

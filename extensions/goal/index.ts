@@ -27,7 +27,6 @@ import {
 } from "./ui.ts";
 
 const GOAL_USAGE = "Usage: /goal [<objective>|clear|edit|pause|resume]";
-const UPDATE_STATUSES = ["complete", "blocked"] as const;
 const COMPLETION_BUDGET_REPORT =
   "Goal achieved. Report final usage from this tool result's structured goal fields. If `goal.tokenBudget` is present, include token usage from `goal.tokensUsed` and `goal.tokenBudget`. If `goal.timeUsedSeconds` is greater than 0, summarize elapsed time in a concise, human-friendly form appropriate to the response language.";
 
@@ -237,31 +236,58 @@ export default function sessionGoal(pi: ExtensionAPI) {
     name: "update_goal",
     label: "Update Goal",
     description:
-      "Update the existing goal.\nUse this tool only to mark the goal achieved or genuinely blocked.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nSet status to `blocked` only when the same blocking condition has repeated for at least three consecutive goal turns, counting the original/user-triggered turn and any automatic continuations, and the agent cannot make meaningful progress without user input or an external-state change.\nIf the user resumes a goal that was previously marked `blocked`, treat the resumed run as a fresh blocked audit. If the same blocking condition then repeats for at least three consecutive resumed goal turns, set status to `blocked` again.\nOnce the blocked threshold is satisfied, do not keep reporting that you are still blocked while leaving the goal active; set status to `blocked`.\nDo not use `blocked` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\nDo not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.\nYou cannot use this tool to pause, resume, budget-limit, or usage-limit a goal; those status changes are controlled by the user or system.\nWhen marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user.",
+      "Update the existing goal.\nUse this tool only to mark the goal achieved or report a genuine blocker.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nWhen a blocking condition first leaves no meaningful work possible, report status `blocked` with a specific `blocker` description, then reuse exactly that description on each following goal turn while it persists. The controller keeps the goal active for the first two reports and marks it blocked only after three consecutive distinct goal turns. Repeated calls in one turn do not count twice; a different blocker or an unreported turn resets the audit.\nIf the user resumes a blocked goal, the resumed run starts a fresh blocked audit.\nDo not report `blocked` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\nDo not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.\nYou cannot use this tool to pause, resume, budget-limit, or usage-limit a goal; those status changes are controlled by the user or system.\nWhen marking a budgeted goal achieved with status `complete`, report the final token usage from the tool result to the user.",
     promptSnippet: "Mark an existing goal complete or strictly blocked",
     promptGuidelines: [
       "Call update_goal with complete only after a requirement-by-requirement evidence audit proves the entire objective is done.",
-      "Call update_goal with blocked only after the same blocker repeats for at least three consecutive goal turns and no meaningful progress is possible.",
+      "When genuinely unable to progress, report blocked once per goal turn with the same specific blocker description; the controller accepts it after three consecutive matching turns.",
     ],
-    parameters: Type.Object(
-      {
-        status: StringEnum(UPDATE_STATUSES, {
-          description:
-            "Required. Set to `complete` only when the objective is achieved and no required work remains. Set to `blocked` only after the same blocking condition has recurred for at least three consecutive goal turns and the agent is at an impasse. After a previously blocked goal is resumed, the resumed run starts a fresh blocked audit.",
-        }),
-      },
-      { additionalProperties: false },
+    parameters: Type.Union(
+      [
+        Type.Object(
+          {
+            status: StringEnum(["complete"] as const, {
+              description:
+                "Required. Set to `complete` only when the objective is achieved and no required work remains.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+        Type.Object(
+          {
+            status: StringEnum(["blocked"] as const, {
+              description:
+                "Report a genuine current impasse. The controller marks the goal blocked only after the same blocker is reported on three consecutive distinct goal turns. A resumed blocked goal starts a fresh audit.",
+            }),
+            blocker: Type.String({
+              minLength: 1,
+              maxLength: GOAL_LIMITS.reasonChars,
+              description:
+                "Required for blocked. A stable, specific description of the blocking condition; reuse the same wording on each consecutive goal turn while it persists.",
+            }),
+          },
+          { additionalProperties: false },
+        ),
+      ],
+      { description: "Mark the goal complete, or report a specific blocker." },
     ),
     execute(_id, params, _signal, _onUpdate, ctx) {
-      const goal = controller.updateFromModel(params.status);
-      const response = goalToolResponse(
-        goal,
-        params.status === "complete",
-        ctx.sessionManager.getSessionId(),
+      const update = controller.updateFromModel(
+        params.status,
+        "blocker" in params ? params.blocker : undefined,
       );
+      const response = {
+        ...goalToolResponse(
+          update.goal,
+          params.status === "complete",
+          ctx.sessionManager.getSessionId(),
+        ),
+        blockedAudit: update.blockedAudit ?? null,
+        message: update.message,
+      };
       updateUi(ctx);
       return Promise.resolve(
-        toolResult(response, JSON.stringify(response), goal),
+        toolResult(response, JSON.stringify(response), update.goal),
       );
     },
     renderCall(args, theme) {

@@ -7,6 +7,7 @@ import {
   createGoalSnapshot,
   editGoalObjective,
   markContinuationDispatched,
+  recordBlockedAudit,
   recordGoalProgress,
   restoreGoalSnapshot,
   restoreGoalState,
@@ -190,6 +191,44 @@ test("progress accounting, deferral, continuation count, and token budget are du
   assert.equal(released.deferContinuation, undefined);
   const dispatched = markContinuationDispatched(released, NOW + 3);
   assert.equal(dispatched.continuationCount, 1);
+});
+
+test("blocked audit validates durable current-turn state and ignores duplicate reports", () => {
+  const first = recordBlockedAudit(goal(), "  Waiting for access  ", NOW + 1);
+  assert.equal(first.recorded, true);
+  assert.deepEqual(first.audit, {
+    blocker: "Waiting for access",
+    consecutiveTurns: 1,
+    lastTurn: 0,
+  });
+  assert.equal(
+    recordBlockedAudit(first.snapshot, "Waiting for access", NOW + 2).recorded,
+    false,
+  );
+  assert.throws(
+    () =>
+      validateGoalSnapshot({
+        ...goal(),
+        blockedAudit: {
+          blocker: "Waiting for access",
+          consecutiveTurns: 1,
+          lastTurn: 1,
+        },
+      }),
+    /exceeds continuationCount/,
+  );
+  assert.throws(
+    () =>
+      validateGoalSnapshot({
+        ...goal(),
+        blockedAudit: {
+          blocker: "Waiting for access",
+          consecutiveTurns: 2,
+          lastTurn: 0,
+        },
+      }),
+    /exceeds elapsed goal turns/,
+  );
 });
 
 test("completion acknowledgement is durable, idempotent, and complete-only", () => {

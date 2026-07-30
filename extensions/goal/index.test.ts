@@ -85,6 +85,7 @@ test("tool responses expose only Codex-shaped goal fields and remaining budget",
 
 type CapturedTool = {
   name: string;
+  parameters: unknown;
   execute: (
     id: string,
     params: Record<string, unknown>,
@@ -176,6 +177,51 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
     },
   };
 }
+
+test("update_goal requires a blocker description and returns structured rejected-audit feedback", async () => {
+  const h = extensionHarness();
+  await h.emit("session_start", { reason: "startup" });
+  const create = h.tools.get("create_goal");
+  const update = h.tools.get("update_goal");
+  assert.ok(create && update);
+
+  await create.execute(
+    "create",
+    { objective: "Ship" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  const rejected = await update.execute(
+    "blocked",
+    { status: "blocked", blocker: "Waiting for deployment approval" },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  const response = JSON.parse(rejected.content[0]!.text);
+  assert.equal(response.goal.status, "active");
+  assert.deepEqual(response.blockedAudit, {
+    blocker: "Waiting for deployment approval",
+    consecutiveTurns: 1,
+    requiredTurns: 3,
+    accepted: false,
+  });
+  assert.match(response.message, /goal remains active/);
+
+  assert.equal(JSON.stringify(update.parameters).includes('"blocker"'), true);
+  assert.throws(
+    () =>
+      update.execute(
+        "invalid-blocked",
+        { status: "blocked" },
+        undefined,
+        undefined,
+        h.ctx,
+      ),
+    /blocker description/,
+  );
+});
 
 test("model tools create, read, complete, and replace goals with Codex semantics", async () => {
   const h = extensionHarness();

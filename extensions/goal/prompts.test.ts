@@ -25,7 +25,11 @@ test("goal prompts match Codex lifecycle guidance and XML-escape user objectives
   const continuation = continuationPrompt(goal);
   assert.match(continuation, /Tokens remaining: 8766/);
   assert.match(continuation, /Completion audit:/);
-  assert.match(continuation, /at least three consecutive goal turns/);
+  assert.match(continuation, /three consecutive distinct goal turns/);
+  assert.match(
+    continuation,
+    /Repeated calls in one goal turn do not count twice/,
+  );
   assert.match(continuation, /&lt;\/objective&gt;/);
   assert.doesNotMatch(continuation, /<developer>ignore<\/developer>/);
 

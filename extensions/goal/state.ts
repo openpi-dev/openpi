@@ -11,6 +11,12 @@ export const GOAL_STATUSES = [
 
 export type GoalStatus = (typeof GOAL_STATUSES)[number];
 
+export interface GoalBlockedAudit {
+  blocker: string;
+  consecutiveTurns: number;
+  lastTurn: number;
+}
+
 export interface GoalSnapshot {
   version: 2;
   revision: number;
@@ -25,6 +31,7 @@ export interface GoalSnapshot {
   reason?: string;
   deferContinuation?: boolean;
   continuationCount?: number;
+  blockedAudit?: GoalBlockedAudit;
   completionAcknowledged?: boolean;
 }
 
@@ -54,6 +61,7 @@ const SNAPSHOT_KEYS = new Set([
   "reason",
   "deferContinuation",
   "continuationCount",
+  "blockedAudit",
   "completionAcknowledged",
 ]);
 const RESUMABLE_STATUSES = new Set<GoalStatus>([
@@ -162,7 +170,7 @@ export function validateGoalSnapshot(value: unknown): GoalSnapshot {
     fail("snapshot.updatedAt precedes createdAt");
   }
   const reason = hasOwn(value, "reason")
-    ? normalizeReason(value.reason)
+    ? normalizeGoalReason(value.reason)
     : undefined;
   if (
     hasOwn(value, "deferContinuation") &&
@@ -175,6 +183,12 @@ export function validateGoalSnapshot(value: unknown): GoalSnapshot {
       value.continuationCount,
       "snapshot.continuationCount",
     );
+  }
+  const blockedAudit = hasOwn(value, "blockedAudit")
+    ? validateBlockedAudit(value.blockedAudit, value.continuationCount)
+    : undefined;
+  if (blockedAudit !== undefined && status !== "active") {
+    fail("only an active goal can retain a blocked audit");
   }
   if (
     hasOwn(value, "completionAcknowledged") &&
@@ -204,6 +218,7 @@ export function validateGoalSnapshot(value: unknown): GoalSnapshot {
     ...(hasOwn(value, "continuationCount")
       ? { continuationCount: value.continuationCount as number }
       : {}),
+    ...(blockedAudit === undefined ? {} : { blockedAudit }),
     ...(value.completionAcknowledged === true
       ? { completionAcknowledged: true }
       : {}),
@@ -301,6 +316,7 @@ export function transitionGoal(
   const {
     reason: _reason,
     deferContinuation: _defer,
+    blockedAudit: _blockedAudit,
     completionAcknowledged: _acknowledged,
     ...stable
   } = base;
@@ -309,7 +325,7 @@ export function transitionGoal(
     revision: increment(base.revision, "revision"),
     status,
     updatedAt: now,
-    ...(reason === undefined ? {} : { reason: normalizeReason(reason) }),
+    ...(reason === undefined ? {} : { reason: normalizeGoalReason(reason) }),
   });
 }
 
@@ -334,6 +350,7 @@ export function editGoalObjective(
   const {
     reason: _reason,
     deferContinuation: _defer,
+    blockedAudit: _blockedAudit,
     completionAcknowledged: _acknowledged,
     ...stable
   } = base;
@@ -342,6 +359,54 @@ export function editGoalObjective(
     revision: increment(base.revision, "revision"),
     objective: normalizeGoalObjective(objective),
     status,
+    updatedAt: now,
+  });
+}
+
+export function recordBlockedAudit(
+  current: GoalSnapshot,
+  blocker: unknown,
+  now: number,
+) {
+  const base = validateGoalSnapshot(current);
+  if (base.status !== "active") {
+    fail("only an active goal can record a blocked audit");
+  }
+  const normalizedBlocker = normalizeGoalReason(blocker);
+  const turn = base.continuationCount ?? 0;
+  const previous = base.blockedAudit;
+  if (previous?.blocker === normalizedBlocker && previous.lastTurn === turn) {
+    return { snapshot: base, audit: previous, recorded: false };
+  }
+  assertTimestampAfter(now, base.updatedAt);
+  const audit: GoalBlockedAudit = {
+    blocker: normalizedBlocker,
+    consecutiveTurns:
+      previous?.blocker === normalizedBlocker && previous.lastTurn === turn - 1
+        ? increment(previous.consecutiveTurns, "blockedAudit.consecutiveTurns")
+        : 1,
+    lastTurn: turn,
+  };
+  return {
+    snapshot: validateGoalSnapshot({
+      ...base,
+      revision: increment(base.revision, "revision"),
+      updatedAt: now,
+      blockedAudit: audit,
+    }),
+    audit,
+    recorded: true,
+  };
+}
+
+export function clearBlockedAudit(current: GoalSnapshot, now: number) {
+  const base = validateGoalSnapshot(current);
+  if (!base.blockedAudit) return base;
+  assertTimestampAfter(now, base.updatedAt);
+  const { blockedAudit: _blockedAudit, ...withoutAudit } = base;
+  return validateGoalSnapshot({
+    ...withoutAudit,
+    revision: increment(base.revision, "revision"),
     updatedAt: now,
   });
 }
@@ -478,7 +543,7 @@ function migrateV1Snapshot(value: Record<string, unknown>) {
   }
   const reason =
     typeof value.reason === "string" && value.reason.trim()
-      ? normalizeReason(value.reason)
+      ? normalizeGoalReason(value.reason)
       : status === "paused" &&
           ["active", "waiting"].includes(String(value.status))
         ? "Paused once while migrating the legacy goal; run /goal resume to continue."
@@ -544,7 +609,35 @@ function declaredRevision(value: unknown) {
     : undefined;
 }
 
-function normalizeReason(value: unknown) {
+function validateBlockedAudit(value: unknown, continuationCount: unknown) {
+  if (!isRecord(value)) fail("snapshot.blockedAudit must be an object");
+  assertExactKeys(
+    value,
+    new Set(["blocker", "consecutiveTurns", "lastTurn"]),
+    "snapshot.blockedAudit",
+  );
+  const blocker = normalizeGoalReason(value.blocker);
+  assertPositiveInteger(
+    value.consecutiveTurns,
+    "snapshot.blockedAudit.consecutiveTurns",
+  );
+  assertNonNegativeInteger(value.lastTurn, "snapshot.blockedAudit.lastTurn");
+  const currentTurn =
+    typeof continuationCount === "number" ? continuationCount : 0;
+  if ((value.lastTurn as number) > currentTurn) {
+    fail("snapshot.blockedAudit.lastTurn exceeds continuationCount");
+  }
+  if ((value.consecutiveTurns as number) > (value.lastTurn as number) + 1) {
+    fail("snapshot.blockedAudit.consecutiveTurns exceeds elapsed goal turns");
+  }
+  return {
+    blocker,
+    consecutiveTurns: value.consecutiveTurns as number,
+    lastTurn: value.lastTurn as number,
+  };
+}
+
+export function normalizeGoalReason(value: unknown) {
   if (typeof value !== "string") fail("reason must be a string");
   const reason = value.replace(/\s+/gu, " ").trim();
   if (!reason) fail("reason must not be blank");

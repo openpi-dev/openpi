@@ -462,6 +462,143 @@ test("model completion flushes current assistant usage into its tool result with
   assert.equal(h.messages.length, 0);
 });
 
+test("blocked reports require the same blocker on three consecutive distinct goal turns", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: { ...active(now), continuationCount: 100 },
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+
+  const first = controller.updateFromModel(
+    "blocked",
+    "Missing production access",
+  );
+  assert.equal(first.goal.status, "active");
+  assert.deepEqual(first.blockedAudit, {
+    blocker: "Missing production access",
+    consecutiveTurns: 1,
+    requiredTurns: 3,
+    accepted: false,
+  });
+  assert.match(first.message, /goal remains active/);
+  assert.equal(controller.snapshot()?.blockedAudit?.lastTurn, 100);
+
+  const duplicate = controller.updateFromModel(
+    "blocked",
+    "Missing production access",
+  );
+  assert.equal(duplicate.blockedAudit?.consecutiveTurns, 1);
+  assert.equal(controller.snapshot()?.revision, 2);
+
+  controller.agentStarted();
+  now = 101;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(h.ctx);
+  const second = controller.updateFromModel(
+    "blocked",
+    "Missing production access",
+  );
+  assert.equal(second.goal.status, "active");
+  assert.equal(second.blockedAudit?.consecutiveTurns, 2);
+
+  controller.agentStarted();
+  now = 102;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(h.ctx);
+  const third = controller.updateFromModel(
+    "blocked",
+    "Missing production access",
+  );
+  assert.equal(third.goal.status, "blocked");
+  assert.equal(third.blockedAudit?.accepted, true);
+  assert.equal(h.messages.length, 2);
+});
+
+test("a different or unreported blocker resets the blocked audit", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([
+    { type: "custom", customType: "session-goal", data: active(now) },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => now });
+  controller.restore(h.ctx);
+
+  controller.updateFromModel("blocked", "Missing API credential");
+  controller.agentStarted();
+  now = 101;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(h.ctx);
+  const different = controller.updateFromModel(
+    "blocked",
+    "Service is unavailable",
+  );
+  assert.equal(different.blockedAudit?.consecutiveTurns, 1);
+
+  controller.agentStarted();
+  now = 102;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(h.ctx);
+  controller.agentStarted();
+  now = 103;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(h.ctx);
+  assert.equal(controller.snapshot()?.blockedAudit, undefined);
+});
+
+test("the durable blocked audit survives reload and starts fresh after resume", () => {
+  const h = harness();
+  let now = 100;
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: { ...active(now), continuationCount: 50 },
+    },
+  ]);
+  const firstController = new GoalController(h.pi, { now: () => now });
+  firstController.restore(h.ctx);
+  firstController.updateFromModel("blocked", "Waiting for approval");
+  const persisted = h.entries.at(-1)?.data;
+  assert.ok(persisted);
+
+  const resumedHarness = harness();
+  resumedHarness.setBranch([
+    { type: "custom", customType: "session-goal", data: persisted },
+  ]);
+  const controller = new GoalController(resumedHarness.pi, { now: () => now });
+  controller.restore(resumedHarness.ctx);
+  controller.agentStarted();
+  now = 101;
+  controller.agentEnded([assistant(1)]);
+  controller.settled(resumedHarness.ctx);
+  assert.equal(
+    controller.updateFromModel("blocked", "Waiting for approval").blockedAudit
+      ?.consecutiveTurns,
+    2,
+  );
+
+  const blocked = transitionGoal(
+    controller.snapshot()!,
+    "blocked",
+    102,
+    "Waiting for approval",
+  );
+  resumedHarness.setBranch([
+    { type: "custom", customType: "session-goal", data: blocked },
+  ]);
+  const afterBlocked = new GoalController(resumedHarness.pi, {
+    now: () => 103,
+  });
+  afterBlocked.restore(resumedHarness.ctx);
+  assert.equal(afterBlocked.resume()?.blockedAudit, undefined);
+});
+
 test("model blocking cannot demote a budget-limited goal", () => {
   const h = harness();
   h.setBranch([
@@ -473,7 +610,10 @@ test("model blocking cannot demote a budget-limited goal", () => {
   ]);
   const controller = new GoalController(h.pi, { now: () => 102 });
   controller.restore(h.ctx);
-  assert.equal(controller.updateFromModel("blocked")?.status, "budget_limited");
+  assert.equal(
+    controller.updateFromModel("blocked", "An unrelated blocker").goal.status,
+    "budget_limited",
+  );
   assert.equal(h.entries.length, 0);
 });
 
