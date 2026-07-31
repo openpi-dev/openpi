@@ -242,40 +242,30 @@ export default function sessionGoal(pi: ExtensionAPI) {
       "Call update_goal with complete only after a requirement-by-requirement evidence audit proves the entire objective is done.",
       "When genuinely unable to progress, report blocked once per goal turn with the same specific blocker description; the controller accepts it after three consecutive matching turns.",
     ],
-    parameters: Type.Union(
-      [
-        Type.Object(
-          {
-            status: StringEnum(["complete"] as const, {
-              description:
-                "Required. Set to `complete` only when the objective is achieved and no required work remains.",
-            }),
-          },
-          { additionalProperties: false },
+    // Keep the tool schema's root an object. Some OpenAI-compatible providers
+    // reject a top-level anyOf even though JSON Schema permits it.
+    parameters: Type.Object(
+      {
+        status: StringEnum(["complete", "blocked"] as const, {
+          description:
+            "Required. Set to `complete` only when the objective is achieved. Report `blocked` only for a genuine current impasse; the controller enforces the three-turn audit.",
+        }),
+        blocker: Type.Optional(
+          Type.String({
+            minLength: 1,
+            maxLength: GOAL_LIMITS.reasonChars,
+            description:
+              "Required when status is `blocked`; omit for `complete`. Reuse exactly the same specific description on each consecutive goal turn while the blocker persists.",
+          }),
         ),
-        Type.Object(
-          {
-            status: StringEnum(["blocked"] as const, {
-              description:
-                "Report a genuine current impasse. The controller marks the goal blocked only after the same blocker is reported on three consecutive distinct goal turns. A resumed blocked goal starts a fresh audit.",
-            }),
-            blocker: Type.String({
-              minLength: 1,
-              maxLength: GOAL_LIMITS.reasonChars,
-              description:
-                "Required for blocked. A stable, specific description of the blocking condition; reuse the same wording on each consecutive goal turn while it persists.",
-            }),
-          },
-          { additionalProperties: false },
-        ),
-      ],
-      { description: "Mark the goal complete, or report a specific blocker." },
+      },
+      { additionalProperties: false },
     ),
     execute(_id, params, _signal, _onUpdate, ctx) {
-      const update = controller.updateFromModel(
-        params.status,
-        "blocker" in params ? params.blocker : undefined,
-      );
+      if (params.status === "complete" && params.blocker !== undefined) {
+        throw new Error("Complete goal updates must not include a blocker.");
+      }
+      const update = controller.updateFromModel(params.status, params.blocker);
       const response = {
         ...goalToolResponse(
           update.goal,

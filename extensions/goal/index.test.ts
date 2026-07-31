@@ -209,7 +209,15 @@ test("update_goal requires a blocker description and returns structured rejected
   });
   assert.match(response.message, /goal remains active/);
 
-  assert.equal(JSON.stringify(update.parameters).includes('"blocker"'), true);
+  const schema = update.parameters as {
+    type?: unknown;
+    anyOf?: unknown;
+    properties?: Record<string, unknown>;
+  };
+  assert.equal(schema.type, "object");
+  assert.equal(schema.anyOf, undefined);
+  assert.ok(schema.properties?.status);
+  assert.ok(schema.properties?.blocker);
   assert.throws(
     () =>
       update.execute(
@@ -220,6 +228,17 @@ test("update_goal requires a blocker description and returns structured rejected
         h.ctx,
       ),
     /blocker description/,
+  );
+  assert.throws(
+    () =>
+      update.execute(
+        "invalid-complete",
+        { status: "complete", blocker: "must be absent" },
+        undefined,
+        undefined,
+        h.ctx,
+      ),
+    /must not include a blocker/,
   );
 });
 
