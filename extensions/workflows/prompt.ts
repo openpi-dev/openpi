@@ -34,9 +34,10 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "phase('Scan')",
   "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS })))",
   "const findings = scans.filter((r) => r && r.ok).map((r) => r.structured)",
+  "const dropped = scans.length - findings.length // agents that failed/dropped: surface, never silently swallow",
   "phase('Report')",
   "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report' })",
-  "return { findings, report: report.ok ? report.output : report.error }",
+  "return { findings, dropped, report: report.ok ? report.output : report.error }",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
@@ -46,7 +47,8 @@ export const WORKFLOW_PROMPT_SNIPPET =
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
   "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
-  "In workflow scripts, agent() never throws — always check `.ok` on its result before using `.output`/`.structured`.",
+  "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() settles a throwing thunk to `null`, so guard those with `r && r.ok`.",
+  "A filtered-out or null result is a failed agent, not a clean pass: surface how many dropped (e.g. return a count) so a crashed or timed-out agent never reads as success.",
 ];
 
 /** Marks and forwards a workflow script's agent() task as an isolated child-model prompt. */
