@@ -117,6 +117,34 @@ Rulings:
 - `nextId = max(persistedNextId, maxItemId + 1)` during restore;
 - IDs are branch-local references (`T1`, `T2`), not global identities.
 
+#### Batch lifecycle (implemented)
+
+Session Tasks are working memory for the current request, not a durable ledger
+of everything ever done. A **batch** is the set of items created since the list
+was last empty. When every item in the batch reaches a terminal status
+(`done`/`dropped`), the batch **closes**: the list clears and the next
+`tasks_add` starts a fresh batch numbered from `T1` again.
+
+Consequences and rationale:
+
+- a `T`-id only identifies work **within its own batch**; `T1` in a later batch
+  is unrelated to an earlier `T1`. This keeps the projected list short and
+  prevents historical completed work from accumulating in model context;
+- closing is announced in the mutating tool result (`Task batch closed; the
+  next tasks_add starts again at T1`) and rendered in the panel, so neither the
+  model nor the user is surprised by the reset;
+- evidence is **not lost**: every mutation is appended to the session as a
+  custom entry (`session-tasks`) and to the turn transcript, so a closed
+  batch's `done` notes remain auditable in session history — they are just no
+  longer part of the live list;
+- restore treats `nextId` per the high-water rule above, scoped so a reset
+  batch legitimately restarts at `T1` while an in-progress batch never rewinds
+  an id.
+
+This is deliberately closer to Codex's ephemeral checklist than to a persistent
+project ledger: the subsystem answers "what is left in the work I am doing now",
+not "everything I have ever completed".
+
 ### 3. Persistence
 
 Use Pi session custom entries:

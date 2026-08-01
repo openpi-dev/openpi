@@ -203,7 +203,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
     pi.registerTool({
       name: "tasks_add",
       label: "Tasks Add",
-      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session tasks. Use this only for work spanning multiple agent runs or user turns, or for an explicit user task list.`,
+      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session tasks. Use this only for work spanning multiple agent runs or user turns, or for an explicit user task list. When every item in a batch reaches done/dropped the batch closes and the list clears; the next tasks_add starts a fresh batch numbered from T1, so a T-id only identifies work within its own batch (past evidence remains in the session history, not this list).`,
       promptSnippet:
         "Add stable work-intent items to the current session tasks",
       promptGuidelines: [

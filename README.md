@@ -180,7 +180,7 @@ subagent_spawn({
 - 默认继承父会话的模型和 Thinking Level；
 - 每个子 Agent 有独立 Context Window；
 - 子 Agent 继承当前 Pi 环境中的工具、Skills、项目上下文和 Trust 决策；
-- 最多同时运行 4 个；
+- 模型发起的子 Agent 最多同时运行 4 个；`/btw` 旁路提问使用独立的小池（默认 2），二者互不挤占，卡住的旁路提问不会饿死模型的并发额度；
 - 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
