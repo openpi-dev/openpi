@@ -110,10 +110,10 @@ function outputSection(
   const shownBytes = truncation.outputBytes;
   if (truncation.truncated || view.truncatedBytes > 0) {
     const where = view.spillPath
-      ? `Full log: ${view.spillPath}`
+      ? `Read the full log at ${view.spillPath}`
       : view.truncatedBytes > 0
         ? `${formatSize(view.truncatedBytes)} of older output was dropped: no full log for this terminal`
-        : "Full output in the /ps viewer";
+        : "This is a display cap, not a data loss; no full log is available for this terminal, so redirect the command's output to a file if you need the rest.";
     text += `\n[${label} truncated: showing last ${formatSize(shownBytes)} of ${formatSize(view.totalBytes)}. ${where}]`;
   }
   return text;

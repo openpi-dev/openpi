@@ -90,7 +90,7 @@ test("status result marks head-truncated output with a pointer at the full log",
     }),
   );
   assert.match(text, /stdout truncated: showing last /);
-  assert.match(text, /Full log: \/tmp\/bt-1\.stdout\.log/);
+  assert.match(text, /Read the full log at \/tmp\/bt-1\.stdout\.log/);
 });
 
 test("completion message reports kill, timeout, or exit and omits empty stderr", () => {

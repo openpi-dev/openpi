@@ -69,7 +69,7 @@ function validateBrief(brief: string, ctx: ExtensionContext) {
   }
   if (tokens < MIN_CONTEXT_PIVOT_TOKENS) {
     throw new Error(
-      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot after ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
+      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
     );
   }
 }
@@ -106,11 +106,11 @@ export default function contextPivot(pi: ExtensionAPI) {
     name: "context_pivot",
     label: "Context Pivot",
     description:
-      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use after roughly 30k context tokens when moving between phases such as research → implementation or implementation → review. Use /handoff instead for a genuinely new session.",
+      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /handoff instead for a genuinely new session.",
     promptSnippet:
       "Compress a long current session into a clean brief before changing phase",
     promptGuidelines: [
-      "Use context_pivot only when the current context exceeds roughly 30k tokens and the work is changing phase. Put the current state, decisions, blockers, failed paths worth avoiding, relevant artifact paths, and exact next steps in its brief.",
+      "Use context_pivot only when the current context is at least 30k tokens and the work is changing phase. Put the current state, decisions, blockers, failed paths worth avoiding, relevant artifact paths, and exact next steps in its brief.",
     ],
     parameters: Type.Object({
       brief: Type.String({

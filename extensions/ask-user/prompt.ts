@@ -15,9 +15,9 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
     "One short sentence explaining the impact or tradeoff if selected",
   question: "A single-sentence question shown to the user",
   options:
-    "Between 2 and 5 mutually exclusive choices. Put the recommended choice first. Never include an Other/custom option; the UI adds one automatically.",
+    "Between 2 and 5 mutually exclusive choices. Never include an Other/custom option; the UI adds one automatically.",
   questions:
-    "One to three independent questions. Prefer one; group questions only when answering them together avoids unnecessary model round trips.",
+    "One to three independent questions (see the tool guidelines for when to batch more than one).",
 };
 
 export const ASK_USER_TOOL_DESCRIPTION =

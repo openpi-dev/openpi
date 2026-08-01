@@ -326,7 +326,8 @@ export default function sessionTasks(pi: ExtensionAPI) {
     pi.registerTool({
       name: "tasks_list",
       label: "Tasks List",
-      description: `${TOOL_PURPOSE} Read current session task items, optionally filtered by ID and status.`,
+      description:
+        "Reads the current session's work-intent tasks, optionally filtered by ID and status; does not execute, schedule, or delegate work.",
       promptSnippet: "List current session work-intent task items",
       parameters: Type.Object({
         id: Type.Optional(Type.Integer({ minimum: 1 })),
