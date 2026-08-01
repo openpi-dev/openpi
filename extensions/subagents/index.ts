@@ -31,10 +31,8 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
-  getAgentDir,
   getMarkdownTheme,
   keyHint,
-  ProjectTrustStore,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
@@ -70,6 +68,7 @@ import {
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   createSubagentRuntime,
@@ -134,27 +133,6 @@ function truncatedOutput(
     text += `\n\n[Output truncated: ${formatSize(truncation.outputBytes)} of ${formatSize(truncation.totalBytes)} shown. Full transcript in session file: ${snap.meta.sessionFilePath ?? "?"}]`;
   }
   return text;
-}
-
-/**
- * Same-directory children inherit the live parent decision. An alternate cwd
- * is trusted only when pi's persisted trust store explicitly trusts it (or a
- * containing directory); unreadable/invalid trust data fails closed.
- */
-function resolveChildProjectTrust(options: {
-  parentCwd: string;
-  childCwd: string;
-  parentTrusted: boolean;
-}) {
-  if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
-    return options.parentTrusted;
-  }
-  try {
-    const trustStore = new ProjectTrustStore(getAgentDir());
-    return trustStore.get(options.childCwd) === true;
-  } catch {
-    return false;
-  }
 }
 
 export default function (pi: ExtensionAPI) {
@@ -390,7 +368,7 @@ export default function (pi: ExtensionAPI) {
           reasoningEffort: params.reasoning_effort,
           parent: {
             parentCwd: ctx.cwd,
-            projectTrusted: resolveChildProjectTrust({
+            projectTrusted: resolveStandaloneChildProjectTrust({
               parentCwd: ctx.cwd,
               childCwd: cwd,
               parentTrusted: ctx.isProjectTrusted(),

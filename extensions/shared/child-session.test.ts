@@ -1,7 +1,9 @@
 import assert from "node:assert/strict";
+import { readdir, readFile } from "node:fs/promises";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 import {
   createAgentSession,
@@ -16,6 +18,7 @@ import { Type } from "typebox";
 import {
   bindChildSessionExtensions,
   CHILD_EXCLUDED_TOOL_NAMES,
+  CHILD_SAFE_PACKAGE_TOOL_NAMES,
   childToolPolicy,
   createChildResources,
   resolveStandaloneChildProjectTrust,
@@ -96,25 +99,6 @@ test("child denylist keeps extension and workflow structured tools available", a
     });
     await bindChildSessionExtensions(session);
 
-    assert.deepEqual(
-      [...CHILD_EXCLUDED_TOOL_NAMES],
-      [
-        "subagent_spawn",
-        "subagent_wait",
-        "subagent_cancel",
-        "subagent_check",
-        "subagent_list",
-        "workflow",
-        "ask_user",
-        "tasks_add",
-        "tasks_update",
-        "tasks_list",
-        "get_goal",
-        "create_goal",
-        "update_goal",
-        "configure_my_pi_setup",
-      ],
-    );
     const allTools = new Set(session.getAllTools().map((tool) => tool.name));
     const activeTools = new Set(session.getActiveToolNames());
     assert.equal(starts, 1);
@@ -274,4 +258,94 @@ test("shutdown helper bounds a stuck hook before disposal", async () => {
 
   await shutdownAndDisposeChildSession(session, { timeoutMs: 10 });
   assert.equal(disposals, 1);
+});
+
+/**
+ * Discover every tool this package registers by scanning the extension sources
+ * for `name: "..."` inside `pi.registerTool(...)` / `pi.registerTool({...})`
+ * blocks. This is intentionally source-based, not runtime-based: it must catch a
+ * newly-added tool even before any wiring exists, so the boundary cannot drift.
+ */
+async function discoverRegisteredToolNames() {
+  const extensionsDir = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "..",
+  );
+  const entries = await readdir(extensionsDir, { withFileTypes: true });
+  const names = new Set<string>();
+  // Matches `registerTool(` then the first `name:` string literal after it.
+  // The optional `<...>` skips a generic type-argument list, because some tools
+  // register as `pi.registerTool<Params, Details>({ ... })` (e.g. file-search's
+  // fd/rg). `[^(]*` safely spans nested generics like `<ReturnType<...>, D>`
+  // since a type-argument list contains no `(`. Missing this style silently
+  // drops those tools from the scan and defeats the fail-closed guard below.
+  const registerToolRe = /registerTool\s*(?:<[^(]*>)?\s*\(\s*\{?/g;
+  const nameRe = /name\s*:\s*["'`]([a-z0-9_]+)["'`]/i;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === "shared") continue;
+    const indexPath = path.join(extensionsDir, entry.name, "index.ts");
+    let source: string;
+    try {
+      source = await readFile(indexPath, "utf8");
+    } catch {
+      continue; // not every extension registers tools
+    }
+    let match: RegExpExecArray | null;
+    while ((match = registerToolRe.exec(source))) {
+      const after = source.slice(match.index, match.index + 400);
+      const nameMatch = nameRe.exec(after);
+      if (nameMatch) names.add(nameMatch[1]);
+    }
+  }
+  return names;
+}
+
+test("every registered package tool is classified child-safe or excluded (fail-closed drift guard)", async () => {
+  const registered = await discoverRegisteredToolNames();
+  // Sanity: the scan must actually find tools, or the guard is vacuous.
+  assert.ok(
+    registered.size >= 15,
+    `expected to discover the package tools, found ${registered.size}`,
+  );
+  assert.ok(registered.has("bg_start"), "scan should find bg_start");
+  assert.ok(registered.has("context_pivot"), "scan should find context_pivot");
+  // fd/rg register with a generic type argument; the scan must find them too,
+  // otherwise the CHILD_SAFE classification is never exercised and a future
+  // parent-only tool in that same style would slip through the guard.
+  assert.ok(registered.has("fd"), "scan should find generic-typed fd");
+  assert.ok(registered.has("rg"), "scan should find generic-typed rg");
+
+  const safe = new Set<string>(CHILD_SAFE_PACKAGE_TOOL_NAMES);
+  const excluded = new Set<string>(CHILD_EXCLUDED_TOOL_NAMES);
+
+  // No tool may be both child-safe and excluded.
+  for (const name of safe) {
+    assert.equal(
+      excluded.has(name),
+      false,
+      `${name} cannot be both child-safe and excluded`,
+    );
+  }
+
+  // Every tool the package registers must be explicitly classified. A new
+  // parent-only tool that is neither listed as child-safe nor excluded fails
+  // here instead of silently leaking into headless children.
+  for (const name of registered) {
+    const classified = safe.has(name) || excluded.has(name);
+    assert.ok(
+      classified,
+      `tool "${name}" is registered but not classified: add it to ` +
+        `CHILD_EXCLUDED_TOOL_NAMES (parent-only) or ` +
+        `CHILD_SAFE_PACKAGE_TOOL_NAMES (read-only, child-safe) in child-session.ts`,
+    );
+  }
+
+  // The exclusion list must not name tools the package no longer registers
+  // (except structured_output, a workflow-child tool registered dynamically).
+  for (const name of excluded) {
+    assert.ok(
+      registered.has(name),
+      `excluded tool "${name}" is no longer registered; remove it from CHILD_EXCLUDED_TOOL_NAMES`,
+    );
+  }
 });

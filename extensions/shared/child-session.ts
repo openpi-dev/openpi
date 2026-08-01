@@ -10,22 +10,52 @@ import {
 
 export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
-/** Tools that headless children must not receive. Everything else stays enabled. */
+/**
+ * The only package tools a headless child may keep. Read-only discovery tools
+ * are safe for children; every other tool this package registers is parent-only
+ * because it orchestrates work, mutates shared runtime state, drives the parent
+ * UI, or asks the user. This is the allowlist half of a fail-closed boundary:
+ * anything registered by this package and not listed here MUST be excluded, and
+ * `child-session.test.ts` scans the extensions to enforce exactly that — so a
+ * future tool cannot silently leak into children by being forgotten.
+ */
+export const CHILD_SAFE_PACKAGE_TOOL_NAMES = ["fd", "rg"] as const;
+
+/**
+ * Tools that headless children must not receive. Children run without a UI and
+ * cannot orchestrate, so every parent-only tool this package ships is denied.
+ * Grouped by owning extension; keep in sync with the extensions (guarded by the
+ * drift test in child-session.test.ts).
+ */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
+  // subagents — children cannot spawn/observe more agents
   "subagent_spawn",
   "subagent_wait",
   "subagent_cancel",
   "subagent_check",
   "subagent_list",
+  // workflows — children cannot recursively orchestrate
   "workflow",
+  // ask-user — headless children have no user to ask
   "ask_user",
+  // tasks — the parent session owns its work-intent ledger
   "tasks_add",
   "tasks_update",
   "tasks_list",
+  // goal — the parent session owns its persistent goal
   "get_goal",
   "create_goal",
   "update_goal",
+  // setup — configuration is a package-owned, parent-only choice
   "configure_my_pi_setup",
+  // background-terminals — a child's processes would be invisible to the
+  // parent's /ps and could outlive the child, so children cannot start them
+  "bg_start",
+  "bg_status",
+  "bg_list",
+  "bg_kill",
+  // context-pivot — compaction of the conversation is a parent-only decision
+  "context_pivot",
 ] as const;
 
 /** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
