@@ -10,8 +10,8 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
-  "Use subagent_spawn to delegate self-contained tasks that can run in the background; give it a complete, standalone prompt.",
-  "After subagent_spawn, keep working; results arrive automatically. Only call subagent_wait when you cannot proceed without the result.",
+  "Reserve subagent_spawn for substantial, self-contained work; give it a complete, standalone prompt. For a single lookup or edit you can do inline, just do it — each subagent spends a fresh context window and cannot see this conversation.",
+  "After subagent_spawn, keep working on other things; results arrive automatically. Only call subagent_wait when you cannot proceed without the result, and never answer from a guessed result before it arrives.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
@@ -20,7 +20,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
   name: "Short human-readable name for this subagent, shown in listings and the UI",
   harness:
-    'Harness to run the subagent on. Only "pi" exists: an in-process Pi session that inherits this environment.',
+    'Optional. The only harness is "pi" (an in-process Pi session that inherits this environment), which is the default; you can omit this.',
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   model:
@@ -73,7 +73,7 @@ export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
 
 /** Describes listing all tracked running and settled subagents. */
 export const SUBAGENT_LIST_TOOL_DESCRIPTION =
-  "List all subagents (running and finished) with their harness and status.";
+  "List all subagents (running and finished) with their status.";
 
 /** Builds the child completion/failure wrapper injected into the parent model's context. */
 export function buildSubagentResultMessage(options: {
@@ -87,5 +87,9 @@ export function buildSubagentResultMessage(options: {
   let text = `Subagent ${options.id} "${options.title}" ${verb}.`;
   if (options.errorText) text += `\nError: ${options.errorText}`;
   text += `\n\n${options.output}`;
+  // This message is already displayed to the user, so tell the parent to act on
+  // it rather than reprint it verbatim.
+  text +=
+    "\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)";
   return text;
 }
