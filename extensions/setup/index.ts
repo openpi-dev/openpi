@@ -15,7 +15,6 @@ import {
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
   REASONING_LEVELS,
-  saveSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
   type FooterLayoutItem,
   type FooterPreset,
