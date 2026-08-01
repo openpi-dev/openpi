@@ -12,6 +12,8 @@ import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
 import { makeStubBackend } from "./src/backends/stub.ts";
 import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
 import {
+  MAX_RUNNING,
+  MAX_RUNNING_BTW,
   SubagentManager,
   SubagentManagerLive,
   type SubagentManagerShape,
@@ -160,30 +162,49 @@ test("spawn origin propagates to ids, snapshots, and settlement", async () => {
   });
 });
 
-test("the global concurrency cap includes by-the-way sessions", async () => {
+test("by-the-way sessions run in their own pool, separate from the model pool", async () => {
   await withManager(async (manager, runtime) => {
-    const tasks: SpawnTask[] = [
-      { ...task("side question"), origin: "btw" },
-      task("Task 2"),
-      task("Task 3"),
-      task("Task 4"),
-    ];
-    const spawns = await runTool(
+    // Fill the entire btw pool.
+    const btwTasks: SpawnTask[] = Array.from(
+      { length: MAX_RUNNING_BTW },
+      () => ({
+        ...task("side question"),
+        origin: "btw" as const,
+      }),
+    );
+    const btwSpawns = await runTool(
       runtime,
-      Effect.forEach(tasks, (spawnTask) => manager.spawn("pi", spawnTask), {
+      Effect.forEach(btwTasks, (spawnTask) => manager.spawn("pi", spawnTask), {
         concurrency: "unbounded",
       }),
     );
-    assert.equal(spawns.length, 4);
+    assert.equal(btwSpawns.length, MAX_RUNNING_BTW);
+
+    // A full btw pool must NOT starve the model pool: the model can still spawn
+    // its full quota. This is the regression guard for the phantom-slot bug.
+    const modelTasks: SpawnTask[] = Array.from(
+      { length: MAX_RUNNING },
+      (_, n) => task(`Task ${n + 1}`),
+    );
+    const modelSpawns = await runTool(
+      runtime,
+      Effect.forEach(
+        modelTasks,
+        (spawnTask) => manager.spawn("pi", spawnTask),
+        {
+          concurrency: "unbounded",
+        },
+      ),
+    );
+    assert.equal(modelSpawns.length, MAX_RUNNING);
+
+    // An extra btw aside is rejected against the btw cap, naming that pool.
     await assert.rejects(
       runTool(
         runtime,
-        manager.spawn("pi", {
-          ...task("another side question"),
-          origin: "btw",
-        }),
+        manager.spawn("pi", { ...task("another aside"), origin: "btw" }),
       ),
-      /Max 4 subagents/,
+      /Max 2 by-the-way sessions/,
     );
   });
 });
@@ -201,7 +222,7 @@ test("the concurrency cap rejects a fifth running subagent", async () => {
     assert.equal(spawns.length, 4);
     await assert.rejects(
       runTool(runtime, manager.spawn("pi", task("Task 5"))),
-      /Max 4 subagents/,
+      /Max 4 subagent sessions/,
     );
   });
 });
@@ -237,7 +258,7 @@ test("idle restarts respect the concurrency cap", async () => {
     // Restarting the settled one would be a fifth concurrent run.
     await assert.rejects(
       runTool(runtime, manager.send(settled.id, "go again")),
-      /Max 4 subagents/,
+      /Max 4 subagent sessions/,
     );
     assert.equal(manager.view.get(settled.id)?.status, "done");
   });

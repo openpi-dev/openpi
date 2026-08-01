@@ -42,7 +42,14 @@ import {
   SpawnError,
 } from "./domain.ts";
 
+/** Model-spawned subagents get their own pool so a user aside cannot starve it. */
 export const MAX_RUNNING = 4;
+/**
+ * User "by the way" asides run in a separate, smaller pool. Keeping them off the
+ * model pool means a hung btw session can never consume a slot the model needs,
+ * and the model's "max N" error can honestly reflect only the model's own pool.
+ */
+export const MAX_RUNNING_BTW = 2;
 export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
@@ -190,7 +197,10 @@ const makeManager = Effect.gen(function* () {
   const cleanups = new Set<Fiber.Fiber<unknown>>();
   let modelCounter = 0;
   let btwCounter = 0;
-  let reserved = 0;
+  // Reservations are tracked per pool so the model and user "by the way" asides
+  // never contend for the same slots.
+  let reservedModel = 0;
+  let reservedBtw = 0;
   let disposed = false;
   let onSettled:
     ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined;
@@ -227,10 +237,20 @@ const makeManager = Effect.gen(function* () {
     });
   });
 
-  const runningCount = () =>
+  const runningCount = (origin?: SubagentOrigin) =>
     [...entries.values()].filter(
-      (e) => e.snapshot.status === "running" || e.restarting === true,
+      (e) =>
+        (e.snapshot.status === "running" || e.restarting === true) &&
+        (origin === undefined || e.snapshot.origin === origin),
     ).length;
+
+  /** Per-pool capacity: model asides and user "by the way" asides never mix. */
+  const poolLimit = (origin: SubagentOrigin) =>
+    origin === "btw" ? MAX_RUNNING_BTW : MAX_RUNNING;
+  const poolReserved = (origin: SubagentOrigin) =>
+    origin === "btw" ? reservedBtw : reservedModel;
+  const atPoolCapacity = (origin: SubagentOrigin) =>
+    runningCount(origin) + poolReserved(origin) >= poolLimit(origin);
 
   const addInterest = (ids: ReadonlyArray<string>) => {
     for (const id of ids) waitInterest.set(id, (waitInterest.get(id) ?? 0) + 1);
@@ -421,8 +441,9 @@ const makeManager = Effect.gen(function* () {
 
   const spawn = (backendName: BackendName, task: SpawnTask) =>
     Effect.gen(function* () {
+      const origin: SubagentOrigin = task.origin ?? "model";
       // Reserve synchronously (before the first yield inside doSpawn) so
-      // parallel tool calls cannot race past the global cap.
+      // parallel tool calls cannot race past the pool cap.
       yield* Effect.suspend(
         (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
           if (disposed) {
@@ -430,12 +451,15 @@ const makeManager = Effect.gen(function* () {
               message: "Subagent manager is shutting down.",
             });
           }
-          if (runningCount() + reserved >= MAX_RUNNING) {
+          if (atPoolCapacity(origin)) {
             return new ConcurrencyLimitError({
-              message: `Max ${MAX_RUNNING} subagents can run concurrently. Wait for one to finish before spawning another.`,
+              message: `Max ${poolLimit(origin)} ${
+                origin === "btw" ? "by-the-way" : "subagent"
+              } sessions can run concurrently. Wait for one to finish before spawning another.`,
             });
           }
-          reserved++;
+          if (origin === "btw") reservedBtw++;
+          else reservedModel++;
           return Effect.void;
         },
       );
@@ -458,7 +482,6 @@ const makeManager = Effect.gen(function* () {
           });
         }
 
-        const origin = task.origin ?? "model";
         const id =
           origin === "btw" ? `btw-${++btwCounter}` : `sa-${++modelCounter}`;
         const meta = yield* session.meta;
@@ -512,7 +535,8 @@ const makeManager = Effect.gen(function* () {
       return yield* doSpawn.pipe(
         Effect.ensuring(
           Effect.sync(() => {
-            reserved--;
+            if (origin === "btw") reservedBtw--;
+            else reservedModel--;
             notify();
           }),
         ),
@@ -626,9 +650,12 @@ const makeManager = Effect.gen(function* () {
       // must respect the same cap as spawn. Steering an already-running one
       // does not consume additional capacity.
       if (entry.snapshot.status !== "running") {
-        if (runningCount() + reserved >= MAX_RUNNING) {
+        const origin = entry.snapshot.origin;
+        if (atPoolCapacity(origin)) {
           return new SendError({
-            message: `Max ${MAX_RUNNING} subagents can run concurrently; restarting "${id}" would exceed that.`,
+            message: `Max ${poolLimit(origin)} ${
+              origin === "btw" ? "by-the-way" : "subagent"
+            } sessions can run concurrently; restarting "${id}" would exceed that.`,
           });
         }
         // Occupy the slot synchronously: the RunStarted that flips status
