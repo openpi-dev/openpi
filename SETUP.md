@@ -59,4 +59,4 @@ Session Tasks remain advisory multi-item work intent and do not determine Goal c
 - `/sessions` searches and previews project sessions before switching.
 - `/tasks` inspects branch-scoped advisory work items.
 - `/goal ...` controls the persistent autonomous session objective.
-- `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires roughly 30,000 context tokens; use the separate `/handoff` skill when work should move to a genuinely new session.
+- `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires at least 30,000 context tokens and is rejected below that; use the separate `/handoff` skill when work should move to a genuinely new session.

@@ -213,7 +213,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 - `parallel()` 控制并发 fan-out；
 - JSON Schema 提供结构化结果；
 - 前台运行可实时查看，后台运行结束后自动通知；
-- `/workflows` 查看阶段、Agent、Transcript、Token 与成本；
+- `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
 - 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`。
@@ -397,7 +397,7 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
 | Context 快满时被动 Compact           | Context Pivot 在阶段变化时主动建立干净工作面               |
 | 每个插件一套配置命令                 | `/my-pi-setup` 用自然语言统一配置                          |
 | 插件默认绑定作者的模型和 Provider    | 不写死模型；默认继承当前 Pi，摘要默认零模型调用            |
-| 后台任务只能看一条最终输出           | Terminal、Subagent、Workflow 都可实时观察、取消和接管      |
+| 后台任务只能看一条最终输出           | Terminal、Subagent、Workflow 都可实时观察和取消；Subagent 还可接管继续 |
 
 ### 一条完整路径
 
@@ -517,7 +517,7 @@ pi install ~/work/my-pi-setup
 | `/ps`                       | 查看和管理后台终端                           |
 | `/subagents`                | 查看、取消或接管子 Agent                     |
 | `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
-| `/workflows`                | 查看 Workflow 运行、阶段和产物               |
+| `/workflows`                | 查看 Workflow 运行、阶段和产物；`/workflows <id> stop` 取消运行 |
 | `/tasks`                   | 查看当前 Session 的任务列表                  |
 | `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal    |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
@@ -629,10 +629,12 @@ extensions/
 ├── subagents/             # Pi-native Backend + /subagents
 ├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
 ├── tasks/                 # Session 持久任务
+├── goal/                  # Codex 风格持久自主 Goal
 ├── context-pivot/         # 定向 Compaction
 ├── sessions/              # Session 搜索、预览、切换
 ├── ask-user/              # 结构化用户输入
 ├── file-search/           # fd / rg 与二进制解析
+├── file-mutation-display/ # Write / Edit 紧凑预览
 ├── summaries/             # Run Recap
 ├── git-info/              # Git / PR 与 /lg
 ├── model-info/            # Model / Context / Cost / Throughput
