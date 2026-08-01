@@ -310,9 +310,13 @@ export default function sessionGoal(pi: ExtensionAPI) {
           if (ctx.mode === "print" || ctx.mode === "json") {
             throw new Error(`Goal automation is disabled in ${ctx.mode} mode.`);
           }
-          const goal = controller.resume();
+          controller.resume();
           controller.kickoff(ctx);
-          notify(ctx, goalUpdateMessage(goal!));
+          // Report the status AFTER kickoff: dispatching the first turn can
+          // change it (e.g. a dispatch failure pauses the goal), so notifying
+          // with the pre-kickoff snapshot would show a status the footer then
+          // contradicts.
+          notify(ctx, goalUpdateMessage(controller.snapshot()!));
         } else if (parsed.action === "clear") {
           notify(
             ctx,

@@ -329,6 +329,39 @@ export function transitionGoal(
   });
 }
 
+/**
+ * Resume a goal to active on explicit user action. Unlike a plain
+ * transitionGoal, this resets continuationCount: resuming is the user's
+ * deliberate "run it again", and it is the only recovery path from the
+ * emergency continuation breaker (which trips at emergencyContinuations and is
+ * otherwise preserved by ...stable across every other transition). Without the
+ * reset, resume() would flip to active and dispatchPrompt would immediately
+ * re-trip the breaker, so resume could never actually recover the goal.
+ */
+export function resumeGoal(
+  current: GoalSnapshot,
+  now: number,
+  reason?: string,
+) {
+  const base = validateGoalSnapshot(current);
+  assertTimestampAfter(now, base.updatedAt);
+  const {
+    reason: _reason,
+    deferContinuation: _defer,
+    blockedAudit: _blockedAudit,
+    completionAcknowledged: _acknowledged,
+    continuationCount: _continuationCount,
+    ...stable
+  } = base;
+  return validateGoalSnapshot({
+    ...stable,
+    revision: increment(base.revision, "revision"),
+    status: "active",
+    updatedAt: now,
+    ...(reason === undefined ? {} : { reason: normalizeGoalReason(reason) }),
+  });
+}
+
 export function editGoalObjective(
   current: GoalSnapshot,
   objective: unknown,

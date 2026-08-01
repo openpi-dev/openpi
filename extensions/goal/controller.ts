@@ -24,6 +24,7 @@ import {
   recordBlockedAudit,
   recordGoalProgress,
   restoreGoalState,
+  resumeGoal,
   setContinuationDeferred,
   transitionGoal,
   validateGoalSnapshot,
@@ -211,9 +212,7 @@ export class GoalController {
     }
     this.continuationPending = false;
     this.resetAccountingClock();
-    this.persist(
-      transitionGoal(current, "active", this.now(), "Resumed by user."),
-    );
+    this.persist(resumeGoal(current, this.now(), "Resumed by user."));
     return this.snapshot();
   }
 
@@ -569,7 +568,6 @@ export class GoalController {
         this.persist(emergencyLimited);
         return false;
       }
-      this.persist(markContinuationDispatched(this.goal, this.now()));
     } else if (this.goal.status !== "budget_limited") {
       return false;
     }
@@ -596,7 +594,6 @@ export class GoalController {
           deliverAs: ctx.isIdle() ? "followUp" : "steer",
         },
       );
-      return true;
     } catch (error) {
       this.continuationPending = false;
       if (this.goal?.status === "active") {
@@ -611,6 +608,14 @@ export class GoalController {
       }
       throw error;
     }
+    // Count the continuation only after the turn was actually dispatched, so a
+    // failed send never erodes the emergency safety budget with zero productive
+    // turns. The in-memory continuationPending guard (set above) is what blocks
+    // a concurrent dispatch in the window before this persist lands.
+    if (kind !== "budget_limit") {
+      this.persist(markContinuationDispatched(this.goal, this.now()));
+    }
+    return true;
   }
 
   private persist(candidate: GoalSnapshot) {

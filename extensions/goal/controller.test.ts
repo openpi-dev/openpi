@@ -9,7 +9,7 @@ import {
   countAssistantTokens,
   lastAssistantStopReason,
 } from "./controller.ts";
-import { createGoalSnapshot, transitionGoal } from "./state.ts";
+import { GOAL_LIMITS, createGoalSnapshot, transitionGoal } from "./state.ts";
 
 function harness(options: { sendMessage?: () => void } = {}) {
   const entries: { customType: string; data: unknown }[] = [];
@@ -656,4 +656,58 @@ test("failed continuation dispatch durably pauses the active goal", () => {
   controller.restore(h.ctx);
   assert.throws(() => controller.kickoff(h.ctx), /dispatch failed/);
   assert.equal(controller.snapshot()?.status, "paused");
+});
+
+test("a failed continuation dispatch does not increment the continuation count", () => {
+  let now = 100;
+  const h = harness({
+    sendMessage() {
+      throw new Error("dispatch failed");
+    },
+  });
+  h.setBranch([
+    { type: "custom", customType: "session-goal", data: active(now) },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => ++now });
+  controller.restore(h.ctx);
+  assert.equal(controller.snapshot()?.continuationCount ?? 0, 0);
+  // Every dispatch attempt throws; none of them should have counted, because a
+  // continuation is only counted after the turn is actually dispatched.
+  for (let i = 0; i < 5; i++) {
+    assert.throws(() => controller.kickoff(h.ctx), /dispatch failed/);
+    controller.resume(); // leave the paused state so the next kickoff runs
+  }
+  assert.equal(controller.snapshot()?.continuationCount ?? 0, 0);
+});
+
+test("resume resets the continuation count so the emergency breaker can recover", () => {
+  let now = 100;
+  const h = harness();
+  // A goal that has already tripped the emergency continuation breaker.
+  h.setBranch([
+    {
+      type: "custom",
+      customType: "session-goal",
+      data: {
+        ...active(now),
+        status: "blocked",
+        continuationCount: GOAL_LIMITS.emergencyContinuations,
+      },
+    },
+  ]);
+  const controller = new GoalController(h.pi, { now: () => ++now });
+  controller.restore(h.ctx);
+  assert.equal(
+    controller.snapshot()?.continuationCount,
+    GOAL_LIMITS.emergencyContinuations,
+  );
+
+  // Resuming must reset the count and actually dispatch a turn, rather than
+  // flipping to active only for kickoff to immediately re-trip the breaker.
+  const resumed = controller.resume();
+  assert.equal(resumed?.status, "active");
+  assert.equal(resumed?.continuationCount ?? 0, 0);
+  assert.equal(controller.kickoff(h.ctx), true);
+  assert.equal(controller.snapshot()?.status, "active");
+  assert.equal(controller.snapshot()?.continuationCount, 1);
 });
