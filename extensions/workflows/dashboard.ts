@@ -393,6 +393,7 @@ export class WorkflowDashboard {
   private referencedRunIds: ReadonlySet<string>;
   private startedSince: number;
   private close: () => void;
+  private onAbort?: (runId: string) => boolean;
 
   constructor(
     tui: TUI,
@@ -404,6 +405,7 @@ export class WorkflowDashboard {
     startedSince: number,
     close: () => void,
     initialRunId?: string,
+    onAbort?: (runId: string) => boolean,
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -413,6 +415,7 @@ export class WorkflowDashboard {
     this.referencedRunIds = referencedRunIds;
     this.startedSince = startedSince;
     this.close = close;
+    this.onAbort = onAbort;
     this.refresh();
     if (initialRunId) {
       const entry = this.entries.find(
@@ -501,6 +504,24 @@ export class WorkflowDashboard {
     this.noticeAt = Date.now();
   }
 
+  /** Request cancellation of a run by id, surfacing the outcome as a notice. */
+  private abortRun(entry: RunEntry | undefined) {
+    if (!entry) return;
+    if (entry.details.status !== "running") {
+      this.setNotice(`${entry.runId} is already ${entry.details.status}`);
+      return;
+    }
+    const stopped = this.onAbort?.(entry.runId) ?? false;
+    this.setNotice(
+      stopped ? `stopping ${entry.runId}…` : `cannot stop ${entry.runId}`,
+    );
+  }
+
+  private setNotice(text: string) {
+    this.notice = text;
+    this.noticeAt = Date.now();
+  }
+
   handleInput(data: string) {
     const up = this.keybindings.matches(data, "tui.select.up") || data === "k";
     const down =
@@ -521,6 +542,8 @@ export class WorkflowDashboard {
         this.listIndex = 0;
       } else if (data === "G") {
         this.listIndex = Math.max(0, this.entries.length - 1);
+      } else if (data === "x") {
+        this.abortRun(this.entries[this.listIndex]);
       } else if (confirm) {
         const entry = this.entries[this.listIndex];
         if (entry) {
@@ -586,6 +609,7 @@ export class WorkflowDashboard {
         }
       }
       if (data === "s") this.saveReport();
+      if (data === "x") this.abortRun(this.current);
     } else {
       const maxScroll = Math.max(
         0,
@@ -760,7 +784,7 @@ export class WorkflowDashboard {
     lines.push(...this.panel("Runs", rows, width, panelHeight));
     lines.push(
       this.hintLine(
-        `${this.keys("tui.select.up")}/${this.keys("tui.select.down")} select · ${this.keys("tui.select.confirm")} open · ${this.keys("tui.select.cancel")} close`,
+        `${this.keys("tui.select.up")}/${this.keys("tui.select.down")} select · ${this.keys("tui.select.confirm")} open · x stop · ${this.keys("tui.select.cancel")} close`,
         width,
       ),
     );
@@ -915,8 +939,8 @@ export class WorkflowDashboard {
 
     const hint =
       this.detailFocus === "phases"
-        ? `j/k select phase · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} agents · ${this.keys("tui.select.cancel")} back · s save report`
-        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · ${this.keys("tui.select.confirm")} transcript · s save report`;
+        ? `j/k select phase · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} agents · ${this.keys("tui.select.cancel")} back · x stop · s save report`
+        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · ${this.keys("tui.select.confirm")} transcript · x stop · s save report`;
     lines.push(this.hintLine(hint, width));
     return lines;
   }
@@ -1049,6 +1073,7 @@ export async function showWorkflowDashboard(
   getActive: () => Map<string, WorkflowDetails>,
   initialRunId?: string,
   startedSince = 0,
+  onAbort?: (runId: string) => boolean,
 ): Promise<void> {
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
@@ -1065,6 +1090,7 @@ export async function showWorkflowDashboard(
           done(undefined);
         },
         initialRunId,
+        onAbort,
       );
       return dashboard;
     },

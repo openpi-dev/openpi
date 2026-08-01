@@ -23,7 +23,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
   "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
+  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
 
   "• args — the parsed value of the `args` tool parameter (or undefined).",
   "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. The package default permits 128 agent calls per run and can be changed with /my-pi-setup (hard maximum 1024); there is no overall deadline. Each agent must receive its first assistant response event within 45 seconds so silent provider requests fail clearly; after that, agent() has no wall-clock deadline. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
@@ -33,7 +33,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
   "phase('Scan')",
   "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS })))",
-  "const findings = scans.filter((r) => r.ok).map((r) => r.structured)",
+  "const findings = scans.filter((r) => r && r.ok).map((r) => r.structured)",
   "phase('Report')",
   "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report' })",
   "return { findings, report: report.ok ? report.output : report.error }",

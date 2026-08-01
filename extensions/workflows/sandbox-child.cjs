@@ -116,11 +116,19 @@ const BOOTSTRAP = String.raw`
       throw new Error("parallel(): concurrency must be a positive integer");
     }
     const concurrency = Math.min(maxConcurrency, requested);
-    return mapLimited(items, concurrency, (item) => {
+    return mapLimited(items, concurrency, async (item) => {
       if (typeof item !== "function") {
         throw new Error("parallel() items must be zero-argument functions");
       }
-      return item();
+      // A thunk that throws settles to null instead of rejecting the whole
+      // batch, so one bad item never discards every completed sibling's
+      // result. agent() itself never throws (it returns { ok:false }); this
+      // only catches user thunk code, e.g. JSON.parse on a non-JSON output.
+      try {
+        return await item();
+      } catch {
+        return null;
+      }
     });
   }
 

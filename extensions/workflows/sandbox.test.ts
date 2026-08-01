@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { runWorkflowSandbox } from "./sandbox.ts";
+import { AGENT_CALL_BACKSTOP_MARGIN, runWorkflowSandbox } from "./sandbox.ts";
 
 function run(
   source: string,
@@ -163,6 +163,45 @@ test("the sandbox budget is the configured budget, not a lower hidden one", asyn
     run(source, { maxAgentCalls: 5 }),
     /agent request budget/,
   );
+});
+
+test("the sandbox hard cap sits a fixed margin above the configured budget", async () => {
+  // The sandbox is only the outer backstop; it must not fatally kill the run
+  // at exactly the configured budget (that is the controller's graceful job).
+  // Fire exactly budget + margin calls: all succeed. One more trips the cap.
+  const budget = 4;
+  const atCap = budget + AGENT_CALL_BACKSTOP_MARGIN;
+  const okSource = `
+    for (let i = 0; i < ${atCap}; i++) await agent("x");
+    return "done";
+  `;
+  assert.equal(await run(okSource, { maxAgentCalls: budget }), "done");
+
+  const overSource = `
+    for (let i = 0; i < ${atCap + 1}; i++) await agent("x");
+    return "done";
+  `;
+  await assert.rejects(
+    run(overSource, { maxAgentCalls: budget }),
+    /agent request budget/,
+  );
+});
+
+test("parallel() settles a throwing thunk to null without failing the batch", async () => {
+  const result = await run(
+    `
+      const results = await parallel([
+        () => agent("ok"),
+        () => { throw new Error("bad thunk"); },
+        async () => { const r = await agent("also-ok"); return r.output; },
+      ]);
+      return results.map((r) =>
+        r === null ? "NULL" : typeof r === "string" ? r : r.output,
+      );
+    `,
+    { onAgent: async (prompt) => ({ ok: true, output: `reply:${prompt}` }) },
+  );
+  assert.deepEqual(result, ["reply:ok", "NULL", "reply:also-ok"]);
 });
 
 test("a promise handed to workflow code cannot reach the host realm", async () => {

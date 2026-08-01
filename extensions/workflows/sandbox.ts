@@ -9,6 +9,14 @@ const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_ARGS_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_AGENT_MESSAGE_BYTES = 512 * 1024;
+/**
+ * The sandbox's hard agent-request cap sits this many calls ABOVE the
+ * controller's graceful budget, so the controller rejects the (budget+1)th
+ * agent() into the script (as { ok:false }) before the sandbox would fatally
+ * kill the run. Bounded so the backstop still stops a runaway child that
+ * bypasses the controller entirely.
+ */
+export const AGENT_CALL_BACKSTOP_MARGIN = 8;
 
 export interface SandboxAgentOptions {
   label?: unknown;
@@ -95,10 +103,14 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     );
   }
 
-  const maxAgentRequests = Math.max(
+  // See AGENT_CALL_BACKSTOP_MARGIN: the sandbox hard cap sits above the
+  // controller's graceful budget so the controller rejects first and the
+  // script can still return its aggregate.
+  const controllerBudget = Math.max(
     1,
     Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(options.maxAgentCalls)),
   );
+  const maxAgentRequests = controllerBudget + AGENT_CALL_BACKSTOP_MARGIN;
 
   const argsJson = safeStringify(
     { defined: options.args !== undefined, value: options.args },

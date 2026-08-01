@@ -344,9 +344,30 @@ export default function workflows(pi: ExtensionAPI) {
 
   pi.registerCommand("workflows", {
     description:
-      "List workflow runs (`/workflows <runId>` for one run's detail)",
+      "List workflow runs (`/workflows <runId>` for detail, `/workflows <runId> stop` to cancel)",
     handler: async (rawArgs, ctx) => {
       const arg = rawArgs.trim();
+
+      // `/workflows <runId> stop` (or `stop <runId>`) cancels a running
+      // workflow. Background runs otherwise only stop at session shutdown.
+      const stopMatch = arg.match(/^(?:stop\s+(\S+)|(\S+)\s+stop)$/i);
+      if (stopMatch) {
+        const target = stopMatch[1] ?? stopMatch[2];
+        const entry = [...activeRuns.entries()].find(
+          ([runId, run]) =>
+            (runId === target || runId.endsWith(target)) &&
+            run.details.status === "running",
+        );
+        if (!entry) {
+          ctx.ui.notify(`No running workflow matching "${target}".`, "warning");
+          return;
+        }
+        const [runId, run] = entry;
+        run.controller.abort("Stopped by user");
+        ctx.ui.notify(`Stopping workflow ${runId}…`, "info");
+        return;
+      }
+
       // An explicit run id is a deliberate lookup, so it reaches session history.
       const startedSince = arg ? 0 : turnStartedAt;
       if (ctx.mode === "tui") {
@@ -356,6 +377,12 @@ export default function workflows(pi: ExtensionAPI) {
           activeDetails,
           arg || undefined,
           startedSince,
+          (runId) => {
+            const run = activeRuns.get(runId);
+            if (!run || run.details.status !== "running") return false;
+            run.controller.abort("Stopped by user");
+            return true;
+          },
         );
         // Opening the dashboard acknowledges finished runs.
         completedRuns = 0;
