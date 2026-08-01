@@ -273,6 +273,7 @@ async function discoverRegisteredToolNames() {
   );
   const entries = await readdir(extensionsDir, { withFileTypes: true });
   const names = new Set<string>();
+  const factoryRegistrations: string[] = [];
   // Matches `registerTool(` then the first `name:` string literal after it.
   // The optional `<...>` skips a generic type-argument list, because some tools
   // register as `pi.registerTool<Params, Details>({ ... })` (e.g. file-search's
@@ -281,6 +282,16 @@ async function discoverRegisteredToolNames() {
   // drops those tools from the scan and defeats the fail-closed guard below.
   const registerToolRe = /registerTool\s*(?:<[^(]*>)?\s*\(\s*\{?/g;
   const nameRe = /name\s*:\s*["'`]([a-z0-9_]+)["'`]/i;
+  // Factory style: `registerTool(createEditToolDefinition(...))` /
+  // `registerTool(withCompactCallRenderer(createWriteToolDefinition(...)))`.
+  // The tool name is not a literal here, so an inline-name scan is blind to it.
+  // A factory registration is `registerTool(` whose first argument is a call
+  // expression, not an object/generic literal. Reach through any renderer
+  // wrapper to the innermost `create<Tool>Definition(` that actually names the
+  // tool, so the classifier below fails closed on an UNKNOWN factory tool
+  // rather than silently ignoring it.
+  const factoryHeadRe = /registerTool\s*\(\s*([A-Za-z_$][\w$]*)\s*\(/g;
+  const defFactoryRe = /(create[A-Za-z]*ToolDefinition)\s*\(/;
   for (const entry of entries) {
     if (!entry.isDirectory() || entry.name === "shared") continue;
     const indexPath = path.join(extensionsDir, entry.name, "index.ts");
@@ -296,12 +307,44 @@ async function discoverRegisteredToolNames() {
       const nameMatch = nameRe.exec(after);
       if (nameMatch) names.add(nameMatch[1]);
     }
+    let factoryMatch: RegExpExecArray | null;
+    while ((factoryMatch = factoryHeadRe.exec(source))) {
+      // Look at the registerTool(...) argument region and prefer the innermost
+      // create<Tool>Definition; fall back to the outer callee name if none.
+      const region = source.slice(factoryMatch.index, factoryMatch.index + 200);
+      const def = defFactoryRe.exec(region);
+      factoryRegistrations.push(
+        `${entry.name}: ${def ? def[1] : factoryMatch[1]}(...)`,
+      );
+    }
   }
-  return names;
+  return { names, factoryRegistrations };
 }
 
+/**
+ * Factory-registered tools the scan cannot name-resolve, mapped to the tool
+ * name they actually register, with the classification they carry. write/edit
+ * are native Pi builtins (children keep them), wrapped only for a compact
+ * renderer — not package-owned parent-only tools. Any NEW factory registration
+ * must be added here (with its classification) or the drift guard fails closed.
+ */
+const KNOWN_FACTORY_TOOLS: Record<
+  string,
+  { tool: string; classification: "child-safe-builtin" | "excluded" }
+> = {
+  "createWriteToolDefinition(...)": {
+    tool: "write",
+    classification: "child-safe-builtin",
+  },
+  "createEditToolDefinition(...)": {
+    tool: "edit",
+    classification: "child-safe-builtin",
+  },
+};
+
 test("every registered package tool is classified child-safe or excluded (fail-closed drift guard)", async () => {
-  const registered = await discoverRegisteredToolNames();
+  const { names: registered, factoryRegistrations } =
+    await discoverRegisteredToolNames();
   // Sanity: the scan must actually find tools, or the guard is vacuous.
   assert.ok(
     registered.size >= 15,
@@ -314,6 +357,40 @@ test("every registered package tool is classified child-safe or excluded (fail-c
   // parent-only tool in that same style would slip through the guard.
   assert.ok(registered.has("fd"), "scan should find generic-typed fd");
   assert.ok(registered.has("rg"), "scan should find generic-typed rg");
+
+  // Factory-registered tools carry no inline name literal, so the inline scan
+  // is blind to them. Fail closed: every factory registration must be a KNOWN
+  // one whose classification we have vetted. A new, unrecognized factory
+  // registration trips here instead of silently escaping the boundary — which
+  // is exactly the leak the guard promises to prevent.
+  for (const reg of factoryRegistrations) {
+    const factoryCall = reg.slice(reg.indexOf(": ") + 2);
+    const known = KNOWN_FACTORY_TOOLS[factoryCall];
+    assert.ok(
+      known,
+      `unrecognized factory tool registration "${reg}": add it to ` +
+        `KNOWN_FACTORY_TOOLS with its child classification, and exclude it in ` +
+        `CHILD_EXCLUDED_TOOL_NAMES if it is parent-only`,
+    );
+    // A factory tool classified parent-only must appear in the exclusion list.
+    if (known.classification === "excluded") {
+      assert.ok(
+        (CHILD_EXCLUDED_TOOL_NAMES as readonly string[]).includes(known.tool),
+        `factory tool "${known.tool}" is parent-only but missing from CHILD_EXCLUDED_TOOL_NAMES`,
+      );
+    }
+  }
+  // The write/edit builtins are what motivated this branch; assert the scan
+  // actually saw their factory registrations so this coverage cannot silently
+  // regress to zero.
+  assert.ok(
+    factoryRegistrations.some((r) => r.includes("createWriteToolDefinition")),
+    "scan should see the factory-registered write builtin",
+  );
+  assert.ok(
+    factoryRegistrations.some((r) => r.includes("createEditToolDefinition")),
+    "scan should see the factory-registered edit builtin",
+  );
 
   const safe = new Set<string>(CHILD_SAFE_PACKAGE_TOOL_NAMES);
   const excluded = new Set<string>(CHILD_EXCLUDED_TOOL_NAMES);

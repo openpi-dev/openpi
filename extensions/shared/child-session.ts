@@ -17,7 +17,10 @@ export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
  * UI, or asks the user. This is the allowlist half of a fail-closed boundary:
  * anything registered by this package and not listed here MUST be excluded, and
  * `child-session.test.ts` scans the extensions to enforce exactly that — so a
- * future tool cannot silently leak into children by being forgotten.
+ * future tool cannot silently leak into children by being forgotten. The scan
+ * covers both inline-named registrations and factory-style ones (e.g.
+ * `registerTool(createEditToolDefinition(...))`); an unrecognized factory
+ * registration fails the guard rather than escaping it.
  */
 export const CHILD_SAFE_PACKAGE_TOOL_NAMES = ["fd", "rg"] as const;
 
