@@ -8,7 +8,7 @@
  *   │ ❯ ■ Gather     3/3 │ │ ■ CodeRabbit feedback   gpt-5 · 7%/372k  5m37s│
  *   │   ■ Verify     1/1 │ │ ■ Other bot feedback    gpt-5 · 9%/372k  4m43s│
  *   ╰────────────────────╯ ╰─────────────────────────────────────────────────╯
- *   up/down select · esc back · s save report
+ *   up/down select · right enter · left back · s save report
  */
 
 import * as fs from "node:fs";
@@ -381,6 +381,7 @@ export class WorkflowDashboard {
   private transcriptRowCount = 0;
   private transcriptViewportSize = 1;
   private current?: RunEntry;
+  private openedDirectly = false;
   private notice?: string;
   private noticeAt = 0;
   private disposed = false;
@@ -422,9 +423,8 @@ export class WorkflowDashboard {
         (e) => e.runId === initialRunId || e.runId.endsWith(initialRunId),
       );
       if (entry) {
-        this.current = entry;
         this.listIndex = this.entries.indexOf(entry);
-        this.view = "detail";
+        this.enterEntry(entry, true);
       }
     }
     this.timer = setInterval(() => {
@@ -471,6 +471,19 @@ export class WorkflowDashboard {
     }
     if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
       this.notice = undefined;
+  }
+
+  private enterEntry(entry: RunEntry, directly: boolean) {
+    this.current = entry;
+    this.openedDirectly = directly;
+    const groups = phaseGroups(entry.details, true);
+    const currentPhase = groups.findIndex(
+      (group) => group.title === entry.details.currentPhase,
+    );
+    this.phaseIndex = Math.max(0, currentPhase);
+    this.agentIndex = 0;
+    this.detailFocus = "phases";
+    this.view = "detail";
   }
 
   private groups(): PhaseGroup[] {
@@ -544,16 +557,10 @@ export class WorkflowDashboard {
         this.listIndex = Math.max(0, this.entries.length - 1);
       } else if (data === "x") {
         this.abortRun(this.entries[this.listIndex]);
-      } else if (confirm) {
+      } else if (confirm || right) {
         const entry = this.entries[this.listIndex];
-        if (entry) {
-          this.current = entry;
-          this.phaseIndex = 0;
-          this.agentIndex = 0;
-          this.detailFocus = "phases";
-          this.view = "detail";
-        }
-      } else if (cancel) {
+        if (entry) this.enterEntry(entry, false);
+      } else if (cancel || left) {
         this.close();
         return;
       }
@@ -587,9 +594,12 @@ export class WorkflowDashboard {
             this.detailFocus = "agents";
             this.clampAgentIndex();
           }
-        } else if (cancel) {
-          this.view = "list";
-          this.refresh();
+        } else if (cancel || left) {
+          if (this.openedDirectly) this.close();
+          else {
+            this.view = "list";
+            this.refresh();
+          }
         }
       } else {
         const agents = this.selectedGroup()?.agents ?? [];
@@ -603,7 +613,7 @@ export class WorkflowDashboard {
           this.agentIndex = Math.max(0, agents.length - 1);
         } else if (left || cancel) {
           this.detailFocus = "phases";
-        } else if (confirm && this.selectedAgent()) {
+        } else if ((right || confirm) && this.selectedAgent()) {
           this.transcriptScroll = 0;
           this.view = "transcript";
         }
@@ -940,7 +950,7 @@ export class WorkflowDashboard {
     const hint =
       this.detailFocus === "phases"
         ? `j/k select phase · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} agents · ${this.keys("tui.select.cancel")} back · x stop · s save report`
-        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · ${this.keys("tui.select.confirm")} transcript · x stop · s save report`;
+        : `j/k select agent · h/${this.keys("tui.editor.cursorLeft")}/${this.keys("tui.select.cancel")} phases · l/${this.keys("tui.editor.cursorRight")}/${this.keys("tui.select.confirm")} details · x stop · s save report`;
     lines.push(this.hintLine(hint, width));
     return lines;
   }

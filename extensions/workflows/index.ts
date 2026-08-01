@@ -25,6 +25,7 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
+  CustomEditor,
   getAgentDir,
   getMarkdownTheme,
   keyHint,
@@ -69,6 +70,12 @@ import {
   WORKFLOW_PROMPT_SNIPPET,
   WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import {
+  WorkflowNavigationEditor,
+  WorkflowStripState,
+  WorkflowStripWidget,
+  type WorkflowStripEntry,
+} from "./navigation.ts";
 import {
   createWorkflowResources,
   runAgent,
@@ -261,60 +268,171 @@ export default function workflows(pi: ExtensionAPI) {
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
+  const settledRuns = new Map<string, WorkflowDetails>();
+  const stripState = new WorkflowStripState();
+  const widgetKey = "workflow-navigation";
 
   /**
    * Finished counts are an unread notice: opening the dashboard or sending the
    * next explicit request acknowledges them.
    */
-  let lastUi: ExtensionContext["ui"] | undefined;
+  let lastContext: ExtensionContext | undefined;
   let completedRuns = 0;
   let failedRuns = 0;
+  let widgetVisible = false;
+  let requestWidgetRender: (() => void) | undefined;
+  let dashboardOpen = false;
   /**
    * Start of the current request. The dashboard reports the work belonging to
    * it, not the whole session's run history.
    */
   let turnStartedAt = 0;
+
+  const newestEntry = (
+    entries: Iterable<readonly [string, WorkflowDetails]>,
+  ): WorkflowStripEntry | undefined => {
+    let newest: WorkflowStripEntry | undefined;
+    for (const [runId, details] of entries) {
+      if (!newest || details.startedAt > newest.details.startedAt) {
+        newest = { runId, details };
+      }
+    }
+    return newest;
+  };
+
+  const stripEntry = () => {
+    const running = newestEntry(
+      [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
+    );
+    return running ?? newestEntry(settledRuns);
+  };
+
+  const updateWorkflowWidget = () => {
+    const ctx = lastContext;
+    if (!ctx || ctx.mode !== "tui") return;
+    const visible = Boolean(stripEntry());
+    if (visible === widgetVisible) return;
+    if (!visible) {
+      stripState.focused = false;
+      requestWidgetRender = undefined;
+      ctx.ui.setWidget(widgetKey, undefined);
+      widgetVisible = false;
+      return;
+    }
+    ctx.ui.setWidget(
+      widgetKey,
+      (tui, theme) => {
+        requestWidgetRender = () => tui.requestRender();
+        return new WorkflowStripWidget(tui, theme, stripState, stripEntry);
+      },
+      { placement: "belowEditor" },
+    );
+    widgetVisible = true;
+  };
+
   const updateIndicator = () => {
-    const ui = lastUi;
-    if (!ui) return;
+    const ctx = lastContext;
+    if (!ctx) return;
     try {
       const running = activeRuns.size;
       if (running === 0 && completedRuns === 0 && failedRuns === 0) {
-        ui.setStatus("workflows", undefined);
-        return;
+        ctx.ui.setStatus("workflows", undefined);
+      } else {
+        ctx.ui.setStatus(
+          "workflows",
+          formatActivityStatus(ctx.ui.theme, "workflows", {
+            running,
+            done: completedRuns,
+            failed: failedRuns,
+          }),
+        );
       }
-      ui.setStatus(
-        "workflows",
-        formatActivityStatus(ui.theme, "workflows", {
-          running,
-          done: completedRuns,
-          failed: failedRuns,
-        }),
-      );
+      updateWorkflowWidget();
     } catch {
       // UI may be unavailable.
     }
   };
 
-  const recordSettledRun = (status: WorkflowDetails["status"]) => {
-    if (status === "completed") completedRuns += 1;
+  const acknowledgeSettledRuns = () => {
+    completedRuns = 0;
+    failedRuns = 0;
+    settledRuns.clear();
+  };
+
+  const recordSettledRun = (details: WorkflowDetails) => {
+    settledRuns.set(details.runId, details);
+    if (details.status === "completed") completedRuns += 1;
     else failedRuns += 1;
   };
 
+  const stopRun = (runId: string) => {
+    const run = activeRuns.get(runId);
+    if (!run || run.details.status !== "running") return false;
+    run.controller.abort("Stopped by user");
+    return true;
+  };
+
+  const openDashboard = async (
+    ctx: ExtensionContext,
+    initialRunId?: string,
+    startedSince = turnStartedAt,
+  ) => {
+    if (dashboardOpen || ctx.mode !== "tui") return;
+    dashboardOpen = true;
+    stripState.focused = false;
+    try {
+      await showWorkflowDashboard(
+        ctx,
+        activeDetails,
+        initialRunId,
+        startedSince,
+        stopRun,
+      );
+      acknowledgeSettledRuns();
+    } finally {
+      dashboardOpen = false;
+      updateIndicator();
+    }
+  };
+
+  const installWorkflowNavigation = (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui") return;
+    const previous = ctx.ui.getEditorComponent();
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      const base =
+        previous?.(tui, theme, keybindings) ??
+        new CustomEditor(tui, theme, keybindings);
+      return new WorkflowNavigationEditor(
+        base,
+        keybindings,
+        stripState,
+        () => Boolean(stripEntry()),
+        () => {
+          const entry = stripEntry();
+          if (entry) void openDashboard(ctx, entry.runId);
+        },
+        () => {
+          requestWidgetRender?.();
+          tui.requestRender();
+        },
+      );
+    });
+  };
+
   pi.on("session_start", (_event, ctx) => {
-    if (ctx.hasUI) lastUi = ctx.ui;
+    if (ctx.hasUI) lastContext = ctx;
     turnStartedAt = 0;
     completedRuns = 0;
     failedRuns = 0;
+    settledRuns.clear();
+    installWorkflowNavigation(ctx);
     updateIndicator();
   });
 
   pi.on("input", (event) => {
     if (event.source === "extension") return;
     turnStartedAt = Date.now();
-    if (completedRuns === 0 && failedRuns === 0) return;
-    completedRuns = 0;
-    failedRuns = 0;
+    acknowledgeSettledRuns();
     updateIndicator();
   });
 
@@ -338,8 +456,16 @@ export default function workflows(pi: ExtensionAPI) {
       await Promise.race([Promise.allSettled(completions), timeout]);
       if (timer) clearTimeout(timer);
     }
-    lastUi?.setStatus("workflows", undefined);
-    lastUi = undefined;
+    try {
+      lastContext?.ui.setStatus("workflows", undefined);
+      lastContext?.ui.setWidget(widgetKey, undefined);
+    } catch {
+      // UI may already be disposed.
+    }
+    lastContext = undefined;
+    widgetVisible = false;
+    requestWidgetRender = undefined;
+    stripState.focused = false;
   });
 
   pi.registerCommand("workflows", {
@@ -371,23 +497,8 @@ export default function workflows(pi: ExtensionAPI) {
       // An explicit run id is a deliberate lookup, so it reaches session history.
       const startedSince = arg ? 0 : turnStartedAt;
       if (ctx.mode === "tui") {
-        lastUi = ctx.ui;
-        await showWorkflowDashboard(
-          ctx,
-          activeDetails,
-          arg || undefined,
-          startedSince,
-          (runId) => {
-            const run = activeRuns.get(runId);
-            if (!run || run.details.status !== "running") return false;
-            run.controller.abort("Stopped by user");
-            return true;
-          },
-        );
-        // Opening the dashboard acknowledges finished runs.
-        completedRuns = 0;
-        failedRuns = 0;
-        updateIndicator();
+        lastContext = ctx;
+        await openDashboard(ctx, arg || undefined, startedSince);
         return;
       }
       // Non-TUI fallback: plain text listing.
@@ -744,7 +855,7 @@ export default function workflows(pi: ExtensionAPI) {
       activeRuns.set(runId, activeRun);
       const completion = runScript();
       activeRun.completion = completion;
-      if (ctx.hasUI) lastUi = ctx.ui;
+      if (ctx.hasUI) lastContext = ctx;
       updateIndicator();
 
       if (background) {
@@ -756,7 +867,7 @@ export default function workflows(pi: ExtensionAPI) {
           })
           .finally(() => {
             activeRuns.delete(runId);
-            recordSettledRun(details.status);
+            recordSettledRun(details);
             updateIndicator();
             try {
               pi.sendUserMessage(
@@ -790,7 +901,7 @@ export default function workflows(pi: ExtensionAPI) {
         await completion;
       } finally {
         activeRuns.delete(runId);
-        recordSettledRun(details.status);
+        recordSettledRun(details);
         updateIndicator();
       }
       if (details.status !== "completed") {

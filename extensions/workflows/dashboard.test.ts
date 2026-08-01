@@ -3,13 +3,15 @@ import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { WorkflowDetails } from "./model.ts";
+import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import type { TUI } from "@earendil-works/pi-tui";
+import type { Theme, WorkflowDetails } from "./model.ts";
 
 // runsDir() resolves against getAgentDir(), which reads this env var.
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-workflows-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
-const { loadRunEntries } = await import("./dashboard.ts");
+const { loadRunEntries, WorkflowDashboard } = await import("./dashboard.ts");
 
 const SESSION = "session-1";
 
@@ -82,4 +84,90 @@ test("a background run that settles during this request is reported by it", () =
     (entry) => entry.runId,
   );
   assert.ok(runIds.includes("wf_spanning"));
+});
+
+test("direct workflow navigation drills right and returns left through every level", () => {
+  writeRun("wf_navigation", Date.now() - 1_000);
+  const details: WorkflowDetails = {
+    runId: "wf_navigation",
+    sessionId: SESSION,
+    name: "navigation",
+    description: "Exercise phase navigation",
+    background: true,
+    status: "running",
+    startedAt: Date.now() - 1_000,
+    phases: [{ title: "Draft" }, { title: "Review" }],
+    currentPhase: "Draft",
+    agents: [
+      {
+        index: 1,
+        label: "writer",
+        phase: "Draft",
+        state: "running",
+        startedAt: Date.now() - 900,
+        preview: "",
+        usage: {
+          input: 10,
+          output: 5,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [{ role: "user", text: "Write the draft" }],
+      },
+    ],
+  };
+  let closed = 0;
+  const tui = {
+    terminal: { rows: 30 },
+    requestRender() {},
+  } as unknown as TUI;
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const keys = {
+    matches(data: string, binding: string) {
+      return data === binding.replace("tui.editor.cursor", "").toLowerCase();
+    },
+    getKeys(binding: string) {
+      const key = binding.split(".").at(-1) ?? binding;
+      return [key.toLowerCase()];
+    },
+  } as unknown as KeybindingsManager;
+  const dashboard = new WorkflowDashboard(
+    tui,
+    theme,
+    keys,
+    () => new Map([[details.runId, details]]),
+    SESSION,
+    new Set(),
+    0,
+    () => {
+      closed += 1;
+    },
+    details.runId,
+  );
+
+  try {
+    assert.match(dashboard.render(120).join("\n"), /Phases/);
+
+    dashboard.handleInput("right");
+    assert.match(dashboard.render(120).at(-1) ?? "", /select agent/);
+
+    dashboard.handleInput("right");
+    assert.match(dashboard.render(120).join("\n"), /Transcript/);
+
+    dashboard.handleInput("left");
+    assert.match(dashboard.render(120).at(-1) ?? "", /select agent/);
+
+    dashboard.handleInput("left");
+    assert.match(dashboard.render(120).at(-1) ?? "", /select phase/);
+
+    dashboard.handleInput("left");
+    assert.equal(closed, 1);
+  } finally {
+    dashboard.dispose();
+  }
 });
