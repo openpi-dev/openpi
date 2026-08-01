@@ -1006,7 +1006,10 @@ async function showSessionPicker(
           const currentLayout = getSessionPaneLayout(
             tui.terminal?.columns ?? 80,
           );
-          if (currentLayout.mode === "split") {
+          if (currentLayout.mode === "split" && focus === "preview") {
+            // t/h toggle the preview's tool/thinking visibility. They only
+            // belong to the preview pane; when the list is focused they must
+            // fall through to the filter (so queries containing t/h work).
             if (data === "t") {
               toolsExpanded = !toolsExpanded;
               previewScrollOffset = 0;
@@ -1020,41 +1023,39 @@ async function showSessionPicker(
               return;
             }
 
-            if (focus === "preview") {
-              const pageSize = Math.max(4, (tui.terminal?.rows ?? 24) - 4);
-              if (
-                matchesKey(data, Key.pageDown) ||
-                matchesKey(data, Key.ctrl("d"))
-              ) {
-                previewScrollOffset += pageSize;
-                tui.requestRender();
-                return;
-              }
-              if (
-                matchesKey(data, Key.pageUp) ||
-                matchesKey(data, Key.ctrl("u"))
-              ) {
-                previewScrollOffset = Math.max(
-                  0,
-                  previewScrollOffset - pageSize,
-                );
-                tui.requestRender();
-                return;
-              }
-              if (
-                matchesKey(data, Key.down) ||
-                matchesKey(data, Key.ctrl("j"))
-              ) {
-                previewScrollOffset++;
-                tui.requestRender();
-                return;
-              }
-              if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("k"))) {
-                previewScrollOffset = Math.max(0, previewScrollOffset - 1);
-                tui.requestRender();
-                return;
-              }
+            const pageSize = Math.max(4, (tui.terminal?.rows ?? 24) - 4);
+            if (
+              matchesKey(data, Key.pageDown) ||
+              matchesKey(data, Key.ctrl("d"))
+            ) {
+              previewScrollOffset += pageSize;
+              tui.requestRender();
+              return;
             }
+            if (
+              matchesKey(data, Key.pageUp) ||
+              matchesKey(data, Key.ctrl("u"))
+            ) {
+              previewScrollOffset = Math.max(0, previewScrollOffset - pageSize);
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.down) || matchesKey(data, Key.ctrl("j"))) {
+              previewScrollOffset++;
+              tui.requestRender();
+              return;
+            }
+            if (matchesKey(data, Key.up) || matchesKey(data, Key.ctrl("k"))) {
+              previewScrollOffset = Math.max(0, previewScrollOffset - 1);
+              tui.requestRender();
+              return;
+            }
+            // Selection keys must work regardless of which pane has focus, so a
+            // user who scrolled the preview can still press Enter to open the
+            // highlighted session or Escape to cancel without tabbing back.
+            selectList.handleInput(data);
+            tui.requestRender();
+            return;
           }
 
           if (focus === "list") {
