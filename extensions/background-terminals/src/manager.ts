@@ -140,6 +140,15 @@ export interface TerminalReadModel {
   subscribe(listener: () => void): () => void;
   /** Per-terminal notification (/ps detail view). */
   subscribeTo(id: string, listener: () => void): () => void;
+  /**
+   * Per-terminal raw output chunks, for bg_watch's mid-run matching. Separate
+   * from subscribeTo: that fires on any change and carries no payload, while a
+   * watcher needs the actual bytes as they stream.
+   */
+  subscribeToChunks(
+    id: string,
+    listener: (chunk: string, stream: "stdout" | "stderr") => void,
+  ): () => void;
   /** Fire-and-forget kill (dashboard/detail `x`). Not marked consumed: the
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
@@ -294,6 +303,11 @@ const makeManager = Effect.gen(function* () {
   const killInterest = new Map<string, number>();
   const listeners = new Set<() => void>();
   const idListeners = new Map<string, Set<() => void>>();
+  /** bg_watch chunk listeners, keyed by terminal id. */
+  const chunkListeners = new Map<
+    string,
+    Set<(chunk: string, stream: "stdout" | "stderr") => void>
+  >();
   let counter = 0;
   let reserved = 0;
   let disposed = false;
@@ -316,6 +330,26 @@ const makeManager = Effect.gen(function* () {
         } catch {
           // Same.
         }
+      }
+    }
+  };
+
+  /**
+   * Fan out a raw output chunk to bg_watch listeners. Purely additive next to
+   * notify(): a throwing watcher must never corrupt stream/lifecycle state.
+   */
+  const emitChunk = (
+    id: string,
+    chunk: string,
+    stream: "stdout" | "stderr",
+  ) => {
+    const set = chunkListeners.get(id);
+    if (!set) return;
+    for (const listener of [...set]) {
+      try {
+        listener(chunk, stream);
+      } catch {
+        // A failed watcher must not break output capture.
       }
     }
   };
@@ -660,11 +694,13 @@ const makeManager = Effect.gen(function* () {
         child.stdout?.on("data", (chunk: string) => {
           if (!stdoutBuf.push(chunk)) child.stdout?.pause();
           notify(id);
+          emitChunk(id, chunk, "stdout");
         });
         child.stderr?.setEncoding("utf8");
         child.stderr?.on("data", (chunk: string) => {
           if (!stderrBuf.push(chunk)) child.stderr?.pause();
           notify(id);
+          emitChunk(id, chunk, "stderr");
         });
         // Spawn failures (ENOENT etc.) arrive via 'error', not a throw. Node
         // still emits 'close' afterwards (with a bogus errno as code), so
@@ -907,6 +943,18 @@ const makeManager = Effect.gen(function* () {
       return () => {
         set.delete(listener);
         if (set.size === 0) idListeners.delete(id);
+      };
+    },
+    subscribeToChunks: (id, listener) => {
+      let set = chunkListeners.get(id);
+      if (!set) {
+        set = new Set();
+        chunkListeners.set(id, set);
+      }
+      set.add(listener);
+      return () => {
+        set.delete(listener);
+        if (set.size === 0) chunkListeners.delete(id);
       };
     },
     requestKill: (id) => {

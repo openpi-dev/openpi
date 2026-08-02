@@ -71,6 +71,41 @@ export const BG_KILL_PARAMETER_DESCRIPTIONS = {
   ids: 'Terminal ids to stop, e.g. ["bt-1"]',
 };
 
+/** Describes mid-run output watching, including the failure-coverage rule. */
+export const BG_WATCH_TOOL_DESCRIPTION =
+  'Wake yourself when a running background terminal\'s output matches a pattern, instead of waiting for it to exit. Use this for a process that does not exit on its own — a dev server printing "Ready", a watcher rebuilding, a long job logging progress — so you are notified mid-run rather than polling bg_status. A watch is one-shot: it fires once, then disarms. IMPORTANT: silence is not success — your pattern must also cover the ways the process can FAIL, or a crash looks identical to still-working. Prefer an alternation like "Ready in|Traceback|ERROR|FAILED|Killed". Exiting processes already notify you automatically, so do not add a watch just for completion.';
+
+/** Model-facing schema descriptions for the watch target and pattern. */
+export const BG_WATCH_PARAMETER_DESCRIPTIONS = {
+  id: 'Running terminal id to watch, e.g. "bt-1"',
+  pattern:
+    'JavaScript regular expression matched against stdout and stderr as they stream. Cover failure signatures too, e.g. "Ready in|Traceback|ERROR|FAILED".',
+};
+
+/** Builds the bg_watch arm acknowledgement. */
+export function buildWatchArmedResult(options: {
+  id: string;
+  title: string;
+  pattern: string;
+}) {
+  return `Watching ${options.id} "${options.title}" for /${options.pattern}/. You'll get one message when it first matches (or when the terminal exits, as usual).`;
+}
+
+/** Builds the mid-run match notification delivered to the model. */
+export function buildWatchMatchMessage(options: {
+  id: string;
+  title: string;
+  pattern: string;
+  stream: "stdout" | "stderr";
+  line: string;
+}) {
+  return (
+    `Background terminal ${options.id} "${options.title}" matched /${options.pattern}/ on ${options.stream}:\n\n` +
+    `${options.line}\n\n` +
+    "(The terminal is still running; this watch has disarmed. It will still notify you when it exits.)"
+  );
+}
+
 export function buildStartResult(snap: TerminalSnapshot) {
   return (
     `Started background terminal ${snap.id} "${snap.title}" (pid ${snap.pid ?? "?"}, ${snap.cwd}).\n` +

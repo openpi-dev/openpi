@@ -40,13 +40,18 @@ import {
   BG_START_TOOL_DESCRIPTION,
   BG_STATUS_PARAMETER_DESCRIPTIONS,
   BG_STATUS_TOOL_DESCRIPTION,
+  BG_WATCH_PARAMETER_DESCRIPTIONS,
+  BG_WATCH_TOOL_DESCRIPTION,
   buildKillReport,
   buildStartResult,
   buildStatusResult,
   buildTerminalResultMessage,
+  buildWatchArmedResult,
+  buildWatchMatchMessage,
   describeTerminal,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { compileWatchPattern, createChunkMatcher } from "./src/watch.ts";
 import {
   createTerminalRuntime,
   runTool,
@@ -64,6 +69,8 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  /** Active bg_watch disarm callbacks, keyed by terminal id (one per id). */
+  const watchers = new Map<string, () => void>();
 
   const getRuntime = () => (runtime ??= createTerminalRuntime());
 
@@ -153,6 +160,10 @@ export default function (pi: ExtensionAPI) {
   };
 
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
+    // A settled terminal has delivered its final result and will emit no more
+    // output, so any watch armed on it can never match — disarm it now instead
+    // of leaking the listener until session shutdown.
+    watchers.get(snap.id)?.();
     if (consumed) {
       // An in-flight bg_kill is returning this settlement itself.
       resultDelivery.consume([snap.id]);
@@ -186,6 +197,8 @@ export default function (pi: ExtensionAPI) {
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
     resultDelivery.clear();
+    for (const disarm of [...watchers.values()]) disarm();
+    watchers.clear();
     unsubStatus?.();
     unsubStatus = undefined;
     try {
@@ -373,6 +386,97 @@ export default function (pi: ExtensionAPI) {
             killed: entry.killed,
           })),
         },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "bg_watch",
+    label: "Watch Background Terminal",
+    description: BG_WATCH_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({ description: BG_WATCH_PARAMETER_DESCRIPTIONS.id }),
+      pattern: Type.String({
+        minLength: 1,
+        description: BG_WATCH_PARAMETER_DESCRIPTIONS.pattern,
+      }),
+    }),
+    async execute(_toolCallId, params) {
+      const manager = await getManager();
+      const snap = manager.view.get(params.id);
+      if (!snap) {
+        const known = manager.view.list().map((s) => s.id);
+        throw new Error(
+          `Unknown terminal id "${params.id}". Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+      if (snap.status !== "running") {
+        throw new Error(
+          `Terminal ${params.id} is already ${snap.status}; its result was delivered. Watches only apply to running terminals.`,
+        );
+      }
+      // Compiles the pattern eagerly so an invalid regex is a tool error the
+      // model can fix, not a silent no-op watch.
+      const regex = compileWatchPattern(params.pattern);
+      const matcher = createChunkMatcher(regex);
+
+      let unsubscribe: (() => void) | undefined;
+      const disarm = () => {
+        unsubscribe?.();
+        unsubscribe = undefined;
+        watchers.delete(params.id);
+      };
+      // Replace any previous watch on this terminal: one watch per terminal
+      // keeps the "one-shot" contract unambiguous.
+      watchers.get(params.id)?.();
+      unsubscribe = manager.view.subscribeToChunks(
+        params.id,
+        (chunk, stream) => {
+          const hit = matcher.push(chunk, stream);
+          if (!hit) return;
+          disarm();
+          const current = manager.view.get(params.id);
+          try {
+            pi.sendMessage(
+              {
+                // Distinct from background-terminal-result: a match is not a
+                // settlement and must never touch the settle de-dup map.
+                customType: "background-terminal-match",
+                content: buildWatchMatchMessage({
+                  id: params.id,
+                  title: current?.title ?? snap.title,
+                  pattern: params.pattern,
+                  stream: hit.stream,
+                  line: hit.line,
+                }),
+                display: true,
+                details: {
+                  id: params.id,
+                  pattern: params.pattern,
+                  stream: hit.stream,
+                },
+              },
+              { deliverAs: "followUp", triggerTurn: true },
+            );
+          } catch (error) {
+            console.error("background-terminals: watch delivery failed", error);
+          }
+        },
+      );
+      watchers.set(params.id, disarm);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: buildWatchArmedResult({
+              id: params.id,
+              title: snap.title,
+              pattern: params.pattern,
+            }),
+          },
+        ],
+        details: { id: params.id, pattern: params.pattern },
       };
     },
   });
