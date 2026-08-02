@@ -1,10 +1,10 @@
 import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 
-// Native Write/Edit renderings include their title and context rows. Five
-// visible rows leaves room for roughly three content/diff lines, matching the
-// compact scanability of Claude Code without hiding the operation itself.
-export const FILE_MUTATION_PREVIEW_LINES = 5;
+// Native Write/Edit renderings include their title and context rows. Three
+// visible rows keep the operation identifiable while making repeated file
+// mutations substantially quieter than Claude Code's default preview.
+export const FILE_MUTATION_PREVIEW_LINES = 3;
 
 export function compactRenderedComponent(
   component: Component,

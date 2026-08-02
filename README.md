@@ -184,7 +184,7 @@ subagent_spawn({
 - 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
-> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Write/Edit 的内容和 Diff 默认使用 Claude Code 风格的折叠预览：保留操作标题和约三行正文，并显示隐藏行数。两类结果都可通过 `/my-pi-setup` 选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
+> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Write/Edit 的内容和 Diff 默认使用比 Claude Code 更短的折叠预览：最多保留三行渲染内容（包含操作标题），并显示隐藏行数。两类结果都可通过 `/my-pi-setup` 选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
 
 ### 3. 动态 Multi-Agent Workflows
 
