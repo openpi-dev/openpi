@@ -54,7 +54,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
-    "- Result detail display: Subagent results and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Write/Edit defaults to compact. Recommend compact for users who do not usually inspect implementation details.",
+    "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Bash and Write/Edit default to compact. Recommend compact for users who do not usually inspect implementation details.",
     "",
     "Natural-language footer examples the user might ask for:",
     '- "switch footer to powerline" → ui_footer_preset=powerline',
@@ -160,6 +160,12 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "How completed Subagent results render by default: full preserves complete output; compact shows a bounded preview that can be expanded with app.tools.expand. Omit to preserve the current value.",
         }),
       ),
+      bash_tool_display: Type.Optional(
+        StringEnum(DETAIL_DISPLAYS, {
+          description:
+            "How Bash commands and output render by default: compact keeps a one-line command plus a bounded output preview with a hidden-line count and expands with app.tools.expand; full keeps every command expanded. Omit to preserve the current value.",
+        }),
+      ),
       file_mutation_display: Type.Optional(
         StringEnum(DETAIL_DISPLAYS, {
           description:
@@ -253,6 +259,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
             subagentResultDisplay:
               params.subagent_result_display ??
               current.ui.subagentResultDisplay,
+            bashToolDisplay:
+              params.bash_tool_display ?? current.ui.bashToolDisplay,
             fileMutationDisplay:
               params.file_mutation_display ?? current.ui.fileMutationDisplay,
           },

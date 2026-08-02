@@ -21,6 +21,7 @@ const defaultUi = {
   footerLines: DEFAULT_FOOTER_LINES,
   footerItems: DEFAULT_FOOTER_ITEMS,
   subagentResultDisplay: "full" as const,
+  bashToolDisplay: "compact" as const,
   fileMutationDisplay: "compact" as const,
 };
 
@@ -28,7 +29,7 @@ test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
+    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
   );
 });
 
@@ -57,7 +58,7 @@ test("setup config accepts model choices and drops malformed models", () => {
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
+    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
   );
 
   assert.deepEqual(
@@ -103,6 +104,7 @@ test("UI defaults to a compact header and one-line powerline footer", () => {
       footerLines: DEFAULT_FOOTER_LINES,
       footerItems: DEFAULT_FOOTER_ITEMS,
       subagentResultDisplay: "full",
+      bashToolDisplay: "compact",
       fileMutationDisplay: "compact",
     },
   );
@@ -115,6 +117,14 @@ test("UI defaults to a compact header and one-line powerline footer", () => {
     parseSetupConfig({ ui: { subagentResultDisplay: "unknown" } }).ui
       .subagentResultDisplay,
     "full",
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { bashToolDisplay: "full" } }).ui.bashToolDisplay,
+    "full",
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { bashToolDisplay: "unknown" } }).ui.bashToolDisplay,
+    "compact",
   );
   assert.equal(
     parseSetupConfig({ ui: { fileMutationDisplay: "full" } }).ui

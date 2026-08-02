@@ -122,6 +122,7 @@ export interface MyPiSetupConfig {
     readonly footerLines: FooterLines;
     readonly footerItems: readonly FooterItem[];
     readonly subagentResultDisplay: DetailDisplay;
+    readonly bashToolDisplay: DetailDisplay;
     readonly fileMutationDisplay: DetailDisplay;
   };
 }
@@ -139,6 +140,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     footerLines: DEFAULT_FOOTER_LINES,
     footerItems: DEFAULT_FOOTER_ITEMS,
     subagentResultDisplay: "full",
+    bashToolDisplay: "compact",
     fileMutationDisplay: "compact",
   },
 };
@@ -388,6 +390,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       )
         ? (ui.subagentResultDisplay as DetailDisplay)
         : "full",
+      bashToolDisplay: DETAIL_DISPLAYS.includes(
+        ui.bashToolDisplay as DetailDisplay,
+      )
+        ? (ui.bashToolDisplay as DetailDisplay)
+        : "compact",
       fileMutationDisplay: DETAIL_DISPLAYS.includes(
         ui.fileMutationDisplay as DetailDisplay,
       )
@@ -479,6 +486,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
+    `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
   ].join("\n");
 }

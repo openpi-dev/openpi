@@ -47,16 +47,38 @@ async function withSession(
   }
 }
 
-test("overrides rendering while retaining native Write/Edit execution", async () => {
+test("overrides rendering while retaining native Bash/Write/Edit execution", async () => {
   await withSession(async (session, cwd) => {
+    const bash = session.getToolDefinition("bash");
     const write = session.getToolDefinition("write");
     const edit = session.getToolDefinition("edit");
+    assert.ok(bash?.renderCall);
+    assert.ok(bash?.renderResult);
     assert.ok(write?.renderCall);
     assert.ok(edit?.renderCall);
+    assert.match(bash?.description ?? "", /Execute a bash command/);
     assert.match(write?.description ?? "", /Creates the file/);
     assert.match(edit?.description ?? "", /exact text replacement/);
 
-    const ctx = { cwd } as ExtensionContext;
+    const ctx = {
+      cwd,
+      sessionManager: {
+        getSessionId: () => "session-test",
+        getSessionFile: () => undefined,
+      },
+    } as unknown as ExtensionContext;
+    const bashResult = await bash!.execute(
+      "bash-1",
+      { command: "printf native-bash" },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.equal(bashResult.content[0]?.type, "text");
+    assert.match(
+      bashResult.content[0]?.type === "text" ? bashResult.content[0].text : "",
+      /native-bash/,
+    );
     await write!.execute(
       "write-1",
       { path: "fixture.txt", content: "before\n" },

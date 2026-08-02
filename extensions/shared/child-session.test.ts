@@ -324,14 +324,18 @@ async function discoverRegisteredToolNames() {
 /**
  * Factory-registered tools the scan cannot name-resolve, mapped to the tool
  * name they actually register, with the classification they carry. write/edit
- * are native Pi builtins (children keep them), wrapped only for a compact
- * renderer — not package-owned parent-only tools. Any NEW factory registration
+ * are native Pi builtins (children keep them), wrapped only for compact
+ * renderers — not package-owned parent-only tools. Any NEW factory registration
  * must be added here (with its classification) or the drift guard fails closed.
  */
 const KNOWN_FACTORY_TOOLS: Record<
   string,
   { tool: string; classification: "child-safe-builtin" | "excluded" }
 > = {
+  "createBashToolDefinition(...)": {
+    tool: "bash",
+    classification: "child-safe-builtin",
+  },
   "createWriteToolDefinition(...)": {
     tool: "write",
     classification: "child-safe-builtin",
@@ -380,9 +384,12 @@ test("every registered package tool is classified child-safe or excluded (fail-c
       );
     }
   }
-  // The write/edit builtins are what motivated this branch; assert the scan
-  // actually saw their factory registrations so this coverage cannot silently
-  // regress to zero.
+  // The wrapped builtins are what motivated this branch; assert the scan saw
+  // every factory registration so this coverage cannot silently regress.
+  assert.ok(
+    factoryRegistrations.some((r) => r.includes("createBashToolDefinition")),
+    "scan should see the factory-registered bash builtin",
+  );
   assert.ok(
     factoryRegistrations.some((r) => r.includes("createWriteToolDefinition")),
     "scan should see the factory-registered write builtin",
