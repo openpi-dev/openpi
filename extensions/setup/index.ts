@@ -14,6 +14,7 @@ import {
   updateSetupConfig,
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
+  POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
   SETUP_CONFIG_CHANGED_CHANNEL,
   type FooterLayoutItem,
@@ -54,6 +55,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
+    "- Post-edit command: one optional shell command run in the background after a turn that changed files (e.g. `npm run format`). Off by default, interactive sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Bash and Write/Edit default to compact. Recommend compact for users who do not usually inspect implementation details.",
     "",
     "Natural-language footer examples the user might ask for:",
@@ -172,6 +174,13 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "How Write/Edit content and diffs render by default: compact shows a Claude Code-style folded preview with a hidden-line count and expands with app.tools.expand; full keeps every operation expanded. Omit to preserve the current value.",
         }),
       ),
+      post_edit_command: Type.Optional(
+        Type.String({
+          maxLength: POST_EDIT_COMMAND_MAX_CHARS,
+          description:
+            'A single shell command to run in a background terminal after a turn that changed files, e.g. "npm run format". Runs once per turn, not per edit, and only in an interactive session. Set to an empty string to turn it off. Omit to preserve the current value.',
+        }),
+      ),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const modelFields = [
@@ -263,6 +272,12 @@ export default function myPiSetup(pi: ExtensionAPI) {
               params.bash_tool_display ?? current.ui.bashToolDisplay,
             fileMutationDisplay:
               params.file_mutation_display ?? current.ui.fileMutationDisplay,
+          },
+          postEdit: {
+            command:
+              params.post_edit_command !== undefined
+                ? params.post_edit_command.trim()
+                : current.postEdit.command,
           },
         };
         return config;

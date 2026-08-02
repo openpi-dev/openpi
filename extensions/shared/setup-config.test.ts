@@ -80,3 +80,24 @@ test("a stored value that had to be normalized is reported, not hidden", async (
   );
   assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
 });
+
+test("the post-edit command is off by default, trimmed, and length-bounded", () => {
+  // Off by default: nothing executes until the user configures a command.
+  assert.equal(DEFAULT_SETUP_CONFIG.postEdit.command, "");
+
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ postEdit: { command: "  npm run format  " } }),
+  );
+  assert.equal(loadSetupConfig().postEdit.command, "npm run format");
+
+  // A malformed block degrades to off rather than to something executable.
+  writeFileSync(SETUP_CONFIG_PATH, JSON.stringify({ postEdit: 42 }));
+  assert.equal(loadSetupConfig().postEdit.command, "");
+
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ postEdit: { command: "x".repeat(900) } }),
+  );
+  assert.equal(loadSetupConfig().postEdit.command.length, 500);
+});

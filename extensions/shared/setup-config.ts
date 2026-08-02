@@ -102,6 +102,8 @@ export const DEFAULT_WORKFLOW_CONCURRENCY = 8;
 export const DEFAULT_WORKFLOW_MAX_AGENT_CALLS = 128;
 export const MAX_WORKFLOW_CONCURRENCY = 64;
 export const MAX_WORKFLOW_AGENT_CALLS = 1_024;
+/** Bound on the single post-edit command string. */
+export const POST_EDIT_COMMAND_MAX_CHARS = 500;
 
 export const SETUP_CONFIG_CHANGED_CHANNEL = "my-pi-setup:config-changed";
 
@@ -125,6 +127,14 @@ export interface MyPiSetupConfig {
     readonly bashToolDisplay: DetailDisplay;
     readonly fileMutationDisplay: DetailDisplay;
   };
+  /**
+   * One optional command run after a turn that touched files. Deliberately a
+   * single command, not an event-hook engine: the trust surface stays one
+   * user-typed string, and it is off (empty) by default.
+   */
+  readonly postEdit: {
+    readonly command: string;
+  };
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
@@ -143,6 +153,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     bashToolDisplay: "compact",
     fileMutationDisplay: "compact",
   },
+  postEdit: { command: "" },
 };
 
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
@@ -401,7 +412,16 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         ? (ui.fileMutationDisplay as DetailDisplay)
         : "compact",
     },
+    postEdit: { command: parsePostEditCommand(value.postEdit) },
   };
+}
+
+/** An empty or invalid value disables the post-edit command (the safe default). */
+function parsePostEditCommand(value: unknown) {
+  if (!isRecord(value)) return "";
+  return typeof value.command === "string"
+    ? value.command.trim().slice(0, POST_EDIT_COMMAND_MAX_CHARS)
+    : "";
 }
 
 export function hasSavedSetupConfig() {
@@ -488,6 +508,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
+    `Post-edit command: ${config.postEdit.command ? config.postEdit.command : "off"}`,
   ].join("\n");
 }
 

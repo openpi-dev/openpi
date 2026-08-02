@@ -29,7 +29,7 @@ test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
+    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off`,
   );
 });
 
@@ -55,10 +55,11 @@ test("setup config accepts model choices and drops malformed models", () => {
     },
     workflows: { concurrency: 8, maxAgentCalls: 128 },
     ui: defaultUi,
+    postEdit: { command: "" },
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)`,
+    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off`,
   );
 
   assert.deepEqual(
@@ -72,6 +73,7 @@ test("setup config accepts model choices and drops malformed models", () => {
       summaries: { enabled: false },
       workflows: { concurrency: 8, maxAgentCalls: 128 },
       ui: defaultUi,
+      postEdit: { command: "" },
     },
   );
 });
