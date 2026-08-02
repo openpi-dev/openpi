@@ -212,7 +212,7 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 - `agent()` 启动隔离的 Pi Agent；
 - `parallel()` 控制并发 fan-out；
 - JSON Schema 提供结构化结果；
-- 前台运行可实时查看，后台运行结束后自动通知；
+- 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
@@ -531,7 +531,7 @@ pi install ~/work/my-pi-setup
 | --------------------------------------------------------------------------------------- | ------------------------------------- |
 | `bg_start`, `bg_status`, `bg_list`, `bg_kill`                                           | 后台进程生命周期                      |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
-| `workflow`                                                                              | 动态多阶段 Agent 编排                 |
+| `workflow`, `workflow_status`, `workflow_stop`                                          | 动态多阶段 Agent 编排与后台运行管理   |
 | `tasks_add`, `tasks_update`, `tasks_list`                                            | Session 持久任务                      |
 | `get_goal`, `create_goal`, `update_goal`                                                | 读取、创建或完成/阻塞 Session Goal    |
 | `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
