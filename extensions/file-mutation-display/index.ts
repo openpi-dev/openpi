@@ -27,6 +27,13 @@ function withCompactCallRenderer(
       ) {
         return component;
       }
+      // While the model is still streaming a large Write/Edit payload, a
+      // syntax-highlighted preview changes on nearly every token and makes the
+      // entire tool block flash. Keep that phase to a stable one-line header;
+      // reveal the bounded preview once arguments are complete.
+      if (!context.argsComplete) {
+        return singleLineRenderedComponent(component, theme);
+      }
       const background = context.isPartial
         ? (text: string) => theme.bg("toolPendingBg", text)
         : context.isError

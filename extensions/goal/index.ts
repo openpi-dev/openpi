@@ -163,11 +163,13 @@ export default function sessionGoal(pi: ExtensionAPI) {
     renderCall(_args, theme) {
       return new Text(theme.fg("toolTitle", theme.bold("get_goal")), 0, 0);
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       return renderGoalTool(
         result.details as GoalToolDetails | undefined,
         options.expanded,
         theme,
+        (text) =>
+          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text),
       );
     },
   });
@@ -223,11 +225,13 @@ export default function sessionGoal(pi: ExtensionAPI) {
         0,
       );
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       return renderGoalTool(
         result.details as GoalToolDetails | undefined,
         options.expanded,
         theme,
+        (text) =>
+          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text),
       );
     },
   });
@@ -287,11 +291,13 @@ export default function sessionGoal(pi: ExtensionAPI) {
         0,
       );
     },
-    renderResult(result, options, theme) {
+    renderResult(result, options, theme, context) {
       return renderGoalTool(
         result.details as GoalToolDetails | undefined,
         options.expanded,
         theme,
+        (text) =>
+          theme.bg(context.isError ? "toolErrorBg" : "toolSuccessBg", text),
       );
     },
   });

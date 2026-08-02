@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   acknowledgeGoalCompletion,
   createGoalSnapshot,
@@ -10,6 +11,7 @@ import {
   formatTokensCompact,
   goalContinuationLabel,
   goalFooterText,
+  renderGoalTool,
 } from "./ui.ts";
 
 const goal = {
@@ -70,6 +72,23 @@ test("footer never exposes the objective or legacy turn counters", () => {
   );
   assert.equal(goalFooterText(goal).includes(goal.objective), false);
   assert.equal(goalFooterText(goal).includes("turn"), false);
+});
+
+test("goal tool result paints every row through the supplied status background", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const rendered = renderGoalTool(
+    { goal, message: "created" },
+    false,
+    theme,
+    (text) => `<green>${text}</green>`,
+  ).render(80);
+
+  assert.equal(rendered.length, 3);
+  assert.ok(rendered.every((line) => line.startsWith("<green>")));
+  assert.ok(rendered.every((line) => line.endsWith("</green>")));
 });
 
 test("continuation rows are one-line labels and never reveal prompt bodies", () => {

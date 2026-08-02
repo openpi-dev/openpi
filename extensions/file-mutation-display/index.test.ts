@@ -6,11 +6,15 @@ import test from "node:test";
 import {
   createAgentSession,
   DefaultResourceLoader,
+  initTheme,
   SessionManager,
   SettingsManager,
   type ExtensionContext,
+  type Theme,
 } from "@earendil-works/pi-coding-agent";
 import fileMutationDisplay from "./index.ts";
+
+initTheme("dark", false);
 
 async function withSession(
   run: (
@@ -59,6 +63,48 @@ test("overrides rendering while retaining native Bash/Write/Edit execution", asy
     assert.match(bash?.description ?? "", /Execute a bash command/);
     assert.match(write?.description ?? "", /Creates the file/);
     assert.match(edit?.description ?? "", /exact text replacement/);
+
+    const renderWrite = write.renderCall;
+    assert.ok(renderWrite);
+    const identityTheme = new Proxy(
+      {},
+      {
+        get: (_target, property) =>
+          property === "fg" || property === "bg"
+            ? (_color: string, text: string) => text
+            : (text: string) => text,
+      },
+    ) as Theme;
+    const args = {
+      path: "large.ts",
+      content: Array.from({ length: 30 }, (_, index) => `line ${index}`).join(
+        "\n",
+      ),
+    };
+    const renderContext: Parameters<typeof renderWrite>[2] = {
+      args,
+      toolCallId: "write-render",
+      invalidate() {},
+      lastComponent: undefined,
+      state: {},
+      cwd,
+      executionStarted: false,
+      argsComplete: false,
+      isPartial: true,
+      expanded: false,
+      showImages: false,
+      isError: false,
+    };
+    assert.equal(
+      renderWrite(args, identityTheme, renderContext).render(100).length,
+      1,
+    );
+    assert.ok(
+      renderWrite(args, identityTheme, {
+        ...renderContext,
+        argsComplete: true,
+      }).render(100).length <= 4,
+    );
 
     const ctx = {
       cwd,

@@ -88,6 +88,7 @@ export function renderGoalTool(
   details: GoalToolDetails | undefined,
   expanded: boolean,
   theme: Theme,
+  background?: (text: string) => string,
 ) {
   if (!details?.goal) {
     return new Text(
@@ -111,7 +112,11 @@ export function renderGoalTool(
   if (expanded && goal.reason) {
     lines.push(theme.fg("dim", `Reason: ${goal.reason}`));
   }
-  return new Text(lines.join("\n"), 0, 0);
+  // ToolExecutionComponent normally paints the enclosing Box, but terminals
+  // can expose an unpainted suffix when a styled child line resets its own
+  // attributes. Painting each Goal result row as well makes the full-width
+  // status background deterministic; the enclosing Box still owns padding.
+  return new Text(lines.join("\n"), 0, 0, background);
 }
 
 export function statusColor(goal: GoalSnapshot) {
