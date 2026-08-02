@@ -55,12 +55,15 @@ import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
+  buildSubagentSendResult,
   buildSubagentSpawnResult,
   SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
   SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
@@ -600,6 +603,64 @@ export default function (pi: ExtensionAPI) {
             title: entry.title,
             status: entry.status,
           })),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_send",
+    label: "Send to Subagent",
+    description: SUBAGENT_SEND_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.id,
+      }),
+      text: Type.String({
+        description: SUBAGENT_SEND_PARAMETER_DESCRIPTIONS.text,
+      }),
+    }),
+    async execute(_toolCallId, params, signal) {
+      const manager = await getManager();
+      const snap = manager.view.get(params.id);
+      if (!snap || !isModelVisible(snap)) {
+        const known = manager.view
+          .list()
+          .filter(isModelVisible)
+          .map((s) => s.id);
+        throw new Error(
+          `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+      const text = params.text.trim();
+      if (!text) throw new Error("Provide a non-empty message.");
+
+      // Captured before the send: a settled subagent restarts, a running one
+      // is steered, and the result message must say which happened.
+      const wasRunning = snap.status === "running";
+      await runTool(getRuntime(), manager.send(params.id, text), {
+        signal,
+        interruptMessage: "Subagent send aborted.",
+      });
+      // A settled subagent may already have an undelivered result buffered;
+      // the restart supersedes it, so drop it and let the new run deliver.
+      resultDelivery.consume([params.id]);
+
+      return {
+        content: [
+          {
+            type: "text",
+            text: buildSubagentSendResult({
+              id: snap.id,
+              title: snap.title,
+              wasRunning,
+            }),
+          },
+        ],
+        details: {
+          id: snap.id,
+          title: snap.title,
+          status: manager.view.get(params.id)?.status ?? snap.status,
         },
       };
     },

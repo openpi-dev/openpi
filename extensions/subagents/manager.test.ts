@@ -264,6 +264,35 @@ test("idle restarts respect the concurrency cap", async () => {
   });
 });
 
+test("restarting a settled subagent settles again so its result re-delivers", async () => {
+  // subagent_send relies on this: the restart must re-fire onSettled with
+  // consumed=false, which is what re-delivers the new result to the parent.
+  await withManager(async (manager, runtime) => {
+    const settles: Array<{ id: string; consumed: boolean }> = [];
+    manager.view.setOnSettled((snap, consumed) =>
+      settles.push({ id: snap.id, consumed }),
+    );
+    const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+    // Let the first run settle on its own (unconsumed, as after a spawn).
+    while (manager.view.get(snap.id)?.status === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(settles.length, 1);
+    assert.equal(settles[0]?.consumed, false);
+
+    await runTool(runtime, manager.send(snap.id, "Second"));
+    while (manager.view.get(snap.id)?.status !== "running") {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    while (manager.view.get(snap.id)?.status === "running") {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    assert.equal(settles.length, 2);
+    assert.equal(settles[1]?.id, snap.id);
+    assert.equal(settles[1]?.consumed, false);
+  });
+});
+
 test("send steers an idle subagent into another turn", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

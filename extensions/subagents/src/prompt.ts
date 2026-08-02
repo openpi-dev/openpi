@@ -62,6 +62,27 @@ export const SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS = {
   ids: 'Subagent ids to cancel, e.g. ["sa-1", "sa-2"]',
 };
 
+/** Describes sending a follow-up to one subagent: steer a running one or restart a settled one. */
+export const SUBAGENT_SEND_TOOL_DESCRIPTION =
+  "Send a message to one subagent: steer a running one mid-run, or restart a finished/failed one for another turn with its transcript and context intact. Use this to correct course, add missing context, or ask a follow-up on the SAME subagent instead of cancelling and respawning it. Spawn a fresh subagent for unrelated work. Restarting a settled subagent re-occupies a running slot, so it fails when the concurrency cap is full — wait for one to finish first. The subagent still cannot see this conversation, so make the message self-contained. Its result is delivered back to you when it next settles, exactly like subagent_spawn.";
+
+/** Model-facing schema descriptions for the subagent id and follow-up message. */
+export const SUBAGENT_SEND_PARAMETER_DESCRIPTIONS = {
+  id: 'Subagent id to send to, e.g. "sa-1"',
+  text: "Message for the subagent: steering guidance for a running one, or the next instruction for a finished one. Must be self-contained — it cannot see this conversation.",
+};
+
+/** Builds the subagent_send result, distinguishing a live steer from a restart. */
+export function buildSubagentSendResult(options: {
+  id: string;
+  title: string;
+  wasRunning: boolean;
+}) {
+  return options.wasRunning
+    ? `Steered ${options.id} "${options.title}". It is queued into the active run; the result is delivered when it settles.`
+    : `Restarted ${options.id} "${options.title}" for another turn on its existing transcript. The result is delivered when it settles, or use subagent_wait(ids: ["${options.id}"]) to block for it.`;
+}
+
 /** Describes nonblocking inspection of a subagent without consuming its result. */
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
   "Peek at a subagent's status and recent activity without blocking. Does not consume its result.";
