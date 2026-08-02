@@ -479,7 +479,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
-    `Write/Edit details: ${config.ui.fileMutationDisplay === "full" ? "full by default" : "compact preview (expand for full diff/content)"}`,
+    `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
   ].join("\n");
 }
 

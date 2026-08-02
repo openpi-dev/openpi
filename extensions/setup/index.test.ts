@@ -36,7 +36,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /ui_footer_preset=powerline/);
   assert.match(message, /activity.*core status/);
   assert.match(message, /Result detail display/);
-  assert.match(message, /Write\/Edit.*default to compact/);
+  assert.match(message, /Write\/Edit.*defaults to compact/);
   assert.match(message, /Recommend compact/);
   assert.match(message, /call configure_my_pi_setup at most once/);
 });
