@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderTaskRows, renderTaskWidget, renderToolResult } from "./ui.ts";
+import {
+  renderTaskRows,
+  renderTaskWidget,
+  renderToolResult,
+  TASK_WIDGET_LIMIT,
+} from "./ui.ts";
 
 const theme = {
   fg: (_name: string, text: string) => text,
@@ -54,7 +59,7 @@ test("persistent task widget matches a compact Claude-style task panel", () => {
   assert.match(lines[0]!, /◆ Tasks\s+1\/3/);
   assert.match(lines[0]!, /2 remaining/);
   assert.match(lines[0]!, /\/tasks/);
-  assert.match(lines[0]!, /ctrl\+shift\+t hide/);
+  assert.doesNotMatch(lines[0]!, /ctrl\+shift\+t/);
   assert.match(lines[1]!, /T2 Implement task panel/);
   assert.match(lines[2]!, /T3 Verify rendering/);
   assert.equal(lines.join("\n").includes("Finished setup"), false);
@@ -86,6 +91,33 @@ test("persistent task widget matches a compact Claude-style task panel", () => {
     ),
     [],
   );
+});
+
+test("task widget defaults to four items and Ctrl+Shift+T view shows all", () => {
+  const snapshot = {
+    version: 1 as const,
+    revision: 1,
+    nextId: 7,
+    items: Array.from({ length: 6 }, (_, index) => ({
+      id: index + 1,
+      subject: `Task ${index + 1}`,
+      status: "pending" as const,
+    })),
+  };
+
+  const collapsed = renderTaskWidget(snapshot, theme, 100);
+  assert.equal(TASK_WIDGET_LIMIT, 4);
+  assert.equal(collapsed.length, 6);
+  assert.match(collapsed[0]!, /ctrl\+shift\+t show all/);
+  assert.match(collapsed[4]!, /T4 Task 4/);
+  assert.match(collapsed[5]!, /… 2 more tasks/);
+  assert.doesNotMatch(collapsed.join("\n"), /T5 Task 5/);
+
+  const expanded = renderTaskWidget(snapshot, theme, 100, true);
+  assert.equal(expanded.length, 7);
+  assert.match(expanded[0]!, /ctrl\+shift\+t collapse/);
+  assert.match(expanded[6]!, /T6 Task 6/);
+  assert.doesNotMatch(expanded.join("\n"), /more tasks/);
 });
 
 test("batch closure is visible in compact tool results", () => {

@@ -29,7 +29,7 @@ const TASK_WIDGET_ORDER: Record<TaskItem["status"], number> = {
   dropped: 4,
 };
 
-const TASK_WIDGET_LIMIT = 3;
+export const TASK_WIDGET_LIMIT = 4;
 
 export interface TaskToolDetails {
   action: "add" | "update" | "list";
@@ -94,6 +94,7 @@ export function renderTaskWidget(
   snapshot: TaskSnapshot,
   theme: Theme,
   width: number,
+  expanded = false,
 ) {
   const tracked = snapshot.items.filter((item) => item.status !== "dropped");
   const completed = tracked.filter((item) => item.status === "done").length;
@@ -107,16 +108,20 @@ export function renderTaskWidget(
   if (actionable.length === 0) return [];
 
   const remaining = actionable.length;
+  const hasOverflow = remaining > TASK_WIDGET_LIMIT;
+  const toggleHint = hasOverflow
+    ? `  ·  ctrl+shift+t ${expanded ? "collapse" : "show all"}`
+    : "";
   const header =
     theme.fg("accent", "◆ ") +
     theme.fg("text", theme.bold("Tasks")) +
     theme.fg("dim", "  ") +
     theme.fg("success", `${completed}/${tracked.length}`) +
-    theme.fg(
-      "dim",
-      `  ·  ${remaining} remaining  ·  /tasks  ·  ctrl+shift+t hide`,
-    );
-  const visible = actionable.slice(0, TASK_WIDGET_LIMIT);
+    theme.fg("dim", `  ·  ${remaining} remaining  ·  /tasks${toggleHint}`);
+  const visible = expanded
+    ? actionable
+    : actionable.slice(0, TASK_WIDGET_LIMIT);
+  const hidden = actionable.length - visible.length;
   const lines = [truncateToWidth(header, width)];
   for (const [index, item] of visible.entries()) {
     const color =
@@ -125,7 +130,7 @@ export function renderTaskWidget(
         : item.status === "blocked"
           ? "error"
           : "muted";
-    const branch = index === visible.length - 1 ? "╰─" : "├─";
+    const branch = index === visible.length - 1 && hidden === 0 ? "╰─" : "├─";
     lines.push(
       truncateToWidth(
         `${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg(item.status === "pending" ? "muted" : "text", item.subject)}`,
@@ -133,12 +138,9 @@ export function renderTaskWidget(
       ),
     );
   }
-  if (actionable.length > visible.length) {
+  if (hidden > 0) {
     lines.push(
-      truncateToWidth(
-        `   ${theme.fg("dim", `… ${actionable.length - visible.length} more tasks`)}`,
-        width,
-      ),
+      truncateToWidth(theme.fg("dim", `╰─ … ${hidden} more tasks`), width),
     );
   }
   return lines;

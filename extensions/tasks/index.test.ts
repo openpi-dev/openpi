@@ -80,7 +80,7 @@ function widgetHarness(
   };
 }
 
-test("persistent task widget restores, updates after tool mutations, and toggles", async () => {
+test("persistent task widget restores, updates, and expands all tasks", async () => {
   const h = widgetHarness([
     {
       type: "custom",
@@ -116,22 +116,32 @@ test("persistent task widget restores, updates after tool mutations, and toggles
   assert.match(completed.content[0]?.text ?? "", /batch closed/);
   assert.equal((completed as any).details.batchClosed, true);
 
-  await h.tools
-    .get("tasks_add")
-    .execute(
-      "a1",
-      { items: [{ subject: "Next task" }] },
-      undefined,
-      undefined,
-      h.ctx,
-    );
+  await h.tools.get("tasks_add").execute(
+    "a1",
+    {
+      items: Array.from({ length: 5 }, (_, index) => ({
+        subject: `Next task ${index + 1}`,
+      })),
+    },
+    undefined,
+    undefined,
+    h.ctx,
+  );
   assert.equal(typeof h.widgets.at(-1), "function");
   assert.equal(h.entries.at(-1)?.data.items[0]?.id, 1);
 
   await h.shortcut()?.(h.ctx);
-  assert.equal(h.widgets.at(-1), undefined);
+  assert.equal(typeof h.widgets.at(-1), "function");
+  assert.equal(
+    h.notifications.at(-1),
+    "Showing all 5 active tasks above the editor.",
+  );
   await h.shortcut()?.(h.ctx);
   assert.equal(typeof h.widgets.at(-1), "function");
+  assert.equal(
+    h.notifications.at(-1),
+    "Task panel collapsed to 4 active tasks.",
+  );
 
   h.setBranch([
     {

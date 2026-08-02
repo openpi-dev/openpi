@@ -23,6 +23,7 @@ import {
 } from "./tasks.ts";
 import {
   openTasksScreen,
+  TASK_WIDGET_LIMIT,
   renderTaskWidget,
   renderToolResult,
   type TaskToolDetails,
@@ -92,18 +93,21 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let frozenProjection = "";
   let notifiedProblem: string | undefined;
   let taskWidgetVisible = true;
+  let taskWidgetExpanded = false;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
   const snapshot = () => tasks.snapshot();
 
-  const hasActionableTasks = () =>
-    snapshot().items.some(
+  const actionableTaskCount = () =>
+    snapshot().items.filter(
       (item) =>
         item.status === "pending" ||
         item.status === "in_progress" ||
         item.status === "blocked",
-    );
+    ).length;
+
+  const hasActionableTasks = () => actionableTaskCount() > 0;
 
   const updateTaskWidget = (ctx?: ExtensionContext) => {
     if (ctx?.hasUI) {
@@ -119,7 +123,8 @@ export default function sessionTasks(pi: ExtensionAPI) {
       return false;
     }
     ui.setWidget(TASK_WIDGET_KEY, (_tui, theme) => ({
-      render: (width) => renderTaskWidget(current, theme, width),
+      render: (width) =>
+        renderTaskWidget(current, theme, width, taskWidgetExpanded),
       invalidate() {},
     }));
     return true;
@@ -377,6 +382,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
             : action === "hide"
               ? false
               : !taskWidgetVisible;
+        taskWidgetExpanded = false;
         const shown = updateTaskWidget(ctx);
         if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
         return;
@@ -386,16 +392,37 @@ export default function sessionTasks(pi: ExtensionAPI) {
   });
 
   pi.registerShortcut(Key.ctrlShift("t"), {
-    description: "Hide or show the persistent task panel",
+    description: "Show all active tasks above the editor, or collapse to four",
     handler: async (ctx) => {
       const problem = problemMessage();
       if (problem) {
         if (ctx.hasUI) ctx.ui.notify(problem, "warning");
         return;
       }
-      taskWidgetVisible = !taskWidgetVisible;
-      const shown = updateTaskWidget(ctx);
-      if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
+      const count = actionableTaskCount();
+      if (count === 0) {
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            "No active tasks to show. Use /tasks to inspect task history.",
+            "info",
+          );
+        }
+        return;
+      }
+      taskWidgetVisible = true;
+      taskWidgetExpanded =
+        count > TASK_WIDGET_LIMIT ? !taskWidgetExpanded : false;
+      updateTaskWidget(ctx);
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          count <= TASK_WIDGET_LIMIT
+            ? `All ${count} active task${count === 1 ? " is" : "s are"} already visible.`
+            : taskWidgetExpanded
+              ? `Showing all ${count} active tasks above the editor.`
+              : `Task panel collapsed to ${TASK_WIDGET_LIMIT} active tasks.`,
+          "info",
+        );
+      }
     },
   });
 
@@ -407,6 +434,8 @@ export default function sessionTasks(pi: ExtensionAPI) {
     coldRun = true;
     activeRun = false;
     frozenProjection = "";
+    taskWidgetVisible = true;
+    taskWidgetExpanded = false;
     registerTools();
     notifyProblem(ctx);
     updateTaskWidget(ctx);
@@ -414,6 +443,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   pi.on("session_tree", (_event, ctx) => {
     restore(ctx);
+    taskWidgetExpanded = false;
     coldRun = true;
     activeRun = false;
     frozenProjection = "";
