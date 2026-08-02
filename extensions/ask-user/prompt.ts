@@ -13,6 +13,8 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
     'Concise user-facing label. Put the recommended option first and suffix its label with "(Recommended)".',
   optionDescription:
     "One short sentence explaining the impact or tradeoff if selected",
+  optionPreview:
+    "Optional concrete artifact shown while this option is highlighted — a short code snippet, config, or ASCII layout the user can compare against the other options. Lines are shown as written (indentation preserved, no re-wrapping), so keep them narrow. Omit unless seeing the artifact genuinely changes the decision; the description already carries the tradeoff.",
   question: "A single-sentence question shown to the user",
   options:
     "Between 2 and 5 mutually exclusive choices. Never include an Other/custom option; the UI adds one automatically.",

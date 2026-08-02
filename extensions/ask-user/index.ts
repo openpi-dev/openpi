@@ -43,6 +43,12 @@ const OptionSchema = Type.Object({
     maxLength: 500,
     description: ASK_USER_PARAMETER_DESCRIPTIONS.optionDescription,
   }),
+  preview: Type.Optional(
+    Type.String({
+      maxLength: 2_000,
+      description: ASK_USER_PARAMETER_DESCRIPTIONS.optionPreview,
+    }),
+  ),
 });
 
 const QuestionSchema = Type.Object({
@@ -97,6 +103,8 @@ type EditMode = "notes" | "custom" | undefined;
 interface DisplayOption {
   label: string;
   description?: string;
+  /** Optional artifact shown while this option is highlighted. */
+  preview?: string;
   isOther?: boolean;
 }
 
@@ -361,6 +369,23 @@ export default function askUser(pi: ExtensionAPI) {
                   add(`      ${theme.fg("muted", line)}`);
                 }
               }
+            }
+
+            // Preview for the highlighted option: a concrete artifact the
+            // user compares against the other options. Rendered verbatim
+            // (indentation preserved, hard-truncated) because re-wrapping
+            // would destroy code and ASCII layouts.
+            const preview = currentOptions[optionIndex]?.preview;
+            if (preview) {
+              lines.push("");
+              add(theme.fg("muted", " ┌ preview"));
+              const inner = Math.max(10, width - 4);
+              for (const raw of preview.split("\n").slice(0, 20)) {
+                const line =
+                  raw.length > inner ? `${raw.slice(0, inner - 1)}…` : raw;
+                add(` ${theme.fg("muted", "│")} ${theme.fg("text", line)}`);
+              }
+              add(theme.fg("muted", " └"));
             }
 
             if (editMode) {
