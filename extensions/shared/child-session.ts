@@ -37,8 +37,10 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_cancel",
   "subagent_check",
   "subagent_list",
-  // workflows — children cannot recursively orchestrate
+  // workflows — children cannot recursively orchestrate or manage runs
   "workflow",
+  "workflow_stop",
+  "workflow_status",
   // ask-user — headless children have no user to ask
   "ask_user",
   // tasks — the parent session owns its work-intent ledger

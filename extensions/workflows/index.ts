@@ -65,9 +65,14 @@ import {
   buildBackgroundWorkflowLaunchResult,
   buildWorkflowAgentPrompt,
   buildWorkflowResultMessage,
+  WORKFLOW_LIFECYCLE_PROMPT_SNIPPET,
   WORKFLOW_PARAMETER_DESCRIPTIONS,
   WORKFLOW_PROMPT_GUIDELINES,
   WORKFLOW_PROMPT_SNIPPET,
+  WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS,
+  WORKFLOW_STATUS_TOOL_DESCRIPTION,
+  WORKFLOW_STOP_PARAMETER_DESCRIPTIONS,
+  WORKFLOW_STOP_TOOL_DESCRIPTION,
   WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import {
@@ -870,13 +875,22 @@ export default function workflows(pi: ExtensionAPI) {
             recordSettledRun(details);
             updateIndicator();
             try {
-              pi.sendUserMessage(
-                buildBackgroundWorkflowFollowUp({
-                  runId,
-                  status: details.status,
-                  result: buildWorkflowResultMessage(details, runDir),
-                }),
-                { deliverAs: "followUp" },
+              // Deliver like the subagent/terminal families: a custom-typed
+              // session message with a dedicated renderer, not a plain
+              // user-provenance turn.
+              pi.sendMessage(
+                {
+                  customType: "workflow-result",
+                  content: buildBackgroundWorkflowFollowUp({
+                    runId,
+                    name: details.name,
+                    status: details.status,
+                    result: buildWorkflowResultMessage(details, runDir),
+                  }),
+                  display: true,
+                  details: compactToolDetails(details),
+                },
+                { deliverAs: "followUp", triggerTurn: true },
               );
             } catch {
               // Session may be shutting down.
@@ -1048,4 +1062,163 @@ export default function workflows(pi: ExtensionAPI) {
       return container;
     },
   });
+
+  /** Resolve a run id (exact or suffix) to its details from live, settled, or disk. */
+  const resolveRunDetails = (target: string): WorkflowDetails | undefined => {
+    for (const [runId, run] of activeRuns) {
+      if (runId === target || runId.endsWith(target)) return run.details;
+    }
+    for (const [runId, details] of settledRuns) {
+      if (runId === target || runId.endsWith(target)) return details;
+    }
+    // Fall back to a persisted run this session may not still track in memory.
+    const base = path.join(getAgentDir(), "workflows");
+    let names: string[] = [];
+    try {
+      names = fs.readdirSync(base).filter((name) => name.startsWith("wf_"));
+    } catch {
+      return undefined;
+    }
+    const match = names.find((n) => n === target || n.endsWith(target));
+    if (!match) return undefined;
+    try {
+      const parsed = JSON.parse(
+        fs.readFileSync(path.join(base, match, "workflow.json"), "utf8"),
+      ) as WorkflowDetails;
+      // A run absent from activeRuns cannot still be running this session; a
+      // persisted "running" is a run that was hard-killed or missed the
+      // shutdown settle deadline. Normalize it to "aborted" so this detail path
+      // agrees with listRuns and with workflow_stop (which reports it stopped).
+      if (parsed.status === "running") {
+        return { ...parsed, status: "aborted" };
+      }
+      return parsed;
+    } catch {
+      return undefined;
+    }
+  };
+
+  pi.registerTool({
+    name: "workflow_stop",
+    label: "Stop Workflow",
+    description: WORKFLOW_STOP_TOOL_DESCRIPTION,
+    promptSnippet: WORKFLOW_LIFECYCLE_PROMPT_SNIPPET,
+    parameters: Type.Object({
+      runId: Type.String({
+        description: WORKFLOW_STOP_PARAMETER_DESCRIPTIONS.runId,
+      }),
+    }),
+    execute(_toolCallId, params) {
+      const entry = [...activeRuns.entries()].find(
+        ([runId, run]) =>
+          (runId === params.runId || runId.endsWith(params.runId)) &&
+          run.details.status === "running",
+      );
+      if (!entry) {
+        const running = [...activeRuns.keys()];
+        throw new Error(
+          `No running workflow matching "${params.runId}". Running: ${running.join(", ") || "none"}.`,
+        );
+      }
+      const [runId] = entry;
+      stopRun(runId);
+      return Promise.resolve({
+        content: [{ type: "text", text: `Stopping workflow ${runId}.` }],
+        details: { runId, status: "aborting" },
+      });
+    },
+  });
+
+  pi.registerTool({
+    name: "workflow_status",
+    label: "Workflow Status",
+    description: WORKFLOW_STATUS_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      runId: Type.Optional(
+        Type.String({
+          description: WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS.runId,
+        }),
+      ),
+    }),
+    execute(_toolCallId, params) {
+      // Details are a uniform run-summary array (one entry for a single-id peek)
+      // so the tool has a single result shape; the text carries the detail.
+      const summarize = (d: WorkflowDetails) => {
+        const { done, failed } = countStates(d);
+        return {
+          runId: d.runId,
+          name: d.name,
+          status: d.status,
+          done,
+          failed,
+          total: d.agents.length,
+        };
+      };
+      if (params.runId) {
+        const details = resolveRunDetails(params.runId);
+        if (!details) {
+          const running = [...activeRuns.keys()];
+          throw new Error(
+            `No workflow matching "${params.runId}". Active: ${running.join(", ") || "none"}.`,
+          );
+        }
+        const runDir = path.join(getAgentDir(), "workflows", details.runId);
+        return Promise.resolve({
+          content: [
+            { type: "text", text: buildWorkflowResultMessage(details, runDir) },
+          ],
+          details: { runs: [summarize(details)] },
+        });
+      }
+      const runs = [
+        ...[...activeRuns.values()].map((run) => run.details),
+        ...settledRuns.values(),
+      ];
+      if (runs.length === 0) {
+        return Promise.resolve({
+          content: [
+            { type: "text", text: "No active or recently finished workflows." },
+          ],
+          details: { runs: [] },
+        });
+      }
+      const lines = runs.map((d) => {
+        const { done, failed } = countStates(d);
+        return `${d.runId}${d.name ? ` "${d.name}"` : ""} — ${statusWord(d.status)} · ${done + failed}/${d.agents.length} agents${failed ? `, ${failed} failed` : ""}`;
+      });
+      return Promise.resolve({
+        content: [{ type: "text", text: lines.join("\n") }],
+        details: { runs: runs.map(summarize) },
+      });
+    },
+  });
+
+  pi.registerMessageRenderer(
+    "workflow-result",
+    (message, { expanded }, theme) => {
+      const details = message.details as WorkflowDetails | undefined;
+      const body =
+        typeof message.content === "string"
+          ? message.content
+          : (message.content
+              ?.map((part) => (part.type === "text" ? part.text : ""))
+              .join("") ?? "");
+      if (!details) return new Text(body, 0, 0);
+      const { done, failed } = countStates(details);
+      const settled = done + failed;
+      let header =
+        `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
+        `${theme.fg("accent", details.name ?? details.runId)} ` +
+        theme.fg("dim", `${settled}/${details.agents.length} agents · `) +
+        theme.fg(statusColor(details.status), statusWord(details.status));
+      if (failed) header += theme.fg("error", ` · ${failed} failed`);
+      if (expanded) return new Text(`${header}\n\n${body}`, 0, 0);
+      const preview = body.split("\n").slice(0, 8).join("\n");
+      return new Text(
+        `${header}\n${preview}\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`,
+        0,
+        0,
+      );
+    },
+  );
 }

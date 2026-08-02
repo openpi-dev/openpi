@@ -15,6 +15,29 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
     "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
 };
 
+/** Describes stopping a running background workflow, mirroring subagent_cancel/bg_kill. */
+export const WORKFLOW_STOP_TOOL_DESCRIPTION =
+  "Cancel a running background workflow by its run id (from the workflow launch result). This aborts its remaining agents and settles the run; partial results and artifacts are preserved. Only background runs need this — a blocking workflow is already cancelled by interrupting the turn.";
+
+/** Model-facing schema description for the workflow run id to stop. */
+export const WORKFLOW_STOP_PARAMETER_DESCRIPTIONS = {
+  runId: 'Workflow run id to cancel, e.g. "wf_1a2b3c4d5e6f".',
+};
+
+/** Describes nonblocking inspection of workflow runs, mirroring subagent_check/subagent_list. */
+export const WORKFLOW_STATUS_TOOL_DESCRIPTION =
+  "Peek at background workflow runs without blocking. With a run id, returns that run's phases, per-agent status, and result if finished; without one, lists this session's active and recently finished runs. Does not wait — use background:false when you need the result inline.";
+
+/** Model-facing schema description for the optional workflow run id to inspect. */
+export const WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS = {
+  runId:
+    "Optional workflow run id to inspect. Omit to list active and recently finished runs.",
+};
+
+/** Adds workflow lifecycle inspection/cancellation to the parent model's tools prompt. */
+export const WORKFLOW_LIFECYCLE_PROMPT_SNIPPET =
+  "Inspect (workflow_status) or cancel (workflow_stop) a background workflow by run id";
+
 /** Defines the workflow DSL, constraints, reliability guidance, and model-authored task examples. */
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Use the workflow tool when the user explicitly requests a workflow run or when the task clearly requires multi-phase dynamic orchestration.",
@@ -98,16 +121,20 @@ export function buildWorkflowResultMessage(
   return lines.join("\n");
 }
 
-/** Builds the follow-up user message that delivers a settled background workflow to the parent model. */
+/** Builds the follow-up message that delivers a settled background workflow to the parent model. */
 export function buildBackgroundWorkflowFollowUp(options: {
   runId: string;
+  name?: string;
   status: WorkflowDetails["status"];
   result: string;
 }) {
-  return `[Background workflow ${options.runId} ${options.status}]\n\n${options.result}`;
+  // Sentence lead-in matching the subagent/terminal completion messages.
+  const label = options.name ? `"${options.name}"` : options.runId;
+  const verb = options.status === "completed" ? "finished" : options.status;
+  return `Background workflow ${label} (${options.runId}) ${verb}.\n\n${options.result}`;
 }
 
-/** Builds the background-launch result and tells the parent model where progress and artifacts appear. */
+/** Builds the background-launch result and tells the parent model how to inspect or stop the run. */
 export function buildBackgroundWorkflowLaunchResult(options: {
   runId: string;
   name?: string;
@@ -116,6 +143,6 @@ export function buildBackgroundWorkflowLaunchResult(options: {
   return [
     `Workflow ${options.name ? `"${options.name}"` : options.runId} launched in background (run ${options.runId}).`,
     `Artifacts: ${shortenHome(options.runDir)}`,
-    "You'll receive a follow-up message when it finishes; /workflows shows progress.",
+    `Its result will be delivered to you when it finishes, or use workflow_status(runId: "${options.runId}") to peek and workflow_stop(runId: "${options.runId}") to cancel; /workflows shows progress.`,
   ].join("\n");
 }
