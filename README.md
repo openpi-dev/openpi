@@ -155,6 +155,7 @@ bg_start({
 - 独立捕获 stdout / stderr；
 - `/ps` 实时查看日志和状态；
 - 进程退出后自动通知 Agent，无需轮询；
+- 对不会自己退出的进程（dev server、watcher、长任务），`bg_watch` 可以在输出匹配到指定正则时唤醒模型；模式应同时覆盖失败特征（如 `Ready in|Traceback|ERROR`），否则崩溃看起来和"还在跑"一样；
 - 可为 build、test、migration 设置 `timeout_seconds`；
 - 超时后终止整个进程树，并明确记录为 `timed_out`；
 - 最多并发 8 个后台进程；
@@ -182,6 +183,7 @@ subagent_spawn({
 - 子 Agent 继承当前 Pi 环境中的工具、Skills、项目上下文和 Trust 决策；
 - 模型发起的子 Agent 最多同时运行 4 个；`/btw` 旁路提问使用独立的小池（默认 2），二者互不挤占，卡住的旁路提问不会饿死模型的并发额度；
 - 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
+- `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
 > `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Bash 与 Write/Edit 默认折叠。Bash 只保留单行命令、首段输出和最终状态，Write/Edit 最多保留三行渲染内容（包含操作标题），两者都会显示隐藏行数。三类结果都可通过 `/my-pi-setup` 分别选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
@@ -297,6 +299,7 @@ Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_bud
 - 一次支持 1–3 个独立问题；
 - 每题 2–5 个互斥选项；
 - 推荐项放在第一位，并解释每个选项的权衡；
+- 选项可以带一段可选 `preview`（代码片段、配置或 ASCII 布局），在该选项高亮时原样显示（保留缩进、不重新折行），方便横向对比；
 - 用户可选择、自由填写，或在选项后追加 Notes；
 - 支持中文 IME 焦点；
 - Esc 明确表示拒绝回答，不会被误当成默认选项；
@@ -487,6 +490,8 @@ pi install ~/work/my-pi-setup
 /my-pi-setup Footer 两行：cwd flex model / context cost flex git
 /my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
 /my-pi-setup 关闭自定义状态栏
+/my-pi-setup 编辑后自动跑 npm run format
+/my-pi-setup 关闭 post-edit 命令
 ```
 
 当前模型负责理解自然语言，受限配置工具负责保存结果。配置位于：
@@ -504,6 +509,7 @@ pi install ~/work/my-pi-setup
 | Workflow 最大 Agent 调用 |                                                   128 |
 | 大型 Header              |                                                  关闭 |
 | Dashboard Footer         |                                                  开启 |
+| Post-edit 命令           |                                    默认关闭（空字符串） |
 | 主题                     |                                    不修改用户现有选择 |
 
 ---
@@ -521,6 +527,8 @@ pi install ~/work/my-pi-setup
 | `/tasks`                   | 查看当前 Session 的任务列表                  |
 | `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal    |
 | `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
+| `/cron ...`                 | 为本 Session 定时或周期性排一条提示词         |
+| `/plan [目标]`              | 先只读调研并给出计划，批准后才允许改动       |
 | `/lg`                       | 浏览 Working Tree 改动和 Diff                |
 | `/pr`                       | 刷新当前分支的 GitHub PR 信息                |
 | `/copy-all`                 | 复制当前分支可见的 User / Assistant 对话     |
@@ -529,8 +537,8 @@ pi install ~/work/my-pi-setup
 
 | 工具                                                                                    | 用途                                  |
 | --------------------------------------------------------------------------------------- | ------------------------------------- |
-| `bg_start`, `bg_status`, `bg_list`, `bg_kill`                                           | 后台进程生命周期                      |
-| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_cancel` | 独立子 Agent                          |
+| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                           | 后台进程生命周期                      |
+| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                          |
 | `workflow`, `workflow_status`, `workflow_stop`                                          | 动态多阶段 Agent 编排与后台运行管理   |
 | `tasks_add`, `tasks_update`, `tasks_list`                                            | Session 持久任务                      |
 | `get_goal`, `create_goal`, `update_goal`                                                | 读取、创建或完成/阻塞 Session Goal    |
@@ -631,6 +639,9 @@ extensions/
 ├── tasks/                 # Session 持久任务
 ├── goal/                  # Codex 风格持久自主 Goal
 ├── context-pivot/         # 定向 Compaction
+├── plan-mode/             # /plan 只读调研与批准门禁
+├── cron/                  # /cron Session 内定时提示词
+├── post-edit/             # 编辑后的单条可选命令
 ├── sessions/              # Session 搜索、预览、切换
 ├── ask-user/              # 结构化用户输入
 ├── file-search/           # fd / rg 与二进制解析

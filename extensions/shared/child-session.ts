@@ -35,6 +35,7 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_spawn",
   "subagent_wait",
   "subagent_cancel",
+  "subagent_send",
   "subagent_check",
   "subagent_list",
   // workflows — children cannot recursively orchestrate or manage runs
@@ -59,6 +60,7 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "bg_status",
   "bg_list",
   "bg_kill",
+  "bg_watch",
   // context-pivot — compaction of the conversation is a parent-only decision
   "context_pivot",
 ] as const;
