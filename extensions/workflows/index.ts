@@ -878,6 +878,12 @@ export default function workflows(pi: ExtensionAPI) {
               // Deliver like the subagent/terminal families: a custom-typed
               // session message with a dedicated renderer, not a plain
               // user-provenance turn.
+              //
+              // Wake the model only if it is idle and therefore plausibly
+              // waiting on this run. If it is busy with something else, the
+              // result still enters context with the user's next message
+              // (nextTurn) instead of forcing a turn it can only acknowledge.
+              const wake = ctx.isIdle();
               pi.sendMessage(
                 {
                   customType: "workflow-result",
@@ -890,7 +896,9 @@ export default function workflows(pi: ExtensionAPI) {
                   display: true,
                   details: compactToolDetails(details),
                 },
-                { deliverAs: "followUp", triggerTurn: true },
+                wake
+                  ? { deliverAs: "followUp", triggerTurn: true }
+                  : { deliverAs: "nextTurn" },
               );
             } catch {
               // Session may be shutting down.

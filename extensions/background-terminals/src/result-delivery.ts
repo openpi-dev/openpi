@@ -25,3 +25,19 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
     },
   };
 }
+
+/**
+ * How a settled background result reaches the model.
+ *
+ * `followUp` + `triggerTurn` costs a whole turn, which is right when the model
+ * is idle and waiting on this result, and wrong for a backlog that piled up
+ * while it worked: waking once per stale process forces a turn each, and the
+ * model can only answer "that one already finished". `nextTurn` still puts the
+ * result in context — carried alongside the user's next message — without
+ * demanding a reply.
+ */
+export function resultDeliveryOptions(wake: boolean) {
+  return wake
+    ? ({ deliverAs: "followUp", triggerTurn: true } as const)
+    : ({ deliverAs: "nextTurn" } as const);
+}

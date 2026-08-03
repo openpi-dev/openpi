@@ -50,7 +50,10 @@ import {
   buildWatchMatchMessage,
   describeTerminal,
 } from "./src/prompt.ts";
-import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import {
+  createDeferredResultDelivery,
+  resultDeliveryOptions,
+} from "./src/result-delivery.ts";
 import {
   assertWatchableOutput,
   compileWatchPattern,
@@ -135,26 +138,55 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const deliverResult = (snap: TerminalSnapshot) => {
+  /**
+   * Deliver settled terminals to the model.
+   *
+   * `wake` decides whether this costs the model a turn. A result it is
+   * plausibly waiting for (it just went idle with work outstanding) is worth
+   * waking for. A backlog that piled up while it worked is not: delivering
+   * those with `triggerTurn` forces one whole turn per stale process, and the
+   * model can only answer each with "that one already finished" — exactly the
+   * noise a long-running session drowns in. `nextTurn` still puts them in
+   * context, alongside the user's next message, without demanding a reply.
+   */
+  const deliverResults = (
+    snaps: readonly TerminalSnapshot[],
+    wake: boolean,
+  ) => {
+    if (snaps.length === 0) return true;
     try {
       pi.sendMessage(
         {
           customType: "background-terminal-result",
-          content: buildTerminalResultMessage(snap),
+          // One message per flush, not per terminal: five processes exiting
+          // together are one event to react to, not five.
+          content: snaps.map(buildTerminalResultMessage).join("\n\n"),
           display: true,
-          details: {
-            id: snap.id,
-            title: snap.title,
-            status: snap.status,
-            exitCode: snap.exitCode,
-            signal: snap.signal,
-          },
+          details:
+            snaps.length === 1
+              ? {
+                  id: snaps[0]!.id,
+                  title: snaps[0]!.title,
+                  status: snaps[0]!.status,
+                  exitCode: snaps[0]!.exitCode,
+                  signal: snaps[0]!.signal,
+                }
+              : {
+                  count: snaps.length,
+                  results: snaps.map((snap) => ({
+                    id: snap.id,
+                    title: snap.title,
+                    status: snap.status,
+                    exitCode: snap.exitCode,
+                    signal: snap.signal,
+                  })),
+                },
         },
         // followUp: queued until the agent has no more tool calls — never
-        // interrupts a mid-turn stream. triggerTurn: wakes the model
-        // immediately iff idle; if busy, the queued follow-up is delivered
-        // when the current run settles. Either way exactly one delivery.
-        { deliverAs: "followUp", triggerTurn: true },
+        // interrupts a mid-turn stream. triggerTurn only when the model is
+        // plausibly waiting; otherwise nextTurn, which enters context without
+        // costing a turn.
+        resultDeliveryOptions(wake),
       );
       return true;
     } catch (error) {
@@ -165,9 +197,10 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  const flushResults = () => {
-    for (const snap of resultDelivery.drain()) {
-      if (!deliverResult(snap)) resultDelivery.defer(snap);
+  const flushResults = (wake: boolean) => {
+    const snaps = resultDelivery.drain();
+    if (!deliverResults(snaps, wake)) {
+      for (const snap of snaps) resultDelivery.defer(snap);
     }
   };
 
@@ -188,7 +221,9 @@ export default function (pi: ExtensionAPI) {
       stdout: { ...snap.stdout },
       stderr: { ...snap.stderr },
     });
-    if (sessionContext?.isIdle()) flushResults();
+    // Settled while the model sits idle: it has nothing else in flight, so
+    // this is the result it is waiting on — wake it.
+    if (sessionContext?.isIdle()) flushResults(true);
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -199,7 +234,9 @@ export default function (pi: ExtensionAPI) {
   // Drain deferred results when the agent settles: together with the
   // isIdle() fast path above and the Map-keyed delivery (drain clears),
   // double delivery is structurally impossible — whoever drains first wins.
-  pi.on("agent_settled", flushResults);
+  // These finished while the model was working on something else, so they go
+  // into context without forcing a turn per stale process.
+  pi.on("agent_settled", () => flushResults(false));
 
   // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
   // the old extension instance. Processes never survive a session

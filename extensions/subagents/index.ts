@@ -72,6 +72,7 @@ import {
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { resultDeliveryOptions } from "../background-terminals/src/result-delivery.ts";
 import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
@@ -215,26 +216,57 @@ export default function (pi: ExtensionAPI) {
     else stopStatusTicker();
   };
 
-  const deliverResult = (snap: SubagentSnapshot) => {
+  /**
+   * `wake` decides whether this costs the model a turn. A subagent that
+   * settled while the model sits idle is the result it is waiting on. A
+   * backlog that piled up while it worked is not: waking once per stale
+   * subagent forces a turn each, and the model can only answer "that one
+   * already finished". `nextTurn` still enters context with the user's next
+   * message, without demanding a reply.
+   */
+  const deliverResults = (
+    snaps: readonly SubagentSnapshot[],
+    wake: boolean,
+  ) => {
+    if (snaps.length === 0) return;
     pi.sendMessage(
       {
         customType: "subagent-result",
-        content: buildSubagentResultMessage({
-          id: snap.id,
-          title: snap.title,
-          status: snap.status,
-          errorText: snap.errorText,
-          output: truncatedOutput(snap),
-        }),
+        // One message per flush, not per subagent.
+        content: snaps
+          .map((snap) =>
+            buildSubagentResultMessage({
+              id: snap.id,
+              title: snap.title,
+              status: snap.status,
+              errorText: snap.errorText,
+              output: truncatedOutput(snap),
+            }),
+          )
+          .join("\n\n"),
         display: true,
-        details: { id: snap.id, title: snap.title, status: snap.status },
+        details:
+          snaps.length === 1
+            ? {
+                id: snaps[0]!.id,
+                title: snaps[0]!.title,
+                status: snaps[0]!.status,
+              }
+            : {
+                count: snaps.length,
+                results: snaps.map((snap) => ({
+                  id: snap.id,
+                  title: snap.title,
+                  status: snap.status,
+                })),
+              },
       },
-      { deliverAs: "followUp", triggerTurn: true },
+      resultDeliveryOptions(wake),
     );
   };
 
-  const flushResults = () => {
-    for (const snap of resultDelivery.drain()) deliverResult(snap);
+  const flushResults = (wake: boolean) => {
+    deliverResults(resultDelivery.drain(), wake);
   };
 
   const deliverBtwResult = (snap: SubagentSnapshot) => {
@@ -283,7 +315,9 @@ export default function (pi: ExtensionAPI) {
     // Defer a copy: the live snapshot keeps mutating if the subagent is
     // restarted before the deferred result flushes.
     resultDelivery.defer({ ...snap, meta: { ...snap.meta } });
-    if (sessionContext?.isIdle()) flushResults();
+    // Settled while the model sits idle: it has nothing else in flight, so
+    // this is the result it is waiting on — wake it.
+    if (sessionContext?.isIdle()) flushResults(true);
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -300,7 +334,9 @@ export default function (pi: ExtensionAPI) {
     managerPromise?.then(updateStatus).catch(() => undefined);
   });
 
-  pi.on("agent_settled", flushResults);
+  // These settled while the model was working on something else, so they go
+  // into context without forcing a turn per stale subagent.
+  pi.on("agent_settled", () => flushResults(false));
 
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
