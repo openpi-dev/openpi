@@ -11,7 +11,7 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Reserve subagent_spawn for substantial, self-contained work; give it a complete, standalone prompt. For a single lookup or edit you can do inline, just do it — each subagent spends a fresh context window and cannot see this conversation.",
-  "After subagent_spawn, keep working on other things; results arrive automatically. Only call subagent_wait when you cannot proceed without the result, and never answer from a guessed result before it arrives.",
+  "After subagent_spawn, keep working on other things; results arrive automatically and you are re-invoked when a subagent settles. Do not poll with subagent_check and do not subagent_wait just to sit idle — wait only when your next step genuinely cannot proceed without the result, and never answer from a guessed result before it arrives.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
@@ -39,14 +39,14 @@ export function buildSubagentSpawnResult(options: {
 }) {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).\n` +
-    `It runs in the background. Its result will be delivered to you when it finishes, ` +
-    `or use subagent_wait(ids: ["${options.id}"]) to block for it, subagent_cancel to stop it, subagent_check to peek, subagent_list to see all.`
+    `It runs in the background — keep working on other things; its result is delivered to you automatically when it finishes, so do not poll or wait for it. ` +
+    `Only if your next step truly cannot proceed without it, subagent_wait(ids: ["${options.id}"]) blocks for it; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );
 }
 
 /** Describes explicit blocking collection of one or more subagent results. */
 export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-  "Block until all listed subagents have settled, then return their final outputs. Prefer letting results arrive automatically; use this only when you need a result before continuing.";
+  "Block until all listed subagents have settled, then return their final outputs. This is the EXCEPTION, not the default: after spawning, keep doing other useful work — each subagent's result is delivered to you automatically when it settles, and you'll be re-invoked then. Call subagent_wait only when your very next step cannot proceed without the result (e.g. you must synthesize several children's outputs and have nothing else to do first). Never poll for completion and never answer from a guessed result before it arrives.";
 
 /** Model-facing schema description for the subagent ids to await. */
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
@@ -85,7 +85,7 @@ export function buildSubagentSendResult(options: {
 
 /** Describes nonblocking inspection of a subagent without consuming its result. */
 export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
-  "Peek at a subagent's status and recent activity without blocking. Does not consume its result.";
+  "Peek at a subagent's status and recent activity without blocking. Does not consume its result. Do NOT poll with it to wait for completion — a settled subagent's result is delivered to you automatically. Use it only when you need a running subagent's current partial state right now (e.g. to decide whether to steer it).";
 
 /** Model-facing schema description for the subagent id to inspect. */
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {

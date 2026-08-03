@@ -314,3 +314,22 @@ test("send steers an idle subagent into another turn", async () => {
     assert.match(afterSecond?.finalText ?? "", /Second turn/);
   });
 });
+
+test("a wait issued alongside a restart does not return the stale run", () => {
+  // pi executes same-message tool calls in parallel, so subagent_send and
+  // subagent_wait can start together. The restart occupies the slot before
+  // RunStarted flips status, so waitFor must honor `restarting` or it returns
+  // the previous run's output as the answer to the message just sent.
+  return withManager(async (manager, runtime) => {
+    const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.equal(manager.view.get(snap.id)?.status, "done");
+
+    await runTool(runtime, manager.send(snap.id, "Second"));
+    // Without the fix this resolves immediately against the settled run.
+    await runTool(runtime, manager.waitFor([snap.id]));
+    const after = manager.view.get(snap.id);
+    assert.equal(after?.status, "done");
+    assert.match(after?.finalText ?? "", /Second/);
+  });
+});

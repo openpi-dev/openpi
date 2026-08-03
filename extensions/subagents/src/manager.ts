@@ -237,11 +237,21 @@ const makeManager = Effect.gen(function* () {
     });
   });
 
+  /**
+   * A restart dispatched by `send` occupies a slot immediately, but the
+   * `RunStarted` that flips `snapshot.status` only arrives on the async pump.
+   * Every caller that asks "is this busy?" must honor that window, or a
+   * wait/cancel issued in the same turn as the restart would observe the old
+   * settled run and return (or cancel) the wrong thing.
+   */
+  const isBusy = (entry: Entry | undefined) =>
+    entry !== undefined &&
+    (entry.snapshot.status === "running" || entry.restarting === true);
+
   const runningCount = (origin?: SubagentOrigin) =>
     [...entries.values()].filter(
       (e) =>
-        (e.snapshot.status === "running" || e.restarting === true) &&
-        (origin === undefined || e.snapshot.origin === origin),
+        isBusy(e) && (origin === undefined || e.snapshot.origin === origin),
     ).length;
 
   /** Per-pool capacity: model asides and user "by the way" asides never mix. */
@@ -552,9 +562,7 @@ const makeManager = Effect.gen(function* () {
       addInterest(unique);
       const loop = Effect.gen(function* () {
         while (true) {
-          const pending = unique.filter(
-            (id) => entries.get(id)?.snapshot.status === "running",
-          );
+          const pending = unique.filter((id) => isBusy(entries.get(id)));
           if (pending.length === 0) return;
           onPending?.(pending);
           yield* nextChange;
@@ -602,9 +610,7 @@ const makeManager = Effect.gen(function* () {
       const unique = [...new Set(ids)];
       const running = unique
         .map((id) => entries.get(id))
-        .filter(
-          (entry): entry is Entry => entry?.snapshot.status === "running",
-        );
+        .filter((entry): entry is Entry => isBusy(entry));
       const runningIds = running.map((entry) => entry.snapshot.id);
       // Mark consumed before interrupting so cancellation does not also
       // enqueue duplicate automatic result messages into the parent.
