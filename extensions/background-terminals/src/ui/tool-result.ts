@@ -3,7 +3,6 @@ import { Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { sanitizeText } from "./output-view.ts";
 
 const STREAM_PREVIEW_LINES = 2;
-const STREAM_HEADERS = new Set(["stdout:", "stderr:"]);
 
 interface ParsedTerminalResult {
   summary: string;
@@ -35,13 +34,16 @@ function parseTerminalResult(content: string): ParsedTerminalResult {
 
   for (const rawLine of lines) {
     const line = rawLine.replace(/\s+$/, "");
-    if (STREAM_HEADERS.has(line)) {
+    const streamHeader = /^(stdout|stderr):(.*)$/.exec(line);
+    if (streamHeader) {
       current = {
-        name: line === "stdout:" ? "stdout" : "stderr",
+        name: streamHeader[1] === "stdout" ? "stdout" : "stderr",
         lines: [],
         truncated: false,
       };
       streams.push(current);
+      const inline = streamHeader[2]?.trim();
+      if (inline && inline !== "(empty)") current.lines.push(inline);
       continue;
     }
     if (!current) {

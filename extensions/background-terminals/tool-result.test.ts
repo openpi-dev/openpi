@@ -52,13 +52,9 @@ test("background terminal preview reports upstream truncation without showing it
 
 test("background terminal preview omits empty streams", () => {
   const preview = buildCompactTerminalPreview(
-    [
-      'bt-1 [done] "quiet"',
-      "",
-      "stdout: (empty)",
-      "",
-      "stderr: (empty)",
-    ].join("\n"),
+    ['bt-1 [done] "quiet"', "", "stdout: (empty)", "", "stderr: (empty)"].join(
+      "\n",
+    ),
   );
 
   assert.deepEqual(preview.streams, []);
