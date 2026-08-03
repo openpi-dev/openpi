@@ -26,16 +26,33 @@ import {
 /** How often the scheduler looks for due jobs. */
 const POLL_MS = 30_000;
 
-export default function cron(pi: ExtensionAPI) {
+interface CronRuntime {
+  now(): number;
+  startPolling(tick: () => void): () => void;
+}
+
+const SYSTEM_RUNTIME: CronRuntime = {
+  now: Date.now,
+  startPolling(tick) {
+    const timer = setInterval(tick, POLL_MS);
+    // Never hold the process open for a scheduled prompt.
+    timer.unref?.();
+    return () => clearInterval(timer);
+  },
+};
+
+export default function cron(
+  pi: ExtensionAPI,
+  runtime: CronRuntime = SYSTEM_RUNTIME,
+) {
   let jobs: CronJob[] = [];
   let nextId = 1;
-  let ticker: ReturnType<typeof setInterval> | undefined;
+  let stopPolling: (() => void) | undefined;
   let context: ExtensionContext | undefined;
 
   const stopTicker = () => {
-    if (!ticker) return;
-    clearInterval(ticker);
-    ticker = undefined;
+    stopPolling?.();
+    stopPolling = undefined;
   };
 
   const fire = (job: CronJob) => {
@@ -62,7 +79,7 @@ export default function cron(pi: ExtensionAPI) {
     // Only fire into an idle session: a followUp during a live turn would
     // queue behind it anyway, and firing on a timer mid-stream is surprising.
     if (!ctx.isIdle()) return;
-    const now = Date.now();
+    const now = runtime.now();
     const due = dueJobs(jobs, now);
     if (due.length === 0) return;
     const deliveredIds = new Set<number>();
@@ -74,10 +91,8 @@ export default function cron(pi: ExtensionAPI) {
   };
 
   const startTicker = () => {
-    if (ticker) return;
-    ticker = setInterval(tick, POLL_MS);
-    // Never hold the process open for a scheduled prompt.
-    ticker.unref?.();
+    if (stopPolling) return;
+    stopPolling = runtime.startPolling(tick);
   };
 
   pi.registerCommand("cron", {
@@ -100,7 +115,7 @@ export default function cron(pi: ExtensionAPI) {
           ctx.ui.notify("No scheduled prompts in this session.", "info");
           return;
         }
-        const now = Date.now();
+        const now = runtime.now();
         const lines = jobs.map((job) => {
           const inSeconds = Math.max(
             0,
@@ -133,7 +148,7 @@ export default function cron(pi: ExtensionAPI) {
         id: nextId++,
         prompt: parsed.prompt!,
         ...(parsed.oneShot ? {} : { intervalMs }),
-        nextRunAt: Date.now() + intervalMs,
+        nextRunAt: runtime.now() + intervalMs,
       };
       jobs.push(job);
       startTicker();

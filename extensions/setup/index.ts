@@ -31,12 +31,12 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, Post-edit, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
         "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
-        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer.",
+        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command.",
       ];
 
   return [
@@ -55,14 +55,16 @@ export function buildInteractiveSetupPrompt(options: {
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
-    "- Post-edit command: one optional shell command run in the background after a turn that changed files (e.g. `npm run format`). Off by default, interactive sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
+    "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Bash and Write/Edit default to compact. Recommend compact for users who do not usually inspect implementation details.",
     "",
-    "Natural-language footer examples the user might ask for:",
+    "Natural-language configuration examples the user might ask for:",
     '- "switch footer to powerline" → ui_footer_preset=powerline',
     '- "use mono powerline" → ui_footer_preset=powerline-mono',
     '- "compact footer" → ui_footer_preset=compact',
     '- "two custom lines: cwd flex model / context cost flex git" → ui_footer_lines=[["cwd","flex","model"],["context","cost","flex","git"]]',
+    '- "run npm run format after Write/Edit turns" → post_edit_command="npm run format"',
+    '- "turn off post-edit" → post_edit_command=""',
     "",
     "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
@@ -73,7 +75,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), and result detail display. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), result detail display, and the optional Post-edit command. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
     parameters: Type.Object({
       summaries_enabled: Type.Optional(
         Type.Boolean({
@@ -178,7 +180,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
         Type.String({
           maxLength: POST_EDIT_COMMAND_MAX_CHARS,
           description:
-            'A single shell command to run in a background terminal after a turn that changed files, e.g. "npm run format". Runs once per turn, not per edit, and only in an interactive session. Set to an empty string to turn it off. Omit to preserve the current value.',
+            'A single shell command (maximum 500 characters) to run in the background after a turn with successful Write/Edit operations, e.g. "npm run format". Runs once per changed turn, not per edit, and only in an interactive TUI session. Set to an empty string to turn it off. Omit to preserve the current value.',
         }),
       ),
     }),

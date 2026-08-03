@@ -38,6 +38,10 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Result detail display/);
   assert.match(message, /Bash and Write\/Edit default to compact/);
   assert.match(message, /Recommend compact/);
+  assert.match(message, /Post-edit defaults off/);
+  assert.match(message, /maximum 500 characters/);
+  assert.match(message, /successful Write\/Edit operations/);
+  assert.match(message, /post_edit_command="npm run format"/);
   assert.match(message, /call configure_my_pi_setup at most once/);
 });
 
@@ -54,7 +58,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Recaps, Workflow limits, UI\/Footer, result detail display/,
+    /keep them or change Recaps, Workflow limits, UI\/Footer, result detail display, Post-edit/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.doesNotMatch(message, /This is the first setup/);

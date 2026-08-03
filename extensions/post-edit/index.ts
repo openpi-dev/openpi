@@ -1,5 +1,5 @@
 /**
- * post-edit: run ONE configured command after a turn that changed files.
+ * post-edit: run ONE configured command after a turn with successful Write/Edit operations.
  *
  * Deliberately not an event-hook engine. The trust surface is a single
  * user-typed command string in the package config, off (empty) by default. The

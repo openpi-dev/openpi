@@ -509,8 +509,10 @@ pi install ~/work/my-pi-setup
 | Workflow 最大 Agent 调用 |                                                   128 |
 | 大型 Header              |                                                  关闭 |
 | Dashboard Footer         |                                                  开启 |
-| Post-edit 命令           |                                    默认关闭（空字符串） |
+| Post-edit 命令           |          默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
 | 主题                     |                                    不修改用户现有选择 |
+
+Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。
 
 ---
 
