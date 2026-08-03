@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildCompactTerminalPreview } from "./src/ui/tool-result.ts";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  buildCompactTerminalPreview,
+  renderTerminalResult,
+} from "./src/ui/tool-result.ts";
+
+initTheme("dark", false);
+
+const theme = {
+  fg: (_color: string, text: string) => text,
+} as Theme;
 
 test("background terminal preview keeps only each stream tail", () => {
   const preview = buildCompactTerminalPreview(
@@ -48,6 +58,31 @@ test("background terminal preview reports upstream truncation without showing it
   assert.deepEqual(preview.streams, [{ name: "stdout", lines: ["ready"] }]);
   assert.equal(preview.hiddenLines, 0);
   assert.equal(preview.unknownEarlierOutput, true);
+});
+
+test("compact renderer stays bounded, shows the tail, and advertises expansion", () => {
+  const content = [
+    'bt-8 [done] "full suite"',
+    "",
+    "stdout:",
+    ...Array.from({ length: 20 }, (_, index) => `test ${index + 1} passed`),
+    "",
+    "stderr: (empty)",
+  ].join("\n");
+
+  const rendered = renderTerminalResult(content, false, theme).render(80);
+  assert.equal(rendered.length, 4);
+  assert.match(rendered[1] ?? "", /test 19 passed/);
+  assert.match(rendered[2] ?? "", /test 20 passed/);
+  assert.match(rendered[3] ?? "", /18 earlier lines hidden/);
+  assert.match(rendered[3] ?? "", /expand/);
+  assert.doesNotMatch(rendered.join("\n"), /test 1 passed/);
+
+  const expanded = renderTerminalResult(content, true, theme)
+    .render(120)
+    .join("\n");
+  assert.match(expanded, /test 1 passed/);
+  assert.match(expanded, /test 20 passed/);
 });
 
 test("background terminal preview omits empty streams", () => {
