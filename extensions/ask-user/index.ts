@@ -31,6 +31,8 @@ const MIN_QUESTIONS = 1;
 const MAX_QUESTIONS = 3;
 const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
+/** Preview lines rendered before the tail is summarized. */
+const PREVIEW_MAX_LINES = 20;
 
 const OptionSchema = Type.Object({
   label: Type.String({
@@ -106,6 +108,20 @@ interface DisplayOption {
   /** Optional artifact shown while this option is highlighted. */
   preview?: string;
   isOther?: boolean;
+}
+
+/**
+ * Strip ANSI/control bytes from model-supplied preview text. It is rendered
+ * verbatim to preserve code indentation, so escape sequences would otherwise
+ * reach the terminal directly (cursor control, OSC 52 clipboard writes) and
+ * desync the differential renderer.
+ */
+function sanitizePreviewLine(raw: string) {
+  return raw
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+    .replace(/\t/g, "  ");
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -380,10 +396,21 @@ export default function askUser(pi: ExtensionAPI) {
               lines.push("");
               add(theme.fg("muted", " ┌ preview"));
               const inner = Math.max(10, width - 4);
-              for (const raw of preview.split("\n").slice(0, 20)) {
+              const previewLines = preview.split("\n");
+              const shown = previewLines.slice(0, PREVIEW_MAX_LINES);
+              for (const raw of shown) {
+                const clean = sanitizePreviewLine(raw);
                 const line =
-                  raw.length > inner ? `${raw.slice(0, inner - 1)}…` : raw;
+                  clean.length > inner
+                    ? `${clean.slice(0, inner - 1)}…`
+                    : clean;
                 add(` ${theme.fg("muted", "│")} ${theme.fg("text", line)}`);
+              }
+              const hidden = previewLines.length - shown.length;
+              if (hidden > 0) {
+                add(
+                  ` ${theme.fg("muted", "│")} ${theme.fg("dim", `… ${hidden} more line${hidden === 1 ? "" : "s"}`)}`,
+                );
               }
               add(theme.fg("muted", " └"));
             }
