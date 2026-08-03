@@ -27,31 +27,65 @@ export interface ChunkMatcher {
  * disarm the watch, and this makes double-fire impossible even if they don't.
  */
 export function createChunkMatcher(pattern: RegExp): ChunkMatcher {
-  let carry = "";
+  // One carry PER STREAM. A shared buffer would splice interleaved stdout and
+  // stderr together, both missing real straddling matches and fabricating
+  // matches from text that never appeared on either stream.
+  const carries: Record<"stdout" | "stderr", string> = {
+    stdout: "",
+    stderr: "",
+  };
   let done = false;
   return {
     push(chunk, stream) {
       if (done || !chunk) return undefined;
-      const text = carry + chunk;
+      const text = carries[stream] + chunk;
       const match = pattern.exec(text);
       if (!match) {
         // Retain a bounded tail so a match split across chunks still lands.
-        carry =
+        carries[stream] =
           text.length > WATCH_CARRY_MAX_BYTES
             ? text.slice(-WATCH_CARRY_MAX_BYTES)
             : text;
         return undefined;
       }
       done = true;
-      carry = "";
+      carries.stdout = "";
+      carries.stderr = "";
       // Report the containing line, not the whole buffer: the model wants the
-      // log line that matched, not every byte since the watch started.
+      // log line that matched, not every byte since the watch started. Bound
+      // it too — a process with no newlines (progress bars) would otherwise
+      // smear kilobytes into the transcript.
       const start = text.lastIndexOf("\n", match.index) + 1;
       const endIndex = text.indexOf("\n", match.index);
       const end = endIndex === -1 ? text.length : endIndex;
-      return { line: text.slice(start, end).trim(), stream };
+      return {
+        line: sanitizeLine(text.slice(start, end)),
+        stream,
+      };
     },
   };
+}
+
+/** Cap on the reported match line, so a newline-free stream cannot smear. */
+export const WATCH_LINE_MAX_CHARS = 500;
+
+/**
+ * Strip ANSI/control bytes and bound the length. The matched line is injected
+ * into the transcript, and the sibling terminal-result path already sanitizes;
+ * passing raw escape sequences through would desync the renderer.
+ */
+function sanitizeLine(raw: string) {
+  const stripped = raw
+    // CSI escape sequences (colors, cursor moves).
+    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
+    // OSC sequences (title, hyperlinks, clipboard) up to BEL or ST.
+    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
+    // Remaining C0 controls except tab, plus DEL.
+    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
+    .trim();
+  return stripped.length > WATCH_LINE_MAX_CHARS
+    ? `${stripped.slice(0, WATCH_LINE_MAX_CHARS)}\u2026`
+    : stripped;
 }
 
 /** Cap on the pattern source; a watch pattern is a signature, not a grammar. */

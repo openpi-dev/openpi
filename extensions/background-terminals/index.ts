@@ -25,9 +25,8 @@ import type {
   ExtensionContext,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
-import { getMarkdownTheme, keyHint } from "@earendil-works/pi-coding-agent";
-import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import {
@@ -57,8 +56,8 @@ import {
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
-import { sanitizeText } from "./src/ui/output-view.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
+import { renderTerminalResult } from "./src/ui/tool-result.ts";
 
 const WIDGET_KEY = "background-terminals";
 
@@ -313,6 +312,15 @@ export default function (pi: ExtensionAPI) {
         },
       };
     },
+    renderResult(result, { expanded }, theme) {
+      const first = result.content[0];
+      const content = first?.type === "text" ? first.text : "(no output)";
+      return renderTerminalResult(
+        content,
+        expanded || loadSetupConfig().ui.bashToolDisplay === "full",
+        theme,
+      );
+    },
   });
 
   pi.registerTool({
@@ -514,33 +522,12 @@ export default function (pi: ExtensionAPI) {
 
       const content =
         typeof message.content === "string" ? message.content : "";
-      // Remove only the summary line; the Error line (when present) is part
-      // of the actual result and must remain visible. The body carries raw
-      // process output — sanitize ANSI/control chars or the transcript smears.
-      const body = sanitizeText(content.split("\n").slice(1).join("\n").trim());
-
-      if (expanded) {
-        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
-
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
-      return new Text(text, 0, 0);
+      return renderTerminalResult(
+        content,
+        expanded || loadSetupConfig().ui.bashToolDisplay === "full",
+        theme,
+        header,
+      );
     },
   );
 

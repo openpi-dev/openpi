@@ -4,6 +4,7 @@ import {
   compileWatchPattern,
   createChunkMatcher,
   WATCH_CARRY_MAX_BYTES,
+  WATCH_LINE_MAX_CHARS,
 } from "./src/watch.ts";
 
 test("matches within a single chunk and reports the containing line", () => {
@@ -58,4 +59,27 @@ test("rejects catastrophic-backtracking and over-long patterns", () => {
   // A normal alternation of signatures is unaffected.
   assert.ok(compileWatchPattern("Ready in|Traceback|ERROR"));
   assert.throws(() => compileWatchPattern("a".repeat(201)), /too long/);
+});
+
+test("keeps stdout and stderr carries separate", () => {
+  const m = createChunkMatcher(compileWatchPattern("Ready in"));
+  // A shared buffer would splice these into "Read" + "y in" and fire.
+  assert.equal(m.push("Read", "stdout"), undefined);
+  assert.equal(m.push("y in 5ms\n", "stderr"), undefined);
+  // A real straddling match on one stream still lands.
+  assert.equal(m.push("y in 9ms\n", "stdout")?.line, "Ready in 9ms");
+});
+
+test("strips ANSI and control bytes from the reported line", () => {
+  const m = createChunkMatcher(compileWatchPattern("Ready"));
+  const hit = m.push("\u001b[32mReady\u001b[0m in 5ms\n", "stdout");
+  assert.equal(hit?.line, "Ready in 5ms");
+  assert.doesNotMatch(hit?.line ?? "", /\u001b/);
+});
+
+test("bounds the reported line when the stream has no newline", () => {
+  const m = createChunkMatcher(compileWatchPattern("MATCH"));
+  const hit = m.push(`${"x".repeat(3000)}MATCH${"y".repeat(3000)}`, "stdout");
+  assert.ok(hit);
+  assert.ok(hit.line.length <= WATCH_LINE_MAX_CHARS + 1);
 });
