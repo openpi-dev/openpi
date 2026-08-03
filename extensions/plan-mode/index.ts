@@ -29,6 +29,14 @@ export const BLOCKED_TOOLS = new Set([
   "subagent_send",
   "workflow",
   "bg_start",
+  // Destructive control of work already in flight is not "planning" either.
+  "bg_kill",
+  "subagent_cancel",
+  "workflow_stop",
+  // A durable, cross-session write to the package config on disk.
+  "configure_my_pi_setup",
+  // Compacting away the context being planned in is itself irreversible.
+  "context_pivot",
 ]);
 
 const BLOCK_REASON =
