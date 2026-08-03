@@ -279,10 +279,7 @@ const makeManager = Effect.gen(function* () {
   const pruneSettled = () => {
     if (entries.size <= MAX_TRACKED) return;
     const candidates = [...entries.values()]
-      .filter(
-        (e) =>
-          e.snapshot.status !== "running" && !waitInterest.has(e.snapshot.id),
-      )
+      .filter((e) => !isBusy(e) && !waitInterest.has(e.snapshot.id))
       .sort(
         (a, b) =>
           (a.snapshot.settledAt ?? a.snapshot.createdAt) -
@@ -299,8 +296,17 @@ const makeManager = Effect.gen(function* () {
 
   const settle = (entry: Entry, outcome: RunOutcome) => {
     const s = entry.snapshot;
+    const wasRestarting = entry.restarting === true;
     entry.restarting = false;
-    if (s.status !== "running") return;
+    if (s.status !== "running") {
+      if (!wasRestarting) return;
+      // A cancel can clear a queued restart before RunStarted reaches the
+      // manager. Its RunSettled still belongs to the new run, not the old
+      // settled snapshot, so promote the lifecycle before applying it.
+      s.status = "running";
+      s.settledAt = undefined;
+      s.errorText = undefined;
+    }
     s.settledAt = Date.now();
     switch (outcome._tag) {
       case "Completed":
@@ -578,10 +584,10 @@ const makeManager = Effect.gen(function* () {
       );
     });
 
-  /** Interrupt one running entry, force-closing its scope after 5s. */
+  /** Interrupt one busy entry, including the pre-RunStarted restart window. */
   const abortEntry = (entry: Entry) =>
     Effect.gen(function* () {
-      if (entry.snapshot.status !== "running") return;
+      if (!isBusy(entry)) return;
       const graceful = yield* entry.session.interrupt.pipe(
         Effect.timeout(STOP_TIMEOUT_MS),
         Effect.result,
@@ -619,9 +625,7 @@ const makeManager = Effect.gen(function* () {
         yield* Effect.forEach(running, abortEntry, {
           concurrency: "unbounded",
         });
-        while (running.some((entry) => entry.snapshot.status === "running")) {
-          yield* nextChange;
-        }
+        while (running.some(isBusy)) yield* nextChange;
       });
       return work.pipe(
         Effect.ensuring(
@@ -655,7 +659,7 @@ const makeManager = Effect.gen(function* () {
       // Restarting a settled subagent occupies a running slot again, so it
       // must respect the same cap as spawn. Steering an already-running one
       // does not consume additional capacity.
-      if (entry.snapshot.status !== "running") {
+      if (!isBusy(entry)) {
         const origin = entry.snapshot.origin;
         if (atPoolCapacity(origin)) {
           return new SendError({
@@ -673,6 +677,7 @@ const makeManager = Effect.gen(function* () {
           Effect.onError(() =>
             Effect.sync(() => {
               entry.restarting = false;
+              notify(entry.snapshot.id);
             }),
           ),
         );

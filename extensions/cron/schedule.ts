@@ -96,6 +96,19 @@ export function dueJobs(jobs: readonly CronJob[], now: number) {
   return jobs.filter((job) => job.nextRunAt <= now);
 }
 
+/** Advance only jobs whose prompt was successfully queued for delivery. */
+export function advanceDeliveredJobs(
+  jobs: readonly CronJob[],
+  deliveredIds: ReadonlySet<number>,
+  now: number,
+) {
+  return jobs.flatMap((job) => {
+    if (!deliveredIds.has(job.id)) return [job];
+    const next = advanceJob(job, now);
+    return next ? [next] : [];
+  });
+}
+
 /**
  * Next state for a job that just fired: one-shots drop out, recurring jobs
  * schedule from NOW rather than from the missed slot, so a long busy gap can

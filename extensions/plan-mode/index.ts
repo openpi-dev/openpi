@@ -1,46 +1,59 @@
 /**
  * plan-mode: explore read-only, then get explicit approval before writing.
  *
- * `/plan` arms a session flag; while armed, a `tool_call` handler blocks the
- * mutating tools and tells the model to finish planning instead. `/plan done`
- * (or the model calling nothing at all) presents the plan for approval.
+ * `/plan` arms a session flag; while armed, a `tool_call` handler allows only
+ * explicitly read-only tools and tells the model to finish planning instead.
+ * `/plan done` (or the model calling nothing at all) presents the plan for
+ * approval.
  *
  * SCOPE, deliberately stated: this gates only THIS interactive session. A
  * tool_call handler cannot reach a headless subagent's or a workflow child's
- * writes — those run in their own sessions — so plan mode also blocks the
- * tools that would spawn them rather than pretending to gate what they do.
+ * writes — those run in their own sessions — so delegation is blocked rather
+ * than pretending to gate what a child does.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 
 /**
- * Tools blocked while planning. `bash` is blocked wholesale: its input is an
- * arbitrary command string, so "is this read-only?" is undecidable, and a
- * leaky gate is worse than an explicit one. Read/grep/find/ls/fd/rg stay
- * available — a planner that cannot investigate is useless.
+ * Fail-closed allow-list for planning. Unknown and newly installed tools are
+ * blocked until they are deliberately classified here as observational.
+ * `bash` is absent wholesale: deciding whether an arbitrary command is
+ * read-only is impossible at this boundary.
  */
-export const BLOCKED_TOOLS = new Set([
-  "edit",
-  "write",
-  "bash",
-  // Delegation would escape the gate entirely: a child session's writes are
-  // not visible to this handler.
-  "subagent_spawn",
-  "subagent_send",
-  "workflow",
-  "bg_start",
-  // Destructive control of work already in flight is not "planning" either.
-  "bg_kill",
-  "subagent_cancel",
-  "workflow_stop",
-  // A durable, cross-session write to the package config on disk.
-  "configure_my_pi_setup",
-  // Compacting away the context being planned in is itself irreversible.
-  "context_pivot",
+export const PLAN_SAFE_TOOLS = new Set([
+  // Local repository investigation.
+  "read",
+  "grep",
+  "find",
+  "ls",
+  "fd",
+  "rg",
+  // Web research without write actions.
+  "web_search",
+  "source_check",
+  "fetch_content",
+  "get_search_content",
+  // Read-only inspection of work already in flight.
+  "bg_status",
+  "bg_list",
+  "bg_watch",
+  "subagent_check",
+  "subagent_list",
+  "subagent_wait",
+  "workflow_status",
+  // Advisory state reads and an explicit user clarification.
+  "tasks_list",
+  "get_goal",
+  "ask_user",
 ]);
 
 const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, grep, find, ls, fd, rg) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
+
+export function planToolCallDecision(toolName: string) {
+  if (PLAN_SAFE_TOOLS.has(toolName)) return;
+  return { block: true as const, reason: BLOCK_REASON };
+}
 
 export default function planMode(pi: ExtensionAPI) {
   let planning = false;
@@ -128,8 +141,7 @@ export default function planMode(pi: ExtensionAPI) {
 
   pi.on("tool_call", (event) => {
     if (!planning) return;
-    if (!BLOCKED_TOOLS.has(event.toolName)) return;
-    return { block: true, reason: BLOCK_REASON };
+    return planToolCallDecision(event.toolName);
   });
 
   pi.on("session_start", (_event, ctx) => {

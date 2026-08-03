@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatAnswers } from "./index.ts";
+import { stripVTControlCharacters } from "node:util";
+import { formatAnswers, formatPreviewLine } from "./index.ts";
 import {
   ASK_USER_PROMPT_GUIDELINES,
   buildAskUserResultMessage,
@@ -19,6 +20,16 @@ test("formats selected, noted, and custom answers", () => {
     buildAskUserResultMessage({ kind: "answered", answers }),
     /db: Postgres \(Recommended\).*note: SQLite in tests/,
   );
+});
+
+test("preview truncation preserves Unicode characters and strips controls", () => {
+  const rendered = formatPreviewLine(
+    "123456789😀\u009b2J\u001b]52;c;payload\u0007safe",
+    12,
+  );
+  const plain = stripVTControlCharacters(rendered);
+  assert.match(plain, /😀…$/);
+  assert.doesNotMatch(plain, /payload|[\u001b\u0080-\u009f]/);
 });
 
 test("prompt requires genuine ambiguity, recommendations, and no continue questions", () => {

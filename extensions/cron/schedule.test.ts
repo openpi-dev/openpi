@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  advanceDeliveredJobs,
   advanceJob,
   dueJobs,
   formatInterval,
@@ -69,6 +70,17 @@ test("a recurring job reschedules from now, so a busy gap cannot burst", () => {
 
 test("a one-shot job drops out after firing", () => {
   assert.equal(advanceJob({ id: 1, prompt: "x", nextRunAt: 0 }, 10), undefined);
+});
+
+test("a failed delivery remains due instead of losing the prompt", () => {
+  const jobs: CronJob[] = [
+    { id: 1, prompt: "one shot", nextRunAt: 0 },
+    { id: 2, prompt: "recurring", intervalMs: 30_000, nextRunAt: 0 },
+  ];
+  assert.deepEqual(advanceDeliveredJobs(jobs, new Set(), 10), jobs);
+  assert.deepEqual(advanceDeliveredJobs(jobs, new Set([1, 2]), 10), [
+    { id: 2, prompt: "recurring", intervalMs: 30_000, nextRunAt: 30_010 },
+  ]);
 });
 
 test("formats intervals back to their friendliest unit", () => {

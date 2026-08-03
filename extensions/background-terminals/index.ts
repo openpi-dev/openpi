@@ -27,6 +27,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { loadSetupConfig } from "../shared/setup-config.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
 import {
@@ -50,7 +51,12 @@ import {
   describeTerminal,
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
-import { compileWatchPattern, createChunkMatcher } from "./src/watch.ts";
+import {
+  assertWatchableOutput,
+  compileWatchPattern,
+  createChunkMatcher,
+  matchCapturedOutput,
+} from "./src/watch.ts";
 import {
   createTerminalRuntime,
   runTool,
@@ -60,6 +66,13 @@ import { openTerminalPicker } from "./src/ui/ps.ts";
 import { renderTerminalResult } from "./src/ui/tool-result.ts";
 
 const WIDGET_KEY = "background-terminals";
+
+interface WatchToolDetails {
+  id: string;
+  pattern: string;
+  stream: "stdout" | "stderr" | "pending";
+  matched: boolean;
+}
 
 export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
@@ -255,7 +268,10 @@ export default function (pi: ExtensionAPI) {
       // Collapse whitespace (a newline inside a one-line UI row desyncs the
       // TUI renderer) before bounding the length.
       const title =
-        params.title.replace(/\s+/g, " ").trim().slice(0, 80) || "terminal";
+        sanitizeTerminalText(params.title)
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 80) || "terminal";
       const snap = await runTool(
         getRuntime(),
         manager.start({
@@ -423,8 +439,11 @@ export default function (pi: ExtensionAPI) {
           `Terminal ${params.id} is already ${snap.status}; its result was delivered. Watches only apply to running terminals.`,
         );
       }
-      // Compiles the pattern eagerly so an invalid regex is a tool error the
-      // model can fix, not a silent no-op watch.
+      // Once a raw stream's head was evicted, it may begin inside a hidden
+      // control payload. Reject instead of risking a false readiness match.
+      assertWatchableOutput(snap.stdout, snap.stderr);
+      // Validate and compile the literal signatures eagerly so bad input is a
+      // tool error the model can fix, not a silent no-op watch.
       const regex = compileWatchPattern(params.pattern);
       const matcher = createChunkMatcher(regex);
 
@@ -473,6 +492,41 @@ export default function (pi: ExtensionAPI) {
       );
       watchers.set(params.id, disarm);
 
+      // A fast process may have printed its readiness line before the model
+      // could arm the watch. Check retained output after subscribing so there
+      // is no gap between the historical scan and future chunks.
+      const existing = matchCapturedOutput(matcher, snap.stdout, snap.stderr);
+      if (existing) {
+        disarm();
+        const details: WatchToolDetails = {
+          id: params.id,
+          pattern: params.pattern,
+          stream: existing.stream,
+          matched: true,
+        };
+        return {
+          content: [
+            {
+              type: "text",
+              text: buildWatchMatchMessage({
+                id: params.id,
+                title: snap.title,
+                pattern: params.pattern,
+                stream: existing.stream,
+                line: existing.line,
+              }),
+            },
+          ],
+          details,
+        };
+      }
+
+      const details: WatchToolDetails = {
+        id: params.id,
+        pattern: params.pattern,
+        stream: "pending",
+        matched: false,
+      };
       return {
         content: [
           {
@@ -484,7 +538,7 @@ export default function (pi: ExtensionAPI) {
             }),
           },
         ],
-        details: { id: params.id, pattern: params.pattern },
+        details,
       };
     },
   });

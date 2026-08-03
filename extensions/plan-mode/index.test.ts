@@ -1,18 +1,34 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { readdir, readFile } from "node:fs/promises";
-import * as path from "node:path";
-import { fileURLToPath } from "node:url";
-import { BLOCKED_TOOLS } from "./index.ts";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import planMode, { PLAN_SAFE_TOOLS, planToolCallDecision } from "./index.ts";
 
-test("plan mode blocks every way to change state, including delegation", () => {
-  // Direct mutation.
-  for (const tool of ["edit", "write", "bash"]) {
-    assert.ok(BLOCKED_TOOLS.has(tool), `${tool} must be blocked`);
-  }
-  // Delegation would escape the gate: a child session's writes are invisible
-  // to this extension's tool_call handler, so the spawn itself is blocked.
+test("plan mode allows only explicit observational tools", () => {
   for (const tool of [
+    "read",
+    "fd",
+    "rg",
+    "web_search",
+    "bg_status",
+    "subagent_check",
+    "workflow_status",
+    "tasks_list",
+    "get_goal",
+    "ask_user",
+  ]) {
+    assert.ok(PLAN_SAFE_TOOLS.has(tool), `${tool} must stay available`);
+    assert.equal(planToolCallDecision(tool), undefined);
+  }
+});
+
+test("plan mode fail-closes known mutations and future unknown tools", () => {
+  for (const tool of [
+    "edit",
+    "write",
+    "bash",
     "subagent_spawn",
     "subagent_send",
     "workflow",
@@ -22,83 +38,60 @@ test("plan mode blocks every way to change state, including delegation", () => {
     "workflow_stop",
     "configure_my_pi_setup",
     "context_pivot",
+    "tasks_add",
+    "tasks_update",
+    "create_goal",
+    "update_goal",
+    "future_mutating_extension_tool",
   ]) {
-    assert.ok(BLOCKED_TOOLS.has(tool), `${tool} must be blocked`);
-  }
-});
-
-test("plan mode never blocks investigation", () => {
-  // A planner that cannot read is useless; these must stay available.
-  for (const tool of ["read", "grep", "find", "ls", "fd", "rg"]) {
     assert.equal(
-      BLOCKED_TOOLS.has(tool),
-      false,
-      `${tool} must stay available while planning`,
+      planToolCallDecision(tool)?.block,
+      true,
+      `${tool} must be blocked`,
     );
   }
 });
 
-/**
- * Tools this package registers that are safe while planning: pure reads, and
- * the peeks/asks that carry no side effect. Anything NOT here must be blocked,
- * so a future write-capable tool cannot silently escape the plan-mode gate.
- */
-const PLAN_SAFE_TOOLS = new Set([
-  "fd",
-  "rg",
-  "bg_status",
-  "bg_list",
-  "bg_watch",
-  "subagent_check",
-  "subagent_list",
-  "subagent_wait",
-  "workflow_status",
-  "tasks_add",
-  "tasks_update",
-  "tasks_list",
-  "get_goal",
-  "create_goal",
-  "update_goal",
-  "ask_user",
-]);
+test("runtime gate blocks before approval and opens after explicit approval", async () => {
+  let commandHandler:
+    ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  let toolHandler: ((event: { toolName: string }) => unknown) | undefined;
+  const pi = {
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on(event: string, handler: unknown) {
+      if (event === "tool_call") {
+        toolHandler = handler as (event: { toolName: string }) => unknown;
+      }
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus() {},
+      notify() {},
+      select: async () => "Approve — start making changes",
+    },
+  } as unknown as ExtensionContext;
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(toolHandler);
 
-test("every registered package tool is classified for the plan-mode gate", async () => {
-  const extensionsDir = path.resolve(
-    path.dirname(fileURLToPath(import.meta.url)),
-    "..",
-  );
-  const entries = await readdir(extensionsDir, { withFileTypes: true });
-  const registerToolRe = /registerTool\s*(?:<[^(]*>)?\s*\(\s*\{?/g;
-  const nameRe = /name\s*:\s*["'`]([a-z0-9_]+)["'`]/i;
-  const found = new Set<string>();
-  for (const entry of entries) {
-    if (!entry.isDirectory() || entry.name === "shared") continue;
-    let source: string;
-    try {
-      source = await readFile(
-        path.join(extensionsDir, entry.name, "index.ts"),
-        "utf8",
-      );
-    } catch {
-      continue;
-    }
-    let match: RegExpExecArray | null;
-    while ((match = registerToolRe.exec(source))) {
-      const nameMatch = nameRe.exec(
-        source.slice(match.index, match.index + 400),
-      );
-      if (nameMatch) found.add(nameMatch[1]);
-    }
-  }
-  assert.ok(
-    found.size >= 15,
-    `scan should find the package tools, got ${found.size}`,
-  );
-  for (const tool of found) {
-    assert.ok(
-      BLOCKED_TOOLS.has(tool) || PLAN_SAFE_TOOLS.has(tool),
-      `tool "${tool}" is unclassified for plan mode: block it in BLOCKED_TOOLS ` +
-        "(if it can change anything) or add it to PLAN_SAFE_TOOLS here",
-    );
-  }
+  await commandHandler("", ctx);
+  assert.deepEqual(toolHandler({ toolName: "tasks_add" }), {
+    block: true,
+    reason:
+      "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.",
+  });
+  assert.equal(toolHandler({ toolName: "read" }), undefined);
+
+  await commandHandler("done", ctx);
+  assert.equal(toolHandler({ toolName: "write" }), undefined);
 });

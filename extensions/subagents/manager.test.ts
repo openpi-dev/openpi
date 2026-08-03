@@ -315,6 +315,21 @@ test("send steers an idle subagent into another turn", async () => {
   });
 });
 
+test("cancel issued in the restart window stops the new run", () => {
+  return withManager(async (manager, runtime) => {
+    const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+    await runTool(runtime, manager.waitFor([snap.id]));
+    assert.equal(manager.view.get(snap.id)?.status, "done");
+
+    await runTool(runtime, manager.send(snap.id, "Second"));
+    const report = await runTool(runtime, manager.cancel([snap.id]));
+    assert.deepEqual(report, [
+      { id: snap.id, title: "test", status: "error", cancelled: true },
+    ]);
+    assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+  });
+});
+
 test("a wait issued alongside a restart does not return the stale run", () => {
   // pi executes same-message tool calls in parallel, so subagent_send and
   // subagent_wait can start together. The restart occupies the slot before

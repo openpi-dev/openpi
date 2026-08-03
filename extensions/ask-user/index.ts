@@ -19,6 +19,7 @@ import {
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   ASK_USER_PARAMETER_DESCRIPTIONS,
   ASK_USER_PROMPT_GUIDELINES,
@@ -110,18 +111,8 @@ interface DisplayOption {
   isOther?: boolean;
 }
 
-/**
- * Strip ANSI/control bytes from model-supplied preview text. It is rendered
- * verbatim to preserve code indentation, so escape sequences would otherwise
- * reach the terminal directly (cursor control, OSC 52 clipboard writes) and
- * desync the differential renderer.
- */
-function sanitizePreviewLine(raw: string) {
-  return raw
-    .replace(/\u001b\[[0-9;?]*[ -/]*[@-~]/g, "")
-    .replace(/\u001b\][\s\S]*?(?:\u0007|\u001b\\)/g, "")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "")
-    .replace(/\t/g, "  ");
+export function formatPreviewLine(raw: string, width: number) {
+  return truncateToWidth(sanitizeTerminalText(raw), width, "…");
 }
 
 function wrapText(text: string, width: number): string[] {
@@ -399,11 +390,7 @@ export default function askUser(pi: ExtensionAPI) {
               const previewLines = preview.split("\n");
               const shown = previewLines.slice(0, PREVIEW_MAX_LINES);
               for (const raw of shown) {
-                const clean = sanitizePreviewLine(raw);
-                const line =
-                  clean.length > inner
-                    ? `${clean.slice(0, inner - 1)}…`
-                    : clean;
+                const line = formatPreviewLine(raw, inner);
                 add(` ${theme.fg("muted", "│")} ${theme.fg("text", line)}`);
               }
               const hidden = previewLines.length - shown.length;

@@ -17,19 +17,82 @@ import {
   loadSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
 } from "../shared/setup-config.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 
 /** Tools whose success means a file on disk changed. */
 const MUTATING_TOOLS = new Set(["write", "edit"]);
 
-export default function postEdit(pi: ExtensionAPI) {
-  let command = loadSetupConfig().postEdit.command;
+export default function postEdit(
+  pi: ExtensionAPI,
+  loadCommand: () => string = () => loadSetupConfig().postEdit.command,
+) {
+  let command = loadCommand();
   let filesChanged = false;
-  let running = false;
+  let pendingRuns = 0;
+  let generation = 0;
+  let active: { controller: AbortController } | undefined;
 
   // Re-read on change, matching the sibling extensions' pattern.
   pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
-    command = loadSetupConfig().postEdit.command;
+    command = loadCommand();
+    if (!command) pendingRuns = 0;
   });
+
+  const runNext = (ctx: ExtensionContext, runGeneration: number) => {
+    if (
+      runGeneration !== generation ||
+      active ||
+      pendingRuns === 0 ||
+      !command
+    ) {
+      return;
+    }
+    pendingRuns--;
+    const ran = command;
+    const controller = new AbortController();
+    active = { controller };
+
+    // Notification is best-effort: the context can go stale (session change,
+    // shutdown) while the command runs, and a throwing notify must not become
+    // an unhandled rejection that takes the process down.
+    const warn = (message: string) => {
+      if (generation !== runGeneration) return;
+      try {
+        if (ctx.mode === "tui" && ctx.hasUI) {
+          ctx.ui.notify(sanitizeTerminalText(message), "warning");
+        }
+      } catch {
+        // Nothing better to do — the session that would have shown it is gone.
+      }
+    };
+
+    // Fire-and-forget: never block settlement on the command. Runs are drained
+    // serially so two closely settled changed turns cannot lose the latter.
+    void pi
+      .exec("sh", ["-c", ran], {
+        cwd: ctx.cwd,
+        signal: controller.signal,
+      })
+      .then((result) => {
+        if (result.code === 0) return;
+        const detail = sanitizeTerminalText(
+          result.stderr || result.stdout || "",
+        )
+          .trim()
+          .slice(0, 500);
+        warn(
+          `post-edit command failed (exit ${result.code}): ${sanitizeTerminalText(ran)}${detail ? `\n${detail}` : ""}`,
+        );
+      })
+      .catch((error: unknown) => {
+        const detail = error instanceof Error ? error.message : String(error);
+        warn(`post-edit command could not run: ${detail}`);
+      })
+      .finally(() => {
+        if (active?.controller === controller) active = undefined;
+        if (generation === runGeneration) runNext(ctx, runGeneration);
+      });
+  };
 
   pi.on("tool_result", (event) => {
     // Hot path: only a boolean flip. No await, no exec, no config read that
@@ -40,52 +103,27 @@ export default function postEdit(pi: ExtensionAPI) {
 
   pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
     if (!filesChanged) return;
-    // Interactive sessions only: a headless child or `pi -p` run loads this
-    // extension too, and neither should silently execute the user's command.
-    // Keep the flag set when a previous run is still going, so this turn's
-    // edits are picked up by the next settlement instead of being dropped.
-    if (!ctx.hasUI || !command || running) return;
     filesChanged = false;
+    // `hasUI` is also true in headless RPC mode. This command is intentionally
+    // limited to the interactive terminal session that configured it.
+    if (ctx.mode !== "tui" || !command) return;
+    pendingRuns++;
+    runNext(ctx, generation);
+  });
 
-    running = true;
-    // The command that is actually about to run: `command` can change under a
-    // config update while this is in flight, and the failure message must name
-    // what really ran.
-    const ran = command;
-    // Notification is best-effort: the context can go stale (session change,
-    // shutdown) while the command runs, and a throwing notify must not become
-    // an unhandled rejection that takes the process down.
-    const warn = (message: string) => {
-      try {
-        if (ctx.hasUI) ctx.ui.notify(message, "warning");
-      } catch {
-        // Nothing better to do — the session that would have shown it is gone.
-      }
-    };
-    // Fire-and-forget: never block settlement on the command. Success is
-    // silent; only a failure is surfaced, and only to the user.
-    void pi
-      .exec("sh", ["-c", ran])
-      .then((result) => {
-        if (result.code === 0) return;
-        const detail = (result.stderr || result.stdout || "")
-          .trim()
-          .slice(0, 500);
-        warn(
-          `post-edit command failed (exit ${result.code}): ${ran}${detail ? `\n${detail}` : ""}`,
-        );
-      })
-      .catch((error: unknown) => {
-        warn(
-          `post-edit command could not run: ${error instanceof Error ? error.message : String(error)}`,
-        );
-      })
-      .finally(() => {
-        running = false;
-      });
+  pi.on("session_start", () => {
+    generation++;
+    filesChanged = false;
+    pendingRuns = 0;
+    active?.controller.abort();
+    active = undefined;
   });
 
   pi.on("session_shutdown", () => {
+    generation++;
     filesChanged = false;
+    pendingRuns = 0;
+    active?.controller.abort();
+    active = undefined;
   });
 }

@@ -16,7 +16,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  advanceJob,
+  advanceDeliveredJobs,
   dueJobs,
   formatInterval,
   parseCronCommand,
@@ -49,8 +49,10 @@ export default function cron(pi: ExtensionAPI) {
         },
         { deliverAs: "followUp", triggerTurn: true },
       );
+      return true;
     } catch {
-      // Session may be shutting down; the job stays scheduled for next tick.
+      // Session may be shutting down; leave the job due for the next tick.
+      return false;
     }
   };
 
@@ -63,14 +65,11 @@ export default function cron(pi: ExtensionAPI) {
     const now = Date.now();
     const due = dueJobs(jobs, now);
     if (due.length === 0) return;
-    const dueIds = new Set(due.map((job) => job.id));
-    // Reschedule before firing so a throwing send cannot double-fire a job.
-    jobs = jobs.flatMap((job) => {
-      if (!dueIds.has(job.id)) return [job];
-      const next = advanceJob(job, now);
-      return next ? [next] : [];
-    });
-    for (const job of due) fire(job);
+    const deliveredIds = new Set<number>();
+    for (const job of due) {
+      if (fire(job)) deliveredIds.add(job.id);
+    }
+    jobs = advanceDeliveredJobs(jobs, deliveredIds, now);
     if (jobs.length === 0) stopTicker();
   };
 

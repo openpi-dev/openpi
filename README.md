@@ -155,7 +155,7 @@ bg_start({
 - 独立捕获 stdout / stderr；
 - `/ps` 实时查看日志和状态；
 - 进程退出后自动通知 Agent，无需轮询；
-- 对不会自己退出的进程（dev server、watcher、长任务），`bg_watch` 可以在输出匹配到指定正则时唤醒模型；模式应同时覆盖失败特征（如 `Ready in|Traceback|ERROR`），否则崩溃看起来和"还在跑"一样；
+- 对不会自己退出的进程（dev server、watcher、长任务），`bg_watch` 可以在输出匹配到指定字面签名时唤醒模型；用 `|` 分隔多个签名并同时覆盖失败特征（如 `Ready in|Traceback|ERROR`），否则崩溃看起来和“还在跑”一样；
 - 可为 build、test、migration 设置 `timeout_seconds`；
 - 超时后终止整个进程树，并明确记录为 `timed_out`；
 - 最多并发 8 个后台进程；
