@@ -97,7 +97,7 @@ const BOOTSTRAP = String.raw`
       while (true) {
         const index = next++;
         if (index >= items.length) return;
-        results[index] = await invoke(items[index]);
+        results[index] = await invoke(items[index], index);
       }
     });
     await Promise.all(workers);
@@ -132,6 +132,34 @@ const BOOTSTRAP = String.raw`
     });
   }
 
+  async function pipeline(items, ...stages) {
+    if (!Array.isArray(items)) throw new Error("pipeline() expects an array of items as its first argument");
+    for (const stage of stages) {
+      if (typeof stage !== "function") throw new Error("pipeline() stages must be functions");
+    }
+    // Each item walks every stage on its own, with no barrier in between: item
+    // A can be in stage 3 while item B is still in stage 1. Wall-clock is the
+    // slowest single chain rather than the sum of each stage's slowest item.
+    //
+    // In-flight items are capped even though the host semaphore already
+    // serializes agent calls, because the host counts an agent call against the
+    // run budget when it is SUBMITTED, not when it runs. Releasing every chain
+    // at once would burn the budget on calls that are merely queued.
+    return mapLimited(items, Math.min(maxConcurrency, items.length || 1), async (item, index) => {
+      let value = item;
+      // A throwing stage drops just this item to null and skips its remaining
+      // stages; siblings are unaffected. Matches parallel()'s thunk semantics.
+      try {
+        for (const stage of stages) {
+          value = await stage(value, item, index);
+        }
+        return value;
+      } catch {
+        return null;
+      }
+    });
+  }
+
   function phase(title) {
     callHost("phase", JSON.stringify({ title: String(title) }));
   }
@@ -154,6 +182,7 @@ const BOOTSTRAP = String.raw`
   Object.defineProperties(globalThis, {
     agent: { value: requestAgent, writable: false, configurable: false },
     parallel: { value: parallel, writable: false, configurable: false },
+    pipeline: { value: pipeline, writable: false, configurable: false },
     phase: { value: phase, writable: false, configurable: false },
     args: { value: args, writable: false, configurable: false },
     __workflowCheck: {
@@ -253,7 +282,7 @@ function run(source, argsJson, maxConcurrency) {
     }).runInContext(context, { timeout: 1000 });
     const workflow = vm.compileFunction(
       `"use strict";\nreturn (async function workflow() {\n${source}\n})();`,
-      ["agent", "parallel", "phase", "args"],
+      ["agent", "parallel", "pipeline", "phase", "args"],
       { filename: "workflow-script.js", parsingContext: context },
     );
     context.__workflowBody = workflow;
@@ -262,7 +291,7 @@ function run(source, argsJson, maxConcurrency) {
         const workflowBody = globalThis.__workflowBody;
         delete globalThis.__workflowBody;
         globalThis.__workflowPromise = Promise.resolve(
-          workflowBody(agent, parallel, phase, args),
+          workflowBody(agent, parallel, pipeline, phase, args),
         ).then(async (value) => {
           await Promise.resolve();
           const pending = __workflowCheck();

@@ -46,31 +46,36 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
   "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
+  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. This is a BARRIER: nothing after it starts until every thunk settles. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
+  "• await pipeline(items, stage1, stage2, ...) — run each item through every stage independently, with NO barrier between stages: item A can be in stage 3 while item B is still in stage 1. Results come back in input order. Each stage receives (previousResult, originalItem, index), so a later stage can label its work without threading context through the earlier stage's return value. A stage that throws drops that item to null and skips its remaining stages, leaving siblings untouched.",
+  "PREFER pipeline() for multi-stage work. parallel() forces every item to wait for the slowest one in each stage, so wall-clock becomes the sum of per-stage worst cases (max stage1 + max stage2) instead of the slowest single chain. The gap is widest when different items are slow in different stages; when one item is slowest everywhere it is the critical path either way. Reach for a barrier only when a stage genuinely needs cross-item context from ALL of the previous one: deduping or merging the full result set, exiting early when the total count is zero, or a prompt that compares one finding against the others. Needing to flatten/map/filter in between is NOT a reason — do that inside a pipeline stage.",
 
   "• args — the parsed value of the `args` tool parameter (or undefined).",
   "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. The package default permits 128 agent calls per run and can be changed with /my-pi-setup (hard maximum 1024); there is no overall deadline. Each agent must receive its first assistant response event within 45 seconds so silent provider requests fail clearly; after that, agent() has no wall-clock deadline. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
   "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
-  "Example:",
-  "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Report' }] }",
+  "Example — each file is verified as soon as ITS OWN scan lands, instead of waiting for every scan:",
+  "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Verify' }, { title: 'Report' }] }",
   "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
   "phase('Scan')",
-  "const scans = await parallel(args.files.map((f) => () => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS })))",
-  "const findings = scans.filter((r) => r && r.ok).map((r) => r.structured)",
-  "const dropped = scans.length - findings.length // agents that failed/dropped: surface, never silently swallow",
+  "const checked = await pipeline(args.files,",
+  "  (f) => agent(`Review ${f} for correctness and reliability risks.`, { label: `scan:${f}`, phase: 'Scan', schema: FINDINGS }),",
+  "  (scan, f) => scan.ok ? agent(`Confirm these issues in ${f} are real: ${JSON.stringify(scan.structured.issues)}`, { label: `verify:${f}`, phase: 'Verify' }) : null)",
+  "const verified = checked.filter((r) => r && r.ok)",
+  "const dropped = checked.length - verified.length // agents that failed/dropped: surface, never silently swallow",
   "phase('Report')",
-  "const report = await agent(`Summarize these findings: ${JSON.stringify(findings)}`, { label: 'report', phase: 'Report' })",
-  "return { findings, dropped, report: report.ok ? report.output : report.error }",
+  "const report = await agent(`Summarize these verified findings: ${JSON.stringify(verified.map((r) => r.output))}`, { label: 'report', phase: 'Report' })",
+  "return { verified: verified.length, dropped, report: report.ok ? report.output : report.error }",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
 export const WORKFLOW_PROMPT_SNIPPET =
-  "Orchestrate isolated subagents from an inline JS script: phase()/agent()/parallel() with structured outputs and optional background execution";
+  "Orchestrate isolated subagents from an inline JS script: phase()/agent()/pipeline()/parallel() with structured outputs and optional background execution";
 
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
   "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
-  "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() settles a throwing thunk to `null`, so guard those with `r && r.ok`.",
+  "Default to pipeline() for multi-stage fan-out so each item advances as soon as its own previous stage lands; use parallel() only when a stage truly needs every prior result at once.",
+  "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() and pipeline() settle a throwing thunk or stage to `null`, so guard those with `r && r.ok`.",
   "A filtered-out or null result is a failed agent, not a clean pass: surface how many dropped (e.g. return a count) so a crashed or timed-out agent never reads as success.",
 ];
 

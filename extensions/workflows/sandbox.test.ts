@@ -204,6 +204,116 @@ test("parallel() settles a throwing thunk to null without failing the batch", as
   assert.deepEqual(result, ["reply:ok", "NULL", "reply:also-ok"]);
 });
 
+test("pipeline() advances each item independently, with no barrier between stages", async () => {
+  // The point of pipeline over parallel: a fast item must be allowed to finish
+  // its whole chain while a slow sibling is still in stage one.
+  const order: string[] = [];
+  const result = await run(
+    `
+      return await pipeline(
+        args.files,
+        (file) => agent("s1:" + file),
+        (previous, file, index) => agent("s2:" + file + ":" + index + ":" + previous.output),
+      );
+    `,
+    {
+      args: { files: ["slow", "fast"] },
+      onAgent: async (prompt) => {
+        order.push(`start ${prompt}`);
+        await new Promise((resolve) =>
+          setTimeout(resolve, prompt === "s1:slow" ? 60 : 5),
+        );
+        order.push(`end ${prompt}`);
+        return { ok: true, output: prompt };
+      },
+    },
+  );
+
+  // Results stay in input order even though completion order differs.
+  assert.deepEqual(
+    (result as Array<{ output: string }>).map((entry) => entry.output),
+    ["s2:slow:0:s1:slow", "s2:fast:1:s1:fast"],
+  );
+  // Stage args are (previousResult, originalItem, index): the second stage
+  // could only build these labels if all three arrived.
+  assert.ok(order.includes("start s2:fast:1:s1:fast"));
+  assert.ok(
+    order.indexOf("start s2:fast:1:s1:fast") < order.indexOf("end s1:slow"),
+    `fast reached stage two only after the slow item finished stage one:\n${order.join("\n")}`,
+  );
+});
+
+test("pipeline() drops a throwing item to null and skips its remaining stages", async () => {
+  const reached: string[] = [];
+  const result = await run(
+    `
+      return await pipeline(
+        ["good", "bad"],
+        (item) => { if (item === "bad") throw new Error("stage one failed"); return item; },
+        async (item) => (await agent("s2:" + item)).output,
+      );
+    `,
+    {
+      onAgent: async (prompt) => {
+        reached.push(prompt);
+        return { ok: true, output: prompt };
+      },
+    },
+  );
+
+  assert.deepEqual(result, ["s2:good", null]);
+  // The failed item must not continue: no stage-two agent call for "bad".
+  assert.deepEqual(reached, ["s2:good"]);
+});
+
+test("pipeline() honors the concurrency cap and an empty input", async () => {
+  let active = 0;
+  let peak = 0;
+  const result = await run(
+    `
+      const done = await pipeline(
+        [1, 2, 3, 4, 5, 6],
+        (n) => agent("a" + n),
+        (previous) => agent("b" + previous.output),
+      );
+      const empty = await pipeline([], (x) => x);
+      return { count: done.length, empty };
+    `,
+    {
+      maxConcurrency: 2,
+      onAgent: async (prompt) => {
+        active++;
+        peak = Math.max(peak, active);
+        await new Promise((resolve) => setTimeout(resolve, 5));
+        active--;
+        return { ok: true, output: prompt };
+      },
+    },
+  );
+
+  assert.deepEqual(result, { count: 6, empty: [] });
+  // In-flight chains are capped too: the host counts an agent call against the
+  // run budget when it is submitted, so releasing every chain at once would
+  // spend the budget on merely-queued calls.
+  assert.equal(peak, 2);
+});
+
+test("pipeline() rejects a non-array input and non-function stages", async () => {
+  await assert.rejects(
+    run(`return await pipeline("not-an-array", (x) => x);`),
+    /pipeline\(\) expects an array/,
+  );
+  await assert.rejects(
+    run(`return await pipeline([1], "not-a-function");`),
+    /pipeline\(\) stages must be functions/,
+  );
+});
+
+test("pipeline() with no stages returns the items unchanged", async () => {
+  // Degenerate but well-defined: zero stages is the identity, not an error.
+  assert.deepEqual(await run(`return await pipeline([1, 2]);`), [1, 2]);
+});
+
 test("a promise handed to workflow code cannot reach the host realm", async () => {
   // .then() used to return a host-realm promise, whose constructor chain leads
   // to the host Function and therefore past the context's codeGeneration ban.

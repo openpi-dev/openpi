@@ -200,23 +200,26 @@ subagent_spawn({
 
 ```js
 phase("Scan");
-const findings = await parallel(
-  files.map(
-    (file) => () =>
-      agent(`Review ${file}`, {
-        label: `review:${file}`,
-        schema: FINDING_SCHEMA,
-      }),
-  ),
+// 每个 file 独立走完 scan → verify，阶段之间没有 barrier：
+// 快的文件可以在慢的文件还在 scan 时就进入 verify。
+const checked = await pipeline(
+  files,
+  (file) =>
+    agent(`Review ${file}`, { label: `review:${file}`, schema: FINDING_SCHEMA }),
+  (scan, file) =>
+    scan.ok
+      ? agent(`Confirm the issues found in ${file}`, { label: `verify:${file}` })
+      : null,
 );
 
 phase("Synthesize");
-return await agent(`Synthesize: ${JSON.stringify(findings)}`);
+return await agent(`Synthesize: ${JSON.stringify(checked)}`);
 ```
 
 - `phase()` 展示阶段进度；
 - `agent()` 启动隔离的 Pi Agent；
-- `parallel()` 控制并发 fan-out；
+- `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
+- `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
 - JSON Schema 提供结构化结果；
 - 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
@@ -225,6 +228,8 @@ return await agent(`Synthesize: ${JSON.stringify(findings)}`);
 - 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`。
 
 默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
+
+`pipeline()` 的收益来自去掉阶段之间的等待：barrier 的墙钟是「各阶段最坏值之和」（max(stage1) + max(stage2)），pipeline 是「最坏的那条链路」。所以**当不同 item 在不同阶段慢时差距最大**——实测两个 item、两个阶段的交叉慢点场景，604ms → 324ms；反过来，如果某个 item 在每个阶段都最慢，它就是关键路径，两者没有区别。
 
 ### 4. Session Tasks：跨 Turn 记住未完成工作
 

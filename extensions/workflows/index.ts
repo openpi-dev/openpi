@@ -8,7 +8,8 @@
  *   export const meta = { name, description, phases: [{ title, detail? }] }
  *   phase(title)                                  // mark runtime phase progression
  *   await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? })
- *   await parallel([() => agent(...), ...], { concurrency? })
+ *   await pipeline(items, stage1, stage2, ...)    // per-item, no barrier between stages
+ *   await parallel([() => agent(...), ...], { concurrency? })  // barrier
  *   args                                          // parsed JSON args passed with the tool call
  *
  * `agent()` always resolves to `{ ok, output, structured?, error? }` — it
