@@ -4,6 +4,11 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  PLAN_MODE_CHANNEL,
+  PLAN_MODE_CHILD_TOOLS,
+  planModeChildTools,
+} from "../shared/plan-mode-state.ts";
 import planMode, {
   BLOCK_REASON,
   PLAN_SAFE_TOOLS,
@@ -32,7 +37,6 @@ test("plan mode fail-closes known mutations and future unknown tools", () => {
   for (const tool of [
     "edit",
     "write",
-    "subagent_spawn",
     "subagent_send",
     "workflow",
     "bg_start",
@@ -102,6 +106,7 @@ test("runtime gate blocks before approval and opens after explicit approval", as
         }) => unknown;
       }
     },
+    events: { emit() {} },
     sendMessage() {},
   } as unknown as ExtensionAPI;
   const ctx = {
@@ -143,4 +148,88 @@ test("runtime gate blocks before approval and opens after explicit approval", as
     toolHandler({ toolName: "bash", input: { command: "npm publish" } }),
     undefined,
   );
+});
+
+test("spawning is allowed while planning, resuming an existing child is not", () => {
+  // Parallel read-only exploration is one of the most useful things to do
+  // while planning, and it is safe because the child's tool allowlist is
+  // enforced by the harness — subagents narrows a planning child to
+  // PLAN_MODE_CHILD_TOOLS, which has no write, edit, or bash.
+  assert.ok(PLAN_SAFE_TOOLS.has("subagent_spawn"));
+  assert.equal(planToolCallDecision("subagent_spawn"), undefined);
+
+  // subagent_send resumes a child that may predate the plan and still hold the
+  // full tool set; narrowing only applies at spawn.
+  assert.equal(planToolCallDecision("subagent_send")?.block, true);
+
+  // workflow's agent() has no per-call tool allowlist to narrow.
+  assert.equal(planToolCallDecision("workflow")?.block, true);
+});
+
+test("planning children get investigation tools and never gain any", () => {
+  // The allowlist can only ever remove: a type that restricted itself further
+  // keeps its own limit, and one that named a writing tool does not get it.
+  assert.deepEqual(
+    [...planModeChildTools(undefined)],
+    [...PLAN_MODE_CHILD_TOOLS],
+  );
+  assert.deepEqual(planModeChildTools(["read", "write", "bash"]), ["read"]);
+  assert.deepEqual(planModeChildTools(["read", "rg"]), ["read", "rg"]);
+  assert.deepEqual(planModeChildTools(["write", "edit"]), []);
+  for (const tool of ["write", "edit", "bash", "subagent_spawn"]) {
+    assert.ok(
+      !PLAN_MODE_CHILD_TOOLS.includes(tool),
+      `${tool} must not be available to a planning child`,
+    );
+  }
+});
+
+test("the stance is broadcast on every change, including shutdown", () => {
+  // subagents keeps its own copy of the flag; a stale broadcast would mean a
+  // child spawned with write tools during a plan, or one needlessly
+  // restricted in the session that follows.
+  const emitted: unknown[] = [];
+  let commandHandler:
+    ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+  let shutdown: (() => void) | undefined;
+  const pi = {
+    registerCommand(
+      _name: string,
+      command: { handler: typeof commandHandler },
+    ) {
+      commandHandler = command.handler;
+    },
+    on(event: string, handler: unknown) {
+      if (event === "session_shutdown") shutdown = handler as () => void;
+    },
+    events: {
+      emit(channel: string, payload: unknown) {
+        if (channel === PLAN_MODE_CHANNEL) emitted.push(payload);
+      },
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus() {},
+      notify() {},
+      select: async () => "Approve — start making changes",
+    },
+  } as unknown as ExtensionContext;
+
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(shutdown);
+
+  void commandHandler("", ctx);
+  assert.deepEqual(emitted.at(-1), { planning: true });
+
+  void commandHandler("off", ctx);
+  assert.deepEqual(emitted.at(-1), { planning: false });
+
+  void commandHandler("", ctx);
+  assert.deepEqual(emitted.at(-1), { planning: true });
+  shutdown();
+  assert.deepEqual(emitted.at(-1), { planning: false });
 });

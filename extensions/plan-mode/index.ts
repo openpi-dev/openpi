@@ -8,13 +8,26 @@
  * `/plan done` (or the model calling nothing at all) presents the plan for
  * approval.
  *
- * SCOPE, deliberately stated: this gates only THIS interactive session. A
- * tool_call handler cannot reach a headless subagent's or a workflow child's
- * writes — those run in their own sessions — so delegation is blocked rather
- * than pretending to gate what a child does.
+ * SCOPE, deliberately stated: a `tool_call` handler gates only THIS
+ * interactive session. It cannot reach a headless subagent's or a workflow
+ * child's writes — those run in their own sessions.
+ *
+ * Delegation is still allowed, because that limitation is answered elsewhere:
+ * `subagent_spawn` narrows a child to `PLAN_MODE_CHILD_TOOLS` (see
+ * `../shared/plan-mode-state.ts`), and a child tool allowlist is enforced by
+ * the harness rather than by prompt. Blocking it outright was the first
+ * answer and it was the wrong trade: parallel read-only exploration, kept out
+ * of the main context, is one of the most useful things to do while planning.
+ * `workflow` stays blocked because its `agent()` has no per-call tool
+ * allowlist to narrow, and `subagent_send` because it resumes a child that
+ * may predate the plan and still hold the full tool set.
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import {
+  PLAN_MODE_CHANNEL,
+  type PlanModeState,
+} from "../shared/plan-mode-state.ts";
 import { planBashDecision } from "./bash-policy.ts";
 
 /**
@@ -45,6 +58,19 @@ export const PLAN_SAFE_TOOLS = new Set([
   "subagent_list",
   "subagent_wait",
   "workflow_status",
+  // Delegated investigation. Exploring several subsystems in parallel without
+  // dragging the noise into the main context is one of the most useful things
+  // to do while planning, so spawning is allowed — but only because the
+  // child's tool allowlist is enforced by the harness. See
+  // `plan-mode-state.ts`: subagents narrows a planning child to
+  // PLAN_MODE_CHILD_TOOLS, which has no write, edit, or bash in it. A
+  // tool_call handler could never gate a child's writes itself, since the
+  // child runs in its own session.
+  //
+  // `subagent_send` is NOT here for the same reason: it resumes an existing
+  // child's session, and one started before `/plan` was armed still holds the
+  // full tool set. Narrowing applies at spawn, so only spawning is safe.
+  "subagent_spawn",
   // Advisory state reads and an explicit user clarification.
   "tasks_list",
   "get_goal",
@@ -52,7 +78,7 @@ export const PLAN_SAFE_TOOLS = new Set([
 ]);
 
 export const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, and read-only bash like git log/diff/status) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, read-only bash like git log/diff/status, and subagent_spawn for parallel exploration — planning children get read-only tools) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
 
 export function planToolCallDecision(
   toolName: string,
@@ -75,10 +101,17 @@ export function planToolCallDecision(
 export default function planMode(pi: ExtensionAPI) {
   let planning = false;
 
+  /**
+   * Publish the stance and reflect it in the footer. Every place `planning`
+   * changes goes through here, because a subagent spawned while the broadcast
+   * was stale would be a child with write tools during a plan — the one thing
+   * this extension exists to prevent.
+   */
   const setStatus = (ctx: {
     hasUI: boolean;
     ui: { setStatus: (key: string, value?: string) => void };
   }) => {
+    pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);
     if (!ctx.hasUI) return;
     ctx.ui.setStatus(
       "plan-mode",
@@ -146,7 +179,7 @@ export default function planMode(pi: ExtensionAPI) {
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits, writes, and delegation are blocked until the user approves. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects.${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user approves. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
             "\n\nUse read-only tools to ground the plan, then present it concisely and stop. The user will run `/plan done` to approve.",
           display: true,
           details: {},
@@ -170,5 +203,8 @@ export default function planMode(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     planning = false;
+    // Broadcast without a ctx: subagents keeps its own copy of the stance, and
+    // leaving it armed would restrict children in whatever session comes next.
+    pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);
   });
 }

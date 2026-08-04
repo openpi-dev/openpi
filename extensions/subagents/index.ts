@@ -91,6 +91,11 @@ import {
 } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
+  PLAN_MODE_CHANNEL,
+  planModeChildTools,
+  type PlanModeState,
+} from "../shared/plan-mode-state.ts";
+import {
   createWorktree,
   reclaimWorktree,
   type Worktree,
@@ -401,6 +406,19 @@ export default function (pi: ExtensionAPI) {
    * two children with the same title would otherwise collide on the branch.
    */
   let worktreeCounter = 0;
+
+  /**
+   * Mirror of the session's `/plan` stance, published by plan-mode. Kept here
+   * rather than queried because spawning must not depend on that extension
+   * being loaded: absent it, this stays false and behaviour is unchanged.
+   */
+  let planning = false;
+  pi.events.on(PLAN_MODE_CHANNEL, (state: unknown) => {
+    planning =
+      typeof state === "object" &&
+      state !== null &&
+      (state as PlanModeState).planning === true;
+  });
   /** Only add the parameter when types exist, so a bare install is unchanged. */
   const agentTypeParameters: TProperties =
     agentTypeList.length > 0
@@ -514,6 +532,14 @@ export default function (pi: ExtensionAPI) {
         parentTrusted: ctx.isProjectTrusted(),
       });
 
+      // Planning narrows the child to investigation tools. This is what makes
+      // delegation safe during `/plan`: the allowlist is enforced by the
+      // harness, so the child has no write/edit/bash to call, where a
+      // tool_call handler in this session could never have reached it.
+      const childTools = planning
+        ? planModeChildTools(agentType?.tools)
+        : agentType?.tools;
+
       const spawn = manager.spawn(harness, {
         prompt: params.prompt,
         title,
@@ -522,7 +548,7 @@ export default function (pi: ExtensionAPI) {
         model: params.model ?? agentType?.model,
         reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
-        ...(agentType?.tools ? { tools: agentType.tools } : {}),
+        ...(childTools ? { tools: childTools } : {}),
         ...(agentType ? { agentTypeName: agentType.name } : {}),
         ...(worktree ? { worktree: { ...worktree, repoCwd: cwd } } : {}),
         parent: {

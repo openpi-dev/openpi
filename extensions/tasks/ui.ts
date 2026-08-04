@@ -309,12 +309,19 @@ class TaskResultView implements Component {
 }
 
 export function renderToolResult(
-  details: TaskToolDetails | undefined,
+  details: unknown,
   expanded: boolean,
   theme: Theme,
+  fallbackText = "Tasks updated.",
 ): Component {
-  if (!details) return new Text(theme.fg("dim", "Tasks updated."), 0, 0);
-  return new TaskResultView(details, expanded, theme);
+  if (
+    !details ||
+    typeof details !== "object" ||
+    !Array.isArray((details as Partial<TaskToolDetails>).items)
+  ) {
+    return new Text(theme.fg("dim", fallbackText), 0, 0);
+  }
+  return new TaskResultView(details as TaskToolDetails, expanded, theme);
 }
 
 class TasksScreen implements Component {

@@ -292,3 +292,23 @@ test("normalizes string content and skips when no user message exists", () => {
     undefined,
   );
 });
+
+test("blocked task tools render their refusal instead of crashing", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  const renderer = h.tools.get("tasks_add").renderResult;
+  const component = renderer(
+    {
+      content: [{ type: "text", text: "Plan mode is active." }],
+      details: { blocked: true },
+    },
+    { expanded: false },
+    {
+      fg: (_name: string, text: string) => text,
+      bold: (text: string) => text,
+      strikethrough: (text: string) => text,
+    },
+  );
+
+  assert.equal(component.render(100).join("\n").trim(), "Plan mode is active.");
+});

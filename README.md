@@ -8,8 +8,8 @@
 
 <p align="center">
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.82+" src="https://img.shields.io/badge/Pi-0.82%2B-2f81f7?style=flat-square"></a>
-  <a href="https://github.com/tt-a1i/my-pi-setup/actions"><img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white"></a>
-  <img alt="Tests" src="https://img.shields.io/badge/tests-passing-3fb950?style=flat-square">
+  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white">
+  <a href="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Configuration" src="https://img.shields.io/badge/config-natural%20language-d2a8ff?style=flat-square">
   <img alt="License" src="https://img.shields.io/badge/license-see%20notices-7d8590?style=flat-square">
 </p>
@@ -686,6 +686,22 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 方向是单向的：放行意味着「已证明只读」，拒绝只意味着「未能证明」。所以 `git tag --list`、`git config --get`、`git stash list` 这些确实只读的形式也照拒——把它们和写入形式分开要解析各自的 flag 语法，正是这个模块拒绝做的分析。
 
 它防的是「模型在你批准前就动手」，**不防敌意仓库**：`git diff` 默认会读仓库自己 `.git/config` 里的 `diff.external`，这层拦不住，上层也没打算拦——Pi 本来就在你的 trust 决定下运行项目自带的工具链。
+
+</details>
+
+<details>
+<summary><strong>Plan mode 下还能用子 Agent 吗？</strong></summary>
+
+能，而且应该用。并行看几个子系统、把调研噪音挡在主上下文外面，正是规划阶段最该做的事。
+
+安全性不靠提示词，靠 harness：`/plan` armed 时 `subagent_spawn` 会把子 Agent 的工具白名单收窄成 `read / grep / find / ls / fd / rg`，它手里**根本没有** `write`/`edit`/`bash` 可调用。收窄只做减法——如果 `agent_type` 已经限得更死，保留它自己的限制。
+
+两个例外：
+
+- **`subagent_send` 仍然拦着**。它恢复的是一个已存在的子会话，而那个子 Agent 可能是 `/plan` 之前起的、还握着完整工具集。收窄只发生在 spawn 那一刻。
+- **`workflow` 仍然拦着**。它的 `agent()` 没有 per-call 的工具白名单可收窄，放行就等于承诺作废。
+
+这一条最初的实现是把委派整个封掉，理由是「`tool_call` handler 够不到子会话」。前半句是对的，但结论错了——够不到的那部分，由 harness 强制的工具白名单答掉了。
 
 </details>
 

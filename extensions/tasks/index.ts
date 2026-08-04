@@ -257,10 +257,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
         );
       },
       renderResult(result, options, theme) {
+        const first = result.content[0];
         return renderToolResult(
-          result.details as TaskToolDetails | undefined,
+          result.details,
           options.expanded,
           theme,
+          first?.type === "text" ? first.text : "Tasks unavailable.",
         );
       },
     });
@@ -325,10 +327,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
         );
       },
       renderResult(result, options, theme) {
+        const first = result.content[0];
         return renderToolResult(
-          result.details as TaskToolDetails | undefined,
+          result.details,
           options.expanded,
           theme,
+          first?.type === "text" ? first.text : "Tasks unavailable.",
         );
       },
     });
@@ -362,10 +366,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
         return new Text(theme.fg("toolTitle", theme.bold("tasks_list")), 0, 0);
       },
       renderResult(result, options, theme) {
+        const first = result.content[0];
         return renderToolResult(
-          result.details as TaskToolDetails | undefined,
+          result.details,
           options.expanded,
           theme,
+          first?.type === "text" ? first.text : "Tasks unavailable.",
         );
       },
     });
