@@ -75,6 +75,10 @@ export interface AgentRecord {
   usage: AgentUsage;
   /** Replayed from a prior run's journal instead of actually executed. */
   replayed?: boolean;
+  /** Branch of the isolated worktree this agent ran in, when it holds commits. */
+  worktreeBranch?: string;
+  /** Isolated worktree kept on disk because it had uncommitted changes. */
+  worktreePath?: string;
   /** Normalized, serializable subagent conversation shown by /workflows. */
   transcript: TranscriptEntry[];
 }

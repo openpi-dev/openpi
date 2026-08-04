@@ -25,6 +25,7 @@ export interface SandboxAgentOptions {
   model?: unknown;
   provider?: unknown;
   effort?: unknown;
+  isolation?: unknown;
 }
 
 export interface SandboxAgentResult {
@@ -81,6 +82,7 @@ function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
     ...(value.model !== undefined ? { model: value.model } : {}),
     ...(value.provider !== undefined ? { provider: value.provider } : {}),
     ...(value.effort !== undefined ? { effort: value.effort } : {}),
+    ...(value.isolation !== undefined ? { isolation: value.isolation } : {}),
   };
 }
 

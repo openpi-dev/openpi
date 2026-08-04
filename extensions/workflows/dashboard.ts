@@ -144,6 +144,12 @@ function normalizeDetails(
         ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
       },
       ...(a.replayed === true ? { replayed: true } : {}),
+      ...(typeof a.worktreeBranch === "string"
+        ? { worktreeBranch: a.worktreeBranch }
+        : {}),
+      ...(typeof a.worktreePath === "string"
+        ? { worktreePath: a.worktreePath }
+        : {}),
       transcript: normalizeTranscript(a.transcript),
     });
   }

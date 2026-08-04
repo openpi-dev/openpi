@@ -14,7 +14,7 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   background:
     "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
   resumeFromRunId:
-    'Optional run id of a previous workflow (e.g. "wf_1a2b3c4d5e6f", or a unique suffix) to replay cached agent results from. Any call whose prompt and schema/model/provider/effort are unchanged returns the earlier result for free instead of re-running; changed and new calls run for real, and failed calls are never cached. Use this when re-running a workflow you have edited, so you only pay for what actually changed. An unknown run id is not an error — the workflow just runs everything fresh and says so.',
+    'Optional run id of a previous workflow (e.g. "wf_1a2b3c4d5e6f", or a unique suffix) to replay cached agent results from. Any call whose prompt and schema/model/provider/effort are unchanged returns the earlier result for free instead of re-running; changed and new calls run for real, and failed calls are never cached. Agents that ran with isolation are also never cached, because their real product is a branch of commits that a replayed string cannot recreate. Use this when re-running a workflow you have edited, so you only pay for what actually changed. An unknown run id is not an error — the workflow just runs everything fresh and says so.',
 };
 
 /** Describes stopping a running background workflow, mirroring subagent_cancel/bg_kill. */
@@ -47,7 +47,8 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "The script runs as an async function body with these primitives:",
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
-  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
+  "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort?, isolation? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
+  "• isolation: 'worktree' runs that one agent in its own git worktree on its own branch, instead of the shared working directory. Use it for any fan-out where agents WRITE — without it, concurrent agents share one checkout and one git index, so their edits and `git add`s silently overwrite each other. Tell such an agent to COMMIT its work: on completion the worktree directory is reclaimed and its branch is kept for you to merge (an empty branch is deleted; uncommitted changes keep the directory instead). The branch name comes back in the run artifacts. Costs a fresh checkout, needs a git repo, and starts without gitignored files, so leave it off for read-only agents.",
   "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. This is a BARRIER: nothing after it starts until every thunk settles. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
   "• await pipeline(items, stage1, stage2, ...) — run each item through every stage independently, with NO barrier between stages: item A can be in stage 3 while item B is still in stage 1. Results come back in input order. Each stage receives (previousResult, originalItem, index), so a later stage can label its work without threading context through the earlier stage's return value. A stage that throws drops that item to null and skips its remaining stages, leaving siblings untouched.",
   "PREFER pipeline() for multi-stage work. parallel() forces every item to wait for the slowest one in each stage, so wall-clock becomes the sum of per-stage worst cases (max stage1 + max stage2) instead of the slowest single chain. The gap is widest when different items are slow in different stages; when one item is slowest everywhere it is the critical path either way. Reach for a barrier only when a stage genuinely needs cross-item context from ALL of the previous one: deduping or merging the full result set, exiting early when the total count is zero, or a prompt that compares one finding against the others. Needing to flatten/map/filter in between is NOT a reason — do that inside a pipeline stage.",
@@ -79,6 +80,7 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
   "Default to pipeline() for multi-stage fan-out so each item advances as soon as its own previous stage lands; use parallel() only when a stage truly needs every prior result at once.",
   "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() and pipeline() settle a throwing thunk or stage to `null`, so guard those with `r && r.ok`.",
   "A filtered-out or null result is a failed agent, not a clean pass: surface how many dropped (e.g. return a count) so a crashed or timed-out agent never reads as success.",
+  "When several agents will edit files concurrently, give each one isolation: 'worktree' and tell it to commit; otherwise they share one checkout and one git index and overwrite each other. Read-only agents do not need it.",
 ];
 
 /** Marks and forwards a workflow script's agent() task as an isolated child-model prompt. */
@@ -117,6 +119,23 @@ export function buildWorkflowResultMessage(
   }
   if (details.resumeNote) lines.push(`Resume: ${details.resumeNote}`);
   if (details.error) lines.push(`Error: ${details.error}`);
+  // Isolated work lives on a branch or in a kept directory, not in the working
+  // tree, so an unreported one is work the parent cannot find.
+  const isolated = details.agents.filter(
+    (agent) => agent.worktreeBranch || agent.worktreePath,
+  );
+  if (isolated.length > 0) {
+    lines.push("", "Isolated worktrees:");
+    for (const agent of isolated) {
+      lines.push(
+        `- [${agent.label}] ${
+          agent.worktreeBranch
+            ? `committed to branch ${agent.worktreeBranch}`
+            : "no commits"
+        }${agent.worktreePath ? `; kept at ${shortenHome(agent.worktreePath)} (uncommitted changes)` : ""}`,
+      );
+    }
+  }
   if (details.agents.length > 0) {
     lines.push("", "Agents:");
     for (const agent of details.agents) {

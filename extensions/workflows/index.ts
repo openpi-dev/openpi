@@ -43,6 +43,11 @@ import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
+  createWorktree,
+  reclaimWorktree,
+  type Worktree,
+} from "../shared/worktree.ts";
+import {
   createWorkflowPersistence,
   loadJournal,
   persistWorkflowJson,
@@ -134,6 +139,7 @@ interface AgentCallOptions {
   model?: unknown;
   provider?: unknown;
   effort?: unknown;
+  isolation?: unknown;
 }
 
 const WorkflowParams = Type.Object({
@@ -665,12 +671,14 @@ export default function workflows(pi: ExtensionAPI) {
         workflowConfig.maxAgentCalls,
       );
 
-      // Each concurrent child gets its own extension runtime. All children use
-      // the parent cwd and live trust decision.
+      // Each concurrent child gets its own extension runtime. Children use the
+      // parent's live trust decision; an isolated child gets its own cwd (its
+      // worktree) but keeps that decision, since it is the same project at the
+      // same commit.
       const projectTrusted = ctx.isProjectTrusted();
-      const getResources = (structured: boolean) =>
+      const getResources = (structured: boolean, cwd: string) =>
         createWorkflowResources(
-          ctx.cwd,
+          cwd,
           structured ? "structured" : "plain",
           projectTrusted,
         );
@@ -765,7 +773,11 @@ export default function workflows(pi: ExtensionAPI) {
         const callKey = agentCallKey(prompt, opts);
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
-        const cached = replay?.take(callKey);
+        // Isolated calls never replay: their product is a branch of commits
+        // that a cached string cannot reconstitute, so a "hit" would report
+        // work that this run never did.
+        const cached =
+          opts.isolation === undefined ? replay?.take(callKey) : undefined;
         if (cached) {
           record.state = "done";
           record.replayed = true;
@@ -838,66 +850,118 @@ export default function workflows(pi: ExtensionAPI) {
               thinkingLevel = effort as ThinkingLevel;
             }
 
-            const resources = await getResources(opts.schema !== undefined);
-            const outcome = await runAgent({
-              prompt,
-              schema: opts.schema,
-              model,
-              thinkingLevel,
-              cwd: ctx.cwd,
-              loader: resources.loader,
-              settingsManager: resources.settingsManager,
-              modelRegistry: ctx.modelRegistry,
-              signal: runSignal,
-              onProgress: (progress) => {
-                record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
-                record.usage = progress.usage;
-                record.model = progress.model ?? record.model;
-                record.contextWindow =
-                  progress.contextWindow ?? record.contextWindow;
-                record.transcript = progress.transcript;
-                emit();
-              },
-            });
-
-            record.usage = outcome.usage;
-            record.model = outcome.model ?? record.model;
-            record.contextWindow =
-              outcome.contextWindow ?? record.contextWindow;
-            record.transcript = outcome.transcript;
-            record.preview = (outcome.output || record.preview).slice(
-              0,
-              PREVIEW_LENGTH,
-            );
-            record.finishedAt = Date.now();
-            record.state = outcome.ok ? "done" : "error";
-            if (outcome.ok) {
-              delete record.error;
-            } else {
-              record.error = outcome.error ?? "Agent failed";
+            /**
+             * Isolation is requested, not best-effort: the caller asks for a
+             * worktree exactly because concurrent stages would otherwise
+             * collide in one checkout, so silently sharing `ctx.cwd` would
+             * hand back the hazard they were avoiding. Fail this one agent
+             * with git's reason; siblings are unaffected.
+             */
+            let worktree: Worktree | undefined;
+            if (opts.isolation !== undefined) {
+              if (opts.isolation !== "worktree") {
+                return fail(
+                  `agent "${label}": invalid isolation "${String(opts.isolation)}" (the only value is "worktree")`,
+                );
+              }
+              const created = await createWorktree({
+                cwd: ctx.cwd,
+                label,
+                id: `${details.runId}-${record.index}`,
+              });
+              if (!created.ok) {
+                return fail(
+                  `agent "${label}": isolation "worktree" requested but could not be created (${created.reason})`,
+                );
+              }
+              worktree = created.worktree;
+              record.worktreeBranch = worktree.branch;
             }
-            emit();
+            const agentCwd = worktree?.path ?? ctx.cwd;
 
-            // Only successes are journaled: re-running a failure is usually
-            // the whole reason someone resumes, so it must not be cached.
-            if (outcome.ok) {
-              journalEntries.push({
-                key: callKey,
+            const resources = await getResources(
+              opts.schema !== undefined,
+              agentCwd,
+            );
+            try {
+              const outcome = await runAgent({
+                prompt,
+                schema: opts.schema,
+                model,
+                thinkingLevel,
+                cwd: agentCwd,
+                loader: resources.loader,
+                settingsManager: resources.settingsManager,
+                modelRegistry: ctx.modelRegistry,
+                signal: runSignal,
+                onProgress: (progress) => {
+                  record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
+                  record.usage = progress.usage;
+                  record.model = progress.model ?? record.model;
+                  record.contextWindow =
+                    progress.contextWindow ?? record.contextWindow;
+                  record.transcript = progress.transcript;
+                  emit();
+                },
+              });
+
+              record.usage = outcome.usage;
+              record.model = outcome.model ?? record.model;
+              record.contextWindow =
+                outcome.contextWindow ?? record.contextWindow;
+              record.transcript = outcome.transcript;
+              record.preview = (outcome.output || record.preview).slice(
+                0,
+                PREVIEW_LENGTH,
+              );
+              record.finishedAt = Date.now();
+              record.state = outcome.ok ? "done" : "error";
+              if (outcome.ok) {
+                delete record.error;
+              } else {
+                record.error = outcome.error ?? "Agent failed";
+              }
+              emit();
+
+              // Only successes are journaled: re-running a failure is usually
+              // the whole reason someone resumes, so it must not be cached.
+              // Isolated agents are never journaled either — their real product
+              // is a branch of commits, and replaying only the text would hand
+              // a resumed run an output whose work does not exist.
+              if (outcome.ok && !worktree) {
+                journalEntries.push({
+                  key: callKey,
+                  output: outcome.output,
+                  ...(outcome.structured !== undefined
+                    ? { structured: outcome.structured }
+                    : {}),
+                });
+              }
+
+              return {
+                ok: outcome.ok,
                 output: outcome.output,
                 ...(outcome.structured !== undefined
                   ? { structured: outcome.structured }
                   : {}),
-              });
+                ...(outcome.error !== undefined
+                  ? { error: outcome.error }
+                  : {}),
+              };
+            } finally {
+              // Reclaim as this agent settles, not at run end: a pipeline can
+              // hold many worktrees open at once. Cleanup must never turn a
+              // finished agent into a failed one, so failures only downgrade
+              // what we report about the worktree.
+              if (worktree) {
+                const cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
+                  () => undefined,
+                );
+                if (cleanup?.branchDeleted) delete record.worktreeBranch;
+                if (!cleanup?.removed) record.worktreePath = worktree.path;
+                emit();
+              }
             }
-
-            return {
-              ok: outcome.ok,
-              output: outcome.output,
-              ...(outcome.structured !== undefined
-                ? { structured: outcome.structured }
-                : {}),
-              ...(outcome.error !== undefined ? { error: outcome.error } : {}),
-            };
           }, invocationSignal)
           .catch((error) => fail(errorText(error)));
       };
