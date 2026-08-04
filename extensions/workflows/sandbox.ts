@@ -57,6 +57,13 @@ export interface RunWorkflowSandboxOptions {
   maxConcurrency: number;
   /** Same budget the controller enforces; the sandbox is the outer guard. */
   maxAgentCalls: number;
+  /**
+   * Replayable results available to this run. A replayed call costs no
+   * controller budget but still sends one agent IPC message, so without this
+   * the backstop fires long before the controller does and kills the child
+   * mid-run — losing the aggregate that resuming exists to preserve.
+   */
+  extraAgentRequests?: number;
 }
 
 function byteLength(value: string) {
@@ -120,7 +127,16 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     1,
     Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(options.maxAgentCalls)),
   );
-  const maxAgentRequests = controllerBudget + AGENT_CALL_BACKSTOP_MARGIN;
+  const maxAgentRequests =
+    controllerBudget +
+    AGENT_CALL_BACKSTOP_MARGIN +
+    Math.max(
+      0,
+      Math.min(
+        MAX_WORKFLOW_AGENT_CALLS,
+        Math.floor(options.extraAgentRequests ?? 0),
+      ),
+    );
 
   const argsJson = safeStringify(
     { defined: options.args !== undefined, value: options.args },
@@ -215,11 +231,12 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         return;
       }
       if (raw.kind === "phase") {
+        // Same clip-not-kill rule as log below: a phase title is display text,
+        // and an oversized one must not cost the run its agent results.
         if (
           typeof raw.payloadJson !== "string" ||
-          byteLength(raw.payloadJson) > 4096
+          byteLength(raw.payloadJson) > MAX_LOG_MESSAGE_BYTES
         ) {
-          finish(new Error("Workflow sandbox sent an invalid phase update"));
           return;
         }
         try {
@@ -229,7 +246,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           }
           options.onPhase(payload.title.slice(0, 160));
         } catch {
-          finish(new Error("Workflow sandbox sent an invalid phase update"));
+          return;
         }
         return;
       }
@@ -238,7 +255,12 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           typeof raw.payloadJson !== "string" ||
           byteLength(raw.payloadJson) > MAX_LOG_MESSAGE_BYTES
         ) {
-          finish(new Error("Workflow sandbox sent an invalid log line"));
+          // Dropped, never fatal. A narrator line is the least important thing
+          // in a run; killing the child over one discards every completed
+          // agent's output. The byte ceiling is protocol abuse protection, and
+          // it is generous precisely so that ordinary oversized narration
+          // (a JSON.stringify of 400 paths, 3000 emoji) is clipped by
+          // appendLog rather than losing the run.
           return;
         }
         try {

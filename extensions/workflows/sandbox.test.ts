@@ -351,3 +351,32 @@ test("isolation reaches the host verbatim, per agent call", async () => {
   );
   assert.deepEqual(seen, ["worktree", undefined]);
 });
+
+test("replayed calls raise the backstop instead of killing a resumed run", async () => {
+  // A replay costs no controller budget but still sends one agent IPC message.
+  // Sized on the assumption that the controller always rejects first, the
+  // backstop fired after only MARGIN new calls and killed the child mid-run —
+  // losing the aggregate that resuming exists to preserve. Measured before the
+  // fix: a 128-entry journal plus 9 new calls was fatal with 120 of the run's
+  // real budget untouched.
+  const budget = 4;
+  const replayable = 20;
+  const newCalls = budget;
+  const source = `
+    for (let i = 0; i < ${replayable + newCalls}; i++) await agent("x" + i);
+    return "aggregate";
+  `;
+  assert.equal(
+    await run(source, {
+      maxAgentCalls: budget,
+      extraAgentRequests: replayable,
+    }),
+    "aggregate",
+  );
+
+  // The backstop still exists: without the allowance the same script dies.
+  await assert.rejects(
+    run(source, { maxAgentCalls: budget }),
+    /exceeded its agent request budget/,
+  );
+});

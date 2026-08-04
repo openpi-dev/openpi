@@ -81,7 +81,7 @@ import {
   stateSquare,
   statusColor,
   statusWord,
-  usageSnapshot,
+  createUsageReader,
   SQUARE,
   type AgentRecord,
   type WorkflowDetails,
@@ -174,9 +174,14 @@ type WorkflowInput = Static<typeof WorkflowParams>;
  * Locate a prior run's directory by exact or suffix match, the same convention
  * workflow_stop/workflow_status already accept, so a partial id works here too.
  */
-function findRunDir(target: string) {
+export function findRunDir(target: string) {
   const trimmed = target.trim();
-  if (!trimmed) return undefined;
+  // Shape-checked before it touches the filesystem. This value is
+  // model-supplied, so `path.join(base, "../../elsewhere")` would escape the
+  // runs directory and replay a planted journal.json as genuine agent output —
+  // reported as `ok (replayed)` with no agent having run and no artifact to
+  // audit. Run ids are `wf_` plus hex; a suffix match is a hex tail.
+  if (!/^(wf_)?[0-9a-f]+$/i.test(trimmed)) return undefined;
   const base = path.join(getAgentDir(), "workflows");
   const exact = path.join(base, trimmed);
   try {
@@ -737,6 +742,10 @@ export default function workflows(pi: ExtensionAPI) {
         emit();
       };
 
+      // One reader per run: it carries a high-water mark, because per-agent
+      // usage is recomputed from a message list that compaction shrinks.
+      const readUsage = createUsageReader(details.agents);
+
       let agentCounter = 0;
       const agentFn = async (
         promptValue: unknown,
@@ -899,11 +908,15 @@ export default function workflows(pi: ExtensionAPI) {
             }
             const agentCwd = worktree?.path ?? ctx.cwd;
 
-            const resources = await getResources(
-              opts.schema !== undefined,
-              agentCwd,
-            );
+            // Inside the try, not before it: building resources can throw
+            // (bad settings, an unreadable skills dir), and a throw out here
+            // would skip the finally and leak the worktree permanently —
+            // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
+              const resources = await getResources(
+                opts.schema !== undefined,
+                agentCwd,
+              );
               const outcome = await runAgent({
                 prompt,
                 schema: opts.schema,
@@ -997,9 +1010,12 @@ export default function workflows(pi: ExtensionAPI) {
             onAgent: agentFn,
             onPhase: phaseFn,
             onLog: logFn,
-            usageSnapshot: () => usageSnapshot(details.agents),
+            usageSnapshot: readUsage,
             maxConcurrency: workflowConfig.concurrency,
             maxAgentCalls: workflowConfig.maxAgentCalls,
+            // Replays send an IPC message but spend no controller budget, so
+            // the sandbox's backstop has to know how many to expect.
+            extraAgentRequests: replay?.available ?? 0,
           });
         } catch (error) {
           details.error = errorText(error);

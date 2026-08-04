@@ -100,6 +100,12 @@ export function taskCounts(items: readonly TaskItem[]): TaskCounts {
 export function renderTaskSummary(counts: TaskCounts, theme: Theme): string {
   const number = (value: number) => theme.bold(theme.fg("text", String(value)));
   const dim = (text: string) => theme.fg("dim", text);
+  // Coerced, not trusted: these counts can arrive from a tool-result record
+  // persisted by an older build, where a missing key would render the literal
+  // word "undefined" (or "NaN tasks") into the header.
+  const count = (status: TaskItem["status"]) =>
+    Number.isFinite(counts[status]) ? counts[status] : 0;
+  const total = Number.isFinite(counts.total) ? counts.total : 0;
   // Built segment by segment rather than by wrapping the whole line: each
   // styled run emits its own reset, so an outer color would stop applying at
   // the first inner one.
@@ -108,12 +114,12 @@ export function renderTaskSummary(counts: TaskCounts, theme: Theme): string {
       status === "done" ||
       status === "in_progress" ||
       status === "pending" ||
-      counts[status] > 0,
-  ).map((status) => `${number(counts[status])} ${dim(SUMMARY_LABEL[status])}`);
+      count(status) > 0,
+  ).map((status) => `${number(count(status))} ${dim(SUMMARY_LABEL[status])}`);
   return [
-    number(counts.total),
+    number(total),
     " ",
-    dim(counts.total === 1 ? "task" : "tasks"),
+    dim(total === 1 ? "task" : "tasks"),
     " ",
     dim("("),
     parts.join(dim(", ")),
@@ -139,7 +145,10 @@ export function renderTaskRows(
   if (items.length === 0) return [theme.fg("dim", "No task items.")];
   // Ids address tasks in tasks_update, so they stay — but right-aligned, so a
   // T10 appearing later never shifts every subject one column over.
-  const idWidth = Math.max(...items.map((item) => `T${item.id}`.length), 2);
+  // Floor of 3 ("T99"), not 2: the width is computed per view, so a batch
+  // crossing T9 — or the same batch shown collapsed (5 rows) then expanded
+  // (all of them) — would otherwise shift every subject sideways by a column.
+  const idWidth = Math.max(...items.map((item) => `T${item.id}`.length), 3);
   return items.flatMap((item) => {
     const color =
       item.status === "done"
@@ -221,6 +230,9 @@ export function renderTaskWidget(
     ? actionable
     : actionable.slice(0, TASK_WIDGET_LIMIT);
   const hidden = actionable.length - visible.length;
+  // Right-aligned like the full list, with the same floor: a widget whose ids
+  // are ragged next to a list whose ids are not reads as a different control.
+  const idWidth = Math.max(...visible.map((i) => `T${i.id}`.length), 3);
   const lines = [truncateToWidth(header, width)];
   for (const [index, item] of visible.entries()) {
     const color =
@@ -234,7 +246,7 @@ export function renderTaskWidget(
       truncateToWidth(
         // Same subject weighting as the full list, so the item in flight reads
         // the same wherever you happen to be looking.
-        `${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("dim", `T${item.id}`)} ${subjectStyle(item.status, theme)(item.subject)}`,
+        `${theme.fg("dim", branch)} ${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("dim", `T${item.id}`.padStart(idWidth))} ${subjectStyle(item.status, theme)(item.subject)}`,
         width,
       ),
     );
@@ -247,29 +259,62 @@ export function renderTaskWidget(
   return lines;
 }
 
+/**
+ * Rows are built at the width they will be shown at, not at a fixed width and
+ * then re-wrapped. `Text` re-wraps with a wrapper that closes a line's colour
+ * and underline but NOT strikethrough, so a row laid out for a wider terminal
+ * and folded here left SGR 9 open across the fold — the padding to the right
+ * of the break rendered as a solid struck-through bar. `truncateToWidth`
+ * emits a full reset, so cutting at the real width is safe.
+ */
+class TaskResultView implements Component {
+  private readonly details: TaskToolDetails;
+  private readonly expanded: boolean;
+  private readonly theme: Theme;
+
+  constructor(details: TaskToolDetails, expanded: boolean, theme: Theme) {
+    this.details = details;
+    this.expanded = expanded;
+    this.theme = theme;
+  }
+
+  render(width: number): string[] {
+    const theme = this.theme;
+    const details = this.details;
+    const items = this.expanded ? details.items : details.items.slice(0, 5);
+    const rows: string[] = [];
+    // A closed batch has already been cleared from the live snapshot, so a
+    // census here would read "0 tasks" directly above the rows it describes.
+    // The "Batch complete" line below says everything that is left to say.
+    if (!details.batchClosed && details.counts) {
+      rows.push(renderTaskSummary(details.counts, theme));
+    }
+    rows.push(...renderTaskRows(items, theme, width));
+    if (!this.expanded && details.items.length > items.length) {
+      rows.push(
+        theme.fg("dim", `… ${details.items.length - items.length} more`),
+      );
+    }
+    if (details.batchClosed) {
+      rows.push(
+        theme.fg("success", "✓ Batch complete") +
+          theme.fg("dim", " · next request starts at T1"),
+      );
+    }
+    return rows.map((row) => truncateToWidth(row, width, "…"));
+  }
+
+  /** Nothing is cached between renders, so there is nothing to drop. */
+  invalidate() {}
+}
+
 export function renderToolResult(
   details: TaskToolDetails | undefined,
   expanded: boolean,
   theme: Theme,
 ): Component {
   if (!details) return new Text(theme.fg("dim", "Tasks updated."), 0, 0);
-  const items = expanded ? details.items : details.items.slice(0, 5);
-  // Census first: the shape of the batch is what a glance is after, and the
-  // rows below are only ever a bounded sample of it.
-  const rows = [
-    renderTaskSummary(details.counts ?? taskCounts(details.items), theme),
-    ...renderTaskRows(items, theme, 120),
-  ];
-  if (!expanded && details.items.length > items.length) {
-    rows.push(theme.fg("dim", `… ${details.items.length - items.length} more`));
-  }
-  if (details.batchClosed) {
-    rows.push(
-      theme.fg("success", "✓ Batch complete") +
-        theme.fg("dim", " · next request starts at T1"),
-    );
-  }
-  return new Text(rows.join("\n"), 0, 0);
+  return new TaskResultView(details, expanded, theme);
 }
 
 class TasksScreen implements Component {

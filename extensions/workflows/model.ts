@@ -168,18 +168,34 @@ export interface WorkflowUsageSnapshot {
   agents: number;
 }
 
-export function usageSnapshot(
-  agents: readonly AgentRecord[],
-): WorkflowUsageSnapshot {
-  const usage = aggregateUsage([...agents]);
-  return {
-    input: usage.input,
-    output: usage.output,
-    cacheRead: usage.cacheRead,
-    cacheWrite: usage.cacheWrite,
-    total: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
-    cost: usage.cost,
-    agents: agents.length,
+/**
+ * Cumulative token spend for one run, as read by the script's `usage()`.
+ *
+ * Stateful because the underlying number is not monotonic: each agent's usage
+ * is RECOMPUTED from its current message list, so when a child session
+ * auto-compacts, the dropped messages take their tokens with them and the sum
+ * falls. A script that loops `while (usage().total < N)` would then run well
+ * past N — measured at 400k actual against a 250k intended stop — while
+ * honestly reporting that it stopped on budget. A high-water mark cannot make
+ * the reading exact, but it makes it an under-report that never reverses,
+ * which is the property a loop condition needs.
+ */
+export function createUsageReader(agents: readonly AgentRecord[]) {
+  let peak = 0;
+  return (): WorkflowUsageSnapshot => {
+    const usage = aggregateUsage([...agents]);
+    const total =
+      usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+    peak = Math.max(peak, total);
+    return {
+      input: usage.input,
+      output: usage.output,
+      cacheRead: usage.cacheRead,
+      cacheWrite: usage.cacheWrite,
+      total: peak,
+      cost: usage.cost,
+      agents: agents.length,
+    };
   };
 }
 
