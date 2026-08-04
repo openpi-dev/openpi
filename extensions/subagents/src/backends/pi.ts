@@ -223,6 +223,9 @@ const makePiSession = (
         const { loader, settingsManager } = await createChildResources({
           cwd: task.cwd,
           projectTrusted: task.parent.projectTrusted,
+          ...(task.appendSystemPrompt
+            ? { appendSystemPrompt: [...task.appendSystemPrompt] }
+            : {}),
         });
         const { session } = await createAgentSession({
           cwd: task.cwd,
@@ -231,7 +234,7 @@ const makePiSession = (
           resourceLoader: loader,
           model,
           thinkingLevel,
-          ...childToolPolicy(),
+          ...childToolPolicy(task.tools),
         });
         // Start child extension session hooks/resources in headless mode.
         // A rejection here would otherwise leak the freshly created session:
@@ -452,10 +455,14 @@ const makePiSession = (
     };
 
     // Session naming is best-effort.
+    const kind =
+      task.origin === "btw"
+        ? "btw"
+        : task.agentTypeName
+          ? `subagent[${task.agentTypeName}]`
+          : "subagent";
     yield* Effect.try(() =>
-      session.sessionManager.appendSessionInfo(
-        `${task.origin === "btw" ? "btw" : "subagent"}: ${task.title}`,
-      ),
+      session.sessionManager.appendSessionInfo(`${kind}: ${task.title}`),
     ).pipe(Effect.ignore);
 
     emit({ _tag: "MetaChanged", meta: currentMeta() });

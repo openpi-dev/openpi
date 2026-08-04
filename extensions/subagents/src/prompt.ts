@@ -1,8 +1,34 @@
 /** All model-facing strings for the subagents tools. */
 
+import type { AgentType } from "./agent-types.ts";
+
 /** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
   "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
+
+/**
+ * Appends the configured agent types, if any. They are a runtime resource, so
+ * the roster has to be baked into the description at registration time.
+ */
+export function buildSubagentSpawnToolDescription(
+  agentTypes: readonly AgentType[],
+) {
+  if (agentTypes.length === 0) return SUBAGENT_SPAWN_TOOL_DESCRIPTION;
+  return `${SUBAGENT_SPAWN_TOOL_DESCRIPTION} This environment also defines agent types (see agent_type): named presets that fix a child's system prompt, and often restrict it to a subset of tools. Prefer one when it matches the task — a type's tool restriction is enforced, not advisory.`;
+}
+
+/** Lists each agent type and what it restricts, so the model can choose one. */
+export function buildAgentTypeParameterDescription(
+  agentTypes: readonly AgentType[],
+) {
+  const entries = agentTypes.map((agentType) => {
+    const tools = agentType.tools
+      ? ` [only: ${agentType.tools.join(", ")}]`
+      : "";
+    return `"${agentType.name}" — ${agentType.description}${tools}`;
+  });
+  return `Optional agent type: a preset that gives the child a specialized system prompt and, when listed, restricts it to exactly those tools (it cannot use others). Omit for a general-purpose subagent with the normal tool set. Available: ${entries.join("; ")}. An explicit model or reasoning_effort argument overrides the type's own.`;
+}
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
 export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
@@ -36,9 +62,16 @@ export function buildSubagentSpawnResult(options: {
   harness: string;
   modelLabel: string;
   cwd: string;
+  agentTypeName?: string;
+  tools?: readonly string[];
 }) {
+  // Naming the restriction back to the parent stops it from expecting work the
+  // child structurally cannot do.
+  const typeNote = options.agentTypeName
+    ? ` Agent type "${options.agentTypeName}" applied${options.tools ? `; it can only use: ${options.tools.join(", ")}` : ""}.`
+    : "";
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).\n` +
+    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}\n` +
     `It runs in the background — keep working on other things; its result is delivered to you automatically when it finishes, so do not poll or wait for it. ` +
     `Only if your next step truly cannot proceed without it, subagent_wait(ids: ["${options.id}"]) blocks for it; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );

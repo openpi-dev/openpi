@@ -65,9 +65,20 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "context_pivot",
 ] as const;
 
-/** Fresh SDK options avoid turning the denylist into an accidental allowlist. */
-export function childToolPolicy() {
-  return { excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES] };
+/**
+ * Fresh SDK options avoid turning the denylist into an accidental allowlist.
+ *
+ * `tools` narrows further, for an agent type that fixes a child's capabilities
+ * (see `../subagents/src/agent-types.ts`). It can only ever REMOVE: pi admits a
+ * tool when `(!allowed || allowed.has(name)) && !excluded.has(name)`, so an
+ * allowlist naming an excluded tool still cannot obtain it, and the boundary
+ * above stays authoritative. Omitting `tools` keeps today's behavior.
+ */
+export function childToolPolicy(tools?: readonly string[]) {
+  return {
+    excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
+    ...(tools ? { tools: [...tools] } : {}),
+  };
 }
 
 export interface ChildResourceOptions {
@@ -96,6 +107,22 @@ export async function createChildResources(options: ChildResourceOptions) {
 }
 
 /**
+ * Whether Pi's persisted trust store explicitly trusts this directory (or a
+ * containing one). Unreadable or invalid trust data fails closed.
+ *
+ * Use this when no live trust decision exists yet — notably at extension
+ * registration, which runs before `session_start`.
+ */
+export function isProjectTrustedOnDisk(cwd: string, agentDir?: string) {
+  try {
+    const trustStore = new ProjectTrustStore(agentDir ?? getAgentDir());
+    return trustStore.get(cwd) === true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Same-directory children inherit the live parent decision. An alternate cwd
  * is trusted only when Pi's persisted trust store explicitly trusts it (or a
  * containing directory); unreadable/invalid trust data fails closed.
@@ -109,12 +136,7 @@ export function resolveStandaloneChildProjectTrust(options: {
   if (path.resolve(options.childCwd) === path.resolve(options.parentCwd)) {
     return options.parentTrusted;
   }
-  try {
-    const trustStore = new ProjectTrustStore(options.agentDir ?? getAgentDir());
-    return trustStore.get(options.childCwd) === true;
-  } catch {
-    return false;
-  }
+  return isProjectTrustedOnDisk(options.childCwd, options.agentDir);
 }
 
 /** Start child extension session hooks/resources in headless print mode. */
