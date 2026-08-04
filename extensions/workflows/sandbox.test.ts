@@ -329,3 +329,23 @@ test("a promise handed to workflow code cannot reach the host realm", async () =
   `);
   assert.equal(escaped, "denied");
 });
+
+test("isolation reaches the host verbatim, per agent call", async () => {
+  // The sandbox is where a script-authored option could silently vanish, so
+  // pin that isolation survives the IPC boundary and stays per-call.
+  const seen: unknown[] = [];
+  await run(
+    `
+      await agent("isolated", { isolation: "worktree" });
+      await agent("shared");
+      return null;
+    `,
+    {
+      onAgent: async (_prompt, options) => {
+        seen.push(options.isolation);
+        return { ok: true, output: "" };
+      },
+    },
+  );
+  assert.deepEqual(seen, ["worktree", undefined]);
+});

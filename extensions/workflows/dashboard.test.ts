@@ -171,3 +171,40 @@ test("direct workflow navigation drills right and returns left through every lev
     dashboard.dispose();
   }
 });
+
+test("agent fields added after a run are not dropped when reading it back", () => {
+  // normalizeDetails rebuilds each agent field by field, so any field it does
+  // not name silently disappears on the disk round trip. These three came
+  // later than the original set and are exactly the ones at risk.
+  const runId = "wf_roundtrip";
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: SESSION,
+      status: "completed",
+      startedAt: Date.now() - 1_000,
+      finishedAt: Date.now(),
+      phases: [],
+      agents: [
+        {
+          index: 1,
+          label: "impl",
+          state: "done",
+          startedAt: Date.now() - 900,
+          preview: "",
+          replayed: true,
+          worktreeBranch: "pi/impl-1",
+          worktreePath: "/repo/.git/pi-worktrees/impl-1",
+        },
+      ],
+    }),
+  );
+  const entries = loadRunEntries(new Map(), SESSION, new Set([runId]));
+  const agent = entries.find((e) => e.runId === runId)?.details.agents[0];
+  assert.equal(agent?.replayed, true);
+  assert.equal(agent?.worktreeBranch, "pi/impl-1");
+  assert.equal(agent?.worktreePath, "/repo/.git/pi-worktrees/impl-1");
+});

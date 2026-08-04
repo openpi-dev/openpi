@@ -41,6 +41,10 @@ import {
   shutdownAndDisposeChildSession,
   waitBounded,
 } from "../../../shared/child-session.ts";
+import {
+  reclaimWorktree,
+  WORKTREE_GIT_TIMEOUT_MS,
+} from "../../../shared/worktree.ts";
 
 // --- Model + effort resolution -----------------------------------------------
 
@@ -437,6 +441,15 @@ const makePiSession = (
         }
         await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS);
         await shutdownAndDisposeChildSession(session);
+        // The session scope is the worktree's lifetime: reclaim only after the
+        // child is truly done writing, and never let a git failure block the
+        // rest of teardown.
+        if (task.worktree) {
+          await waitBounded(
+            reclaimWorktree(task.worktree.repoCwd, task.worktree),
+            WORKTREE_GIT_TIMEOUT_MS,
+          );
+        }
         Queue.endUnsafe(events);
       }),
     );

@@ -49,6 +49,8 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     'Optional. The only harness is "pi" (an in-process Pi session that inherits this environment), which is the default; you can omit this.',
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
+  isolation:
+    'Set to "worktree" to run this child in its own git worktree on its own branch, branched from HEAD. Use it whenever children may edit the same files or stage changes concurrently — without it, parallel children share one checkout and one git index, so their edits and `git add`s overwrite each other. The child should COMMIT its work; on teardown the worktree directory is reclaimed and the branch is kept for you to inspect or merge (an empty branch is deleted, and uncommitted changes keep the directory instead). Requires a git repository, and the checkout starts clean, so anything gitignored (build output, .env) will not be there.',
   model:
     'Optional model override, as "provider/model-id" or a bare id resolved against the current provider. Omit to inherit the current model; never guess a model name.',
   reasoningEffort:
@@ -64,14 +66,20 @@ export function buildSubagentSpawnResult(options: {
   cwd: string;
   agentTypeName?: string;
   tools?: readonly string[];
+  worktreeBranch?: string;
 }) {
   // Naming the restriction back to the parent stops it from expecting work the
   // child structurally cannot do.
   const typeNote = options.agentTypeName
     ? ` Agent type "${options.agentTypeName}" applied${options.tools ? `; it can only use: ${options.tools.join(", ")}` : ""}.`
     : "";
+  // Without the branch name the parent has no way to find committed work after
+  // the isolated directory is reclaimed.
+  const worktreeNote = options.worktreeBranch
+    ? ` Isolated in its own worktree on branch "${options.worktreeBranch}" — its edits are invisible here until you merge that branch, and the directory is reclaimed when it finishes.`
+    : "";
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}\n` +
+    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${worktreeNote}\n` +
     `It runs in the background — keep working on other things; its result is delivered to you automatically when it finishes, so do not poll or wait for it. ` +
     `Only if your next step truly cannot proceed without it, subagent_wait(ids: ["${options.id}"]) blocks for it; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );

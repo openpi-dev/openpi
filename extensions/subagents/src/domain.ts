@@ -68,6 +68,17 @@ export interface SpawnTask {
   readonly tools?: readonly string[];
   /** Agent type that supplied the above, for the session label. */
   readonly agentTypeName?: string;
+  /**
+   * Isolated git worktree this child runs in, created by the tool layer. The
+   * backend only reclaims it when the session scope closes; it does not know
+   * how it was made.
+   */
+  readonly worktree?: {
+    readonly path: string;
+    readonly branch: string;
+    /** Repository the worktree belongs to, for the reclaim call. */
+    readonly repoCwd: string;
+  };
   readonly parent: ParentContext;
 }
 

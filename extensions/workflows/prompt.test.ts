@@ -3,9 +3,11 @@ import test from "node:test";
 import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
+  buildWorkflowResultMessage,
   WORKFLOW_STATUS_TOOL_DESCRIPTION,
   WORKFLOW_STOP_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import { emptyUsage, type AgentRecord, type WorkflowDetails } from "./model.ts";
 
 test("background follow-up uses a sentence lead-in, not the old bracket form", () => {
   const msg = buildBackgroundWorkflowFollowUp({
@@ -52,4 +54,60 @@ test("lifecycle tool descriptions state their scope and non-blocking nature", ()
   );
   assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /without blocking/);
   assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /Does not wait/);
+});
+
+function agentRecord(overrides: Partial<AgentRecord>): AgentRecord {
+  return {
+    index: 1,
+    label: "impl",
+    state: "done",
+    startedAt: 0,
+    finishedAt: 1000,
+    preview: "",
+    usage: emptyUsage(),
+    transcript: [],
+    ...overrides,
+  };
+}
+
+function details(agents: AgentRecord[]): WorkflowDetails {
+  return {
+    runId: "wf_abc123",
+    background: false,
+    status: "completed",
+    startedAt: 0,
+    finishedAt: 1000,
+    phases: [],
+    agents,
+  };
+}
+
+test("result message names where isolated work ended up", () => {
+  // Isolated work lands on a branch or in a kept directory, never in the
+  // working tree, so a message that omits it strands the child's output.
+  const msg = buildWorkflowResultMessage(
+    details([
+      agentRecord({ label: "committed", worktreeBranch: "pi/committed-1" }),
+      agentRecord({
+        index: 2,
+        label: "dirty",
+        worktreeBranch: "pi/dirty-2",
+        worktreePath: "/repo/.git/pi-worktrees/dirty-2",
+      }),
+      agentRecord({ index: 3, label: "plain" }),
+    ]),
+    "/tmp/wf_abc123",
+  );
+  assert.match(msg, /committed to branch pi\/committed-1/);
+  assert.match(msg, /kept at .*dirty-2 \(uncommitted changes\)/);
+  // A non-isolated agent contributes no worktree line.
+  assert.doesNotMatch(msg, /\[plain\].*worktree/);
+});
+
+test("result message stays quiet when nothing was isolated", () => {
+  const msg = buildWorkflowResultMessage(
+    details([agentRecord({})]),
+    "/tmp/wf_abc123",
+  );
+  assert.doesNotMatch(msg, /Isolated worktrees/);
 });

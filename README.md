@@ -190,6 +190,23 @@ subagent_spawn({
 
 工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。未受信任的项目目录不会贡献任何类型。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；修改后 `/reload` 生效（与 Skills 一致）。
 
+**Worktree 隔离**：并行子 Agent 默认共享同一个工作副本，也就共享同一个 git index——两个子 Agent 改同一个文件、或同时 `git add`，会互相覆盖。`isolation: "worktree"` 给这个子 Agent 一份独立 checkout 和独立分支：
+
+```text
+subagent_spawn({
+  name: "implement retry",
+  isolation: "worktree",
+  prompt: "... 完成后 commit 你的改动。"
+})
+```
+
+- Worktree 建在 `.git/pi-worktrees/` 下，不在工作区里——放工作区会让父仓库 `git status` 多出未跟踪条目，破坏 Agent 判断「我改了什么」的依据；
+- Trust 按分支来源目录继承，所以子 Agent 照常拿到项目 Skills 和 AGENTS.md；
+- 顶层 `node_modules` 会 symlink 进去，否则全新 checkout 里跑不了构建和测试（实测 `ERR_MODULE_NOT_FOUND`）；
+- 子 Agent 结束时自动回收：**提交过就保留分支**供你 review 或 merge，没提交过的空分支直接删掉，**有未提交改动则整个目录保留**（用 `git worktree remove` 的原生拒绝作为判据，不使用 `--force`）；
+- 分支名会写在 spawn 结果里——目录回收后它是找到那份工作的唯一线索；
+- 代价：需要 git 仓库，且 checkout 是干净的，gitignore 掉的东西（构建产物、`.env`）不在里面。只读子 Agent 不需要开。
+
 > `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Bash 与 Write/Edit 默认折叠。Bash 只保留单行命令、首段输出和最终状态，Write/Edit 最多保留三行渲染内容（包含操作标题），两者都会显示隐藏行数。三类结果都可通过 `/my-pi-setup` 分别选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
 
 ### 3. 动态 Multi-Agent Workflows
@@ -226,6 +243,7 @@ return await agent(`Synthesize: ${JSON.stringify(checked)}`);
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
 - `resume_from_run_id` 重放上一次运行的结果，只有真正改动的调用才重新执行；
+- `isolation: "worktree"` 让单个 Agent 在自己的 git worktree 和分支上工作，语义与 `subagent_spawn` 的同名参数一致——**任何会写文件的 fan-out 都该开**，否则并发 Agent 共享一个 checkout 和一个 git index，改动互相覆盖；
 - 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`。
 
 默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
@@ -240,7 +258,23 @@ workflow({ script: <改过的脚本>, resume_from_run_id: "wf_1a2b3c4d5e6f" })
 
 匹配依据是**调用内容**（prompt 加 schema/model/provider/effort），不是调用序号。这一点是必须的：`pipeline()` 没有阶段 barrier，调用发起顺序取决于各 Agent 的真实耗时，同一脚本两次运行的 `#4` 可能是不同的调用——按序号重放会把 A 的结果喂给 B，静默返回错误答案。按内容匹配则顺序无关。
 
-副作用是脚本里的 `Date.now()` 之类只会让 prompt 变化、导致 cache miss，**不会返回错的结果**。`label` 和 `phase` 只影响展示，改名不会失效；失败的调用从不缓存（重跑往往正是为了让它重试）。运行结果里会明确报告「重放了几个、实跑了几个」，找不到对应 run 时不报错，只是全新跑一遍并说明。缓存写在 `journal.json`，上限 2MB，超出时丢弃最旧的条目。
+副作用是脚本里的 `Date.now()` 之类只会让 prompt 变化、导致 cache miss，**不会返回错的结果**。`label` 和 `phase` 只影响展示，改名不会失效；失败的调用从不缓存（重跑往往正是为了让它重试）。带 `isolation` 的调用同样不缓存——它真正的产物是一组 commit，重放一段文本会让 resume 报告一份并不存在的工作。运行结果里会明确报告「重放了几个、实跑了几个」，找不到对应 run 时不报错，只是全新跑一遍并说明。缓存写在 `journal.json`，上限 2MB，超出时丢弃最旧的条目。
+
+**并行写入**用 worktree 隔离，每个实现 Agent 一份独立 checkout 和分支：
+
+```js
+phase("Implement");
+const branches = await parallel(
+  tasks.map((task) => () =>
+    agent(`${task.prompt}\n完成后 commit 你的改动。`, {
+      label: `impl:${task.name}`,
+      isolation: "worktree",
+    }),
+  ),
+);
+```
+
+运行结果会列出每个隔离 Agent 的落点：提交过的给出分支名，有未提交改动的给出保留下来的目录路径。两者都必须报告——它们都不在工作区里，不说就等于丢了。
 
 ### 4. Session Tasks：跨 Turn 记住未完成工作
 
@@ -417,6 +451,7 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
 | 长命令占住 Bash Tool，Agent 原地等待 | 后台终端立即返回，退出时自动通知                           |
 | 把调研、实现、测试全塞进一个 Context | 独立 Pi Subagent 隔离噪音，父模型与工具自然继承            |
 | 多 Agent 只是并行发 Prompt           | Workflow 支持阶段、依赖、结构化结果、Artifact 与 Dashboard |
+| 并行 Agent 共享一个工作副本和 git index，改动互相覆盖 | `isolation: "worktree"` 给每个 Agent 独立 checkout 和分支，提交过的分支保留供 merge |
 | Context 快满时被动 Compact           | Context Pivot 在阶段变化时主动建立干净工作面               |
 | 每个插件一套配置命令                 | `/my-pi-setup` 用自然语言统一配置                          |
 | 插件默认绑定作者的模型和 Provider    | 不写死模型；默认继承当前 Pi，摘要默认零模型调用            |

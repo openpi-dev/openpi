@@ -91,6 +91,11 @@ import {
 } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
+  createWorktree,
+  reclaimWorktree,
+  type Worktree,
+} from "../shared/worktree.ts";
+import {
   createSubagentRuntime,
   runTool,
   type SubagentRuntime,
@@ -390,6 +395,12 @@ export default function (pi: ExtensionAPI) {
     projectTrusted: isProjectTrustedOnDisk(process.cwd()),
   });
   const agentTypeList = [...agentTypes.values()];
+  /**
+   * Disambiguates worktree directory/branch names. The subagent id is only
+   * assigned inside the manager, after the worktree already has to exist, and
+   * two children with the same title would otherwise collide on the branch.
+   */
+  let worktreeCounter = 0;
   /** Only add the parameter when types exist, so a bare install is unchanged. */
   const agentTypeParameters: TProperties =
     agentTypeList.length > 0
@@ -434,6 +445,11 @@ export default function (pi: ExtensionAPI) {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.workingDir,
         }),
       ),
+      isolation: Type.Optional(
+        StringEnum(["worktree"] as const, {
+          description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.isolation,
+        }),
+      ),
       model: Type.Optional(
         Type.String({
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.model,
@@ -463,35 +479,75 @@ export default function (pi: ExtensionAPI) {
         : undefined;
 
       const title = params.name.trim().slice(0, 160) || "subagent";
-      const snap = await runTool(
-        getRuntime(),
-        manager.spawn(harness, {
-          prompt: params.prompt,
-          title,
+
+      /**
+       * Isolation is requested, not best-effort: a caller asks for a worktree
+       * precisely because a shared checkout would let this child collide with
+       * its siblings, so quietly falling back to `cwd` would deliver the
+       * hazard they were avoiding. Fail loudly with git's own reason instead.
+       */
+      let worktree: Worktree | undefined;
+      if (params.isolation === "worktree") {
+        const created = await createWorktree({
           cwd,
-          // An explicit argument beats the type's own preference.
-          model: params.model ?? agentType?.model,
-          reasoningEffort:
-            params.reasoning_effort ?? agentType?.reasoningEffort,
-          ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
-          ...(agentType?.tools ? { tools: agentType.tools } : {}),
-          ...(agentType ? { agentTypeName: agentType.name } : {}),
-          parent: {
-            parentCwd: ctx.cwd,
-            projectTrusted: resolveStandaloneChildProjectTrust({
-              parentCwd: ctx.cwd,
-              childCwd: cwd,
-              parentTrusted: ctx.isProjectTrusted(),
-            }),
-            inheritedModel: ctx.model
-              ? { provider: ctx.model.provider, id: ctx.model.id }
-              : undefined,
-            inheritedThinkingLevel: pi.getThinkingLevel(),
-            modelRegistry: ctx.modelRegistry,
-          },
-        }),
-        { signal, interruptMessage: "Subagent spawn aborted." },
-      );
+          label: title,
+          id: String(++worktreeCounter),
+        });
+        if (!created.ok) {
+          throw new Error(
+            `isolation: "worktree" requested but could not be created (${created.reason}). Omit isolation to run in ${cwd}.`,
+          );
+        }
+        worktree = created.worktree;
+      }
+      const childCwd = worktree?.path ?? cwd;
+
+      /**
+       * Trust follows the directory the worktree was branched from, not the
+       * worktree path. It is the same project at the same commit, so a live
+       * "trusted" decision that was never persisted must not be downgraded
+       * just because the checkout moved into `.git/`.
+       */
+      const projectTrusted = resolveStandaloneChildProjectTrust({
+        parentCwd: ctx.cwd,
+        childCwd: cwd,
+        parentTrusted: ctx.isProjectTrusted(),
+      });
+
+      const spawn = manager.spawn(harness, {
+        prompt: params.prompt,
+        title,
+        cwd: childCwd,
+        // An explicit argument beats the type's own preference.
+        model: params.model ?? agentType?.model,
+        reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
+        ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
+        ...(agentType?.tools ? { tools: agentType.tools } : {}),
+        ...(agentType ? { agentTypeName: agentType.name } : {}),
+        ...(worktree ? { worktree: { ...worktree, repoCwd: cwd } } : {}),
+        parent: {
+          parentCwd: ctx.cwd,
+          projectTrusted,
+          inheritedModel: ctx.model
+            ? { provider: ctx.model.provider, id: ctx.model.id }
+            : undefined,
+          inheritedThinkingLevel: pi.getThinkingLevel(),
+          modelRegistry: ctx.modelRegistry,
+        },
+      });
+
+      let snap;
+      try {
+        snap = await runTool(getRuntime(), spawn, {
+          signal,
+          interruptMessage: "Subagent spawn aborted.",
+        });
+      } catch (error) {
+        // The session scope owns reclamation, but it never opened, so this
+        // worktree would otherwise be orphaned on disk.
+        if (worktree) await reclaimWorktree(cwd, worktree).catch(() => {});
+        throw error;
+      }
 
       return {
         content: [
@@ -502,7 +558,8 @@ export default function (pi: ExtensionAPI) {
               title: snap.title,
               harness,
               modelLabel: snap.meta.modelLabel ?? "?",
-              cwd,
+              cwd: childCwd,
+              ...(worktree ? { worktreeBranch: worktree.branch } : {}),
               ...(agentType
                 ? {
                     agentTypeName: agentType.name,
@@ -515,7 +572,7 @@ export default function (pi: ExtensionAPI) {
         details: {
           id: snap.id,
           title: snap.title,
-          cwd,
+          cwd: childCwd,
           harness,
           model: snap.meta.modelLabel,
           ...(agentType ? { agentType: agentType.name } : {}),
