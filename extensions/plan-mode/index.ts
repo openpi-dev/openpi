@@ -3,6 +3,8 @@
  *
  * `/plan` arms a session flag; while armed, a `tool_call` handler allows only
  * explicitly read-only tools and tells the model to finish planning instead.
+ * `bash` is judged per command rather than as a whole (see `bash-policy.ts`),
+ * because history and diffs are what a plan is grounded in.
  * `/plan done` (or the model calling nothing at all) presents the plan for
  * approval.
  *
@@ -13,12 +15,14 @@
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { planBashDecision } from "./bash-policy.ts";
 
 /**
  * Fail-closed allow-list for planning. Unknown and newly installed tools are
  * blocked until they are deliberately classified here as observational.
- * `bash` is absent wholesale: deciding whether an arbitrary command is
- * read-only is impossible at this boundary.
+ * `bash` is absent from this set on purpose but is NOT blocked outright:
+ * whether an arbitrary command is read-only cannot be decided by tool name, so
+ * it is decided one level down, per command, by `planBashDecision`.
  */
 export const PLAN_SAFE_TOOLS = new Set([
   // Local repository investigation.
@@ -47,11 +51,24 @@ export const PLAN_SAFE_TOOLS = new Set([
   "ask_user",
 ]);
 
-const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
+export const BLOCK_REASON =
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, and read-only bash like git log/diff/status) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
 
-export function planToolCallDecision(toolName: string) {
+export function planToolCallDecision(
+  toolName: string,
+  input?: Record<string, unknown>,
+) {
   if (PLAN_SAFE_TOOLS.has(toolName)) return;
+  // bash is decided per command, not per tool: the read-only investigation a
+  // plan is built on (history, diffs, PR state) lives behind it.
+  if (toolName === "bash") {
+    const decision = planBashDecision(input?.command);
+    if (decision.allowed) return;
+    return {
+      block: true as const,
+      reason: `${decision.reason ?? "plan mode could not verify this command is read-only"}. ${BLOCK_REASON}`,
+    };
+  }
   return { block: true as const, reason: BLOCK_REASON };
 }
 
@@ -129,7 +146,7 @@ export default function planMode(pi: ExtensionAPI) {
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits, writes, bash, and delegation are blocked until the user approves.${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits, writes, and delegation are blocked until the user approves. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects.${objective ? `\n\nPlan for: ${objective}` : ""}` +
             "\n\nUse read-only tools to ground the plan, then present it concisely and stop. The user will run `/plan done` to approve.",
           display: true,
           details: {},
@@ -141,7 +158,7 @@ export default function planMode(pi: ExtensionAPI) {
 
   pi.on("tool_call", (event) => {
     if (!planning) return;
-    return planToolCallDecision(event.toolName);
+    return planToolCallDecision(event.toolName, event.input);
   });
 
   pi.on("session_start", (_event, ctx) => {

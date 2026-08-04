@@ -670,6 +670,26 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 ## FAQ
 
 <details>
+<summary><strong>Plan mode 下为什么 `git log` 能跑，`npm install` 不能？</strong></summary>
+
+因为规划最需要的恰恰是历史和改动：`read`/`rg` 能看到代码写了什么，看不到它**为什么**变成这样。把 bash 整个封掉，等于让模型脱离 `git log` / `git diff` / `git status` 做计划。
+
+判断任意 shell 命令是否只读是不可能的，所以 plan mode 不做这个判断。它只回答一个窄得多的问题：**这条命令是不是完全由白名单上的零件拼成的**。
+
+- 含 shell 元字符（`;` `|` `&` `>` `` ` `` `$` `\` 通配符）或引号一律拒绝——那说明它不止一条命令，而解析 shell 意味着每个 parser bug 都是一个绕过；
+- 只认 `git` 和 `gh` 两个程序。文件相关的 `ls`/`cat`/`head` 走 `read`、`ls`、`grep`、`fd` 工具，不走 bash；
+- 子命令必须**紧跟在程序名后面**，不是「第一个不带横杠的词」；
+- 每个 flag 都要在白名单上，认不出来就拒。
+
+后两条不是洁癖，是**修出来的**。第一版按「第一个不带横杠的词」找子命令，等于假设所有 dash 词都不带值——而 `git --namespace <x>` 会吃掉下一个词，于是 `git --namespace log push --force` 里的 `log` 被 flag 吞了，真跑的是 `push`。同理 `gh pr --title view create` 在 cobra 里解析成 `gh pr create --title view`，会真的开一个 PR。第一版还按「已知危险 flag」做拒绝清单，一轮审查就找出四个漏网的：`git grep -Osh` 会把匹配到的仓库文件当 shell 脚本执行，`file --compile` 会写文件，`tree -ao` 绕过锚定的 `-o` 检查，`date -s` 改系统时钟。**在无穷的 flag 空间上做拒绝清单是做不完的**；白名单漏一项只是多一次拒绝。
+
+方向是单向的：放行意味着「已证明只读」，拒绝只意味着「未能证明」。所以 `git tag --list`、`git config --get`、`git stash list` 这些确实只读的形式也照拒——把它们和写入形式分开要解析各自的 flag 语法，正是这个模块拒绝做的分析。
+
+它防的是「模型在你批准前就动手」，**不防敌意仓库**：`git diff` 默认会读仓库自己 `.git/config` 里的 `diff.external`，这层拦不住，上层也没打算拦——Pi 本来就在你的 trust 决定下运行项目自带的工具链。
+
+</details>
+
+<details>
 <summary><strong>Pi Subagent 会阻塞主 Agent 吗？</strong></summary>
 
 不会。`subagent_spawn` 立即返回，子 Agent 在后台独立运行，结束后自动回传结果。只有主 Agent 主动调用 `subagent_wait` 时，当前 Tool Call 才会等待；这应该只用于真正依赖子 Agent 结果的步骤。

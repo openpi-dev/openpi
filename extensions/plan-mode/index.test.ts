@@ -4,7 +4,11 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import planMode, { PLAN_SAFE_TOOLS, planToolCallDecision } from "./index.ts";
+import planMode, {
+  BLOCK_REASON,
+  PLAN_SAFE_TOOLS,
+  planToolCallDecision,
+} from "./index.ts";
 
 test("plan mode allows only explicit observational tools", () => {
   for (const tool of [
@@ -28,7 +32,6 @@ test("plan mode fail-closes known mutations and future unknown tools", () => {
   for (const tool of [
     "edit",
     "write",
-    "bash",
     "subagent_spawn",
     "subagent_send",
     "workflow",
@@ -52,10 +55,36 @@ test("plan mode fail-closes known mutations and future unknown tools", () => {
   }
 });
 
+test("bash is judged per command, not blocked as a whole tool", () => {
+  // The tool name alone cannot say whether a command writes, so bash is the
+  // one tool decided by its argument. See bash-policy.test.ts for the command
+  // grammar itself.
+  assert.equal(
+    planToolCallDecision("bash", { command: "git log -5" }),
+    undefined,
+  );
+  assert.equal(
+    planToolCallDecision("bash", { command: "git push" })?.block,
+    true,
+  );
+  // A bash call whose input never arrives must not fall through to allowed.
+  assert.equal(planToolCallDecision("bash")?.block, true);
+  assert.equal(planToolCallDecision("bash", {})?.block, true);
+  // The refusal keeps both the specific reason and the standing instruction.
+  const reason = planToolCallDecision("bash", { command: "rm -rf /" })?.reason;
+  assert.match(reason ?? "", /read-only git and gh investigation commands/);
+  assert.match(reason ?? "", /Plan mode is active/);
+});
+
 test("runtime gate blocks before approval and opens after explicit approval", async () => {
   let commandHandler:
     ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
-  let toolHandler: ((event: { toolName: string }) => unknown) | undefined;
+  let toolHandler:
+    | ((event: {
+        toolName: string;
+        input?: Record<string, unknown>;
+      }) => unknown)
+    | undefined;
   const pi = {
     registerCommand(
       _name: string,
@@ -67,7 +96,10 @@ test("runtime gate blocks before approval and opens after explicit approval", as
     },
     on(event: string, handler: unknown) {
       if (event === "tool_call") {
-        toolHandler = handler as (event: { toolName: string }) => unknown;
+        toolHandler = handler as (event: {
+          toolName: string;
+          input?: Record<string, unknown>;
+        }) => unknown;
       }
     },
     sendMessage() {},
@@ -87,11 +119,28 @@ test("runtime gate blocks before approval and opens after explicit approval", as
   await commandHandler("", ctx);
   assert.deepEqual(toolHandler({ toolName: "tasks_add" }), {
     block: true,
-    reason:
-      "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.",
+    reason: BLOCK_REASON,
   });
   assert.equal(toolHandler({ toolName: "read" }), undefined);
+  // The gate passes the call's input through, so bash reaches the per-command
+  // policy instead of being decided by name.
+  assert.equal(
+    toolHandler({ toolName: "bash", input: { command: "git status" } }),
+    undefined,
+  );
+  assert.equal(
+    (
+      toolHandler({ toolName: "bash", input: { command: "npm publish" } }) as {
+        block?: boolean;
+      }
+    )?.block,
+    true,
+  );
 
   await commandHandler("done", ctx);
   assert.equal(toolHandler({ toolName: "write" }), undefined);
+  assert.equal(
+    toolHandler({ toolName: "bash", input: { command: "npm publish" } }),
+    undefined,
+  );
 });
