@@ -670,6 +670,23 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 ## FAQ
 
 <details>
+<summary><strong>Plan mode 下为什么 `git log` 能跑，`npm install` 不能？</strong></summary>
+
+因为规划最需要的恰恰是历史和改动：`read`/`rg` 能看到代码写了什么，看不到它**为什么**变成这样。把 bash 整个封掉，等于让模型脱离 `git log` / `git diff` / `git status` 做计划。
+
+判断任意 shell 命令是否只读是不可能的，所以 plan mode 不做这个判断。它只回答一个窄得多的问题：**这条命令是不是恰好是几个已知只读命令之一，且没有夹带别的东西**。
+
+- 含 shell 元字符（`;` `|` `&` `>` `` ` `` `$` `\` 通配符……）一律拒绝——那说明它不止一条命令，而解析 shell 意味着每个 parser bug 都是一个绕过；
+- 带引号也拒绝，引号会让分词结果和实际执行不一致；
+- 剩下的按前缀白名单放行：`git log/diff/status/show/blame/rev-parse/ls-files` 等、`gh pr|issue view/list`、`ls`、`cat`、`head`、`tail`、`wc`；
+- 即使子命令只读，`-o` / `--output`（会写文件）和 `--exec-path` / `-c` / `-C` / `--git-dir`（会改变执行什么、在哪执行）仍然拒绝；
+- `gh` 还要求第三个词是明确的读动词，因为 `gh pr view` 和 `gh pr create` 的父命令是同一个。
+
+方向是单向的：放行意味着「已证明只读」，拒绝只意味着「未能证明」，不代表危险。白名单外的东西照旧交给用户自己跑。
+
+</details>
+
+<details>
 <summary><strong>Pi Subagent 会阻塞主 Agent 吗？</strong></summary>
 
 不会。`subagent_spawn` 立即返回，子 Agent 在后台独立运行，结束后自动回传结果。只有主 Agent 主动调用 `subagent_wait` 时，当前 Tool Call 才会等待；这应该只用于真正依赖子 Agent 结果的步骤。
