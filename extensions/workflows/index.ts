@@ -19,7 +19,12 @@
  * `background: true` to return immediately and get a follow-up message when
  * the run finishes. Run artifacts (script, args, statuses, result) are saved
  * under `~/.pi/agent/workflows/<runId>/` for inspection; result and bounded
- * transcripts use separate artifacts, and there is no resume.
+ * transcripts use separate artifacts.
+ *
+ * `resume_from_run_id` replays a prior run's cached agent results. Matching is
+ * by call CONTENT, not by ordinal: `pipeline()` issues calls in an order that
+ * depends on real agent latency, so an ordinal would drift between runs and
+ * hand one item's result to another. See `journal.ts`.
  */
 
 import { randomBytes } from "node:crypto";
@@ -37,7 +42,17 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
-import { createWorkflowPersistence, persistWorkflowJson } from "./artifacts.ts";
+import {
+  createWorkflowPersistence,
+  loadJournal,
+  persistWorkflowJson,
+} from "./artifacts.ts";
+import {
+  agentCallKey,
+  createReplayCache,
+  type JournalEntry,
+  type ReplayCache,
+} from "./journal.ts";
 import { RunController } from "./controller.ts";
 import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
 import {
@@ -135,9 +150,39 @@ const WorkflowParams = Type.Object({
       description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
     }),
   ),
+  resume_from_run_id: Type.Optional(
+    Type.String({
+      description: WORKFLOW_PARAMETER_DESCRIPTIONS.resumeFromRunId,
+    }),
+  ),
 });
 
 type WorkflowInput = Static<typeof WorkflowParams>;
+
+/**
+ * Locate a prior run's directory by exact or suffix match, the same convention
+ * workflow_stop/workflow_status already accept, so a partial id works here too.
+ */
+function findRunDir(target: string) {
+  const trimmed = target.trim();
+  if (!trimmed) return undefined;
+  const base = path.join(getAgentDir(), "workflows");
+  const exact = path.join(base, trimmed);
+  try {
+    if (fs.statSync(exact).isDirectory()) return exact;
+  } catch {
+    // Fall through to a suffix scan.
+  }
+  try {
+    const match = fs
+      .readdirSync(base)
+      .filter((name) => name.startsWith("wf_"))
+      .find((name) => name.endsWith(trimmed));
+    return match ? path.join(base, match) : undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(
@@ -585,11 +630,31 @@ export default function workflows(pi: ExtensionAPI) {
         agents: [],
       };
 
+      // Resume: replay cached results for calls whose content is unchanged.
+      // A missing or unreadable source degrades to a normal full run — resume
+      // is an optimization and must not become a new way to fail.
+      const journalEntries: JournalEntry[] = [];
+      let replay: ReplayCache | undefined;
+      if (params.resume_from_run_id) {
+        const sourceDir = findRunDir(params.resume_from_run_id);
+        const journal = sourceDir ? loadJournal(sourceDir) : undefined;
+        if (journal && journal.entries.length > 0) {
+          replay = createReplayCache(journal);
+          details.resumedFrom = path.basename(sourceDir!);
+        } else {
+          details.resumeNote = sourceDir
+            ? `No replayable results found in ${path.basename(sourceDir)}; ran everything fresh.`
+            : `No workflow run matching "${params.resume_from_run_id}"; ran everything fresh.`;
+        }
+      }
+
       writeRunFile(runDir, "script.js", params.script);
       if (params.args !== undefined)
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
-      const persistence = createWorkflowPersistence(runDir, details);
+      const persistence = createWorkflowPersistence(runDir, details, {
+        journal: () => journalEntries,
+      });
 
       // Background runs survive Esc on the parent turn, but all runs are
       // aborted and settled during session shutdown.
@@ -697,6 +762,28 @@ export default function workflows(pi: ExtensionAPI) {
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
+        const callKey = agentCallKey(prompt, opts);
+        // Checked before controller.schedule on purpose: schedule() charges the
+        // run's agent-call budget on entry, and a replayed call runs no agent.
+        const cached = replay?.take(callKey);
+        if (cached) {
+          record.state = "done";
+          record.replayed = true;
+          record.finishedAt = Date.now();
+          record.preview = cached.output.slice(0, PREVIEW_LENGTH);
+          emit();
+          // Re-journal so a chain of resumes keeps working: run C resuming from
+          // B still finds what B replayed from A.
+          journalEntries.push(cached);
+          return {
+            ok: true,
+            output: cached.output,
+            ...(cached.structured !== undefined
+              ? { structured: cached.structured }
+              : {}),
+          };
+        }
+
         return controller
           .schedule(async (runSignal) => {
             // Model/provider resolution: default to the parent session's model.
@@ -790,6 +877,18 @@ export default function workflows(pi: ExtensionAPI) {
               record.error = outcome.error ?? "Agent failed";
             }
             emit();
+
+            // Only successes are journaled: re-running a failure is usually
+            // the whole reason someone resumes, so it must not be cached.
+            if (outcome.ok) {
+              journalEntries.push({
+                key: callKey,
+                output: outcome.output,
+                ...(outcome.structured !== undefined
+                  ? { structured: outcome.structured }
+                  : {}),
+              });
+            }
 
             return {
               ok: outcome.ok,

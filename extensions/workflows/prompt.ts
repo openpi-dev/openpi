@@ -13,6 +13,8 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   args: "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
   background:
     "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
+  resumeFromRunId:
+    'Optional run id of a previous workflow (e.g. "wf_1a2b3c4d5e6f", or a unique suffix) to replay cached agent results from. Any call whose prompt and schema/model/provider/effort are unchanged returns the earlier result for free instead of re-running; changed and new calls run for real, and failed calls are never cached. Use this when re-running a workflow you have edited, so you only pay for what actually changed. An unknown run id is not an error — the workflow just runs everything fresh and says so.',
 };
 
 /** Describes stopping a running background workflow, mirroring subagent_cancel/bg_kill. */
@@ -52,7 +54,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
 
   "• args — the parsed value of the `args` tool parameter (or undefined).",
   "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. The package default permits 128 agent calls per run and can be changed with /my-pi-setup (hard maximum 1024); there is no overall deadline. Each agent must receive its first assistant response event within 45 seconds so silent provider requests fail clearly; after that, agent() has no wall-clock deadline. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
-  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. There is no resume: a failed run is simply re-run. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection.",
+  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. Artifacts are saved under ~/.pi/agent/workflows/<runId>/ for inspection. To re-run an edited workflow cheaply, pass `resume_from_run_id` with the previous run id: unchanged calls replay their cached results and only what you actually changed runs again.",
   "Example — each file is verified as soon as ITS OWN scan lands, instead of waiting for every scan:",
   "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Verify' }, { title: 'Report' }] }",
   "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
@@ -105,13 +107,24 @@ export function buildWorkflowResultMessage(
       `across ${details.phases.length} phase(s) in ${elapsed}.`,
     `Run dir: ${shortenHome(runDir)}`,
   ];
+  // State the hit rate out loud: it is the only way to tell a resume that
+  // worked from one that silently replayed nothing.
+  const replayed = details.agents.filter((agent) => agent.replayed).length;
+  if (details.resumedFrom) {
+    lines.push(
+      `Resumed from ${details.resumedFrom}: replayed ${replayed}/${details.agents.length} agent call(s), ran ${details.agents.length - replayed} for real.`,
+    );
+  }
+  if (details.resumeNote) lines.push(`Resume: ${details.resumeNote}`);
   if (details.error) lines.push(`Error: ${details.error}`);
   if (details.agents.length > 0) {
     lines.push("", "Agents:");
     for (const agent of details.agents) {
       const status =
         agent.state === "done"
-          ? "ok"
+          ? agent.replayed
+            ? "ok (replayed)"
+            : "ok"
           : agent.state === "error"
             ? "FAILED"
             : "running";

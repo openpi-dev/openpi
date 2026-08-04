@@ -1,10 +1,19 @@
 import type { TranscriptEntry, WorkflowDetails } from "./model.ts";
 import {
+  boundedJournal,
+  parseJournal,
+  type JournalEntry,
+  type WorkflowJournal,
+} from "./journal.ts";
+import {
   safeStringify,
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
+import * as fs from "node:fs";
 import * as path from "node:path";
+
+export const JOURNAL_FILE = "journal.json";
 
 const ARTIFACT_TRANSCRIPT_MAX_BYTES = 32 * 1024;
 const ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES = 8 * 1024;
@@ -87,7 +96,11 @@ function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
 
-export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
+export function persistWorkflowJson(
+  runDir: string,
+  details: WorkflowDetails,
+  journal?: readonly JournalEntry[],
+) {
   const transcripts = Object.fromEntries(
     details.agents.map((agent) => [
       agent.index,
@@ -99,6 +112,18 @@ export function persistWorkflowJson(runDir: string, details: WorkflowDetails) {
     "transcripts.json",
     safeStringify(transcripts, { maxBytes: 2 * 1024 * 1024 }),
   );
+  // Written alongside the rest so it inherits atomic write, 500ms coalescing,
+  // and the final flush. Only present once a call has actually succeeded.
+  // boundedJournal has already brought this under the cap, and plain
+  // JSON.stringify is deliberate: safeStringify would swap an over-cap value
+  // for a preview stub, silently turning the journal into something unusable.
+  if (journal && journal.length > 0) {
+    writeRunFile(
+      runDir,
+      JOURNAL_FILE,
+      JSON.stringify(boundedJournal(journal).journal, null, 2),
+    );
+  }
   if (details.result !== undefined) {
     writeRunFile(
       runDir,
@@ -127,7 +152,13 @@ export function createWorkflowPersistence(
   details: WorkflowDetails,
   options: {
     intervalMs?: number;
-    persist?: (runDir: string, details: WorkflowDetails) => void;
+    persist?: (
+      runDir: string,
+      details: WorkflowDetails,
+      journal?: readonly JournalEntry[],
+    ) => void;
+    /** Read at write time so callers only have to append to their own array. */
+    journal?: () => readonly JournalEntry[];
   } = {},
 ) {
   const intervalMs = Math.max(
@@ -135,6 +166,7 @@ export function createWorkflowPersistence(
     options.intervalMs ?? WORKFLOW_CHECKPOINT_INTERVAL_MS,
   );
   const persist = options.persist ?? persistWorkflowJson;
+  const readJournal = options.journal;
   let lastPersistedAt = Date.now();
   let dirty = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -143,7 +175,7 @@ export function createWorkflowPersistence(
     timer = undefined;
     if (!dirty) return;
     try {
-      persist(runDir, details);
+      persist(runDir, details, readJournal?.());
       dirty = false;
       lastPersistedAt = Date.now();
     } catch {
@@ -171,9 +203,23 @@ export function createWorkflowPersistence(
     flush() {
       if (timer) clearTimeout(timer);
       timer = undefined;
-      persist(runDir, details);
+      persist(runDir, details, readJournal?.());
       dirty = false;
       lastPersistedAt = Date.now();
     },
   };
+}
+
+/**
+ * Read a prior run's replay journal. Any failure (missing run, unreadable or
+ * malformed file) yields undefined: resume is an optimization and must never
+ * turn into a new way for a run to fail.
+ */
+export function loadJournal(runDir: string): WorkflowJournal | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(runDir, JOURNAL_FILE), "utf8");
+    return parseJournal(JSON.parse(raw));
+  } catch {
+    return undefined;
+  }
 }
