@@ -143,6 +143,7 @@ function normalizeDetails(
         turns: 0,
         ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
       },
+      ...(a.replayed === true ? { replayed: true } : {}),
       transcript: normalizeTranscript(a.transcript),
     });
   }
@@ -204,6 +205,10 @@ function normalizeDetails(
       typeof record.transcriptArtifact === "string"
         ? record.transcriptArtifact
         : undefined,
+    resumedFrom:
+      typeof record.resumedFrom === "string" ? record.resumedFrom : undefined,
+    resumeNote:
+      typeof record.resumeNote === "string" ? record.resumeNote : undefined,
     error: typeof record.error === "string" ? record.error : undefined,
   };
 }

@@ -73,6 +73,8 @@ export interface AgentRecord {
   error?: string;
   preview: string;
   usage: AgentUsage;
+  /** Replayed from a prior run's journal instead of actually executed. */
+  replayed?: boolean;
   /** Normalized, serializable subagent conversation shown by /workflows. */
   transcript: TranscriptEntry[];
 }
@@ -93,6 +95,10 @@ export interface WorkflowDetails {
   result?: unknown;
   resultArtifact?: string;
   transcriptArtifact?: string;
+  /** Run this one replayed cached agent results from, when resuming. */
+  resumedFrom?: string;
+  /** Why a requested resume produced no cache, for an honest result message. */
+  resumeNote?: string;
   error?: string;
 }
 
