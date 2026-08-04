@@ -137,6 +137,10 @@ const BOOTSTRAP = String.raw`
     for (const stage of stages) {
       if (typeof stage !== "function") throw new Error("pipeline() stages must be functions");
     }
+    // Snapshot: mapLimited re-reads items[index] every iteration, so a stage
+    // that mutates the array it was given would manufacture nulls for items
+    // that never existed (truncating) or silently extend the run (appending).
+    const work = items.slice();
     // Each item walks every stage on its own, with no barrier in between: item
     // A can be in stage 3 while item B is still in stage 1. Wall-clock is the
     // slowest single chain rather than the sum of each stage's slowest item.
@@ -145,16 +149,22 @@ const BOOTSTRAP = String.raw`
     // serializes agent calls, because the host counts an agent call against the
     // run budget when it is SUBMITTED, not when it runs. Releasing every chain
     // at once would burn the budget on calls that are merely queued.
-    return mapLimited(items, Math.min(maxConcurrency, items.length || 1), async (item, index) => {
+    return mapLimited(work, Math.min(maxConcurrency, work.length || 1), async (item, index) => {
       let value = item;
       // A throwing stage drops just this item to null and skips its remaining
       // stages; siblings are unaffected. Matches parallel()'s thunk semantics.
+      //
+      // The throw is narrated rather than swallowed: without it a script bug
+      // (a typo on an undefined field), a deliberate skip, and a genuinely
+      // failed agent are all one indistinguishable null, and the "how many
+      // dropped" count every script is told to report becomes a guess.
       try {
         for (const stage of stages) {
           value = await stage(value, item, index);
         }
         return value;
-      } catch {
+      } catch (error) {
+        log("pipeline: item " + index + " dropped — " + ((error && error.message) || String(error)));
         return null;
       }
     });
@@ -258,6 +268,8 @@ let token;
  * newest and no sequence number is needed.
  */
 let usageJson = "{}";
+/** Emission cap for the narrator; see the log bridge in run(). */
+let logCount = 0;
 const pendingAgents = new Map();
 
 function send(message) {
@@ -316,6 +328,13 @@ function run(source, argsJson, maxConcurrency) {
         return undefined;
       }
       if (kind === "log") {
+        // Capped in the CHILD, where the memory is. process.send queues on the
+        // IPC pipe, and a synchronous log loop never yields, so the queue grows
+        // until the 128MB heap dies with SIGABRT — taking every completed
+        // agent's output with it. Measured: 1e6 logs delivers ~2k of them and
+        // then aborts the run. The cap is ~100x the 100-line display window, so
+        // nothing a reader would have seen is lost.
+        if (++logCount > 10000) return undefined;
         send({ kind: "log", payloadJson });
         return undefined;
       }

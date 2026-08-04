@@ -5,7 +5,7 @@ import {
   MAX_LOG_ENTRIES,
   MAX_LOG_TEXT,
   sanitizeLine,
-  usageSnapshot,
+  createUsageReader,
   type AgentRecord,
   type WorkflowDetails,
 } from "./model.ts";
@@ -101,8 +101,8 @@ test("the log keeps the newest lines and reports how many it dropped", () => {
   assert.equal(d.logs?.at(-1)?.text, `line ${total - 1}`);
 });
 
-test("a usage snapshot sums every agent's tokens including cache", () => {
-  const snapshot = usageSnapshot([
+test("a usage reading sums every agent's tokens including cache", () => {
+  const read = createUsageReader([
     agentRecord({
       input: 100,
       output: 20,
@@ -118,11 +118,31 @@ test("a usage snapshot sums every agent's tokens including cache", () => {
       cost: 0.25,
     }),
   ]);
+  const snapshot = read();
   assert.equal(snapshot.input, 300);
   assert.equal(snapshot.output, 50);
   assert.equal(snapshot.total, 360);
   assert.equal(snapshot.cost, 0.75);
   assert.equal(snapshot.agents, 2);
+});
+
+test("a usage reading never goes backwards when an agent compacts", () => {
+  // Each agent's usage is RECOMPUTED from its current message list, so a
+  // child session that auto-compacts drops the tokens of the messages it
+  // discarded and the sum falls. A script looping until a token target would
+  // then run far past it while honestly reporting it stopped on budget —
+  // measured at 400k actual against a 250k intended stop. The reading is a
+  // monotonic lower bound instead.
+  const agent = agentRecord({ input: 100_000, output: 5_000 });
+  const read = createUsageReader([agent]);
+  assert.equal(read().total, 105_000);
+
+  // Compaction shrinks what the recompute can see.
+  agent.usage.input = 20_000;
+  assert.equal(read().total, 105_000, "the reading must not fall");
+
+  agent.usage.input = 200_000;
+  assert.equal(read().total, 205_000, "and must still track real growth");
 });
 
 test("log() reaches the host in order and phase() stays separate", async () => {
@@ -192,4 +212,91 @@ test("the usage reading is frozen, so a script cannot fake its own totals", asyn
     { usageSnapshot: () => ({ total: 42 }) },
   );
   assert.equal(result, 42);
+});
+
+test("an oversized log line is dropped, never fatal to the run", async () => {
+  // The byte gate used to call finish(), rejecting the whole run and
+  // discarding every completed agent's output over one narration line. The
+  // gate is also byte-based on a code-point-capped field, so the threshold
+  // varied 4x by script: 8k ASCII passed where 3k emoji did not.
+  const logs: string[] = [];
+  const result = await runSandbox(
+    `
+      log("a".repeat(50000));
+      log("🙂".repeat(5000));
+      const r = await agent("real work");
+      log("still alive");
+      return r.output;
+    `,
+    { onLog: (text) => logs.push(text) },
+  );
+  assert.equal(result, "reply:real work", "the run must survive");
+  assert.deepEqual(logs, ["still alive"]);
+});
+
+test("an oversized phase title is dropped, never fatal to the run", async () => {
+  const phases: string[] = [];
+  const result = await runSandbox(
+    `
+      phase("x".repeat(50000));
+      phase("Scan");
+      return (await agent("work")).output;
+    `,
+    { onPhase: (title) => phases.push(title) },
+  );
+  assert.equal(result, "reply:work");
+  assert.deepEqual(phases, ["Scan"]);
+});
+
+test("a log flood is capped instead of killing the child with OOM", async () => {
+  // log() is synchronous into process.send, which queues on the IPC pipe. A
+  // tight loop never yields, so the queue grew until the 128MB heap aborted —
+  // taking an hour of completed agent work with it. Measured: 1e6 logs
+  // delivered ~2k lines and then SIGABRT.
+  let logged = 0;
+  const result = await runSandbox(
+    `
+      for (let i = 0; i < 200000; i++) log("progress " + i);
+      return (await agent("survived")).output;
+    `,
+    { onLog: () => logged++ },
+  );
+  assert.equal(result, "reply:survived", "the run must survive the flood");
+  assert.ok(logged > 0 && logged <= 10_000, `delivered ${logged}`);
+});
+
+test("a stage that throws says why instead of leaving a bare null", async () => {
+  // Without this, a script bug, a deliberate skip, and a genuinely failed
+  // agent are one indistinguishable null — and the "how many dropped" count
+  // every script is told to report becomes a guess.
+  const logs: string[] = [];
+  const result = await runSandbox(
+    `
+      return await pipeline(
+        ["a", "b"],
+        (item) => item,
+        (prev) => { if (prev === "b") throw new Error("guard rejected b"); return prev; },
+      );
+    `,
+    { onLog: (text) => logs.push(text) },
+  );
+  assert.deepEqual(result, ["a", null]);
+  assert.equal(logs.length, 1);
+  assert.match(logs[0] ?? "", /item 1 dropped/);
+  assert.match(logs[0] ?? "", /guard rejected b/);
+});
+
+test("a stage mutating its own input array cannot manufacture nulls", async () => {
+  // mapLimited re-reads items[index] each iteration, so truncating the array
+  // mid-run reported drops for items that had already been processed.
+  const result = await runSandbox(
+    `
+      const items = ["a", "b", "c", "d"];
+      return await pipeline(items, (item, _orig, index) => {
+        if (index === 0) items.length = 1;
+        return "done:" + item;
+      });
+    `,
+  );
+  assert.deepEqual(result, ["done:a", "done:b", "done:c", "done:d"]);
 });
