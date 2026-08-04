@@ -26,6 +26,7 @@ import {
   TASK_WIDGET_LIMIT,
   renderTaskWidget,
   renderToolResult,
+  taskCounts,
   type TaskToolDetails,
 } from "./ui.ts";
 
@@ -198,6 +199,10 @@ export default function sessionTasks(pi: ExtensionAPI) {
     items,
     total: snapshot().items.length,
     revision: snapshot().revision,
+    // From the live snapshot, not `items`: a tools_update carries only the one
+    // row it touched, and a header counted from that would claim the batch is
+    // a single task.
+    counts: taskCounts(snapshot().items),
     ...(batchClosed ? { batchClosed: true } : {}),
   });
 
