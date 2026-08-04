@@ -586,12 +586,8 @@ export default function (pi: ExtensionAPI) {
               modelLabel: snap.meta.modelLabel ?? "?",
               cwd: childCwd,
               ...(worktree ? { worktreeBranch: worktree.branch } : {}),
-              ...(agentType
-                ? {
-                    agentTypeName: agentType.name,
-                    ...(agentType.tools ? { tools: agentType.tools } : {}),
-                  }
-                : {}),
+              ...(agentType ? { agentTypeName: agentType.name } : {}),
+              ...(childTools ? { tools: childTools } : {}),
             }),
           },
         ],

@@ -803,6 +803,8 @@ npm test
 - `fd` / `rg` argv、官方二进制下载、SHA-256 和输出截断；
 - Session 搜索、Summary 脱敏、配置边界与 TUI 选择状态。
 
+历史方案、研究与多模型评估归档在 [`docs/design/`](docs/design/)。
+
 仓库的 [`AGENTS.md`](AGENTS.md) 还定义了维护约束：任何新增的模型、开关、权限、并发或 UI 偏好，都必须同步接入 `/my-pi-setup`，保持单一配置入口。
 
 ---

@@ -1,10 +1,12 @@
 /** All model-facing strings for the subagents tools. */
 
 import type { AgentType } from "./agent-types.ts";
+import { MAX_RUNNING } from "./manager.ts";
 
 /** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. Max 4 subagents can be running at once.";
+  "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. " +
+  `Max ${MAX_RUNNING} subagents can be running at once.`;
 
 /**
  * Appends the configured agent types, if any. They are a runtime resource, so
@@ -68,10 +70,16 @@ export function buildSubagentSpawnResult(options: {
   tools?: readonly string[];
   worktreeBranch?: string;
 }) {
-  // Naming the restriction back to the parent stops it from expecting work the
-  // child structurally cannot do.
   const typeNote = options.agentTypeName
-    ? ` Agent type "${options.agentTypeName}" applied${options.tools ? `; it can only use: ${options.tools.join(", ")}` : ""}.`
+    ? ` Agent type "${options.agentTypeName}" applied.`
+    : "";
+  // Report the effective allowlist independently of agent type: plan mode can
+  // narrow a general child too, and the parent must not expect work the child
+  // structurally cannot do.
+  const toolNote = options.tools
+    ? options.tools.length > 0
+      ? ` It can only use: ${options.tools.join(", ")}.`
+      : " It has no tools available."
     : "";
   // Without the branch name the parent has no way to find committed work after
   // the isolated directory is reclaimed.
@@ -79,7 +87,7 @@ export function buildSubagentSpawnResult(options: {
     ? ` Isolated in its own worktree on branch "${options.worktreeBranch}" — its edits are invisible here until you merge that branch, and the directory is reclaimed when it finishes.`
     : "";
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${worktreeNote}\n` +
+    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}\n` +
     `It runs in the background — keep working on other things; its result is delivered to you automatically when it finishes, so do not poll or wait for it. ` +
     `Only if your next step truly cannot proceed without it, subagent_wait(ids: ["${options.id}"]) blocks for it; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );

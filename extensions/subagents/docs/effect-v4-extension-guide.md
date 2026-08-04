@@ -5,9 +5,9 @@
 > **this** file is how to stand up _one pi extension_ on the same toolchain and where to
 > draw the line between "wrap in Effect" and "leave as plain TS".
 >
-> **Verified against** `effect@4.0.0-beta.98`, `@effect/platform-node@4.0.0-beta.98`,
-> `@effect/tsgo@0.19.0`, `typescript@7.0.2` (checked 2026-07-13, in `extensions/subagents`).
-> `npm run check` there passes clean — use it as the reference implementation.
+> The API examples originated against the July 2026 Effect v4 beta toolchain. The current
+> dependency versions and all install/check commands are centralized in the repository root;
+> treat the root `package.json`, lockfile, and `tsconfig.json` as canonical.
 >
 > Audience: the agents migrating `ask-user`, `model-info`, `git-info`,
 > `ui-customization`, and `copy-all`.
@@ -38,64 +38,36 @@ toolchain (§1) and leaving the body plain. Don't invent an Effect layer to have
 
 ---
 
-## 1. Per-extension toolchain (copy this exactly)
+## 1. Repository-level toolchain
 
-Each extension is its own npm package with its own `node_modules`. Replicate the pinned
-setup — do **not** float the versions.
+The repository now has one npm package and one dependency tree. Declare `effect`,
+`@effect/platform-node`, `@effect/tsgo`, and TypeScript only in the root `package.json`;
+do not recreate extension-local manifests, lockfiles, or `node_modules`.
 
-`package.json`:
-
-```jsonc
-{
-  "name": "<ext>",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "check": "tsc --noEmit -p .",
-    "prepare": "effect-tsgo patch", // patches the Effect LS into the tsgo binary
-  },
-  "dependencies": {
-    "effect": "4.0.0-beta.98", // EXACT pin, no ^
-    "@effect/platform-node": "4.0.0-beta.98", // only if you touch fs / child processes
-  },
-  "devDependencies": {
-    "@effect/tsgo": "^0.19.0",
-    "typescript": "^7.0.2",
-  },
-}
-```
-
-`tsconfig.json` (extends the repo root, adds the Effect language-service plugin):
+The root `tsconfig.json` owns the Effect language-service plugin and the shared strict
+compiler options. An extension keeps a small `tsconfig.json` only to define its local
+project scope:
 
 ```jsonc
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": {
-    "plugins": [{ "name": "@effect/language-service" }],
-  },
   "include": ["index.ts", "src/**/*.ts", "*.test.ts"],
 }
 ```
 
-The root `tsconfig.json` already sets `strict`, `module`/`moduleResolution: NodeNext`,
-`verbatimModuleSyntax`, `allowImportingTsExtensions`, `target: ES2022`, `types: ["node"]`.
 Keep local `.ts` imports written **with the `.ts` extension** (`./src/manager.ts`), matching
 the house style.
 
 ### The LSP / language-service, precisely
 
-- `typescript@7` is the **native (tsgo) TypeScript** — its `tsc` is a Go binary, and it's
-  what `npm run check` runs.
-- `@effect/language-service` is **not an installed npm package** here (you won't find it in
-  `node_modules`). It's delivered by `effect-tsgo patch`, run automatically by the `prepare`
-  lifecycle script on `npm install`. The patch injects the Effect Language Service into the
-  tsgo binary; the tsconfig `plugins` entry then turns on Effect-aware editor diagnostics and
-  quickfixes (e.g. "yield missing services", floating effects).
-- Practical sequence for a fresh/edited extension: `npm install` (runs the patch) →
-  `npm run check`. If editor diagnostics look stale, re-run `npx effect-tsgo patch`;
-  `npx effect-tsgo get-exe-path` prints the patched binary it resolved.
-- The plugin drives the _editor_; it does not change `tsc` exit codes. `npm run check` is
-  still your ground-truth green/red signal.
+- `typescript@7` is the native TypeScript implementation used by `npm run check`.
+- The root `prepare` script patches the Effect Language Service into TypeScript when the
+  development-only `@effect/tsgo` package is installed. It exits cleanly for production
+  installs that omit dev dependencies.
+- The root plugin configuration keeps Effect errors in the check exit code while printing
+  existing warning-level diagnostics without failing the build.
+- Practical sequence: run `npm install` or `npm ci` at the repository root, then
+  `npm run check`. If editor diagnostics look stale, run `npm run prepare`.
 
 ---
 
@@ -288,29 +260,27 @@ Effect LS, and only touch runtime code that has a real async/resource concern.
 
 ---
 
-## 7. Verify — scoped to the one extension
+## 7. Verify from the repository root
 
-Run everything from inside the extension directory so you never trigger a root/global build
-or format:
+The root scripts are the canonical checks and cover every extension:
 
 ```bash
-cd extensions/<ext>
-npm install        # first time / after dep or script edits — runs `prepare` (effect-tsgo patch)
-npm run check      # tsc --noEmit -p .  ← ground-truth green/red
-npm run test       # only if the extension defines tests; keep them minimal
+npm install
+npm run format:check
+npm run check
+npm test
 ```
 
-`extensions/subagents` is the known-green reference: `npm run check` there exits 0 against
-the pinned versions. If a migrated extension fails `check` with `Effect.fork`/`ServiceMap`/
-`Either` errors, it's using stale v3/early-beta APIs — consult the rename table in
-`effect-v4-notes.md`.
+For a clean-install check, use `npm ci`. If an extension fails with
+`Effect.fork`/`ServiceMap`/`Either` errors, it is using stale v3/early-beta APIs — consult
+the rename table in `effect-v4-notes.md`.
 
 ---
 
 ## 8. Don'ts (keep it lean)
 
-1. **Don't float versions.** Pin `effect` and `@effect/platform-node` to the exact same
-   `4.0.0-beta.98`; `unstable/*` can break between betas.
+1. **Don't declare versions per extension.** The root `package.json` is the single source of
+   dependency versions; `unstable/*` can break between Effect betas.
 2. **Don't Effect-ify pure/UI code.** No service or layer for a clipboard write, a string
    truncation, or a popup. §0 is the test: is there a typed-error / cancellation / resource /
    retry concern? If not, leave it.
@@ -322,6 +292,5 @@ the pinned versions. If a migrated extension fails `check` with `Effect.fork`/`S
    in `session_shutdown` run them.
 5. **Don't over-test.** A `check` that passes plus one focused runtime test (where behavior
    is non-obvious) beats a wall of defensive unit tests.
-6. **Don't run root scripts.** No repo-root `tsc`, `prettier`, or `npm run format`; stay
-inside `extensions/<ext>`.
-</content>
+6. **Don't invent nested package scripts.** Run `npm run check`, `npm test`, and formatting
+   from the repository root so every extension uses the same dependency tree and gates.

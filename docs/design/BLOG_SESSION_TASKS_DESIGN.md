@@ -89,7 +89,7 @@ Task 状态只能是提示。它不能推翻仓库里的真实状态，也不能
 
 ## 第一版先撞上了持久化
 
-第一版 [`TASKS_DESIGN.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/TASKS_DESIGN.md) 写完后，我们让 Fable 5、Opus 5 和 GPT-5.6 Sol 分别评审。Fable 与 Opus 完成交叉质询，Sol 在这一轮超时，最后由 Opus 5 汇总。完整裁决保存在 [`TASKS_EVALUATION.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/TASKS_EVALUATION.md)。
+第一版 [`TASKS_DESIGN.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/docs/design/TASKS_DESIGN.md) 写完后，我们让 Fable 5、Opus 5 和 GPT-5.6 Sol 分别评审。Fable 与 Opus 完成交叉质询，Sol 在这一轮超时，最后由 Opus 5 汇总。完整裁决保存在 [`TASKS_EVALUATION.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/docs/design/TASKS_EVALUATION.md)。
 
 | 模型 | 独立结论 | 置信度 |
 | --- | --- | ---: |

@@ -4,6 +4,12 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
+    "plugins": [
+      {
+        "name": "@effect/language-service",
+        "ignoreEffectWarningsInTscExitCode": true
+      }
+    ],
     "skipLibCheck": true,
     "strict": true,
     "target": "ES2022",

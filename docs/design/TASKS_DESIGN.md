@@ -67,12 +67,12 @@ Strong ideas worth preserving:
 - model-visible task context is bounded;
 - task tools mutate local task state and do not dispatch work.
 
-Sources:
+Sources in the companion Maka Agent repository:
 
-- `/Users/tushaokun/code/maka-agent/docs/session-task-ledger-lifecycle.md`
-- `/Users/tushaokun/code/maka-agent/packages/core/src/task-ledger.ts`
-- `/Users/tushaokun/code/maka-agent/packages/runtime/src/task-ledger-tools.ts`
-- `/Users/tushaokun/code/maka-agent/packages/storage/src/task-ledger-store.ts`
+- `maka-agent/docs/session-task-ledger-lifecycle.md`
+- `maka-agent/packages/core/src/task-ledger.ts`
+- `maka-agent/packages/runtime/src/task-ledger-tools.ts`
+- `maka-agent/packages/storage/src/task-ledger-store.ts`
 
 Maka's event-sourced JSONL store, UUID + hierarchical keys, resume-trust classifier, seven-day archive, expert-team claiming, and compatibility migration are not justified for My Pi Setup v1.
 

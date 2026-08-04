@@ -1,10 +1,14 @@
 # background-terminals — Implementation Guide
 
+> **Status: historical implementation guide.** The repository now centralizes dependencies
+> and test scripts in its root `package.json`; extension-local package snippets below preserve
+> the original implementation context.
+>
 > Research phase output. Updated 2026-07-24 against:
 > - `effect@4.0.0-beta.101` (verified installed in this package's `node_modules/effect`; the
 >   `unstable/process` module exists there but we deliberately do NOT use it — see §6)
 > - `@earendil-works/pi-coding-agent@^0.82.0` docs at
->   `/Users/davis/.vite-plus/js_runtime/node/24.18.0/lib/node_modules/@earendil-works/pi-coding-agent/docs/`
+>   `node_modules/@earendil-works/pi-coding-agent/docs/`
 > - Reference implementations: `extensions/subagents` (Effect v4 service/manager/read-model/tools)
 >   and `extensions/workflows` (dashboard UI, status line, background completion follow-ups).
 >
@@ -40,8 +44,7 @@ there against the pinned toolchain):
 
 ```
 extensions/background-terminals/
-├── package.json              # exact pins, see §3
-├── tsconfig.json             # extends ../../tsconfig.json + effect LS plugin
+├── tsconfig.json             # extends ../../tsconfig.json; keeps extension-local scope
 ├── index.ts                  # extension edge: tools, command, widget, events (plain TS + runTool)
 ├── docs/
 │   └── implementation-guide.md   (this file)
@@ -61,49 +64,24 @@ extensions/background-terminals/
 └── ps.test.ts                # selection-reconciliation tests (like takeover.test.ts)
 ```
 
-Tests live at the package root, plain `node --test --experimental-strip-types`, exactly like
-`extensions/subagents/package.json`'s `test` script. Note the repo-root `package.json` test
-script (`node --test --experimental-strip-types extensions/*/*.test.ts`) will automatically
-pick these up.
+Tests live at the extension root and the repository's root `package.json` runs them with
+`node --test --experimental-strip-types extensions/*/*.test.ts`.
 
-## 3. Toolchain (copy exactly, per effect-v4-extension-guide.md §1)
+## 3. Current repository toolchain
 
-`package.json`:
-
-```jsonc
-{
-  "name": "background-terminals",
-  "private": true,
-  "type": "module",
-  "scripts": {
-    "check": "tsc --noEmit -p .",
-    "prepare": "effect-tsgo patch",
-    "test": "node --test --experimental-strip-types manager.test.ts output.test.ts result-delivery.test.ts ps.test.ts"
-  },
-  "dependencies": {
-    "effect": "^4.0.0-beta.99"
-  },
-  "devDependencies": {
-    "@effect/tsgo": "^0.24.2",
-    "typescript": "^7.0.2"
-  }
-}
-```
-
-`tsconfig.json` — identical to `extensions/subagents/tsconfig.json`:
+Dependencies, the lockfile, the Effect language-service plugin, and verification scripts now
+live at the repository root. This extension keeps only a scoped `tsconfig.json`:
 
 ```jsonc
 {
   "extends": "../../tsconfig.json",
-  "compilerOptions": { "plugins": [{ "name": "@effect/language-service" }] },
   "include": ["index.ts", "src/**/*.ts", "*.test.ts"]
 }
 ```
 
-Per AGENTS.md: add deps with an install command (`npm install effect@^4.0.0-beta.99`),
-run `npm run check` when done, avoid explicit return types unless needed, no `as any`.
-Verification runs from inside `extensions/background-terminals/` only — never root scripts
-(house rule, effect-v4-extension-guide.md §7/§8).
+Run `npm install`, `npm run check`, and `npm test` from the repository root. Per AGENTS.md,
+avoid explicit return types unless needed and never use `as any` without exhausting typed
+alternatives.
 
 Note: we do **not** need `@effect/platform-node`. Subagents' codex backend uses raw
 `node:child_process` `spawn` inside Effect and that is the right model here too (§6).
@@ -530,7 +508,7 @@ Handler: validate cwd (§6), `title.trim().slice(0, 80) || "terminal"`, then
 prompt.ts, like `buildSubagentSpawnResult`):
 
 ```
-Started background terminal bt-3 "dev server" (pid 12345, /Users/davis/project).
+Started background terminal bt-3 "dev server" (pid 12345, /path/to/project).
 It runs in the background with no stdin. You'll get a message when it exits, or use
 bg_status(id: "bt-3") to peek, bg_kill to stop it, bg_list to see all.
 ```
@@ -914,8 +892,8 @@ tricks; they exist on any machine running pi)
 
 ## 16. Acceptance checklist
 
-- [ ] `npm install && npm run check` green in `extensions/background-terminals` (TS7 + Effect LS).
-- [ ] `npm test` green (manager, output, result-delivery, ps selection).
+- [ ] Root `npm ci`, `npm run check`, and `npm test` are green (TS7 + Effect LS included).
+- [ ] Manager, output, result-delivery, and ps-selection tests pass through the root suite.
 - [ ] Tools registered: `bg_start`, `bg_status`, `bg_list`, `bg_kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
 - [ ] stdout and stderr captured separately and completely (in-memory tail + spill file);

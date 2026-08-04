@@ -24,19 +24,25 @@
     "@earendil-works/pi-ai": "^0.82.0",
     "@earendil-works/pi-coding-agent": "^0.82.0",
     "@earendil-works/pi-tui": "^0.82.0",
+    "@effect/platform-node": "^4.0.0-beta.99",
     "acorn": "^8.17.0",
+    "effect": "^4.0.0-beta.99",
     "typebox": "^1.3.6"
   },
   "devDependencies": {
+    "@effect/tsgo": "^0.24.2",
+    "@effect/vitest": "^4.0.0-beta.99",
     "@types/node": "^26.1.1",
     "prettier": "^3.9.5",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "vitest": "4.1.10"
   },
   "type": "module",
   "scripts": {
     "check": "tsc --noEmit",
-    "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"*.json\"",
-    "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"*.json\"",
-    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && npm --prefix extensions/file-search test"
+    "prepare": "node scripts/prepare-effect-tsgo.mjs",
+    "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
+    "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
+    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts"
   }
 }
