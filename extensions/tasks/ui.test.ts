@@ -157,14 +157,16 @@ test("batch closure is visible in compact tool results", () => {
 });
 
 test("collapsed tool results remain bounded", () => {
+  const items = Array.from({ length: 8 }, (_, index) => ({
+    id: index + 1,
+    subject: `Task ${index + 1}`,
+    status: "pending" as const,
+  }));
   const component = renderToolResult(
     {
       action: "list",
-      items: Array.from({ length: 8 }, (_, index) => ({
-        id: index + 1,
-        subject: `Task ${index + 1}`,
-        status: "pending" as const,
-      })),
+      items,
+      counts: taskCounts(items),
       total: 8,
       revision: 1,
     },
@@ -179,6 +181,77 @@ test("collapsed tool results remain bounded", () => {
     output.split("\n")[0]!,
     /8 tasks \(0 done, 0 in progress, 8 open\)/,
   );
+});
+
+test("a record without counts shows no census rather than a wrong one", () => {
+  // tasks_update carries only the row it touched, so counting `items` would
+  // announce "1 task" for a batch of eight. Records persisted before `counts`
+  // existed replay through this same path on session resume.
+  const component = renderToolResult(
+    {
+      action: "update",
+      items: [{ id: 4, subject: "Verify", status: "done" as const }],
+      total: 8,
+      revision: 9,
+    },
+    true,
+    theme,
+  );
+  const output = component.render(100);
+  assert.ok(!output[0]?.includes("task"), `unexpected census: ${output[0]}`);
+  assert.match(output.join("\n"), /Verify/);
+});
+
+test("a closed batch does not print a census of the batch it just cleared", () => {
+  // closeCompletedTaskBatch empties the snapshot as the last item settles, so
+  // the live counts describe nothing — "0 tasks" directly above a done row.
+  const component = renderToolResult(
+    {
+      action: "update",
+      items: [{ id: 2, subject: "Verify it", status: "done" as const }],
+      counts: {
+        total: 0,
+        done: 0,
+        in_progress: 0,
+        blocked: 0,
+        pending: 0,
+        dropped: 0,
+      },
+      batchClosed: true,
+      total: 0,
+      revision: 3,
+    },
+    true,
+    theme,
+  );
+  const output = component.render(100);
+  assert.ok(!output[0]?.includes("0 tasks"), `stale census: ${output[0]}`);
+  assert.match(output.join("\n"), /Batch complete/);
+});
+
+test("rows are laid out at the width they are rendered at", () => {
+  // Rows used to be built at a hardcoded 120 and re-wrapped by Text at the
+  // real width. That wrapper closes colour and underline but not SGR 9, so a
+  // struck-through subject folded mid-line left the strikethrough open and
+  // painted the row's trailing padding.
+  const long =
+    "Rewrite extensions/tasks/very/deep/nested/session-snapshot-restore-validator.ts";
+  const component = renderToolResult(
+    {
+      action: "update",
+      items: [{ id: 1, subject: long, status: "done" as const }],
+      total: 1,
+      revision: 1,
+    },
+    true,
+    theme,
+  );
+  for (const line of component.render(60)) {
+    assert.ok(
+      visibleWidth(line) <= 60,
+      `line exceeds the viewport: ${visibleWidth(line)}`,
+    );
+  }
 });
 
 test("settled subjects are struck through, live ones are not", () => {
