@@ -186,6 +186,10 @@ subagent_spawn({
 - `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
+**Agent 类型**：在 `~/.pi/agent/agents/*.md`（以及受信任项目的 `.pi/agents/*.md`）里定义可复用的子 Agent 预设，固定 System Prompt、模型、Thinking Level，以及**允许使用的工具集**。`subagent_spawn` 随之多出 `agent_type` 参数；没有定义任何类型时参数不出现，行为与之前完全一致。
+
+工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。未受信任的项目目录不会贡献任何类型。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；修改后 `/reload` 生效（与 Skills 一致）。
+
 > `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Bash 与 Write/Edit 默认折叠。Bash 只保留单行命令、首段输出和最终状态，Write/Edit 最多保留三行渲染内容（包含操作标题），两者都会显示隐藏行数。三类结果都可通过 `/my-pi-setup` 分别选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
 
 ### 3. 动态 Multi-Agent Workflows
@@ -636,7 +640,7 @@ Subagent 适合一项自包含委派；Workflow 适合多阶段、有依赖关�
 extensions/
 ├── setup/                 # /my-pi-setup 与受限配置工具
 ├── background-terminals/  # 长进程、日志、/ps
-├── subagents/             # Pi-native Backend + /subagents
+├── subagents/             # Pi-native Backend + /subagents + Agent 类型
 ├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
 ├── tasks/                 # Session 持久任务
 ├── goal/                  # Codex 风格持久自主 Goal

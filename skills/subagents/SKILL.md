@@ -17,6 +17,14 @@ Only pass a model when the user explicitly requests one or the task has a concre
 
 Thinking levels are `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`. Omit `reasoning_effort` to inherit the parent level.
 
+## Agent types
+
+An environment may define agent types: named presets that give a child a specialized system prompt and, usually, restrict it to a subset of tools. When types exist, `subagent_spawn` accepts `agent_type`, and its parameter description lists each available type with its tool restriction.
+
+Prefer a matching type over a general-purpose child. The tool restriction is enforced by the harness, not merely described — a read-only type has no write tool to call. An explicit `model` or `reasoning_effort` argument overrides the type's own.
+
+Types are defined in `~/.pi/agent/agents/*.md` and, in trusted projects, `.pi/agents/*.md`. See `extensions/subagents/docs/agent-types.md` for the file format.
+
 ## Spawn and manage
 
 Call `subagent_spawn` with:
@@ -27,6 +35,7 @@ Call `subagent_spawn` with:
 - `working_dir`: optional directory when different from the parent cwd
 - `model`: optional explicit model selection
 - `reasoning_effort`: optional explicit thinking level
+- `agent_type`: optional preset, when the environment defines any
 
 At most four subagents run concurrently.
 

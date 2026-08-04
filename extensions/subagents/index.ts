@@ -4,8 +4,9 @@
  *
  * Tools (for the parent LLM):
  * - subagent_spawn: fire-and-forget spawn (prompt, name, optional harness,
- *   working_dir, model, reasoning_effort). Model-spawned subagents and user
- *   /btw asides run in separate pools (MAX_RUNNING and MAX_RUNNING_BTW).
+ *   working_dir, model, reasoning_effort, and agent_type when this environment
+ *   defines any). Model-spawned subagents and user /btw asides run in separate
+ *   pools (MAX_RUNNING and MAX_RUNNING_BTW).
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
@@ -13,6 +14,9 @@
  *
  * Unawaited subagents queue their result as a follow-up message when they
  * settle. `/subagents` opens a picker + full interactive takeover view.
+ *
+ * Agent types (`src/agent-types.ts`) are optional named presets that fix a
+ * child's system prompt, model, and tool allowlist; see `docs/agent-types.md`.
  *
  * Architecture: Effect v4 generators throughout (backend -> manager ->
  * runtime); this file is the async boundary where tool handlers run effects
@@ -32,12 +36,18 @@ import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   formatSize,
+  getAgentDir,
   getMarkdownTheme,
   keyHint,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
-import { Type } from "typebox";
+import { Type, type TProperties } from "typebox";
+import {
+  formatAgentTypeDiagnostics,
+  loadAgentTypes,
+  type AgentType,
+} from "./src/agent-types.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   BACKEND_NAMES,
@@ -54,9 +64,11 @@ import {
 import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
+  buildAgentTypeParameterDescription,
   buildSubagentResultMessage,
   buildSubagentSendResult,
   buildSubagentSpawnResult,
+  buildSubagentSpawnToolDescription,
   SUBAGENT_CANCEL_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CANCEL_TOOL_DESCRIPTION,
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
@@ -73,7 +85,10 @@ import {
 } from "./src/prompt.ts";
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import { resultDeliveryOptions } from "../background-terminals/src/result-delivery.ts";
-import { resolveStandaloneChildProjectTrust } from "../shared/child-session.ts";
+import {
+  isProjectTrustedOnDisk,
+  resolveStandaloneChildProjectTrust,
+} from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   createSubagentRuntime,
@@ -95,6 +110,7 @@ interface SpawnResultDetails {
   readonly title?: string;
   readonly harness?: string;
   readonly model?: string;
+  readonly agentType?: string;
 }
 
 interface SubagentFinishedData {
@@ -324,6 +340,10 @@ export default function (pi: ExtensionAPI) {
     sessionContext = ctx;
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
+    // A malformed agent type is silently missing from the roster otherwise, so
+    // report it once the UI exists. Never fatal: the rest still loaded.
+    const notice = formatAgentTypeDiagnostics(agentTypeDiagnostics);
+    if (notice && ctx.hasUI) ctx.ui.notify(notice, "warning");
   });
 
   // A new explicit request starts a fresh unread window: previously finished
@@ -354,15 +374,50 @@ export default function (pi: ExtensionAPI) {
     await closing?.dispose();
   });
 
+  // --- Agent types ---------------------------------------------------------
+
+  /**
+   * Discovered once, here, because a tool's description is a static string
+   * fixed at registration — the roster has to be known before the model ever
+   * sees the tool. Registration runs before session_start, so there is no
+   * `ctx.cwd` yet and no resolved trust; use the process cwd and consult the
+   * persisted trust store directly, exactly as a standalone child would.
+   * Consequence: edits to `agents/*.md` take effect on `/reload`, like skills.
+   */
+  const { agentTypes, diagnostics: agentTypeDiagnostics } = loadAgentTypes({
+    agentDir: getAgentDir(),
+    cwd: process.cwd(),
+    projectTrusted: isProjectTrustedOnDisk(process.cwd()),
+  });
+  const agentTypeList = [...agentTypes.values()];
+  /** Only add the parameter when types exist, so a bare install is unchanged. */
+  const agentTypeParameters: TProperties =
+    agentTypeList.length > 0
+      ? {
+          agent_type: Type.Optional(
+            StringEnum(
+              agentTypeList.map((agentType) => agentType.name) as [
+                string,
+                ...string[],
+              ],
+              {
+                description: buildAgentTypeParameterDescription(agentTypeList),
+              },
+            ),
+          ),
+        }
+      : {};
+
   // --- Tools -------------------------------------------------------------
 
   pi.registerTool({
     name: "subagent_spawn",
     label: "Spawn Subagent",
-    description: SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+    description: buildSubagentSpawnToolDescription(agentTypeList),
     promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
     promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
     parameters: Type.Object({
+      ...agentTypeParameters,
       prompt: Type.String({
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
       }),
@@ -400,6 +455,13 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
+      // Present only when types were discovered, so this is absent on a bare
+      // install; the enum already rejects an unknown name.
+      const requestedType = (params as { agent_type?: string }).agent_type;
+      const agentType = requestedType
+        ? agentTypes.get(requestedType)
+        : undefined;
+
       const title = params.name.trim().slice(0, 160) || "subagent";
       const snap = await runTool(
         getRuntime(),
@@ -407,8 +469,13 @@ export default function (pi: ExtensionAPI) {
           prompt: params.prompt,
           title,
           cwd,
-          model: params.model,
-          reasoningEffort: params.reasoning_effort,
+          // An explicit argument beats the type's own preference.
+          model: params.model ?? agentType?.model,
+          reasoningEffort:
+            params.reasoning_effort ?? agentType?.reasoningEffort,
+          ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
+          ...(agentType?.tools ? { tools: agentType.tools } : {}),
+          ...(agentType ? { agentTypeName: agentType.name } : {}),
           parent: {
             parentCwd: ctx.cwd,
             projectTrusted: resolveStandaloneChildProjectTrust({
@@ -436,6 +503,12 @@ export default function (pi: ExtensionAPI) {
               harness,
               modelLabel: snap.meta.modelLabel ?? "?",
               cwd,
+              ...(agentType
+                ? {
+                    agentTypeName: agentType.name,
+                    ...(agentType.tools ? { tools: agentType.tools } : {}),
+                  }
+                : {}),
             }),
           },
         ],
@@ -445,6 +518,7 @@ export default function (pi: ExtensionAPI) {
           cwd,
           harness,
           model: snap.meta.modelLabel,
+          ...(agentType ? { agentType: agentType.name } : {}),
         },
       };
     },

@@ -56,6 +56,18 @@ export interface SpawnTask {
   readonly model?: string;
   /** Thinking level for the child; omitted inherits the parent level. */
   readonly reasoningEffort?: ReasoningEffort;
+  /**
+   * Agent-type fields, resolved by the tool layer. The backend applies them
+   * verbatim; it does not know where they came from.
+   */
+  readonly appendSystemPrompt?: readonly string[];
+  /**
+   * Tool allowlist for the child. Composed with (never replacing) the child
+   * denylist, so this can only narrow. Omitted = the normal child tool set.
+   */
+  readonly tools?: readonly string[];
+  /** Agent type that supplied the above, for the session label. */
+  readonly agentTypeName?: string;
   readonly parent: ParentContext;
 }
 
