@@ -38,6 +38,20 @@ test("the pi backend refuses to spawn without the parent's model registry", asyn
   );
 });
 
+test("an inherited model that disappeared fails instead of selecting an SDK default", async () => {
+  const registry = registryOf([{ provider: "seal", id: "available" }]);
+
+  await assert.rejects(
+    spawn(
+      spawnTask(undefined, {
+        modelRegistry: registry,
+        inheritedModel: { provider: "seal", id: "removed" },
+      }),
+    ),
+    /Inherited model "seal\/removed" is no longer available/,
+  );
+});
+
 test("an unresolvable model hint fails before a child session exists", async () => {
   const registry = registryOf([{ provider: "seal", id: "kimi-k3" }]);
 

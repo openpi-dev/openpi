@@ -26,6 +26,7 @@ import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
 } from "../../shared/child-session.ts";
+import { sanitizeTerminalText } from "../../shared/terminal-text.ts";
 import {
   isSubagentRoleName,
   type SubagentRoleModel,
@@ -445,8 +446,10 @@ export function formatAgentTypeDiagnostics(
   diagnostics: readonly AgentTypeDiagnostic[],
 ) {
   if (diagnostics.length === 0) return undefined;
-  return [
-    `Agent types: ${diagnostics.length} problem${diagnostics.length === 1 ? "" : "s"}.`,
-    ...diagnostics.map((entry) => `- ${entry.source}: ${entry.message}`),
-  ].join("\n");
+  return sanitizeTerminalText(
+    [
+      `Agent types: ${diagnostics.length} problem${diagnostics.length === 1 ? "" : "s"}.`,
+      ...diagnostics.map((entry) => `- ${entry.source}: ${entry.message}`),
+    ].join("\n"),
+  );
 }

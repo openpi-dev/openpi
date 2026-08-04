@@ -28,6 +28,29 @@ import {
   type MyPiSetupConfig,
 } from "../shared/setup-config.ts";
 
+const subagentRoleModelValueSchema = Type.Union([
+  Type.Object(
+    {
+      provider: Type.String({ description: "Available Pi provider id." }),
+      model: Type.String({ description: "Available Pi model id." }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Null(),
+]);
+
+export const SUBAGENT_ROLE_MODELS_SCHEMA = Type.Partial(
+  Type.Record(
+    Type.Union(SUBAGENT_ROLE_NAMES.map((role) => Type.Literal(role))),
+    subagentRoleModelValueSchema,
+  ),
+  {
+    additionalProperties: false,
+    description:
+      "Partial built-in-role model assignments. Each value is an available {provider, model}; null clears that role to inherit the parent model, and omitted roles are preserved.",
+  },
+);
+
 export function applySubagentRoleModelUpdates(
   current: SubagentRoleModels,
   updates:
@@ -217,26 +240,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "How Write/Edit content and diffs render by default: compact shows a Claude Code-style folded preview with a hidden-line count and expands with app.tools.expand; full keeps every operation expanded. Omit to preserve the current value.",
         }),
       ),
-      subagent_role_models: Type.Optional(
-        Type.Partial(
-          Type.Record(
-            StringEnum(SUBAGENT_ROLE_NAMES),
-            Type.Union([
-              Type.Object({
-                provider: Type.String({
-                  description: "Available Pi provider id.",
-                }),
-                model: Type.String({ description: "Available Pi model id." }),
-              }),
-              Type.Null(),
-            ]),
-          ),
-          {
-            description:
-              "Partial built-in-role model assignments. Each value is an available {provider, model}; null clears that role to inherit the parent model, and omitted roles are preserved.",
-          },
-        ),
-      ),
+      subagent_role_models: Type.Optional(SUBAGENT_ROLE_MODELS_SCHEMA),
       post_edit_command: Type.Optional(
         Type.String({
           maxLength: POST_EDIT_COMMAND_MAX_CHARS,

@@ -65,7 +65,11 @@ function resolvePiModel(
 ): Model<any> | undefined {
   if (!hint) {
     if (!inherited) return undefined;
-    return registry.find(inherited.provider, inherited.id) ?? undefined;
+    const found = registry.find(inherited.provider, inherited.id);
+    if (found) return found;
+    throw new Error(
+      `Inherited model "${inherited.provider}/${inherited.id}" is no longer available. Choose an available model explicitly.`,
+    );
   }
   const slash = hint.indexOf("/");
   if (slash > 0) {

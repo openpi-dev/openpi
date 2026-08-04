@@ -353,9 +353,11 @@ export default function (pi: ExtensionAPI) {
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
     // A malformed agent type is silently missing from the roster otherwise, so
-    // report it once the UI exists. Never fatal: the rest still loaded.
+    // report it once. Never fatal: the rest still loaded. Non-UI modes receive
+    // stderr rather than a model-context message.
     const notice = formatAgentTypeDiagnostics(agentTypeDiagnostics);
     if (notice && ctx.hasUI) ctx.ui.notify(notice, "warning");
+    else if (notice) process.stderr.write(`${notice}\n`);
   });
 
   // A new explicit request starts a fresh unread window: previously finished

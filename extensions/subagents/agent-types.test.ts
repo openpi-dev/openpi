@@ -358,6 +358,16 @@ test("model selection keeps parent inheritance until an override exists", () => 
   );
 });
 
+test("agent-type diagnostics strip terminal control sequences", () => {
+  const notice = formatAgentTypeDiagnostics([
+    {
+      source: "\u001b]52;c;Y2xpcGJvYXJk\u0007bad.md",
+      message: "\u001b[31mwrong\u001b[0m",
+    },
+  ]);
+  assert.equal(notice, "Agent types: 1 problem.\n- bad.md: wrong");
+});
+
 test("childToolPolicy without an allowlist is unchanged", () => {
   const policy = childToolPolicy();
 

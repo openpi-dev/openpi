@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import { SUBAGENT_ROLE_NAMES } from "../shared/subagent-roles.ts";
 import setupExtension, {
   applySubagentRoleModelUpdates,
   buildInteractiveSetupPrompt,
+  SUBAGENT_ROLE_MODELS_SCHEMA,
 } from "./index.ts";
 
 test("registers one natural-language setup command and one constrained tool", () => {
@@ -18,6 +20,24 @@ test("registers one natural-language setup command and one constrained tool", ()
 
   assert.deepEqual(commands, new Set(["my-pi-setup"]));
   assert.deepEqual(tools, new Set(["configure_my_pi_setup"]));
+});
+
+test("the role-model schema exposes every built-in role as an optional property", () => {
+  const schema = SUBAGENT_ROLE_MODELS_SCHEMA as unknown as {
+    readonly properties: Record<
+      string,
+      { readonly anyOf: readonly { readonly additionalProperties?: boolean }[] }
+    >;
+    readonly required?: readonly string[];
+    readonly additionalProperties?: boolean;
+  };
+  assert.deepEqual(Object.keys(schema.properties), [...SUBAGENT_ROLE_NAMES]);
+  assert.equal(schema.required, undefined);
+  assert.equal(schema.additionalProperties, false);
+  assert.equal(
+    schema.properties.explorer?.anyOf[0]?.additionalProperties,
+    false,
+  );
 });
 
 test("builds a model-guided first-run setup prompt with impacts", () => {
