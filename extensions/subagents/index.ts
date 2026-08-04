@@ -46,6 +46,8 @@ import { Type, type TProperties } from "typebox";
 import {
   formatAgentTypeDiagnostics,
   loadAgentTypes,
+  roleModelForAgentType,
+  selectSubagentModel,
   type AgentType,
 } from "./src/agent-types.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
@@ -419,23 +421,20 @@ export default function (pi: ExtensionAPI) {
       state !== null &&
       (state as PlanModeState).planning === true;
   });
-  /** Only add the parameter when types exist, so a bare install is unchanged. */
-  const agentTypeParameters: TProperties =
-    agentTypeList.length > 0
-      ? {
-          agent_type: Type.Optional(
-            StringEnum(
-              agentTypeList.map((agentType) => agentType.name) as [
-                string,
-                ...string[],
-              ],
-              {
-                description: buildAgentTypeParameterDescription(agentTypeList),
-              },
-            ),
-          ),
-        }
-      : {};
+  /** Built-in roles make this roster non-empty even without files on disk. */
+  const agentTypeParameters: TProperties = {
+    agent_type: Type.Optional(
+      StringEnum(
+        agentTypeList.map((agentType) => agentType.name) as [
+          string,
+          ...string[],
+        ],
+        {
+          description: buildAgentTypeParameterDescription(agentTypeList),
+        },
+      ),
+    ),
+  };
 
   // --- Tools -------------------------------------------------------------
 
@@ -489,8 +488,7 @@ export default function (pi: ExtensionAPI) {
         throw new Error(`working_dir is not a directory: ${cwd}`);
       }
 
-      // Present only when types were discovered, so this is absent on a bare
-      // install; the enum already rejects an unknown name.
+      // The enum always includes built-in roles and any loaded overrides.
       const requestedType = (params as { agent_type?: string }).agent_type;
       const agentType = requestedType
         ? agentTypes.get(requestedType)
@@ -539,13 +537,24 @@ export default function (pi: ExtensionAPI) {
       const childTools = planning
         ? planModeChildTools(agentType?.tools)
         : agentType?.tools;
+      // Read at spawn time so `/my-pi-setup` changes affect the next child
+      // without reloading this extension. Undefined preserves parent-model
+      // inheritance in the backend.
+      const model = selectSubagentModel(
+        params.model,
+        agentType,
+        roleModelForAgentType(
+          agentType,
+          loadSetupConfig().subagents.roleModels,
+        ),
+      );
 
       const spawn = manager.spawn(harness, {
         prompt: params.prompt,
         title,
         cwd: childCwd,
-        // An explicit argument beats the type's own preference.
-        model: params.model ?? agentType?.model,
+        // Explicit spawn > role file > package role assignment > parent.
+        model,
         reasoningEffort: params.reasoning_effort ?? agentType?.reasoningEffort,
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
         ...(childTools ? { tools: childTools } : {}),

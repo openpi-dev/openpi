@@ -10,9 +10,12 @@ import * as path from "node:path";
 import test from "node:test";
 import {
   AGENT_TYPE_LIMITS,
+  BUILT_IN_AGENT_TYPES,
   formatAgentTypeDiagnostics,
   loadAgentTypes,
   parseAgentType,
+  roleModelForAgentType,
+  selectSubagentModel,
 } from "./src/agent-types.ts";
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
@@ -29,6 +32,8 @@ reasoning_effort: medium
 
 You are a read-only exploration agent.
 `;
+
+const BUILT_IN_EXPLORER = VALID.replace("name: explore", "name: explorer");
 
 async function withTempDir(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-agent-types-"));
@@ -58,6 +63,55 @@ async function seed(
   }
   return { agentDir, cwd };
 }
+
+test("built-in roles have exact capability boundaries and no model defaults", () => {
+  assert.deepEqual(
+    BUILT_IN_AGENT_TYPES.map((role) => ({
+      name: role.name,
+      tools: role.tools,
+      effort: role.reasoningEffort,
+      model: role.model,
+    })),
+    [
+      {
+        name: "explorer",
+        tools: ["read", "grep", "find", "ls", "fd", "rg"],
+        effort: "high",
+        model: undefined,
+      },
+      {
+        name: "implementer",
+        tools: [
+          "read",
+          "bash",
+          "edit",
+          "write",
+          "grep",
+          "find",
+          "ls",
+          "fd",
+          "rg",
+        ],
+        effort: "high",
+        model: undefined,
+      },
+      {
+        name: "reviewer",
+        tools: ["read", "grep", "find", "ls", "fd", "rg"],
+        effort: "medium",
+        model: undefined,
+      },
+      {
+        name: "advisor",
+        tools: ["read", "grep", "find", "ls", "fd", "rg"],
+        effort: "xhigh",
+        model: undefined,
+      },
+    ],
+  );
+  assert.match(BUILT_IN_AGENT_TYPES[0]?.description ?? "", /xhigh/);
+  assert.match(BUILT_IN_AGENT_TYPES[0]?.description ?? "", /max only/);
+});
 
 test("a valid agent type parses into prompt, tools, model, and effort", () => {
   const result = parseAgentType(VALID, "explore", "/tmp/explore.md");
@@ -180,11 +234,21 @@ test("an untrusted project contributes no agent types", async () => {
     });
 
     const untrusted = loadAgentTypes({ agentDir, cwd, projectTrusted: false });
-    assert.deepEqual([...untrusted.agentTypes.keys()], ["explore"]);
+    assert.deepEqual([...untrusted.agentTypes.keys()].sort(), [
+      "advisor",
+      "explore",
+      "explorer",
+      "implementer",
+      "reviewer",
+    ]);
 
     const trusted = loadAgentTypes({ agentDir, cwd, projectTrusted: true });
     assert.deepEqual([...trusted.agentTypes.keys()].sort(), [
+      "advisor",
       "explore",
+      "explorer",
+      "implementer",
+      "reviewer",
       "sneaky",
     ]);
   });
@@ -193,10 +257,10 @@ test("an untrusted project contributes no agent types", async () => {
 test("a project agent type overrides the global one of the same name", async () => {
   await withTempDir(async (root) => {
     const { agentDir, cwd } = await seed(root, {
-      global: { "explore.md": VALID },
+      global: { "explorer.md": BUILT_IN_EXPLORER },
       project: {
-        "explore.md":
-          "---\nname: explore\ndescription: Project override.\ntools: [read]\n---\nProject body.",
+        "explorer.md":
+          "---\nname: explorer\ndescription: Project override.\ntools: [read]\n---\nProject body.",
       },
     });
 
@@ -206,10 +270,12 @@ test("a project agent type overrides the global one of the same name", async () 
       projectTrusted: true,
     });
 
-    assert.equal(agentTypes.size, 1);
-    assert.deepEqual(agentTypes.get("explore")?.tools, ["read"]);
-    // Shadowing changes what a name means, so it is never silent.
-    assert.match(diagnostics[0]?.message ?? "", /overrides the agent type/);
+    assert.equal(agentTypes.size, 4);
+    assert.deepEqual(agentTypes.get("explorer")?.tools, ["read"]);
+    // Global replaces the built-in, then the trusted project replaces global.
+    const messages = diagnostics.map((entry) => entry.message).join("\n");
+    assert.match(messages, /from built-in:explorer/);
+    assert.match(messages, /from .*agent\/agents\/explorer\.md/);
   });
 });
 
@@ -220,7 +286,12 @@ test("a missing agents directory is normal, and one bad file does not sink the r
       cwd: path.join(root, "nonexistent"),
       projectTrusted: true,
     });
-    assert.equal(empty.agentTypes.size, 0);
+    assert.deepEqual([...empty.agentTypes.keys()].sort(), [
+      "advisor",
+      "explorer",
+      "implementer",
+      "reviewer",
+    ]);
     assert.deepEqual(empty.diagnostics, []);
 
     const { agentDir, cwd } = await seed(root, {
@@ -230,7 +301,13 @@ test("a missing agents directory is normal, and one bad file does not sink the r
       },
     });
     const loaded = loadAgentTypes({ agentDir, cwd, projectTrusted: true });
-    assert.deepEqual([...loaded.agentTypes.keys()], ["explore"]);
+    assert.deepEqual([...loaded.agentTypes.keys()].sort(), [
+      "advisor",
+      "explore",
+      "explorer",
+      "implementer",
+      "reviewer",
+    ]);
     assert.equal(loaded.diagnostics.length, 1);
     assert.match(
       formatAgentTypeDiagnostics(loaded.diagnostics) ?? "",
@@ -238,6 +315,47 @@ test("a missing agents directory is normal, and one bad file does not sink the r
     );
     assert.equal(formatAgentTypeDiagnostics([]), undefined);
   });
+});
+
+test("model selection keeps parent inheritance until an override exists", () => {
+  const explorer = BUILT_IN_AGENT_TYPES.find(
+    (role) => role.name === "explorer",
+  );
+  assert.ok(explorer);
+  const setupModel = { provider: "configured", model: "role-model" };
+
+  assert.equal(
+    selectSubagentModel(
+      "explicit/model",
+      { ...explorer, model: "role/model" },
+      setupModel,
+    ),
+    "explicit/model",
+  );
+  assert.equal(
+    selectSubagentModel(
+      undefined,
+      { ...explorer, model: "role/model" },
+      setupModel,
+    ),
+    "role/model",
+  );
+  assert.equal(
+    selectSubagentModel(undefined, explorer, setupModel),
+    "configured/role-model",
+  );
+  assert.equal(selectSubagentModel(undefined, explorer, undefined), undefined);
+  assert.deepEqual(
+    roleModelForAgentType(explorer, { explorer: setupModel }),
+    setupModel,
+  );
+  assert.equal(
+    roleModelForAgentType(
+      { ...explorer, name: "custom" },
+      { explorer: setupModel },
+    ),
+    undefined,
+  );
 });
 
 test("childToolPolicy without an allowlist is unchanged", () => {
@@ -340,7 +458,13 @@ test("a symlinked agent type is discovered like a real file", async () => {
       cwd,
       projectTrusted: false,
     });
-    assert.deepEqual([...agentTypes.keys()], ["explore"]);
+    assert.deepEqual([...agentTypes.keys()].sort(), [
+      "advisor",
+      "explore",
+      "explorer",
+      "implementer",
+      "reviewer",
+    ]);
   });
 });
 
@@ -356,6 +480,6 @@ test("a symlink pointing at a directory is still skipped", async () => {
       cwd,
       projectTrusted: false,
     });
-    assert.equal(agentTypes.size, 0);
+    assert.equal(agentTypes.size, 4);
   });
 });

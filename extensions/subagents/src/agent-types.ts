@@ -26,6 +26,10 @@ import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
 } from "../../shared/child-session.ts";
+import {
+  isSubagentRoleName,
+  type SubagentRoleModel,
+} from "../../shared/subagent-roles.ts";
 import { REASONING_EFFORTS, type ReasoningEffort } from "./domain.ts";
 
 /** Directory name scanned under both the agent dir and a project's `.pi`. */
@@ -86,6 +90,75 @@ export interface AgentType {
   readonly body?: string;
   /** Absolute path this type was loaded from, for diagnostics. */
   readonly source: string;
+}
+
+const READ_ONLY_TOOLS = ["read", "grep", "find", "ls", "fd", "rg"];
+
+/**
+ * Built-in role definitions are deliberately provider-free: model selection is
+ * inherited unless the user assigns one in package setup. Files may replace a
+ * complete role definition; `loadAgentTypes` reports every replacement.
+ */
+export const BUILT_IN_AGENT_TYPES: readonly AgentType[] = [
+  {
+    name: "explorer",
+    description:
+      "Read-only codebase exploration. For cross-module or subtle lifecycle work, override spawn effort to xhigh; use max only for exceptionally hard unfamiliar or ambiguous investigations.",
+    tools: READ_ONLY_TOOLS,
+    reasoningEffort: "high",
+    body: "Explore the codebase read-only. Trace the real flow, inspect related callers, and report concise evidence with file paths and line references.",
+    source: "built-in:explorer",
+  },
+  {
+    name: "implementer",
+    description: "Focused implementation with repository checks.",
+    tools: ["read", "bash", "edit", "write", "grep", "find", "ls", "fd", "rg"],
+    reasoningEffort: "high",
+    body: "Implement the requested change carefully. Trace the affected flow first, make the smallest correct edit, and run relevant checks before reporting results.",
+    source: "built-in:implementer",
+  },
+  {
+    name: "reviewer",
+    description: "Read-only review for correctness, safety, and regressions.",
+    tools: READ_ONLY_TOOLS,
+    reasoningEffort: "medium",
+    body: "Review the requested code or change read-only. Identify concrete correctness, security, and regression risks with evidence; do not modify files.",
+    source: "built-in:reviewer",
+  },
+  {
+    name: "advisor",
+    description: "Deep read-only analysis and technical advice.",
+    tools: READ_ONLY_TOOLS,
+    reasoningEffort: "xhigh",
+    body: "Analyze the problem deeply without modifying files. Explain the relevant tradeoffs, risks, and recommended next step using repository evidence.",
+    source: "built-in:advisor",
+  },
+];
+
+/**
+ * Resolves the model hint without turning inherited-parent selection into a
+ * hardcoded default. The backend receives undefined to preserve inheritance.
+ */
+export function selectSubagentModel(
+  explicitModel: string | undefined,
+  agentType: AgentType | undefined,
+  roleModel: SubagentRoleModel | undefined,
+) {
+  return (
+    explicitModel ??
+    agentType?.model ??
+    (roleModel ? `${roleModel.provider}/${roleModel.model}` : undefined)
+  );
+}
+
+/** Return a package assignment only for the four built-in role names. */
+export function roleModelForAgentType(
+  agentType: AgentType | undefined,
+  roleModels: Partial<Record<string, SubagentRoleModel>>,
+) {
+  return agentType && isSubagentRoleName(agentType.name)
+    ? roleModels[agentType.name]
+    : undefined;
 }
 
 export interface AgentTypeDiagnostic {
@@ -333,9 +406,9 @@ export interface LoadAgentTypesOptions {
 }
 
 /**
- * Load global then project agent types. Project entries override global ones of
- * the same name (more specific wins), which is reported so a shadowed global
- * does not silently change meaning.
+ * Load built-in then global then project agent types. Each more-specific layer
+ * overrides a complete same-name definition, and every replacement is reported
+ * so a role never changes meaning silently.
  */
 export function loadAgentTypes(options: LoadAgentTypesOptions) {
   const global = loadDirectory(
@@ -347,18 +420,21 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
 
   const diagnostics = [...global.diagnostics, ...project.diagnostics];
   const agentTypes = new Map<string, AgentType>();
-  for (const agentType of global.agentTypes) {
-    agentTypes.set(agentType.name, agentType);
-  }
-  for (const agentType of project.agentTypes) {
-    const shadowed = agentTypes.get(agentType.name);
-    if (shadowed) {
-      diagnostics.push({
-        source: agentType.source,
-        message: `overrides the agent type of the same name from ${shadowed.source}`,
-      });
+  for (const layer of [
+    BUILT_IN_AGENT_TYPES,
+    global.agentTypes,
+    project.agentTypes,
+  ]) {
+    for (const agentType of layer) {
+      const shadowed = agentTypes.get(agentType.name);
+      if (shadowed) {
+        diagnostics.push({
+          source: agentType.source,
+          message: `overrides the agent type of the same name from ${shadowed.source}`,
+        });
+      }
+      agentTypes.set(agentType.name, agentType);
     }
-    agentTypes.set(agentType.name, agentType);
   }
 
   return { agentTypes, diagnostics };

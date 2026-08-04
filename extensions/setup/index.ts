@@ -2,6 +2,11 @@ import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import {
+  SUBAGENT_ROLE_NAMES,
+  type SubagentRoleModel,
+  type SubagentRoleModels,
+} from "../shared/subagent-roles.ts";
+import {
   applyFooterConfig,
   DETAIL_DISPLAYS,
   FOOTER_ITEMS,
@@ -23,6 +28,39 @@ import {
   type MyPiSetupConfig,
 } from "../shared/setup-config.ts";
 
+export function applySubagentRoleModelUpdates(
+  current: SubagentRoleModels,
+  updates:
+    | Partial<
+        Record<(typeof SUBAGENT_ROLE_NAMES)[number], SubagentRoleModel | null>
+      >
+    | undefined,
+  findModel: (
+    provider: string,
+    model: string,
+  ) => { readonly provider: string; readonly id: string } | undefined,
+) {
+  if (!updates) return current;
+
+  const roleModels = { ...current };
+  for (const role of SUBAGENT_ROLE_NAMES) {
+    const update = updates[role];
+    if (update === undefined) continue;
+    if (update === null) {
+      delete roleModels[role];
+      continue;
+    }
+    const resolved = findModel(update.provider, update.model);
+    if (!resolved) {
+      throw new Error(
+        `Unknown configured subagent role model for ${role}: ${update.provider}/${update.model}`,
+      );
+    }
+    roleModels[role] = { provider: resolved.provider, model: resolved.id };
+  }
+  return roleModels;
+}
+
 export function buildInteractiveSetupPrompt(options: {
   currentConfiguration: string;
   currentModel: string;
@@ -31,12 +69,12 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, Post-edit, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, Post-edit, Subagent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
         "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
-        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command.",
+        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Subagent roles inherit the parent model unless the user assigns an available model to a role.",
       ];
 
   return [
@@ -57,6 +95,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Bash and Write/Edit default to compact. Recommend compact for users who do not usually inspect implementation details.",
+    "- Subagent role models: built-in explorer, implementer, reviewer, and advisor roles always exist and inherit the parent model by default. Assign only an available registry model to an individual role when needed; clearing that role returns it to inheritance. Custom agent-type files still override a built-in role's complete definition.",
     "",
     "Natural-language configuration examples the user might ask for:",
     '- "switch footer to powerline" → ui_footer_preset=powerline',
@@ -65,6 +104,8 @@ export function buildInteractiveSetupPrompt(options: {
     '- "two custom lines: cwd flex model / context cost flex git" → ui_footer_lines=[["cwd","flex","model"],["context","cost","flex","git"]]',
     '- "run npm run format after Write/Edit turns" → post_edit_command="npm run format"',
     '- "turn off post-edit" → post_edit_command=""',
+    '- "make explorer use my available fast model" → subagent_role_models={explorer:{provider:"…",model:"…"}}',
+    '- "make explorer inherit again" → subagent_role_models={explorer:null}',
     "",
     "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
@@ -75,7 +116,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), result detail display, and the optional Post-edit command. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
+      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and per-built-in-Subagent-role model assignments. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
     parameters: Type.Object({
       summaries_enabled: Type.Optional(
         Type.Boolean({
@@ -175,6 +216,26 @@ export default function myPiSetup(pi: ExtensionAPI) {
           description:
             "How Write/Edit content and diffs render by default: compact shows a Claude Code-style folded preview with a hidden-line count and expands with app.tools.expand; full keeps every operation expanded. Omit to preserve the current value.",
         }),
+      ),
+      subagent_role_models: Type.Optional(
+        Type.Partial(
+          Type.Record(
+            StringEnum(SUBAGENT_ROLE_NAMES),
+            Type.Union([
+              Type.Object({
+                provider: Type.String({
+                  description: "Available Pi provider id.",
+                }),
+                model: Type.String({ description: "Available Pi model id." }),
+              }),
+              Type.Null(),
+            ]),
+          ),
+          {
+            description:
+              "Partial built-in-role model assignments. Each value is an available {provider, model}; null clears that role to inherit the parent model, and omitted roles are preserved.",
+          },
+        ),
       ),
       post_edit_command: Type.Optional(
         Type.String({
@@ -281,6 +342,13 @@ export default function myPiSetup(pi: ExtensionAPI) {
                 ? params.post_edit_command.trim()
                 : current.postEdit.command,
           },
+          subagents: {
+            roleModels: applySubagentRoleModelUpdates(
+              current.subagents.roleModels,
+              params.subagent_role_models,
+              (provider, modelId) => ctx.modelRegistry.find(provider, modelId),
+            ),
+          },
         };
         return config;
       };
@@ -324,7 +392,7 @@ export default function myPiSetup(pi: ExtensionAPI) {
             "Current configuration:",
             currentConfiguration,
             "",
-            "Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Nerd Font only affects powerline separator glyphs. Changes apply immediately in the active TUI session.",
+            "Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Subagent role models (explorer, implementer, reviewer, advisor) inherit the parent unless assigned an available registry model; clear an assignment to inherit again. Custom agent-type files still override built-in role definitions. Nerd Font only affects powerline separator glyphs. Changes apply immediately in the active TUI session.",
             "",
             "Use configure_my_pi_setup to apply only the requested changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
           ]

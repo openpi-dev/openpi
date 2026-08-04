@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import setupExtension, { buildInteractiveSetupPrompt } from "./index.ts";
+import setupExtension, {
+  applySubagentRoleModelUpdates,
+  buildInteractiveSetupPrompt,
+} from "./index.ts";
 
 test("registers one natural-language setup command and one constrained tool", () => {
   const commands = new Set<string>();
@@ -39,10 +42,47 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Bash and Write\/Edit default to compact/);
   assert.match(message, /Recommend compact/);
   assert.match(message, /Post-edit defaults off/);
+  assert.match(message, /Subagent role models/);
+  assert.match(message, /explorer, implementer, reviewer, and advisor/);
+  assert.match(message, /subagent_role_models=\{explorer/);
   assert.match(message, /maximum 500 characters/);
   assert.match(message, /successful Write\/Edit operations/);
   assert.match(message, /post_edit_command="npm run format"/);
   assert.match(message, /call configure_my_pi_setup at most once/);
+});
+
+test("partially assigns and clears validated subagent role models", () => {
+  const registry = (provider: string, model: string) =>
+    provider === "input" && model === "requested"
+      ? { provider: "canonical", id: "resolved" }
+      : undefined;
+
+  const assigned = applySubagentRoleModelUpdates(
+    { explorer: { provider: "old", model: "old-model" } },
+    {
+      explorer: { provider: "input", model: "requested" },
+      advisor: { provider: "input", model: "requested" },
+    },
+    registry,
+  );
+  assert.deepEqual(assigned, {
+    explorer: { provider: "canonical", model: "resolved" },
+    advisor: { provider: "canonical", model: "resolved" },
+  });
+
+  assert.deepEqual(
+    applySubagentRoleModelUpdates(assigned, { explorer: null }, registry),
+    { advisor: { provider: "canonical", model: "resolved" } },
+  );
+  assert.throws(
+    () =>
+      applySubagentRoleModelUpdates(
+        {},
+        { reviewer: { provider: "unknown", model: "missing" } },
+        registry,
+      ),
+    /Unknown configured subagent role model for reviewer: unknown\/missing/,
+  );
 });
 
 test("builds a focused review prompt when configuration already exists", () => {
@@ -58,7 +98,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Recaps, Workflow limits, UI\/Footer, result detail display, Post-edit/,
+    /keep them or change Recaps, Workflow limits, UI\/Footer, result detail display, Post-edit, Subagent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.doesNotMatch(message, /This is the first setup/);

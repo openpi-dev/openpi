@@ -186,9 +186,11 @@ subagent_spawn({
 - `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
-**Agent 类型**：在 `~/.pi/agent/agents/*.md`（以及受信任项目的 `.pi/agents/*.md`）里定义可复用的子 Agent 预设，固定 System Prompt、模型、Thinking Level，以及**允许使用的工具集**。`subagent_spawn` 随之多出 `agent_type` 参数；没有定义任何类型时参数不出现，行为与之前完全一致。
+**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，分别用于只读探索、实现、只读审查和深度只读建议；默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high，跨模块或微妙生命周期问题应由父 Agent 显式提到 xhigh，只有极难、陌生或歧义调查才用 max。
 
-工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。未受信任的项目目录不会贡献任何类型。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；修改后 `/reload` 生效（与 Skills 一致）。
+**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。`subagent_spawn.model` > 所选角色文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式 spawn > 所选角色 > 父会话。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 立即读取生效，无需 reload。
+
+工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。未受信任的项目目录不会贡献任何类型。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
 
 **Worktree 隔离**：并行子 Agent 默认共享同一个工作副本，也就共享同一个 git index——两个子 Agent 改同一个文件、或同时 `git add`，会互相覆盖。`isolation: "worktree"` 给这个子 Agent 一份独立 checkout 和独立分支：
 
@@ -574,6 +576,8 @@ pi install ~/work/my-pi-setup
 /my-pi-setup 关闭自定义状态栏
 /my-pi-setup 编辑后自动跑 npm run format
 /my-pi-setup 关闭 post-edit 命令
+/my-pi-setup 给 explorer 指定当前 Registry 中可用的模型
+/my-pi-setup 清除 explorer 的模型，让它继承父模型
 ```
 
 当前模型负责理解自然语言，受限配置工具负责保存结果。配置位于：
@@ -592,9 +596,10 @@ pi install ~/work/my-pi-setup
 | 大型 Header              |                                                  关闭 |
 | Dashboard Footer         |                                                  开启 |
 | Post-edit 命令           |       默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
+| Subagent 角色模型        | explorer / implementer / reviewer / advisor 均继承父模型 |
 | 主题                     |                                    不修改用户现有选择 |
 
-Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。
+Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。角色模型只接受当前 Pi Registry 能解析的 provider/model，并保存 Registry 规范化后的值；传入 `null` 只清除对应角色，未提及的角色保持原样。
 
 ---
 

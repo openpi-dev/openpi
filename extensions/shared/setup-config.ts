@@ -3,6 +3,11 @@ import { existsSync, readFileSync } from "node:fs";
 import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
+import {
+  SUBAGENT_ROLE_NAMES,
+  type SubagentRoleModel,
+  type SubagentRoleModels,
+} from "./subagent-roles.ts";
 
 export const REASONING_LEVELS = [
   "off",
@@ -135,6 +140,10 @@ export interface MyPiSetupConfig {
   readonly postEdit: {
     readonly command: string;
   };
+  readonly subagents: {
+    /** Per-built-in-role assignments; missing roles inherit the parent model. */
+    readonly roleModels: SubagentRoleModels;
+  };
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
@@ -154,6 +163,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     fileMutationDisplay: "compact",
   },
   postEdit: { command: "" },
+  subagents: { roleModels: {} },
 };
 
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
@@ -344,6 +354,24 @@ function parseUiFooter(
   };
 }
 
+function parseSubagentRoleModels(value: unknown): SubagentRoleModels {
+  if (!isRecord(value)) return {};
+
+  const roleModels: Partial<Record<string, SubagentRoleModel>> = {};
+  for (const role of SUBAGENT_ROLE_NAMES) {
+    const candidate = value[role];
+    if (!isRecord(candidate)) continue;
+    const provider = readString(candidate.provider);
+    const model = readString(candidate.model);
+    if (provider && model) roleModels[role] = { provider, model };
+  }
+  return roleModels;
+}
+
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
 function boundedInteger(value: unknown, fallback: number, maximum: number) {
   return typeof value === "number" &&
     Number.isInteger(value) &&
@@ -376,6 +404,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
 
   const workflows = isRecord(value.workflows) ? value.workflows : {};
   const ui = isRecord(value.ui) ? value.ui : {};
+  const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
     summaries: { enabled, ...(model ? { model } : {}) },
@@ -413,6 +442,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         : "compact",
     },
     postEdit: { command: parsePostEditCommand(value.postEdit) },
+    subagents: { roleModels: parseSubagentRoleModels(subagents.roleModels) },
   };
 }
 
@@ -509,6 +539,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Post-edit command: ${config.postEdit.command ? config.postEdit.command : "off"}`,
+    `Subagent role models: ${SUBAGENT_ROLE_NAMES.map((role) => `${role} ${config.subagents.roleModels[role] ? `${config.subagents.roleModels[role].provider}/${config.subagents.roleModels[role].model}` : "inherit"}`).join(" · ")}`,
   ].join("\n");
 }
 
