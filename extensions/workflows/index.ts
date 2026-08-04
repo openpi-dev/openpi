@@ -7,6 +7,8 @@
  *
  *   export const meta = { name, description, phases: [{ title, detail? }] }
  *   phase(title)                                  // mark runtime phase progression
+ *   log(message)                                  // narrate progress to the user and the report
+ *   usage()                                       // cumulative token spend so far (read-only)
  *   await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? })
  *   await pipeline(items, stage1, stage2, ...)    // per-item, no barrier between stages
  *   await parallel([() => agent(...), ...], { concurrency? })  // barrier
@@ -68,15 +70,18 @@ import {
 import {
   agentContext,
   aggregateUsage,
+  appendLog,
   countStates,
   emptyUsage,
   formatElapsed,
   formatUsage,
   phaseGroups,
   resultJson,
+  sanitizeLine,
   stateSquare,
   statusColor,
   statusWord,
+  usageSnapshot,
   SQUARE,
   type AgentRecord,
   type WorkflowDetails,
@@ -200,8 +205,15 @@ function errorText(error: unknown): string {
 function summaryLine(details: WorkflowDetails): string {
   const { done, failed } = countStates(details);
   const settled = done + failed;
+  // The newest narrator line beats the phase title when there is one: the
+  // script wrote it precisely because it says more than the phase does.
+  const latest = details.logs?.[details.logs.length - 1]?.text;
   return `workflow ${details.name ?? details.runId}: ${settled}/${details.agents.length} agents${
-    details.currentPhase ? ` · ${details.currentPhase}` : ""
+    latest
+      ? ` · ${latest}`
+      : details.currentPhase
+        ? ` · ${details.currentPhase}`
+        : ""
   }`;
 }
 
@@ -710,10 +722,18 @@ export default function workflows(pi: ExtensionAPI) {
       };
 
       const phaseFn = (title: unknown) => {
-        const text = String(title);
+        const text = sanitizeLine(String(title), 160);
+        if (!text) return;
         details.currentPhase = text;
         if (!details.phases.some((p) => p.title === text))
           details.phases.push({ title: text });
+        emit();
+      };
+
+      // The script's narrator. Unlike phase(), this is append-only progress
+      // text, so it never mutates the phase list a run is judged against.
+      const logFn = (text: string) => {
+        appendLog(details, text, Date.now());
         emit();
       };
 
@@ -976,6 +996,8 @@ export default function workflows(pi: ExtensionAPI) {
             signal: controller.signal,
             onAgent: agentFn,
             onPhase: phaseFn,
+            onLog: logFn,
+            usageSnapshot: () => usageSnapshot(details.agents),
             maxConcurrency: workflowConfig.concurrency,
             maxAgentCalls: workflowConfig.maxAgentCalls,
           });
@@ -1165,6 +1187,11 @@ export default function workflows(pi: ExtensionAPI) {
             `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
           )}`;
         }
+        // Only the tail collapsed: the newest lines are the ones that say
+        // where the run is now.
+        for (const entry of (details.logs ?? []).slice(-3)) {
+          text += `\n  ${theme.fg("muted", "›")} ${theme.fg("dim", entry.text)}`;
+        }
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
         if (details.error)
           text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
@@ -1204,6 +1231,32 @@ export default function workflows(pi: ExtensionAPI) {
             const preview = agent.preview.split("\n").slice(0, 2).join(" ");
             container.addChild(new Text(`  ${theme.fg("dim", preview)}`, 0, 0));
           }
+        }
+      }
+
+      if (details.logs && details.logs.length > 0) {
+        container.addChild(new Spacer(1));
+        container.addChild(new Text(theme.fg("muted", "─── log ───"), 0, 0));
+        if (details.logsDropped) {
+          container.addChild(
+            new Text(
+              theme.fg(
+                "dim",
+                `(${details.logsDropped} earlier line(s) dropped)`,
+              ),
+              0,
+              0,
+            ),
+          );
+        }
+        for (const entry of details.logs) {
+          container.addChild(
+            new Text(
+              `${theme.fg("muted", "›")} ${theme.fg("dim", entry.text)}`,
+              0,
+              0,
+            ),
+          );
         }
       }
 

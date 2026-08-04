@@ -83,6 +83,12 @@ export interface AgentRecord {
   transcript: TranscriptEntry[];
 }
 
+/** One narrator line emitted by the script's `log()`. */
+export interface WorkflowLogEntry {
+  at: number;
+  text: string;
+}
+
 export interface WorkflowDetails {
   runId: string;
   /** Pi session that launched this run. */
@@ -96,6 +102,10 @@ export interface WorkflowDetails {
   phases: { title: string; detail?: string }[];
   currentPhase?: string;
   agents: AgentRecord[];
+  /** Narrator lines from `log()`, oldest first, bounded to MAX_LOG_ENTRIES. */
+  logs?: WorkflowLogEntry[];
+  /** Oldest lines discarded once the ring filled, reported rather than hidden. */
+  logsDropped?: number;
   result?: unknown;
   resultArtifact?: string;
   transcriptArtifact?: string;
@@ -104,6 +114,73 @@ export interface WorkflowDetails {
   /** Why a requested resume produced no cache, for an honest result message. */
   resumeNote?: string;
   error?: string;
+}
+
+export const MAX_LOG_ENTRIES = 100;
+export const MAX_LOG_TEXT = 300;
+
+/**
+ * Flatten model-authored text into one safe terminal line. Workflow scripts are
+ * written by the model, so an escape sequence in a `log()` or `phase()` string
+ * would otherwise repaint the user's screen; newlines would break row layout.
+ */
+export function sanitizeLine(value: string, maxLength: number): string {
+  // Code-point slicing, not code-unit: cutting a surrogate pair in half leaves
+  // a lone surrogate that renders as a replacement glyph.
+  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
+  const points = [...flat];
+  const clipped =
+    points.length > maxLength ? points.slice(0, maxLength).join("") : flat;
+  return clipped.trimEnd();
+}
+
+/**
+ * Append a narrator line, keeping only the most recent MAX_LOG_ENTRIES. The
+ * tail is what a reader needs, and a silently dropped head would read as "the
+ * script went quiet", so the discarded count is kept for the report.
+ */
+export function appendLog(
+  details: WorkflowDetails,
+  text: string,
+  at: number,
+): void {
+  const clean = sanitizeLine(text, MAX_LOG_TEXT);
+  if (!clean) return;
+  const logs = (details.logs ??= []);
+  logs.push({ at, text: clean });
+  const excess = logs.length - MAX_LOG_ENTRIES;
+  if (excess > 0) {
+    logs.splice(0, excess);
+    details.logsDropped = (details.logsDropped ?? 0) + excess;
+  }
+}
+
+/** Cumulative token spend across a run's agents, as read by the script's `usage()`. */
+export interface WorkflowUsageSnapshot {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** input + output + cacheRead + cacheWrite. */
+  total: number;
+  cost: number;
+  /** Agents started so far, including ones still running. */
+  agents: number;
+}
+
+export function usageSnapshot(
+  agents: readonly AgentRecord[],
+): WorkflowUsageSnapshot {
+  const usage = aggregateUsage([...agents]);
+  return {
+    input: usage.input,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+    total: usage.input + usage.output + usage.cacheRead + usage.cacheWrite,
+    cost: usage.cost,
+    agents: agents.length,
+  };
 }
 
 /** Colored square state indicator (no emojis/glyphs). */

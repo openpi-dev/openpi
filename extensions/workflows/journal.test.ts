@@ -198,6 +198,8 @@ function runWith(
     signal: new AbortController().signal,
     onAgent,
     onPhase: () => {},
+    onLog: () => {},
+    usageSnapshot: () => ({ total: 0 }),
     maxConcurrency: 8,
     maxAgentCalls: 128,
   });

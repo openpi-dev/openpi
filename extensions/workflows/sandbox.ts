@@ -9,6 +9,8 @@ const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_ARGS_BYTES = 256 * 1024;
 const MAX_RESULT_BYTES = 1024 * 1024;
 const MAX_AGENT_MESSAGE_BYTES = 512 * 1024;
+/** A narrator line is one terminal row; the host bounds it again on arrival. */
+const MAX_LOG_MESSAGE_BYTES = 8 * 1024;
 /**
  * The sandbox's hard agent-request cap sits this many calls ABOVE the
  * controller's graceful budget, so the controller rejects the (budget+1)th
@@ -46,6 +48,12 @@ export interface RunWorkflowSandboxOptions {
     signal: AbortSignal,
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
+  onLog: (text: string) => void;
+  /**
+   * Cumulative run usage, read at send time so the child's `usage()` reflects
+   * the agent that just settled rather than a value captured at launch.
+   */
+  usageSnapshot: () => unknown;
   maxConcurrency: number;
   /** Same budget the controller enforces; the sandbox is the outer guard. */
   maxAgentCalls: number;
@@ -150,6 +158,17 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     let requestCount = 0;
     let finished = false;
 
+    // The child parses this and falls back to zeros if it is ever unusable, so
+    // a broken snapshot degrades `usage()` to a zero reading instead of
+    // failing the run.
+    const usageJson = () => {
+      try {
+        return JSON.stringify(options.usageSnapshot()) ?? "{}";
+      } catch {
+        return "{}";
+      }
+    };
+
     const cleanup = () => {
       for (const abortController of activeAgentRequests.values()) {
         abortController.abort(new Error("Workflow stopped"));
@@ -214,6 +233,25 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         }
         return;
       }
+      if (raw.kind === "log") {
+        if (
+          typeof raw.payloadJson !== "string" ||
+          byteLength(raw.payloadJson) > MAX_LOG_MESSAGE_BYTES
+        ) {
+          finish(new Error("Workflow sandbox sent an invalid log line"));
+          return;
+        }
+        try {
+          const payload: unknown = JSON.parse(raw.payloadJson);
+          if (!isRecord(payload) || typeof payload.text !== "string") {
+            throw new Error("invalid text");
+          }
+          options.onLog(payload.text);
+        } catch {
+          finish(new Error("Workflow sandbox sent an invalid log line"));
+        }
+        return;
+      }
       if (raw.kind === "agent") {
         if (
           typeof raw.payloadJson !== "string" ||
@@ -266,7 +304,13 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
               error: "Agent result exceeded the workflow IPC output limit",
             });
           }
-          child.send({ token, kind: "agentResult", id, resultJson });
+          child.send({
+            token,
+            kind: "agentResult",
+            id,
+            resultJson,
+            usageJson: usageJson(),
+          });
         };
         activeAgentRequests.set(id, abortController);
         void options
@@ -313,6 +357,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         source: options.source,
         argsJson,
         maxConcurrency: options.maxConcurrency,
+        usageJson: usageJson(),
       },
       (error) => {
         if (error) finish(error);
