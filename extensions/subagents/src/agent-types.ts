@@ -22,7 +22,10 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
-import { CHILD_SAFE_PACKAGE_TOOL_NAMES } from "../../shared/child-session.ts";
+import {
+  CHILD_EXCLUDED_TOOL_NAMES,
+  CHILD_SAFE_PACKAGE_TOOL_NAMES,
+} from "../../shared/child-session.ts";
 import { REASONING_EFFORTS, type ReasoningEffort } from "./domain.ts";
 
 /** Directory name scanned under both the agent dir and a project's `.pi`. */
@@ -54,6 +57,21 @@ export const KNOWN_TOOL_NAMES: readonly string[] = [
   "find",
   "ls",
   ...CHILD_SAFE_PACKAGE_TOOL_NAMES,
+];
+
+/**
+ * Every key `parseAgentType` reads. Anything else is reported, because a
+ * misspelled key fails in the dangerous direction: `tool:` leaves `tools`
+ * undefined and yields a child with the full inherited toolset, indis-
+ * tinguishable from a type that deliberately inherits everything.
+ */
+export const KNOWN_FRONTMATTER_KEYS: readonly string[] = [
+  "name",
+  "description",
+  "tools",
+  "model",
+  "reasoning_effort",
+  "reasoningEffort",
 ];
 
 export interface AgentType {
@@ -185,10 +203,29 @@ export function parseAgentType(
   if (toolList?.error !== undefined) return fail(toolList.error);
   const tools = toolList?.tools;
   for (const tool of tools ?? []) {
+    if (CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never)) {
+      diagnostics.push({
+        source,
+        message: `"${tool}" in ${name} is a parent-only tool; the child cannot receive it, so it is ignored`,
+      });
+      continue;
+    }
     if (KNOWN_TOOL_NAMES.includes(tool)) continue;
     diagnostics.push({
       source,
       message: `unrecognized tool "${tool}" in ${name}; it is kept, but a typo here silently removes a capability`,
+    });
+  }
+  // A misspelled KEY is the dangerous direction: `tool:` or `allowed_tools:`
+  // parses cleanly, leaves `tools` undefined, and produces a child with the
+  // full inherited toolset — while the body says "you are read-only" and the
+  // spawn result reports the type as applied. `tools: []` is already a hard
+  // error for the same reason; a typo deserves at least a warning.
+  for (const key of Object.keys(frontmatter)) {
+    if (KNOWN_FRONTMATTER_KEYS.includes(key)) continue;
+    diagnostics.push({
+      source,
+      message: `unrecognized key "${key}" in ${name}; it is ignored — check the spelling if you meant to restrict or configure this type`,
     });
   }
 
@@ -244,7 +281,20 @@ function loadDirectory(directory: string) {
   }
 
   const files = entries
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".md"))
+    .filter((entry) => {
+      if (!entry.name.endsWith(".md")) return false;
+      if (entry.isFile()) return true;
+      // A symlinked type is the normal shape when these live in a dotfiles
+      // repo, and `isFile()` is false for one. Skipping it silently means the
+      // user's type simply never appears — no diagnostic, no enum entry. Pi's
+      // own skills loader resolves symlinks for exactly this reason.
+      if (!entry.isSymbolicLink()) return false;
+      try {
+        return fs.statSync(path.join(directory, entry.name)).isFile();
+      } catch {
+        return false;
+      }
+    })
     .map((entry) => entry.name)
     .sort();
 

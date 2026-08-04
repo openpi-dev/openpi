@@ -4,7 +4,7 @@
  */
 
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
@@ -266,4 +266,96 @@ test("an agent-type allowlist narrows and cannot re-enable an excluded tool", ()
   assert.equal(admits("grep"), true);
   assert.equal(admits("write"), false, "not in the allowlist");
   assert.equal(admits("subagent_spawn"), false, "denylist still wins");
+});
+
+test("a misspelled frontmatter key is reported, not silently ignored", () => {
+  // The dangerous direction. `tool:` parses cleanly, leaves `tools` undefined,
+  // and produces a child with the FULL inherited toolset — while the body says
+  // "you are read-only" and the spawn result reports the type as applied. It
+  // is indistinguishable from a type that deliberately inherits everything.
+  // `tools: []` is already a hard error for exactly this reason.
+  const parsed = parseAgentType(
+    `---
+name: research
+description: Read-only research.
+tool: [read, rg]
+allowed_tools: [read]
+---
+
+You are read-only and must never write files.
+`,
+    "research",
+    "research.md",
+  );
+  assert.ok(parsed.agentType, "the type still loads");
+  assert.equal(parsed.agentType?.tools, undefined);
+  const messages = parsed.diagnostics.map((d) => d.message).join("\n");
+  assert.match(messages, /unrecognized key "tool"/);
+  assert.match(messages, /unrecognized key "allowed_tools"/);
+});
+
+test("every key the parser reads is accepted without a warning", () => {
+  const parsed = parseAgentType(VALID, "explore", "explore.md");
+  assert.ok(parsed.agentType);
+  assert.deepEqual(parsed.diagnostics, []);
+});
+
+test("naming a parent-only tool says so instead of calling it a typo", () => {
+  // subagent_spawn is real and correctly spelled; it is denied. Reporting it
+  // as "unrecognized … a typo here silently removes a capability" said the
+  // opposite of what happened.
+  const parsed = parseAgentType(
+    `---
+name: helper
+description: Tries to delegate.
+tools: [read, subagent_spawn, gerp]
+---
+
+Body.
+`,
+    "helper",
+    "helper.md",
+  );
+  const messages = parsed.diagnostics.map((d) => d.message).join("\n");
+  assert.match(messages, /"subagent_spawn" in helper is a parent-only tool/);
+  assert.match(messages, /unrecognized tool "gerp"/);
+});
+
+test("a symlinked agent type is discovered like a real file", async () => {
+  // These commonly live in a dotfiles repo and are symlinked into place — the
+  // same shape this user's own ~/.pi/agent/skills uses. `isFile()` is false
+  // for a symlink, so the type simply never appeared, with no diagnostic.
+  await withTempDir(async (root) => {
+    const { agentDir, cwd } = await seed(root, {});
+    const real = path.join(root, "dotfiles");
+    await mkdir(real, { recursive: true });
+    await writeFile(path.join(real, "explore.md"), VALID);
+    await symlink(
+      path.join(real, "explore.md"),
+      path.join(agentDir, "agents", "explore.md"),
+    );
+
+    const { agentTypes } = loadAgentTypes({
+      agentDir,
+      cwd,
+      projectTrusted: false,
+    });
+    assert.deepEqual([...agentTypes.keys()], ["explore"]);
+  });
+});
+
+test("a symlink pointing at a directory is still skipped", async () => {
+  await withTempDir(async (root) => {
+    const { agentDir, cwd } = await seed(root, {});
+    const dir = path.join(root, "notafile");
+    await mkdir(dir, { recursive: true });
+    await symlink(dir, path.join(agentDir, "agents", "broken.md"));
+
+    const { agentTypes } = loadAgentTypes({
+      agentDir,
+      cwd,
+      projectTrusted: false,
+    });
+    assert.equal(agentTypes.size, 0);
+  });
 });
