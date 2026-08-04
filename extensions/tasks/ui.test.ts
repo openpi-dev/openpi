@@ -9,9 +9,12 @@ import {
   TASK_WIDGET_LIMIT,
 } from "./ui.ts";
 
+// strikethrough is marked rather than dropped, so a test can assert which
+// subjects got struck without matching real ANSI escapes.
 const theme = {
   fg: (_name: string, text: string) => text,
   bold: (text: string) => text,
+  strikethrough: (text: string) => `<s>${text}</s>`,
 } as unknown as Theme;
 
 test("renders status, detail, and auditable note labels", () => {
@@ -163,4 +166,28 @@ test("collapsed tool results remain bounded", () => {
   const output = component.render(100).join("\n");
   assert.match(output, /… 3 more/);
   assert.match(output, /8 total · revision 1/);
+});
+
+test("settled subjects are struck through, live ones are not", () => {
+  const rows = renderTaskRows(
+    [
+      { id: 1, subject: "Ship it", status: "done", note: "tests pass" },
+      { id: 2, subject: "Abandon it", status: "dropped", note: "superseded" },
+      { id: 3, subject: "Still going", status: "in_progress" },
+      { id: 4, subject: "Not started", status: "pending" },
+      { id: 5, subject: "Waiting", status: "blocked", note: "needs fixture" },
+    ],
+    theme,
+    120,
+  ).join("\n");
+  // Struck: the two terminal states, and only the subject — the id, status
+  // tag, and evidence line stay readable.
+  assert.match(rows, /<s>Ship it<\/s>/);
+  assert.match(rows, /<s>Abandon it<\/s>/);
+  assert.doesNotMatch(rows, /<s>T\d/);
+  assert.doesNotMatch(rows, /<s>tests pass/);
+  // Not struck: anything still actionable, including blocked.
+  for (const live of ["Still going", "Not started", "Waiting"]) {
+    assert.doesNotMatch(rows, new RegExp(`<s>${live}</s>`));
+  }
 });

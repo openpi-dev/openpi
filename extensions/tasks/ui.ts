@@ -31,6 +31,22 @@ const TASK_WIDGET_ORDER: Record<TaskItem["status"], number> = {
 
 export const TASK_WIDGET_LIMIT = 4;
 
+/**
+ * A settled item's subject reads as struck-through and dimmed, so a glance at
+ * the list separates what is left from what is behind you.
+ *
+ * Both, not either: SGR 9 is widely but not universally supported, and a
+ * terminal that drops it would otherwise render done items identically to
+ * open ones. The dim color survives on its own.
+ */
+function subjectStyle(status: TaskItem["status"], theme: Theme) {
+  if (status === "done" || status === "dropped") {
+    return (text: string) => theme.strikethrough(theme.fg("dim", text));
+  }
+  return (text: string) =>
+    theme.fg(status === "pending" ? "muted" : "text", text);
+}
+
 export interface TaskToolDetails {
   action: "add" | "update" | "list";
   items: TaskItem[];
@@ -58,7 +74,7 @@ export function renderTaskRows(
               : "muted";
     const rows = [
       truncateToWidth(
-        `${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg("muted", `[${item.status}]`)} ${theme.fg(item.status === "done" ? "dim" : "text", item.subject)}`,
+        `${theme.fg(color, STATUS_ICON[item.status])} ${theme.fg("accent", `T${item.id}`)} ${theme.fg("muted", `[${item.status}]`)} ${subjectStyle(item.status, theme)(item.subject)}`,
         width,
       ),
     ];
