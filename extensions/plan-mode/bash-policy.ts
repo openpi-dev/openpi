@@ -1,13 +1,27 @@
 /**
  * Deciding whether an ARBITRARY shell command is read-only is undecidable, so
- * this does not try. It answers a much narrower question: is this command
- * EXACTLY one of a few known investigation commands, with nothing else
- * attached? Anything it cannot prove safe stays blocked — the same fail-closed
- * stance as PLAN_SAFE_TOOLS one level up, one level finer.
+ * this does not try. It answers a much narrower question: is this command one
+ * of a few known investigation commands, built ONLY from parts on an explicit
+ * allowlist? Anything not on a list is refused — the same fail-closed stance
+ * as PLAN_SAFE_TOOLS one level up, one level finer.
  *
  * It exists because planning without `git log`/`git diff`/`git status` means
  * planning without history: `read`/`rg` show what the code says, never why it
  * came to say it.
+ *
+ * THREAT MODEL. The adversary is a model that would start changing things
+ * before the user approved a plan — including one steered by injected text it
+ * read while investigating. It is NOT a hostile repository: `git diff` honors
+ * `diff.external` from the repo's own config, so a checkout whose `.git/config`
+ * is attacker-controlled can run a program through a command this module
+ * allows. Nothing here can prevent that, and nothing above it tries to: pi
+ * already runs the project's own tooling under the user's trust decision.
+ *
+ * EVERY LIST BELOW IS AN ALLOWLIST, deliberately. An earlier version scanned
+ * for known-dangerous flags instead, and review found four separate escapes in
+ * one pass (`git grep -O<cmd>` executes, `file --compile` writes, `tree -ao`
+ * writes, `date -s` sets the clock). A denylist over an unbounded flag space
+ * cannot be finished; a missing allowlist entry only costs a refusal.
  */
 
 /**
@@ -18,83 +32,170 @@
  * `\` is here because a line continuation splices in the next line; `$` covers
  * both `$(...)` and a `$VAR` that expands into arguments never inspected here.
  */
-const SHELL_METACHARACTERS = /[;&|<>$`\\!*?{}()\[\]\n\r#]/;
+const SHELL_METACHARACTERS = /[;&|<>$`\\!*?{}()[\]\n\r#]/;
+
+/**
+ * Tilde expansion, but only where a shell would actually expand it: at the
+ * start of a word. `HEAD~3` is ordinary revision syntax and must survive,
+ * while `~/notes` and `~user/x` resolve to a path this module never sees.
+ */
+const TILDE_EXPANSION = /(^|\s)~/;
 
 /** Quotes hide word boundaries from the tokenizer below, so they are refused too. */
 const QUOTES = /["']/;
 
 /**
- * Read-only invocations keyed by argv[0]. A non-empty set means the second
- * word must be one of those subcommands; an empty set means the command reads
- * by nature and only flags/paths follow.
- *
- * Deliberately absent from git: `config` (writes on `--global x y`), `stash`
- * (mutates the worktree), `tag`/`branch`/`remote` (create refs on most forms),
- * `reflog` (`expire` deletes). Absent from gh: `api` (any method), `run`
- * (`rerun`/`cancel`), `repo` (`clone`/`delete`), `release` (`create`). Each
- * has a read-only form, but distinguishing it means parsing that subcommand's
- * own flag grammar — the exact analysis this module refuses to do.
+ * Read-only git subcommands. Absent on purpose: `config`, `stash`, `tag`,
+ * `branch`, `remote`, `reflog`, `worktree` — each has a listing form, but
+ * telling it apart from the writing form means parsing that subcommand's own
+ * grammar, which is the analysis this module refuses to do.
  */
-const READ_ONLY_COMMANDS = new Map<string, ReadonlySet<string>>([
-  [
-    "git",
-    new Set([
-      "log",
-      "diff",
-      "status",
-      "show",
-      "blame",
-      "shortlog",
-      "describe",
-      "rev-parse",
-      "rev-list",
-      "ls-files",
-      "ls-tree",
-      "cat-file",
-      "for-each-ref",
-      "merge-base",
-      "name-rev",
-      "whatchanged",
-      "grep",
-    ]),
-  ],
-  ["gh", new Set(["pr", "issue", "search"])],
-  ["ls", new Set()],
-  ["cat", new Set()],
-  ["head", new Set()],
-  ["tail", new Set()],
-  ["wc", new Set()],
-  ["file", new Set()],
-  ["stat", new Set()],
-  ["du", new Set()],
-  ["pwd", new Set()],
-  ["which", new Set()],
-  ["date", new Set()],
-  ["tree", new Set()],
+const GIT_SUBCOMMANDS = new Set([
+  "log",
+  "diff",
+  "status",
+  "show",
+  "blame",
+  "shortlog",
+  "describe",
+  "rev-parse",
+  "rev-list",
+  "ls-files",
+  "ls-tree",
+  "cat-file",
+  "merge-base",
+  "name-rev",
+  "whatchanged",
+  "grep",
 ]);
 
 /**
- * `gh <subcommand>` verbs that write even under an otherwise read-only parent
- * (`gh pr create`, `gh issue close`). Checked as a denylist because gh keeps
- * adding read verbs, and a new read verb being refused is a harmless miss
- * while a new write verb slipping through is not — so the check below also
- * requires the third word to be a known read verb.
+ * Flags accepted after a git subcommand. The admission rule for this list is
+ * narrow: a flag qualifies only if it shapes OUTPUT or SELECTS commits, and
+ * never names a program, a file to write, or a path git will execute from.
+ * That is why `-O`/`--open-files-in-pager` (runs a program per match),
+ * `-o`/`--output` (writes a file) and `--contents` (reads an out-of-tree file)
+ * are absent, and why an unrecognized flag is refused rather than assumed dull.
+ *
+ * A `--flag=value` form is matched on the `--flag` part; a value given as the
+ * next word is admitted by the non-flag branch of the scan.
  */
-const GH_READ_VERBS = new Set(["view", "list", "status", "diff", "checks"]);
+const GIT_FLAGS = new Set([
+  // Patch and stat shaping.
+  "-p",
+  "--patch",
+  "--no-patch",
+  "-s",
+  "--stat",
+  "--shortstat",
+  "--numstat",
+  "--summary",
+  "--raw",
+  "--name-only",
+  "--name-status",
+  "--no-color",
+  "--color",
+  "--word-diff",
+  "-U",
+  "--unified",
+  "--no-ext-diff",
+  // Commit formatting.
+  "--oneline",
+  "--graph",
+  "--abbrev-commit",
+  "--no-abbrev-commit",
+  "--format",
+  "--pretty",
+  "--date",
+  "--relative-date",
+  "--decorate",
+  "--no-decorate",
+  // Commit selection.
+  "-n",
+  "--max-count",
+  "--skip",
+  "--since",
+  "--after",
+  "--until",
+  "--before",
+  "--author",
+  "--committer",
+  "--grep",
+  "--all",
+  "--branches",
+  "--tags",
+  "--remotes",
+  "--first-parent",
+  "--no-merges",
+  "--merges",
+  "--reverse",
+  "--follow",
+  "--topo-order",
+  "--date-order",
+  // Diff/blame comparison.
+  "--cached",
+  "--staged",
+  "-w",
+  "--ignore-all-space",
+  "--ignore-space-change",
+  "-M",
+  "-C",
+  "-L",
+  "--find-renames",
+  "--find-copies",
+  // Plumbing queries used while orienting.
+  "--abbrev-ref",
+  "--show-toplevel",
+  "--git-dir",
+  "--is-inside-work-tree",
+  "--verify",
+  "--short",
+  "--porcelain",
+  "--branch",
+  "-b",
+  "-u",
+  "--untracked-files",
+  "-t",
+  "-r",
+  "--long",
+  "--count",
+]);
+
+/** gh subcommands paired with the verbs under each that only read. */
+const GH_SUBCOMMANDS = new Map<string, ReadonlySet<string>>([
+  ["pr", new Set(["view", "list", "diff", "checks", "status"])],
+  ["issue", new Set(["view", "list", "status"])],
+  ["search", new Set(["code", "commits", "issues", "prs", "repos"])],
+]);
 
 /**
- * Flags that make an otherwise read-only command write a file. `git show
- * --output=x` and `git diff --output x` both exist; so does `-o`.
+ * Flags accepted after a gh verb. `--web` is absent on purpose: it opens the
+ * user's browser, which reads nothing and is a side effect they did not ask a
+ * planning step to cause.
  */
-const OUTPUT_FLAGS = /^(-o|--output)(=|$)/;
+const GH_FLAGS = new Set([
+  "--json",
+  "--jq",
+  "--template",
+  "--repo",
+  "-R",
+  "--state",
+  "--limit",
+  "-L",
+  "--author",
+  "--assignee",
+  "--label",
+  "--search",
+  "--draft",
+  "--base",
+  "--head",
+  "--owner",
+  "--language",
+  "--comments",
+]);
 
-/**
- * Flags that relocate what a command runs against or executes. `git
- * --exec-path=/tmp/evil log` runs binaries from an attacker path, and `-c
- * core.pager=...` runs a pager command.
- */
-const RELOCATING_FLAGS =
-  /^(-c|-C|--exec-path|--git-dir|--work-tree|--upload-pack|--receive-pack|--pager)(=|$)/;
+/** `-5`, `-20`: git's count shorthand, which is a number rather than a flag. */
+const NUMERIC_SHORTHAND = /^-\d+$/;
 
 export interface BashPlanDecision {
   allowed: boolean;
@@ -106,6 +207,35 @@ const refuse = (reason: string): BashPlanDecision => ({
   allowed: false,
   reason,
 });
+
+/** Split `--flag=value` into the flag part the allowlists are keyed on. */
+function flagName(word: string) {
+  const eq = word.indexOf("=");
+  return eq === -1 ? word : word.slice(0, eq);
+}
+
+/**
+ * Check the argument tail. Words after `--` are pathspecs by definition and
+ * need no check; before it, a word either is an allowlisted flag or is not a
+ * flag at all (a path, ref, or pattern, none of which can execute).
+ */
+function scanArguments(
+  words: readonly string[],
+  allowed: ReadonlySet<string>,
+  program: string,
+): BashPlanDecision {
+  for (const word of words) {
+    if (word === "--") break;
+    if (!word.startsWith("-")) continue;
+    if (NUMERIC_SHORTHAND.test(word)) continue;
+    if (!allowed.has(flagName(word))) {
+      return refuse(
+        `plan mode does not recognize "${word}" as a read-only ${program} option, so it will not run this command`,
+      );
+    }
+  }
+  return { allowed: true };
+}
 
 /**
  * Whether this exact command may run during plan mode. The contract is
@@ -127,49 +257,57 @@ export function planBashDecision(command: unknown): BashPlanDecision {
   if (QUOTES.test(text)) {
     return refuse("plan mode only runs unquoted commands while planning");
   }
-
-  const words = text.split(/\s+/);
-  const [program, ...rest] = words;
-  const subcommands = READ_ONLY_COMMANDS.get(program ?? "");
-  if (!subcommands) {
+  if (TILDE_EXPANSION.test(text)) {
     return refuse(
-      `plan mode allows only read-only investigation commands (git log/diff/status/show/blame, gh pr view, ls, cat, head, tail, wc), not "${program}"`,
+      "plan mode does not run commands with `~` paths — give a path relative to the project instead",
     );
   }
 
-  for (const word of rest) {
-    if (OUTPUT_FLAGS.test(word)) {
-      return refuse(`"${word}" writes a file, which plan mode does not allow`);
-    }
-    if (RELOCATING_FLAGS.test(word)) {
+  const [program, ...rest] = text.split(/\s+/);
+
+  /*
+   * The subcommand must be the FIRST word, never "the first word that is not a
+   * flag". Skipping over flags assumes they are value-less, and git's
+   * `--namespace x` / `--attr-source x` and gh's cobra parser each consume the
+   * next word — so a skip-to-first-non-flag rule lets `git --namespace log
+   * push --force` donate the allowlisted subcommand to the flag and run the
+   * one behind it. Requiring position refuses `git -P log` too; that is a
+   * false negative, which this module is allowed to have.
+   */
+  if (program === "git") {
+    const [subcommand, ...args] = rest;
+    if (!subcommand || !GIT_SUBCOMMANDS.has(subcommand)) {
       return refuse(
-        `"${word}" can redirect what runs or where it runs, which plan mode does not allow`,
+        `plan mode allows only a read-only git subcommand immediately after "git" (log, diff, status, show, blame, …), not "${subcommand ?? "(none)"}"`,
       );
     }
-  }
-
-  if (subcommands.size === 0) return { allowed: true };
-
-  // The subcommand is the first word that is not a global flag: `git -P log`
-  // and `git log` are the same command.
-  const subcommand = rest.find((word) => !word.startsWith("-"));
-  if (!subcommand || !subcommands.has(subcommand)) {
-    return refuse(
-      `plan mode allows only read-only ${program} subcommands (${[...subcommands].slice(0, 5).join(", ")}, …), not "${subcommand ?? "(none)"}"`,
-    );
+    return scanArguments(args, GIT_FLAGS, "git");
   }
 
   if (program === "gh") {
-    // `gh pr view` reads; `gh pr create` does not. Require an explicit read
-    // verb rather than trusting the parent subcommand.
-    const afterSub = rest.slice(rest.indexOf(subcommand) + 1);
-    const verb = afterSub.find((word) => !word.startsWith("-"));
-    if (!verb || !GH_READ_VERBS.has(verb)) {
+    const [subcommand, verb, ...args] = rest;
+    const verbs = subcommand ? GH_SUBCOMMANDS.get(subcommand) : undefined;
+    if (!verbs) {
       return refuse(
-        `plan mode allows only read verbs after "gh ${subcommand}" (${[...GH_READ_VERBS].join(", ")}), not "${verb ?? "(none)"}"`,
+        `plan mode allows only "gh pr", "gh issue" or "gh search" while planning, not "${subcommand ?? "(none)"}"`,
       );
     }
+    if (!verb || !verbs.has(verb)) {
+      return refuse(
+        `plan mode allows only read verbs after "gh ${subcommand}" (${[...verbs].join(", ")}), not "${verb ?? "(none)"}"`,
+      );
+    }
+    return scanArguments(args, GH_FLAGS, "gh");
   }
 
-  return { allowed: true };
+  /*
+   * Nothing else is admitted. `ls`, `cat`, `head`, `tail` and `wc` were on an
+   * earlier version of this list and are gone: plan mode already grants the
+   * `ls`, `read`, `grep` and `fd`/`rg` TOOLS, so those shell forms added no
+   * capability while each contributed its own flag grammar to get wrong
+   * (`file --compile` and `tree -ao` both write files).
+   */
+  return refuse(
+    `plan mode runs only read-only git and gh investigation commands while planning, not "${program}" — use the read, ls, grep or fd tools for files`,
+  );
 }

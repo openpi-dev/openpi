@@ -72,7 +72,7 @@ test("bash is judged per command, not blocked as a whole tool", () => {
   assert.equal(planToolCallDecision("bash", {})?.block, true);
   // The refusal keeps both the specific reason and the standing instruction.
   const reason = planToolCallDecision("bash", { command: "rm -rf /" })?.reason;
-  assert.match(reason ?? "", /read-only investigation commands/);
+  assert.match(reason ?? "", /read-only git and gh investigation commands/);
   assert.match(reason ?? "", /Plan mode is active/);
 });
 

@@ -146,7 +146,7 @@ export default function planMode(pi: ExtensionAPI) {
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits, writes, and delegation are blocked until the user approves; bash is limited to read-only investigation such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` (one plain command, no pipes or redirects).${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits, writes, and delegation are blocked until the user approves. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects.${objective ? `\n\nPlan for: ${objective}` : ""}` +
             "\n\nUse read-only tools to ground the plan, then present it concisely and stop. The user will run `/plan done` to approve.",
           display: true,
           details: {},
