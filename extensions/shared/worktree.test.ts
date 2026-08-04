@@ -49,6 +49,26 @@ describe("worktreeSlug", () => {
     assert.equal(worktreeSlug("...", "fallback"), "fallback");
     assert.equal(worktreeSlug("", "fallback"), "fallback");
   });
+
+  test("a slug is never unique enough to identify a worktree by itself", () => {
+    // Recorded because it is easy to assume otherwise. Every non-Latin label
+    // collapses to the fallback, and two labels sharing a long prefix collide
+    // once the length cap bites. createWorktree adds randomness for this
+    // reason; nothing else may depend on slug uniqueness.
+    assert.equal(worktreeSlug("中文标签", "agent"), "agent");
+    assert.equal(worktreeSlug("🚀🚀", "agent"), "agent");
+    assert.equal(
+      worktreeSlug("refactor the authentication subsystem part one", "x"),
+      worktreeSlug("refactor the authentication subsystem part two", "x"),
+    );
+  });
+
+  test("mid-string dots collapse, since git rejects a ref containing ..", () => {
+    // "bump v1.2..3" sanitizes fine as a path but `pi/bump-v1.2..3` is not a
+    // legal branch name, which would fail the spawn outright.
+    assert.equal(worktreeSlug("a..b", "x"), "a.b");
+    assert.ok(!worktreeSlug("bump v1.2..3", "x").includes(".."));
+  });
 });
 
 describe("worktree lifecycle", () => {
@@ -90,22 +110,62 @@ describe("worktree lifecycle", () => {
     assert.equal(cleanup.branchDeleted, true);
   });
 
-  test("links node_modules in and never deletes the real one", async () => {
+  test("the child's own status is clean, so node_modules is never committed", async () => {
+    // The original design linked node_modules INSIDE the checkout, and a
+    // `.gitignore` of `node_modules/` (trailing slash = directory only) does
+    // not match a symlink. The child then saw `?? node_modules` from the
+    // start, `git add -A` committed it as a 120000 blob, teardown was blocked
+    // forever, and merging that branch replaced the PARENT's real
+    // node_modules with a self-referential symlink.
     const result = await createWorktree({ cwd: repo, label: "deps", id: "2" });
     assert.ok(result.ok);
     if (!result.ok) return;
 
-    const linked = path.join(result.worktree.path, "node_modules");
-    assert.equal(fs.lstatSync(linked).isSymbolicLink(), true);
-    // The point of the link: a child can actually resolve dependencies.
-    assert.ok(fs.existsSync(path.join(linked, "dep", "index.js")));
+    assert.equal(
+      git(result.worktree.path, "status", "--porcelain").trim(),
+      "",
+      "a freshly created worktree must start clean for the child too",
+    );
 
+    // The link lives beside the worktrees, and Node finds it by walking up.
+    const beside = path.join(
+      path.dirname(result.worktree.path),
+      "node_modules",
+    );
+    assert.equal(fs.lstatSync(beside).isSymbolicLink(), true);
+    assert.ok(fs.existsSync(path.join(beside, "dep", "index.js")));
+    assert.equal(
+      fs.existsSync(path.join(result.worktree.path, "node_modules")),
+      false,
+      "nothing may be placed inside the tree git reports on",
+    );
+
+    // `git add -A` is what a child is told to do before committing.
+    fs.writeFileSync(path.join(result.worktree.path, "a.txt"), "child\n");
+    git(result.worktree.path, "add", "-A");
+    assert.ok(
+      !git(result.worktree.path, "diff", "--cached", "--name-only").includes(
+        "node_modules",
+      ),
+      "node_modules must never reach the index",
+    );
+
+    git(result.worktree.path, "commit", "--quiet", "-m", "child work");
     const cleanup = await reclaimWorktree(repo, result.worktree);
-    assert.equal(cleanup.removed, true);
+    assert.equal(cleanup.removed, true, cleanup.reason ?? "");
+    assert.equal(cleanup.branchDeleted, false, "committed work must survive");
     assert.ok(
       fs.existsSync(path.join(repo, "node_modules", "dep", "index.js")),
-      "teardown must unlink, never follow into the repo's node_modules",
+      "teardown must never follow the link into the repo's node_modules",
     );
+
+    git(repo, "merge", "--quiet", "--no-ff", "-m", "merge", cleanup.branch);
+    assert.equal(
+      fs.lstatSync(path.join(repo, "node_modules")).isDirectory(),
+      true,
+      "merging the child's branch must not turn node_modules into a symlink",
+    );
+    git(repo, "reset", "--quiet", "--hard", "HEAD~1");
   });
 
   test("keeps a worktree that still holds uncommitted work", async () => {
@@ -142,6 +202,102 @@ describe("worktree lifecycle", () => {
     // branch holding commits is never deleted by cleanup.
     assert.equal(cleanup.branchDeleted, false);
     assert.equal(await worktreeCommitCount(repo, result.worktree.branch), 1);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
+  test("the same agent title can be isolated again after one commits", async () => {
+    // A committed branch outlives its worktree by design, so a name derived
+    // only from label+id is already taken the next time that title runs —
+    // `git worktree add` fails and isolation, which is requested rather than
+    // best-effort, degrades into a hard spawn failure.
+    const first = await createWorktree({
+      cwd: repo,
+      label: "reviewer",
+      id: "1",
+    });
+    assert.ok(first.ok);
+    if (!first.ok) return;
+    fs.writeFileSync(path.join(first.worktree.path, "a.txt"), "one\n");
+    git(first.worktree.path, "commit", "--quiet", "-am", "first");
+    const firstCleanup = await reclaimWorktree(repo, first.worktree);
+    assert.equal(firstCleanup.branchDeleted, false, "branch must survive");
+
+    const second = await createWorktree({
+      cwd: repo,
+      label: "reviewer",
+      id: "1",
+    });
+    assert.ok(
+      second.ok,
+      `second spawn of the same title failed: ${second.ok ? "" : second.reason}`,
+    );
+    if (!second.ok) return;
+    assert.notEqual(second.worktree.branch, first.worktree.branch);
+    await reclaimWorktree(repo, second.worktree);
+    git(repo, "branch", "-D", first.worktree.branch);
+  });
+
+  test("a productive child is not judged empty because the parent moved", async () => {
+    // "Produced nothing" was measured against the parent's HEAD, which the
+    // parent is free to move — including by merging the child's own branch.
+    // The count then reads zero and the branch is deleted.
+    const result = await createWorktree({ cwd: repo, label: "base", id: "9" });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+    assert.ok(result.worktree.baseSha, "creation must record its baseline");
+
+    fs.writeFileSync(path.join(result.worktree.path, "a.txt"), "child\n");
+    git(result.worktree.path, "commit", "--quiet", "-am", "child work");
+
+    // The parent merges before teardown runs.
+    git(
+      repo,
+      "merge",
+      "--quiet",
+      "--no-ff",
+      "-m",
+      "merge",
+      result.worktree.branch,
+    );
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, true, cleanup.reason ?? "");
+    assert.equal(
+      cleanup.branchDeleted,
+      false,
+      "a branch holding real commits must not be deleted as empty",
+    );
+    git(repo, "reset", "--quiet", "--hard", "HEAD~1");
+    git(repo, "branch", "-D", cleanup.branch);
+  });
+
+  test("a child that commits on its own branch keeps it and is reported", async () => {
+    // The spawn result names the branch we created; if the child moved, that
+    // name is a dead end and its real work would go unreported.
+    const result = await createWorktree({
+      cwd: repo,
+      label: "moved",
+      id: "10",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    git(result.worktree.path, "checkout", "--quiet", "-b", "child-own-branch");
+    fs.writeFileSync(path.join(result.worktree.path, "a.txt"), "elsewhere\n");
+    git(result.worktree.path, "commit", "--quiet", "-am", "on my own branch");
+
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, true, cleanup.reason ?? "");
+    assert.equal(
+      cleanup.branch,
+      "child-own-branch",
+      "report where the work actually landed",
+    );
+    assert.equal(
+      cleanup.branchDeleted,
+      false,
+      "a branch this module did not create is not ours to delete",
+    );
+    git(repo, "branch", "-D", "child-own-branch");
     git(repo, "branch", "-D", result.worktree.branch);
   });
 

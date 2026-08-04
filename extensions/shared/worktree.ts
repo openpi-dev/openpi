@@ -20,11 +20,22 @@
  *   AGENTS.md. A worktree in `/tmp` would resolve to "untrusted" and silently
  *   strip those, which is why an out-of-repo location is not an option.
  *
- * - **`node_modules` is symlinked in.** A fresh checkout has no dependencies,
- *   so an isolated child cannot build or test its own work (verified:
- *   `ERR_MODULE_NOT_FOUND: Cannot find package 'effect'`). The symlink is
- *   absolute so it resolves regardless of how deep the worktree sits, and it
- *   is removed before teardown so `git worktree remove` sees a clean tree.
+ * - **`node_modules` is linked from the PARENT of the checkout, not into it.**
+ *   A fresh checkout has no dependencies, so an isolated child cannot build or
+ *   test its own work (verified: `ERR_MODULE_NOT_FOUND: Cannot find package
+ *   'effect'`). Node resolves `node_modules` by walking ancestor directories,
+ *   so a link at `.git/pi-worktrees/node_modules` serves every worktree under
+ *   it while git never sees the entry at all.
+ *
+ *   Putting it INSIDE the checkout was the original design and was wrong in a
+ *   way worth recording. A `.gitignore` line of `node_modules/` — with the
+ *   trailing slash almost every project uses — matches a directory only, not a
+ *   symlink. So the link showed as `?? node_modules` for the child's whole
+ *   life, `git add -A` committed it as a `120000` blob, teardown was then
+ *   permanently blocked ("contains modified or untracked files"), and merging
+ *   the child's branch REPLACED the parent's real `node_modules` directory
+ *   with a self-referential symlink — destroying the dependencies of the very
+ *   repo the session was working in.
  *
  * - **Teardown never uses `--force`.** Git refuses to remove a worktree with
  *   modified or untracked files, and that refusal is exactly the policy we
@@ -35,6 +46,7 @@
  */
 
 import { execFile } from "node:child_process";
+import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 
@@ -52,6 +64,14 @@ export interface Worktree {
   readonly path: string;
   /** Branch created for this worktree. Survives teardown. */
   readonly branch: string;
+  /**
+   * Commit the worktree was created at. "Did the child produce anything" is
+   * measured against THIS, never against the parent's HEAD: the parent moves
+   * (it can commit, or merge the child's own branch) while the child works, and
+   * a moving baseline makes a productive child look empty and get its branch
+   * deleted.
+   */
+  readonly baseSha?: string;
 }
 
 export interface WorktreeFailure {
@@ -102,13 +122,23 @@ function firstLine(text: string) {
  * input on a path and a ref: `..`, a slash, or a leading dash would let it
  * escape `.git/pi-worktrees/` or be read by git as an option. Only a
  * conservative character set survives, and the result is never empty.
+ *
+ * The result is NOT unique and must never be the only thing distinguishing two
+ * worktrees. It cannot be: a non-Latin label ("中文标签", "🚀") has no surviving
+ * characters and collapses to the fallback, and two labels sharing a long
+ * prefix collide once `maxLength` cuts them. Uniqueness comes from the random
+ * suffix in `createWorktree`.
  */
-export function worktreeSlug(label: string, fallback: string) {
+export function worktreeSlug(label: string, fallback: string, maxLength = 32) {
   const slug = label
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, "-")
+    // `a..b` sanitizes fine as a path but is not a legal ref: git rejects any
+    // name containing `..`, which would fail the spawn rather than escape it.
+    .replace(/\.{2,}/g, ".")
     .replace(/^[-.]+|[-.]+$/g, "")
-    .slice(0, 40);
+    .slice(0, maxLength)
+    .replace(/[-.]+$/g, "");
   return slug || fallback;
 }
 
@@ -149,9 +179,27 @@ export async function createWorktree(options: {
     return { ok: false, reason: `not a git repository: ${options.cwd}` };
   }
 
-  const name = `${worktreeSlug(options.label, "agent")}-${worktreeSlug(options.id, "0")}`;
+  /*
+   * The random suffix is what makes the name unique, and it is not optional.
+   * A committed branch deliberately OUTLIVES its worktree, so any name derived
+   * only from label+id is already taken the next time the same agent title
+   * runs — `git worktree add` then fails with "a branch named … already
+   * exists" and isolation, which is requested rather than best-effort, turns
+   * into a hard spawn failure that tells the model to go run unisolated.
+   * Deriving it from a label cannot work: every non-Latin title slugs to the
+   * same fallback.
+   */
+  const name = [
+    worktreeSlug(options.label, "agent"),
+    worktreeSlug(options.id, "0", 24),
+    randomBytes(3).toString("hex"),
+  ].join("-");
   const worktreePath = path.join(gitDir, ...WORKTREE_DIR_SEGMENTS, name);
   const branch = `${WORKTREE_NAME_PREFIX}${name}`;
+
+  // Read before creating: this is the baseline teardown measures against.
+  const base = await runGit(["rev-parse", "HEAD"], options.cwd);
+  const baseSha = base.code === 0 ? firstLine(base.stdout) : undefined;
 
   const added = await runGit(
     ["worktree", "add", "--quiet", "-b", branch, worktreePath, "HEAD"],
@@ -167,20 +215,29 @@ export async function createWorktree(options: {
   if (options.linkNodeModules !== false)
     linkNodeModules(options.cwd, worktreePath);
 
-  return { ok: true, worktree: { path: worktreePath, branch } };
+  return {
+    ok: true,
+    worktree: { path: worktreePath, branch, ...(baseSha ? { baseSha } : {}) },
+  };
 }
 
 /**
- * Symlink the repository's node_modules into the worktree, best effort.
+ * Link the repository's node_modules NEXT TO the worktrees, best effort.
  *
- * Absolute target: the worktree sits several levels inside `.git`, and a
- * relative link would break if either path shape changed. A failure here is
- * not fatal — the child just cannot run builds — so it is swallowed rather
- * than turned into a spawn failure.
+ * The link lives at `.git/pi-worktrees/node_modules`, one level above every
+ * checkout, because Node resolves bare imports by walking ancestor
+ * directories: a child at `.git/pi-worktrees/impl-1` finds it, and git never
+ * sees an entry inside the tree it reports on. See the header for what putting
+ * it inside the checkout actually did.
+ *
+ * The target is absolute so it resolves regardless of depth, and one link
+ * serves every worktree, so this is idempotent across concurrent creates. A
+ * failure here is not fatal — the child just cannot run builds — so it is
+ * swallowed rather than turned into a spawn failure.
  */
 function linkNodeModules(repoCwd: string, worktreePath: string) {
   const source = path.join(repoCwd, "node_modules");
-  const target = path.join(worktreePath, "node_modules");
+  const target = path.join(path.dirname(worktreePath), "node_modules");
   try {
     if (!fs.existsSync(source)) return;
     if (
@@ -191,19 +248,6 @@ function linkNodeModules(repoCwd: string, worktreePath: string) {
     fs.symlinkSync(source, target, "junction");
   } catch {
     // The worktree is still usable for reading and editing without deps.
-  }
-}
-
-/** Remove the node_modules symlink (never its target) before teardown. */
-function unlinkNodeModules(worktreePath: string) {
-  const target = path.join(worktreePath, "node_modules");
-  try {
-    const stat = fs.lstatSync(target, { throwIfNoEntry: false });
-    // Only ever unlink a symlink: a real directory here would mean the child
-    // installed its own dependencies, and deleting that is not our call.
-    if (stat?.isSymbolicLink()) fs.unlinkSync(target);
-  } catch {
-    // Leaving it behind only means `git worktree remove` declines below.
   }
 }
 
@@ -227,24 +271,43 @@ export interface WorktreeCleanup {
  * branch is deleted only when it holds no commits, so a child that committed
  * always leaves something to merge, and a child that did nothing leaves no
  * litter behind.
+ *
+ * "Produced nothing" is measured against the worktree's OWN head and its
+ * creation-time base, never against the parent's current HEAD. Both matter:
+ * a child is free to `checkout -b` and commit somewhere else, and the parent
+ * is free to move on (or merge the child's branch) before teardown runs.
+ * Getting either wrong deletes a branch that holds real work.
  */
 export async function reclaimWorktree(
   repoCwd: string,
   worktree: Worktree,
 ): Promise<WorktreeCleanup> {
-  const commits = await worktreeCommitCount(repoCwd, worktree.branch);
-  unlinkNodeModules(worktree.path);
+  // Read the checkout's real branch before removing it: after `git worktree
+  // remove` there is nothing left to ask.
+  const head = await runGit(
+    ["-C", worktree.path, "symbolic-ref", "--quiet", "--short", "HEAD"],
+    repoCwd,
+  );
+  const headBranch = head.code === 0 ? firstLine(head.stdout) : "";
+  const branch = headBranch || worktree.branch;
+  const commits = await worktreeCommitCount(repoCwd, branch, worktree.baseSha);
   const removed = await runGit(["worktree", "remove", worktree.path], repoCwd);
   if (removed.code !== 0) {
     return {
       removed: false,
       branchDeleted: false,
-      reason: firstLine(removed.stderr) || "worktree has uncommitted changes",
-      branch: worktree.branch,
+      reason:
+        firstLine(removed.stderr) || "git declined to remove the worktree",
+      branch,
     };
   }
   if (commits > 0) {
-    return { removed: true, branchDeleted: false, branch: worktree.branch };
+    return { removed: true, branchDeleted: false, branch };
+  }
+  // Only ever delete the branch this module created. A branch the child made
+  // itself is not ours to remove, even when it looks empty from here.
+  if (branch !== worktree.branch) {
+    return { removed: true, branchDeleted: false, branch };
   }
   const deleted = await runGit(["branch", "-D", worktree.branch], repoCwd);
   return {
@@ -254,10 +317,20 @@ export async function reclaimWorktree(
   };
 }
 
-/** Commits the child made on its branch that the base does not have. */
-export async function worktreeCommitCount(repoCwd: string, branch: string) {
+/**
+ * Commits on `branch` that its creation base does not have.
+ *
+ * `base` defaults to the parent's HEAD only for worktrees recorded before
+ * baseSha existed; that fallback is the moving baseline this parameter exists
+ * to replace.
+ */
+export async function worktreeCommitCount(
+  repoCwd: string,
+  branch: string,
+  base = "HEAD",
+) {
   const result = await runGit(
-    ["rev-list", "--count", `HEAD..${branch}`],
+    ["rev-list", "--count", `${base}..${branch}`],
     repoCwd,
   );
   if (result.code !== 0) return 0;

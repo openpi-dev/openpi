@@ -78,6 +78,8 @@ export interface SpawnTask {
     readonly branch: string;
     /** Repository the worktree belongs to, for the reclaim call. */
     readonly repoCwd: string;
+    /** Creation-time commit; reclaim measures "produced nothing" against it. */
+    readonly baseSha?: string;
   };
   readonly parent: ParentContext;
 }

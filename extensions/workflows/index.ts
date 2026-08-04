@@ -899,11 +899,15 @@ export default function workflows(pi: ExtensionAPI) {
             }
             const agentCwd = worktree?.path ?? ctx.cwd;
 
-            const resources = await getResources(
-              opts.schema !== undefined,
-              agentCwd,
-            );
+            // Inside the try, not before it: building resources can throw
+            // (bad settings, an unreadable skills dir), and a throw out here
+            // would skip the finally and leak the worktree permanently —
+            // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
+              const resources = await getResources(
+                opts.schema !== undefined,
+                agentCwd,
+              );
               const outcome = await runAgent({
                 prompt,
                 schema: opts.schema,
