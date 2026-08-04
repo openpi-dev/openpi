@@ -14,6 +14,8 @@ function run(
     signal: abort.signal,
     onAgent: async (prompt) => ({ ok: true, output: `reply:${prompt}` }),
     onPhase: () => {},
+    onLog: () => {},
+    usageSnapshot: () => ({ total: 0 }),
     maxConcurrency: 8,
     maxAgentCalls: 128,
     ...overrides,

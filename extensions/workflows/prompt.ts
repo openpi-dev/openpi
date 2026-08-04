@@ -47,6 +47,8 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "The script runs as an async function body with these primitives:",
   "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
   "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
+  "• log(message) — emit one progress line to the user and to your own final report. This is the run's narrator: use it for anything the reader needs while the run is still going, or that the return value would not capture — round counts, how many agents were dropped, why a branch was skipped. Unlike phase(), it does not touch the phase list. Lines are one row each (newlines are flattened); the most recent 100 are kept and any earlier ones are reported as dropped.",
+  "• usage() — read this run's cumulative token spend so far: { input, output, cacheRead, cacheWrite, total, cost, agents }. The reading refreshes as each agent settles, so evaluating it right after an `await` reflects that agent. Use it to report or adapt cost — e.g. log a running total, or stop a discovery loop once the spend stops paying for itself. It is a reading, not a limit: nothing is enforced for you.",
   "• await agent(prompt, { label?, phase?, schema?, model?, provider?, effort?, isolation? }) — run ONE subagent in an isolated context and wait for it. Always resolves to { ok, output, structured?, error? }. Check `ok` before using the result. When you pass a JSON `schema`, `structured` holds the validated object on success. `model`/`provider` override the session model; `effort` sets the thinking level (off|minimal|low|medium|high|xhigh|max). Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
   "• isolation: 'worktree' runs that one agent in its own git worktree on its own branch, instead of the shared working directory. Use it for any fan-out where agents WRITE — without it, concurrent agents share one checkout and one git index, so their edits and `git add`s silently overwrite each other. Tell such an agent to COMMIT its work: on completion the worktree directory is reclaimed and its branch is kept for you to merge (an empty branch is deleted; uncommitted changes keep the directory instead). The branch name comes back in the run artifacts. Costs a fresh checkout, needs a git repo, and starts without gitignored files, so leave it off for read-only agents.",
   "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. This is a BARRIER: nothing after it starts until every thunk settles. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /my-pi-setup (hard maximum 64).",
@@ -65,14 +67,16 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "  (scan, f) => scan.ok ? agent(`Confirm these issues in ${f} are real: ${JSON.stringify(scan.structured.issues)}`, { label: `verify:${f}`, phase: 'Verify' }) : null)",
   "const verified = checked.filter((r) => r && r.ok)",
   "const dropped = checked.length - verified.length // agents that failed/dropped: surface, never silently swallow",
+  "if (dropped) log(`${dropped}/${checked.length} file(s) dropped before verification`)",
   "phase('Report')",
   "const report = await agent(`Summarize these verified findings: ${JSON.stringify(verified.map((r) => r.output))}`, { label: 'report', phase: 'Report' })",
+  "log(`done — ${verified.length} verified, ${usage().total} tokens`)",
   "return { verified: verified.length, dropped, report: report.ok ? report.output : report.error }",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
 export const WORKFLOW_PROMPT_SNIPPET =
-  "Orchestrate isolated subagents from an inline JS script: phase()/agent()/pipeline()/parallel() with structured outputs and optional background execution";
+  "Orchestrate isolated subagents from an inline JS script: phase()/agent()/pipeline()/parallel() with structured outputs, log() progress, usage() token readings, and optional background execution";
 
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
@@ -80,6 +84,7 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
   "Default to pipeline() for multi-stage fan-out so each item advances as soon as its own previous stage lands; use parallel() only when a stage truly needs every prior result at once.",
   "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() and pipeline() settle a throwing thunk or stage to `null`, so guard those with `r && r.ok`.",
   "A filtered-out or null result is a failed agent, not a clean pass: surface how many dropped (e.g. return a count) so a crashed or timed-out agent never reads as success.",
+  "log() anything the reader would want before the run ends — round counts, dropped agents, why a branch was skipped. A long run that narrates nothing is indistinguishable from a stalled one, and the return value only arrives at the end.",
   "When several agents will edit files concurrently, give each one isolation: 'worktree' and tell it to commit; otherwise they share one checkout and one git index and overwrite each other. Read-only agents do not need it.",
 ];
 
@@ -119,6 +124,15 @@ export function buildWorkflowResultMessage(
   }
   if (details.resumeNote) lines.push(`Resume: ${details.resumeNote}`);
   if (details.error) lines.push(`Error: ${details.error}`);
+  // The script's own narration of what happened, which is often the only
+  // record of work that did not make it into the return value.
+  if (details.logs && details.logs.length > 0) {
+    lines.push("", "Log:");
+    if (details.logsDropped) {
+      lines.push(`  (${details.logsDropped} earlier line(s) dropped)`);
+    }
+    for (const entry of details.logs) lines.push(`  ${entry.text}`);
+  }
   // Isolated work lives on a branch or in a kept directory, not in the working
   // tree, so an unreported one is work the parent cannot find.
   const isolated = details.agents.filter(

@@ -6,6 +6,7 @@ import {
   buildWorkflowResultMessage,
   WORKFLOW_STATUS_TOOL_DESCRIPTION,
   WORKFLOW_STOP_TOOL_DESCRIPTION,
+  WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import { emptyUsage, type AgentRecord, type WorkflowDetails } from "./model.ts";
 
@@ -110,4 +111,43 @@ test("result message stays quiet when nothing was isolated", () => {
     "/tmp/wf_abc123",
   );
   assert.doesNotMatch(msg, /Isolated worktrees/);
+});
+
+test("result message carries the script's narration and what it dropped", () => {
+  // log() lines are often the only record of work the return value omits, so
+  // the model's copy of the run has to include them.
+  const withLogs: WorkflowDetails = {
+    ...details([agentRecord({})]),
+    logs: [
+      { at: 1, text: "round 1: 3 found" },
+      { at: 2, text: "round 2: nothing new, stopping" },
+    ],
+    logsDropped: 5,
+  };
+  const msg = buildWorkflowResultMessage(withLogs, "/tmp/wf_abc123");
+  assert.match(msg, /^Log:$/m);
+  assert.match(msg, /round 2: nothing new, stopping/);
+  // A silent truncation would read as "the script only said this much".
+  assert.match(msg, /5 earlier line\(s\) dropped/);
+
+  const quiet = buildWorkflowResultMessage(
+    details([agentRecord({})]),
+    "/tmp/wf_abc123",
+  );
+  assert.doesNotMatch(quiet, /^Log:$/m);
+});
+
+test("the tool description teaches log() and usage() as distinct from phase()", () => {
+  // The description is the only place the model learns these exist.
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /• log\(message\)/);
+  assert.match(
+    WORKFLOW_TOOL_DESCRIPTION,
+    /Unlike phase\(\), it does not touch/,
+  );
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /• usage\(\)/);
+  // usage() reports; it does not enforce. Saying otherwise would invite a
+  // script to rely on a limit that does not exist.
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /reading, not a limit/);
+  // The worked example should actually use them, not just describe them.
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /^log\(`done — /m);
 });

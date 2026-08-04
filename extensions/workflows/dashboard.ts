@@ -32,8 +32,10 @@ import {
   formatElapsed,
   formatUsage,
   aggregateUsage,
+  MAX_LOG_TEXT,
   phaseGroups,
   resultJson,
+  sanitizeLine,
   shortenHome,
   stateSquare,
   statusColor,
@@ -44,6 +46,7 @@ import {
   type PhaseGroup,
   type TranscriptEntry,
   type WorkflowDetails,
+  type WorkflowLogEntry,
 } from "./model.ts";
 
 const NOTICE_TTL_MS = 4000;
@@ -170,6 +173,20 @@ function normalizeDetails(
     });
   }
 
+  const rawLogs = Array.isArray(record.logs) ? record.logs : [];
+  const logs: WorkflowLogEntry[] = [];
+  for (const item of rawLogs) {
+    if (!item || typeof item !== "object") continue;
+    const entry = item as Record<string, unknown>;
+    if (typeof entry.text !== "string") continue;
+    // Re-sanitized on the way in: this file was written by an earlier run and
+    // is read back as untrusted data, not as something we just produced.
+    logs.push({
+      at: typeof entry.at === "number" ? entry.at : startedAt,
+      text: sanitizeLine(entry.text, MAX_LOG_TEXT),
+    });
+  }
+
   const status =
     record.status === "running" ||
     record.status === "failed" ||
@@ -202,6 +219,10 @@ function normalizeDetails(
     currentPhase:
       typeof record.currentPhase === "string" ? record.currentPhase : undefined,
     agents,
+    ...(logs.length > 0 ? { logs } : {}),
+    ...(typeof record.logsDropped === "number" && record.logsDropped > 0
+      ? { logsDropped: record.logsDropped }
+      : {}),
     result: record.result,
     resultArtifact:
       typeof record.resultArtifact === "string"
@@ -373,6 +394,13 @@ function buildReport(details: WorkflowDetails): string {
       resultJson(details.result),
       "```",
     );
+  }
+  if (details.logs && details.logs.length > 0) {
+    lines.push("", "## Log", "");
+    if (details.logsDropped) {
+      lines.push(`_${details.logsDropped} earlier line(s) dropped_`, "");
+    }
+    for (const entry of details.logs) lines.push(`- ${entry.text}`);
   }
   lines.push("");
   return lines.join("\n");
@@ -847,7 +875,12 @@ export class WorkflowDashboard {
     const selectedGroup = groups[this.phaseIndex];
     this.clampAgentIndex();
 
-    const panelHeight = height - 3;
+    // A narrator strip under the panels, since log() is run-wide and belongs to
+    // no single phase. It yields rows to the panels first: on a short terminal
+    // the agent list is what the view exists for.
+    const logBudget = Math.max(0, Math.min(3, height - 12));
+    const recentLogs = (d.logs ?? []).slice(-logBudget);
+    const panelHeight = height - 3 - recentLogs.length;
     const bodyHeight = Math.max(0, panelHeight - 2);
 
     // Left: phases sidebar.
@@ -956,6 +989,15 @@ export class WorkflowDashboard {
     );
     for (let i = 0; i < panelHeight; i++) {
       lines.push(`${leftPanel[i] ?? ""} ${rightPanel[i] ?? ""}`);
+    }
+    for (const entry of recentLogs) {
+      lines.push(
+        truncateToWidth(
+          ` ${theme.fg("muted", "›")} ${theme.fg("dim", entry.text)}`,
+          width,
+          "…",
+        ),
+      );
     }
 
     const hint =

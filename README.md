@@ -222,10 +222,15 @@ phase("Scan");
 const checked = await pipeline(
   files,
   (file) =>
-    agent(`Review ${file}`, { label: `review:${file}`, schema: FINDING_SCHEMA }),
+    agent(`Review ${file}`, {
+      label: `review:${file}`,
+      schema: FINDING_SCHEMA,
+    }),
   (scan, file) =>
     scan.ok
-      ? agent(`Confirm the issues found in ${file}`, { label: `verify:${file}` })
+      ? agent(`Confirm the issues found in ${file}`, {
+          label: `verify:${file}`,
+        })
       : null,
 );
 
@@ -234,6 +239,8 @@ return await agent(`Synthesize: ${JSON.stringify(checked)}`);
 ```
 
 - `phase()` 展示阶段进度；
+- `log()` 向用户和最终报告输出一行进度叙述；
+- `usage()` 读取本次运行至今的累计 Token 用量；
 - `agent()` 启动隔离的 Pi Agent；
 - `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
 - `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
@@ -250,6 +257,24 @@ return await agent(`Synthesize: ${JSON.stringify(checked)}`);
 
 `pipeline()` 的收益来自去掉阶段之间的等待：barrier 的墙钟是「各阶段最坏值之和」（max(stage1) + max(stage2)），pipeline 是「最坏的那条链路」。所以**当不同 item 在不同阶段慢时差距最大**——实测两个 item、两个阶段的交叉慢点场景，604ms → 324ms；反过来，如果某个 item 在每个阶段都最慢，它就是关键路径，两者没有区别。
 
+**叙述与用量**：脚本跑到哪、丢了几个 Agent、为什么跳过某条分支——这些只有脚本自己知道，塞进 `return` 值要等跑完才看得见，中途被 Esc 就全没了。`log()` 把一行文本同时送到实时进度、`/workflows`、保存的报告，以及**模型读回的运行结果**：
+
+```js
+let round = 0;
+const found = [];
+while (usage().total < 500_000 && round < 20) {
+  round++;
+  const r = await agent(`scan round ${round}`);
+  if (r.ok) found.push(r.output);
+  log(`round ${round}: ${found.length} found, ${usage().total} tokens`);
+}
+log(`stopped after ${round} rounds`);
+```
+
+`log()` 与 `phase()` 分开：它是追加的进度流，不会污染阶段列表。每行压成一行（换行和控制字符会被拍平，模型写的转义序列不会重绘终端），保留最近 100 行，被丢弃的行数会明确报告，不静默截断。
+
+`usage()` 返回 `{ input, output, cacheRead, cacheWrite, total, cost, agents }`，读数在每个 Agent 落地时刷新——所以紧跟在 `await` 之后求值，读到的就包含刚结束那个 Agent。它**只是读数，不做限制**：没有预算参数，也不会替你拦截，要不要停由脚本自己决定。
+
 **Resume**：改了脚本想重跑时，带上一次的 run id 即可，未变的调用直接复用缓存结果：
 
 ```text
@@ -265,11 +290,12 @@ workflow({ script: <改过的脚本>, resume_from_run_id: "wf_1a2b3c4d5e6f" })
 ```js
 phase("Implement");
 const branches = await parallel(
-  tasks.map((task) => () =>
-    agent(`${task.prompt}\n完成后 commit 你的改动。`, {
-      label: `impl:${task.name}`,
-      isolation: "worktree",
-    }),
+  tasks.map(
+    (task) => () =>
+      agent(`${task.prompt}\n完成后 commit 你的改动。`, {
+        label: `impl:${task.name}`,
+        isolation: "worktree",
+      }),
   ),
 );
 ```
@@ -399,11 +425,11 @@ cwd  model  thinking  context  cache  cost  throughput   git  PR
 | `pr`         | 当前分支对应的 PR                        |
 | `flex`       | 布局分隔：左侧与右侧对齐                 |
 
-| Preset           | 效果                              |
-| ---------------- | --------------------------------- |
+| Preset           | 效果                             |
+| ---------------- | -------------------------------- |
 | `powerline`      | 默认单行 ANSI256 色块 + `` 转场 |
-| `powerline-mono` | 单行高对比灰阶 Powerline          |
-| `compact`        | 单行 plain 纯文本                  |
+| `powerline-mono` | 单行高对比灰阶 Powerline         |
+| `compact`        | 单行 plain 纯文本                |
 
 Nerd Font 只影响 Powerline 分隔符观感，不是硬依赖；没有该字体时文字指标仍然完整可读。配置保存后，活动 TUI Session 会立即重新安装 Footer。
 
@@ -446,16 +472,17 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
 
 ## 它和普通 Pi 配置有什么不同
 
-| 常见做法                             | My Pi Setup                                                |
-| ------------------------------------ | ---------------------------------------------------------- |
-| 长命令占住 Bash Tool，Agent 原地等待 | 后台终端立即返回，退出时自动通知                           |
-| 把调研、实现、测试全塞进一个 Context | 独立 Pi Subagent 隔离噪音，父模型与工具自然继承            |
-| 多 Agent 只是并行发 Prompt           | Workflow 支持阶段、依赖、结构化结果、Artifact 与 Dashboard |
-| 并行 Agent 共享一个工作副本和 git index，改动互相覆盖 | `isolation: "worktree"` 给每个 Agent 独立 checkout 和分支，提交过的分支保留供 merge |
-| Context 快满时被动 Compact           | Context Pivot 在阶段变化时主动建立干净工作面               |
-| 每个插件一套配置命令                 | `/my-pi-setup` 用自然语言统一配置                          |
-| 插件默认绑定作者的模型和 Provider    | 不写死模型；默认继承当前 Pi，摘要默认零模型调用            |
-| 后台任务只能看一条最终输出           | Terminal、Subagent、Workflow 都可实时观察和取消；Subagent 还可接管继续 |
+| 常见做法                                                   | My Pi Setup                                                                         |
+| ---------------------------------------------------------- | ----------------------------------------------------------------------------------- |
+| 长命令占住 Bash Tool，Agent 原地等待                       | 后台终端立即返回，退出时自动通知                                                    |
+| 把调研、实现、测试全塞进一个 Context                       | 独立 Pi Subagent 隔离噪音，父模型与工具自然继承                                     |
+| 多 Agent 只是并行发 Prompt                                 | Workflow 支持阶段、依赖、结构化结果、Artifact 与 Dashboard                          |
+| 并行 Agent 共享一个工作副本和 git index，改动互相覆盖      | `isolation: "worktree"` 给每个 Agent 独立 checkout 和分支，提交过的分支保留供 merge |
+| 编排脚本只能靠 `return` 值说话，跑一半被中断就什么都没留下 | `log()` 实时叙述进度，`usage()` 读取累计 Token，两者都进最终报告                    |
+| Context 快满时被动 Compact                                 | Context Pivot 在阶段变化时主动建立干净工作面                                        |
+| 每个插件一套配置命令                                       | `/my-pi-setup` 用自然语言统一配置                                                   |
+| 插件默认绑定作者的模型和 Provider                          | 不写死模型；默认继承当前 Pi，摘要默认零模型调用                                     |
+| 后台任务只能看一条最终输出                                 | Terminal、Subagent、Workflow 都可实时观察和取消；Subagent 还可接管继续              |
 
 ### 一条完整路径
 
@@ -564,7 +591,7 @@ pi install ~/work/my-pi-setup
 | Workflow 最大 Agent 调用 |                                                   128 |
 | 大型 Header              |                                                  关闭 |
 | Dashboard Footer         |                                                  开启 |
-| Post-edit 命令           |          默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
+| Post-edit 命令           |       默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
 | 主题                     |                                    不修改用户现有选择 |
 
 Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。
@@ -573,36 +600,36 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 
 ## 命令速查
 
-| 命令                        | 作用                                         |
-| --------------------------- | -------------------------------------------- |
-| `/my-pi-setup [自然语言]`   | 查看或修改本包配置                           |
-| `/sessions`                 | 搜索、预览并切换 Session                     |
-| `/ps`                       | 查看和管理后台终端                           |
-| `/subagents`                | 查看、取消或接管子 Agent                     |
-| `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务 |
+| 命令                        | 作用                                                            |
+| --------------------------- | --------------------------------------------------------------- |
+| `/my-pi-setup [自然语言]`   | 查看或修改本包配置                                              |
+| `/sessions`                 | 搜索、预览并切换 Session                                        |
+| `/ps`                       | 查看和管理后台终端                                              |
+| `/subagents`                | 查看、取消或接管子 Agent                                        |
+| `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务                    |
 | `/workflows`                | 查看 Workflow 运行、阶段和产物；`/workflows <id> stop` 取消运行 |
-| `/tasks`                   | 查看当前 Session 的任务列表                  |
-| `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal    |
-| `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段     |
-| `/cron ...`                 | 为本 Session 定时或周期性排一条提示词         |
-| `/plan [目标]`              | 先只读调研并给出计划，批准后才允许改动       |
-| `/lg`                       | 浏览 Working Tree 改动和 Diff                |
-| `/pr`                       | 刷新当前分支的 GitHub PR 信息                |
-| `/copy-all`                 | 复制当前分支可见的 User / Assistant 对话     |
+| `/tasks`                    | 查看当前 Session 的任务列表                                     |
+| `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal                       |
+| `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段                        |
+| `/cron ...`                 | 为本 Session 定时或周期性排一条提示词                           |
+| `/plan [目标]`              | 先只读调研并给出计划，批准后才允许改动                          |
+| `/lg`                       | 浏览 Working Tree 改动和 Diff                                   |
+| `/pr`                       | 刷新当前分支的 GitHub PR 信息                                   |
+| `/copy-all`                 | 复制当前分支可见的 User / Assistant 对话                        |
 
 ## 模型工具速查
 
-| 工具                                                                                    | 用途                                  |
-| --------------------------------------------------------------------------------------- | ------------------------------------- |
-| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                           | 后台进程生命周期                      |
+| 工具                                                                                                     | 用途                                  |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
+| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期                      |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                          |
-| `workflow`, `workflow_status`, `workflow_stop`                                          | 动态多阶段 Agent 编排与后台运行管理   |
-| `tasks_add`, `tasks_update`, `tasks_list`                                            | Session 持久任务                      |
-| `get_goal`, `create_goal`, `update_goal`                                                | 读取、创建或完成/阻塞 Session Goal    |
-| `context_pivot`                                                                         | Agent 主动切换 Context 阶段           |
-| `ask_user`                                                                              | 结构化用户决策                        |
-| `fd`, `rg`                                                                              | 文件发现与内容搜索                    |
-| `configure_my_pi_setup`                                                                 | `/my-pi-setup` 背后的受限配置写入工具 |
+| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段 Agent 编排与后台运行管理   |
+| `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 持久任务                      |
+| `get_goal`, `create_goal`, `update_goal`                                                                 | 读取、创建或完成/阻塞 Session Goal    |
+| `context_pivot`                                                                                          | Agent 主动切换 Context 阶段           |
+| `ask_user`                                                                                               | 结构化用户决策                        |
+| `fd`, `rg`                                                                                               | 文件发现与内容搜索                    |
+| `configure_my_pi_setup`                                                                                  | `/my-pi-setup` 背后的受限配置写入工具 |
 
 ---
 

@@ -164,6 +164,52 @@ const BOOTSTRAP = String.raw`
     callHost("phase", JSON.stringify({ title: String(title) }));
   }
 
+  function log(message) {
+    const text =
+      typeof message === "string"
+        ? message
+        : message === undefined
+          ? ""
+          : (() => {
+              try {
+                return typeof message === "object" && message !== null
+                  ? JSON.stringify(message)
+                  : String(message);
+              } catch {
+                return String(message);
+              }
+            })();
+    callHost("log", JSON.stringify({ text }));
+  }
+
+  // Synchronous read of a plain JSON string the host refreshes as agents
+  // settle, so a loop condition evaluated right after an awaited agent call
+  // sees that agent's spend. Returning a primitive keeps the host realm sealed.
+  // (No backticks in this file's comments: BOOTSTRAP is a template literal.)
+  function usage() {
+    let raw;
+    try {
+      raw = JSON.parse(callHost("usage", ""));
+    } catch {
+      raw = undefined;
+    }
+    const read = (key) => {
+      const value = raw && typeof raw === "object" ? raw[key] : undefined;
+      return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    };
+    // Every field is coerced, so a missing or malformed snapshot reads as zero
+    // rather than undefined: a script doing arithmetic on it gets 0, not NaN.
+    return deepFreeze({
+      input: read("input"),
+      output: read("output"),
+      cacheRead: read("cacheRead"),
+      cacheWrite: read("cacheWrite"),
+      total: read("total"),
+      cost: read("cost"),
+      agents: read("agents"),
+    });
+  }
+
   const argsEnvelope = JSON.parse(globalThis.__argsJson);
   const args = argsEnvelope.defined ? deepFreeze(argsEnvelope.value) : undefined;
   delete globalThis.__argsJson;
@@ -184,6 +230,8 @@ const BOOTSTRAP = String.raw`
     parallel: { value: parallel, writable: false, configurable: false },
     pipeline: { value: pipeline, writable: false, configurable: false },
     phase: { value: phase, writable: false, configurable: false },
+    log: { value: log, writable: false, configurable: false },
+    usage: { value: usage, writable: false, configurable: false },
     args: { value: args, writable: false, configurable: false },
     __workflowCheck: {
       value: Object.freeze(() => ({
@@ -204,6 +252,12 @@ const BOOTSTRAP = String.raw`
 
 let initialized = false;
 let token;
+/**
+ * Latest host usage snapshot as a JSON string, refreshed on init and on every
+ * agent result. IPC is an ordered stream, so "the last one received" is the
+ * newest and no sequence number is needed.
+ */
+let usageJson = "{}";
 const pendingAgents = new Map();
 
 function send(message) {
@@ -232,10 +286,12 @@ process.on("message", (message) => {
     }
     initialized = true;
     token = message.token;
+    if (typeof message.usageJson === "string") usageJson = message.usageJson;
     run(message.source, message.argsJson, message.maxConcurrency);
     return;
   }
   if (message.token !== token || message.kind !== "agentResult") return;
+  if (typeof message.usageJson === "string") usageJson = message.usageJson;
   const pending = pendingAgents.get(message.id);
   if (!pending) return;
   pendingAgents.delete(message.id);
@@ -259,6 +315,11 @@ function run(source, argsJson, maxConcurrency) {
         send({ kind: "phase", payloadJson });
         return undefined;
       }
+      if (kind === "log") {
+        send({ kind: "log", payloadJson });
+        return undefined;
+      }
+      if (kind === "usage") return usageJson;
       if (kind !== "agent")
         return Promise.reject(new Error("Unknown workflow operation"));
       let id;
@@ -282,7 +343,7 @@ function run(source, argsJson, maxConcurrency) {
     }).runInContext(context, { timeout: 1000 });
     const workflow = vm.compileFunction(
       `"use strict";\nreturn (async function workflow() {\n${source}\n})();`,
-      ["agent", "parallel", "pipeline", "phase", "args"],
+      ["agent", "parallel", "pipeline", "phase", "log", "usage", "args"],
       { filename: "workflow-script.js", parsingContext: context },
     );
     context.__workflowBody = workflow;
@@ -291,7 +352,7 @@ function run(source, argsJson, maxConcurrency) {
         const workflowBody = globalThis.__workflowBody;
         delete globalThis.__workflowBody;
         globalThis.__workflowPromise = Promise.resolve(
-          workflowBody(agent, parallel, pipeline, phase, args),
+          workflowBody(agent, parallel, pipeline, phase, log, usage, args),
         ).then(async (value) => {
           await Promise.resolve();
           const pending = __workflowCheck();
