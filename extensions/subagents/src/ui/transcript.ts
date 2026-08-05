@@ -1,20 +1,23 @@
 /**
  * Transcript rendering for the takeover view: turns a SubagentSnapshot's
- * normalized transcript + live state into plain wrapped lines. Ported from
- * v1, with the session-poking replaced by snapshot reads.
+ * normalized transcript + live state into width-bounded TUI lines. The domain
+ * stream stays normalized and bounded; this renderer only formats its previews.
  */
 
-import type { Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
+  Markdown,
   truncateToWidth,
   visibleWidth,
   wrapTextWithAnsi,
+  type DefaultTextStyle,
 } from "@earendil-works/pi-tui";
 import type { SubagentSnapshot, TranscriptItem } from "../domain.ts";
 
 const ANSI_PATTERN =
   // eslint-disable-next-line no-control-regex
   /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
+const MAX_CACHED_WIDTHS_PER_ITEM = 2;
 
 /**
  * Strip raw ANSI codes, expand tabs, and drop control chars. Terminal-expanded
@@ -28,77 +31,147 @@ export function sanitizeText(text: string): string {
     .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
 }
 
-function renderUserText(
-  theme: Theme,
+function compactPreview(text: string) {
+  return sanitizeText(text).replace(/\s+/g, " ").trim();
+}
+
+function stringField(value: Record<string, unknown>, field: string) {
+  const candidate = value[field];
+  return typeof candidate === "string" ? compactPreview(candidate) : undefined;
+}
+
+function parsedArgs(preview: string) {
+  try {
+    const value: unknown = JSON.parse(preview);
+    return value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/** Turn common tool arguments into a useful, bounded summary without retaining raw args. */
+export function summarizeToolArgs(name: string, argsPreview?: string) {
+  if (!argsPreview) return undefined;
+
+  const fallback = compactPreview(argsPreview);
+  if (!fallback || fallback === "{}") return undefined;
+
+  const args = parsedArgs(fallback);
+  if (!args) return fallback;
+
+  const tool = name.toLowerCase();
+  if (tool === "bash") return stringField(args, "command") ?? fallback;
+  if (tool === "read" || tool === "write" || tool === "edit") {
+    return stringField(args, "path") ?? fallback;
+  }
+  if (tool === "rg" || tool === "fd") {
+    const pattern = stringField(args, "pattern");
+    const path = stringField(args, "path");
+    if (pattern && path) return `${pattern} · ${path}`;
+    return pattern ?? path ?? fallback;
+  }
+  return fallback;
+}
+
+function transcriptMarkdownTheme() {
+  const theme = getMarkdownTheme();
+  return {
+    ...theme,
+    // Markdown normalizes unordered lists to "- "; use a display bullet so
+    // transcript list syntax is never confused with unrendered source.
+    listBullet: (text: string) =>
+      theme.listBullet(text.replace(/^(?:[-+*]) /, "• ")),
+  };
+}
+
+function renderMarkdown(
   text: string,
   width: number,
-  out: string[],
+  defaultTextStyle?: DefaultTextStyle,
 ) {
   const clean = sanitizeText(text).trim();
-  if (!clean) return;
-  const wrapped = wrapTextWithAnsi(clean, Math.max(10, width - 2));
+  if (!clean) return [];
+  const markdown = new Markdown(
+    clean,
+    0,
+    0,
+    transcriptMarkdownTheme(),
+    defaultTextStyle,
+  );
+  return markdown
+    .render(Math.max(1, width))
+    .map((line) => truncateToWidth(line, width));
+}
+
+function renderUserText(theme: Theme, text: string, width: number) {
+  const clean = sanitizeText(text).trim();
+  if (!clean) return [];
+  const out: string[] = [];
+  const wrapped = wrapTextWithAnsi(clean, Math.max(1, width - 2));
   for (let i = 0; i < wrapped.length; i++) {
     const prefix = i === 0 ? theme.fg("accent", "> ") : "  ";
     out.push(
       truncateToWidth(prefix + theme.fg("userMessageText", wrapped[i]), width),
     );
   }
+  return out;
 }
 
-function renderThinking(
-  theme: Theme,
-  text: string,
-  width: number,
-  out: string[],
-) {
+function renderThinking(theme: Theme, text: string, width: number) {
   const reasoning = sanitizeText(text).trim();
-  if (!reasoning) return;
+  if (!reasoning) return [];
+  const out: string[] = [];
   const prefix = theme.fg("dim", "~ ");
-  const wrapped = wrapTextWithAnsi(reasoning, Math.max(10, width - 2));
-  for (let i = 0; i < wrapped.length; i++) {
-    out.push(
-      truncateToWidth(
-        (i === 0 ? prefix : "  ") + theme.fg("muted", theme.italic(wrapped[i])),
-        width,
-      ),
-    );
+  const defaultTextStyle = {
+    color: (content: string) => theme.fg("muted", content),
+    italic: true,
+  } satisfies DefaultTextStyle;
+  const lines = renderMarkdown(
+    reasoning,
+    Math.max(1, width - 2),
+    defaultTextStyle,
+  );
+  for (let i = 0; i < lines.length; i++) {
+    out.push(truncateToWidth((i === 0 ? prefix : "  ") + lines[i], width));
   }
+  return out;
 }
 
 function renderAssistantItem(
   theme: Theme,
   item: Extract<TranscriptItem, { kind: "assistant" }>,
   width: number,
-  out: string[],
 ) {
+  const out: string[] = [];
   for (const part of item.parts) {
     if (part.type === "text") {
-      const text = sanitizeText(part.text).trim();
-      if (!text) continue;
-      out.push(...wrapTextWithAnsi(text, width));
+      out.push(...renderMarkdown(part.text, width));
     } else if (part.type === "thinking") {
-      renderThinking(
-        theme,
-        part.redacted ? "[redacted reasoning]" : part.text,
-        width,
-        out,
+      out.push(
+        ...renderThinking(
+          theme,
+          part.redacted ? "[redacted reasoning]" : part.text,
+          width,
+        ),
       );
     } else if (part.type === "toolCall") {
-      const preview = part.argsPreview ? sanitizeText(part.argsPreview) : "";
+      const preview = summarizeToolArgs(part.name, part.argsPreview);
       const line =
         theme.fg("muted", "→ ") +
         theme.fg("toolTitle", part.name) +
-        (preview && preview !== "{}" ? theme.fg("dim", ` ${preview}`) : "");
+        (preview ? theme.fg("dim", ` ${preview}`) : "");
       out.push(truncateToWidth(line, width));
     }
   }
+  return out;
 }
 
 function renderToolResultItem(
   theme: Theme,
   item: Extract<TranscriptItem, { kind: "toolResult" }>,
   width: number,
-  out: string[],
 ) {
   const firstLine =
     sanitizeText(item.outputPreview ?? "")
@@ -107,76 +180,107 @@ function renderToolResultItem(
   const label = item.isError
     ? theme.fg("error", "  error: ")
     : theme.fg("dim", "  output: ");
-  out.push(
+  return [
     truncateToWidth(label + theme.fg("dim", firstLine || "(no output)"), width),
-  );
+  ];
 }
 
-/** Render a subagent's conversation as plain lines, wrapped to `width`. */
+function renderTranscriptItem(
+  theme: Theme,
+  item: TranscriptItem,
+  width: number,
+) {
+  if (item.kind === "user") return renderUserText(theme, item.text, width);
+  if (item.kind === "assistant") return renderAssistantItem(theme, item, width);
+  return renderToolResultItem(theme, item, width);
+}
+
+/**
+ * Caches finalized transcript items by identity and width. Live state remains
+ * uncached because it changes on every stream tick; callers clear this cache
+ * from their component's invalidate() when Pi changes theme.
+ */
+export class TranscriptRenderer {
+  private itemCache = new Map<TranscriptItem, Map<number, string[]>>();
+
+  render(snap: SubagentSnapshot, width: number, theme: Theme) {
+    const out: string[] = [];
+
+    for (const item of snap.transcript) {
+      const cached = this.itemCache.get(item)?.get(width);
+      const lines = cached ?? renderTranscriptItem(theme, item, width);
+      if (!cached) {
+        const widths = this.itemCache.get(item) ?? new Map<number, string[]>();
+        if (widths.size >= MAX_CACHED_WIDTHS_PER_ITEM) {
+          const oldestWidth = widths.keys().next().value;
+          if (oldestWidth !== undefined) widths.delete(oldestWidth);
+        }
+        widths.set(width, lines);
+        this.itemCache.set(item, widths);
+      }
+      if (lines.length > 0) out.push(...lines, "");
+    }
+    while (out.length > 0 && out[out.length - 1] === "") out.pop();
+
+    // Live streaming assistant buffers (cleared when the finalized message lands).
+    if (snap.liveAssistant) {
+      const { thinking, text } = snap.liveAssistant;
+      const before = out.length;
+      if (out.length > 0) out.push("");
+      if (thinking.trim()) out.push(...renderThinking(theme, thinking, width));
+      if (text.trim()) out.push(...renderMarkdown(text, width));
+      if (out.length === before + 1) out.pop();
+    }
+
+    // Live tool executions (present until the ToolEnd lands in the transcript).
+    for (const tool of snap.liveTools) {
+      if (out.length > 0) out.push("");
+      const marker = tool.done
+        ? tool.isError
+          ? theme.fg("error", "error")
+          : theme.fg("success", "done")
+        : theme.fg("warning", "running");
+      const args = summarizeToolArgs(tool.name, tool.argsPreview);
+      let line = `${theme.fg("toolTitle", tool.name)}${args ? theme.fg("dim", ` ${args}`) : ""} · ${marker}`;
+      const preview = tool.outputPreview && compactPreview(tool.outputPreview);
+      if (preview) line += theme.fg("dim", ` · ${preview}`);
+      out.push(truncateToWidth(line, width));
+    }
+
+    // Queued steering/follow-up messages: show them immediately so Enter
+    // visibly acknowledges the user's input instead of appearing to do nothing.
+    for (const message of snap.queued) {
+      if (out.length > 0) out.push("");
+      const prefix = theme.fg("warning", `> [queued ${message.kind}] `);
+      const wrapped = wrapTextWithAnsi(
+        sanitizeText(message.text),
+        Math.max(1, width - visibleWidth(prefix)),
+      );
+      for (let i = 0; i < wrapped.length; i++) {
+        out.push(
+          truncateToWidth(
+            (i === 0 ? prefix : " ".repeat(visibleWidth(prefix))) +
+              theme.fg("muted", wrapped[i]),
+            width,
+          ),
+        );
+      }
+    }
+
+    return out;
+  }
+
+  invalidate() {
+    this.itemCache.clear();
+  }
+}
+
+/** Render a subagent's conversation as width-bounded lines. */
 export function buildTranscriptLines(
   snap: SubagentSnapshot,
   width: number,
   theme: Theme,
-): string[] {
-  const out: string[] = [];
-
-  for (const item of snap.transcript) {
-    const before = out.length;
-    if (item.kind === "user") {
-      renderUserText(theme, item.text, width, out);
-    } else if (item.kind === "assistant") {
-      renderAssistantItem(theme, item, width, out);
-    } else {
-      renderToolResultItem(theme, item, width, out);
-    }
-    if (out.length > before) out.push("");
-  }
-  while (out.length > 0 && out[out.length - 1] === "") out.pop();
-
-  // Live streaming assistant buffers (cleared when the finalized message lands).
-  if (snap.liveAssistant) {
-    const { thinking, text } = snap.liveAssistant;
-    const before = out.length;
-    if (out.length > 0) out.push("");
-    if (thinking.trim()) renderThinking(theme, thinking, width, out);
-    if (text.trim())
-      out.push(...wrapTextWithAnsi(sanitizeText(text).trim(), width));
-    if (out.length === before + 1) out.pop();
-  }
-
-  // Live tool executions (present until the ToolEnd lands in the transcript).
-  for (const tool of snap.liveTools) {
-    if (out.length > 0) out.push("");
-    const marker = tool.done
-      ? tool.isError
-        ? theme.fg("error", "error")
-        : theme.fg("success", "done")
-      : theme.fg("warning", "running");
-    let line = `${theme.fg("toolTitle", tool.name)} · ${marker}`;
-    const preview = tool.outputPreview && sanitizeText(tool.outputPreview);
-    if (preview) line += theme.fg("dim", ` · ${preview}`);
-    out.push(truncateToWidth(line, width));
-  }
-
-  // Queued steering/follow-up messages: show them immediately so Enter
-  // visibly acknowledges the user's input instead of appearing to do nothing.
-  for (const message of snap.queued) {
-    if (out.length > 0) out.push("");
-    const prefix = theme.fg("warning", `> [queued ${message.kind}] `);
-    const wrapped = wrapTextWithAnsi(
-      sanitizeText(message.text),
-      Math.max(10, width - visibleWidth(prefix)),
-    );
-    for (let i = 0; i < wrapped.length; i++) {
-      out.push(
-        truncateToWidth(
-          (i === 0 ? prefix : " ".repeat(visibleWidth(prefix))) +
-            theme.fg("muted", wrapped[i]),
-          width,
-        ),
-      );
-    }
-  }
-
-  return out;
+  renderer?: TranscriptRenderer,
+) {
+  return (renderer ?? new TranscriptRenderer()).render(snap, width, theme);
 }

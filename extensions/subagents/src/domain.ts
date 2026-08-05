@@ -150,9 +150,9 @@ export type RunOutcome =
   | { readonly _tag: "Interrupted"; readonly partialText?: string };
 
 /**
- * Normalized activity stream. Previews (`argsPreview`, `outputPreview`) are
- * pre-flattened single-line strings because the UI only ever renders one
- * sanitized line.
+ * Normalized activity stream. Previews (`argsPreview`, `outputPreview`) stay
+ * bounded, pre-flattened strings; the UI may compact known argument fields but
+ * never retains arbitrary raw tool payloads.
  */
 export type SubagentEvent =
   // lifecycle (a session can run multiple turns via send())

@@ -16,7 +16,7 @@ import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../format.ts";
 import type { SubagentReadModel } from "../manager.ts";
-import { buildTranscriptLines } from "./transcript.ts";
+import { TranscriptRenderer, buildTranscriptLines } from "./transcript.ts";
 
 function configuredKeys(
   keybindings: KeybindingsManager,
@@ -371,6 +371,7 @@ class TakeoverView implements Component, Focusable {
   private options?: TakeoverOptions;
 
   private input = new Input();
+  private transcriptRenderer = new TranscriptRenderer();
   /** Scroll offset in lines from the bottom of the transcript. 0 = pinned to bottom. */
   private scrollOffset = 0;
   private unsubscribe: () => void;
@@ -527,7 +528,12 @@ class TakeoverView implements Component, Focusable {
 
     // Fixed-height transcript viewport. Error and scroll status consume rows
     // inside the viewport so streaming/scrolling never changes overlay height.
-    const transcript = buildTranscriptLines(snap, width, theme);
+    const transcript = buildTranscriptLines(
+      snap,
+      width,
+      theme,
+      this.transcriptRenderer,
+    );
     const viewport = this.viewportHeight();
     const errorRows = snap.errorText ? 1 : 0;
     const scrollRows = this.scrollOffset > 0 ? 1 : 0;
@@ -579,5 +585,6 @@ class TakeoverView implements Component, Focusable {
 
   invalidate(): void {
     this.input.invalidate();
+    this.transcriptRenderer.invalidate();
   }
 }
