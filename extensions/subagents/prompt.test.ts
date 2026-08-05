@@ -2,12 +2,59 @@
 
 import assert from "node:assert/strict";
 import test from "node:test";
+import { Value } from "typebox/value";
 import { MAX_RUNNING } from "./src/manager.ts";
 import {
+  buildAgentTypeParameterDescription,
   buildSubagentSpawnResult,
+  createAgentTypeParameterSchema,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
+import { BUILT_IN_AGENT_TYPES, type AgentType } from "./src/agent-types.ts";
+
+test("the generated agent_type schema exposes each effective capability and effort default", () => {
+  const parentOnlyType: AgentType = {
+    name: "parent-only",
+    description: "Attempts parent orchestration.",
+    tools: ["read", "subagent_spawn"],
+    source: "test",
+  };
+  const schema = createAgentTypeParameterSchema([
+    ...BUILT_IN_AGENT_TYPES,
+    parentOnlyType,
+  ]);
+
+  for (const name of [
+    "explorer",
+    "implementer",
+    "reviewer",
+    "advisor",
+    "parent-only",
+  ]) {
+    assert.equal(Value.Check(schema, name), true, `${name} is in the enum`);
+  }
+  assert.equal(Value.Check(schema, "missing-type"), false);
+
+  const description = buildAgentTypeParameterDescription([
+    ...BUILT_IN_AGENT_TYPES,
+    parentOnlyType,
+  ]);
+  assert.match(description, /explorer.*default reasoning_effort: high/);
+  assert.match(description, /reviewer.*default reasoning_effort: medium/);
+  assert.match(description, /advisor.*default reasoning_effort: xhigh/);
+  assert.match(description, /parent-only.*reasoning_effort: inherits parent/);
+  assert.match(description, /parent-only.*only: read/);
+  assert.doesNotMatch(description, /only: read, subagent_spawn/);
+  assert.match(
+    description,
+    /explicit spawn model > selected type file model > configured built-in role model > parent model/,
+  );
+  assert.match(
+    description,
+    /explicit spawn reasoning_effort > selected type default > parent reasoning effort/,
+  );
+});
 
 test("the spawn description derives its concurrency cap from the manager", () => {
   assert.match(
@@ -49,6 +96,17 @@ test("a planning child reports its effective tools without an agent type", () =>
     tools: [],
   });
   assert.match(toolLess, /no tools available/);
+
+  const parentOnly = buildSubagentSpawnResult({
+    id: "sa-3",
+    title: "review",
+    harness: "pi",
+    modelLabel: "m",
+    cwd: "/repo",
+    tools: ["read", "subagent_spawn"],
+  });
+  assert.match(parentOnly, /It can only use: read/);
+  assert.doesNotMatch(parentOnly, /only use: read, subagent_spawn/);
 });
 
 test("a spawned isolated child reports the branch its work will land on", () => {

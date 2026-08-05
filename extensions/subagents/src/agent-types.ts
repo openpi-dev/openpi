@@ -104,7 +104,7 @@ export const BUILT_IN_AGENT_TYPES: readonly AgentType[] = [
   {
     name: "explorer",
     description:
-      "Read-only codebase exploration. For cross-module or subtle lifecycle work, override spawn effort to xhigh; use max only for exceptionally hard unfamiliar or ambiguous investigations.",
+      "Read-only codebase exploration. Use high for routine, local, direct tracing; xhigh for interacting state transitions, concurrency or trust boundaries, or subtle multi-path lifecycle/control-flow; max only for exceptionally difficult broad unfamiliar architecture with unresolved competing flows.",
     tools: READ_ONLY_TOOLS,
     reasoningEffort: "high",
     body: "Explore the codebase read-only. Trace the real flow, inspect related callers, and report concise evidence with file paths and line references.",

@@ -20,6 +20,7 @@ import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
   childToolPolicy,
+  effectiveChildToolAllowlist,
   createChildResources,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
@@ -34,6 +35,19 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
     await rm(directory, { recursive: true, force: true });
   }
 }
+
+test("effective child allowlists never advertise parent-only tools", () => {
+  assert.deepEqual(
+    effectiveChildToolAllowlist(["read", "subagent_spawn", "bg_start"]),
+    ["read"],
+  );
+  assert.deepEqual(effectiveChildToolAllowlist(["subagent_spawn"]), []);
+  assert.equal(effectiveChildToolAllowlist(undefined), undefined);
+  assert.deepEqual(childToolPolicy(["read", "subagent_spawn"]), {
+    tools: ["read"],
+    excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
+  });
+});
 
 test("child denylist keeps extension and workflow structured tools available", async () => {
   await withTempDir(async (directory) => {
@@ -280,8 +294,10 @@ async function discoverRegisteredToolNames() {
   // fd/rg). `[^(]*` safely spans nested generics like `<ReturnType<...>, D>`
   // since a type-argument list contains no `(`. Missing this style silently
   // drops those tools from the scan and defeats the fail-closed guard below.
-  const registerToolRe = /registerTool\s*(?:<[^(]*>)?\s*\(\s*\{?/g;
+  const registerToolRe =
+    /registerTool\s*(?:<[^(]*>)?\s*\(\s*(?:defineTool\s*\(\s*)?\{?/g;
   const nameRe = /name\s*:\s*["'`]([a-z0-9_]+)["'`]/i;
+  const namedToolRe = /defineTool\s*\(\s*\{/g;
   // Factory style: `registerTool(createEditToolDefinition(...))` /
   // `registerTool(withCompactCallRenderer(createWriteToolDefinition(...)))`.
   // The tool name is not a literal here, so an inline-name scan is blind to it.
@@ -307,8 +323,18 @@ async function discoverRegisteredToolNames() {
       const nameMatch = nameRe.exec(after);
       if (nameMatch) names.add(nameMatch[1]);
     }
+    let namedToolMatch: RegExpExecArray | null;
+    while ((namedToolMatch = namedToolRe.exec(source))) {
+      const nameMatch = nameRe.exec(
+        source.slice(namedToolMatch.index, namedToolMatch.index + 400),
+      );
+      if (nameMatch) names.add(nameMatch[1]);
+    }
     let factoryMatch: RegExpExecArray | null;
     while ((factoryMatch = factoryHeadRe.exec(source))) {
+      // defineTool preserves an inline literal name, which registerToolRe
+      // already found above; it is not an opaque factory registration.
+      if (factoryMatch[1] === "defineTool") continue;
       // Look at the registerTool(...) argument region and prefer the innermost
       // create<Tool>Definition; fall back to the outer callee name if none.
       const region = source.slice(factoryMatch.index, factoryMatch.index + 200);

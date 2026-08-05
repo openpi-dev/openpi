@@ -1,5 +1,8 @@
 /** All model-facing strings for the subagents tools. */
 
+import { StringEnum } from "@earendil-works/pi-ai";
+import { Type } from "typebox";
+import { effectiveChildToolAllowlist } from "../../shared/child-session.ts";
 import type { AgentType } from "./agent-types.ts";
 import { MAX_RUNNING } from "./manager.ts";
 
@@ -19,17 +22,37 @@ export function buildSubagentSpawnToolDescription(
   return `${SUBAGENT_SPAWN_TOOL_DESCRIPTION} This environment also defines agent types (see agent_type): named presets that fix a child's system prompt, and often restrict it to a subset of tools. Prefer one when it matches the task — a type's tool restriction is enforced, not advisory.`;
 }
 
-/** Lists each agent type and what it restricts, so the model can choose one. */
+/** Lists each agent type's enforced capabilities and reasoning default. */
 export function buildAgentTypeParameterDescription(
   agentTypes: readonly AgentType[],
 ) {
   const entries = agentTypes.map((agentType) => {
     const tools = agentType.tools
-      ? ` [only: ${agentType.tools.join(", ")}]`
+      ? (() => {
+          const effectiveTools = effectiveChildToolAllowlist(agentType.tools);
+          return effectiveTools?.length
+            ? ` [only: ${effectiveTools.join(", ")}]`
+            : " [only: no child-safe tools]";
+        })()
       : "";
-    return `"${agentType.name}" — ${agentType.description}${tools}`;
+    const effort = agentType.reasoningEffort
+      ? ` [default reasoning_effort: ${agentType.reasoningEffort}]`
+      : " [reasoning_effort: inherits parent]";
+    return `"${agentType.name}" — ${agentType.description}${tools}${effort}`;
   });
-  return `Optional agent type: a preset that gives the child a specialized system prompt and, when listed, restricts it to exactly those tools (it cannot use others). Omit for a general-purpose subagent with the normal tool set. Available: ${entries.join("; ")}. An explicit model or reasoning_effort argument overrides the type's own.`;
+  return `Optional agent type: a preset that gives the child a specialized system prompt and, when listed, restricts it to exactly those child-safe tools. Omit for a general-purpose subagent with the normal tool set. Available: ${entries.join("; ")}. Model precedence: explicit spawn model > selected type file model > configured built-in role model > parent model. Reasoning precedence: explicit spawn reasoning_effort > selected type default > parent reasoning effort.`;
+}
+
+/** Generated schema for the dynamic agent-type roster. */
+export function createAgentTypeParameterSchema(
+  agentTypes: readonly AgentType[],
+) {
+  return Type.Optional(
+    StringEnum(
+      agentTypes.map((agentType) => agentType.name) as [string, ...string[]],
+      { description: buildAgentTypeParameterDescription(agentTypes) },
+    ),
+  );
 }
 
 /** Adds background subagent delegation to the parent model's available-tools prompt. */
@@ -54,9 +77,9 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   isolation:
     'Set to "worktree" to run this child in its own git worktree on its own branch, branched from HEAD. Use it whenever children may edit the same files or stage changes concurrently — without it, parallel children share one checkout and one git index, so their edits and `git add`s overwrite each other. The child should COMMIT its work; on teardown the worktree directory is reclaimed and the branch is kept for you to inspect or merge (an empty branch is deleted, and uncommitted changes keep the directory instead). Requires a git repository, and the checkout starts clean, so anything gitignored (build output, .env) will not be there.',
   model:
-    'Optional model override, as "provider/model-id" or a bare id resolved against the current provider. Omit to inherit the current model; never guess a model name.',
+    'Optional model override, as "provider/model-id" or a bare id resolved against the current provider. Precedence: explicit spawn model > selected type file model > configured built-in role model > parent model. Never guess a model name.',
   reasoningEffort:
-    "Thinking level for the child. Omit to inherit the current level.",
+    "Optional thinking level for the child. Precedence: explicit spawn reasoning_effort > selected type default > parent reasoning effort.",
 };
 
 /** Builds the subagent_spawn result that tells the parent model how to continue or inspect the child. */
@@ -75,10 +98,12 @@ export function buildSubagentSpawnResult(options: {
     : "";
   // Report the effective allowlist independently of agent type: plan mode can
   // narrow a general child too, and the parent must not expect work the child
-  // structurally cannot do.
-  const toolNote = options.tools
-    ? options.tools.length > 0
-      ? ` It can only use: ${options.tools.join(", ")}.`
+  // structurally cannot do. Defend this presentation boundary as well as the
+  // child-session boundary, so a future caller cannot advertise parent tools.
+  const effectiveTools = effectiveChildToolAllowlist(options.tools);
+  const toolNote = effectiveTools
+    ? effectiveTools.length > 0
+      ? ` It can only use: ${effectiveTools.join(", ")}.`
       : " It has no tools available."
     : "";
   // Without the branch name the parent has no way to find committed work after

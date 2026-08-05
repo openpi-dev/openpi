@@ -381,7 +381,7 @@ test("an agent-type allowlist narrows and cannot re-enable an excluded tool", ()
   // composition at our boundary rather than trusting that silently.
   const policy = childToolPolicy(["read", "grep", "subagent_spawn"]);
 
-  assert.deepEqual(policy.tools, ["read", "grep", "subagent_spawn"]);
+  assert.deepEqual(policy.tools, ["read", "grep"]);
   assert.deepEqual(policy.excludeTools, [...CHILD_EXCLUDED_TOOL_NAMES]);
 
   // Mirror pi's own admission rule over the policy we hand it.

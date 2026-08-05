@@ -7,6 +7,7 @@ import type {
 import {
   PLAN_MODE_CHANNEL,
   PLAN_MODE_CHILD_TOOLS,
+  planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../shared/plan-mode-state.ts";
 import planMode, {
@@ -182,6 +183,13 @@ test("planning children get investigation tools and never gain any", () => {
       `${tool} must not be available to a planning child`,
     );
   }
+});
+
+test("plan mode rejects type declarations it would silently narrow", () => {
+  assert.equal(planModeAllowsDeclaredTools(["read", "rg"]), true);
+  assert.equal(planModeAllowsDeclaredTools(["read", "write"]), false);
+  assert.equal(planModeAllowsDeclaredTools(["bash"]), false);
+  assert.equal(planModeAllowsDeclaredTools(undefined), true);
 });
 
 test("the stance is broadcast on every change, including shutdown", () => {

@@ -48,7 +48,7 @@ file with the same name.
 
 | Role | Tools | Effort | Purpose |
 | --- | --- | --- | --- |
-| `explorer` | `read grep find ls fd rg` | `high` | Read-only codebase tracing. Its description tells the parent to use `xhigh` for cross-module or subtle lifecycle work, and `max` only for exceptionally hard unfamiliar or ambiguous investigations. |
+| `explorer` | `read grep find ls fd rg` | `high` | Read-only codebase tracing. Use `high` for routine, local, direct tracing; `xhigh` for interacting state transitions, concurrency or trust boundaries, or subtle multi-path lifecycle/control-flow; `max` only for exceptionally difficult broad unfamiliar architecture with unresolved competing flows. |
 | `implementer` | `read bash edit write grep find ls fd rg` | `high` | Focused implementation and relevant checks. |
 | `reviewer` | `read grep find ls fd rg` | `medium` | Read-only correctness, safety, and regression review. |
 | `advisor` | `read grep find ls fd rg` | `xhigh` | Deep read-only analysis and technical advice. |
@@ -58,7 +58,7 @@ allowlists still intersect with plan mode and the child denylist.
 
 ## Discovery
 
-Definitions are layered at extension load:
+Definitions are layered at each `session_start`:
 
 | Priority | Source | Loaded |
 | --- | --- | --- |
@@ -71,10 +71,12 @@ an untrusted repository contributes none. Each higher layer replaces the
 **complete** same-name definition from the layer below, and every override is
 reported as a diagnostic rather than applied silently.
 
-Because a tool's description is a static string fixed when the tool is
-registered, the roster has to be known before the model ever sees
-`subagent_spawn`. Edits to `agents/*.md` therefore take effect on `/reload` or a
-new session — the same as skills.
+The extension initially registers only built-in and global types, then
+re-registers `subagent_spawn` at `session_start` from `ctx.cwd` and
+`ctx.isProjectTrusted()`. This honors temporary session-only trust decisions and
+cross-cwd session replacements without ever loading an untrusted project's
+prompt before trust resolves. Edits take effect on `/reload` or a new session —
+the same as skills.
 
 A malformed file is skipped and reported as a warning at session start; it never
 prevents the other types from loading, and never blocks spawning.
@@ -82,11 +84,12 @@ prevents the other types from loading, and never blocks spawning.
 ## Model and effort precedence
 
 For an `agent_type` spawn, model selection is: explicit `subagent_spawn.model`
-→ selected role-file `model` → `/my-pi-setup` assignment for that built-in role
+→ selected type file `model` → `/my-pi-setup` assignment for that built-in role
 name → inherited parent model. Effort is: explicit `reasoning_effort` → selected
-role-file effort (including a built-in) → parent effort. A custom `explorer.md`
-therefore replaces the built-in definition, while an explicit spawn argument
-still wins.
+type default (including a built-in) → parent effort. The generated `agent_type`
+roster shows each type's default effort or explicit parent inheritance. A custom
+`explorer.md` therefore replaces the built-in definition, while an explicit
+spawn argument still wins.
 
 `/my-pi-setup` can assign any model currently present in Pi's registry to one or
 more built-in roles. Assignments are partial; omitted roles stay unchanged, and
@@ -126,6 +129,14 @@ Two consequences worth being precise about:
 
 So `tools: [read, grep, find, ls]` yields a child that genuinely has no
 `write`, `edit`, or `bash` tool to call — not one that has been asked not to.
+Parent-only names are removed before the generated roster and spawn result are
+shown, so a type that lists `subagent_spawn` never advertises it as usable.
+
+While `/plan` is armed, `isolation: "worktree"` is rejected before Git is
+changed. A selected type whose declared tools plan mode would narrow (such as
+`implementer`) is also rejected rather than spawning it with a contradictory
+implementation prompt; use `explorer`, `reviewer`, `advisor`, or omit the type
+for read-only investigation.
 
 Unrecognized tool names are kept and reported rather than rejected: a
 third-party extension may register tools this package cannot enumerate, but a
@@ -136,8 +147,9 @@ typo that silently removes a capability is worth a warning.
 - `src/agent-types.ts` — built-ins, parsing, discovery, diagnostics, and model
   precedence helpers.
 - `../../shared/subagent-roles.ts` — one typed source for built-in role names.
-- `index.ts` — discovery at registration, the `agent_type` parameter, and
-  merging a type/config assignment into the spawn task.
+- `index.ts` — safe initial discovery, session-scoped roster refresh and
+  re-registration, the `agent_type` parameter, and merging a type/config
+  assignment into the spawn task.
 - `src/backends/pi.ts` — applies `appendSystemPrompt` and the tool allowlist to
   the child session.
 - `../shared/child-session.ts` — `childToolPolicy(tools?)`, where the allowlist

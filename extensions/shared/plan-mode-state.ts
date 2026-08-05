@@ -53,3 +53,11 @@ export function planModeChildTools(
   if (!requested) return [...PLAN_MODE_CHILD_TOOLS];
   return requested.filter((tool) => PLAN_MODE_CHILD_TOOLS.includes(tool));
 }
+
+/** Whether a declared type can run unchanged under plan mode. */
+export function planModeAllowsDeclaredTools(tools?: readonly string[]) {
+  return (
+    tools === undefined ||
+    tools.every((tool) => PLAN_MODE_CHILD_TOOLS.includes(tool))
+  );
+}

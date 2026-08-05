@@ -35,6 +35,7 @@ import type {
 import {
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
+  defineTool,
   formatSize,
   getAgentDir,
   getMarkdownTheme,
@@ -42,7 +43,7 @@ import {
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
-import { Type, type TProperties } from "typebox";
+import { Type } from "typebox";
 import {
   formatAgentTypeDiagnostics,
   loadAgentTypes,
@@ -66,8 +67,8 @@ import {
 import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
-  buildAgentTypeParameterDescription,
   buildSubagentResultMessage,
+  createAgentTypeParameterSchema,
   buildSubagentSendResult,
   buildSubagentSpawnResult,
   buildSubagentSpawnToolDescription,
@@ -88,12 +89,13 @@ import {
 import { createDeferredResultDelivery } from "./src/result-delivery.ts";
 import { resultDeliveryOptions } from "../background-terminals/src/result-delivery.ts";
 import {
-  isProjectTrustedOnDisk,
+  effectiveChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   PLAN_MODE_CHANNEL,
+  planModeAllowsDeclaredTools,
   planModeChildTools,
   type PlanModeState,
 } from "../shared/plan-mode-state.ts";
@@ -349,6 +351,7 @@ export default function (pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    refreshAgentTypes(ctx.cwd, ctx.isProjectTrusted());
     sessionContext = ctx;
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
@@ -391,19 +394,17 @@ export default function (pi: ExtensionAPI) {
   // --- Agent types ---------------------------------------------------------
 
   /**
-   * Discovered once, here, because a tool's description is a static string
-   * fixed at registration — the roster has to be known before the model ever
-   * sees the tool. Registration runs before session_start, so there is no
-   * `ctx.cwd` yet and no resolved trust; use the process cwd and consult the
-   * persisted trust store directly, exactly as a standalone child would.
-   * Consequence: edits to `agents/*.md` take effect on `/reload`, like skills.
+   * Register a safe initial roster before Pi gives us a session context. It
+   * includes only built-ins and global types; session_start immediately
+   * refreshes it with ctx.cwd and ctx.isProjectTrusted(), including temporary
+   * trust decisions and cross-cwd session replacements.
    */
-  const { agentTypes, diagnostics: agentTypeDiagnostics } = loadAgentTypes({
+  let { agentTypes, diagnostics: agentTypeDiagnostics } = loadAgentTypes({
     agentDir: getAgentDir(),
     cwd: process.cwd(),
-    projectTrusted: isProjectTrustedOnDisk(process.cwd()),
+    projectTrusted: false,
   });
-  const agentTypeList = [...agentTypes.values()];
+  let agentTypeList = [...agentTypes.values()];
   /**
    * Disambiguates worktree directory/branch names. The subagent id is only
    * assigned inside the manager, after the worktree already has to exist, and
@@ -423,31 +424,31 @@ export default function (pi: ExtensionAPI) {
       state !== null &&
       (state as PlanModeState).planning === true;
   });
-  /** Built-in roles make this roster non-empty even without files on disk. */
-  const agentTypeParameters: TProperties = {
-    agent_type: Type.Optional(
-      StringEnum(
-        agentTypeList.map((agentType) => agentType.name) as [
-          string,
-          ...string[],
-        ],
-        {
-          description: buildAgentTypeParameterDescription(agentTypeList),
-        },
-      ),
-    ),
+  /**
+   * Session trust is not just persisted trust: Pi may grant it for this
+   * session only. Re-registering refreshes both the agent_type enum and its
+   * model-facing roster before the parent can call subagent_spawn.
+   */
+  const refreshAgentTypes = (cwd: string, projectTrusted: boolean) => {
+    const loaded = loadAgentTypes({
+      agentDir: getAgentDir(),
+      cwd,
+      projectTrusted,
+    });
+    agentTypes = loaded.agentTypes;
+    agentTypeDiagnostics = loaded.diagnostics;
+    agentTypeList = [...agentTypes.values()];
+    subagentSpawnTool.description =
+      buildSubagentSpawnToolDescription(agentTypeList);
+    subagentSpawnTool.parameters = createSubagentSpawnParameters();
+    registerSubagentSpawnTool();
   };
 
   // --- Tools -------------------------------------------------------------
 
-  pi.registerTool({
-    name: "subagent_spawn",
-    label: "Spawn Subagent",
-    description: buildSubagentSpawnToolDescription(agentTypeList),
-    promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
-    promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
-    parameters: Type.Object({
-      ...agentTypeParameters,
+  const createSubagentSpawnParameters = () =>
+    Type.Object({
+      agent_type: createAgentTypeParameterSchema(agentTypeList),
       prompt: Type.String({
         description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.prompt,
       }),
@@ -479,9 +480,16 @@ export default function (pi: ExtensionAPI) {
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
-    }),
+    });
+
+  const subagentSpawnTool = defineTool({
+    name: "subagent_spawn",
+    label: "Spawn Subagent",
+    description: buildSubagentSpawnToolDescription(agentTypeList),
+    promptSnippet: SUBAGENT_SPAWN_PROMPT_SNIPPET,
+    promptGuidelines: SUBAGENT_SPAWN_PROMPT_GUIDELINES,
+    parameters: createSubagentSpawnParameters(),
     async execute(_toolCallId, params, signal, _onUpdate, ctx) {
-      const manager = await getManager();
       // Only one backend exists; harness is optional and defaults to it.
       const harness = params.harness ?? BACKEND_NAMES[0];
 
@@ -497,6 +505,24 @@ export default function (pi: ExtensionAPI) {
         : undefined;
 
       const title = params.name.trim().slice(0, 160) || "subagent";
+      const declaredChildTools = effectiveChildToolAllowlist(agentType?.tools);
+
+      // A worktree creation mutates git metadata, so reject before attempting
+      // it. Plan-mode children are investigation-only and never need one.
+      if (planning && params.isolation === "worktree") {
+        throw new Error(
+          'Plan mode is active: isolation: "worktree" creates a checkout and is unavailable while planning. Omit isolation and use an explorer, reviewer, advisor, or no incompatible agent type for read-only investigation.',
+        );
+      }
+      if (
+        planning &&
+        agentType?.tools &&
+        !planModeAllowsDeclaredTools(declaredChildTools)
+      ) {
+        throw new Error(
+          `Plan mode is active: agent type "${agentType.name}" declares tools that plan mode excludes. Use explorer, reviewer, advisor, or omit agent_type for read-only investigation.`,
+        );
+      }
 
       /**
        * Isolation is requested, not best-effort: a caller asks for a worktree
@@ -536,9 +562,10 @@ export default function (pi: ExtensionAPI) {
       // delegation safe during `/plan`: the allowlist is enforced by the
       // harness, so the child has no write/edit/bash to call, where a
       // tool_call handler in this session could never have reached it.
-      const childTools = planning
-        ? planModeChildTools(agentType?.tools)
-        : agentType?.tools;
+      const requestedChildTools = planning
+        ? planModeChildTools(declaredChildTools)
+        : declaredChildTools;
+      const childTools = effectiveChildToolAllowlist(requestedChildTools);
       // Read at spawn time so `/my-pi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model
       // inheritance in the backend.
@@ -551,6 +578,7 @@ export default function (pi: ExtensionAPI) {
         ),
       );
 
+      const manager = await getManager();
       const spawn = manager.spawn(harness, {
         prompt: params.prompt,
         title,
@@ -636,6 +664,9 @@ export default function (pi: ExtensionAPI) {
       );
     },
   });
+
+  const registerSubagentSpawnTool = () => pi.registerTool(subagentSpawnTool);
+  registerSubagentSpawnTool();
 
   pi.registerTool({
     name: "subagent_wait",

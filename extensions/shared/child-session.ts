@@ -73,11 +73,22 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
  * tool when `(!allowed || allowed.has(name)) && !excluded.has(name)`, so an
  * allowlist naming an excluded tool still cannot obtain it, and the boundary
  * above stays authoritative. Omitting `tools` keeps today's behavior.
+ *
+ * Remove parent-only tools before exposing or enforcing a requested allowlist.
+ * Undefined preserves the normal child tool set; an empty array deliberately
+ * means no tools.
  */
+export function effectiveChildToolAllowlist(tools?: readonly string[]) {
+  return tools?.filter(
+    (tool) => !CHILD_EXCLUDED_TOOL_NAMES.includes(tool as never),
+  );
+}
+
 export function childToolPolicy(tools?: readonly string[]) {
+  const effectiveTools = effectiveChildToolAllowlist(tools);
   return {
     excludeTools: [...CHILD_EXCLUDED_TOOL_NAMES],
-    ...(tools ? { tools: [...tools] } : {}),
+    ...(effectiveTools ? { tools: effectiveTools } : {}),
   };
 }
 

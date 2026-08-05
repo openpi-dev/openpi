@@ -186,11 +186,11 @@ subagent_spawn({
 - `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
-**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，分别用于只读探索、实现、只读审查和深度只读建议；默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high，跨模块或微妙生命周期问题应由父 Agent 显式提到 xhigh，只有极难、陌生或歧义调查才用 max。
+**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，分别用于只读探索、实现、只读审查和深度只读建议；默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
 
-**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。`subagent_spawn.model` > 所选角色文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式 spawn > 所选角色 > 父会话。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 立即读取生效，无需 reload。
+**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。`subagent_spawn.model` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式 spawn > 所选类型默认值 > 父会话。生成的 `agent_type` roster 会显示每种类型的默认 effort 或父级继承。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 立即读取生效，无需 reload。
 
-工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。未受信任的项目目录不会贡献任何类型。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
+工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。父会话专属工具也会在生成 roster 和 spawn 结果中移除，绝不宣传为子 Agent 可用。未受信任的项目目录不会贡献任何类型：扩展先安全注册内置和全局 roster，随后在 `session_start` 用当前 `cwd` 与 live Trust 重新注册，因此临时 Trust 和跨目录 Session 也正确生效。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
 
 **Worktree 隔离**：并行子 Agent 默认共享同一个工作副本，也就共享同一个 git index——两个子 Agent 改同一个文件、或同时 `git add`，会互相覆盖。`isolation: "worktree"` 给这个子 Agent 一份独立 checkout 和独立分支：
 
@@ -699,7 +699,7 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 
 能，而且应该用。并行看几个子系统、把调研噪音挡在主上下文外面，正是规划阶段最该做的事。
 
-安全性不靠提示词，靠 harness：`/plan` armed 时 `subagent_spawn` 会把子 Agent 的工具白名单收窄成 `read / grep / find / ls / fd / rg`，它手里**根本没有** `write`/`edit`/`bash` 可调用。收窄只做减法——如果 `agent_type` 已经限得更死，保留它自己的限制。
+安全性不靠提示词，靠 harness：`/plan` armed 时 `subagent_spawn` 会把子 Agent 的工具白名单收窄成 `read / grep / find / ls / fd / rg`，它手里**根本没有** `write`/`edit`/`bash` 可调用。收窄只做减法——如果 `agent_type` 已经限得更死，保留它自己的限制。若选定类型的声明工具会被 Plan Mode 收窄（例如 `implementer`），spawn 会拒绝，改用 `explorer`、`reviewer`、`advisor` 或不选类型，避免给子 Agent 相互矛盾的实现提示；`isolation: "worktree"` 也会在创建 checkout 前被拒绝。
 
 两个例外：
 
