@@ -7,8 +7,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
+  agentFailureMessage,
   createFirstResponseWatchdog,
   guardWorkflowChildTools,
+  observeAssistantSettlement,
   recordToolExecutionTiming,
   transcriptFromMessages,
   type ToolExecutionTiming,
@@ -177,6 +179,65 @@ test("in-flight aborted tool calls retain start timing without completion", () =
   assert.equal(
     transcript.some((entry) => entry.role === "toolResult"),
     false,
+  );
+});
+
+test("assistant settlement survives failed compaction and clears after recovery", () => {
+  const overflow = {
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: zeroUsage,
+    stopReason: "error",
+    errorMessage: "input exceeds the context window",
+    timestamp: 1_000,
+  } satisfies AgentSession["messages"][number];
+  const recovered = {
+    ...overflow,
+    content: [
+      {
+        type: "toolCall" as const,
+        id: "structured-result",
+        name: "structured_output",
+        arguments: { ok: true },
+      },
+    ],
+    stopReason: "toolUse" as const,
+    errorMessage: undefined,
+    timestamp: 2_000,
+  };
+
+  let settlement = observeAssistantSettlement(undefined, overflow);
+  assert.deepEqual(settlement, {
+    stopReason: "error",
+    errorMessage: "input exceeds the context window",
+  });
+  assert.equal(
+    agentFailureMessage(settlement),
+    "input exceeds the context window",
+  );
+
+  // Pi removes the overflow assistant from active messages before compacting.
+  // A failed compaction emits no newer assistant, so the observed error stays.
+  settlement = observeAssistantSettlement(settlement, undefined);
+  assert.equal(
+    agentFailureMessage(settlement),
+    "input exceeds the context window",
+  );
+
+  // A successful compact-and-retry emits a newer assistant and supersedes it.
+  settlement = observeAssistantSettlement(settlement, recovered);
+  assert.deepEqual(settlement, {
+    stopReason: "toolUse",
+    errorMessage: undefined,
+  });
+  assert.equal(agentFailureMessage(settlement), undefined);
+  assert.equal(
+    agentFailureMessage(settlement, "prompt rejected"),
+    "prompt rejected",
+    "a thrown prompt error must remain independent from assistant recovery",
   );
 });
 

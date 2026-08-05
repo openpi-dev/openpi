@@ -193,6 +193,42 @@ function makeStructuredOutputTool(
   });
 }
 
+type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+
+export interface AssistantSettlement {
+  stopReason: AssistantMessage["stopReason"];
+  errorMessage?: string;
+}
+
+/**
+ * Observe assistant message_end events instead of rescanning mutable Pi state:
+ * overflow recovery temporarily removes the failed assistant from that state.
+ */
+export function observeAssistantSettlement(
+  previous: AssistantSettlement | undefined,
+  message: AgentMessage | undefined,
+) {
+  if (message?.role !== "assistant") return previous;
+  return {
+    stopReason: message.stopReason,
+    errorMessage: message.errorMessage,
+  };
+}
+
+export function agentFailureMessage(
+  settlement: AssistantSettlement | undefined,
+  promptErrorMessage?: string,
+) {
+  if (
+    settlement?.stopReason !== "error" &&
+    settlement?.errorMessage === undefined &&
+    promptErrorMessage === undefined
+  ) {
+    return undefined;
+  }
+  return settlement?.errorMessage ?? promptErrorMessage ?? "Agent failed";
+}
+
 function finalOutput(messages: AgentMessage[]): string {
   for (let i = messages.length - 1; i >= 0; i--) {
     const msg = messages[i];
@@ -478,8 +514,8 @@ export async function runAgent(
   let usage = emptyUsage();
   let modelId = childSession.model?.id ?? options.model?.id;
   let contextWindow = childSession.model?.contextWindow;
-  let stopReason: string | undefined;
-  let errorMessage: string | undefined;
+  let assistantSettlement: AssistantSettlement | undefined;
+  let promptErrorMessage: string | undefined;
   const toolTimings = new Map<string, ToolExecutionTiming>();
 
   const sync = () => {
@@ -523,8 +559,6 @@ export async function runAgent(
         modelId = reportedModel.id;
         contextWindow = reportedModel.contextWindow;
       }
-      if (msg.stopReason) stopReason = msg.stopReason;
-      if (msg.errorMessage) errorMessage = msg.errorMessage;
       break;
     }
   };
@@ -532,6 +566,12 @@ export async function runAgent(
   let markFirstResponse = () => {};
   const unsubscribe = childSession.subscribe((event) => {
     if (isAssistantResponseEvent(event)) markFirstResponse();
+    if (event.type === "message_end") {
+      assistantSettlement = observeAssistantSettlement(
+        assistantSettlement,
+        event.message,
+      );
+    }
     if (
       event.type === "tool_execution_start" ||
       event.type === "tool_execution_end"
@@ -578,8 +618,7 @@ export async function runAgent(
       );
     }
   } catch (error) {
-    errorMessage = errorMessage ?? errorText(error);
-    stopReason = stopReason ?? "error";
+    promptErrorMessage = errorText(error);
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
     if (abortPromise) await abortPromise;
@@ -594,7 +633,7 @@ export async function runAgent(
     await shutdownAndDisposeChildSession(childSession);
   }
 
-  if (aborted || stopReason === "aborted") {
+  if (aborted || assistantSettlement?.stopReason === "aborted") {
     return {
       ok: false,
       output,
@@ -608,13 +647,16 @@ export async function runAgent(
     };
   }
 
-  const failed = stopReason === "error" || errorMessage !== undefined;
-  if (failed) {
+  const failureMessage = agentFailureMessage(
+    assistantSettlement,
+    promptErrorMessage,
+  );
+  if (failureMessage !== undefined) {
     return {
       ok: false,
       output,
       structured,
-      error: errorMessage ?? "Agent failed",
+      error: failureMessage,
       aborted: false,
       usage,
       model: modelId,
