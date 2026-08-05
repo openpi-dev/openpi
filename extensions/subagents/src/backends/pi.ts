@@ -16,7 +16,6 @@ import type { AssistantMessage, Message, Model } from "@earendil-works/pi-ai";
 import type {
   AgentSession,
   AgentSessionEvent,
-  ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
@@ -24,6 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
+import { resolveAgentModel } from "../agent-types.ts";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
 import type {
   SpawnTask,
@@ -51,47 +51,6 @@ import {
 type ThinkingLevel = NonNullable<
   NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"]
 >;
-
-/**
- * Resolve the generic model hint against the parent registry (v1 semantics):
- * "provider/model-id" is exact; a bare id prefers the inherited provider,
- * then must be unambiguous across providers. No hint inherits the parent
- * model; with nothing to inherit, the SDK default applies.
- */
-function resolvePiModel(
-  registry: ModelRegistry,
-  hint: string | undefined,
-  inherited: { provider: string; id: string } | undefined,
-): Model<any> | undefined {
-  if (!hint) {
-    if (!inherited) return undefined;
-    const found = registry.find(inherited.provider, inherited.id);
-    if (found) return found;
-    throw new Error(
-      `Inherited model "${inherited.provider}/${inherited.id}" is no longer available. Choose an available model explicitly.`,
-    );
-  }
-  const slash = hint.indexOf("/");
-  if (slash > 0) {
-    const provider = hint.slice(0, slash);
-    const id = hint.slice(slash + 1);
-    const found = registry.find(provider, id);
-    if (found) return found;
-    throw new Error(`Unknown model "${hint}".`);
-  }
-  if (inherited) {
-    const found = registry.find(inherited.provider, hint);
-    if (found) return found;
-  }
-  const matches = registry.getAll().filter((m) => m.id === hint);
-  if (matches.length === 1) return matches[0];
-  if (matches.length > 1) {
-    throw new Error(
-      `Model "${hint}" exists in multiple providers (${matches.map((m) => m.provider).join(", ")}). Use "provider/${hint}".`,
-    );
-  }
-  throw new Error(`Unknown model "${hint}".`);
-}
 
 // --- Event translation ----------------------------------------------------------
 
@@ -219,7 +178,7 @@ const makePiSession = (
 
     const model = yield* Effect.try({
       try: () =>
-        resolvePiModel(registry, task.model, task.parent.inheritedModel),
+        resolveAgentModel(registry, task.model, task.parent.inheritedModel),
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
     // pi's thinking levels ARE the shared reasoning-effort scale.

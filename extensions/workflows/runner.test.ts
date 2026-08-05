@@ -13,6 +13,7 @@ import {
   observeAssistantSettlement,
   recordToolExecutionTiming,
   transcriptFromMessages,
+  workflowChildTools,
   type ToolExecutionTiming,
 } from "./runner.ts";
 
@@ -270,6 +271,20 @@ test("first assistant response disarms the watchdog without limiting the run", a
     new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
   );
   assert.equal(result, "done");
+});
+
+test("structured role children keep their terminating tool without widening capabilities", () => {
+  assert.deepEqual(workflowChildTools(["read", "rg"], true), [
+    "read",
+    "rg",
+    "structured_output",
+  ]);
+  assert.deepEqual(workflowChildTools(["read"], false), ["read"]);
+  assert.equal(
+    workflowChildTools(undefined, true),
+    undefined,
+    "an untyped child must retain its normal inherited tool set",
+  );
 });
 
 test("workflow children guard structured, normal, and dynamically registered tools", async () => {

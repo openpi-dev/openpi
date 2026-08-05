@@ -37,11 +37,13 @@ export interface WorkflowJournal {
 }
 
 /**
- * Only these four options change what an agent produces, so only these are
+ * Only semantic options change what an agent produces, so only these are
  * hashed. Callers pass their whole options object; `label` and `phase` are
  * display only, and renaming a label must not invalidate an identical call.
  */
 interface KeyedCallOptions {
+  /** Canonical model/effort and resolved Agent Type semantics. */
+  readonly execution?: unknown;
   readonly schema?: unknown;
   readonly model?: unknown;
   readonly provider?: unknown;
@@ -53,13 +55,24 @@ export function agentCallKey(
   prompt: string,
   options: Readonly<KeyedCallOptions> = {},
 ) {
+  const canonical = options.execution !== undefined;
   const payload = stableSerialize({
     prompt,
+    execution: options.execution,
     schema: options.schema,
-    model: typeof options.model === "string" ? options.model : undefined,
+    // Callers without a canonical execution snapshot retain the legacy key.
+    model:
+      !canonical && typeof options.model === "string"
+        ? options.model
+        : undefined,
     provider:
-      typeof options.provider === "string" ? options.provider : undefined,
-    effort: typeof options.effort === "string" ? options.effort : undefined,
+      !canonical && typeof options.provider === "string"
+        ? options.provider
+        : undefined,
+    effort:
+      !canonical && typeof options.effort === "string"
+        ? options.effort
+        : undefined,
   });
   return createHash("sha256").update(payload).digest("hex").slice(0, 32);
 }

@@ -186,11 +186,11 @@ subagent_spawn({
 - `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
 - `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
 
-**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，分别用于只读探索、实现、只读审查和深度只读建议；默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
+**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，既可用于 `subagent_spawn.agent_type`，也可用于 Workflow 的 `agent(..., { agent_type })`；分别用于只读探索、实现、只读审查和深度只读建议。默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
 
-**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。`subagent_spawn.model` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式 spawn > 所选类型默认值 > 父会话。生成的 `agent_type` roster 会显示每种类型的默认 effort 或父级继承。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 立即读取生效，无需 reload。
+**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。Subagent 的显式 `model` 或 Workflow 的显式 `model/provider` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式调用 > 所选类型默认值 > 父会话。生成的 `subagent_spawn.agent_type` roster 会显示每种类型的默认 effort 或父级继承，Workflow 使用同一套名字和定义。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 或 Workflow `agent()` 调用立即读取生效，无需 reload。
 
-工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。父会话专属工具也会在生成 roster 和 spawn 结果中移除，绝不宣传为子 Agent 可用。未受信任的项目目录不会贡献任何类型：扩展先安全注册内置和全局 roster，随后在 `session_start` 用当前 `cwd` 与 live Trust 重新注册，因此临时 Trust 和跨目录 Session 也正确生效。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
+工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。父会话专属工具也会在生成 roster 和 spawn 结果中移除，绝不宣传为子 Agent 可用。未受信任的项目目录不会贡献任何类型：扩展先安全注册内置和全局 roster，随后在 `session_start` 用当前 `cwd` 与 live Trust 刷新 Subagent 和 Workflow 共用的语义，因此临时 Trust 和跨目录 Session 也正确生效。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
 
 **Worktree 隔离**：并行子 Agent 默认共享同一个工作副本，也就共享同一个 git index——两个子 Agent 改同一个文件、或同时 `git add`，会互相覆盖。`isolation: "worktree"` 给这个子 Agent 一份独立 checkout 和独立分支：
 
@@ -224,26 +224,30 @@ phase("Scan");
 const checked = await pipeline(
   files,
   (file) =>
-    agent(`Review ${file}`, {
+    agent(`Trace ${file} for candidate reliability risks with evidence`, {
+      agent_type: "explorer",
       label: `review:${file}`,
       schema: FINDING_SCHEMA,
     }),
   (scan, file) =>
     scan.ok
-      ? agent(`Confirm the issues found in ${file}`, {
+      ? agent(`Review whether the candidate issues in ${file} are real`, {
+          agent_type: "reviewer",
           label: `verify:${file}`,
         })
       : null,
 );
 
 phase("Synthesize");
-return await agent(`Synthesize: ${JSON.stringify(checked)}`);
+return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(checked)}`, {
+  agent_type: "advisor",
+});
 ```
 
 - `phase()` 展示阶段进度；
 - `log()` 向用户和最终报告输出一行进度叙述；
 - `usage()` 读取本次运行至今的累计 Token 用量；
-- `agent()` 启动隔离的 Pi Agent；
+- `agent()` 启动隔离的 Pi Agent；`agent_type` 复用与 `subagent_spawn` 相同的角色提示词、强制工具边界、模型配置和默认 effort，显式 model/provider 与 effort 仍优先；
 - `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
 - `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
 - JSON Schema 提供结构化结果；
@@ -596,10 +600,10 @@ pi install ~/work/my-pi-setup
 | 大型 Header              |                                                  关闭 |
 | Dashboard Footer         |                                                  开启 |
 | Post-edit 命令           |       默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
-| Subagent 角色模型        | explorer / implementer / reviewer / advisor 均继承父模型 |
+| Agent 角色模型           | explorer / implementer / reviewer / advisor 均继承父模型 |
 | 主题                     |                                    不修改用户现有选择 |
 
-Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。角色模型只接受当前 Pi Registry 能解析的 provider/model，并保存 Registry 规范化后的值；传入 `null` 只清除对应角色，未提及的角色保持原样。
+Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。角色模型由 Subagent 和 Workflow `agent_type` 共用，只接受当前 Pi Registry 能解析的 provider/model，并保存 Registry 规范化后的值；传入 `null` 只清除对应角色，未提及的角色保持原样。
 
 ---
 
@@ -704,7 +708,7 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 两个例外：
 
 - **`subagent_send` 仍然拦着**。它恢复的是一个已存在的子会话，而那个子 Agent 可能是 `/plan` 之前起的、还握着完整工具集。收窄只发生在 spawn 那一刻。
-- **`workflow` 仍然拦着**。它的 `agent()` 没有 per-call 的工具白名单可收窄，放行就等于承诺作废。
+- **`workflow` 仍然拦着**。虽然指定 `agent_type` 的调用现在有强制工具白名单，但它是可选的，DSL 也没有整次运行的 Plan Mode 收窄；未指定类型或选 `implementer` 的调用仍可能写入。
 
 这一条最初的实现是把委派整个封掉，理由是「`tool_call` handler 够不到子会话」。前半句是对的，但结论错了——够不到的那部分，由 harness 强制的工具白名单答掉了。
 

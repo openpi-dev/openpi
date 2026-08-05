@@ -51,6 +51,48 @@ test("the call key ignores display options and tracks semantic ones", () => {
     agentCallKey("review a.ts", { schema: { type: "object" }, effort: "high" }),
     base,
   );
+  const typed = agentCallKey("review a.ts", {
+    schema: { type: "object" },
+    execution: {
+      agentType: {
+        name: "reviewer",
+        body: "Review read-only.",
+        tools: ["read", "rg"],
+      },
+      model: "provider/reviewer",
+      effort: "medium",
+    },
+  });
+  assert.notEqual(typed, base);
+  assert.notEqual(
+    agentCallKey("review a.ts", {
+      schema: { type: "object" },
+      execution: {
+        agentType: {
+          name: "reviewer",
+          body: "Review read-only.",
+          tools: ["read", "rg"],
+        },
+        model: "other-provider/reviewer",
+        effort: "medium",
+      },
+    }),
+    typed,
+    "a bare model resolving under a different parent provider must miss",
+  );
+});
+
+test("canonical execution ignores equivalent raw model and effort spellings", () => {
+  const execution = { model: "p/m", effort: "high" };
+  assert.equal(
+    agentCallKey("p", { model: "p/m", effort: "high", execution }),
+    agentCallKey("p", {
+      provider: "p",
+      model: "m",
+      effort: undefined,
+      execution,
+    }),
+  );
 });
 
 test("the call key is stable across schema property order", () => {

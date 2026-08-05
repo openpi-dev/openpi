@@ -90,6 +90,8 @@ export interface RunAgentOptions {
   loader: DefaultResourceLoader;
   settingsManager: SettingsManager;
   modelRegistry: ExtensionContext["modelRegistry"];
+  /** Agent Type allowlist; childToolPolicy can only narrow capabilities. */
+  tools?: readonly string[];
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
   /** Test-only override for the per-tool execution timeout. */
@@ -103,14 +105,26 @@ export function createWorkflowResources(
   cwd: string,
   variant: "plain" | "structured",
   projectTrusted: boolean,
+  agentTypePrompt?: string,
 ) {
+  const appendSystemPrompt = [
+    ...(agentTypePrompt ? [agentTypePrompt] : []),
+    ...(variant === "structured" ? [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION] : []),
+  ];
   return createChildResources({
     cwd,
     projectTrusted,
-    ...(variant === "structured"
-      ? { appendSystemPrompt: [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION] }
-      : {}),
+    ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
   });
+}
+
+export function workflowChildTools(
+  tools: readonly string[] | undefined,
+  structured: boolean,
+) {
+  return tools
+    ? [...new Set([...tools, ...(structured ? ["structured_output"] : [])])]
+    : undefined;
 }
 
 interface WorkflowToolSession {
@@ -478,6 +492,10 @@ export async function runAgent(
             }),
           ]
         : undefined;
+    const childTools = workflowChildTools(
+      options.tools,
+      customTools !== undefined,
+    );
     ({ session } = await createAgentSession({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
@@ -488,7 +506,7 @@ export async function runAgent(
       settingsManager: options.settingsManager,
       sessionManager: SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
-      ...childToolPolicy(),
+      ...childToolPolicy(childTools),
     }));
     await bindChildSessionExtensions(session);
     unsubscribeToolTimeout = guardWorkflowChildTools(

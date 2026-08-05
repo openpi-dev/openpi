@@ -332,6 +332,25 @@ test("a promise handed to workflow code cannot reach the host realm", async () =
   assert.equal(escaped, "denied");
 });
 
+test("agent_type reaches the host verbatim, per agent call", async () => {
+  const seen: unknown[] = [];
+  await run(
+    `
+      await agent("explore", { agent_type: "explorer" });
+      await agent("inherit");
+      return null;
+    `,
+    {
+      onAgent: async (_prompt, options) => {
+        seen.push(options.agent_type);
+        return { ok: true, output: "" };
+      },
+    },
+  );
+
+  assert.deepEqual(seen, ["explorer", undefined]);
+});
+
 test("isolation reaches the host verbatim, per agent call", async () => {
   // The sandbox is where a script-authored option could silently vanish, so
   // pin that isolation survives the IPC boundary and stays per-call.

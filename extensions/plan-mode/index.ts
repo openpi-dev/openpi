@@ -18,8 +18,9 @@
  * the harness rather than by prompt. Blocking it outright was the first
  * answer and it was the wrong trade: parallel read-only exploration, kept out
  * of the main context, is one of the most useful things to do while planning.
- * `workflow` stays blocked because its `agent()` has no per-call tool
- * allowlist to narrow, and `subagent_send` because it resumes a child that
+ * `workflow` stays blocked because `agent_type` is optional and the DSL has
+ * no run-wide plan-mode narrowing: an untyped or implementation call may
+ * still write. `subagent_send` stays blocked because it resumes a child that
  * may predate the plan and still hold the full tool set.
  */
 

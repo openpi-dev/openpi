@@ -168,7 +168,8 @@ test("spawning is allowed while planning, resuming an existing child is not", ()
   // full tool set; narrowing only applies at spawn.
   assert.equal(planToolCallDecision("subagent_send")?.block, true);
 
-  // workflow's agent() has no per-call tool allowlist to narrow.
+  // agent_type is optional and there is no run-wide plan-mode narrowing, so
+  // an untyped or implementation Workflow call may still write.
   assert.equal(planToolCallDecision("workflow")?.block, true);
 });
 

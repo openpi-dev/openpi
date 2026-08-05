@@ -4,6 +4,7 @@ import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildWorkflowResultMessage,
+  WORKFLOW_PROMPT_GUIDELINES,
   WORKFLOW_STATUS_TOOL_DESCRIPTION,
   WORKFLOW_STOP_TOOL_DESCRIPTION,
   WORKFLOW_TOOL_DESCRIPTION,
@@ -145,6 +146,23 @@ test("the tool description teaches log() and usage() as distinct from phase()", 
     /Unlike phase\(\), it does not touch/,
   );
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /• usage\(\)/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /agent_type\?/);
+  assert.match(
+    WORKFLOW_TOOL_DESCRIPTION,
+    /same named preset and enforced capabilities as subagent_spawn/,
+  );
+  assert.match(
+    WORKFLOW_TOOL_DESCRIPTION,
+    /explicit model.*type-file model.*configured built-in role model.*parent model/,
+  );
+  assert.match(
+    WORKFLOW_TOOL_DESCRIPTION,
+    /explicit effort.*type default.*parent effort/,
+  );
+  assert.match(
+    WORKFLOW_PROMPT_GUIDELINES.join("\n"),
+    /select a matching agent_type.*do not hardcode that role's model/,
+  );
   // usage() reports; it does not enforce. Saying otherwise would invite a
   // script to rely on a limit that does not exist.
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /reading, not a limit/);

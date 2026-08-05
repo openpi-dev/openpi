@@ -29,7 +29,7 @@ test("setup defaults to disabled recaps until explicitly configured", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nSubagent role models: explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
@@ -60,7 +60,7 @@ test("setup config accepts model choices and drops malformed models", () => {
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nSubagent role models: explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
@@ -97,7 +97,7 @@ test("subagent role models parse partially and drop malformed persisted entries"
   });
   assert.match(
     formatSetupConfig(config),
-    /Subagent role models: explorer provider\/explorer-model · implementer inherit · reviewer inherit · advisor inherit/,
+    /Agent role models \(Subagents \+ Workflows\): explorer provider\/explorer-model · implementer inherit · reviewer inherit · advisor inherit/,
   );
 });
 

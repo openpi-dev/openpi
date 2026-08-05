@@ -21,7 +21,11 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { parseFrontmatter } from "@earendil-works/pi-coding-agent";
+import type { Model } from "@earendil-works/pi-ai";
+import {
+  parseFrontmatter,
+  type ModelRegistry,
+} from "@earendil-works/pi-coding-agent";
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
@@ -150,6 +154,46 @@ export function selectSubagentModel(
     agentType?.model ??
     (roleModel ? `${roleModel.provider}/${roleModel.model}` : undefined)
   );
+}
+
+/**
+ * Resolve a model hint consistently for direct and Workflow children.
+ * Provider-qualified hints are exact; bare ids prefer the parent provider and
+ * otherwise must be unique. No hint inherits the parent model.
+ */
+export function resolveAgentModel(
+  registry: ModelRegistry,
+  hint: string | undefined,
+  inherited: { provider: string; id: string } | undefined,
+): Model<any> | undefined {
+  if (!hint) {
+    if (!inherited) return undefined;
+    const found = registry.find(inherited.provider, inherited.id);
+    if (found) return found;
+    throw new Error(
+      `Inherited model "${inherited.provider}/${inherited.id}" is no longer available. Choose an available model explicitly.`,
+    );
+  }
+  const slash = hint.indexOf("/");
+  if (slash > 0) {
+    const provider = hint.slice(0, slash);
+    const id = hint.slice(slash + 1);
+    const found = registry.find(provider, id);
+    if (found) return found;
+    throw new Error(`Unknown model "${hint}".`);
+  }
+  if (inherited) {
+    const found = registry.find(inherited.provider, hint);
+    if (found) return found;
+  }
+  const matches = registry.getAll().filter((model) => model.id === hint);
+  if (matches.length === 1) return matches[0];
+  if (matches.length > 1) {
+    throw new Error(
+      `Model "${hint}" exists in multiple providers (${matches.map((model) => model.provider).join(", ")}). Use "provider/${hint}".`,
+    );
+  }
+  throw new Error(`Unknown model "${hint}".`);
 }
 
 /** Return a package assignment only for the four built-in role names. */

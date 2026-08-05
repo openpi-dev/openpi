@@ -9,7 +9,7 @@
  *   phase(title)                                  // mark runtime phase progression
  *   log(message)                                  // narrate progress to the user and the report
  *   usage()                                       // cumulative token spend so far (read-only)
- *   await agent(prompt, { label?, phase?, schema?, model?, provider?, effort? })
+ *   await agent(prompt, { agent_type?, label?, phase?, schema?, model?, provider?, effort? })
  *   await pipeline(items, stage1, stage2, ...)    // per-item, no barrier between stages
  *   await parallel([() => agent(...), ...], { concurrency? })  // barrier
  *   args                                          // parsed JSON args passed with the tool call
@@ -44,6 +44,12 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
+import {
+  loadAgentTypes,
+  resolveAgentModel,
+  roleModelForAgentType,
+  selectSubagentModel,
+} from "../subagents/src/agent-types.ts";
 import {
   createWorktree,
   reclaimWorktree,
@@ -138,6 +144,7 @@ interface ScriptAgentResult {
 }
 
 interface AgentCallOptions {
+  agent_type?: unknown;
   label?: unknown;
   phase?: unknown;
   schema?: unknown;
@@ -361,6 +368,11 @@ export default function workflows(pi: ExtensionAPI) {
    * it, not the whole session's run history.
    */
   let turnStartedAt = 0;
+  let agentTypes = loadAgentTypes({
+    agentDir: getAgentDir(),
+    cwd: process.cwd(),
+    projectTrusted: false,
+  }).agentTypes;
 
   const newestEntry = (
     entries: Iterable<readonly [string, WorkflowDetails]>,
@@ -495,6 +507,11 @@ export default function workflows(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.hasUI) lastContext = ctx;
+    agentTypes = loadAgentTypes({
+      agentDir: getAgentDir(),
+      cwd: ctx.cwd,
+      projectTrusted: ctx.isProjectTrusted(),
+    }).agentTypes;
     turnStartedAt = 0;
     completedRuns = 0;
     failedRuns = 0;
@@ -682,6 +699,8 @@ export default function workflows(pi: ExtensionAPI) {
       // Background runs survive Esc on the parent turn, but all runs are
       // aborted and settled during session shutdown.
       const workflowConfig = loadSetupConfig().workflows;
+      const projectTrusted = ctx.isProjectTrusted();
+      const runAgentTypes = agentTypes;
       const controller = new RunController(
         background ? undefined : signal,
         workflowConfig.concurrency,
@@ -692,12 +711,16 @@ export default function workflows(pi: ExtensionAPI) {
       // parent's live trust decision; an isolated child gets its own cwd (its
       // worktree) but keeps that decision, since it is the same project at the
       // same commit.
-      const projectTrusted = ctx.isProjectTrusted();
-      const getResources = (structured: boolean, cwd: string) =>
+      const getResources = (
+        structured: boolean,
+        cwd: string,
+        agentTypePrompt?: string,
+      ) =>
         createWorkflowResources(
           cwd,
           structured ? "structured" : "plain",
           projectTrusted,
+          agentTypePrompt,
         );
 
       // Throttled progress: tool-block updates when blocking. Background
@@ -799,7 +822,105 @@ export default function workflows(pi: ExtensionAPI) {
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
-        const callKey = agentCallKey(prompt, opts);
+        const requestedType =
+          typeof opts.agent_type === "string"
+            ? opts.agent_type.trim()
+            : undefined;
+        if (opts.agent_type !== undefined && !requestedType) {
+          return fail(
+            `agent "${label}": agent_type must be a non-empty string`,
+          );
+        }
+        const agentType = requestedType
+          ? runAgentTypes.get(requestedType)
+          : undefined;
+        if (requestedType && !agentType) {
+          return fail(
+            `agent "${label}": unknown agent_type "${requestedType}" (available: ${[...runAgentTypes.keys()].join(", ")})`,
+          );
+        }
+
+        const explicitModel =
+          typeof opts.model === "string" && opts.model.trim()
+            ? opts.model.trim()
+            : undefined;
+        const explicitProvider =
+          typeof opts.provider === "string" && opts.provider.trim()
+            ? opts.provider.trim()
+            : undefined;
+        if (opts.model !== undefined && !explicitModel) {
+          return fail(`agent "${label}": model must be a non-empty string`);
+        }
+        if (opts.provider !== undefined && !explicitProvider) {
+          return fail(`agent "${label}": provider must be a non-empty string`);
+        }
+        if (explicitProvider && !explicitModel) {
+          return fail(
+            `agent "${label}": \`provider\` requires \`model\` as well`,
+          );
+        }
+
+        const explicitModelHint =
+          explicitModel && explicitProvider
+            ? `${explicitProvider}/${explicitModel}`
+            : explicitModel;
+        const modelHint = selectSubagentModel(
+          explicitModelHint,
+          agentType,
+          roleModelForAgentType(
+            agentType,
+            loadSetupConfig().subagents.roleModels,
+          ),
+        );
+        const explicitEffort =
+          typeof opts.effort === "string" && opts.effort.trim()
+            ? opts.effort.trim()
+            : undefined;
+        if (opts.effort !== undefined && !explicitEffort) {
+          return fail(`agent "${label}": effort must be a non-empty string`);
+        }
+        // Resolve every output-affecting default before replay lookup.
+        let model: WorkflowModel | undefined = ctx.model;
+        if (modelHint !== undefined) {
+          try {
+            model = resolveAgentModel(
+              ctx.modelRegistry,
+              modelHint,
+              ctx.model
+                ? { provider: ctx.model.provider, id: ctx.model.id }
+                : undefined,
+            );
+          } catch (error) {
+            return fail(`agent "${label}": ${errorText(error)}`);
+          }
+        }
+        const effectiveEffort = explicitEffort ?? agentType?.reasoningEffort;
+        let thinkingLevel: ThinkingLevel = pi.getThinkingLevel();
+        if (effectiveEffort !== undefined) {
+          const effort = String(effectiveEffort);
+          if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
+            return fail(
+              `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,
+            );
+          }
+          thinkingLevel = effort as ThinkingLevel;
+        }
+        record.model = model?.id;
+        record.contextWindow = model?.contextWindow;
+        const callKey = agentCallKey(prompt, {
+          ...opts,
+          execution: {
+            agentType: agentType
+              ? {
+                  name: agentType.name,
+                  body: agentType.body,
+                  tools: agentType.tools,
+                }
+              : undefined,
+            model: model ? `${model.provider}/${model.id}` : undefined,
+            effort: thinkingLevel,
+          },
+        });
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
         // Isolated calls never replay: their product is a branch of commits
@@ -827,57 +948,9 @@ export default function workflows(pi: ExtensionAPI) {
 
         return controller
           .schedule(async (runSignal) => {
-            // Model/provider resolution: default to the parent session's model.
-            let model: WorkflowModel | undefined = ctx.model;
-            if (opts.model !== undefined || opts.provider !== undefined) {
-              const modelOpt =
-                typeof opts.model === "string" ? opts.model : undefined;
-              const providerOpt =
-                typeof opts.provider === "string" ? opts.provider : undefined;
-              if (!modelOpt)
-                return fail(
-                  `agent "${label}": \`provider\` requires \`model\` as well`,
-                );
-              let resolved: WorkflowModel | undefined;
-              if (providerOpt) {
-                resolved = ctx.modelRegistry.find(providerOpt, modelOpt);
-              } else {
-                const slash = modelOpt.indexOf("/");
-                if (slash > 0) {
-                  resolved = ctx.modelRegistry.find(
-                    modelOpt.slice(0, slash),
-                    modelOpt.slice(slash + 1),
-                  );
-                }
-                resolved ??= ctx.modelRegistry
-                  .getAll()
-                  .find((m) => m.id === modelOpt);
-              }
-              if (!resolved) {
-                const requested = providerOpt
-                  ? `${providerOpt}/${modelOpt}`
-                  : modelOpt;
-                return fail(
-                  `agent "${label}": unknown model "${requested}" (use provider/id)`,
-                );
-              }
-              model = resolved;
-            }
             record.model = model?.id;
             record.contextWindow = model?.contextWindow;
             emit();
-
-            // Effort → thinking level; default inherits the parent session.
-            let thinkingLevel: ThinkingLevel = pi.getThinkingLevel();
-            if (opts.effort !== undefined) {
-              const effort = String(opts.effort);
-              if (!(THINKING_LEVELS as readonly string[]).includes(effort)) {
-                return fail(
-                  `agent "${label}": invalid effort "${effort}" (use ${THINKING_LEVELS.join("|")})`,
-                );
-              }
-              thinkingLevel = effort as ThinkingLevel;
-            }
 
             /**
              * Isolation is requested, not best-effort: the caller asks for a
@@ -916,6 +989,7 @@ export default function workflows(pi: ExtensionAPI) {
               const resources = await getResources(
                 opts.schema !== undefined,
                 agentCwd,
+                agentType?.body,
               );
               const outcome = await runAgent({
                 prompt,
@@ -926,6 +1000,7 @@ export default function workflows(pi: ExtensionAPI) {
                 loader: resources.loader,
                 settingsManager: resources.settingsManager,
                 modelRegistry: ctx.modelRegistry,
+                ...(agentType?.tools ? { tools: agentType.tools } : {}),
                 signal: runSignal,
                 onProgress: (progress) => {
                   record.preview = progress.preview.slice(0, PREVIEW_LENGTH);

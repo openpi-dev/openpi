@@ -21,6 +21,7 @@ const MAX_LOG_MESSAGE_BYTES = 8 * 1024;
 export const AGENT_CALL_BACKSTOP_MARGIN = 8;
 
 export interface SandboxAgentOptions {
+  agent_type?: unknown;
   label?: unknown;
   phase?: unknown;
   schema?: unknown;
@@ -91,6 +92,7 @@ function terminateChild(child: ChildProcess) {
 function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
   if (!isRecord(value)) return {};
   return {
+    ...(value.agent_type !== undefined ? { agent_type: value.agent_type } : {}),
     ...(value.label !== undefined ? { label: value.label } : {}),
     ...(value.phase !== undefined ? { phase: value.phase } : {}),
     ...(value.schema !== undefined ? { schema: value.schema } : {}),
