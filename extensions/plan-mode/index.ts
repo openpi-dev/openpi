@@ -84,6 +84,14 @@ export function planToolCallDecision(
   toolName: string,
   input?: Record<string, unknown>,
 ) {
+  // Creating a worktree changes Git metadata before the child even starts;
+  // delegation is safe in plan mode only in the existing checkout.
+  if (toolName === "subagent_spawn" && input?.isolation === "worktree") {
+    return {
+      block: true as const,
+      reason: `Plan mode cannot create an isolated worktree. Omit isolation for read-only delegation. ${BLOCK_REASON}`,
+    };
+  }
   if (PLAN_SAFE_TOOLS.has(toolName)) return;
   // bash is decided per command, not per tool: the read-only investigation a
   // plan is built on (history, diffs, PR state) lives behind it.

@@ -54,10 +54,12 @@ export function planModeChildTools(
   return requested.filter((tool) => PLAN_MODE_CHILD_TOOLS.includes(tool));
 }
 
-/** Whether a declared type can run unchanged under plan mode. */
+/** Whether a selected type can run unchanged under plan mode. */
 export function planModeAllowsDeclaredTools(tools?: readonly string[]) {
+  // Omitting `tools` inherits the normal write-capable child set, so selecting
+  // that type would still pair its unchanged prompt with narrowed capabilities.
   return (
-    tools === undefined ||
+    tools !== undefined &&
     tools.every((tool) => PLAN_MODE_CHILD_TOOLS.includes(tool))
   );
 }

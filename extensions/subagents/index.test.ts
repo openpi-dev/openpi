@@ -26,6 +26,10 @@ test("session_start re-registers agent types for its cwd and live trust decision
       path.join(cwd, ".pi", "agents", "session-only.md"),
       "---\nname: session-only\ndescription: Present only with live session trust.\ntools: [read]\n---\nRead only.",
     );
+    await writeFile(
+      path.join(cwd, ".pi", "agents", "inherited-tools.md"),
+      "---\nname: inherited-tools\ndescription: Inherits the normal child tool set.\n---\nPerform general work.",
+    );
 
     const sessionStarts: Array<
       (event: unknown, ctx: ExtensionContext) => unknown
@@ -166,7 +170,33 @@ test("session_start re-registers agent types for its cwd and live trust decision
           undefined,
           context,
         ),
-      /agent type "implementer" declares tools that plan mode excludes/,
+      /agent type "implementer" would be narrowed to capabilities that contradict its unchanged prompt/,
+    );
+
+    // A custom type that omits `tools` inherits the normal write-capable set;
+    // it must not evade the same contradiction check merely because its
+    // allowlist is undefined.
+    start({}, {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => true,
+    } as unknown as ExtensionContext);
+    const trustedSpawn = spawnTools.at(-1)?.execute;
+    assert.ok(trustedSpawn);
+    await assert.rejects(
+      () =>
+        trustedSpawn(
+          "call",
+          {
+            prompt: "Inspect only.",
+            name: "inspect",
+            agent_type: "inherited-tools",
+          },
+          undefined,
+          undefined,
+          context,
+        ),
+      /agent type "inherited-tools" would be narrowed to capabilities that contradict its unchanged prompt/,
     );
   });
 });

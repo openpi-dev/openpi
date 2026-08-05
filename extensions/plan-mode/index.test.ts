@@ -158,6 +158,11 @@ test("spawning is allowed while planning, resuming an existing child is not", ()
   // PLAN_MODE_CHILD_TOOLS, which has no write, edit, or bash.
   assert.ok(PLAN_SAFE_TOOLS.has("subagent_spawn"));
   assert.equal(planToolCallDecision("subagent_spawn"), undefined);
+  const isolated = planToolCallDecision("subagent_spawn", {
+    isolation: "worktree",
+  });
+  assert.equal(isolated?.block, true);
+  assert.match(isolated?.reason ?? "", /cannot create an isolated worktree/);
 
   // subagent_send resumes a child that may predate the plan and still hold the
   // full tool set; narrowing only applies at spawn.
@@ -189,7 +194,9 @@ test("plan mode rejects type declarations it would silently narrow", () => {
   assert.equal(planModeAllowsDeclaredTools(["read", "rg"]), true);
   assert.equal(planModeAllowsDeclaredTools(["read", "write"]), false);
   assert.equal(planModeAllowsDeclaredTools(["bash"]), false);
-  assert.equal(planModeAllowsDeclaredTools(undefined), true);
+  // Omitting a type allowlist inherits the normal write-capable child tools,
+  // so selecting that type would still require silent narrowing.
+  assert.equal(planModeAllowsDeclaredTools(undefined), false);
 });
 
 test("the stance is broadcast on every change, including shutdown", () => {

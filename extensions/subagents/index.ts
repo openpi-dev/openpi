@@ -516,11 +516,11 @@ export default function (pi: ExtensionAPI) {
       }
       if (
         planning &&
-        agentType?.tools &&
+        agentType &&
         !planModeAllowsDeclaredTools(declaredChildTools)
       ) {
         throw new Error(
-          `Plan mode is active: agent type "${agentType.name}" declares tools that plan mode excludes. Use explorer, reviewer, advisor, or omit agent_type for read-only investigation.`,
+          `Plan mode is active: agent type "${agentType.name}" would be narrowed to capabilities that contradict its unchanged prompt. Use explorer, reviewer, advisor, or omit agent_type for read-only investigation.`,
         );
       }
 
