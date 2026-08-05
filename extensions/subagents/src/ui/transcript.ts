@@ -11,12 +11,11 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
   type DefaultTextStyle,
+  type MarkdownOptions,
 } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import type { SubagentSnapshot, TranscriptItem } from "../domain.ts";
 
-const ANSI_PATTERN =
-  // eslint-disable-next-line no-control-regex
-  /[\u001B\u009B][[\]()#;?]*(?:(?:(?:[a-zA-Z\d]*(?:;[a-zA-Z\d]*)*)?\u0007)|(?:(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~]))/g;
 const MAX_CACHED_WIDTHS_PER_ITEM = 2;
 
 /**
@@ -25,19 +24,24 @@ const MAX_CACHED_WIDTHS_PER_ITEM = 2;
  * TUI, which desyncs the renderer and smears the overlay.
  */
 export function sanitizeText(text: string): string {
-  return text
-    .replace(ANSI_PATTERN, "")
-    .replaceAll("\t", "  ")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f]/g, "");
+  return sanitizeTerminalText(text);
+}
+
+function singleLinePreview(text: string) {
+  // Keep meaningful whitespace inside parsed commands and paths; only fold
+  // physical line breaks so a preview remains one terminal row.
+  return sanitizeText(text).replace(/\r?\n/g, " ↵ ");
 }
 
 function compactPreview(text: string) {
-  return sanitizeText(text).replace(/\s+/g, " ").trim();
+  return singleLinePreview(text).trim();
 }
 
 function stringField(value: Record<string, unknown>, field: string) {
   const candidate = value[field];
-  return typeof candidate === "string" ? compactPreview(candidate) : undefined;
+  return typeof candidate === "string" && candidate.length > 0
+    ? singleLinePreview(candidate)
+    : undefined;
 }
 
 function parsedArgs(preview: string) {
@@ -90,6 +94,7 @@ function renderMarkdown(
   text: string,
   width: number,
   defaultTextStyle?: DefaultTextStyle,
+  options?: MarkdownOptions,
 ) {
   const clean = sanitizeText(text).trim();
   if (!clean) return [];
@@ -99,6 +104,7 @@ function renderMarkdown(
     0,
     transcriptMarkdownTheme(),
     defaultTextStyle,
+    options,
   );
   return markdown
     .render(Math.max(1, width))
@@ -106,17 +112,18 @@ function renderMarkdown(
 }
 
 function renderUserText(theme: Theme, text: string, width: number) {
-  const clean = sanitizeText(text).trim();
-  if (!clean) return [];
-  const out: string[] = [];
-  const wrapped = wrapTextWithAnsi(clean, Math.max(1, width - 2));
-  for (let i = 0; i < wrapped.length; i++) {
-    const prefix = i === 0 ? theme.fg("accent", "> ") : "  ";
-    out.push(
-      truncateToWidth(prefix + theme.fg("userMessageText", wrapped[i]), width),
-    );
-  }
-  return out;
+  const lines = renderMarkdown(
+    text,
+    Math.max(1, width - 2),
+    { color: (content: string) => theme.fg("userMessageText", content) },
+    { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+  );
+  return lines.map((line, index) =>
+    truncateToWidth(
+      (index === 0 ? theme.fg("accent", "> ") : "  ") + line,
+      width,
+    ),
+  );
 }
 
 function renderThinking(theme: Theme, text: string, width: number) {
@@ -201,7 +208,7 @@ function renderTranscriptItem(
  * from their component's invalidate() when Pi changes theme.
  */
 export class TranscriptRenderer {
-  private itemCache = new Map<TranscriptItem, Map<number, string[]>>();
+  private itemCache = new WeakMap<TranscriptItem, Map<number, string[]>>();
 
   render(snap: SubagentSnapshot, width: number, theme: Theme) {
     const out: string[] = [];
@@ -271,7 +278,7 @@ export class TranscriptRenderer {
   }
 
   invalidate() {
-    this.itemCache.clear();
+    this.itemCache = new WeakMap();
   }
 }
 

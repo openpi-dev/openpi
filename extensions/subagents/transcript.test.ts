@@ -7,6 +7,7 @@ import type { SubagentSnapshot } from "./src/domain.ts";
 import {
   TranscriptRenderer,
   buildTranscriptLines,
+  sanitizeText,
   summarizeToolArgs,
 } from "./src/ui/transcript.ts";
 
@@ -43,10 +44,21 @@ function plain(lines: readonly string[]) {
   return stripVTControlCharacters(lines.join("\n"));
 }
 
+test("transcript sanitization strips terminal control sequences before rendering", () => {
+  assert.equal(
+    sanitizeText("\u001b]52;c;Y2xpcGJvYXJk\u0007**safe**\u001b[31m"),
+    "**safe**",
+  );
+});
+
 test("takeover transcript renders finalized and live assistant Markdown within its width", () => {
   const lines = buildTranscriptLines(
     snapshot({
       transcript: [
+        {
+          kind: "user",
+          text: "**Request:** inspect `takeover.ts`",
+        },
         {
           kind: "assistant",
           parts: [
@@ -69,7 +81,10 @@ test("takeover transcript renders finalized and live assistant Markdown within i
   const rendered = plain(lines);
 
   assert.doesNotMatch(rendered, /\*\*|`|- first item|- active item/);
-  assert.match(rendered, /Counts:|npm test|• first item|Live:|Markdown|Plan:/);
+  assert.match(
+    rendered,
+    /Request:|takeover\.ts|Counts:|npm test|• first item|Live:|Markdown|Plan:/,
+  );
   assert.ok(lines.every((line) => visibleWidth(line) <= 24));
 });
 
@@ -101,6 +116,14 @@ test("thinking renders Markdown but preserves redaction", () => {
 
 test("tool calls summarize known bounded JSON arguments and safely fall back", () => {
   assert.equal(summarizeToolArgs("bash", '{"command":"npm test"}'), "npm test");
+  assert.equal(
+    summarizeToolArgs("bash", JSON.stringify({ command: "printf x\\ " })),
+    "printf x\\ ",
+  );
+  assert.equal(
+    summarizeToolArgs("bash", '{"command":"printf \'a  b\'\\necho done"}'),
+    "printf 'a  b' ↵ echo done",
+  );
   assert.equal(summarizeToolArgs("read", '{"path":"src/a.ts"}'), "src/a.ts");
   assert.equal(
     summarizeToolArgs(
@@ -115,7 +138,7 @@ test("tool calls summarize known bounded JSON arguments and safely fall back", (
   );
   assert.equal(
     summarizeToolArgs("custom", '{"query":"  safe\\npreview  "}'),
-    '{"query":" safe\\npreview "}',
+    '{"query":"  safe\\npreview  "}',
   );
   assert.equal(summarizeToolArgs("bash", '{"command":'), '{"command":');
 });
