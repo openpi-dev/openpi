@@ -340,8 +340,44 @@ test("shutdown helper bounds a stuck hook before disposal", async () => {
     },
   };
 
-  await shutdownAndDisposeChildSession(session, { timeoutMs: 10 });
+  const result = await shutdownAndDisposeChildSession(session, {
+    timeoutMs: 10,
+  });
   assert.equal(disposals, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.timedOut, true);
+  assert.match(result.errors.join("; "), /shutdown timed out/i);
+});
+
+test("shutdown helper bounds abort and surfaces cleanup failure", async () => {
+  let aborts = 0;
+  let disposals = 0;
+  const session: DisposableChildSession = {
+    extensionRunner: {
+      hasHandlers: () => false,
+      async emit() {},
+    },
+    abort() {
+      aborts++;
+      return new Promise(() => {});
+    },
+    dispose() {
+      disposals++;
+      throw new Error("dispose fixture");
+    },
+  };
+
+  const startedAt = Date.now();
+  const result = await shutdownAndDisposeChildSession(session, {
+    abort: true,
+    timeoutMs: 10,
+  });
+  assert.ok(Date.now() - startedAt < 200);
+  assert.equal(aborts, 1);
+  assert.equal(disposals, 1);
+  assert.equal(result.ok, false);
+  assert.equal(result.timedOut, true);
+  assert.match(result.errors.join("; "), /abort timed out.*dispose fixture/i);
 });
 
 /**

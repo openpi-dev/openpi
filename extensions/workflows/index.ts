@@ -43,6 +43,7 @@ import {
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { waitBounded } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   loadAgentTypes,
@@ -251,6 +252,39 @@ function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
   };
 }
 
+export interface ActiveWorkflowRunLifecycle {
+  details: WorkflowDetails;
+  controller: Pick<RunController, "abort" | "settle">;
+  completion?: Promise<void>;
+  forceSettle(error: string): void;
+}
+
+/** Abort every live child and bound the whole session-shutdown barrier once. */
+export async function shutdownActiveWorkflowRuns(
+  runs: readonly ActiveWorkflowRunLifecycle[],
+  timeoutMs = 8_000,
+) {
+  for (const run of runs) run.controller.abort("Session is shutting down");
+  const completions = runs
+    .map((run) => run.completion)
+    .filter(
+      (completion): completion is Promise<void> => completion !== undefined,
+    );
+  const completed = await waitBounded(
+    Promise.allSettled([
+      ...runs.map((run) => run.controller.settle({ abort: true })),
+      ...completions,
+    ]),
+    timeoutMs,
+  );
+  if (!completed) {
+    for (const run of runs) {
+      run.forceSettle("Session shutdown deadline exceeded");
+    }
+  }
+  return completed;
+}
+
 interface RunSummary {
   runId: string;
   name?: string;
@@ -341,14 +375,7 @@ function runDetailText(
 
 export default function workflows(pi: ExtensionAPI) {
   /** Live background runs, for /workflows and shutdown cleanup. */
-  const activeRuns = new Map<
-    string,
-    {
-      details: WorkflowDetails;
-      controller: RunController;
-      completion?: Promise<void>;
-    }
-  >();
+  const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
@@ -532,25 +559,7 @@ export default function workflows(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
-    const runs = [...activeRuns.values()];
-    for (const run of runs) run.controller.abort("Session is shutting down");
-    await Promise.all(
-      runs.map((run) => run.controller.settle({ abort: true })),
-    );
-    const completions = runs
-      .map((run) => run.completion)
-      .filter(
-        (completion): completion is Promise<void> => completion !== undefined,
-      );
-    if (completions.length > 0) {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      const timeout = new Promise<void>((resolve) => {
-        timer = setTimeout(resolve, 8_000);
-        timer.unref?.();
-      });
-      await Promise.race([Promise.allSettled(completions), timeout]);
-      if (timer) clearTimeout(timer);
-    }
+    await shutdownActiveWorkflowRuns([...activeRuns.values()]);
     try {
       lastContext?.ui.setStatus("workflows", undefined);
       lastContext?.ui.setWidget(widgetKey, undefined);
@@ -731,8 +740,10 @@ export default function workflows(pi: ExtensionAPI) {
       // runs are covered by the below-editor indicator and /workflows.
       let emitTimer: ReturnType<typeof setTimeout> | undefined;
       let lastEmit = 0;
-      const flush = () => {
+      let runSettled = false;
+      const flush = (terminal = false) => {
         emitTimer = undefined;
+        if (runSettled && !terminal) return;
         lastEmit = Date.now();
         if (background) return;
         onUpdate?.({
@@ -741,6 +752,7 @@ export default function workflows(pi: ExtensionAPI) {
         });
       };
       const emit = (checkpoint = true) => {
+        if (runSettled) return;
         if (checkpoint) persistence.checkpoint();
         if (emitTimer) return;
         emitTimer = setTimeout(
@@ -748,12 +760,52 @@ export default function workflows(pi: ExtensionAPI) {
           Math.max(0, EMIT_INTERVAL_MS - (Date.now() - lastEmit)),
         );
       };
-      const flushNow = () => {
+      const flushNow = (terminal = false) => {
         if (emitTimer) clearTimeout(emitTimer);
-        flush();
+        flush(terminal);
+      };
+
+      const terminalize = (
+        status: WorkflowDetails["status"],
+        error?: string,
+      ) => {
+        if (runSettled) return false;
+        runSettled = true;
+        if (emitTimer) {
+          clearTimeout(emitTimer);
+          emitTimer = undefined;
+        }
+        controller.abort(
+          error ??
+            (status === "completed"
+              ? "Workflow completed"
+              : "Workflow was settled"),
+        );
+        for (const record of details.agents) {
+          if (record.state !== "running") continue;
+          record.state = "error";
+          record.error =
+            record.error ?? "Agent did not settle before run cleanup";
+          record.finishedAt = Date.now();
+        }
+        details.status = status;
+        details.finishedAt = Date.now();
+        if (error) details.error = error;
+        return true;
+      };
+
+      const forceSettle = (error: string) => {
+        if (!terminalize("failed", error)) return;
+        try {
+          persistence.flush();
+        } catch (persistenceError) {
+          details.error = `${error}; artifact persistence failed: ${errorText(persistenceError)}`;
+        }
+        flushNow(true);
       };
 
       const phaseFn = (title: unknown) => {
+        if (runSettled) return;
         const text = sanitizeLine(String(title), 160);
         if (!text) return;
         details.currentPhase = text;
@@ -765,6 +817,7 @@ export default function workflows(pi: ExtensionAPI) {
       // The script's narrator. Unlike phase(), this is append-only progress
       // text, so it never mutates the phase list a run is judged against.
       const logFn = (text: string) => {
+        if (runSettled) return;
         appendLog(details, text, Date.now());
         emit();
       };
@@ -789,6 +842,13 @@ export default function workflows(pi: ExtensionAPI) {
             ? opts.label.trim().slice(0, 160)
             : `agent-${index}`;
 
+        if (runSettled || controller.signal.aborted) {
+          return {
+            ok: false,
+            output: "",
+            error: "Workflow was aborted before this agent started",
+          };
+        }
         const record: AgentRecord = {
           index,
           label,
@@ -809,10 +869,12 @@ export default function workflows(pi: ExtensionAPI) {
         emit(false);
 
         const fail = (error: string): ScriptAgentResult => {
-          record.state = "error";
-          record.error = error;
-          record.finishedAt = Date.now();
-          emit();
+          if (record.state === "running" && !runSettled) {
+            record.state = "error";
+            record.error = error;
+            record.finishedAt = Date.now();
+            emit();
+          }
           return { ok: false, output: "", error };
         };
 
@@ -1013,7 +1075,12 @@ export default function workflows(pi: ExtensionAPI) {
                 );
               }
               worktree = created.worktree;
-              record.worktreeBranch = worktree.branch;
+              if (!runSettled) record.worktreeBranch = worktree.branch;
+            }
+            if (runSignal.aborted || runSettled) {
+              throw runSignal.reason instanceof Error
+                ? runSignal.reason
+                : new Error("Workflow was aborted");
             }
             const agentCwd = worktree?.path ?? ctx.cwd;
 
@@ -1022,13 +1089,35 @@ export default function workflows(pi: ExtensionAPI) {
             // would skip the finally and leak the worktree permanently —
             // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
-              const resources =
+              let rejectResourceLoad: (() => void) | undefined;
+              const resourceAbort = new Promise<never>((_resolve, reject) => {
+                rejectResourceLoad = () =>
+                  reject(
+                    runSignal.reason instanceof Error
+                      ? runSignal.reason
+                      : new Error("Workflow was aborted"),
+                  );
+                runSignal.addEventListener("abort", rejectResourceLoad, {
+                  once: true,
+                });
+                if (runSignal.aborted) queueMicrotask(rejectResourceLoad);
+              });
+              const resources = await Promise.race([
                 replayResources ??
-                (await getResources(
-                  opts.schema !== undefined,
-                  agentCwd,
-                  agentType?.body,
-                ));
+                  getResources(
+                    opts.schema !== undefined,
+                    agentCwd,
+                    agentType?.body,
+                  ),
+                resourceAbort,
+              ]).finally(() => {
+                if (rejectResourceLoad) {
+                  runSignal.removeEventListener("abort", rejectResourceLoad);
+                }
+              });
+              if (runSettled) {
+                throw new Error("Workflow was settled before agent creation");
+              }
               const outcome = await runAgent({
                 prompt,
                 schema: opts.schema,
@@ -1041,6 +1130,7 @@ export default function workflows(pi: ExtensionAPI) {
                 ...(agentType?.tools ? { tools: agentType.tools } : {}),
                 signal: runSignal,
                 onProgress: (progress) => {
+                  if (runSettled || record.state !== "running") return;
                   record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
                   record.usage = progress.usage;
                   record.model = progress.model ?? record.model;
@@ -1051,6 +1141,13 @@ export default function workflows(pi: ExtensionAPI) {
                 },
               });
 
+              if (runSettled || record.state !== "running") {
+                return {
+                  ok: false,
+                  output: "",
+                  error: "Agent completed after workflow settlement",
+                };
+              }
               record.usage = outcome.usage;
               record.model = outcome.model ?? record.model;
               record.contextWindow =
@@ -1086,6 +1183,7 @@ export default function workflows(pi: ExtensionAPI) {
                 ? replayKey(completedIdentity)
                 : undefined;
               if (
+                !runSettled &&
                 outcome.ok &&
                 completedKey !== undefined &&
                 completedKey === callKey
@@ -1118,9 +1216,11 @@ export default function workflows(pi: ExtensionAPI) {
                 const cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
                   () => undefined,
                 );
-                if (cleanup?.branchDeleted) delete record.worktreeBranch;
-                if (!cleanup?.removed) record.worktreePath = worktree.path;
-                emit();
+                if (!runSettled) {
+                  if (cleanup?.branchDeleted) delete record.worktreeBranch;
+                  if (!cleanup?.removed) record.worktreePath = worktree.path;
+                  emit();
+                }
               }
             }
           }, invocationSignal)
@@ -1130,7 +1230,7 @@ export default function workflows(pi: ExtensionAPI) {
       const runScript = async () => {
         let status: WorkflowDetails["status"] = "completed";
         try {
-          details.result = await runWorkflowSandbox({
+          const result = await runWorkflowSandbox({
             source: prepared.source,
             args,
             cwd: ctx.cwd,
@@ -1145,30 +1245,27 @@ export default function workflows(pi: ExtensionAPI) {
             // the sandbox's backstop has to know how many to expect.
             extraAgentRequests: replay?.available ?? 0,
           });
+          if (!runSettled) details.result = result;
         } catch (error) {
-          details.error = errorText(error);
-          status = controller.signal.aborted ? "aborted" : "failed";
-          controller.abort("Workflow script failed");
+          if (!runSettled) {
+            details.error = errorText(error);
+            status = controller.signal.aborted ? "aborted" : "failed";
+            controller.abort("Workflow script failed");
+          }
         }
 
         const settled = await controller.settle({
           abort: status !== "completed",
         });
+        if (runSettled) return;
         if (!settled) {
           status = "failed";
           details.error = details.error
             ? `${details.error}; agent shutdown deadline exceeded`
             : "Agent shutdown deadline exceeded";
         }
-        for (const record of details.agents) {
-          if (record.state !== "running") continue;
-          record.state = "error";
-          record.error =
-            record.error ?? "Agent did not settle before run cleanup";
-          record.finishedAt = Date.now();
-        }
-        details.status = status;
-        details.finishedAt = Date.now();
+        if (runSettled) return;
+        terminalize(status, details.error);
         try {
           persistence.flush();
         } catch (error) {
@@ -1176,16 +1273,16 @@ export default function workflows(pi: ExtensionAPI) {
           details.error = `Artifact persistence failed: ${errorText(error)}`;
           throw new Error(details.error);
         } finally {
-          flushNow();
+          flushNow(true);
         }
       };
 
       // Registered for /workflows visibility and session_shutdown abort;
       // blocking runs are watchable live from the dashboard too.
-      const activeRun = { details, controller } as {
-        details: WorkflowDetails;
-        controller: RunController;
-        completion?: Promise<void>;
+      const activeRun: ActiveWorkflowRunLifecycle = {
+        details,
+        controller,
+        forceSettle,
       };
       activeRuns.set(runId, activeRun);
       const completion = runScript();

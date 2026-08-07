@@ -151,6 +151,36 @@ test("workflow cancellation aborts a pending agent request", async () => {
   assert.equal(requestAborted, true);
 });
 
+test("late agent completion after cancellation is ignored", async () => {
+  const controller = new AbortController();
+  let complete: ((result: { ok: true; output: string }) => void) | undefined;
+  let startedResolve: (() => void) | undefined;
+  const started = new Promise<void>((resolve) => {
+    startedResolve = resolve;
+  });
+  let logs = 0;
+  const pending = run(
+    `const result = await agent("late"); log(result.output); return result;`,
+    {
+      signal: controller.signal,
+      onLog: () => logs++,
+      onAgent: async () => {
+        startedResolve?.();
+        return new Promise((resolve) => {
+          complete = resolve;
+        });
+      },
+    },
+  );
+
+  await started;
+  controller.abort();
+  await assert.rejects(pending, /Workflow was aborted/);
+  complete?.({ ok: true, output: "too late" });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+  assert.equal(logs, 0);
+});
+
 test("the sandbox budget is the configured budget, not a lower hidden one", async () => {
   const source = `
     let n = 0;

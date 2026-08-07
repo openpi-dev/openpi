@@ -81,6 +81,10 @@ export interface AgentProgress {
   transcript: TranscriptEntry[];
 }
 
+export type WorkflowAgentSessionFactory = (
+  options: Parameters<typeof createAgentSession>[0],
+) => Promise<{ session: AgentSession }>;
+
 export interface RunAgentOptions {
   prompt: string;
   schema?: unknown;
@@ -98,6 +102,10 @@ export interface RunAgentOptions {
   toolCallTimeoutMs?: number;
   /** Test-only override for the first assistant response-event timeout. */
   firstResponseTimeoutMs?: number;
+  /** Test-only override for the end-to-end abort/shutdown deadline. */
+  shutdownTimeoutMs?: number;
+  /** Test seam for lifecycle races; production always uses createAgentSession. */
+  sessionFactory?: WorkflowAgentSessionFactory;
 }
 
 /** Build a fresh extension runtime for each concurrent workflow child. */
@@ -480,6 +488,7 @@ export async function runAgent(
   options: RunAgentOptions,
 ): Promise<AgentOutcome> {
   let structured: unknown;
+  let settled = false;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
   let unsubscribeToolTimeout: (() => void) | undefined;
@@ -488,7 +497,7 @@ export async function runAgent(
       options.schema !== undefined
         ? [
             makeStructuredOutputTool(options.schema, (value) => {
-              structured = value;
+              if (!settled) structured = value;
             }),
           ]
         : undefined;
@@ -496,7 +505,7 @@ export async function runAgent(
       options.tools,
       customTools !== undefined,
     );
-    ({ session } = await createAgentSession({
+    ({ session } = await (options.sessionFactory ?? createAgentSession)({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
       ...(options.thinkingLevel
@@ -514,12 +523,19 @@ export async function runAgent(
       options.toolCallTimeoutMs,
     );
   } catch (error) {
+    settled = true;
     unsubscribeToolTimeout?.();
-    if (session) await shutdownAndDisposeChildSession(session);
+    const cleanup = session
+      ? await shutdownAndDisposeChildSession(session, {
+          abort: true,
+          timeoutMs: options.shutdownTimeoutMs,
+        })
+      : undefined;
+    const cleanupError = cleanup?.errors.join("; ");
     return {
       ok: false,
       output: "",
-      error: `Failed to create agent session: ${errorText(error)}`,
+      error: `Failed to create agent session: ${errorText(error)}${cleanupError ? `; cleanup failed: ${cleanupError}` : ""}`,
       aborted: false,
       usage: emptyUsage(),
       model: options.model?.id,
@@ -583,6 +599,7 @@ export async function runAgent(
 
   let markFirstResponse = () => {};
   const unsubscribe = childSession.subscribe((event) => {
+    if (settled) return;
     if (isAssistantResponseEvent(event)) markFirstResponse();
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
@@ -612,10 +629,26 @@ export async function runAgent(
   });
 
   let aborted = false;
-  let abortPromise: Promise<void> | undefined;
+  let abortOperation: Promise<unknown> | undefined;
+  let rejectForAbort: ((error: Error) => void) | undefined;
+  const abortRace = new Promise<never>((_resolve, reject) => {
+    rejectForAbort = reject;
+  });
   const onAbort = () => {
+    if (aborted) return;
     aborted = true;
-    abortPromise ??= childSession.abort().catch(() => {});
+    try {
+      abortOperation ??= childSession.abort();
+      void abortOperation.catch(() => {});
+    } catch (error) {
+      abortOperation = Promise.reject(error);
+      void abortOperation.catch(() => {});
+    }
+    rejectForAbort?.(
+      options.signal?.reason instanceof Error
+        ? options.signal.reason
+        : new Error("Agent was aborted"),
+    );
   };
   if (options.signal) {
     if (options.signal.aborted) onAbort();
@@ -624,22 +657,33 @@ export async function runAgent(
 
   let output = "";
   let transcript: TranscriptEntry[] = [];
+  let cleanupErrors: string[] = [];
   try {
     if (!aborted) {
-      const watchdog = createFirstResponseWatchdog(() => childSession.abort(), {
-        timeoutMs: options.firstResponseTimeoutMs,
-        model: modelId,
-      });
-      markFirstResponse = watchdog.markResponse;
-      await watchdog.waitFor(
-        childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
+      const watchdog = createFirstResponseWatchdog(
+        () => {
+          abortOperation ??= childSession.abort();
+          void abortOperation.catch(() => {});
+          return abortOperation;
+        },
+        {
+          timeoutMs: options.firstResponseTimeoutMs,
+          model: modelId,
+        },
       );
+      markFirstResponse = watchdog.markResponse;
+      await Promise.race([
+        watchdog.waitFor(
+          childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
+        ),
+        abortRace,
+      ]);
     }
   } catch (error) {
     promptErrorMessage = errorText(error);
   } finally {
     options.signal?.removeEventListener("abort", onAbort);
-    if (abortPromise) await abortPromise;
+    settled = true;
     unsubscribe();
     unsubscribeToolTimeout?.();
     sync();
@@ -648,15 +692,27 @@ export async function runAgent(
       AGENT_OUTPUT_MAX_BYTES,
     );
     transcript = transcriptFromMessages(childSession.messages, toolTimings);
-    await shutdownAndDisposeChildSession(childSession);
+    const cleanup = await shutdownAndDisposeChildSession(childSession, {
+      abort: aborted || promptErrorMessage !== undefined,
+      abortOperation,
+      timeoutMs: options.shutdownTimeoutMs,
+    });
+    cleanupErrors = cleanup.errors;
   }
+
+  const cleanupError =
+    cleanupErrors.length > 0
+      ? `Cleanup failed: ${cleanupErrors.join("; ")}`
+      : undefined;
 
   if (aborted || assistantSettlement?.stopReason === "aborted") {
     return {
       ok: false,
       output,
       structured,
-      error: "Agent was aborted",
+      error: cleanupError
+        ? `Agent was aborted; ${cleanupError}`
+        : "Agent was aborted",
       aborted: true,
       usage,
       model: modelId,
@@ -665,10 +721,9 @@ export async function runAgent(
     };
   }
 
-  const failureMessage = agentFailureMessage(
-    assistantSettlement,
-    promptErrorMessage,
-  );
+  const failureMessage =
+    agentFailureMessage(assistantSettlement, promptErrorMessage) ??
+    cleanupError;
   if (failureMessage !== undefined) {
     return {
       ok: false,

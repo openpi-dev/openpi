@@ -337,16 +337,20 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           });
         };
         activeAgentRequests.set(id, abortController);
-        void options
-          .onAgent(
+        let agentOperation: Promise<SandboxAgentResult>;
+        try {
+          agentOperation = options.onAgent(
             payload.prompt,
             sanitizeAgentOptions(payload.options),
             abortController.signal,
-          )
-          .then(sendResult)
-          .catch((error) =>
-            sendResult({ ok: false, output: "", error: errorText(error) }),
           );
+        } catch (error) {
+          sendResult({ ok: false, output: "", error: errorText(error) });
+          return;
+        }
+        void agentOperation.then(sendResult, (error) =>
+          sendResult({ ok: false, output: "", error: errorText(error) }),
+        );
         return;
       }
       if (raw.kind === "result") {

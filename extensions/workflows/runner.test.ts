@@ -7,6 +7,7 @@ import {
   DefaultResourceLoader,
   SettingsManager,
   type AgentSession,
+  type AgentSessionEvent,
   type AgentSessionEventListener,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
@@ -21,6 +22,7 @@ import {
   transcriptFromMessages,
   workflowChildTools,
   type ToolExecutionTiming,
+  type WorkflowAgentSessionFactory,
 } from "./runner.ts";
 
 async function withTempDir(run: (directory: string) => Promise<void>) {
@@ -30,6 +32,78 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+}
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((next) => {
+    resolve = next;
+  });
+  return { promise, resolve };
+}
+
+function runnerHarness(options: {
+  prompt?: () => Promise<void>;
+  abort?: () => Promise<void>;
+  shutdown?: () => Promise<void>;
+}) {
+  const listeners = new Set<AgentSessionEventListener>();
+  const messages: AgentSession["messages"] = [];
+  let aborts = 0;
+  let disposals = 0;
+  const session = {
+    messages,
+    model: undefined,
+    extensionRunner: {
+      hasHandlers: () => options.shutdown !== undefined,
+      emit: async () => options.shutdown?.(),
+    },
+    async bindExtensions() {},
+    subscribe(listener: AgentSessionEventListener) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    async prompt() {
+      await options.prompt?.();
+    },
+    async abort() {
+      aborts++;
+      await options.abort?.();
+    },
+    dispose() {
+      disposals++;
+    },
+    getContextUsage: () => undefined,
+    getAllTools: () => [],
+    getToolDefinition: () => undefined,
+  } as unknown as AgentSession;
+  const factory: WorkflowAgentSessionFactory = async () => ({ session });
+  return {
+    factory,
+    messages,
+    emit: (event: AgentSessionEvent) => {
+      for (const listener of listeners) listener(event);
+    },
+    aborts: () => aborts,
+    disposals: () => disposals,
+  };
+}
+
+function runHarnessAgent(
+  harness: ReturnType<typeof runnerHarness>,
+  overrides: Partial<Parameters<typeof runAgent>[0]> = {},
+) {
+  return runAgent({
+    prompt: "fixture",
+    cwd: process.cwd(),
+    loader: {} as Parameters<typeof runAgent>[0]["loader"],
+    settingsManager: {} as Parameters<typeof runAgent>[0]["settingsManager"],
+    modelRegistry: { find: () => undefined } as unknown as Parameters<
+      typeof runAgent
+    >[0]["modelRegistry"],
+    sessionFactory: harness.factory,
+    ...overrides,
+  });
 }
 
 const zeroUsage = {
@@ -255,6 +329,89 @@ test("assistant settlement survives failed compaction and clears after recovery"
     "prompt rejected",
     "a thrown prompt error must remain independent from assistant recovery",
   );
+});
+
+test("cancel during prompt owns the session and returns after bounded disposal", async () => {
+  const prompt = deferred<void>();
+  const abort = deferred<void>();
+  const harness = runnerHarness({
+    prompt: () => prompt.promise,
+    abort: () => abort.promise,
+  });
+  const controller = new AbortController();
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+    shutdownTimeoutMs: 10,
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  controller.abort(new Error("cancel fixture"));
+  const outcome = await outcomePromise;
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.match(outcome.error ?? "", /aborted.*abort timed out/i);
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+  prompt.resolve();
+  abort.resolve();
+});
+
+test("cancel during a hanging tool ignores late events and progress writers", async () => {
+  const prompt = deferred<void>();
+  const harness = runnerHarness({ prompt: () => prompt.promise });
+  const controller = new AbortController();
+  let progress = 0;
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+    shutdownTimeoutMs: 20,
+    onProgress: () => progress++,
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  harness.emit({
+    type: "tool_execution_start",
+    toolCallId: "hanging",
+    toolName: "fixture",
+    args: {},
+  });
+  controller.abort();
+  const outcome = await outcomePromise;
+  const settledProgress = progress;
+  harness.emit({
+    type: "tool_execution_end",
+    toolCallId: "hanging",
+    toolName: "fixture",
+    result: { content: [{ type: "text", text: "late" }] },
+    isError: false,
+  });
+  assert.equal(progress, settledProgress);
+  assert.equal(outcome.aborted, true);
+  assert.equal(
+    outcome.transcript.some((entry) => entry.finishedAt !== undefined),
+    false,
+  );
+  prompt.resolve();
+});
+
+test("late prompt completion after first-response timeout cannot become success", async () => {
+  const prompt = deferred<void>();
+  const harness = runnerHarness({ prompt: () => prompt.promise });
+  const outcome = await runHarnessAgent(harness, {
+    firstResponseTimeoutMs: 5,
+    shutdownTimeoutMs: 20,
+  });
+  prompt.resolve();
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error ?? "", /no assistant response event/i);
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("cleanup timeout is surfaced instead of reporting agent success", async () => {
+  const harness = runnerHarness({ shutdown: () => new Promise(() => {}) });
+  const outcome = await runHarnessAgent(harness, { shutdownTimeoutMs: 5 });
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error ?? "", /cleanup failed.*shutdown timed out/i);
+  assert.equal(harness.disposals(), 1);
 });
 
 test("first-response watchdog aborts a silent provider request", async () => {

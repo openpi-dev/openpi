@@ -86,6 +86,7 @@ export class RunController {
   private readonly tasks = new Set<Promise<unknown>>();
   private callCount = 0;
   private sealed = false;
+  private settlePromise?: Promise<boolean>;
   private parentAbort?: () => void;
   private parentSignal?: AbortSignal;
 
@@ -170,29 +171,33 @@ export class RunController {
     this.semaphore.clear();
   }
 
-  /** Seal the task registry and wait a bounded time for every task to settle. */
-  async settle(options: { abort?: boolean; timeoutMs?: number } = {}) {
+  /** Seal once and wait a bounded time for the same task snapshot on every caller. */
+  settle(options: { abort?: boolean; timeoutMs?: number } = {}) {
     this.sealed = true;
     if (options.abort) this.abort();
-    const tasks = [...this.tasks];
-    if (tasks.length === 0) {
-      this.detachParent();
-      return true;
-    }
+    if (this.settlePromise) return this.settlePromise;
 
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<false>((resolve) => {
-      timer = setTimeout(
-        () => resolve(false),
-        options.timeoutMs ?? RUN_SHUTDOWN_TIMEOUT_MS,
-      );
-      timer.unref?.();
-    });
-    const settled = Promise.allSettled(tasks).then(() => true as const);
-    const completed = await Promise.race([settled, timeout]);
-    if (timer) clearTimeout(timer);
-    this.detachParent();
-    return completed;
+    const tasks = [...this.tasks];
+    this.settlePromise = (async () => {
+      if (tasks.length === 0) {
+        this.detachParent();
+        return true;
+      }
+
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<false>((resolve) => {
+        timer = setTimeout(
+          () => resolve(false),
+          options.timeoutMs ?? RUN_SHUTDOWN_TIMEOUT_MS,
+        );
+      });
+      const settled = Promise.allSettled(tasks).then(() => true as const);
+      const completed = await Promise.race([settled, timeout]);
+      if (timer) clearTimeout(timer);
+      this.detachParent();
+      return completed;
+    })();
+    return this.settlePromise;
   }
 
   private detachParent() {

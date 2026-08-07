@@ -193,61 +193,125 @@ interface ChildExtensionRunner {
 
 export interface DisposableChildSession {
   readonly extensionRunner: ChildExtensionRunner;
+  abort?(): Promise<unknown>;
   dispose(): void;
 }
 
-const childShutdowns = new WeakMap<object, Promise<void>>();
+export interface ChildShutdownResult {
+  ok: boolean;
+  errors: string[];
+  timedOut: boolean;
+}
 
-/** Await an operation but never longer than `timeoutMs`; never rejects. */
-export function waitBounded(operation: Promise<unknown>, timeoutMs: number) {
+const childShutdowns = new WeakMap<object, Promise<ChildShutdownResult>>();
+
+function shutdownError(error: unknown) {
+  return (error instanceof Error ? error.message : String(error)).slice(
+    0,
+    4096,
+  );
+}
+
+/** Await an operation but never longer than `timeoutMs`; return whether it settled. */
+export async function waitBounded(
+  operation: Promise<unknown>,
+  timeoutMs: number,
+) {
+  const result = await waitUntil(
+    operation,
+    Date.now() + timeoutMs,
+    "Operation",
+  );
+  return !result.timedOut;
+}
+
+/** Await an operation until a shared deadline and retain failure information. */
+async function waitUntil(
+  operation: Promise<unknown>,
+  deadline: number,
+  label: string,
+): Promise<{ error?: string; timedOut: boolean }> {
+  const remaining = Math.max(0, deadline - Date.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
-  const timeout = new Promise<void>((resolve) => {
-    timer = setTimeout(resolve, timeoutMs);
+  const timeout = new Promise<{ error: string; timedOut: true }>((resolve) => {
+    timer = setTimeout(
+      () => resolve({ error: `${label} timed out`, timedOut: true }),
+      remaining,
+    );
+    timer.unref?.();
   });
-  return Promise.race([
-    operation.then(
-      () => undefined,
-      () => undefined,
-    ),
-    timeout,
-  ])
-    .catch(() => {})
-    .finally(() => {
-      if (timer) clearTimeout(timer);
-    });
+  const completed = operation.then(
+    () => ({ timedOut: false as const }),
+    (error) => ({
+      error: `${label} failed: ${shutdownError(error)}`,
+      timedOut: false as const,
+    }),
+  );
+  const result = await Promise.race([completed, timeout]);
+  if (timer) clearTimeout(timer);
+  return result;
 }
 
 /**
- * Emit child session_shutdown once, then dispose once. Hook failures and a
- * bounded hook deadline never prevent disposal.
+ * Request abort when needed, emit child session_shutdown once, and dispose
+ * once. The whole sequence shares one deadline and reports timeout/failure
+ * instead of silently turning failed cleanup into success.
  */
 export function shutdownAndDisposeChildSession(
   session: DisposableChildSession,
-  options: { timeoutMs?: number } = {},
+  options: {
+    timeoutMs?: number;
+    abort?: boolean;
+    abortOperation?: Promise<unknown>;
+  } = {},
 ) {
   const existing = childShutdowns.get(session);
   if (existing) return existing;
 
-  const shutdown = (async () => {
+  const shutdown = (async (): Promise<ChildShutdownResult> => {
+    const errors: string[] = [];
+    let timedOut = false;
+    const deadline =
+      Date.now() + (options.timeoutMs ?? CHILD_SHUTDOWN_TIMEOUT_MS);
+
+    if (options.abort || options.abortOperation) {
+      let abortOperation = options.abortOperation;
+      try {
+        abortOperation ??= session.abort?.();
+      } catch (error) {
+        errors.push(`Agent abort failed: ${shutdownError(error)}`);
+      }
+      if (abortOperation) {
+        const result = await waitUntil(abortOperation, deadline, "Agent abort");
+        if (result.error) errors.push(result.error);
+        timedOut ||= result.timedOut;
+      }
+    }
+
     try {
       if (session.extensionRunner.hasHandlers("session_shutdown")) {
-        await waitBounded(
+        const result = await waitUntil(
           session.extensionRunner.emit({
             type: "session_shutdown",
             reason: "quit",
           }),
-          options.timeoutMs ?? CHILD_SHUTDOWN_TIMEOUT_MS,
+          deadline,
+          "Child session shutdown",
         );
+        if (result.error) errors.push(result.error);
+        timedOut ||= result.timedOut;
       }
-    } catch {
-      // Extension runner inspection/emission is best-effort during teardown.
-    } finally {
-      try {
-        session.dispose();
-      } catch {
-        // Disposal is terminal and must remain idempotent for callers.
-      }
+    } catch (error) {
+      errors.push(`Child session shutdown failed: ${shutdownError(error)}`);
     }
+
+    try {
+      session.dispose();
+    } catch (error) {
+      errors.push(`Child session disposal failed: ${shutdownError(error)}`);
+    }
+
+    return { ok: errors.length === 0, errors, timedOut };
   })();
 
   childShutdowns.set(session, shutdown);
