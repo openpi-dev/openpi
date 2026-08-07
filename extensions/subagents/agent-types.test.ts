@@ -195,8 +195,8 @@ test("malformed agent types are reported, never thrown", () => {
 });
 
 test("an unrecognized tool name is reported but still applied", () => {
-  // A third-party extension may register tools we cannot enumerate, so this
-  // must not reject — but a typo silently dropping a capability must be loud.
+  // A third-party extension may register tools we cannot enumerate, so parsing
+  // must not reject; launch preflight verifies the final child registry.
   const result = parseAgentType(
     "---\nname: explore\ndescription: Typo.\ntools: [read, gerp]\n---\nBody.",
     "explore",
@@ -396,12 +396,10 @@ test("an agent-type allowlist narrows and cannot re-enable an excluded tool", ()
   assert.equal(admits("subagent_spawn"), false, "denylist still wins");
 });
 
-test("a misspelled frontmatter key is reported, not silently ignored", () => {
+test("misspelled frontmatter restriction keys reject the type", () => {
   // The dangerous direction. `tool:` parses cleanly, leaves `tools` undefined,
-  // and produces a child with the FULL inherited toolset — while the body says
-  // "you are read-only" and the spawn result reports the type as applied. It
-  // is indistinguishable from a type that deliberately inherits everything.
-  // `tools: []` is already a hard error for exactly this reason.
+  // and would produce a child with the FULL inherited toolset. Unknown keys
+  // therefore fail closed instead of being treated as advisory metadata.
   const parsed = parseAgentType(
     `---
 name: research
@@ -415,11 +413,16 @@ You are read-only and must never write files.
     "research",
     "research.md",
   );
-  assert.ok(parsed.agentType, "the type still loads");
-  assert.equal(parsed.agentType?.tools, undefined);
+  assert.equal(parsed.agentType, undefined);
   const messages = parsed.diagnostics.map((d) => d.message).join("\n");
-  assert.match(messages, /unrecognized key "tool"/);
-  assert.match(messages, /unrecognized key "allowed_tools"/);
+  assert.match(
+    messages,
+    /unrecognized frontmatter keys "tool", "allowed_tools"/,
+  );
+  assert.match(
+    messages,
+    /rejected because ignored keys could change its tool restrictions/,
+  );
 });
 
 test("every key the parser reads is accepted without a warning", () => {

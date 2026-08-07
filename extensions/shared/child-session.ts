@@ -150,11 +150,40 @@ export function resolveStandaloneChildProjectTrust(options: {
   return isProjectTrustedOnDisk(options.childCwd, options.agentDir);
 }
 
-/** Start child extension session hooks/resources in headless print mode. */
+interface ChildSessionStartup {
+  bindExtensions(bindings: { mode: "print" }): Promise<void>;
+  getActiveToolNames(): string[];
+}
+
+function boundedToolNames(names: readonly string[]) {
+  const shown = names
+    .slice(0, 8)
+    .map((name) => JSON.stringify(name.slice(0, 128)))
+    .join(", ");
+  return names.length > 8 ? `${shown}, and ${names.length - 8} more` : shown;
+}
+
+/**
+ * Start child extensions, then fail before the first prompt if an explicit
+ * allowlist names a tool that the final bound registry cannot actually expose.
+ * Parent-only names are deliberately ignored here: the denylist remains
+ * authoritative, so naming one can never turn this check into a grant.
+ */
 export async function bindChildSessionExtensions(
-  session: Pick<AgentSession, "bindExtensions">,
+  session: ChildSessionStartup,
+  requestedTools?: readonly string[],
 ) {
   await session.bindExtensions({ mode: "print" });
+  const requested = effectiveChildToolAllowlist(requestedTools);
+  if (!requested) return;
+
+  const active = new Set(session.getActiveToolNames());
+  const missing = [...new Set(requested)].filter((name) => !active.has(name));
+  if (missing.length === 0) return;
+
+  throw new Error(
+    `Child tool preflight failed: requested tool${missing.length === 1 ? "" : "s"} ${boundedToolNames(missing)} ${missing.length === 1 ? "is" : "are"} unavailable after child extensions initialized. Check the Agent Type tools list and child extension loading.`,
+  );
 }
 
 interface ChildExtensionRunner {

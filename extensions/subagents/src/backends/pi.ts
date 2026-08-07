@@ -207,7 +207,7 @@ const makePiSession = (
         // A rejection here would otherwise leak the freshly created session:
         // the scope finalizer that owns cleanup is only registered later.
         try {
-          await bindChildSessionExtensions(session);
+          await bindChildSessionExtensions(session, task.tools);
         } catch (error) {
           await shutdownAndDisposeChildSession(session);
           throw error;

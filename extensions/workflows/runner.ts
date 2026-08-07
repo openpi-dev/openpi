@@ -508,7 +508,7 @@ export async function runAgent(
       ...(customTools ? { customTools } : {}),
       ...childToolPolicy(childTools),
     }));
-    await bindChildSessionExtensions(session);
+    await bindChildSessionExtensions(session, childTools);
     unsubscribeToolTimeout = guardWorkflowChildTools(
       session,
       options.toolCallTimeoutMs,

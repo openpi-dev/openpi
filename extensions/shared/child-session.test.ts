@@ -49,6 +49,76 @@ test("effective child allowlists never advertise parent-only tools", () => {
   });
 });
 
+test("explicit child tools are checked against the final bound registry", async () => {
+  await withTempDir(async (directory) => {
+    const settingsManager = SettingsManager.inMemory(undefined, {
+      projectTrusted: false,
+    });
+    const loader = new DefaultResourceLoader({
+      cwd: directory,
+      agentDir: path.join(directory, "inline-agent"),
+      settingsManager,
+      extensionFactories: [
+        (pi) => {
+          pi.registerTool({
+            name: "fixture_extension_tool",
+            label: "Fixture Extension Tool",
+            description: "fixture",
+            parameters: Type.Object({}),
+            async execute() {
+              return {
+                content: [{ type: "text", text: "ok" }],
+                details: {},
+              };
+            },
+          });
+        },
+      ],
+    });
+    await loader.reload();
+
+    const create = async (tools: readonly string[]) => {
+      const { session } = await createAgentSession({
+        cwd: directory,
+        agentDir: path.join(directory, "inline-agent"),
+        resourceLoader: loader,
+        settingsManager,
+        sessionManager: SessionManager.inMemory(directory),
+        ...childToolPolicy(tools),
+      });
+      return session;
+    };
+
+    const available = await create(["read", "fixture_extension_tool"]);
+    await bindChildSessionExtensions(available, [
+      "read",
+      "fixture_extension_tool",
+    ]);
+    assert.deepEqual(available.getActiveToolNames().sort(), [
+      "fixture_extension_tool",
+      "read",
+    ]);
+    await shutdownAndDisposeChildSession(available);
+
+    const missing = await create(["read", "missing_fixture_tool"]);
+    await assert.rejects(
+      bindChildSessionExtensions(missing, ["read", "missing_fixture_tool"]),
+      /Child tool preflight failed: requested tool "missing_fixture_tool" is unavailable after child extensions initialized/,
+    );
+    assert.equal(
+      missing.messages.length,
+      0,
+      "preflight must run before prompt",
+    );
+    await shutdownAndDisposeChildSession(missing);
+
+    const excluded = await create(["read", "subagent_spawn"]);
+    await bindChildSessionExtensions(excluded, ["read", "subagent_spawn"]);
+    assert.deepEqual(excluded.getActiveToolNames(), ["read"]);
+    await shutdownAndDisposeChildSession(excluded);
+  });
+});
+
 test("child denylist keeps extension and workflow structured tools available", async () => {
   await withTempDir(async (directory) => {
     let starts = 0;

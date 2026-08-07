@@ -81,7 +81,10 @@ loading an untrusted project's prompt before trust resolves. Edits take effect
 on `/reload` or a new session — the same as skills.
 
 A malformed file is skipped and reported as a warning at session start; it never
-prevents the other types from loading, and never blocks spawning.
+prevents the other types from loading, and never blocks spawning. Unknown
+frontmatter keys make that file malformed rather than being ignored: this fails
+closed when `tools` or another restriction field is misspelled instead of
+silently giving the child the inherited full tool set.
 
 ## Model and effort precedence
 
@@ -150,9 +153,13 @@ changed. A selected type whose declared tools plan mode would narrow (such as
 implementation prompt; use `explorer`, `reviewer`, `advisor`, or omit the type
 for read-only investigation.
 
-Unrecognized tool names are kept and reported rather than rejected: a
-third-party extension may register tools this package cannot enumerate, but a
-typo that silently removes a capability is worth a warning.
+Unrecognized tool names are kept at parse time because a third-party extension
+may register them. After child extensions initialize, every explicitly listed
+child-safe tool is checked against the final active child registry before the
+first model prompt. An extension-registered tool therefore works normally; a
+typo or unavailable tool fails that direct Subagent or Workflow agent launch
+with a bounded error and sends no model tokens. Parent-only names remain denied
+and are not treated as missing, so the child denylist stays authoritative.
 
 ## Implementation
 

@@ -1,9 +1,14 @@
 import assert from "node:assert/strict";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import * as path from "node:path";
 import { test } from "node:test";
-import type {
-  AgentSession,
-  AgentSessionEventListener,
-  ToolDefinition,
+import {
+  DefaultResourceLoader,
+  SettingsManager,
+  type AgentSession,
+  type AgentSessionEventListener,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
@@ -12,10 +17,20 @@ import {
   guardWorkflowChildTools,
   observeAssistantSettlement,
   recordToolExecutionTiming,
+  runAgent,
   transcriptFromMessages,
   workflowChildTools,
   type ToolExecutionTiming,
 } from "./runner.ts";
+
+async function withTempDir(run: (directory: string) => Promise<void>) {
+  const directory = await mkdtemp(path.join(tmpdir(), "workflow-preflight-"));
+  try {
+    await run(directory);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
 
 const zeroUsage = {
   input: 0,
@@ -285,6 +300,67 @@ test("structured role children keep their terminating tool without widening capa
     undefined,
     "an untyped child must retain its normal inherited tool set",
   );
+});
+
+test("workflow agents reject a missing declared tool before prompting", async () => {
+  await withTempDir(async (cwd) => {
+    const settingsManager = SettingsManager.inMemory(undefined, {
+      projectTrusted: false,
+    });
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir: path.join(cwd, "agent"),
+      settingsManager,
+      extensionFactories: [
+        (pi) => {
+          pi.registerTool({
+            name: "available_fixture_tool",
+            label: "Available fixture tool",
+            description: "fixture",
+            parameters: Type.Object({}),
+            async execute() {
+              return {
+                content: [{ type: "text", text: "ok" }],
+                details: {},
+              };
+            },
+          });
+        },
+      ],
+    });
+    await loader.reload();
+    const model = {
+      provider: "fixture",
+      id: "fixture-model",
+      name: "Fixture Model",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8_192,
+      maxTokens: 1_024,
+    } as NonNullable<Parameters<typeof runAgent>[0]["model"]>;
+    const outcome = await runAgent({
+      prompt: "must never reach the provider",
+      model,
+      cwd,
+      loader,
+      settingsManager,
+      modelRegistry: {
+        find: () => undefined,
+      } as unknown as Parameters<typeof runAgent>[0]["modelRegistry"],
+      tools: ["read", "available_fixture_tool", "missing_fixture_tool"],
+    });
+
+    assert.equal(outcome.ok, false);
+    assert.match(
+      outcome.error ?? "",
+      /Failed to create agent session: Child tool preflight failed: requested tool "missing_fixture_tool" is unavailable after child extensions initialized/,
+    );
+    assert.deepEqual(outcome.transcript, []);
+    assert.equal(outcome.usage.turns, 0);
+  });
 });
 
 test("workflow children guard structured, normal, and dynamically registered tools", async () => {

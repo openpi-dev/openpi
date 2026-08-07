@@ -16,7 +16,8 @@
  * contribute none. Project files win on a name collision.
  *
  * Malformed files never throw: they are skipped and reported as diagnostics, so
- * one bad file cannot take down spawning.
+ * one bad file cannot take down spawning. Unknown frontmatter keys are malformed
+ * too: ignoring a misspelled restriction key could otherwise widen the child.
  */
 
 import * as fs from "node:fs";
@@ -53,9 +54,9 @@ const NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
 /**
  * Pi's built-in tools (`read bash edit write grep find ls`) plus the read-only
- * tools this package exposes to children. Used only to flag likely typos: a
- * third-party extension can register tools we cannot know about, so an
- * unrecognized name is reported, never rejected.
+ * tools this package exposes to children. Used only for an early diagnostic: a
+ * third-party extension can register other names, whose actual availability is
+ * verified against each final bound child registry before its first prompt.
  */
 export const KNOWN_TOOL_NAMES: readonly string[] = [
   "read",
@@ -267,8 +268,9 @@ export type ParseAgentTypeResult =
 
 /**
  * Parse one agent-type document. Pure: `source` is only echoed into
- * diagnostics. A returned `agentType` may still carry diagnostics (e.g. an
- * unrecognized tool name) — those are advisory, not failures.
+ * diagnostics. Unknown tool names remain advisory because extensions can
+ * register them; unknown frontmatter keys reject the whole type because a
+ * misspelled restriction key could otherwise expand capability.
  */
 export function parseAgentType(
   content: string,
@@ -331,20 +333,21 @@ export function parseAgentType(
     if (KNOWN_TOOL_NAMES.includes(tool)) continue;
     diagnostics.push({
       source,
-      message: `unrecognized tool "${tool}" in ${name}; it is kept, but a typo here silently removes a capability`,
+      message: `unrecognized tool "${tool}" in ${name}; launch will verify it after child extensions initialize`,
     });
   }
   // A misspelled KEY is the dangerous direction: `tool:` or `allowed_tools:`
-  // parses cleanly, leaves `tools` undefined, and produces a child with the
-  // full inherited toolset — while the body says "you are read-only" and the
-  // spawn result reports the type as applied. `tools: []` is already a hard
-  // error for the same reason; a typo deserves at least a warning.
-  for (const key of Object.keys(frontmatter)) {
-    if (KNOWN_FRONTMATTER_KEYS.includes(key)) continue;
-    diagnostics.push({
-      source,
-      message: `unrecognized key "${key}" in ${name}; it is ignored — check the spelling if you meant to restrict or configure this type`,
-    });
+  // parses cleanly, leaves `tools` undefined, and would produce a child with
+  // the full inherited toolset. There is no safe distinction between a typo
+  // in a restriction-relevant key and a harmless future key, so reject every
+  // unknown key rather than guessing and widening capability.
+  const unknownKeys = Object.keys(frontmatter).filter(
+    (key) => !KNOWN_FRONTMATTER_KEYS.includes(key),
+  );
+  if (unknownKeys.length > 0) {
+    return fail(
+      `unrecognized frontmatter key${unknownKeys.length === 1 ? "" : "s"} ${unknownKeys.map((key) => `"${key}"`).join(", ")}; the agent type was rejected because ignored keys could change its tool restrictions`,
+    );
   }
 
   const model = readString(frontmatter.model);
