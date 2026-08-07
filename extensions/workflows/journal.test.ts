@@ -127,9 +127,15 @@ test("an empty or absent journal yields a cache that always misses", () => {
   assert.equal(cache.available, 0);
 });
 
-test("a malformed journal degrades to no cache instead of throwing", () => {
+test("a malformed or old journal degrades to no cache instead of throwing", () => {
   assert.equal(parseJournal(undefined), undefined);
   assert.equal(parseJournal("not an object"), undefined);
+  // Version 1 journals predate side-effect-safe eligibility and project/
+  // resource identity, so accepting one could replay a mutating old call.
+  assert.equal(
+    parseJournal({ version: 1, entries: [{ key: "old", output: "unsafe" }] }),
+    undefined,
+  );
   assert.equal(parseJournal({ version: 99, entries: [] }), undefined);
   assert.equal(parseJournal({ version: JOURNAL_VERSION }), undefined);
 

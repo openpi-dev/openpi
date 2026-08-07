@@ -22,7 +22,9 @@ import { createHash } from "node:crypto";
 
 /** Cap on the whole journal artifact; oldest entries are dropped first. */
 export const JOURNAL_MAX_BYTES = 2 * 1024 * 1024;
-export const JOURNAL_VERSION = 1;
+// Version 1 did not record side-effect eligibility or cwd/resource identity.
+// Reject it rather than risk replaying an old write-capable call.
+export const JOURNAL_VERSION = 2;
 
 /** The replay payload: exactly the fields a script observes from agent(). */
 export interface JournalEntry {

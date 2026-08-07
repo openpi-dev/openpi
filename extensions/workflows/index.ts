@@ -119,6 +119,10 @@ import {
   type ThinkingLevel,
   type WorkflowModel,
 } from "./runner.ts";
+import {
+  createReplayIdentity,
+  isReplaySafeAgentCall,
+} from "./replay-safety.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
 
@@ -907,27 +911,59 @@ export default function workflows(pi: ExtensionAPI) {
         }
         record.model = model?.id;
         record.contextWindow = model?.contextWindow;
-        const callKey = agentCallKey(prompt, {
-          ...opts,
-          execution: {
-            agentType: agentType
-              ? {
-                  name: agentType.name,
-                  body: agentType.body,
-                  tools: agentType.tools,
-                }
-              : undefined,
-            model: model ? `${model.provider}/${model.id}` : undefined,
-            effort: thinkingLevel,
-          },
+
+        // Replay is deliberately narrower than execution: only a named type
+        // whose effective tool allowlist is entirely known read-only can be
+        // cached. General-purpose children inherit bash/edit/write, custom
+        // tools have unknown effects, and worktrees have state a string result
+        // cannot restore.
+        const replaySafe = isReplaySafeAgentCall({
+          tools: agentType?.tools,
+          isolation: opts.isolation,
         });
+        let replayResources:
+          Awaited<ReturnType<typeof getResources>> | undefined;
+        let replayIdentity: ReturnType<typeof createReplayIdentity> | undefined;
+        if (replaySafe) {
+          try {
+            replayResources = await getResources(
+              opts.schema !== undefined,
+              ctx.cwd,
+              agentType?.body,
+            );
+            replayIdentity = createReplayIdentity(
+              ctx.cwd,
+              replayResources.loader,
+              projectTrusted,
+            );
+          } catch {
+            // Fingerprinting is an optimization boundary. If resources cannot
+            // be resolved, run normally and let the execution path report any
+            // real resource error instead of trusting an unverifiable hit.
+          }
+        }
+        const replayKey = (
+          identity: NonNullable<ReturnType<typeof createReplayIdentity>>,
+        ) =>
+          agentCallKey(prompt, {
+            ...opts,
+            execution: {
+              agentType: agentType
+                ? {
+                    name: agentType.name,
+                    body: agentType.body,
+                    tools: agentType.tools,
+                  }
+                : undefined,
+              model: model ? `${model.provider}/${model.id}` : undefined,
+              effort: thinkingLevel,
+              replayIdentity: identity,
+            },
+          });
+        const callKey = replayIdentity ? replayKey(replayIdentity) : undefined;
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
-        // Isolated calls never replay: their product is a branch of commits
-        // that a cached string cannot reconstitute, so a "hit" would report
-        // work that this run never did.
-        const cached =
-          opts.isolation === undefined ? replay?.take(callKey) : undefined;
+        const cached = callKey ? replay?.take(callKey) : undefined;
         if (cached) {
           record.state = "done";
           record.replayed = true;
@@ -986,11 +1022,13 @@ export default function workflows(pi: ExtensionAPI) {
             // would skip the finally and leak the worktree permanently —
             // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
-              const resources = await getResources(
-                opts.schema !== undefined,
-                agentCwd,
-                agentType?.body,
-              );
+              const resources =
+                replayResources ??
+                (await getResources(
+                  opts.schema !== undefined,
+                  agentCwd,
+                  agentType?.body,
+                ));
               const outcome = await runAgent({
                 prompt,
                 schema: opts.schema,
@@ -1031,14 +1069,29 @@ export default function workflows(pi: ExtensionAPI) {
               }
               emit();
 
-              // Only successes are journaled: re-running a failure is usually
-              // the whole reason someone resumes, so it must not be cached.
-              // Isolated agents are never journaled either — their real product
-              // is a branch of commits, and replaying only the text would hand
-              // a resumed run an output whose work does not exist.
-              if (outcome.ok && !worktree) {
+              // Only provably read-only successes with a complete, stable
+              // identity are journaled. Recheck after execution so a concurrent
+              // writer cannot leave a result keyed to the state from before it
+              // ran. Re-running a failure is usually why someone resumes;
+              // writable, unrestricted, unknown-tool, isolated, changed, and
+              // unfingerprintable calls always run for real.
+              const completedIdentity = callKey
+                ? createReplayIdentity(
+                    ctx.cwd,
+                    resources.loader,
+                    projectTrusted,
+                  )
+                : undefined;
+              const completedKey = completedIdentity
+                ? replayKey(completedIdentity)
+                : undefined;
+              if (
+                outcome.ok &&
+                completedKey !== undefined &&
+                completedKey === callKey
+              ) {
                 journalEntries.push({
-                  key: callKey,
+                  key: completedKey,
                   output: outcome.output,
                   ...(outcome.structured !== undefined
                     ? { structured: outcome.structured }

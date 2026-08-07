@@ -255,7 +255,7 @@ return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(c
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
-- `resume_from_run_id` 重放上一次运行的结果，只有真正改动的调用才重新执行；
+- `resume_from_run_id` 只重放可证明为只读、且调用内容与项目上下文一致的结果：会校验规范化 cwd、仓库状态、加载资源与 Trust；无类型/无限制、含 `bash`/`edit`/`write`、未知自定义工具、worktree 隔离、旧版 journal 或无法生成指纹的调用一律真实执行；只读调用仍按内容匹配，不受并发完成顺序影响；
 - `isolation: "worktree"` 让单个 Agent 在自己的 git worktree 和分支上工作，语义与 `subagent_spawn` 的同名参数一致——**任何会写文件的 fan-out 都该开**，否则并发 Agent 共享一个 checkout 和一个 git index，改动互相覆盖；
 - 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`。
 
