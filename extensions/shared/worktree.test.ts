@@ -187,6 +187,75 @@ describe("worktree lifecycle", () => {
     git(repo, "branch", "-D", result.worktree.branch);
   });
 
+  test("preserves ignored-only output instead of silently deleting it", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "ignored",
+      id: "ignored",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    fs.mkdirSync(path.join(result.worktree.path, "node_modules"), {
+      recursive: true,
+    });
+    fs.writeFileSync(
+      path.join(result.worktree.path, "node_modules", "artifact.txt"),
+      "generated\n",
+    );
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, false);
+    assert.equal(cleanup.ignored, true);
+    assert.match(cleanup.reason ?? "", /ignored files/);
+    assert.ok(fs.existsSync(result.worktree.path));
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
+  test("preserves a detached HEAD that contains child commits", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "detached",
+      id: "detached",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    git(result.worktree.path, "checkout", "--quiet", "--detach");
+    fs.writeFileSync(path.join(result.worktree.path, "a.txt"), "detached\n");
+    git(result.worktree.path, "commit", "--quiet", "-am", "detached work");
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, false);
+    assert.equal(cleanup.detached, true);
+    assert.equal(cleanup.commits, 1);
+    assert.match(cleanup.reason ?? "", /detached HEAD/);
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
+  test("preserves when the immutable base cannot be inspected", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "unknown-base",
+      id: "unknown-base",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    const cleanup = await reclaimWorktree(repo, {
+      ...result.worktree,
+      baseSha: "does-not-exist",
+    });
+    assert.equal(cleanup.removed, false);
+    assert.match(cleanup.reason ?? "", /ambiguous argument|rev-list/);
+    assert.ok(fs.existsSync(result.worktree.path));
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
   test("reclaims a committed worktree and keeps the commits on its branch", async () => {
     const result = await createWorktree({ cwd: repo, label: "done", id: "4" });
     assert.ok(result.ok);
@@ -195,13 +264,27 @@ describe("worktree lifecycle", () => {
     fs.writeFileSync(path.join(result.worktree.path, "a.txt"), "committed\n");
     git(result.worktree.path, "commit", "--quiet", "-am", "child work");
 
-    assert.equal(await worktreeCommitCount(repo, result.worktree.branch), 1);
+    assert.deepEqual(
+      await worktreeCommitCount(
+        repo,
+        result.worktree.branch,
+        result.worktree.baseSha!,
+      ),
+      { ok: true, count: 1 },
+    );
     const cleanup = await reclaimWorktree(repo, result.worktree);
     assert.equal(cleanup.removed, true);
     // Directory gone, work not: the branch is what the parent merges, so a
     // branch holding commits is never deleted by cleanup.
     assert.equal(cleanup.branchDeleted, false);
-    assert.equal(await worktreeCommitCount(repo, result.worktree.branch), 1);
+    assert.deepEqual(
+      await worktreeCommitCount(
+        repo,
+        result.worktree.branch,
+        result.worktree.baseSha!,
+      ),
+      { ok: true, count: 1 },
+    );
     git(repo, "branch", "-D", result.worktree.branch);
   });
 

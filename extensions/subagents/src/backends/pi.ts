@@ -408,10 +408,25 @@ const makePiSession = (
         // child is truly done writing, and never let a git failure block the
         // rest of teardown.
         if (task.worktree) {
-          await waitBounded(
+          const cleanup = await Promise.race([
             reclaimWorktree(task.worktree.repoCwd, task.worktree),
-            WORKTREE_GIT_TIMEOUT_MS,
-          );
+            new Promise<undefined>((resolve) => {
+              setTimeout(resolve, WORKTREE_GIT_TIMEOUT_MS);
+            }),
+          ]).catch(() => undefined);
+          emit({
+            _tag: "WorktreeCleaned",
+            cleanup: cleanup ?? {
+              removed: false,
+              branchDeleted: false,
+              reason: "worktree cleanup timed out or failed",
+              branch: task.worktree.branch,
+              ...(task.worktree.baseSha
+                ? { baseSha: task.worktree.baseSha }
+                : {}),
+              detached: false,
+            },
+          });
         }
         Queue.endUnsafe(events);
       }),

@@ -142,12 +142,22 @@ export function buildWorkflowResultMessage(
   if (isolated.length > 0) {
     lines.push("", "Isolated worktrees:");
     for (const agent of isolated) {
+      const cleanup = agent.worktreeCleanup;
+      const work = cleanup?.commits
+        ? `${cleanup.commits} commit${cleanup.commits === 1 ? "" : "s"} on ${cleanup.branch}`
+        : agent.worktreeBranch
+          ? `committed to branch ${agent.worktreeBranch}`
+          : "no commits";
       lines.push(
-        `- [${agent.label}] ${
-          agent.worktreeBranch
-            ? `committed to branch ${agent.worktreeBranch}`
-            : "no commits"
-        }${agent.worktreePath ? `; kept at ${shortenHome(agent.worktreePath)} (uncommitted changes)` : ""}`,
+        `- [${agent.label}] ${work}${
+          agent.worktreePath
+            ? `; kept at ${shortenHome(agent.worktreePath)} (${cleanup?.reason ?? "uncommitted changes"})`
+            : cleanup?.branchDeleted
+              ? "; empty branch deleted"
+              : cleanup?.reason
+                ? `; cleanup warning: ${cleanup.reason}`
+                : ""
+        }`,
       );
     }
   }

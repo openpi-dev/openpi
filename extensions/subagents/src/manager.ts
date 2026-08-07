@@ -98,6 +98,7 @@ interface MutableSnapshot {
   queued: SubagentSnapshot["queued"];
   finalText: string;
   turns: number;
+  worktreeCleanup?: SubagentSnapshot["worktreeCleanup"];
 }
 
 interface Entry {
@@ -447,6 +448,9 @@ const makeManager = Effect.gen(function* () {
         break;
       case "MetaChanged":
         s.meta = { ...s.meta, ...event.meta };
+        break;
+      case "WorktreeCleaned":
+        s.worktreeCleanup = event.cleanup;
         break;
       case "BackendError":
         s.errorText = bounded(event.message);

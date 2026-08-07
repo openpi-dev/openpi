@@ -55,6 +55,7 @@ import {
   createWorktree,
   reclaimWorktree,
   type Worktree,
+  type WorktreeCleanup,
 } from "../shared/worktree.ts";
 import {
   createWorkflowPersistence,
@@ -1214,11 +1215,20 @@ export default function workflows(pi: ExtensionAPI) {
               // what we report about the worktree.
               if (worktree) {
                 const cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
-                  () => undefined,
+                  (error): WorktreeCleanup => ({
+                    removed: false,
+                    branchDeleted: false,
+                    reason: `worktree cleanup failed: ${errorText(error)}`,
+                    branch: worktree.branch,
+                    ...(worktree.baseSha ? { baseSha: worktree.baseSha } : {}),
+                    detached: false,
+                  }),
                 );
                 if (!runSettled) {
-                  if (cleanup?.branchDeleted) delete record.worktreeBranch;
-                  if (!cleanup?.removed) record.worktreePath = worktree.path;
+                  record.worktreeCleanup = cleanup;
+                  if (cleanup.branchDeleted) delete record.worktreeBranch;
+                  else record.worktreeBranch = cleanup.branch;
+                  if (!cleanup.removed) record.worktreePath = worktree.path;
                   emit();
                 }
               }

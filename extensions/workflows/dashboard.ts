@@ -68,6 +68,19 @@ function runsDir(): string {
   return path.join(getAgentDir(), "workflows");
 }
 
+function isWorktreeCleanup(
+  value: unknown,
+): value is NonNullable<AgentRecord["worktreeCleanup"]> {
+  if (!value || typeof value !== "object") return false;
+  const cleanup = value as Record<string, unknown>;
+  return (
+    typeof cleanup.removed === "boolean" &&
+    typeof cleanup.branchDeleted === "boolean" &&
+    typeof cleanup.branch === "string" &&
+    typeof cleanup.detached === "boolean"
+  );
+}
+
 function normalizeTranscript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
   const transcript: TranscriptEntry[] = [];
@@ -152,6 +165,9 @@ function normalizeDetails(
         : {}),
       ...(typeof a.worktreePath === "string"
         ? { worktreePath: a.worktreePath }
+        : {}),
+      ...(isWorktreeCleanup(a.worktreeCleanup)
+        ? { worktreeCleanup: a.worktreeCleanup }
         : {}),
       transcript: normalizeTranscript(a.transcript),
     });

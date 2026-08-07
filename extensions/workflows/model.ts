@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import type { WorktreeCleanup } from "../shared/worktree.ts";
 import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
@@ -77,8 +78,10 @@ export interface AgentRecord {
   replayed?: boolean;
   /** Branch of the isolated worktree this agent ran in, when it holds commits. */
   worktreeBranch?: string;
-  /** Isolated worktree kept on disk because it had uncommitted changes. */
+  /** Isolated worktree kept on disk because automatic cleanup was unsafe. */
   worktreePath?: string;
+  /** Authoritative result of inspecting and reclaiming the isolated checkout. */
+  worktreeCleanup?: WorktreeCleanup;
   /** Normalized, serializable subagent conversation shown by /workflows. */
   transcript: TranscriptEntry[];
 }

@@ -256,10 +256,26 @@ export interface WorktreeCleanup {
   readonly removed: boolean;
   /** True when the branch was deleted too, because it held no commits. */
   readonly branchDeleted: boolean;
-  /** Why it was kept, for the parent-facing message. */
+  /** Why it was kept, or why a final cleanup step failed. */
   readonly reason?: string;
-  /** Branch; present unless it was deleted as empty. */
+  /** Branch observed in the checkout, or the branch created for it. */
   readonly branch: string;
+  /** Creation-time baseline used to judge whether the child committed work. */
+  readonly baseSha?: string;
+  /** HEAD observed before cleanup. */
+  readonly headSha?: string;
+  /** Commits reachable from HEAD but not from baseSha. */
+  readonly commits?: number;
+  readonly detached: boolean;
+  readonly dirty?: boolean;
+  readonly untracked?: boolean;
+  readonly ignored?: boolean;
+}
+
+export interface WorktreeCommitCount {
+  readonly ok: boolean;
+  readonly count?: number;
+  readonly reason?: string;
 }
 
 /**
@@ -282,58 +298,171 @@ export async function reclaimWorktree(
   repoCwd: string,
   worktree: Worktree,
 ): Promise<WorktreeCleanup> {
-  // Read the checkout's real branch before removing it: after `git worktree
-  // remove` there is nothing left to ask.
+  const base = {
+    removed: false,
+    branchDeleted: false,
+    branch: worktree.branch,
+    ...(worktree.baseSha ? { baseSha: worktree.baseSha } : {}),
+    detached: false,
+  };
+  const preserve = (
+    reason: string,
+    observed: Partial<WorktreeCleanup> = {},
+  ): WorktreeCleanup => ({ ...base, ...observed, reason });
+
+  // Inspect everything that automatic removal could destroy before asking Git
+  // to remove anything. An unknown state is productive until proven otherwise.
   const head = await runGit(
+    ["-C", worktree.path, "rev-parse", "--verify", "HEAD"],
+    repoCwd,
+  );
+  const headSha = head.code === 0 ? firstLine(head.stdout) : "";
+  if (!headSha) {
+    return preserve(
+      firstLine(head.stderr) || "could not inspect worktree HEAD",
+    );
+  }
+
+  const symbolic = await runGit(
     ["-C", worktree.path, "symbolic-ref", "--quiet", "--short", "HEAD"],
     repoCwd,
   );
-  const headBranch = head.code === 0 ? firstLine(head.stdout) : "";
+  const headBranch = symbolic.code === 0 ? firstLine(symbolic.stdout) : "";
+  const detached = !headBranch;
   const branch = headBranch || worktree.branch;
-  const commits = await worktreeCommitCount(repoCwd, branch, worktree.baseSha);
+  const observed = { branch, headSha, detached };
+
+  const status = await runGit(
+    ["-C", worktree.path, "status", "--porcelain=v1", "--untracked-files=all"],
+    repoCwd,
+  );
+  if (status.code !== 0) {
+    return preserve(
+      firstLine(status.stderr) || "could not inspect worktree status",
+      observed,
+    );
+  }
+  const statusLines = status.stdout.split("\n").filter(Boolean);
+  const untracked = statusLines.some((line) => line.startsWith("??"));
+  const dirty = statusLines.length > 0;
+
+  const ignoredFiles = await runGit(
+    [
+      "-C",
+      worktree.path,
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "-z",
+    ],
+    repoCwd,
+  );
+  if (ignoredFiles.code !== 0) {
+    return preserve(
+      firstLine(ignoredFiles.stderr) || "could not inspect ignored files",
+      { ...observed, dirty, untracked },
+    );
+  }
+  const ignored = ignoredFiles.stdout.length > 0;
+
+  if (!worktree.baseSha) {
+    return preserve("worktree creation baseline is unknown", {
+      ...observed,
+      dirty,
+      untracked,
+      ignored,
+    });
+  }
+  const commitCount = await worktreeCommitCount(
+    repoCwd,
+    headSha,
+    worktree.baseSha,
+  );
+  if (!commitCount.ok || commitCount.count === undefined) {
+    return preserve(
+      commitCount.reason ?? "could not inspect worktree commits",
+      {
+        ...observed,
+        dirty,
+        untracked,
+        ignored,
+      },
+    );
+  }
+  const inspected = {
+    ...observed,
+    commits: commitCount.count,
+    dirty,
+    untracked,
+    ignored,
+  };
+
+  if (dirty || ignored) {
+    const contents = [
+      dirty ? "modified or untracked files" : undefined,
+      ignored ? "ignored files" : undefined,
+    ].filter(Boolean);
+    return preserve(`worktree contains ${contents.join(" and ")}`, inspected);
+  }
+  // A detached commit has no surviving ref. Removing its checkout would leave
+  // the only durable result dangling even though the tree itself is clean.
+  if (detached && commitCount.count > 0) {
+    return preserve(
+      "detached HEAD contains commits not reachable from its base",
+      {
+        ...inspected,
+        branch: worktree.branch,
+      },
+    );
+  }
+
   const removed = await runGit(["worktree", "remove", worktree.path], repoCwd);
   if (removed.code !== 0) {
-    return {
-      removed: false,
-      branchDeleted: false,
-      reason:
-        firstLine(removed.stderr) || "git declined to remove the worktree",
-      branch,
-    };
+    return preserve(
+      firstLine(removed.stderr) || "git declined to remove the worktree",
+      inspected,
+    );
   }
-  if (commits > 0) {
-    return { removed: true, branchDeleted: false, branch };
+  if (commitCount.count > 0 || branch !== worktree.branch) {
+    return { ...base, ...inspected, removed: true };
   }
-  // Only ever delete the branch this module created. A branch the child made
-  // itself is not ours to remove, even when it looks empty from here.
-  if (branch !== worktree.branch) {
-    return { removed: true, branchDeleted: false, branch };
-  }
+
+  // Only delete the branch this module created, after proving it is clean and
+  // has no commits beyond its immutable creation baseline.
   const deleted = await runGit(["branch", "-D", worktree.branch], repoCwd);
   return {
+    ...base,
+    ...inspected,
     removed: true,
     branchDeleted: deleted.code === 0,
-    branch: worktree.branch,
+    ...(deleted.code === 0
+      ? {}
+      : {
+          reason: firstLine(deleted.stderr) || "could not delete empty branch",
+        }),
   };
 }
 
-/**
- * Commits on `branch` that its creation base does not have.
- *
- * `base` defaults to the parent's HEAD only for worktrees recorded before
- * baseSha existed; that fallback is the moving baseline this parameter exists
- * to replace.
- */
+/** Commits on `head` that the immutable creation `base` does not have. */
 export async function worktreeCommitCount(
   repoCwd: string,
-  branch: string,
-  base = "HEAD",
-) {
+  head: string,
+  base: string,
+): Promise<WorktreeCommitCount> {
   const result = await runGit(
-    ["rev-list", "--count", `${base}..${branch}`],
+    ["rev-list", "--count", `${base}..${head}`],
     repoCwd,
   );
-  if (result.code !== 0) return 0;
+  if (result.code !== 0) {
+    return {
+      ok: false,
+      reason: firstLine(result.stderr) || "git rev-list failed",
+    };
+  }
   const count = Number.parseInt(firstLine(result.stdout), 10);
-  return Number.isFinite(count) ? count : 0;
+  if (!Number.isFinite(count) || count < 0) {
+    return { ok: false, reason: "git rev-list returned an invalid count" };
+  }
+  return { ok: true, count };
 }
