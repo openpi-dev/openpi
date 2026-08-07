@@ -126,6 +126,10 @@ import {
   isReplaySafeAgentCall,
 } from "./replay-safety.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
+import {
+  finalizeWorktreeHandoff,
+  prepareWorktreeHandoff,
+} from "./worktree-handoff.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
 
 const PREVIEW_LENGTH = 200;
@@ -1214,16 +1218,47 @@ export default function workflows(pi: ExtensionAPI) {
               // finished agent into a failed one, so failures only downgrade
               // what we report about the worktree.
               if (worktree) {
-                const cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
-                  (error): WorktreeCleanup => ({
+                const prepared = prepareWorktreeHandoff({
+                  runDir,
+                  runId: details.runId,
+                  agentIndex: record.index,
+                  agentLabel: record.label,
+                  repoCwd: ctx.cwd,
+                  worktree,
+                });
+                let cleanup: WorktreeCleanup;
+                if (!prepared.ok) {
+                  cleanup = {
                     removed: false,
                     branchDeleted: false,
-                    reason: `worktree cleanup failed: ${errorText(error)}`,
+                    reason: `handoff capture failed; preserved checkout: ${prepared.reason}`,
                     branch: worktree.branch,
                     ...(worktree.baseSha ? { baseSha: worktree.baseSha } : {}),
                     detached: false,
-                  }),
-                );
+                  };
+                } else {
+                  cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
+                    (error): WorktreeCleanup => ({
+                      removed: false,
+                      branchDeleted: false,
+                      reason: `worktree cleanup failed: ${errorText(error)}`,
+                      branch: worktree.branch,
+                      ...(worktree.baseSha
+                        ? { baseSha: worktree.baseSha }
+                        : {}),
+                      detached: false,
+                    }),
+                  );
+                  try {
+                    finalizeWorktreeHandoff(prepared, cleanup);
+                    record.worktreeHandoffArtifact = prepared.artifact;
+                  } catch (error) {
+                    cleanup = {
+                      ...cleanup,
+                      reason: `handoff finalization failed: ${errorText(error)}${cleanup.reason ? `; ${cleanup.reason}` : ""}`,
+                    };
+                  }
+                }
                 if (!runSettled) {
                   record.worktreeCleanup = cleanup;
                   if (cleanup.branchDeleted) delete record.worktreeBranch;

@@ -169,6 +169,9 @@ function normalizeDetails(
       ...(isWorktreeCleanup(a.worktreeCleanup)
         ? { worktreeCleanup: a.worktreeCleanup }
         : {}),
+      ...(typeof a.worktreeHandoffArtifact === "string"
+        ? { worktreeHandoffArtifact: a.worktreeHandoffArtifact }
+        : {}),
       transcript: normalizeTranscript(a.transcript),
     });
   }

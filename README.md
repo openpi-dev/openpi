@@ -257,7 +257,7 @@ return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(c
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
 - `resume_from_run_id` 只重放可证明为只读、且调用内容与项目上下文一致的结果：会校验规范化 cwd、仓库状态、加载资源与 Trust；无类型/无限制、含 `bash`/`edit`/`write`、未知自定义工具、worktree 隔离、旧版 journal 或无法生成指纹的调用一律真实执行；只读调用仍按内容匹配，不受并发完成顺序影响；
 - `isolation: "worktree"` 让单个 Agent 在自己的 git worktree 和分支上工作，语义与 `subagent_spawn` 的同名参数一致——**任何会写文件的 fan-out 都该开**，否则并发 Agent 共享一个 checkout 和一个 git index，改动互相覆盖；
-- 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`。
+- 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`；隔离 Agent 会在清理 checkout 前原子写入有界 handoff manifest（tracked binary patch、stat、实际 branch/HEAD、untracked/ignored 名单和 cleanup receipt）。名单不是内容备份，因此存在未跟踪或忽略文件时 checkout 会保留，不会自动 merge/apply 或强删。
 
 默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
 

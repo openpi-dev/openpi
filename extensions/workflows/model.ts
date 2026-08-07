@@ -82,6 +82,8 @@ export interface AgentRecord {
   worktreePath?: string;
   /** Authoritative result of inspecting and reclaiming the isolated checkout. */
   worktreeCleanup?: WorktreeCleanup;
+  /** Run-directory-relative manifest captured before cleanup. */
+  worktreeHandoffArtifact?: string;
   /** Normalized, serializable subagent conversation shown by /workflows. */
   transcript: TranscriptEntry[];
 }

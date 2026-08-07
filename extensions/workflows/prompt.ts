@@ -157,7 +157,7 @@ export function buildWorkflowResultMessage(
               : cleanup?.reason
                 ? `; cleanup warning: ${cleanup.reason}`
                 : ""
-        }`,
+        }${agent.worktreeHandoffArtifact ? `; handoff ${agent.worktreeHandoffArtifact}` : ""}`,
       );
     }
   }
