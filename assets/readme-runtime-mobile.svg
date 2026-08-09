@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="1100" viewBox="0 0 720 1100" role="img" aria-labelledby="title desc">
+  <title id="title">My Pi Setup runtime model</title>
+  <desc id="desc">A mobile-readable diagram of parent control, execution paths, continuity, and observability.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#161b22"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="8" refY="4.5" orient="auto">
+      <path d="M0 0L9 4.5 0 9Z" fill="#484f58"/>
+    </marker>
+  </defs>
+
+  <rect width="720" height="1100" rx="28" fill="#0d1117"/>
+  <rect x="1" y="1" width="718" height="1098" rx="27" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <text x="40" y="58" fill="#f0f6fc" font-size="32" font-weight="750">One parent. Three paths.</text>
+    <text x="40" y="91" fill="#8b949e" font-size="21">One observable lifecycle.</text>
+  </g>
+
+  <g transform="translate(40 126)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <rect width="640" height="112" rx="16" fill="url(#panel)" stroke="#58a6ff" stroke-width="2"/>
+    <rect x="20" y="18" width="104" height="30" rx="15" fill="#12233d"/>
+    <text x="38" y="39" fill="#79c0ff" font-size="16" font-weight="700">PARENT</text>
+    <text x="20" y="82" fill="#f0f6fc" font-size="26" font-weight="700">Main Pi Session</text>
+    <text x="382" y="80" fill="#8b949e" font-size="19">plan · decide · synthesize</text>
+
+    <path d="M320 112V154" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(0 176)">
+      <rect width="640" height="258" rx="16" fill="#090d12" stroke="#30363d"/>
+      <text x="22" y="34" fill="#8b949e" font-size="18" font-weight="700" letter-spacing="1">EXECUTION</text>
+
+      <rect x="22" y="56" width="596" height="54" rx="11" fill="#0d1117" stroke="#238636"/>
+      <circle cx="47" cy="83" r="7" fill="#3fb950"/>
+      <text x="68" y="91" fill="#7ee787" font-size="22" font-weight="700">Background terminal</text>
+
+      <rect x="22" y="124" width="596" height="54" rx="11" fill="#0d1117" stroke="#1f6feb"/>
+      <circle cx="47" cy="151" r="7" fill="#58a6ff"/>
+      <text x="68" y="159" fill="#79c0ff" font-size="22" font-weight="700">Pi subagent</text>
+
+      <rect x="22" y="192" width="596" height="54" rx="11" fill="#0d1117" stroke="#8957e5"/>
+      <circle cx="47" cy="219" r="7" fill="#bc8cff"/>
+      <text x="68" y="227" fill="#d2a8ff" font-size="22" font-weight="700">Dynamic workflow</text>
+    </g>
+
+    <path d="M320 434V474" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(0 496)">
+      <rect width="640" height="164" rx="16" fill="url(#panel)" stroke="#30363d"/>
+      <text x="22" y="34" fill="#8b949e" font-size="18" font-weight="700" letter-spacing="1">CONTINUITY</text>
+
+      <g transform="translate(22 54)" font-size="20" font-weight="700">
+        <rect width="136" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="18" y="29" fill="#f0f6fc">Tasks</text>
+        <rect x="150" width="136" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="168" y="29" fill="#f0f6fc">Goal</text>
+        <rect x="300" width="158" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="310" y="29" fill="#f0f6fc" font-size="18">Context Pivot</text>
+        <rect x="472" width="124" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="490" y="29" fill="#f0f6fc">Sessions</text>
+      </g>
+      <text x="22" y="132" fill="#7d8590" font-size="18">work intent · autonomy · phase switch · resume</text>
+    </g>
+
+    <g transform="translate(0 682)">
+      <rect width="640" height="164" rx="16" fill="url(#panel)" stroke="#30363d"/>
+      <text x="22" y="34" fill="#8b949e" font-size="18" font-weight="700" letter-spacing="1">OBSERVE &amp; CONTROL</text>
+
+      <g transform="translate(22 54)" font-size="20" font-weight="700">
+        <rect width="136" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="18" y="29" fill="#f0f6fc">Footer</text>
+        <rect x="150" width="136" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="168" y="29" fill="#f0f6fc">Dashboards</text>
+        <rect x="300" width="136" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="318" y="29" fill="#f0f6fc">Artifacts</text>
+        <rect x="450" width="146" height="44" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="468" y="29" fill="#f0f6fc">Cleanup</text>
+      </g>
+      <text x="22" y="132" fill="#7d8590" font-size="18">inspect · stop · audit · bounded shutdown</text>
+    </g>
+
+    <g transform="translate(0 872)">
+      <rect width="640" height="78" rx="14" fill="#111820" stroke="#30363d"/>
+      <circle cx="28" cy="27" r="7" fill="#3fb950"/>
+      <text x="50" y="35" fill="#f0f6fc" font-size="21" font-weight="700">Fail closed</text>
+      <text x="28" y="62" fill="#8b949e" font-size="17">unknown or unsafe state → denied, never guessed</text>
+    </g>
+  </g>
+</svg>

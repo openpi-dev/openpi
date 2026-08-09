@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900" role="img" aria-labelledby="title desc">
+  <title id="title">My Pi Setup</title>
+  <desc id="desc">A mobile-readable overview of the Pi-native multi-agent runtime.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#0d1117"/>
+      <stop offset="1" stop-color="#111827"/>
+    </linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse">
+      <path d="M48 0H0V48" fill="none" stroke="#30363d" opacity="0.3"/>
+    </pattern>
+  </defs>
+
+  <rect width="720" height="900" rx="28" fill="url(#bg)"/>
+  <rect width="720" height="900" rx="28" fill="url(#grid)"/>
+  <rect x="1" y="1" width="718" height="898" rx="27" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <g transform="translate(48 48)">
+    <rect width="146" height="42" rx="21" fill="#12233d" stroke="#2f81f7" stroke-width="2"/>
+    <circle cx="22" cy="21" r="7" fill="#3fb950"/>
+    <text x="42" y="28" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" letter-spacing="1">PI NATIVE</text>
+
+    <text x="0" y="122" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="66" font-weight="760" letter-spacing="-2">My Pi Setup</text>
+    <text x="0" y="168" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24">Small harness. Real runtime.</text>
+  </g>
+
+  <g transform="translate(48 250)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="23" font-weight="600">
+    <rect width="624" height="68" rx="14" fill="#0d1117" stroke="#238636"/>
+    <circle cx="28" cy="34" r="7" fill="#3fb950"/>
+    <text x="52" y="42" fill="#d1f7d6">background execution</text>
+
+    <rect y="82" width="624" height="68" rx="14" fill="#0d1117" stroke="#1f6feb"/>
+    <circle cx="28" cy="116" r="7" fill="#58a6ff"/>
+    <text x="52" y="124" fill="#cae8ff">isolated Pi subagents</text>
+
+    <rect y="164" width="624" height="68" rx="14" fill="#0d1117" stroke="#8957e5"/>
+    <circle cx="28" cy="198" r="7" fill="#bc8cff"/>
+    <text x="52" y="206" fill="#eadcff">dynamic workflows</text>
+
+    <rect y="246" width="624" height="68" rx="14" fill="#0d1117" stroke="#238b8f"/>
+    <circle cx="28" cy="280" r="7" fill="#39c5cf"/>
+    <text x="52" y="288" fill="#c7f5f7">clean, observable context</text>
+  </g>
+
+  <g transform="translate(48 610)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <rect width="624" height="226" rx="18" fill="#010409" stroke="#30363d" stroke-width="2"/>
+    <rect x="1" y="1" width="622" height="46" rx="17" fill="#161b22"/>
+    <circle cx="23" cy="23" r="6" fill="#f85149"/>
+    <circle cx="44" cy="23" r="6" fill="#d29922"/>
+    <circle cx="65" cy="23" r="6" fill="#3fb950"/>
+    <text x="312" y="30" text-anchor="middle" fill="#8b949e" font-size="18">pi · main</text>
+
+    <rect x="24" y="66" width="576" height="48" rx="10" fill="#0d1117" stroke="#30363d"/>
+    <circle cx="46" cy="90" r="6" fill="#58a6ff"/>
+    <text x="64" y="98" fill="#f0f6fc" font-size="22" font-weight="700">main agent</text>
+    <text x="450" y="97" fill="#8b949e" font-size="18">orchestrating</text>
+
+    <g transform="translate(24 130)" font-size="18" font-weight="700">
+      <rect width="176" height="48" rx="9" fill="#0d1117" stroke="#238636"/>
+      <text x="20" y="31" fill="#7ee787">terminal</text>
+      <rect x="200" width="176" height="48" rx="9" fill="#0d1117" stroke="#1f6feb"/>
+      <text x="220" y="31" fill="#79c0ff">subagent</text>
+      <rect x="400" width="176" height="48" rx="9" fill="#0d1117" stroke="#8957e5"/>
+      <text x="420" y="31" fill="#d2a8ff">workflow</text>
+    </g>
+
+    <rect x="24" y="190" width="576" height="20" rx="5" fill="#0b1720"/>
+    <text x="36" y="206" fill="#39c5cf" font-size="16">next: run tests and open the PR</text>
+  </g>
+
+  <text x="360" y="872" text-anchor="middle" fill="#7d8590" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="600">PI-NATIVE · MODEL-NEUTRAL · FAIL-CLOSED</text>
+</svg>

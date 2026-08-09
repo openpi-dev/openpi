@@ -1,0 +1,111 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="520" viewBox="0 0 1200 520" role="img" aria-labelledby="title desc">
+  <title id="title">My Pi Setup runtime model</title>
+  <desc id="desc">The main Pi session delegates execution to background terminals, subagents, and workflows while state, context, and observability stay under parent control.</desc>
+  <defs>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#161b22"/>
+      <stop offset="1" stop-color="#0d1117"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto" markerUnits="strokeWidth">
+      <path d="M0 0L8 4 0 8Z" fill="#484f58"/>
+    </marker>
+  </defs>
+
+  <rect width="1200" height="520" rx="24" fill="#0d1117"/>
+  <rect x="1" y="1" width="1198" height="518" rx="23" fill="none" stroke="#30363d" stroke-width="2"/>
+
+  <g font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif">
+    <text x="52" y="56" fill="#f0f6fc" font-size="24" font-weight="700">One parent. Three execution paths. One observable lifecycle.</text>
+    <text x="52" y="84" fill="#8b949e" font-size="15">The parent owns user interaction, configuration, durable state, and cleanup.</text>
+  </g>
+
+  <g transform="translate(52 116)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace">
+    <rect width="250" height="120" rx="14" fill="url(#panel)" stroke="#58a6ff" stroke-width="2"/>
+    <rect x="18" y="18" width="84" height="24" rx="12" fill="#12233d"/>
+    <text x="31" y="35" fill="#79c0ff" font-size="13" font-weight="700">PARENT</text>
+    <text x="18" y="72" fill="#f0f6fc" font-size="17" font-weight="700">Main Pi Session</text>
+    <text x="18" y="98" fill="#8b949e" font-size="14">plan · decide · synthesize</text>
+
+    <path d="M250 60H316" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(334 0)">
+      <rect width="710" height="120" rx="14" fill="#090d12" stroke="#30363d"/>
+      <text x="20" y="26" fill="#7d8590" font-size="13" font-weight="700" letter-spacing="1">EXECUTION PLANE</text>
+
+      <g transform="translate(20 42)">
+        <rect width="205" height="58" rx="10" fill="#0d1117" stroke="#238636"/>
+        <circle cx="18" cy="20" r="4" fill="#3fb950"/>
+        <text x="31" y="24" fill="#7ee787" font-size="14" font-weight="700">Background terminal</text>
+        <text x="16" y="45" fill="#7d8590" font-size="13">server · watcher · build</text>
+      </g>
+      <g transform="translate(244 42)">
+        <rect width="205" height="58" rx="10" fill="#0d1117" stroke="#1f6feb"/>
+        <circle cx="18" cy="20" r="4" fill="#58a6ff"/>
+        <text x="31" y="24" fill="#79c0ff" font-size="14" font-weight="700">Pi subagent</text>
+        <text x="16" y="45" fill="#7d8590" font-size="13">isolated context</text>
+      </g>
+      <g transform="translate(468 42)">
+        <rect width="222" height="58" rx="10" fill="#0d1117" stroke="#8957e5"/>
+        <circle cx="18" cy="20" r="4" fill="#bc8cff"/>
+        <text x="31" y="24" fill="#d2a8ff" font-size="14" font-weight="700">Dynamic workflow</text>
+        <text x="16" y="45" fill="#7d8590" font-size="13">pipeline · schema · replay</text>
+      </g>
+    </g>
+
+    <path d="M177 120V176" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+    <path d="M690 120V176" stroke="#484f58" stroke-width="2" marker-end="url(#arrow)"/>
+
+    <g transform="translate(0 194)">
+      <rect width="514" height="126" rx="14" fill="url(#panel)" stroke="#30363d"/>
+      <text x="20" y="27" fill="#7d8590" font-size="13" font-weight="700" letter-spacing="1">CONTINUITY</text>
+
+      <g transform="translate(20 46)" font-size="14">
+        <rect width="104" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="16" y="23" fill="#f0f6fc" font-weight="700">Tasks</text>
+        <text x="16" y="41" fill="#7d8590">work intent</text>
+
+        <rect x="118" width="104" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="134" y="23" fill="#f0f6fc" font-weight="700">Goal</text>
+        <text x="134" y="41" fill="#7d8590">autonomy</text>
+
+        <rect x="236" width="120" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="252" y="23" fill="#f0f6fc" font-weight="700">Context Pivot</text>
+        <text x="252" y="41" fill="#7d8590">phase switch</text>
+
+        <rect x="370" width="104" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="386" y="23" fill="#f0f6fc" font-weight="700">Sessions</text>
+        <text x="386" y="41" fill="#7d8590">find · resume</text>
+      </g>
+    </g>
+
+    <g transform="translate(534 194)">
+      <rect width="510" height="126" rx="14" fill="url(#panel)" stroke="#30363d"/>
+      <text x="20" y="27" fill="#7d8590" font-size="13" font-weight="700" letter-spacing="1">OBSERVE &amp; CONTROL</text>
+
+      <g transform="translate(20 46)" font-size="14">
+        <rect width="108" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="16" y="23" fill="#f0f6fc" font-weight="700">Footer</text>
+        <text x="16" y="41" fill="#7d8590">live signals</text>
+
+        <rect x="122" width="108" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="138" y="23" fill="#f0f6fc" font-weight="700">Dashboards</text>
+        <text x="138" y="41" fill="#7d8590">inspect · stop</text>
+
+        <rect x="244" width="108" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="260" y="23" fill="#f0f6fc" font-weight="700">Artifacts</text>
+        <text x="260" y="41" fill="#7d8590">audit · handoff</text>
+
+        <rect x="366" width="104" height="54" rx="9" fill="#0d1117" stroke="#30363d"/>
+        <text x="382" y="23" fill="#f0f6fc" font-weight="700">Cleanup</text>
+        <text x="382" y="41" fill="#7d8590">bounded</text>
+      </g>
+    </g>
+
+    <g transform="translate(0 350)">
+      <rect width="1044" height="52" rx="12" fill="#111820" stroke="#30363d"/>
+      <circle cx="24" cy="26" r="5" fill="#3fb950"/>
+      <text x="40" y="31" fill="#c9d1d9" font-size="13">Fail closed:</text>
+      <text x="132" y="31" fill="#8b949e" font-size="13">unknown tools, unsafe replay, uncertain Git state, and child orchestration are denied — never guessed.</text>
+    </g>
+  </g>
+</svg>

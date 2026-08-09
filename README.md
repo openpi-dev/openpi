@@ -1,149 +1,113 @@
 <p align="center">
-  <img src="assets/readme-hero.svg" alt="My Pi Setup — Pi-native multi-agent coding environment" width="100%" />
+  <picture>
+    <source media="(max-width: 640px)" srcset="assets/readme-hero-mobile.svg">
+    <img src="assets/readme-hero.svg" alt="My Pi Setup — a Pi-native multi-agent runtime" width="100%" />
+  </picture>
 </p>
 
 <p align="center">
-  <strong>让最小的 Pi harness，长出可靠的后台执行、Pi-native 多 Agent、动态工作流与高密度终端界面。</strong>
+  <strong>给 Pi 补上后台执行、多 Agent 编排、持久任务和可观测终端，同时保留它原本的轻量与可控。</strong>
 </p>
 
 <p align="center">
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.82+" src="https://img.shields.io/badge/Pi-0.82%2B-2f81f7?style=flat-square"></a>
-  <img alt="TypeScript" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white">
-  <a href="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml"><img alt="Tests" src="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml/badge.svg"></a>
-  <img alt="Configuration" src="https://img.shields.io/badge/config-natural%20language-d2a8ff?style=flat-square">
-  <img alt="License" src="https://img.shields.io/badge/license-see%20notices-7d8590?style=flat-square">
+  <img alt="Node.js 22+" src="https://img.shields.io/badge/Node.js-22%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
+  <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white">
+  <a href="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Model neutral" src="https://img.shields.io/badge/models-user--selected-bc8cff?style=flat-square">
 </p>
 
 <p align="center">
-  一套经过裁剪、测试和实际使用打磨的 <a href="https://pi.dev">Pi</a> 扩展包。<br />
-  不替你决定模型，不强制主题，也不会在安装后偷偷产生额外模型调用。
+  一套在真实开发中持续使用的 <a href="https://pi.dev">Pi</a> 扩展包。<br />
+  不替你选模型，不强制主题，安装后也不会偷偷增加模型调用。
 </p>
 
 <p align="center">
-  <a href="#60-秒开始"><strong>60 秒开始</strong></a> ·
+  <a href="#快速开始"><strong>快速开始</strong></a> ·
+  <a href="#为什么装它">为什么装它</a> ·
   <a href="#核心能力">核心能力</a> ·
-  <a href="#它和普通-pi-配置有什么不同">为什么选它</a> ·
+  <a href="#安全边界">安全边界</a> ·
+  <a href="#统一配置">统一配置</a> ·
   <a href="#命令速查">命令速查</a> ·
-  <a href="#一个入口完成配置">自然语言配置</a> ·
   <a href="#faq">FAQ</a>
 </p>
 
-<br />
+---
 
-## 60 秒开始
+## 快速开始
 
 ```bash
 pi install git:github.com/tt-a1i/my-pi-setup
 ```
 
-重启 Pi，或者在当前 Session 运行 `/reload`。安装默认不会切换主题、不会指定模型，也不会额外调用下一步预测模型。
-
-然后只需要正常描述任务：
+重启 Pi，或在当前 Session 运行 `/reload`。然后直接描述任务：
 
 ```text
-启动前端 dev server，然后用两个 Pi 子代理分别检查 API 主链路和测试覆盖；
-结果回来后汇总风险，不要阻塞等待。
+启动前端 dev server；并行让两个子 Agent 检查 API 主链路和测试覆盖；
+结果回来后汇总风险，主会话不要原地等待。
 ```
 
-Pi 会把长期进程放到后台，启动独立 Context 的子 Agent，并在结果完成时自动继续。所有后台状态都可以从 Footer、`/ps`、`/subagents` 和 `/workflows` 查看。
+Pi 会把长期进程放到后台，把独立任务交给隔离 Context 的子 Agent，并在结果完成时自动继续。Subagent 和 Workflow 状态显示在 Footer；后台终端有编辑器上方状态条，完整信息分别从 `/ps`、`/subagents` 和 `/workflows` 查看。
+
+> [!IMPORTANT]
+> 默认安装是安静的：不修改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。所有用户偏好统一通过 `/my-pi-setup` 显式配置。
 
 > [!TIP]
-> `subagent_spawn` 会立即返回。主 Agent 应继续做其他工作，而不是立刻调用 `subagent_wait`；子 Agent 结束后会自动回传。只有后续步骤确实依赖结果时才需要等待。
+> `subagent_spawn` 会立即返回。主 Agent 应继续处理确定性工作；只有下一步确实依赖子 Agent 结果时，才调用 `subagent_wait`。
 
 ---
 
-## 它解决什么问题
+## 为什么装它
 
-Pi 的价值在于小：它提供 Agent loop、工具、Session 和扩展 API，却不把工作方式写死。
-但真实开发很快会遇到几个问题：
-
-- Dev server、watcher 和长测试不能阻塞主 Agent；
-- 调研、实现和审查需要隔离 Context，而不是把所有噪音塞进一个会话；
-- 多阶段任务需要并行执行、结构化汇总和可观察的运行状态；
-- 长会话需要主动切换阶段，也需要快速找回历史 Session；
-- 模型应该能在真正存在歧义时，用合适的界面向用户提问；
-- 终端应该持续展示模型、Context、成本、Git 和后台任务，而不是让用户到处查询。
-
-My Pi Setup 把这些能力组织成一套一致的 Pi-native 工作流：
-
-```text
-主 Pi 会话
-  ├─ 后台终端 ───────── dev server / watcher / build / test
-  ├─ Pi subagents ───── 独立 Context 的并行调研、实现与审查
-  ├─ Workflows ──────── 多阶段 fan-out → structured result → synthesis
-  ├─ Context Pivot ──── 同一 Session 内从旧阶段切换到干净的新阶段
-  └─ Next Suggestion ─── 每轮结束后在空输入框预测一个可选的下一步
-```
-
----
-
-## 适合谁
+Pi 的价值在于小：Agent loop、工具、Session 和扩展 API 都有，但工作方式没有被平台写死。真实项目需要的，则是围绕这些原语的一层可靠运行时。
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<strong>适合</strong><br/><br/>
-
-- 已经把 Pi 当作主力 Coding Agent；
-- 同时运行服务、测试、调研和实现；
-- 希望用同一套 Provider、模型和 Skills 扩展多个 Agent；
-- 关心 Context 卫生、可观察性和可回放产物；
-- 喜欢强能力默认值，但不希望插件替自己决定模型。
-
+<td width="33%" valign="top">
+<strong>后台执行</strong><br/><br/>
+Dev server、watcher、build 和长测试不再占住主 Agent。日志可查，超时可控，退出自动回传。
 </td>
-<td width="50%" valign="top">
-<strong>可能不适合</strong><br/><br/>
-
-- 只需要一次性问答或单文件修改；
-- 希望所有能力都由一个云端平台托管；
-- 不想让 Agent 启动本地进程；
-- 需要 Windows 上与 macOS/Linux 完全一致的自动二进制体验；
-- 更偏好极简原生 Pi，且不需要后台任务或多 Agent。
-
+<td width="33%" valign="top">
+<strong>干净委派</strong><br/><br/>
+Subagent 使用独立 Pi Context。调研、实现和审查可以并行，不把全部过程塞回主会话。
+</td>
+<td width="33%" valign="top">
+<strong>动态编排</strong><br/><br/>
+Workflow 支持 pipeline、parallel、结构化输出、显式验收、恢复执行和持久产物。
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+<strong>连续工作</strong><br/><br/>
+Tasks 记工作项，Goal 驱动持续目标，Context Pivot 在阶段变化时主动换一块干净工作面。
+</td>
+<td width="33%" valign="top">
+<strong>全程可见</strong><br/><br/>
+模型、Context、缓存、成本、Git、PR 与后台活动集中显示；每类运行都有检查和取消入口。
+</td>
+<td width="33%" valign="top">
+<strong>边界明确</strong><br/><br/>
+子 Agent 不能递归编排；未知工具、不可证明安全的 Replay、状态不明的 Worktree 一律 fail closed。
 </td>
 </tr>
 </table>
+
+### 运行模型
+
+<p align="center">
+  <picture>
+    <source media="(max-width: 640px)" srcset="assets/readme-runtime-mobile.svg">
+    <img src="assets/readme-runtime.svg" alt="My Pi Setup runtime model" width="100%" />
+  </picture>
+</p>
+
+主 Pi Session 始终拥有用户交互、配置和生命周期。后台 Terminal、Subagent 与 Workflow 是三条执行路径；Tasks、Goal、Session 和 Context Pivot 保持连续性；Footer、Dashboard、Artifacts 与清理逻辑负责可观察性。
 
 ---
 
 ## 核心能力
 
-<table>
-<tr>
-<td width="33%" valign="top">
-<strong>Run in background</strong><br/><br/>
-Dev server、watcher、build 与 test 在后台运行；日志可见，超时可控，退出自动回传。
-</td>
-<td width="33%" valign="top">
-<strong>Delegate cleanly</strong><br/><br/>
-Pi-native Subagent 使用独立 Context，继承父模型与工具，不把调研噪音带回主会话。
-</td>
-<td width="33%" valign="top">
-<strong>Orchestrate deeply</strong><br/><br/>
-动态 Workflow 组合阶段、并行 Agent 与结构化输出，并保存完整可检查的运行产物。
-</td>
-</tr>
-<tr>
-<td width="33%" valign="top">
-<strong>Control context</strong><br/><br/>
-Context Pivot 在同一 Session 内切换阶段；Handoff 负责真正跨 Session 的工作交接。
-</td>
-<td width="33%" valign="top">
-<strong>Stay observable</strong><br/><br/>
-Footer 支持 preset / style / 多行 flex 布局，可展示目录、Model、Thinking、Context、缓存命中率、Cost、Throughput、Git、PR 与后台活动。
-</td>
-<td width="33%" valign="top">
-<strong>Configure naturally</strong><br/><br/>
-一个 <code>/my-pi-setup</code> 命令，用自然语言配置模型、并发与界面，不增加命令迷宫。
-</td>
-</tr>
-</table>
-
-<br />
-
-### 1. 后台终端，而不是“开个 Bash 然后等”
-
-模型可以启动长期进程，然后继续工作：
+### 1. 后台终端：长期进程不再阻塞 Agent
 
 ```text
 bg_start({
@@ -152,391 +116,311 @@ bg_start({
 })
 ```
 
-- 独立捕获 stdout / stderr；
-- `/ps` 实时查看日志和状态；
-- 进程退出后自动通知 Agent，无需轮询；
-- 对不会自己退出的进程（dev server、watcher、长任务），`bg_watch` 可以在输出匹配到指定字面签名时唤醒模型；用 `|` 分隔多个签名并同时覆盖失败特征（如 `Ready in|Traceback|ERROR`），否则崩溃看起来和“还在跑”一样；
-- 可为 build、test、migration 设置 `timeout_seconds`；
-- 超时后终止整个进程树，并明确记录为 `timed_out`；
-- 最多并发 8 个后台进程；
-- Session 关闭或 Reload 时自动清理，避免遗留进程。
+- stdout / stderr 独立捕获，完整日志有私有、有界的临时落盘；
+- `/ps` 查看状态与日志，`bg_kill` 终止整个进程树；
+- 进程退出后自动通知，不需要轮询；
+- build、test、migration 可设置 `timeout_seconds`；
+- server 和 watcher 不设超时，用 `bg_watch` 等待 `Ready in|Traceback|ERROR` 一类字面签名；
+- 最多同时运行 8 个后台终端；Session 关闭或 Reload 时统一清理。
 
-适合：dev server、watch mode、长测试、流式构建。交互式程序不适合——后台终端没有 stdin。
+后台终端没有 stdin，因此不适合交互式程序。它适合 server、watch mode、长测试和流式构建。
 
-### 2. Pi-native Subagents
-
-主 Agent 可以把自包含任务交给独立的 Pi Session。Spawn 是后台操作，不会占住主 Agent；结果完成后自动回传：
+### 2. Pi-native Subagents：隔离 Context，而不是另起一套系统
 
 ```text
 subagent_spawn({
-  harness: "pi",
+  agent_type: "explorer",
   name: "audit auth flow",
-  prompt: "Inspect src/auth end to end ..."
+  prompt: "Trace src/auth end to end and report file:line evidence."
 })
 ```
 
-默认行为刻意保持简单：
+每个 Subagent 都是新的进程内 Pi SDK Session：
 
-- 默认使用 `pi` harness；
-- 默认继承父会话的模型和 Thinking Level；
-- 每个子 Agent 有独立 Context Window；
-- 子 Agent 继承当前 Pi 环境中的工具、Skills、项目上下文和 Trust 决策；
-- 模型发起的子 Agent 最多同时运行 4 个；`/btw` 旁路提问使用独立的小池（默认 2），二者互不挤占，卡住的旁路提问不会饿死模型的并发额度；
-- 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
-- `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
-- 运行中或刚结束未读的 Subagent 会像 Workflow 一样在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开 `/subagents` 接管界面。若 Subagent 与 Workflow 两条摘要同时存在，继续按 `↓` 可进入下一条；
+- 默认继承父会话的 Provider、模型和 Thinking Level；
+- 继承普通 child-safe 工具、Skills、项目说明与 Trust 决策，但不获得父级编排/交互工具；
+- 最多 4 个模型发起的 Subagent 并发运行；`/btw` 使用独立小池；
+- 结束后自动回传，可 `check`、`wait`、`cancel`；
+- `subagent_send` 可以继续指导运行中的 Agent，也能恢复刚结束的同一子会话；
+- 输入框下方展示实时摘要，空输入时按 `↓` 聚焦，`Enter` 或 `→` 打开管理界面。
 
-**内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，既可用于 `subagent_spawn.agent_type`，也可用于 Workflow 的 `agent(..., { agent_type })`；分别用于只读探索、实现、只读审查和深度只读建议。默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
+内置角色由 harness 强制工具边界，不靠提示词自律：
 
-**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示；更高优先级的同名文件若损坏会阻断较宽松定义的 fallback，而不是悄悄退回。Subagent 的显式 `model` 或 Workflow 的显式 `model/provider` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式调用 > 所选类型默认值 > 父会话。生成的 `subagent_spawn.agent_type` roster 会显示每种类型的默认 effort 或父级继承，Workflow 使用同一套名字和定义。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 或 Workflow `agent()` 调用立即读取生效，无需 reload。
+| `agent_type`  | 用途           | 默认 effort | 强制能力                         |
+| ------------- | -------------- | ----------- | -------------------------------- |
+| `explorer`    | 代码追踪与探索 | high        | 只读发现工具                     |
+| `implementer` | 聚焦实现       | high        | read / bash / edit / write 等    |
+| `reviewer`    | 正确性与回归审查 | medium      | 只读发现工具                     |
+| `advisor`     | 深度技术建议   | xhigh       | 只读发现工具                     |
 
-工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。父会话专属工具也会在生成 roster 和 spawn 结果中移除，绝不宣传为子 Agent 可用。未受信任的项目目录不会贡献任何类型：扩展先安全注册内置和全局 roster，随后在 `session_start` 用当前 `cwd` 与 live Trust 刷新 Subagent 和 Workflow 共用的语义，因此临时 Trust 和跨目录 Session 也正确生效。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
+角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 完整覆盖。精确格式、工具清单与优先级见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。
 
-**Worktree 隔离**：并行子 Agent 默认共享同一个工作副本，也就共享同一个 git index——两个子 Agent 改同一个文件、或同时 `git add`，会互相覆盖。`isolation: "worktree"` 给这个子 Agent 一份独立 checkout 和独立分支：
+<details>
+<summary><strong>并行写文件时如何隔离 Worktree？</strong></summary>
+
+默认并行 Agent 共享 checkout 和 git index。只读 fan-out 不受影响；会写文件的并行任务应开启：
 
 ```text
 subagent_spawn({
   name: "implement retry",
   isolation: "worktree",
-  prompt: "... 完成后 commit 你的改动。"
+  prompt: "Implement the retry path, test it, and commit the result."
 })
 ```
 
-- Worktree 建在 `.git/pi-worktrees/` 下，不在工作区里——放工作区会让父仓库 `git status` 多出未跟踪条目，破坏 Agent 判断「我改了什么」的依据；
-- Trust 按分支来源目录继承，所以子 Agent 照常拿到项目 Skills 和 AGENTS.md；
-- 顶层 `node_modules` 会 symlink 进去，否则全新 checkout 里跑不了构建和测试（实测 `ERR_MODULE_NOT_FOUND`）；
-- Direct Subagent 的同一 Session 可以通过 `subagent_send` 继续运行，因此 checkout 与 Session 同寿命；Session 退役时只在限时检查完整证明 checkout 为空后回收，任何提交、dirty/untracked/ignored、detached HEAD、超时或 Git 探测失败都会保留路径/分支；
-- Workflow 的隔离 Agent 是一次性调用：清理前先写 handoff manifest；只有状态被完整证明为空时才删分支，任何提交、dirty/untracked/ignored、detached HEAD 或 Git 探测失败都会保留对应结果；
-- 代价：需要 git 仓库，且 checkout 是干净的，gitignore 掉的东西（构建产物、`.env`）不在里面。只读子 Agent 不需要开。
+Worktree 建在 `.git/pi-worktrees/`，拥有独立 checkout 和分支。Direct Subagent 的 checkout 与它的可恢复 Session 同寿命。退役时，已提交工作删除 checkout、保留分支；dirty/untracked/ignored 文件、detached HEAD、Git 探测失败或超时则保留 checkout 路径。只有完整证明为空时才全部回收。
 
-> `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Bash 与 Write/Edit 默认折叠。Bash 只保留单行命令、首段输出和最终状态，Write/Edit 最多保留三行渲染内容（包含操作标题），两者都会显示隐藏行数。三类结果都可通过 `/my-pi-setup` 分别选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
+全新 checkout 不包含 `.env` 或其他 gitignored 内容。可用时会在 `.git/pi-worktrees/node_modules` 建立依赖 symlink，让 checkout 通过父目录解析依赖；Worktree 仍要求当前目录是 Git 仓库。
 
-### 3. 动态 Multi-Agent Workflows
+</details>
 
-单个 Subagent 解决“把一件事委派出去”；Workflow 解决“任务本身有阶段、有依赖、有 fan-out”。
+<details>
+<summary><strong>模型与 Agent Type 的优先级</strong></summary>
 
-模型可以在受限 JavaScript DSL 中组合：
+模型：显式调用 > Agent Type 文件 > `/my-pi-setup` 的角色模型 > 父模型继承。
+
+Effort：显式调用 > Agent Type 默认值 > 父会话。
+
+同名角色定义：内置 < 全局 < 受信任项目。更高优先级文件如果损坏，会阻断 fallback，而不是悄悄退回更宽松的定义。工具白名单只能收窄，也无法重新拿回父会话专属工具。
+
+</details>
+
+### 3. Dynamic Workflows：让多 Agent 任务有阶段、有证据、有产物
+
+单个 Subagent 负责一项自包含委派。Workflow 处理多阶段、有依赖、需要 fan-out 和综合的任务：
 
 ```js
 phase("Scan");
-// 每个 file 独立走完 scan → verify，阶段之间没有 barrier：
-// 快的文件可以在慢的文件还在 scan 时就进入 verify。
 const checked = await pipeline(
   files,
   (file) =>
-    agent(`Trace ${file} for candidate reliability risks with evidence`, {
+    agent(`Trace ${file} for reliability risks with file:line evidence`, {
       agent_type: "explorer",
-      label: `review:${file}`,
+      label: `scan:${file}`,
       schema: FINDING_SCHEMA,
     }),
   (scan, file) =>
     scan.ok
-      ? agent(`Review whether the candidate issues in ${file} are real`, {
+      ? agent(`Verify these findings in ${file}: ${scan.output}`, {
           agent_type: "reviewer",
           label: `verify:${file}`,
         })
       : null,
 );
 
-phase("Synthesize");
-return await agent(
-  `Synthesize tradeoffs and recommendations: ${JSON.stringify(checked)}`,
-  {
-    agent_type: "advisor",
-  },
-);
+phase("Report");
+log(`${checked.filter(Boolean).length}/${checked.length} files verified`);
+return await agent(`Synthesize: ${JSON.stringify(checked)}`, {
+  agent_type: "advisor",
+});
 ```
 
-- `phase()` 展示阶段进度；
-- `log()` 向用户和最终报告输出一行进度叙述；
-- `usage()` 读取本次运行至今的累计 Token 用量；
-- `agent()` 启动隔离的 Pi Agent；`agent_type` 复用与 `subagent_spawn` 相同的角色提示词、强制工具边界、模型配置和默认 effort，显式 model/provider 与 effort 仍优先；
-- `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
-- `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
-- JSON Schema 提供结构化结果；可选 `acceptance: { criteria: [...] }` 让同一个 Agent 提交显式 evidence ledger，不会暗中追加 reviewer 或执行 shell；缺失、格式错误或被拒绝的条件会令该 Agent `ok: false`，同时保留输出和 ledger，并在 Dashboard/产物中显示状态；
-- 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
-- `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
-- 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要，与 Subagent 共用 `↓` 聚焦、`Enter/→` 打开的导航语义；Dashboard 内再用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
-- 脚本运行在无文件、网络和进程权限的独立沙箱；
-- `resume_from_run_id` 只重放可证明为只读、且调用内容与项目上下文一致的结果：会校验规范化 cwd、仓库状态、加载资源与 Trust；无类型/无限制、含 `bash`/`edit`/`write`、未知自定义工具、worktree 隔离、旧版 journal 或无法生成指纹的调用一律真实执行；只读调用仍按内容匹配，不受并发完成顺序影响；
-- `isolation: "worktree"` 让单个 Agent 在自己的 git worktree 和分支上工作，语义与 `subagent_spawn` 的同名参数一致——**任何会写文件的 fan-out 都该开**，否则并发 Agent 共享一个 checkout 和一个 git index，改动互相覆盖；
-- 运行产物持久化到 `~/.pi/agent/workflows/<run-id>/`；隔离 Agent 会在清理 checkout 前原子写入有界 handoff manifest（tracked binary patch、stat、实际 branch/HEAD、untracked/ignored 名单和 cleanup receipt）。名单不是内容备份，因此存在未跟踪或忽略文件时 checkout 会保留，不会自动 merge/apply 或强删。
+| 原语         | 作用                                                                 |
+| ------------ | -------------------------------------------------------------------- |
+| `phase()`    | 标记当前阶段                                                         |
+| `log()`      | 向实时界面与最终报告追加一行进度                                     |
+| `usage()`    | 读取累计 Token、缓存与成本的单调 lower bound；它不是预算限制器        |
+| `agent()`    | 启动一个隔离 Pi Agent，可指定 role、schema、acceptance 或 worktree    |
+| `pipeline()` | 每个 item 完成上一阶段后立即进入下一阶段；多阶段 fan-out 的默认选择   |
+| `parallel()` | 并发 barrier；只有下一阶段确实需要全部结果时使用                      |
 
-默认每个 Workflow 同时运行 **8** 个 Agent，最多调用 **128** 次；可配置到并发 64、总调用 1024。多个 Workflow 彼此独立。
+Workflow 默认并发 8 个 Agent、单次最多 128 次调用；可分别配置到 64 和 1024。Workflow DSL 不暴露文件、网络或进程 API；Sandbox 进程只保留启动所需的包目录读取权限。`usage()` 在 Agent 压缩 Context 后可能低估实际总量，只适合观察趋势。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 检查阶段、Agent、Transcript、用量与产物，`workflow_stop` 或 Dashboard 中的 `x` 可以取消。
 
-`pipeline()` 的收益来自去掉阶段之间的等待：barrier 的墙钟是「各阶段最坏值之和」（max(stage1) + max(stage2)），pipeline 是「最坏的那条链路」。所以**当不同 item 在不同阶段慢时差距最大**——实测两个 item、两个阶段的交叉慢点场景，604ms → 324ms；反过来，如果某个 item 在每个阶段都最慢，它就是关键路径，两者没有区别。
+<details>
+<summary><strong>Replay、Acceptance Ledger 与隔离写入</strong></summary>
 
-**叙述与用量**：脚本跑到哪、丢了几个 Agent、为什么跳过某条分支——这些只有脚本自己知道，塞进 `return` 值要等跑完才看得见，中途被 Esc 就全没了。`log()` 把一行文本同时送到实时进度、`/workflows`、保存的报告，以及**模型读回的运行结果**：
+`resume_from_run_id` 只 Replay 能被完整证明为只读且上下文未变的调用。指纹覆盖 prompt、schema、model/provider/effort、规范化 cwd、仓库状态、已加载资源和 Trust。下列调用一定真实执行：
 
-```js
-let round = 0;
-const found = [];
-while (usage().total < 500_000 && round < 20) {
-  round++;
-  const r = await agent(`scan round ${round}`);
-  if (r.ok) found.push(r.output);
-  log(`round ${round}: ${found.length} found, ${usage().total} tokens`);
-}
-log(`stopped after ${round} rounds`);
-```
+- 无 Agent Type 或工具范围无限制；
+- 带 `bash`、`edit`、`write` 或未知自定义工具；
+- 使用 `isolation: "worktree"`；
+- 存在会影响结果但无法纳入指纹的 ignored 文件；
+- 旧 journal、指纹失败，或与不可缓存调用发生不安全重叠。
 
-`log()` 与 `phase()` 分开：它是追加的进度流，不会污染阶段列表。每行压成一行（换行和控制字符会被拍平，模型写的转义序列不会重绘终端），保留最近 100 行，被丢弃的行数会明确报告，不静默截断。
+匹配依据是调用内容，不是调用序号，因此 `pipeline()` 的并发完成顺序变化不会把 A 的结果错配给 B。失败调用从不缓存。Journal 上限 2MB，超出后丢弃最旧条目并显式报告。
 
-`usage()` 返回 `{ input, output, cacheRead, cacheWrite, total, cost, agents }`，读数在每个 Agent 落地时刷新——所以紧跟在 `await` 之后求值，读到的就包含刚结束那个 Agent。它**只是读数，不做限制**：没有预算参数，也不会替你拦截，要不要停由脚本自己决定。
+可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。条件缺失、格式错误或被拒绝时，该调用 `ok: false`，但原始输出与 ledger 仍保留；不会暗中再启动 reviewer 或 shell。
 
-**Resume**：改了脚本想重跑时，带上一次的 run id 即可，未变的调用直接复用缓存结果：
+并行写入使用 `isolation: "worktree"`。Workflow 在清理 checkout 前原子保存有界 handoff manifest，包括 tracked binary patch、stat、branch/HEAD、untracked/ignored 清单和 cleanup receipt。状态不明时保留，不自动 merge、apply 或强删。
 
-```text
-workflow({ script: <改过的脚本>, resume_from_run_id: "wf_1a2b3c4d5e6f" })
-```
+</details>
 
-匹配依据是**调用内容**（prompt 加 schema/model/provider/effort），不是调用序号。这一点是必须的：`pipeline()` 没有阶段 barrier，调用发起顺序取决于各 Agent 的真实耗时，同一脚本两次运行的 `#4` 可能是不同的调用——按序号重放会把 A 的结果喂给 B，静默返回错误答案。按内容匹配则顺序无关。
+---
 
-副作用是脚本里的 `Date.now()` 之类只会让 prompt 变化、导致 cache miss，**不会返回错的结果**。`label` 和 `phase` 只影响展示，改名不会失效；失败的调用从不缓存（重跑往往正是为了让它重试）。只有工具能力和项目/资源指纹都能证明为只读且完整的调用才缓存；可写、无限制、带 `isolation`、存在可观察 ignored 文件或无法完整指纹的调用都会实跑——它们可能有副作用或依赖未纳入 Git 的内容，重放一段文本会返回并不存在或已经过期的工作；只读调用若与同一 Workflow 的不可缓存调用重叠也不会写入 journal，避免写入后恢复原状的 ABA 变化绕过端点指纹。运行结果里会明确报告「重放了几个、实跑了几个」，找不到对应 run 时不报错，只是全新跑一遍并说明。缓存写在 `journal.json`，上限 2MB，超出时丢弃最旧的条目。
+## 连续性与交互
 
-**并行写入**用 worktree 隔离，每个实现 Agent 一份独立 checkout 和分支：
+<table>
+<tr>
+<td width="50%" valign="top">
+<strong>Session Tasks</strong><br/><br/>
+<code>tasks_add / tasks_update / tasks_list</code><br/>
+跨 Agent Run 和用户回合记录当前批次的工作意图。稳定 ID、可审计状态、Session 分支恢复；全部完成后关闭批次，下批从 T1 重新开始。Tasks 不执行工作。
+</td>
+<td width="50%" valign="top">
+<strong>Session Goal</strong><br/><br/>
+<code>/goal &lt;目标&gt;</code><br/>
+Codex 风格的持久自主目标。支持 pause、resume、edit、clear 和可选 Token budget；系统规则要求模型先完成证据审计再声明 complete，工具本身只记录声明。
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<strong>Context Pivot</strong><br/><br/>
+<code>/context-pivot &lt;下一阶段&gt;</code><br/>
+Context 超过约 30K Tokens 且任务切换阶段时，用自包含 Brief 替换旧阶段噪音，在同一 Session 继续。普通超长对话仍用 Pi 原生 <code>/compact</code>。
+</td>
+<td width="50%" valign="top">
+<strong>Session Browser</strong><br/><br/>
+<code>/sessions</code><br/>
+按名称、首条消息、Session ID 和目录搜索；预览 User、Assistant、Tool 与 Summary；通过 Pi 安全生命周期切换。
+</td>
+</tr>
+<tr>
+<td width="50%" valign="top">
+<strong>Structured Questions</strong><br/><br/>
+<code>ask_user</code><br/>
+一次显示 1–3 个真正影响结果的问题，每题 2–5 个互斥选项，支持推荐项、Notes、代码预览、自由输入和中文 IME。
+</td>
+<td width="50%" valign="top">
+<strong>Next-action Suggestion</strong><br/><br/>
+完整主 Agent Run 结束后，可在空编辑器的独立暗色行预测一个下一步。<code>Right</code> 只填入、不提交；其他输入取消。默认关闭且不写入 Session 或模型 Context。
+</td>
+</tr>
+</table>
 
-```js
-phase("Implement");
-const branches = await parallel(
-  tasks.map(
-    (task) => () =>
-      agent(`${task.prompt}\n完成后 commit 你的改动。`, {
-        label: `impl:${task.name}`,
-        isolation: "worktree",
-      }),
-  ),
-);
-```
+### Tasks 与 Goal 怎么分工
 
-运行结果会列出每个隔离 Agent 的落点：提交过的给出分支名，有未提交改动的给出保留下来的目录路径。两者都必须报告——它们都不在工作区里，不说就等于丢了。
+- Tasks 是多个工作项的咨询性记录，不调度、不委派，也不参与 Goal 完成判定；
+- Goal 是一个持续到终态的自主目标，模型只能提交 `complete` 或经过连续审计的 `blocked`；
+- Subagent 与 Workflow 才执行工作；文件、Git、测试、Artifacts 和用户确认仍是事实来源。
 
-### 4. Session Tasks：跨 Turn 记住未完成工作
+### Plan Mode、Cron 与 Post-edit
 
-```text
-/tasks
-```
+- `/plan [目标]` 先做只读调研，批准后才允许修改；Plan Mode 使用严格命令白名单，不尝试“理解”任意 Shell 是否只读；
+- `/cron ...` 在当前 Session 中排定一次或周期性提示词；
+- Post-edit 可在成功 Write/Edit 的 Turn 后运行一条用户配置的命令，例如 `npm run format`。默认关闭，最多 500 字符，不猜测 Bash 是否改过文件。
 
-Session Tasks 用稳定 ID 记录当前需求跨多个 Agent Run 或用户回合的工作意图。它不是 Session 历史账本：当前批次全部进入 `done / dropped` 后立即关闭并隐藏；下一次 `tasks_add` 自动开启新批次，编号重新从 T1 开始：
+---
 
-- `tasks_add` 增加一条或多条工作项；
-- `tasks_update` 更新 `pending / in_progress / blocked / done / dropped`；
-- `tasks_list` 按 ID 或状态读取；
-- `blocked / done / dropped` 必须留下阻塞条件、可检查证据或放弃原因；
-- 状态跟随 Pi Session 分支，在 `/reload`、`/resume`、`/tree`、`/fork` 和 Context Pivot 后恢复；
-- Tasks 不执行、不调度、也不委派工作，Subagents 和 Workflows 继续负责执行。
+## 终端体验
 
-Tasks 会像 Claude Code Tasks 一样，把当前批次持久显示在输入框上方：清晰展示批次进度、剩余数量和优先级最高的三项，状态变化后立即刷新；`Ctrl+Shift+T` 或 `/tasks hide|show|toggle` 可隐藏和恢复，`/tasks` 打开完整清单。面板只隐藏显示，不删除 Session 中的任务。每次冷启动或 Context Pivot 后，Tasks 仍只向当前模型临时注入最多 800 字符的活跃条目，不把旧快照写进模型 Context。若检测到其他 `todo` / `TodoWrite` / `update_plan` 工具，Tasks 会拒绝注册，避免两套规划工具同时误导模型。
+### 一行 Footer，持续显示真实状态
 
-### 5. Session Goal：Codex 风格的持久自主目标
-
-```text
-/goal
-/goal <目标>
-/goal edit | pause | resume | clear
-```
-
-Session Goal 与当前 OpenAI Codex Goal 的操作语义对齐。`/goal <目标>` 直接创建并立即开始，不再追加“成功条件”输入，也不经过外部 Contract Judge；目标正文最多 4000 字符，应自行包含结果、证据与约束。模型只在用户或 system/developer 明确要求持久自主目标时调用 `create_goal`，可用 `get_goal` 读取状态，并在严格证据审计证明全部完成后调用 `update_goal({ status: "complete" })`。只有同一阻塞连续出现至少三个 Goal Turn 且确实无法继续时，模型才可标记 `blocked`。
-
-Goal 没有默认的 40 Turn、无进展或 120 分钟上限。可选 `token_budget` 只要求为正数；达到预算后状态变为 `budget_limited`，系统只追加一次收尾 Turn，不再启动实质工作。运行中按 Codex 口径统计 Goal Assistant 的非缓存输入加输出 Token 和耗时。`/goal` 展示 Status、Objective、Time used、Tokens used、可选 Token budget，以及当前状态可用命令；`/goal edit` 预填现有目标并保留预算和用量；已经耗尽的预算不会因编辑而重新激活。未完成目标被 `/goal <新目标>` 替换前会显示 `Replace current goal / Cancel`，已完成目标则直接替换。
-
-状态为 `active / paused / blocked / usage_limited / budget_limited / complete`。用户负责 pause、resume、edit、clear；模型只能 complete 或 blocked；系统负责预算和运行错误状态。Esc/Ctrl+C 导致的 Assistant `aborted` 会暂停 Goal，Assistant `error` 会阻塞 Goal。活动 Goal 在 `/reload` 或 Session 恢复后继续；Fork 和 `/tree` 为避免继承后立刻执行，会等第一次显式用户输入后再继续。恢复 paused、blocked 或 usage-limited Goal 时会询问是否 Resume。旧 v1 Goal 首次迁移时把 active/waiting 降为 paused，并尽量把原成功条件折入 Objective。
-
-另有仅用于防止失控的 1000 次自动延续内部熔断，不作为常规用户预算。Footer 只显示 Codex 风格状态，例如 `Pursuing goal (2m)`、`Pursuing goal (12.5K / 50K)`、`Goal paused (/goal resume)` 或 `Goal achieved (2m)`，不显示目标正文和 Turn 计数。完成提示会保留到用户下一次显式输入，随后只隐藏 Footer、仍可通过 `/goal` 查看完成记录；这个确认状态随 Session 分支持久化。print/json 模式不自动延续，Pi 子 Session 不获得 Goal 工具。Goal 负责单个持续终态；Tasks 仍只是多个工作项的咨询性记录，不参与 Goal 完成判定。
-
-### 6. Context Pivot：同一 Session，切换工作阶段
-
-```text
-/context-pivot 从调研切换到实现，先完成 API 主链路
-```
-
-当当前 Context 已经积累大量调研过程、失败尝试或上一阶段细节时，Context Pivot 会：
-
-1. 让 Agent 生成下一阶段的自包含 Brief；
-2. 主动压缩旧 Context；
-3. 将 Brief 放在新 Context 的注意力前沿；
-4. 在同一个 Session 中继续执行。
-
-它与 `/handoff` 不同：
-
-| 场景                                          | 使用               |
-| --------------------------------------------- | ------------------ |
-| 同一 Session 内从调研切到实现、从实现切到审查 | `/context-pivot`   |
-| 需要真正的新 Session、分支实验或跨 Agent 交接 | `/handoff` Skill   |
-| 只是 Context 太长，但任务阶段没有变化         | Pi 原生 `/compact` |
-
-为避免无意义压缩，Context Pivot 仅在约 30K Context Tokens 后启用。
-
-### 7. Session 搜索与预览
-
-```text
-/sessions
-```
-
-打开全屏 Session 选择器：
-
-- 按名称、首条消息、Session ID、工作目录实时过滤；
-- 预览 User / Assistant / Tool / Summary 内容；
-- 查看时间与 Git 变更概况；
-- 当前项目与全部 Workspace 之间切换；
-- 选中后直接调用 Pi 的安全 Session Switch 生命周期。
-
-### 8. 模型可以真正“问用户”
-
-`ask_user` 不是普通文本提问，而是模型可调用的结构化 TUI：
-
-- 一次支持 1–3 个独立问题；
-- 每题 2–5 个互斥选项；
-- 推荐项放在第一位，并解释每个选项的权衡；
-- 选项可以带一段可选 `preview`（代码片段、配置或 ASCII 布局），在该选项高亮时原样显示（保留缩进、不重新折行），方便横向对比；
-- 用户可选择、自由填写，或在选项后追加 Notes；
-- 支持中文 IME 焦点；
-- Esc 明确表示拒绝回答，不会被误当成默认选项；
-- 无头子 Agent 和 Workflow Child 无法调用，避免后台任务卡死。
-
-Prompt 约束它只询问真正会改变结果、又无法从代码和上下文推断的决策；禁止用它问“是否继续”。
-
-### 9. 一等文件搜索工具
-
-模型直接获得结构化 `fd` 与 `rg`：
-
-- 默认遵守 `.gitignore`；
-- 支持名称、Glob、类型、扩展名、Smart Case、固定字符串和上下文行；
-- 参数经过严格 argv 构造，不依赖 Shell 拼接；
-- 标准限制为 50KB / 2000 行，完整截断结果保存在当前 Session 的临时文件；
-- Session 结束自动清理临时结果；
-- 系统没有 `fd` / `rg` 时，会从官方 Release 通过 HTTPS 下载固定版本，校验 SHA-256 后原子安装。
-
-`rg.max_matches_per_file` 明确表达它是“每个文件”的限制，不会让模型误以为是全局上限。
-
-### 10. 高密度终端 Dashboard
-
-默认 Footer 使用一行 `powerline` 布局：
+默认 Powerline Footer：
 
 ```text
 cwd  model  thinking  context  cache  cost  throughput   git  PR
 ```
 
-也可切换到灰阶 `powerline-mono`，或一行 `compact` 纯文本布局。行过窄时按优先级隐藏次要指标（cwd/model/context 优先保留），而不是只从尾部截断。
+支持 `powerline`、`powerline-mono` 与 `compact` 三个 preset，也可用 `footerLines` 自定义多行布局。终端变窄时按优先级隐藏次要指标，而不是机械截断尾部。
 
-可通过 `/my-pi-setup` 选择 preset、style，或自定义 `footerLines`（需要时可使用多行；每行最多一个 `flex`）：
-
-| 项目         | 内容                                     |
+| 指标         | 内容                                     |
 | ------------ | ---------------------------------------- |
-| `cwd`        | 当前工作目录                             |
+| `cwd`        | 当前目录                                 |
 | `model`      | Provider / Model                         |
-| `thinking`   | 当前 Thinking 档位                       |
-| `context`    | Context 占用与容量；占用未知时仅显示容量 |
-| `cache`      | Session 已报告的 Prompt Cache 命中率     |
+| `thinking`   | Thinking 档位                            |
+| `context`    | Context 占用与容量；占用未知时只显示容量 |
+| `cache`      | Session 报告的 Prompt Cache 命中率       |
 | `cost`       | Session 累计成本                         |
-| `throughput` | 当前运行的估算 Token 速度                |
-| `git`        | 当前分支                                 |
-| `pr`         | 当前分支对应的 PR                        |
-| `flex`       | 布局分隔：左侧与右侧对齐                 |
+| `throughput` | 当前流式运行的估算 Token 速度            |
+| `git` / `pr` | 当前分支与对应 PR                        |
+| `flex`       | 同一行左右对齐的分隔点                   |
 
-| Preset           | 效果                             |
-| ---------------- | -------------------------------- |
-| `powerline`      | 默认单行 ANSI256 色块 + `` 转场 |
-| `powerline-mono` | 单行高对比灰阶 Powerline         |
-| `compact`        | 单行 plain 纯文本                |
+Subagent 与 Workflow 状态属于 Footer 的基础可观察性：活动时自动出现，空闲时不占空间。后台终端使用编辑器上方状态条和 `/ps`，不混进 Footer。Nerd Font 只改善 Powerline 分隔符 ``，不是硬依赖。
 
-Nerd Font 只影响 Powerline 分隔符观感，不是硬依赖；没有该字体时文字指标仍然完整可读。配置保存后，活动 TUI Session 会立即重新安装 Footer。
+### 输出密度按内容类型独立控制
 
-Subagents、Workflows 和后台终端状态属于基础可观察性，不是可选指标：只要自定义 Footer 开启，就会按需自动出现；没有活动时不占行。
+- Subagent 结果默认完整显示；
+- Bash 默认折叠为单行命令、有限输出与最终状态；
+- Write/Edit 默认最多显示三行渲染内容；
+- 三类结果都能在 `/my-pi-setup` 中独立切换 `full` / `compact`；
+- 折叠内容用 Pi 当前的 `app.tools.expand` 快捷键临时展开，默认是 `Ctrl+O`。
 
-例如：
+### 文件搜索是一等工具
+
+`fd` 与 `rg` 使用结构化参数，不拼接 Shell；默认遵守 `.gitignore`，支持 Glob、类型、Smart Case、固定字符串和上下文。结果限制为 50KB / 2000 行，完整截断内容保存在 Session 临时文件中，Shutdown 时清理。
+
+macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载固定官方版本、校验 SHA-256 后原子安装。其他架构和平台需自行提供 `fd` 与 `rg`。
+
+---
+
+## 安全边界
+
+这里的安全不是一段 Prompt，而是运行时约束。
+
+| 边界                     | 行为                                                                 |
+| ------------------------ | -------------------------------------------------------------------- |
+| 子 Agent 递归编排        | 禁止。Subagent/Workflow child 不获得 `subagent_*`、`workflow` 等父级工具 |
+| Agent Type 工具          | Harness 强制白名单；声明不能突破父级 denylist                        |
+| 类型与工具预检           | 未知、损坏、错名或最终未注册的工具在首个 Token 前失败                 |
+| Workflow Sandbox         | DSL 无文件、网络、进程、import、eval 或 timer API；进程仅可读启动包目录 |
+| Replay                   | 只有可证明只读、上下文指纹完整且无不安全重叠的调用才缓存              |
+| Worktree 清理            | 未知即保留；Git 状态、handoff 或超时不确定时绝不删除                  |
+| 终端输出                 | 控制字符、方向格式符与超长内容在 ingress/render 边界清洗和限长         |
+| Shutdown                 | Terminal、Subagent、Workflow 都做有界取消、清理与唯一终态             |
+| 用户配置                 | 一个受限 typed tool 写入；没有散落的扩展私有入口                      |
+| 模型消费                 | Suggestion 默认关闭；Subagent/Workflow 只在任务显式触发时运行          |
+
+可选的 [pi-intercom](https://github.com/nicobailon/pi-intercom) 只在顶层 Pi Session 加载。它依赖进程级身份，而 Direct/Workflow child 是同一进程内的并发 Session；为避免身份串线，child Resource Loader 会移除 pi-intercom 的扩展与 Skill。
+
+---
+
+## 统一配置
+
+本包只有一个用户配置入口：
 
 ```text
-/my-pi-setup 切换 Footer 为 powerline
-/my-pi-setup 用 mono powerline Footer
-/my-pi-setup Footer 用 compact
+/my-pi-setup
+```
+
+无参数时，当前模型先解释已有设置与影响，再引导修改。直接跟自然语言则只改指定项：
+
+```text
+/my-pi-setup 开启下一步预测，选择当前 Registry 里的轻量模型，minimal 推理
+/my-pi-setup workflow 同时跑 16 个 agent，总调用最多 256
 /my-pi-setup Footer 两行：cwd flex model / context cost flex git
-/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
+/my-pi-setup Footer 用 mono powerline
+/my-pi-setup Bash 展开，Write/Edit 保持紧凑
+/my-pi-setup 编辑后自动跑 npm run format
+/my-pi-setup 给 explorer 指定模型，让 reviewer 继承父模型
 ```
 
-未选中的指标不渲染；运行中的 Subagent、Workflow 和后台终端状态始终显示在 Dashboard 后。
+配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离。升级不会覆盖。
 
-- Context 与模型信息直接来自 Pi Runtime；Context ≥70% 警告色、≥90% 错误色；
-- 成本累计 Assistant、嵌套 Tool、Compaction 和 Branch Summary 的已记录 Usage；
-- Token 速度用 `~` 明确标记为流式估算；
-- Git 每 5 秒刷新，并在输入或工具结束后立即刷新；默认仅显示分支和 PR，不显示变更文件数；
-- `/lg` 浏览本地文件与 Diff；
-- `/pr` 刷新当前分支对应的 GitHub PR；
-- 大型 ASCII Header 默认关闭；
-- Footer 可以通过统一配置关闭，恢复 Pi 原生 Footer。
+### 默认值
 
-### 11. Next-action Suggestion，不打断对话
+| 配置                     | 默认值                                                       |
+| ------------------------ | ------------------------------------------------------------ |
+| Next-action suggestion   | 关闭；启用时必须显式选择 Registry 中可用的模型与 reasoning   |
+| Workflow 并发            | 8，硬上限 64                                                 |
+| Workflow 总 Agent 调用   | 128，硬上限 1024                                             |
+| 大型 Header              | 关闭                                                         |
+| Dashboard Footer         | 开启；单行 `powerline`                                       |
+| Subagent 结果            | `full`                                                       |
+| Bash 输出                | `compact`                                                    |
+| Write/Edit 输出          | `compact`                                                    |
+| Post-edit 命令           | 关闭；单条命令最多 500 字符                                  |
+| 内置角色模型             | `explorer / implementer / reviewer / advisor` 均继承父模型   |
+| 主题                     | 保留用户现有选择                                             |
 
-主 Agent 的完整运行结束后，配置的轻量模型会预测用户最可能输入的一条下一步动作，并显示在空输入框内的独立暗色提示行。提示与硬件光标分行，避免中文 IME 的预编辑文字覆盖后闪烁：
-
-- 按 `Right` 将建议填入输入框，但不会自动提交；
-- 输入任意其他内容会立即丢弃建议；
-- 输入框非空、后台结果已过期或没有具体下一步时都不显示；
-- 建议只存在于当前 TUI 状态，不写入 Session history，也不会进入模型 Context。
-
-默认关闭。用户可通过 `/my-pi-setup` 显式选择当前 Pi Registry 中任意可用模型和 reasoning level；启用后，每个完整结束的主 Agent run 最多增加一次小型模型调用。`Right` 之所以优先于 `Tab`，是为了不抢占编辑器的 autocomplete 键。
+任何新增的模型、开关、权限、并发或 UI 偏好都必须接入 `/my-pi-setup`。仓库的 [`AGENTS.md`](AGENTS.md) 用测试守住这份单一入口契约。
 
 ---
 
-## 它和普通 Pi 配置有什么不同
-
-| 常见做法                                                   | My Pi Setup                                                                         |
-| ---------------------------------------------------------- | ----------------------------------------------------------------------------------- |
-| 长命令占住 Bash Tool，Agent 原地等待                       | 后台终端立即返回，退出时自动通知                                                    |
-| 把调研、实现、测试全塞进一个 Context                       | 独立 Pi Subagent 隔离噪音，父模型与工具自然继承                                     |
-| 多 Agent 只是并行发 Prompt                                 | Workflow 支持阶段、依赖、结构化结果、Artifact 与 Dashboard                          |
-| 并行 Agent 共享一个工作副本和 git index，改动互相覆盖      | `isolation: "worktree"` 给每个 Agent 独立 checkout 和分支，提交过的分支保留供 merge |
-| 编排脚本只能靠 `return` 值说话，跑一半被中断就什么都没留下 | `log()` 实时叙述进度，`usage()` 读取累计 Token，两者都进最终报告                    |
-| Context 快满时被动 Compact                                 | Context Pivot 在阶段变化时主动建立干净工作面                                        |
-| 每个插件一套配置命令                                       | `/my-pi-setup` 用自然语言统一配置                                                   |
-| 插件默认绑定作者的模型和 Provider                          | 不写死模型；默认继承当前 Pi，下一步预测默认零模型调用                               |
-| 后台任务只能看一条最终输出                                 | Terminal、Subagent、Workflow 都可实时观察和取消；Subagent 还可接管继续              |
-
-### 一条完整路径
-
-```text
-用户目标
-  ↓
-主 Agent 理解任务并启动 dev server
-  ↓
-并行 Pi Subagents：代码追踪 / 测试审计 / 文档核验
-  ↓
-主 Agent 继续处理确定性工作，不原地等待
-  ↓
-结果自动回传；需要多阶段综合时交给 Workflow
-  ↓
-调研结束后 Context Pivot 到实现阶段
-  ↓
-测试、Git、Context、成本与后台状态持续显示在 Footer
-  ↓
-本轮结束后可在空输入框显示一个不进入模型 Context 的下一步建议
-```
-
-这套设计的重点不是“工具更多”，而是让后台任务、Agent 和 Context 都有清晰的所有权与生命周期。
-
----
-
-## 完整安装说明
+## 安装与可选集成
 
 ### 要求
 
 - Pi `0.82.0` 或更新版本；
 - Node.js 22+；
-- macOS 或 Linux 可使用自动安装的 `fd` / `rg`；其他平台请自行安装二进制。
+- macOS/Linux 的 arm64 或 x64 可自动安装 `fd` / `rg`；其他架构和平台需自行安装。
 
-### 推荐：作为 Pi Package 安装
+### Pi Package
 
 ```bash
 pi install git:github.com/tt-a1i/my-pi-setup
 ```
 
-重启 Pi，或在现有 Pi Session 中运行：
-
-```text
-/reload
-```
-
-开发本仓库时，也可以直接安装本地 Checkout：
+开发本仓库时可以安装本地 checkout：
 
 ```bash
 git clone https://github.com/tt-a1i/my-pi-setup.git ~/work/my-pi-setup
@@ -545,21 +429,21 @@ npm install
 pi install ~/work/my-pi-setup
 ```
 
-### 可选：连接多个顶层 Pi Session
+安装或更新后重启 Pi，或运行 `/reload`。
 
-需要在同一台机器上的独立 Pi Session 之间传递上下文时，可单独安装 [pi-intercom](https://github.com/nicobailon/pi-intercom)：
+### 可选：多个顶层 Pi Session 通信
 
 ```bash
 pi install npm:pi-intercom
 ```
 
-重启或 `/reload` 后，用 `Alt+M` 或 `/intercom` 选择目标 Session。它通过本地 IPC 传递消息；传输本身不调用模型，但默认会在目标 Session 空闲时触发一个模型 Turn，正在工作的交互式 Session 则把消息放进 steering queue；忙碌的无头 Session 会回复当前不可用。可在 `~/.pi/agent/intercom/config.json` 中将 `inboundTrigger` 改为 `"replies"` 或 `"never"`。
+pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷键、命令与 `inboundTrigger` 配置以当前安装版本的文档为准。
 
-`pi-intercom` 只在顶层 Session 加载。My Pi Setup 的 Direct Subagent 与 Workflow child 是同一进程内并发的 Pi Session，而 pi-intercom 当前使用进程级身份变量；为避免 child 身份串线，child Resource Loader 会移除它的扩展与 Skill。跨顶层 Session 通信用 pi-intercom，父子委派仍用 `subagent_*` / Workflow 原生结果通道。
+本包只保证一件事：pi-intercom 留在顶层 Session，child 不加载它。跨顶层 Session 用 pi-intercom；父子委派继续使用 `subagent_*` 和 Workflow 原生结果通道。
 
 ### 可选：GitHub Dark 主题
 
-安装包会注册主题，但不会替你切换。通过 Pi `/settings` 选择 `github-dark-default`，或在 `~/.pi/agent/settings.json` 中设置：
+安装包会注册主题，但不会自动切换。通过 Pi `/settings` 选择 `github-dark-default`，或配置：
 
 ```json
 {
@@ -569,232 +453,143 @@ pi install npm:pi-intercom
 
 ---
 
-## 一个入口完成配置
-
-所有属于本包的用户配置都走一个命令：
-
-```text
-/my-pi-setup
-```
-
-无参数命令始终进入模型主持的交互入口：首次使用时先解释可配置项和影响，再完成初始化；已有配置时先解释当前设置，并询问保留、修改某一类，还是重新检查全部。后面直接跟自然语言则跳过总览，只修改指定设置：
-
-```text
-/my-pi-setup 开启下一步预测，使用 seal/deepseek-v4-flash，关闭推理
-/my-pi-setup 关闭下一步预测
-/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
-/my-pi-setup 显示大标题
-/my-pi-setup 隐藏大标题
-/my-pi-setup 切换 Footer 为 powerline
-/my-pi-setup 用 mono powerline Footer
-/my-pi-setup Footer 用 compact
-/my-pi-setup Footer 两行：cwd flex model / context cost flex git
-/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
-/my-pi-setup 关闭自定义状态栏
-/my-pi-setup 编辑后自动跑 npm run format
-/my-pi-setup 关闭 post-edit 命令
-/my-pi-setup 给 explorer 指定当前 Registry 中可用的模型
-/my-pi-setup 清除 explorer 的模型，让它继承父模型
-```
-
-当前模型负责理解自然语言，受限配置工具负责保存结果。配置位于：
-
-```text
-~/.pi/agent/my-pi-setup.json
-```
-
-安装默认值：
-
-| 配置                     |                                                   默认值 |
-| ------------------------ | -------------------------------------------------------: |
-| Next-action suggestion   | 默认关闭；运行 `/my-pi-setup` 选择模型；`Right` 仅填入不提交 |
-| Workflow 并发            |                                                        8 |
-| Workflow 最大 Agent 调用 |                                                      128 |
-| 大型 Header              |                                                     关闭 |
-| Dashboard Footer         |                                                     开启 |
-| Post-edit 命令           |          默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
-| Agent 角色模型           | explorer / implementer / reviewer / advisor 均继承父模型 |
-| 主题                     |                                       不修改用户现有选择 |
-
-Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。角色模型由 Subagent 和 Workflow `agent_type` 共用，只接受当前 Pi Registry 能解析的 provider/model，并保存 Registry 规范化后的值；传入 `null` 只清除对应角色，未提及的角色保持原样。
-
----
-
 ## 命令速查
 
 | 命令                        | 作用                                                            |
 | --------------------------- | --------------------------------------------------------------- |
 | `/my-pi-setup [自然语言]`   | 查看或修改本包配置                                              |
-| `/sessions`                 | 搜索、预览并切换 Session                                        |
-| `/ps`                       | 查看和管理后台终端                                              |
+| `/ps`                       | 查看、跟踪和终止后台终端                                        |
 | `/subagents`                | 查看、取消或接管子 Agent                                        |
-| `/btw`                      | 在旁路 Pi Context 中问一个问题，不打断主任务                    |
-| `/workflows`                | 查看 Workflow 运行、阶段和产物；`/workflows <id> stop` 取消运行 |
-| `/tasks`                    | 查看当前 Session 的任务列表                                     |
-| `/goal ...`                 | 设置、查看、编辑、暂停或恢复持久自主 Goal                       |
-| `/context-pivot <下一阶段>` | 在同一 Session 中清理 Context 并切换阶段                        |
-| `/cron ...`                 | 为本 Session 定时或周期性排一条提示词                           |
-| `/plan [目标]`              | 先只读调研并给出计划，批准后才允许改动                          |
-| `/lg`                       | 浏览 Working Tree 改动和 Diff                                   |
-| `/pr`                       | 刷新当前分支的 GitHub PR 信息                                   |
+| `/btw`                      | 在旁路 Pi Context 中提问，不打断主任务                          |
+| `/workflows`                | 查看阶段、Agent 与产物；`/workflows <id> stop` 取消运行         |
+| `/tasks`                    | 查看当前 Session 的工作项                                      |
+| `/goal ...`                 | 创建、查看、编辑、暂停或恢复持久 Goal                           |
+| `/context-pivot <下一阶段>` | 在同一 Session 中压缩旧阶段并继续                              |
+| `/sessions`                 | 搜索、预览并切换 Session                                        |
+| `/plan [目标]`              | 先只读调研，批准后再修改                                        |
+| `/cron ...`                 | 为当前 Session 安排定时或周期性 Prompt                          |
+| `/lg` / `/pr`               | 浏览 Working Tree Diff / 刷新当前分支 PR                       |
 | `/copy-all`                 | 复制当前分支可见的 User / Assistant 对话                        |
 
-## 模型工具速查
+<details>
+<summary><strong>模型工具速查</strong></summary>
 
-| 工具                                                                                                     | 用途                                  |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------------- |
-| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期                      |
-| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                          |
-| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段 Agent 编排与后台运行管理   |
-| `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 持久任务                      |
-| `get_goal`, `create_goal`, `update_goal`                                                                 | 读取、创建或完成/阻塞 Session Goal    |
-| `context_pivot`                                                                                          | Agent 主动切换 Context 阶段           |
-| `ask_user`                                                                                               | 结构化用户决策                        |
-| `fd`, `rg`                                                                                               | 文件发现与内容搜索                    |
-| `configure_my_pi_setup`                                                                                  | `/my-pi-setup` 背后的受限配置写入工具 |
+| 工具                                                                                                     | 用途                                |
+| -------------------------------------------------------------------------------------------------------- | ----------------------------------- |
+| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期                    |
+| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                        |
+| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理            |
+| `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                      |
+| `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                        |
+| `context_pivot`                                                                                          | Context 阶段切换                    |
+| `ask_user`                                                                                               | 结构化用户决策                      |
+| `fd`, `rg`                                                                                               | 文件发现与内容搜索                  |
+| `configure_my_pi_setup`                                                                                  | 受限配置写入                        |
+
+</details>
 
 ---
 
-## 为什么这样设计
+## 设计原则
 
-### Pi-native 优先
+### Pi-native first
 
-默认子 Agent 是新的 Pi SDK Session，而不是另起一个外部 CLI。它自然继承用户已经配置好的 Provider、模型、Tools、Skills 和项目 Trust。
+子 Agent 是 Pi SDK Session，不是独立 CLI。Provider、模型、Skills、Trust 与普通 child-safe 工具沿用用户已有环境；编排、交互和父级状态工具明确移除。
 
-### 没有隐式模型消费
+### Context 有明确去向
 
-仓库不写死私有 Provider 或模型名。Next-action suggestion 默认关闭；Subagent 默认继承父 Session 的模型与思考等级。
+一项委派交给 Subagent；多阶段依赖交给 Workflow；阶段变化用 Context Pivot；真正跨 Session 用 Handoff；下一步建议只停留在编辑器 UI。
 
-### Context 是资源，不是垃圾桶
+### 后台能力必须可见，也必须能停
 
-- 一次任务委派给 Subagent；
-- 多阶段依赖交给 Workflow；
-- 阶段变化使用 Context Pivot；
-- 真正跨 Session 使用 Handoff；
-- 下一步建议只做临时输入提示，不写入 Session 或模型 Context。
+Terminal、Subagent、Workflow 都有 ID、状态、检查入口、取消路径、有界 Shutdown 和一次性完成通知。无界后台工作不属于“方便”，只是把问题藏起来。
 
-### 后台能力必须可观察、可终止
+### 少猜一次，多拒绝一次
 
-后台 Terminal、Subagent、Workflow 都有：
-
-- 明确 ID 与状态；
-- 实时或截断输出；
-- UI Dashboard；
-- 取消与 Shutdown 清理；
-- 一次且仅一次的完成通知。
-
-### 约束错误，而不是约束能力
-
-默认并发足够高，并允许用户继续放宽；同时保留机械上限、输出上限、调用预算和沙箱边界，防止错误脚本无限扩张。
+不可证明只读就不 Replay，不能确认干净就不删 Worktree，损坏的高优先级角色定义不 fallback。拒绝会留下可见错误；猜错可能留下错误代码、旧结果或丢失数据。
 
 ---
 
 ## FAQ
 
 <details>
-<summary><strong>Plan mode 下为什么 `git log` 能跑，`npm install` 不能？</strong></summary>
+<summary><strong>安装后会自动调用额外模型吗？</strong></summary>
 
-因为规划最需要的恰恰是历史和改动：`read`/`rg` 能看到代码写了什么，看不到它**为什么**变成这样。把 bash 整个封掉，等于让模型脱离 `git log` / `git diff` / `git status` 做计划。
-
-判断任意 shell 命令是否只读是不可能的，所以 plan mode 不做这个判断。它只回答一个窄得多的问题：**这条命令是不是完全由白名单上的零件拼成的**。
-
-- 含 shell 元字符（`;` `|` `&` `>` `` ` `` `$` `\` 通配符）或引号一律拒绝——那说明它不止一条命令，而解析 shell 意味着每个 parser bug 都是一个绕过；
-- 只认 `git` 和 `gh` 两个程序。文件相关的 `ls`/`cat`/`head` 走 `read`、`ls`、`grep`、`fd` 工具，不走 bash；
-- 子命令必须**紧跟在程序名后面**，不是「第一个不带横杠的词」；
-- 每个 flag 都要在白名单上，认不出来就拒。
-
-后两条不是洁癖，是**修出来的**。第一版按「第一个不带横杠的词」找子命令，等于假设所有 dash 词都不带值——而 `git --namespace <x>` 会吃掉下一个词，于是 `git --namespace log push --force` 里的 `log` 被 flag 吞了，真跑的是 `push`。同理 `gh pr --title view create` 在 cobra 里解析成 `gh pr create --title view`，会真的开一个 PR。第一版还按「已知危险 flag」做拒绝清单，一轮审查就找出四个漏网的：`git grep -Osh` 会把匹配到的仓库文件当 shell 脚本执行，`file --compile` 会写文件，`tree -ao` 绕过锚定的 `-o` 检查，`date -s` 改系统时钟。**在无穷的 flag 空间上做拒绝清单是做不完的**；白名单漏一项只是多一次拒绝。
-
-方向是单向的：放行意味着「已证明只读」，拒绝只意味着「未能证明」。所以 `git tag --list`、`git config --get`、`git stash list` 这些确实只读的形式也照拒——把它们和写入形式分开要解析各自的 flag 语法，正是这个模块拒绝做的分析。
-
-它防的是「模型在你批准前就动手」，**不防敌意仓库**：`git diff` 默认会读仓库自己 `.git/config` 里的 `diff.external`，这层拦不住，上层也没打算拦——Pi 本来就在你的 trust 决定下运行项目自带的工具链。
-
-</details>
-
-<details>
-<summary><strong>Plan mode 下还能用子 Agent 吗？</strong></summary>
-
-能，而且应该用。并行看几个子系统、把调研噪音挡在主上下文外面，正是规划阶段最该做的事。
-
-安全性不靠提示词，靠 harness：`/plan` armed 时 `subagent_spawn` 会把子 Agent 的工具白名单收窄成 `read / grep / find / ls / fd / rg`，它手里**根本没有** `write`/`edit`/`bash` 可调用。收窄只做减法——如果 `agent_type` 已经限得更死，保留它自己的限制。若选定类型的声明工具会被 Plan Mode 收窄（例如 `implementer`），spawn 会拒绝，改用 `explorer`、`reviewer`、`advisor` 或不选类型，避免给子 Agent 相互矛盾的实现提示；`isolation: "worktree"` 也会在创建 checkout 前被拒绝。
-
-两个例外：
-
-- **`subagent_send` 仍然拦着**。它恢复的是一个已存在的子会话，而那个子 Agent 可能是 `/plan` 之前起的、还握着完整工具集。收窄只发生在 spawn 那一刻。
-- **`workflow` 仍然拦着**。虽然指定 `agent_type` 的调用现在有强制工具白名单，但它是可选的，DSL 也没有整次运行的 Plan Mode 收窄；未指定类型或选 `implementer` 的调用仍可能写入。
-
-这一条最初的实现是把委派整个封掉，理由是「`tool_call` handler 够不到子会话」。前半句是对的，但结论错了——够不到的那部分，由 harness 强制的工具白名单答掉了。
+不会。Next-action suggestion 默认关闭；只有用户通过 `/my-pi-setup` 显式选择模型后，完整主 Agent Run 结束时才可能增加一次小型预测调用。Subagent 与 Workflow 也只在任务实际触发时运行。
 
 </details>
 
 <details>
 <summary><strong>Pi Subagent 会阻塞主 Agent 吗？</strong></summary>
 
-不会。`subagent_spawn` 立即返回，子 Agent 在后台独立运行，结束后自动回传结果。只有主 Agent 主动调用 `subagent_wait` 时，当前 Tool Call 才会等待；这应该只用于真正依赖子 Agent 结果的步骤。
+不会。`subagent_spawn` 立即返回，结束后自动回传。只有显式调用 `subagent_wait` 才会等待；它只适合下一步确实依赖结果的场景。
 
 </details>
 
 <details>
-<summary><strong>安装后会自动调用额外模型吗？</strong></summary>
+<summary><strong>为什么同时提供 Subagent 和 Workflow？</strong></summary>
 
-不会。Next-action suggestion 默认关闭，只有用户通过 `/my-pi-setup` 显式选择模型后，才会在完整结束的主 Agent run 后调用一次预测模型。Pi Subagent 也只有在任务实际触发时才运行，并默认继承当前模型。
+Subagent 是一项可继续对话的自包含委派；Workflow 是多阶段编排，强调 fan-out、结构化结果、可恢复执行和持久产物。前者可以接管继续，后者更适合自动化流水线。
 
 </details>
 
 <details>
-<summary><strong>为什么既有 Subagent，又有 Workflow？</strong></summary>
+<summary><strong>Plan Mode 下为什么 `git log` 能运行，`npm install` 不能？</strong></summary>
 
-Subagent 适合一项自包含委派；Workflow 适合多阶段、有依赖关系、需要结构化汇总的任务。前者可以被用户接管继续，后者强调自动编排与可回放产物。
+Plan Mode 不分析“任意 Shell 是否只读”，而只放行由已知安全零件组成的命令。它允许窄白名单中的 `git` / `gh` 查询形式；Shell 元字符、未知 flag、安装、写入和无法证明的形式全部拒绝。这里的方向是单向的：放行意味着已证明只读，拒绝只表示未能证明。
+
+Plan Mode 仍可启动只读 Subagent，但会把工具收窄到发现工具；`subagent_send` 和 Workflow 会被拦截，因为它们可能恢复或创建拥有写权限的执行路径。
 
 </details>
 
 <details>
 <summary><strong>配置和升级会互相覆盖吗？</strong></summary>
 
-包代码与用户配置分离。用户配置保存在 `~/.pi/agent/my-pi-setup.json`，模型认证和 Pi 设置仍归 Pi 自己管理；更新仓库不会重写这些文件。
+不会。包代码、Pi 自己的模型认证与 `~/.pi/agent/my-pi-setup.json` 相互分离。更新仓库不会重写用户配置。
 
 </details>
 
 <details>
 <summary><strong>后台服务会不会变成孤儿进程？</strong></summary>
 
-正常的 `/new`、`/resume`、`/fork`、`/reload` 和退出都会触发 Session Shutdown；扩展会终止后台进程树并清理日志。后台终端也支持手动 `bg_kill` 和 `/ps` 管理。
+正常的 `/new`、`/resume`、`/fork`、`/reload` 和退出都会触发 Session Shutdown。扩展会终止后台进程树并清理临时日志；也可随时用 `bg_kill` 或 `/ps` 手动管理。
 
 </details>
 
-### 项目状态
+<details>
+<summary><strong>这是稳定 API 吗？</strong></summary>
 
-这是一个持续实际使用的个人发行版，而不是 API 稳定承诺。每次改动都会经过 TypeScript、格式检查和专项测试；上游 Pi API 变化时会优先保持 Session 生命周期、结果去重和资源清理等核心不变量。
+这是持续实际使用的独立发行版，不承诺扩展 API 永远不变。改动会经过 TypeScript、格式检查和专项测试；Pi 上游变化时，优先保持 Session 生命周期、工具边界、结果去重和资源清理这些行为不变量。
 
-欢迎通过 Issue 提交真实工作流、兼容性问题和可复现 Bug。新增功能应优先复用 Pi 原生能力，并遵守 [`AGENTS.md`](AGENTS.md) 中的单一配置入口与 Pi-native 默认约束。
+</details>
 
 ---
 
-## 架构
+## 仓库结构
 
 ```text
 extensions/
 ├── setup/                 # /my-pi-setup 与受限配置工具
 ├── background-terminals/  # 长进程、日志、/ps
-├── subagents/             # Pi-native Backend + /subagents + Agent 类型
-├── workflows/             # JS DSL、Agent Runner、Sandbox、Artifacts
-├── tasks/                 # Session 持久任务
-├── goal/                  # Codex 风格持久自主 Goal
+├── subagents/             # Pi-native Backend、角色、/subagents
+├── workflows/             # DSL、Runner、Sandbox、Replay、Artifacts
+├── tasks/                 # Session 工作项
+├── goal/                  # 持久自主 Goal
 ├── context-pivot/         # 定向 Compaction
-├── plan-mode/             # /plan 只读调研与批准门禁
-├── cron/                  # /cron Session 内定时提示词
-├── post-edit/             # 编辑后的单条可选命令
-├── sessions/              # Session 搜索、预览、切换
+├── plan-mode/             # 只读调研与批准门禁
+├── cron/                  # Session 内定时 Prompt
+├── post-edit/             # 成功编辑后的可选命令
+├── sessions/              # Session 搜索与切换
 ├── ask-user/              # 结构化用户输入
-├── file-search/           # fd / rg 与二进制解析
-├── file-mutation-display/ # Write / Edit 紧凑预览
-├── suggestions/           # Next-action ghost suggestion
-├── git-info/              # Git / PR 与 /lg
-├── model-info/            # Model / Context / Cost / Throughput
-├── turn-time/             # 每次请求结束后的耗时行
-├── ui-customization/      # Header / Footer / Terminal title
+├── file-search/           # fd / rg 与安全二进制获取
+├── file-mutation-display/ # Bash / Write / Edit 紧凑渲染
+├── suggestions/           # Ephemeral next-action suggestion
+├── git-info/              # Git、PR 与 /lg
+├── model-info/            # Model、Context、Cost、Throughput
+├── turn-time/             # Turn 耗时
+├── ui-customization/      # Header、Footer、Terminal title
 ├── copy-all/              # 可见对话复制
-└── shared/                # Child session、配置、状态与超时策略
+└── shared/                # Child policy、配置、Worktree、终端清洗
 
 skills/
 ├── background-terminals/
@@ -804,7 +599,7 @@ themes/
 └── github-dark-default.json
 ```
 
-扩展之间通过 Pi Event Bus 和小型共享状态通信；长生命周期资源均绑定 Session Shutdown。Workflow JavaScript 在独立 Node Permission Sandbox 中运行，Agent Child 则使用 Pi SDK 的独立 Session 与 Trust-aware Resource Loader。
+扩展通过 Pi Event Bus 和小型共享状态通信。长生命周期资源绑定 Session Shutdown；Workflow JavaScript 在独立 Permission Sandbox 中运行；Agent child 使用 Pi SDK Session 和 Trust-aware Resource Loader。
 
 ---
 
@@ -817,30 +612,20 @@ npm run format:check
 npm test
 ```
 
-核心测试覆盖：
+测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox/Replay/Acceptance、Worktree 数据保全、文件搜索二进制校验、Session 状态恢复、配置迁移和 TUI 渲染。
 
-- 后台进程树终止、SIGTERM → SIGKILL、超时、日志和竞态；
-- Subagent 并发、结果去重、取消、Context 使用量；
-- Workflow 沙箱、调用预算、结构化输出、Artifact 原子写入；
-- `fd` / `rg` argv、官方二进制下载、SHA-256 和输出截断；
-- Session 搜索、下一步预测输入脱敏、配置边界与 TUI 选择状态。
-
-历史方案、研究与多模型评估归档在 [`docs/design/`](docs/design/)。
-
-仓库的 [`AGENTS.md`](AGENTS.md) 还定义了维护约束：任何新增的模型、开关、权限、并发或 UI 偏好，都必须同步接入 `/my-pi-setup`，保持单一配置入口。
+设计记录与多模型评估见 [`docs/design/`](docs/design/)。欢迎通过 [Issues](https://github.com/tt-a1i/my-pi-setup/issues) 提交可复现 Bug 或真实工作流；新增能力应优先复用 Pi 原生原语，并遵守 [`AGENTS.md`](AGENTS.md) 的单一配置入口与 child-session 边界。
 
 ---
 
 ## 来源与致谢
 
-本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，感谢原作者提供的起点；现作为独立发行版维护，并针对 Pi-native 子代理、统一自然语言配置、Context Pivot、Session 浏览、结构化提问、可配置 Workflow Fan-out、后台超时与资源清理进行了持续打磨。
+本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
 
-`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。可选的顶层 Session 通信由 [pi-intercom](https://github.com/nicobailon/pi-intercom) 提供。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
----
+本仓库目前没有项目级开源许可证；`THIRD_PARTY_NOTICES.md` 只记录第三方来源与各自许可，不等同于授予本项目使用许可。
 
-<div align="center">
-
-**Small harness. Deep extensions. Clean context.**
-
-</div>
+<p align="center">
+  <strong>Small harness. Deep extensions. Clean context.</strong>
+</p>
