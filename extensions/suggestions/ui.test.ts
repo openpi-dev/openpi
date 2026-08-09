@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER } from "@earendil-works/pi-tui";
 import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
@@ -85,17 +86,23 @@ test("latest-wins state rejects stale or non-empty-editor offers", () => {
   assert.equal(state.isActive(), false);
 });
 
-test("overlays dim ghost text without changing editor contents", () => {
+test("renders the ghost on an IME-safe row without changing editor contents", () => {
   const lines = renderGhostSuggestion(
-    ["top", `${FAKE_CURSOR}${" ".repeat(19)}`, "bottom"],
+    ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(19)}`, "bottom"],
     20,
     "run the full test suite",
     (text) => `\u001b[2m${text}\u001b[22m`,
   );
-  assert.match(lines[1]!, /\u001b\[2mrun the full test/);
-  assert.equal(lines[1]!.includes("suite"), false);
+
+  // macOS IME preedit is terminal-owned and appears at CURSOR_MARKER. The
+  // suggestion must never share that row or it flickers underneath preedit.
+  assert.equal(lines[1]!.includes("run the full test"), false);
+  assert.equal(lines[1]!.includes(CURSOR_MARKER), true);
+  assert.match(lines[2]!, /\u001b\[2mrun the full test/);
+  assert.equal(lines[2]!.includes("suite"), false);
+  assert.equal(lines[2]!.includes(CURSOR_MARKER), false);
   assert.equal(lines[0], "top");
-  assert.equal(lines[2], "bottom");
+  assert.equal(lines[3], "bottom");
 });
 
 test("Right accepts into an empty editor without submitting", () => {

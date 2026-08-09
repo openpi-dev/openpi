@@ -1,6 +1,7 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
 import {
+  CURSOR_MARKER,
   Key,
   matchesKey,
   truncateToWidth,
@@ -85,8 +86,8 @@ function ghostGeometry(lines: readonly string[], width: number) {
   const index = lines.findIndex((line) => line.includes(FAKE_CURSOR));
   if (index === -1) return undefined;
   const line = lines[index]!;
-  const cursorEnd = line.indexOf(FAKE_CURSOR) + FAKE_CURSOR.length;
-  const prefix = line.slice(0, cursorEnd);
+  const cursorStart = line.indexOf(FAKE_CURSOR);
+  const prefix = line.slice(0, cursorStart).replaceAll(CURSOR_MARKER, "");
   const available = Math.max(0, width - visibleWidth(prefix));
   return available > 0 ? { index, prefix, available } : undefined;
 }
@@ -102,16 +103,21 @@ export function renderGhostSuggestion(
   const { index, prefix, available } = geometry;
   const ghost = truncateToWidth(suggestion, available, "…");
   const content = `${prefix}${dim(ghost)}`;
-  const rendered = [...lines];
-  rendered[index] =
+  const ghostLine =
     content + " ".repeat(Math.max(0, width - visibleWidth(content)));
+  const rendered = [...lines];
+  // macOS IMEs draw uncommitted preedit text directly on the hardware-cursor
+  // row, before the editor receives any input event. A same-row ghost fights
+  // that terminal-owned text and flickers. Keep the suggestion inside the
+  // editor, but on its own row immediately below the cursor.
+  rendered.splice(index + 1, 0, ghostLine);
   return rendered;
 }
 
 /**
- * Transparent editor wrapper that overlays one dim suggestion in an empty
- * editor. Right accepts without submitting; any other editor interaction
- * cancels the pending or visible suggestion. Existing management-strip
+ * Transparent editor wrapper that shows one dim suggestion on a dedicated row
+ * inside an empty editor. Right accepts without submitting; any other editor
+ * interaction cancels the pending or visible suggestion. Existing management-strip
  * navigation keeps precedence while a strip is focused.
  */
 export class NextActionSuggestionEditor extends BelowEditorNavigationEditor {

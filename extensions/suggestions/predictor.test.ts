@@ -61,6 +61,8 @@ test("omits reasoning only when configured off", () => {
 test("prompt predicts user input rather than recapping the run", () => {
   assert.match(SUGGESTION_SYSTEM_PROMPT, /exactly as the user would type/);
   assert.match(SUGGESTION_SYSTEM_PROMPT, /one line and at most 200 characters/);
+  assert.match(SUGGESTION_SYSTEM_PROMPT, /natural-language user request/);
+  assert.match(SUGGESTION_SYSTEM_PROMPT, /never an imitation.*tool call/);
   assert.match(SUGGESTION_SYSTEM_PROMPT, /Return null/);
   assert.doesNotMatch(SUGGESTION_SYSTEM_PROMPT, /cover everything performed/i);
   assert.equal(

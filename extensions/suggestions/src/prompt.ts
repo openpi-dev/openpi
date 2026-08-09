@@ -8,6 +8,7 @@ Rules:
 - Write suggestion exactly as the user would type it to the coding agent, not as advice about what the user should do.
 - Choose one concrete, useful continuation grounded in the supplied run: a likely follow-up, verification, refinement, or next task. Never repeat work the run already confirmed complete.
 - Match the language, tone, and brevity of the user's initiating prompt. Keep the suggestion to one line and at most 200 characters.
+- Emit a natural-language user request, never an imitation of an assistant tool call. Do not copy a bare tool name, shell command, or filesystem path from assistant/tool transcript; mention a path only when the user's own initiating prompt named it and it remains necessary.
 - Return null when there is no specific, plausible continuation. Do not emit generic filler such as "continue", "anything else", "review the result", or "let me know".
 - Never invent facts, paths, failures, approvals, or user intent. Never propose destructive, irreversible, publishing, purchasing, credential, or permission-changing actions unless the user's run explicitly requested that exact action and it remains unfinished.
 - Base the answer only on the supplied current-run transcript.
