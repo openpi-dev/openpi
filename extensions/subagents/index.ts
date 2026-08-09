@@ -33,6 +33,7 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import {
+  CustomEditor,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   defineTool,
@@ -92,6 +93,10 @@ import {
   effectiveChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
+import {
+  BelowEditorNavigationEditor,
+  BelowEditorStripState,
+} from "../shared/below-editor-navigation.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   PLAN_MODE_CHANNEL,
@@ -109,6 +114,11 @@ import {
   runTool,
   type SubagentRuntime,
 } from "./src/runtime.ts";
+import {
+  normalizeSubagentTitle,
+  selectSubagentStripEntry,
+  SubagentStripWidget,
+} from "./navigation.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
   renderWaitResult,
@@ -181,8 +191,12 @@ export default function (pi: ExtensionAPI) {
    * acknowledges everything that had already finished.
    */
   let settledAcknowledgedAt = 0;
-  /** Ticks the elapsed time on the live rows while subagents are running. */
-  let statusTicker: ReturnType<typeof setInterval> | undefined;
+  const stripState = new BelowEditorStripState();
+  const widgetKey = "subagent-navigation";
+  let navigationManager: SubagentManagerShape | undefined;
+  let widgetVisible = false;
+  let requestWidgetRender: (() => void) | undefined;
+  let dashboardOpen = false;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
@@ -192,6 +206,7 @@ export default function (pi: ExtensionAPI) {
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
+        navigationManager = manager;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
@@ -201,49 +216,90 @@ export default function (pi: ExtensionAPI) {
     return managerPromise;
   };
 
-  /** Live rows beyond this crowd out the conversation. */
-  const MAX_STATUS_ROWS = 5;
+  const stripEntry = () =>
+    navigationManager
+      ? selectSubagentStripEntry(
+          navigationManager.view.list(),
+          settledAcknowledgedAt,
+        )
+      : undefined;
 
-  const startStatusTicker = (manager: SubagentManagerShape) => {
-    if (statusTicker) return;
-    // Elapsed time advances without any manager event, so redraw on a timer.
-    statusTicker = setInterval(() => updateStatus(manager), 1_000);
-    statusTicker.unref?.();
-  };
-
-  const stopStatusTicker = () => {
-    if (!statusTicker) return;
-    clearInterval(statusTicker);
-    statusTicker = undefined;
+  const updateSubagentWidget = () => {
+    const ctx = sessionContext;
+    if (!ctx || ctx.mode !== "tui") return;
+    const visible = Boolean(stripEntry());
+    if (visible === widgetVisible) return;
+    if (!visible) {
+      stripState.focused = false;
+      requestWidgetRender = undefined;
+      ctx.ui.setWidget(widgetKey, undefined);
+      widgetVisible = false;
+      return;
+    }
+    ctx.ui.setWidget(
+      widgetKey,
+      (tui, theme) => {
+        requestWidgetRender = () => tui.requestRender();
+        return new SubagentStripWidget(tui, theme, stripState, stripEntry);
+      },
+      { placement: "belowEditor" },
+    );
+    widgetVisible = true;
   };
 
   const updateStatus = (manager: SubagentManagerShape) => {
     if (!ui) return;
-    const theme = ui.theme;
-    const subs = manager.view.list();
-    const counts = unreadActivityCounts(subs, settledAcknowledgedAt);
-    if (!hasActivity(counts)) {
-      stopStatusTicker();
-      ui.setStatus("subagents", undefined);
-      return;
-    }
+    const counts = unreadActivityCounts(
+      manager.view.list(),
+      settledAcknowledgedAt,
+    );
+    ui.setStatus(
+      "subagents",
+      hasActivity(counts)
+        ? formatActivityStatus(ui.theme, "subagents", counts)
+        : undefined,
+    );
+    updateSubagentWidget();
+  };
 
-    const lines = [formatActivityStatus(theme, "subagents", counts)];
-    const running = subs.filter((snap) => snap.status === "running");
-    for (const snap of running.slice(0, MAX_STATUS_ROWS)) {
-      lines.push(
-        `  ${theme.fg("warning", "\u25cb")} ${snap.title} ${theme.fg("dim", formatElapsed(snap))}`,
-      );
+  const openDashboard = async (ctx: ExtensionContext, initialId?: string) => {
+    if (dashboardOpen || ctx.mode !== "tui") return;
+    dashboardOpen = true;
+    stripState.focused = false;
+    let manager: SubagentManagerShape | undefined;
+    try {
+      manager = await getManager();
+      if (manager.view.size() === 0) return;
+      await openSubagentPicker(ctx, manager.view, initialId);
+      settledAcknowledgedAt = Date.now();
+    } finally {
+      dashboardOpen = false;
+      if (manager) updateStatus(manager);
     }
-    if (running.length > MAX_STATUS_ROWS) {
-      lines.push(
-        theme.fg("dim", `  \u2026 +${running.length - MAX_STATUS_ROWS} more`),
-      );
-    }
-    ui.setStatus("subagents", lines.join("\n"));
+  };
 
-    if (running.length > 0) startStatusTicker(manager);
-    else stopStatusTicker();
+  const installSubagentNavigation = (ctx: ExtensionContext) => {
+    if (ctx.mode !== "tui") return;
+    const previous = ctx.ui.getEditorComponent();
+    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
+      const base =
+        previous?.(tui, theme, keybindings) ??
+        new CustomEditor(tui, theme, keybindings);
+      return new BelowEditorNavigationEditor(
+        base,
+        keybindings,
+        stripState,
+        () => Boolean(stripEntry()),
+        () => {
+          const entry = stripEntry();
+          if (entry) void openDashboard(ctx, entry.snapshot.id);
+        },
+        () => {
+          requestWidgetRender?.();
+          tui.requestRender();
+        },
+      );
+    });
   };
 
   /**
@@ -355,6 +411,8 @@ export default function (pi: ExtensionAPI) {
     sessionContext = ctx;
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
+    installSubagentNavigation(ctx);
+    updateSubagentWidget();
     // A malformed agent type is silently missing from the roster otherwise, so
     // report it once. Never fatal: the rest still loaded. Non-UI modes receive
     // stderr rather than a model-context message.
@@ -376,13 +434,22 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", () => flushResults(false));
 
   pi.on("session_shutdown", async () => {
-    sessionContext = undefined;
-    stopStatusTicker();
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
-    ui?.setStatus("subagents", undefined);
+    try {
+      ui?.setStatus("subagents", undefined);
+      sessionContext?.ui.setWidget(widgetKey, undefined);
+    } catch {
+      // UI may already be disposed.
+    }
+    sessionContext = undefined;
     ui = undefined;
+    navigationManager = undefined;
+    widgetVisible = false;
+    requestWidgetRender = undefined;
+    stripState.focused = false;
+    dashboardOpen = false;
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;
@@ -504,7 +571,7 @@ export default function (pi: ExtensionAPI) {
         ? agentTypes.get(requestedType)
         : undefined;
 
-      const title = params.name.trim().slice(0, 160) || "subagent";
+      const title = normalizeSubagentTitle(params.name);
       const declaredChildTools = effectiveChildToolAllowlist(agentType?.tools);
 
       // A worktree creation mutates git metadata, so reject before attempting
@@ -1101,7 +1168,7 @@ export default function (pi: ExtensionAPI) {
         manager.spawn("pi", {
           origin: "btw",
           prompt,
-          title: deriveBtwTitle(prompt),
+          title: normalizeSubagentTitle(deriveBtwTitle(prompt), "by the way"),
           cwd: ctx.cwd,
           parent: {
             parentCwd: ctx.cwd,
@@ -1152,7 +1219,7 @@ export default function (pi: ExtensionAPI) {
         );
         return;
       }
-      await openSubagentPicker(ctx, manager.view);
+      await openDashboard(ctx);
     },
   });
 }

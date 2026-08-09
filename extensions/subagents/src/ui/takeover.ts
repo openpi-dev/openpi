@@ -7,16 +7,21 @@
  */
 
 import type {
-  ExtensionCommandContext,
+  ExtensionContext,
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../format.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { TranscriptRenderer, buildTranscriptLines } from "./transcript.ts";
+
+export function sanitizeSubagentDisplayLine(value: string) {
+  return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
+}
 
 function configuredKeys(
   keybindings: KeybindingsManager,
@@ -54,7 +59,7 @@ export interface TakeoverOptions {
 }
 
 export async function openSubagentTakeover(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
   id: string,
   options?: TakeoverOptions,
@@ -71,10 +76,11 @@ export async function openSubagentTakeover(
 }
 
 export async function openSubagentPicker(
-  ctx: ExtensionCommandContext,
+  ctx: ExtensionContext,
   view: SubagentReadModel,
+  initialId?: string,
 ) {
-  const selection: DashboardSelection = { index: 0 };
+  const selection: DashboardSelection = { id: initialId, index: 0 };
 
   while (true) {
     if (view.size() === 0) {
@@ -318,9 +324,10 @@ class SubagentDashboard implements Component {
 
       // Left: marker, status square, title
       const marker = isSelected ? theme.fg("accent", "❯") : " ";
+      const safeTitle = sanitizeSubagentDisplayLine(snap.title) || snap.id;
       const title = isSelected
-        ? theme.fg("accent", snap.title)
-        : theme.fg("text", snap.title);
+        ? theme.fg("accent", safeTitle)
+        : theme.fg("text", safeTitle);
       const left = ` ${marker} ${statusGlyph(snap, theme)} ${title}`;
 
       // Right: backend · model · context utilization · elapsed · status
@@ -328,7 +335,10 @@ class SubagentDashboard implements Component {
       const dot = theme.fg("dim", " · ");
       const rightParts = [
         theme.fg("muted", snap.backend),
-        theme.fg("muted", snap.meta.modelLabel ?? "?"),
+        theme.fg(
+          "muted",
+          sanitizeSubagentDisplayLine(snap.meta.modelLabel ?? "?") || "?",
+        ),
         ...(utilization ? [theme.fg("muted", utilization)] : []),
         theme.fg("muted", formatElapsed(snap)),
         statusWord(snap, theme),
@@ -516,12 +526,21 @@ class TakeoverView implements Component, Focusable {
     const utilization = formatContextUtilization(snap.usage);
     const header =
       `${statusGlyph(snap, theme)} ` +
-      theme.fg("accent", theme.bold(snap.title)) +
+      theme.fg(
+        "accent",
+        theme.bold(sanitizeSubagentDisplayLine(snap.title) || snap.id),
+      ) +
       theme.fg("muted", ` · ${snap.status} · ${formatElapsed(snap)}`) +
       (this.options?.badge
-        ? theme.fg("muted", ` · ${this.options.badge}`)
+        ? theme.fg(
+            "muted",
+            ` · ${sanitizeSubagentDisplayLine(this.options.badge)}`,
+          )
         : "") +
-      theme.fg("dim", ` · ${snap.backend}: ${snap.meta.modelLabel ?? "?"}`) +
+      theme.fg(
+        "dim",
+        ` · ${snap.backend}: ${sanitizeSubagentDisplayLine(snap.meta.modelLabel ?? "?") || "?"}`,
+      ) +
       (utilization ? theme.fg("dim", ` · ${utilization}`) : "");
     lines.push(truncateToWidth(header, width));
     lines.push(border);
@@ -544,7 +563,13 @@ class TakeoverView implements Component, Focusable {
     const body: string[] = [];
     if (snap.errorText) {
       body.push(
-        truncateToWidth(theme.fg("error", `error: ${snap.errorText}`), width),
+        truncateToWidth(
+          theme.fg(
+            "error",
+            `error: ${sanitizeSubagentDisplayLine(snap.errorText)}`,
+          ),
+          width,
+        ),
       );
     }
 

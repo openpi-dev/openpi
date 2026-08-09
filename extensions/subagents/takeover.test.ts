@@ -2,8 +2,18 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   reconcileDashboardSelection,
+  sanitizeSubagentDisplayLine,
   type DashboardSelection,
 } from "./src/ui/takeover.ts";
+
+test("picker and takeover display text cannot inject terminal controls", () => {
+  assert.equal(
+    sanitizeSubagentDisplayLine(
+      "review\u001b]52;c;clipboard\u0007\n\u001b[31mnow\u001b[0m",
+    ),
+    "review now",
+  );
+});
 
 test("dashboard selection follows its subagent id and falls back by row", () => {
   const selection: DashboardSelection = { id: "sa-7", index: 6 };

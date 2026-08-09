@@ -2,7 +2,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Theme = ExtensionContext["ui"]["theme"];
 
-interface ActivityCounts {
+export interface ActivityCounts {
   running: number;
   done: number;
   failed: number;

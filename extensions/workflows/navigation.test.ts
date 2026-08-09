@@ -69,6 +69,15 @@ test("the focused strip opens right, backs out left, and never traps typing", ()
   }
   assert.equal(
     workflowStripInput({
+      data: "\u001b[B",
+      focused: true,
+      available: true,
+      editorEmpty: true,
+    }),
+    "next",
+  );
+  assert.equal(
+    workflowStripInput({
       data: "x",
       focused: true,
       available: true,
@@ -150,6 +159,25 @@ function workflow(): WorkflowDetails {
     ],
   };
 }
+
+test("workflow strip sanitizes restored or legacy metadata defensively", () => {
+  const details = workflow();
+  details.name = "audit\u001b]52;c;clipboard\u0007\nnow";
+  details.currentPhase = "Scan\u001b[31m\u001b[0m";
+  const widget = new WorkflowStripWidget(
+    { requestRender() {} } as unknown as TUI,
+    theme,
+    new WorkflowStripState(),
+    () => ({ runId: "wf_test", details }),
+  );
+  try {
+    const line = widget.render(100)[0] ?? "";
+    assert.match(line, /audit now/);
+    assert.doesNotMatch(line, /clipboard|\u001b/);
+  } finally {
+    widget.dispose();
+  }
+});
 
 test("the workflow strip stays one line, bounded, and exposes its navigation hint", () => {
   const strip = new WorkflowStripState();

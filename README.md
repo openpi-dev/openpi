@@ -184,7 +184,7 @@ subagent_spawn({
 - 模型发起的子 Agent 最多同时运行 4 个；`/btw` 旁路提问使用独立的小池（默认 2），二者互不挤占，卡住的旁路提问不会饿死模型的并发额度；
 - 完成结果自动返回，也可以 `check`、`wait`、`cancel`；
 - `subagent_send` 可以给运行中的子 Agent 追加指引，或让已结束的子 Agent 带着原有 transcript 再跑一轮，不必取消重建；
-- `/subagents` 可以查看实时 Transcript、工具活动、Context 占用，甚至接管继续对话。
+- 运行中或刚结束未读的 Subagent 会像 Workflow 一样在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开 `/subagents` 接管界面。若 Subagent 与 Workflow 两条摘要同时存在，继续按 `↓` 可进入下一条；
 
 **内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，既可用于 `subagent_spawn.agent_type`，也可用于 Workflow 的 `agent(..., { agent_type })`；分别用于只读探索、实现、只读审查和深度只读建议。默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
 
@@ -256,7 +256,7 @@ return await agent(
 - JSON Schema 提供结构化结果；可选 `acceptance: { criteria: [...] }` 让同一个 Agent 提交显式 evidence ledger，不会暗中追加 reviewer 或执行 shell；缺失、格式错误或被拒绝的条件会令该 Agent `ok: false`，同时保留输出和 ledger，并在 Dashboard/产物中显示状态；
 - 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
-- 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
+- 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要，与 Subagent 共用 `↓` 聚焦、`Enter/→` 打开的导航语义；Dashboard 内再用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
 - 脚本运行在无文件、网络和进程权限的独立沙箱；
 - `resume_from_run_id` 只重放可证明为只读、且调用内容与项目上下文一致的结果：会校验规范化 cwd、仓库状态、加载资源与 Trust；无类型/无限制、含 `bash`/`edit`/`write`、未知自定义工具、worktree 隔离、旧版 journal 或无法生成指纹的调用一律真实执行；只读调用仍按内容匹配，不受并发完成顺序影响；
 - `isolation: "worktree"` 让单个 Agent 在自己的 git worktree 和分支上工作，语义与 `subagent_spawn` 的同名参数一致——**任何会写文件的 fan-out 都该开**，否则并发 Agent 共享一个 checkout 和一个 git index，改动互相覆盖；
