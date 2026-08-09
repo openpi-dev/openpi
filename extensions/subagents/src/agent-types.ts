@@ -46,6 +46,9 @@ export const AGENT_TYPE_LIMITS = Object.freeze({
   nameChars: 64,
   descriptionChars: 1024,
   bodyChars: 16_384,
+  modelChars: 256,
+  toolNameChars: 128,
+  fileBytes: 64 * 1024,
   tools: 64,
   files: 128,
 });
@@ -243,6 +246,11 @@ function readToolList(
   for (const entry of raw) {
     const name = readString(entry);
     if (!name) return { error: "tools entries must be non-empty strings" };
+    if (name.length > AGENT_TYPE_LIMITS.toolNameChars) {
+      return {
+        error: `tool name exceeds ${AGENT_TYPE_LIMITS.toolNameChars} characters`,
+      };
+    }
     if (!tools.includes(name)) tools.push(name);
   }
   if (tools.length === 0) {
@@ -280,10 +288,14 @@ export function parseAgentType(
   source = stem,
 ): ParseAgentTypeResult {
   const diagnostics: AgentTypeDiagnostic[] = [];
+  let rejectedName = stem;
   const fail = (message: string) => ({
-    rejectedName: stem,
+    rejectedName,
     diagnostics: [...diagnostics, { source, message }],
   });
+  if (Buffer.byteLength(content, "utf8") > AGENT_TYPE_LIMITS.fileBytes) {
+    return fail(`file exceeds ${AGENT_TYPE_LIMITS.fileBytes} bytes`);
+  }
 
   let frontmatter: Record<string, unknown>;
   let body: string;
@@ -308,6 +320,9 @@ export function parseAgentType(
       `name "${name}" must be lowercase letters, digits, and single hyphens`,
     );
   }
+  // Once a safe declared name is known, a malformed/misnamed file must block
+  // that role rather than only its filename spelling.
+  rejectedName = name;
   // A renamed file with a stale `name` would otherwise shadow a different type
   // than the filename suggests.
   if (name !== stem) {
@@ -354,6 +369,9 @@ export function parseAgentType(
   }
 
   const model = readString(frontmatter.model);
+  if (model && model.length > AGENT_TYPE_LIMITS.modelChars) {
+    return fail(`model exceeds ${AGENT_TYPE_LIMITS.modelChars} characters`);
+  }
 
   const rawEffort =
     readString(frontmatter.reasoning_effort) ??
@@ -389,6 +407,7 @@ function loadDirectory(directory: string) {
   const agentTypes: AgentType[] = [];
   const rejectedNames = new Set<string>();
   const diagnostics: AgentTypeDiagnostic[] = [];
+  let blockAllFallback = false;
 
   let entries: fs.Dirent[];
   try {
@@ -397,12 +416,13 @@ function loadDirectory(directory: string) {
     // Not existing is the common case and not worth reporting; anything else
     // (permissions, a file where a directory belongs) is.
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+      blockAllFallback = true;
       diagnostics.push({
         source: directory,
-        message: `could not read agent types: ${error instanceof Error ? error.message : String(error)}`,
+        message: `could not read agent types: ${error instanceof Error ? error.message : String(error)}; all lower-precedence definitions are blocked`,
       });
     }
-    return { agentTypes, rejectedNames, diagnostics };
+    return { agentTypes, rejectedNames, diagnostics, blockAllFallback };
   }
 
   const files = entries
@@ -431,6 +451,10 @@ function loadDirectory(directory: string) {
     const filePath = path.join(directory, file);
     let content: string;
     try {
+      const size = fs.statSync(filePath).size;
+      if (size > AGENT_TYPE_LIMITS.fileBytes) {
+        throw new Error(`file exceeds ${AGENT_TYPE_LIMITS.fileBytes} bytes`);
+      }
       content = fs.readFileSync(filePath, "utf8");
     } catch (error) {
       rejectedNames.add(file.slice(0, -3));
@@ -446,7 +470,7 @@ function loadDirectory(directory: string) {
     else rejectedNames.add(result.rejectedName);
   }
 
-  return { agentTypes, rejectedNames, diagnostics };
+  return { agentTypes, rejectedNames, diagnostics, blockAllFallback };
 }
 
 export interface LoadAgentTypesOptions {
@@ -467,13 +491,19 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
   );
   const project = options.projectTrusted
     ? loadDirectory(path.join(options.cwd, ".pi", AGENT_TYPES_DIR_NAME))
-    : { agentTypes: [], rejectedNames: new Set<string>(), diagnostics: [] };
+    : {
+        agentTypes: [],
+        rejectedNames: new Set<string>(),
+        diagnostics: [],
+        blockAllFallback: false,
+      };
 
   const diagnostics = [...global.diagnostics, ...project.diagnostics];
   const agentTypes = new Map<string, AgentType>(
     BUILT_IN_AGENT_TYPES.map((agentType) => [agentType.name, agentType]),
   );
   for (const layer of [global, project]) {
+    if (layer.blockAllFallback) agentTypes.clear();
     for (const rejectedName of layer.rejectedNames) {
       const shadowed = agentTypes.get(rejectedName);
       if (shadowed) {

@@ -28,17 +28,18 @@ You are a read-only exploration agent. Locate code and report concrete
 file:line references. You cannot modify files — do not attempt to.
 ```
 
-| Field              | Required | Meaning                                                                  |
-| ------------------ | -------- | ------------------------------------------------------------------------ |
-| `name`             | yes      | `[a-z0-9-]`, ≤64 chars, and must equal the filename stem.                |
-| `description`      | yes      | Shown to the parent model when it picks a type. ≤1024 chars.             |
-| `tools`            | no       | Tool allowlist. **Omit to inherit the normal tool set.**                 |
-| `model`            | no       | `provider/model-id`, or a bare id resolved against the current provider. |
-| `reasoning_effort` | no       | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.               |
-| body               | no       | Appended to the child's system prompt. ≤16384 chars.                     |
+| Field              | Required | Meaning                                                                              |
+| ------------------ | -------- | ------------------------------------------------------------------------------------ |
+| `name`             | yes      | `[a-z0-9-]`, ≤64 chars, and must equal the filename stem.                            |
+| `description`      | yes      | Shown to the parent model when it picks a type. ≤1024 chars.                         |
+| `tools`            | no       | Tool allowlist. **Omit to inherit the normal tool set.**                             |
+| `model`            | no       | `provider/model-id`, or a bare id resolved against the current provider; ≤256 chars. |
+| `reasoning_effort` | no       | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.                           |
+| body               | no       | Appended to the child's system prompt. ≤16384 chars.                                 |
 
-`name` must match the filename so a renamed file cannot keep answering to its
-old name. An explicit `model` or `reasoning_effort` argument on `subagent_spawn`,
+Each file is capped at 64 KiB and each tool name at 128 characters before it can
+enter a prompt or startup diagnostic. `name` must match the filename so a renamed
+file cannot keep answering to its old name. An explicit `model` or `reasoning_effort` argument on `subagent_spawn`,
 or `model`/`provider` or `effort` on Workflow `agent()`, overrides the type's own.
 
 ## Built-in roles
@@ -85,7 +86,10 @@ from loading. Its own filename is blocked at that precedence layer: a broken
 project `implementer.md` cannot silently fall back to the broader global or
 built-in `implementer`. Unknown frontmatter keys make that file malformed rather
 than being ignored, so a misspelled `tools` or restriction field cannot expose
-the inherited full tool set.
+the inherited full tool set. If an entire configured layer exists but cannot be
+read, all lower-precedence definitions are blocked because its intended overrides
+cannot be determined safely; a genuinely missing directory remains the normal
+no-override case.
 
 ## Model and effort precedence
 

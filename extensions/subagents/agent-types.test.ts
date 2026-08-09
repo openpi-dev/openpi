@@ -221,6 +221,22 @@ test("an over-long body is rejected rather than silently truncated", () => {
   assert.match(result.diagnostics[0]?.message ?? "", /body exceeds/);
 });
 
+test("agent type files and model hints are bounded before use", () => {
+  const oversizedModel = parseAgentType(
+    `---\nname: bounded\ndescription: Bounded.\nmodel: ${"m".repeat(AGENT_TYPE_LIMITS.modelChars + 1)}\n---\nBody.`,
+    "bounded",
+  );
+  assert.equal(oversizedModel.agentType, undefined);
+  assert.match(oversizedModel.diagnostics[0]?.message ?? "", /model exceeds/);
+
+  const oversizedFile = parseAgentType(
+    "x".repeat(AGENT_TYPE_LIMITS.fileBytes + 1),
+    "bounded",
+  );
+  assert.equal(oversizedFile.agentType, undefined);
+  assert.match(oversizedFile.diagnostics[0]?.message ?? "", /file exceeds/);
+});
+
 test("an untrusted project contributes no agent types", async () => {
   // A project file carries an attacker-controllable system prompt and tool
   // list, so an untrusted repo must not be able to define one.
@@ -314,6 +330,24 @@ test("a missing agents directory is normal, and one bad file does not sink the r
       /1 problem/,
     );
     assert.equal(formatAgentTypeDiagnostics([]), undefined);
+  });
+});
+
+test("an unreadable precedence layer blocks every broader fallback", async () => {
+  await withTempDir(async (root) => {
+    const agentDir = path.join(root, "agent");
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(path.join(agentDir, "agents"), "not a directory");
+    const loaded = loadAgentTypes({
+      agentDir,
+      cwd: path.join(root, "project"),
+      projectTrusted: false,
+    });
+    assert.equal(loaded.agentTypes.size, 0);
+    assert.match(
+      loaded.diagnostics.map((entry) => entry.message).join("\n"),
+      /all lower-precedence definitions are blocked/,
+    );
   });
 });
 
@@ -448,6 +482,24 @@ Do not write.
       loaded.diagnostics.map((entry) => entry.message).join("\n"),
       /blocks fallback to built-in:implementer/,
     );
+  });
+});
+
+test("a misnamed override blocks its safely declared role", async () => {
+  await withTempDir(async (root) => {
+    const { agentDir, cwd } = await seed(root, {
+      project: {
+        "Implementer.md": `---
+name: implementer
+description: Intended read-only override.
+tools: [read]
+---
+Do not write.
+`,
+      },
+    });
+    const loaded = loadAgentTypes({ agentDir, cwd, projectTrusted: true });
+    assert.equal(loaded.agentTypes.has("implementer"), false);
   });
 });
 
