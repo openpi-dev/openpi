@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import {
@@ -12,9 +13,27 @@ import {
 } from "../shared/plan-mode-state.ts";
 import planMode, {
   BLOCK_REASON,
+  buildPlanImplementationPrompt,
+  latestAssistantToolCallCount,
+  MAX_READY_PLAN_UTF8_BYTES,
+  PLAN_MODE_STATE_ENTRY,
+  PLAN_READY_ACTIONS,
   PLAN_SAFE_TOOLS,
+  planReadyBatchDecision,
   planToolCallDecision,
+  restorePlanModeState,
 } from "./index.ts";
+
+type PlanReadyExecute = (
+  toolCallId: string,
+  params: { plan: string },
+  signal: AbortSignal,
+  onUpdate: undefined,
+  ctx: ExtensionContext,
+) => Promise<{
+  details?: { status?: string; plan?: string };
+  terminate?: boolean;
+}>;
 
 test("plan mode allows only explicit observational tools", () => {
   for (const tool of [
@@ -28,6 +47,7 @@ test("plan mode allows only explicit observational tools", () => {
     "tasks_list",
     "get_goal",
     "ask_user",
+    "plan_ready",
   ]) {
     assert.ok(PLAN_SAFE_TOOLS.has(tool), `${tool} must stay available`);
     assert.equal(planToolCallDecision(tool), undefined);
@@ -81,20 +101,51 @@ test("bash is judged per command, not blocked as a whole tool", () => {
   assert.match(reason ?? "", /Plan mode is active/);
 });
 
-test("runtime gate blocks before approval and opens after explicit approval", async () => {
+test("plan_ready fails preflight unless it is the only tool call", () => {
+  const branch = [
+    {
+      type: "message",
+      message: {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Finishing." },
+          { type: "toolCall", id: "ready", name: "plan_ready" },
+          { type: "toolCall", id: "read", name: "read" },
+        ],
+      },
+    },
+  ];
+  const count = latestAssistantToolCallCount(branch);
+  assert.equal(count, 2);
+  assert.equal(planReadyBatchDecision("plan_ready", count)?.block, true);
+  assert.match(
+    planReadyBatchDecision("plan_ready", count)?.reason ?? "",
+    /only tool call/,
+  );
+  assert.equal(planReadyBatchDecision("plan_ready", 1), undefined);
+  assert.equal(planReadyBatchDecision("read", 2), undefined);
+});
+
+test("Plan Ready keeps the write gate closed until the user prepares an editable implementation prompt", async () => {
   let commandHandler:
-    ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+    ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
   let toolHandler:
     | ((event: {
         toolName: string;
         input?: Record<string, unknown>;
       }) => unknown)
     | undefined;
+  let readyExecute: PlanReadyExecute | undefined;
+  let editorText = "";
+  const messages: Array<{ content: string }> = [];
   const pi = {
+    registerTool(definition: { name: string; execute: PlanReadyExecute }) {
+      if (definition.name === "plan_ready") readyExecute = definition.execute;
+    },
     registerCommand(
       _name: string,
       command: {
-        handler: (args: string, ctx: ExtensionContext) => Promise<void>;
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
       },
     ) {
       commandHandler = command.handler;
@@ -108,19 +159,26 @@ test("runtime gate blocks before approval and opens after explicit approval", as
       }
     },
     events: { emit() {} },
-    sendMessage() {},
+    appendEntry() {},
+    sendMessage(message: { content: string }) {
+      messages.push(message);
+    },
   } as unknown as ExtensionAPI;
   const ctx = {
     hasUI: true,
     ui: {
       setStatus() {},
       notify() {},
-      select: async () => "Approve — start making changes",
+      select: async () => PLAN_READY_ACTIONS.current,
+      setEditorText(text: string) {
+        editorText = text;
+      },
     },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionCommandContext;
   planMode(pi);
   assert.ok(commandHandler);
   assert.ok(toolHandler);
+  assert.ok(readyExecute);
 
   await commandHandler("", ctx);
   assert.deepEqual(toolHandler({ toolName: "tasks_add" }), {
@@ -144,11 +202,142 @@ test("runtime gate blocks before approval and opens after explicit approval", as
   );
 
   await commandHandler("done", ctx);
+  assert.match(messages.at(-1)?.content ?? "", /call plan_ready alone/);
+  assert.equal(
+    (toolHandler({ toolName: "write" }) as { block?: boolean } | undefined)
+      ?.block,
+    true,
+  );
+
+  await assert.rejects(
+    readyExecute(
+      "ready-too-large",
+      { plan: "界".repeat(Math.ceil(MAX_READY_PLAN_UTF8_BYTES / 3) + 1) },
+      new AbortController().signal,
+      undefined,
+      ctx,
+    ),
+    /at most 48000 UTF-8 bytes/,
+  );
+  assert.equal(
+    (toolHandler({ toolName: "write" }) as { block?: boolean } | undefined)
+      ?.block,
+    true,
+  );
+
+  const plan = "# Plan\n\n1. Add the feature.\n2. Test it.";
+  const result = await readyExecute(
+    "ready-1",
+    { plan: `${plan}\u001b]52;c;hidden\u0007` },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+  assert.equal(result.terminate, true);
+  assert.deepEqual(result.details, { status: "ready", plan });
+  assert.equal(
+    (toolHandler({ toolName: "write" }) as { block?: boolean } | undefined)
+      ?.block,
+    true,
+    "recording a plan must not open the write gate",
+  );
+  assert.equal(
+    (toolHandler({ toolName: "read" }) as { block?: boolean } | undefined)
+      ?.block,
+    true,
+    "a ready plan is sealed against follow-up tool calls",
+  );
+
+  await commandHandler("", ctx);
   assert.equal(toolHandler({ toolName: "write" }), undefined);
   assert.equal(
     toolHandler({ toolName: "bash", input: { command: "npm publish" } }),
     undefined,
   );
+  assert.equal(editorText, buildPlanImplementationPrompt(plan));
+  assert.equal(
+    messages.length,
+    2,
+    "Plan Ready and implementation selection must not auto-submit a turn",
+  );
+});
+
+test("fresh implementation links a new session and prefills without submitting", async () => {
+  let commandHandler:
+    ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+  let readyExecute: PlanReadyExecute | undefined;
+  let parentSession: string | undefined;
+  let editorText = "";
+  let messageCount = 0;
+  const pi = {
+    registerTool(definition: { name: string; execute: PlanReadyExecute }) {
+      if (definition.name === "plan_ready") readyExecute = definition.execute;
+    },
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on() {},
+    events: { emit() {} },
+    appendEntry() {},
+    sendMessage() {
+      messageCount++;
+    },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus() {},
+      notify() {},
+      select: async () => PLAN_READY_ACTIONS.fresh,
+    },
+    sessionManager: {
+      getSessionFile: () => "/tmp/source-session.jsonl",
+    },
+    waitForIdle: async () => {},
+    newSession: async (options: {
+      parentSession?: string;
+      withSession: (ctx: {
+        ui: {
+          setEditorText(text: string): void;
+          notify(): void;
+        };
+      }) => Promise<void>;
+    }) => {
+      parentSession = options.parentSession;
+      await options.withSession({
+        ui: {
+          setEditorText(text: string) {
+            editorText = text;
+          },
+          notify() {},
+        },
+      });
+      return { cancelled: false };
+    },
+  } as unknown as ExtensionCommandContext;
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(readyExecute);
+
+  await commandHandler("", ctx);
+  const plan = "# Plan\n\nImplement in a clean context.";
+  await readyExecute(
+    "ready-2",
+    { plan },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+  await commandHandler("", ctx);
+
+  assert.equal(parentSession, "/tmp/source-session.jsonl");
+  assert.equal(editorText, buildPlanImplementationPrompt(plan));
+  assert.equal(messageCount, 1, "only arming Plan Mode starts a model turn");
 });
 
 test("spawning is allowed while planning, resuming an existing child is not", () => {
@@ -200,6 +389,106 @@ test("plan mode rejects type declarations it would silently narrow", () => {
   assert.equal(planModeAllowsDeclaredTools(undefined), false);
 });
 
+test("persisted Plan Mode state restores branch-locally and fails closed", () => {
+  const readyEntry = {
+    type: "custom",
+    customType: PLAN_MODE_STATE_ENTRY,
+    data: { version: 1, status: "ready", plan: "# Restored plan" },
+  };
+  assert.deepEqual(restorePlanModeState([readyEntry]), {
+    planning: true,
+    readyPlan: "# Restored plan",
+  });
+  assert.deepEqual(
+    restorePlanModeState([
+      readyEntry,
+      {
+        type: "custom",
+        customType: PLAN_MODE_STATE_ENTRY,
+        data: { version: 1, status: "inactive" },
+      },
+    ]),
+    { planning: false },
+  );
+  const malformed = restorePlanModeState([
+    {
+      type: "custom",
+      customType: PLAN_MODE_STATE_ENTRY,
+      data: { version: 1, status: "ready", plan: "# Plan", extra: true },
+    },
+  ]);
+  assert.equal(malformed.planning, true);
+  assert.match(malformed.error ?? "", /writes remain blocked/);
+});
+
+test("session reload and tree navigation restore the branch-local write gate", () => {
+  let sessionStart:
+    ((event: unknown, ctx: ExtensionContext) => void) | undefined;
+  let sessionTree:
+    ((event: unknown, ctx: ExtensionContext) => void) | undefined;
+  let toolHandler:
+    | ((event: { toolName: string; input?: Record<string, unknown> }) => {
+        block?: boolean;
+      } | void)
+    | undefined;
+  let status = "";
+  let branch: unknown[] = [
+    {
+      type: "custom",
+      customType: PLAN_MODE_STATE_ENTRY,
+      data: { version: 1, status: "ready", plan: "# Restored plan" },
+    },
+  ];
+  const pi = {
+    registerTool() {},
+    registerCommand() {},
+    appendEntry() {},
+    sendMessage() {},
+    events: { emit() {} },
+    on(event: string, handler: unknown) {
+      if (event === "session_start") {
+        sessionStart = handler as typeof sessionStart;
+      } else if (event === "session_tree") {
+        sessionTree = handler as typeof sessionTree;
+      } else if (event === "tool_call") {
+        toolHandler = handler as typeof toolHandler;
+      }
+    },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus(_key: string, value?: string) {
+        status = value ?? "";
+      },
+      notify() {},
+    },
+    sessionManager: {
+      getBranch: () => branch,
+    },
+  } as unknown as ExtensionContext;
+
+  planMode(pi);
+  assert.ok(sessionStart);
+  assert.ok(sessionTree);
+  assert.ok(toolHandler);
+  sessionStart({}, ctx);
+
+  assert.equal(toolHandler({ toolName: "write" })?.block, true);
+  assert.match(status, /ready/);
+
+  branch = [
+    {
+      type: "custom",
+      customType: PLAN_MODE_STATE_ENTRY,
+      data: { version: 1, status: "inactive" },
+    },
+  ];
+  sessionTree({}, ctx);
+  assert.equal(toolHandler({ toolName: "write" }), undefined);
+  assert.equal(status, "");
+});
+
 test("the stance is broadcast on every change, including shutdown", () => {
   // subagents keeps its own copy of the flag; a stale broadcast would mean a
   // child spawned with write tools during a plan, or one needlessly
@@ -209,6 +498,7 @@ test("the stance is broadcast on every change, including shutdown", () => {
     ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
   let shutdown: (() => void) | undefined;
   const pi = {
+    registerTool() {},
     registerCommand(
       _name: string,
       command: { handler: typeof commandHandler },
@@ -223,6 +513,7 @@ test("the stance is broadcast on every change, including shutdown", () => {
         if (channel === PLAN_MODE_CHANNEL) emitted.push(payload);
       },
     },
+    appendEntry() {},
     sendMessage() {},
   } as unknown as ExtensionAPI;
   const ctx = {

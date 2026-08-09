@@ -278,7 +278,7 @@ Context 超过约 30K Tokens 且任务切换阶段时，用自包含 Brief 替�
 <td width="50%" valign="top">
 <strong>Structured Questions</strong><br/><br/>
 <code>ask_user</code><br/>
-一次显示 1–3 个真正影响结果的问题，每题 2–5 个互斥选项，支持推荐项、Notes、代码预览、自由输入和中文 IME。
+一次显示 1–3 个真正影响结果的问题，每题 2–5 个互斥选项，支持推荐项、Notes、代码预览、自由输入和中文 IME；答案先作为草稿，最终复核后才提交。
 </td>
 <td width="50%" valign="top">
 <strong>Next-action Suggestion</strong><br/><br/>
@@ -295,7 +295,7 @@ Context 超过约 30K Tokens 且任务切换阶段时，用自包含 Brief 替�
 
 ### Plan Mode、Cron 与 Post-edit
 
-- `/plan [目标]` 先做只读调研，批准后才允许修改；Plan Mode 使用严格命令白名单，不尝试“理解”任意 Shell 是否只读；
+- `/plan [目标]` 先做只读调研；模型以 `plan_ready` 显式提交完整计划后，`/plan` 才提供继续规划、当前 Session 实施或 Fresh Session 实施。两个实施入口都只填入可编辑 Prompt，不自动提交；Planning/Ready 状态按 Session branch 持久化并在 Reload、Resume、Tree navigation 后恢复；Plan Mode 使用严格命令白名单，不尝试“理解”任意 Shell 是否只读；
 - `/cron ...` 在当前 Session 中排定一次或周期性提示词；
 - Post-edit 可在成功 Write/Edit 的 Turn 后运行一条用户配置的命令，例如 `npm run format`。默认关闭，最多 500 字符，不猜测 Bash 是否改过文件。
 
@@ -466,7 +466,7 @@ pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷
 | `/goal ...`                 | 创建、查看、编辑、暂停或恢复持久 Goal                           |
 | `/context-pivot <下一阶段>` | 在同一 Session 中压缩旧阶段并继续                              |
 | `/sessions`                 | 搜索、预览并切换 Session                                        |
-| `/plan [目标]`              | 先只读调研，批准后再修改                                        |
+| `/plan [目标]`              | 只读调研，进入 Plan Ready 后显式选择实施方式                     |
 | `/cron ...`                 | 为当前 Session 安排定时或周期性 Prompt                          |
 | `/lg` / `/pr`               | 浏览 Working Tree Diff / 刷新当前分支 PR                       |
 | `/copy-all`                 | 复制当前分支可见的 User / Assistant 对话                        |
@@ -482,7 +482,8 @@ pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷
 | `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                      |
 | `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                        |
 | `context_pivot`                                                                                          | Context 阶段切换                    |
-| `ask_user`                                                                                               | 结构化用户决策                      |
+| `ask_user`                                                                                               | 带草稿与提交前复核的结构化用户决策  |
+| `plan_ready`                                                                                             | 显式完成计划，不自动开始实施      |
 | `fd`, `rg`                                                                                               | 文件发现与内容搜索                  |
 | `configure_my_pi_setup`                                                                                  | 受限配置写入                        |
 

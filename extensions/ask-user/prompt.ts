@@ -23,10 +23,10 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
 };
 
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one to three short, independent multiple-choice questions and wait for answers. Each question gets a free-form answer option, and the user may add notes to a selected choice or dismiss the request. Prefer one question unless several independent decisions should be answered together.";
+  "Ask the user one to three short, independent multiple-choice questions and wait for explicitly reviewed answers. Each question gets a free-form answer option, and the user may add notes, revise any draft answer from the review screen, or dismiss the request. Prefer one question unless several independent decisions should be answered together.";
 
 export const ASK_USER_PROMPT_SNIPPET =
-  "Ask 1-3 structured user questions with recommended choices, tradeoffs, optional notes, and free-form answers";
+  "Ask 1-3 structured user questions with draft answers, final review, optional notes, and free-form answers";
 
 export const ASK_USER_PROMPT_GUIDELINES = [
   "Use ask_user only for a genuine ambiguity or user preference that cannot be resolved from the code, docs, or conversation and would materially change the result. Never use it to ask whether to continue.",

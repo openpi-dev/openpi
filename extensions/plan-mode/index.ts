@@ -5,8 +5,10 @@
  * explicitly read-only tools and tells the model to finish planning instead.
  * `bash` is judged per command rather than as a whole (see `bash-policy.ts`),
  * because history and diffs are what a plan is grounded in.
- * `/plan done` (or the model calling nothing at all) presents the plan for
- * approval.
+ * `/plan done` asks the model to finalize through `plan_ready`; that explicit
+ * terminating tool records the complete plan while keeping the write gate
+ * closed. A later `/plan` lets the user continue planning or prefill an
+ * implementation prompt in this session or a fresh linked session.
  *
  * SCOPE, deliberately stated: a `tool_call` handler gates only THIS
  * interactive session. It cannot reach a headless subagent's or a workflow
@@ -24,12 +26,129 @@
  * may predate the plan and still hold the full tool set.
  */
 
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import {
   PLAN_MODE_CHANNEL,
   type PlanModeState,
 } from "../shared/plan-mode-state.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { planBashDecision } from "./bash-policy.ts";
+
+export const MAX_READY_PLAN_CHARS = 50_000;
+export const MAX_READY_PLAN_UTF8_BYTES = 48_000;
+export const PLAN_MODE_STATE_ENTRY = "my-pi-setup-plan-mode-state";
+
+export type PersistedPlanModeState =
+  | { version: 1; status: "inactive" | "planning" }
+  | { version: 1; status: "ready"; plan: string };
+
+export interface RestoredPlanModeState {
+  planning: boolean;
+  readyPlan?: string;
+  error?: string;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isBoundedReadyPlan(value: unknown): value is string {
+  return (
+    typeof value === "string" &&
+    sanitizeTerminalText(value) === value &&
+    value.trim().length > 0 &&
+    value.length <= MAX_READY_PLAN_CHARS &&
+    new TextEncoder().encode(value.trim()).byteLength <=
+      MAX_READY_PLAN_UTF8_BYTES
+  );
+}
+
+function decodePlanModeState(data: unknown): RestoredPlanModeState | undefined {
+  if (
+    !isRecord(data) ||
+    data.version !== 1 ||
+    typeof data.status !== "string"
+  ) {
+    return;
+  }
+  const keys = Object.keys(data).sort().join(",");
+  if (data.status === "inactive" || data.status === "planning") {
+    if (keys !== "status,version") return;
+    return { planning: data.status === "planning" };
+  }
+  if (data.status === "ready" && keys === "plan,status,version") {
+    if (!isBoundedReadyPlan(data.plan)) return;
+    return { planning: true, readyPlan: data.plan.trim() };
+  }
+}
+
+export function latestAssistantToolCallCount(entries: readonly unknown[]) {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (!isRecord(entry) || entry.type !== "message") continue;
+    const message = entry.message;
+    if (!isRecord(message) || message.role !== "assistant") continue;
+    if (!Array.isArray(message.content)) return 0;
+    return message.content.filter(
+      (part) => isRecord(part) && part.type === "toolCall",
+    ).length;
+  }
+  return 0;
+}
+
+export function planReadyBatchDecision(toolName: string, callCount: number) {
+  if (toolName !== "plan_ready" || callCount === 1) return;
+  return {
+    block: true as const,
+    reason:
+      "plan_ready must be the only tool call in its assistant message so Pi can terminate planning deterministically. Retry it alone after the other tool results return.",
+  };
+}
+
+/** Restore only the newest branch-local state; malformed state fails closed. */
+export function restorePlanModeState(
+  entries: readonly unknown[],
+): RestoredPlanModeState {
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index];
+    if (
+      !isRecord(entry) ||
+      entry.type !== "custom" ||
+      entry.customType !== PLAN_MODE_STATE_ENTRY
+    ) {
+      continue;
+    }
+    return (
+      decodePlanModeState(entry.data) ?? {
+        planning: true,
+        error:
+          "The latest persisted Plan Mode state is malformed; writes remain blocked. Use `/plan off` to clear it explicitly.",
+      }
+    );
+  }
+  return { planning: false };
+}
+
+export const PLAN_READY_ACTIONS = {
+  continue: "Continue planning",
+  current: "Implement in this session",
+  fresh: "Start a fresh session",
+} as const;
+
+export function buildPlanImplementationPrompt(plan: string) {
+  return [
+    "Implement the approved plan below. Re-check the repository state before editing, follow the project instructions, and verify the finished change.",
+    "",
+    "--- APPROVED PLAN ---",
+    plan,
+    "--- END APPROVED PLAN ---",
+  ].join("\n");
+}
 
 /**
  * Fail-closed allow-list for planning. Unknown and newly installed tools are
@@ -76,10 +195,12 @@ export const PLAN_SAFE_TOOLS = new Set([
   "tasks_list",
   "get_goal",
   "ask_user",
+  // The model's explicit, terminating transition from planning to ready.
+  "plan_ready",
 ]);
 
 export const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, read-only bash like git log/diff/status, and subagent_spawn for parallel exploration — planning children get read-only tools) and present your plan. The user runs `/plan done` to approve it, or `/plan off` to cancel.";
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, read-only bash like git log/diff/status, and subagent_spawn for parallel exploration — planning children get read-only tools). When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
 
 export function planToolCallDecision(
   toolName: string,
@@ -109,6 +230,7 @@ export function planToolCallDecision(
 
 export default function planMode(pi: ExtensionAPI) {
   let planning = false;
+  let readyPlan: string | undefined;
 
   /**
    * Publish the stance and reflect it in the footer. Every place `planning`
@@ -124,47 +246,216 @@ export default function planMode(pi: ExtensionAPI) {
     if (!ctx.hasUI) return;
     ctx.ui.setStatus(
       "plan-mode",
-      planning ? "plan mode · read-only" : undefined,
+      readyPlan
+        ? "plan mode · ready"
+        : planning
+          ? "plan mode · read-only"
+          : undefined,
     );
   };
 
+  const commitPlanState = (
+    state: PersistedPlanModeState,
+    ctx: {
+      hasUI: boolean;
+      ui: { setStatus: (key: string, value?: string) => void };
+    },
+  ) => {
+    // Persist before mutating memory: a failed append must never open the gate
+    // or discard a ready plan only in RAM.
+    pi.appendEntry(PLAN_MODE_STATE_ENTRY, state);
+    planning = state.status !== "inactive";
+    readyPlan = state.status === "ready" ? state.plan : undefined;
+    setStatus(ctx);
+  };
+
+  const clearPlan = (ctx: {
+    hasUI: boolean;
+    ui: { setStatus: (key: string, value?: string) => void };
+  }) => {
+    commitPlanState({ version: 1, status: "inactive" }, ctx);
+  };
+
+  const continuePlanning = (ctx: ExtensionCommandContext) => {
+    commitPlanState({ version: 1, status: "planning" }, ctx);
+    ctx.ui.notify(
+      "Still in plan mode. Enter the revision you want; writes remain blocked.",
+      "info",
+    );
+  };
+
+  const implementHere = (ctx: ExtensionCommandContext) => {
+    if (!readyPlan) {
+      ctx.ui.notify("No ready plan is available.", "warning");
+      return;
+    }
+    if (!ctx.hasUI) {
+      ctx.ui.notify(
+        "Implementing a ready plan requires an interactive editor.",
+        "warning",
+      );
+      return;
+    }
+    const prompt = buildPlanImplementationPrompt(readyPlan);
+    ctx.ui.setEditorText(prompt);
+    clearPlan(ctx);
+    ctx.ui.notify(
+      "Plan mode is off. Review the implementation prompt, then submit it when ready.",
+      "info",
+    );
+  };
+
+  const implementFresh = async (ctx: ExtensionCommandContext) => {
+    if (!readyPlan) {
+      ctx.ui.notify("No ready plan is available.", "warning");
+      return;
+    }
+    if (!ctx.hasUI) {
+      ctx.ui.notify(
+        "Starting a fresh implementation requires an interactive editor.",
+        "warning",
+      );
+      return;
+    }
+    const prompt = buildPlanImplementationPrompt(readyPlan);
+    const parentSession = ctx.sessionManager.getSessionFile();
+    await ctx.waitForIdle();
+    const result = await ctx.newSession({
+      ...(parentSession ? { parentSession } : {}),
+      withSession: async (nextCtx) => {
+        nextCtx.ui.setEditorText(prompt);
+        nextCtx.ui.notify(
+          "Fresh implementation session ready. Review the prompt, then submit it when ready.",
+          "info",
+        );
+      },
+    });
+    if (result.cancelled) {
+      ctx.ui.notify(
+        "Fresh session cancelled; the plan is still ready.",
+        "info",
+      );
+    }
+  };
+
+  const showReadyActions = async (ctx: ExtensionCommandContext) => {
+    if (!readyPlan) {
+      ctx.ui.notify("No ready plan is available.", "warning");
+      return;
+    }
+    if (!ctx.hasUI) {
+      ctx.ui.notify(
+        "Use `/plan implement`, `/plan fresh`, or `/plan off` in a UI session.",
+        "warning",
+      );
+      return;
+    }
+    const choice = await ctx.ui.select(
+      "Plan Ready — choose what happens next",
+      Object.values(PLAN_READY_ACTIONS),
+    );
+    if (choice === PLAN_READY_ACTIONS.continue) {
+      continuePlanning(ctx);
+    } else if (choice === PLAN_READY_ACTIONS.current) {
+      implementHere(ctx);
+    } else if (choice === PLAN_READY_ACTIONS.fresh) {
+      await implementFresh(ctx);
+    }
+  };
+
+  pi.registerTool({
+    name: "plan_ready",
+    label: "Plan Ready",
+    description:
+      "Finish an active Plan Mode workflow with the complete implementation-ready Markdown plan. Call it alone as the final action only after research and material user decisions are complete.",
+    promptSnippet:
+      "Complete active Plan Mode with one explicit implementation-ready plan",
+    promptGuidelines: [
+      "When Plan Mode is active and the plan is decision-complete, call plan_ready alone as the final action with the complete Markdown plan; do not infer approval or begin implementation.",
+    ],
+    parameters: Type.Object({
+      plan: Type.String({
+        minLength: 1,
+        maxLength: MAX_READY_PLAN_CHARS,
+        description: "The complete implementation-ready Markdown plan",
+      }),
+    }),
+    async execute(_toolCallId, params, signal, _onUpdate, ctx) {
+      if (signal?.aborted) {
+        return {
+          content: [
+            { type: "text" as const, text: "Plan completion cancelled." },
+          ],
+          details: { status: "cancelled" as const },
+          terminate: true,
+        };
+      }
+      if (!planning) {
+        throw new Error("plan_ready requires active Plan Mode.");
+      }
+      const plan = sanitizeTerminalText(params.plan).trim();
+      if (!plan) throw new Error("plan_ready requires a non-empty plan.");
+      if (
+        new TextEncoder().encode(plan).byteLength > MAX_READY_PLAN_UTF8_BYTES
+      ) {
+        throw new Error(
+          `plan_ready plans must be at most ${MAX_READY_PLAN_UTF8_BYTES} UTF-8 bytes.`,
+        );
+      }
+      commitPlanState({ version: 1, status: "ready", plan }, ctx);
+      ctx.ui.notify(
+        "Plan ready. Run `/plan` to continue planning or prepare implementation.",
+        "info",
+      );
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Plan ready for explicit user action. No implementation has started.\n\n${plan}`,
+          },
+        ],
+        details: { status: "ready" as const, plan },
+        terminate: true,
+      };
+    },
+  });
+
   pi.registerCommand("plan", {
     description:
-      "Plan before changing anything: `/plan` blocks edits while you explore, `/plan done` approves, `/plan off` cancels",
+      "Plan read-only, then use an explicit Plan Ready action: `/plan`, `/plan done`, `/plan implement`, `/plan fresh`, `/plan off`",
     handler: async (rawArgs, ctx) => {
       const action = rawArgs.trim().toLowerCase();
 
       if (action === "off" || action === "cancel") {
-        planning = false;
-        setStatus(ctx);
-        ctx.ui.notify("Plan mode off. No plan was approved.", "info");
+        clearPlan(ctx);
+        ctx.ui.notify("Plan mode off. No implementation was started.", "info");
+        return;
+      }
+
+      if (action === "implement" || action === "current") {
+        implementHere(ctx);
+        return;
+      }
+
+      if (action === "fresh") {
+        await implementFresh(ctx);
         return;
       }
 
       if (action === "done" || action === "approve") {
+        if (readyPlan) {
+          await showReadyActions(ctx);
+          return;
+        }
         if (!planning) {
           ctx.ui.notify("Plan mode is not active.", "warning");
           return;
         }
-        // Two-way only: Pi has no per-edit approval gate to toggle, so an
-        // "approve and auto-accept edits" choice would promise nothing real.
-        const choice = ctx.hasUI
-          ? await ctx.ui.select("Approve the plan and start making changes?", [
-              "Approve — start making changes",
-              "Keep planning",
-            ])
-          : "Approve — start making changes";
-        if (choice !== "Approve — start making changes") {
-          ctx.ui.notify("Still in plan mode.", "info");
-          return;
-        }
-        planning = false;
-        setStatus(ctx);
         pi.sendMessage(
           {
-            customType: "plan-approved",
+            customType: "plan-finalize-requested",
             content:
-              "The user approved the plan. Plan mode is off — carry it out now, starting with the first step.",
+              "Finalize the plan now. Resolve any remaining material ambiguity with ask_user; otherwise call plan_ready alone with the complete implementation-ready Markdown plan. Do not implement it.",
             display: true,
             details: {},
           },
@@ -173,23 +464,27 @@ export default function planMode(pi: ExtensionAPI) {
         return;
       }
 
+      if (readyPlan && !action) {
+        await showReadyActions(ctx);
+        return;
+      }
+
       if (planning) {
         ctx.ui.notify(
-          "Plan mode is already active. `/plan done` approves, `/plan off` cancels.",
+          "Plan mode is already active. `/plan done` requests completion; `/plan off` cancels.",
           "info",
         );
         return;
       }
 
-      planning = true;
-      setStatus(ctx);
+      commitPlanState({ version: 1, status: "planning" }, ctx);
       const objective = rawArgs.trim();
       pi.sendMessage(
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user approves. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
-            "\n\nUse read-only tools to ground the plan, then present it concisely and stop. The user will run `/plan done` to approve.",
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user explicitly chooses an implementation action. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            "\n\nUse read-only tools to ground the plan. When it is decision-complete, call `plan_ready` alone with the complete Markdown plan. That records the plan but does not start implementation; the user chooses the next action with `/plan`.",
           display: true,
           details: {},
         },
@@ -198,20 +493,45 @@ export default function planMode(pi: ExtensionAPI) {
     },
   });
 
-  pi.on("tool_call", (event) => {
+  pi.on("tool_call", (event, ctx) => {
     if (!planning) return;
+    if (readyPlan) {
+      return {
+        block: true as const,
+        reason:
+          "The plan is ready and the write gate remains closed. Wait for the user to choose the next action with `/plan`; do not call more tools.",
+      };
+    }
+    const batchDecision =
+      event.toolName === "plan_ready"
+        ? planReadyBatchDecision(
+            event.toolName,
+            latestAssistantToolCallCount(ctx.sessionManager.getBranch()),
+          )
+        : undefined;
+    if (batchDecision) return batchDecision;
     return planToolCallDecision(event.toolName, event.input);
   });
 
-  pi.on("session_start", (_event, ctx) => {
-    // Plan mode is a within-session stance; never inherit it across a
-    // restart, where the user has no visible reminder it is armed.
-    planning = false;
+  const restoreRuntimeState = (ctx: ExtensionContext) => {
+    const restored = restorePlanModeState(ctx.sessionManager.getBranch());
+    planning = restored.planning;
+    readyPlan = restored.readyPlan;
     setStatus(ctx);
+    if (restored.error) ctx.ui.notify(restored.error, "error");
+  };
+
+  pi.on("session_start", (_event, ctx) => {
+    restoreRuntimeState(ctx);
+  });
+
+  pi.on("session_tree", (_event, ctx) => {
+    restoreRuntimeState(ctx);
   });
 
   pi.on("session_shutdown", () => {
     planning = false;
+    readyPlan = undefined;
     // Broadcast without a ctx: subagents keeps its own copy of the stance, and
     // leaving it armed would restrict children in whatever session comes next.
     pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);

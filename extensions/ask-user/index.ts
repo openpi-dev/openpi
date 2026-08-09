@@ -3,8 +3,9 @@
  *
  * - 1 to 3 independent questions per call, shown one at a time
  * - 2 to 5 options per question, plus an automatic free-form option
- * - Enter accepts an option; Tab adds optional notes to the highlighted option
- * - Esc returns from editing or dismisses the whole request
+ * - Enter records a draft answer; Tab adds optional notes to the highlighted option
+ * - every call ends on an explicit review screen before answers are submitted
+ * - review can reopen any question; Esc dismisses without returning draft answers
  */
 
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
@@ -16,6 +17,7 @@ import {
   Text,
   truncateToWidth,
   type Focusable,
+  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
@@ -34,6 +36,15 @@ const MIN_OPTIONS = 2;
 const MAX_OPTIONS = 5;
 /** Preview lines rendered before the tail is summarized. */
 const PREVIEW_MAX_LINES = 20;
+export const MAX_ANSWER_DRAFT_UTF8_BYTES = 8_000;
+
+function answerDraftByteLength(value: string) {
+  return new TextEncoder().encode(value).byteLength;
+}
+
+export function answerDraftFits(value: string) {
+  return answerDraftByteLength(value) <= MAX_ANSWER_DRAFT_UTF8_BYTES;
+}
 
 const OptionSchema = Type.Object({
   label: Type.String({
@@ -102,6 +113,7 @@ interface AskUserDetails {
 
 type SelectionResult = AskUserAnswer[] | null;
 type EditMode = "notes" | "custom" | undefined;
+type ScreenMode = "question" | "review";
 
 interface DisplayOption {
   label: string;
@@ -115,36 +127,40 @@ export function formatPreviewLine(raw: string, width: number) {
   return truncateToWidth(sanitizeTerminalText(raw), width, "…");
 }
 
+function safeSingleLine(text: string) {
+  return sanitizeTerminalText(text).replace(/\s+/g, " ").trim();
+}
+
 function wrapText(text: string, width: number): string[] {
-  const lines: string[] = [];
-  for (const paragraph of text.split("\n")) {
-    const words = paragraph.split(/\s+/).filter(Boolean);
-    if (words.length === 0) {
-      lines.push("");
-      continue;
-    }
-    let current = "";
-    for (const word of words) {
-      const candidate = current ? `${current} ${word}` : word;
-      if (candidate.length > width && current) {
-        lines.push(current);
-        current = word;
-      } else {
-        current = candidate;
-      }
-    }
-    if (current) lines.push(current);
-  }
-  return lines;
+  const safe = sanitizeTerminalText(text);
+  const renderWidth = Math.max(1, width);
+  return safe
+    .split("\n")
+    .flatMap((paragraph) =>
+      paragraph ? wrapTextWithAnsi(paragraph, renderWidth) : [""],
+    );
 }
 
 export function formatAnswers(answers: readonly AskUserAnswer[]) {
   return answers
     .map((answer) => {
-      const value = answer.custom ?? answer.selected ?? "(unanswered)";
-      return `${answer.id}: ${value}${answer.note ? ` — ${answer.note}` : ""}`;
+      const id = sanitizeTerminalText(answer.id).replace(/\s+/g, " ").trim();
+      return `${id}: ${formatReviewAnswer(answer, 512)}`;
     })
     .join("\n");
+}
+
+export function formatReviewAnswer(
+  answer: AskUserAnswer | undefined,
+  maxCharacters = 240,
+) {
+  if (!answer) return "(unanswered)";
+  const value = answer.custom ?? answer.selected ?? "(unanswered)";
+  const combined = `${value}${answer.note ? ` — ${answer.note}` : ""}`;
+  const plain = sanitizeTerminalText(combined).replace(/\s+/g, " ").trim();
+  const characters = [...plain];
+  if (characters.length <= maxCharacters) return plain;
+  return `${characters.slice(0, Math.max(0, maxCharacters - 1)).join("")}…`;
 }
 
 export default function askUser(pi: ExtensionAPI) {
@@ -198,12 +214,21 @@ export default function askUser(pi: ExtensionAPI) {
 
       const showQuestions = (uiSignal: AbortSignal) =>
         ctx.ui.custom<SelectionResult>((tui, theme, _kb, done) => {
+          let screen: ScreenMode = "question";
           let questionIndex = 0;
           let optionIndex = 0;
+          let reviewIndex = params.questions.length;
+          let returnToReview = false;
           let editMode: EditMode;
+          let editError: string | undefined;
+          let cachedWidth: number | undefined;
           let cachedLines: string[] | undefined;
           let settled = false;
-          const answers: AskUserAnswer[] = [];
+          const answers: Array<AskUserAnswer | undefined> = Array.from({
+            length: params.questions.length,
+          });
+          const customDrafts = new Map<string, string>();
+          const noteDrafts = new Map<string, string>();
 
           const editorTheme: EditorTheme = {
             borderColor: (text) => theme.fg("accent", text),
@@ -222,8 +247,11 @@ export default function askUser(pi: ExtensionAPI) {
             ...question().options,
             { label: "Write my own answer…", isOther: true },
           ];
+          const noteDraftKey = (questionId: string, optionLabel: string) =>
+            `${questionId}\u0000${optionLabel}`;
 
           function refresh() {
+            cachedWidth = undefined;
             cachedLines = undefined;
             tui.requestRender();
           }
@@ -239,10 +267,50 @@ export default function askUser(pi: ExtensionAPI) {
             finish(null);
           }
 
+          function completeAnswers() {
+            if (answers.some((answer) => !answer)) return;
+            finish(answers.filter((answer) => answer !== undefined));
+          }
+
+          function showReview() {
+            screen = "review";
+            reviewIndex = params.questions.length;
+            returnToReview = false;
+            editMode = undefined;
+            editError = undefined;
+            editor.setText("");
+            refresh();
+          }
+
+          function editQuestion(index: number) {
+            screen = "question";
+            questionIndex = index;
+            returnToReview = true;
+            editMode = undefined;
+            editError = undefined;
+            editor.setText("");
+            const answer = answers[index];
+            const currentOptions = options();
+            if (answer?.custom !== undefined) {
+              optionIndex = currentOptions.length - 1;
+            } else if (answer?.selected) {
+              const selectedIndex = question().options.findIndex(
+                (option) => option.label === answer.selected,
+              );
+              optionIndex = Math.max(0, selectedIndex);
+            } else {
+              optionIndex = 0;
+            }
+            refresh();
+          }
+
           function advance(answer: AskUserAnswer) {
-            answers.push(answer);
-            if (questionIndex === params.questions.length - 1) {
-              finish(answers);
+            answers[questionIndex] = answer;
+            if (
+              returnToReview ||
+              questionIndex === params.questions.length - 1
+            ) {
+              showReview();
               return;
             }
             questionIndex++;
@@ -252,16 +320,66 @@ export default function askUser(pi: ExtensionAPI) {
             refresh();
           }
 
+          function rememberEditorDraft() {
+            if (!editMode) return;
+            const current = question();
+            const selected = options()[optionIndex];
+            const text = editor.getText();
+            if (editMode === "custom") {
+              customDrafts.set(current.id, text);
+            } else if (selected && !selected.isOther) {
+              noteDrafts.set(noteDraftKey(current.id, selected.label), text);
+            }
+          }
+
+          function startEditing(mode: Exclude<EditMode, undefined>) {
+            const current = question();
+            const selected = options()[optionIndex];
+            if (!selected) return;
+            editMode = mode;
+            editError = undefined;
+            if (mode === "custom") {
+              editor.setText(
+                customDrafts.get(current.id) ??
+                  answers[questionIndex]?.custom ??
+                  "",
+              );
+            } else if (!selected.isOther) {
+              const existing = answers[questionIndex];
+              editor.setText(
+                noteDrafts.get(noteDraftKey(current.id, selected.label)) ??
+                  (existing?.selected === selected.label
+                    ? (existing.note ?? "")
+                    : ""),
+              );
+            }
+            refresh();
+          }
+
           editor.onSubmit = (value) => {
+            if (!answerDraftFits(value)) {
+              // Pi expands and clears compact paste markers before onSubmit.
+              // Restore the expanded value so an alternate editor path cannot
+              // turn a rejected submission into silent draft loss.
+              editor.setText(value);
+              editError = `Answer drafts are limited to ${MAX_ANSWER_DRAFT_UTF8_BYTES} UTF-8 bytes.`;
+              refresh();
+              return;
+            }
             const text = value.trim();
             if (!text) return;
             const current = question();
+            const selected = options()[optionIndex];
             if (editMode === "custom") {
+              customDrafts.set(current.id, value);
               advance({ id: current.id, custom: text });
-            } else {
-              const selected = options()[optionIndex];
-              if (!selected || selected.isOther) return;
-              advance({ id: current.id, selected: selected.label, note: text });
+            } else if (selected && !selected.isOther) {
+              noteDrafts.set(noteDraftKey(current.id, selected.label), value);
+              advance({
+                id: current.id,
+                selected: selected.label,
+                note: text,
+              });
             }
           };
 
@@ -273,24 +391,82 @@ export default function askUser(pi: ExtensionAPI) {
             if (!selected) return;
             optionIndex = index;
             if (selected.isOther) {
-              editMode = "custom";
-              editor.setText("");
+              startEditing("custom");
+              return;
+            }
+            const existing = answers[questionIndex];
+            advance({
+              id: question().id,
+              selected: selected.label,
+              ...(existing?.selected === selected.label && existing.note
+                ? { note: existing.note }
+                : {}),
+            });
+          }
+
+          function handleReviewInput(data: string) {
+            const rowCount = params.questions.length + 1;
+            if (matchesKey(data, Key.up)) {
+              reviewIndex = (reviewIndex - 1 + rowCount) % rowCount;
               refresh();
               return;
             }
-            advance({ id: question().id, selected: selected.label });
+            if (matchesKey(data, Key.down)) {
+              reviewIndex = (reviewIndex + 1) % rowCount;
+              refresh();
+              return;
+            }
+            if (
+              data.length === 1 &&
+              data >= "1" &&
+              data <= String(params.questions.length)
+            ) {
+              editQuestion(Number(data) - 1);
+              return;
+            }
+            if (matchesKey(data, Key.enter)) {
+              if (reviewIndex === params.questions.length) {
+                completeAnswers();
+              } else {
+                editQuestion(reviewIndex);
+              }
+              return;
+            }
+            if (matchesKey(data, Key.escape)) finish(null);
           }
 
           function handleInput(data: string) {
             if (editMode) {
               if (matchesKey(data, Key.escape)) {
+                rememberEditorDraft();
                 editMode = undefined;
+                editError = undefined;
                 editor.setText("");
                 refresh();
                 return;
               }
+              // getText() may contain a short `[paste #…]` marker while the
+              // real draft is much larger. Measure the expanded text on both
+              // sides so oversized bracketed pastes are rejected immediately.
+              const previous = editor.getExpandedText();
               editor.handleInput(data);
+              const next = editor.getExpandedText();
+              if (!answerDraftFits(next)) {
+                if (
+                  answerDraftByteLength(next) > answerDraftByteLength(previous)
+                ) {
+                  editor.setText(previous);
+                }
+                editError = `Answer drafts are limited to ${MAX_ANSWER_DRAFT_UTF8_BYTES} UTF-8 bytes.`;
+              } else {
+                editError = undefined;
+              }
               refresh();
+              return;
+            }
+
+            if (screen === "review") {
+              handleReviewInput(data);
               return;
             }
 
@@ -309,11 +485,7 @@ export default function askUser(pi: ExtensionAPI) {
             }
             if (matchesKey(data, Key.tab)) {
               const selected = currentOptions[optionIndex];
-              if (selected && !selected.isOther) {
-                editMode = "notes";
-                editor.setText("");
-                refresh();
-              }
+              if (selected && !selected.isOther) startEditing("notes");
               return;
             }
             if (
@@ -332,15 +504,54 @@ export default function askUser(pi: ExtensionAPI) {
           }
 
           function render(width: number): string[] {
-            if (cachedLines) return cachedLines;
-            const current = question();
-            const currentOptions = options();
+            if (cachedLines && cachedWidth === width) return cachedLines;
             const lines: string[] = [];
             const add = (text: string) =>
               lines.push(truncateToWidth(text, width));
 
+            if (screen === "review") {
+              const title = " Review answers ";
+              add(
+                theme.fg(
+                  "accent",
+                  `─${title}${"─".repeat(Math.max(0, width - title.length - 1))}`,
+                ),
+              );
+              add(
+                ` ${theme.fg("text", theme.bold("Check every answer before submitting"))}`,
+              );
+              lines.push("");
+              for (let index = 0; index < params.questions.length; index++) {
+                const selected = reviewIndex === index;
+                const prefix = selected ? theme.fg("accent", " ❯ ") : "   ";
+                const current = params.questions[index]!;
+                const header = safeSingleLine(current.header);
+                add(
+                  `${prefix}${theme.fg(selected ? "accent" : "text", `${index + 1}. ${header}`)}${theme.fg("muted", ` — ${formatReviewAnswer(answers[index])}`)}`,
+                );
+              }
+              lines.push("");
+              const submitSelected = reviewIndex === params.questions.length;
+              add(
+                `${submitSelected ? theme.fg("accent", " ❯ ") : "   "}${theme.fg(submitSelected ? "accent" : "success", "✓ Submit answers")}`,
+              );
+              lines.push("");
+              add(
+                theme.fg(
+                  "dim",
+                  ` ↑↓ choose • 1-${params.questions.length} edit answer • Enter open/submit • Esc dismiss`,
+                ),
+              );
+              add(theme.fg("accent", "─".repeat(width)));
+              cachedWidth = width;
+              cachedLines = lines;
+              return lines;
+            }
+
+            const current = question();
+            const currentOptions = options();
             const progress = `${questionIndex + 1}/${params.questions.length}`;
-            const title = ` ${current.header} · ${progress} `;
+            const title = ` ${safeSingleLine(current.header)} · ${progress} `;
             add(
               theme.fg(
                 "accent",
@@ -360,7 +571,7 @@ export default function askUser(pi: ExtensionAPI) {
               const selected = i === optionIndex;
               const prefix = selected ? theme.fg("accent", " ❯ ") : "   ";
               const marker = option.isOther ? "✎" : `${i + 1}.`;
-              const label = `${marker} ${option.label}`;
+              const label = `${marker} ${safeSingleLine(option.label)}`;
               add(
                 prefix +
                   theme.fg(
@@ -387,7 +598,7 @@ export default function askUser(pi: ExtensionAPI) {
               lines.push("");
               add(theme.fg("muted", " ┌ preview"));
               const inner = Math.max(10, width - 4);
-              const previewLines = preview.split("\n");
+              const previewLines = sanitizeTerminalText(preview).split("\n");
               const shown = previewLines.slice(0, PREVIEW_MAX_LINES);
               for (const raw of shown) {
                 const line = formatPreviewLine(raw, inner);
@@ -408,13 +619,14 @@ export default function askUser(pi: ExtensionAPI) {
                 theme.fg(
                   "muted",
                   editMode === "notes"
-                    ? ` Notes for “${currentOptions[optionIndex]?.label ?? ""}”:`
+                    ? ` Notes for “${safeSingleLine(currentOptions[optionIndex]?.label ?? "")}”:`
                     : " Your answer:",
                 ),
               );
               for (const line of editor.render(Math.max(1, width - 2))) {
                 add(` ${line}`);
               }
+              if (editError) add(` ${theme.fg("error", editError)}`);
             }
 
             lines.push("");
@@ -422,11 +634,12 @@ export default function askUser(pi: ExtensionAPI) {
               theme.fg(
                 "dim",
                 editMode
-                  ? " Enter submit • Esc back to options"
-                  : ` ↑↓ or 1-${currentOptions.length} select • Tab add notes • Enter confirm • Esc dismiss`,
+                  ? " Enter save answer • Esc keep draft and return"
+                  : ` ↑↓ or 1-${currentOptions.length} select • Tab add notes • Enter save draft answer • Esc dismiss`,
               ),
             );
             add(theme.fg("accent", "─".repeat(width)));
+            cachedWidth = width;
             cachedLines = lines;
             return lines;
           }
@@ -445,6 +658,7 @@ export default function askUser(pi: ExtensionAPI) {
             },
             render,
             invalidate: () => {
+              cachedWidth = undefined;
               cachedLines = undefined;
               editor.invalidate();
             },
@@ -492,7 +706,7 @@ export default function askUser(pi: ExtensionAPI) {
           "question" in question &&
           typeof question.question === "string"
         ) {
-          text += `\n${theme.fg("dim", `  ${question.question}`)}`;
+          text += `\n${theme.fg("dim", `  ${safeSingleLine(question.question)}`)}`;
         }
       }
       return new Text(text, 0, 0);
@@ -502,7 +716,11 @@ export default function askUser(pi: ExtensionAPI) {
       const details = result.details as AskUserDetails | undefined;
       if (!details) {
         const first = result.content[0];
-        return new Text(first?.type === "text" ? first.text : "", 0, 0);
+        return new Text(
+          first?.type === "text" ? sanitizeTerminalText(first.text) : "",
+          0,
+          0,
+        );
       }
       if (details.cancelled) {
         return new Text(theme.fg("warning", "✗ dismissed"), 0, 0);

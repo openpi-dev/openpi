@@ -64,6 +64,8 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "workflow_status",
   // ask-user — headless children have no user to ask
   "ask_user",
+  // plan-mode — completion controls the parent session's write gate and UI
+  "plan_ready",
   // tasks — the parent session owns its work-intent ledger
   "tasks_add",
   "tasks_update",
