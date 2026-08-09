@@ -37,7 +37,7 @@ test("an unreadable config blocks the write and survives untouched", async () =>
 test("a readable or absent config saves normally", async () => {
   const config = {
     ...DEFAULT_SETUP_CONFIG,
-    summaries: { ...DEFAULT_SETUP_CONFIG.summaries, enabled: false },
+    suggestions: { ...DEFAULT_SETUP_CONFIG.suggestions, enabled: false },
   };
 
   writeFileSync(SETUP_CONFIG_PATH, "{}\n");
@@ -60,10 +60,10 @@ test("an update patches the document as it is on disk, not as it was read", asyn
 
   const { config, replaced } = await updateSetupConfig((current) => ({
     ...current,
-    summaries: { ...current.summaries, enabled: false },
+    suggestions: { ...current.suggestions, enabled: false },
   }));
   assert.equal(config.workflows.concurrency, 17);
-  assert.equal(config.summaries.enabled, false);
+  assert.equal(config.suggestions.enabled, false);
   assert.deepEqual(replaced, []);
 });
 
@@ -79,6 +79,24 @@ test("a stored value that had to be normalized is reported, not hidden", async (
     DEFAULT_SETUP_CONFIG.workflows.concurrency,
   );
   assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
+});
+
+test("legacy model-free recaps are explicitly migrated to disabled suggestions", async () => {
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({ summaries: { enabled: true } }),
+  );
+
+  const { config, replaced } = await updateSetupConfig((current) => current);
+
+  assert.deepEqual(config.suggestions, { enabled: false });
+  assert.deepEqual(replaced, ["summaries → suggestions"]);
+  const stored = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")) as Record<
+    string,
+    unknown
+  >;
+  assert.equal("summaries" in stored, false);
+  assert.deepEqual(stored.suggestions, { enabled: false });
 });
 
 test("the post-edit command is off by default, trimmed, and length-bounded", () => {

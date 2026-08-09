@@ -25,15 +25,15 @@ const defaultUi = {
   fileMutationDisplay: "compact" as const,
 };
 
-test("setup defaults to disabled recaps until explicitly configured", () => {
+test("setup defaults to disabled next-action suggestions", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Run recaps: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Next-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
-test("setup config accepts model choices and drops malformed models", () => {
+test("setup config accepts suggestion models and migrates the recap key", () => {
   const configured = parseSetupConfig({
     summaries: {
       enabled: true,
@@ -45,7 +45,7 @@ test("setup config accepts model choices and drops malformed models", () => {
     },
   });
   assert.deepEqual(configured, {
-    summaries: {
+    suggestions: {
       enabled: true,
       model: {
         provider: "seal",
@@ -60,18 +60,18 @@ test("setup config accepts model choices and drops malformed models", () => {
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Next-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
     parseSetupConfig({
-      summaries: {
-        enabled: false,
+      suggestions: {
+        enabled: true,
         model: { provider: "", model: 42, reasoning: "turbo" },
       },
     }),
     {
-      summaries: { enabled: false },
+      suggestions: { enabled: false },
       workflows: { concurrency: 8, maxAgentCalls: 128 },
       ui: defaultUi,
       postEdit: { command: "" },
@@ -103,7 +103,10 @@ test("subagent role models parse partially and drop malformed persisted entries"
 
 test("workflow limits default safely and accept configured fan-out", () => {
   assert.deepEqual(parseSetupConfig({}), DEFAULT_SETUP_CONFIG);
-  assert.equal(parseSetupConfig({ summaries: {} }).summaries.enabled, false);
+  assert.equal(
+    parseSetupConfig({ suggestions: {} }).suggestions.enabled,
+    false,
+  );
   assert.deepEqual(
     parseSetupConfig({
       workflows: { concurrency: 16, maxAgentCalls: 256 },

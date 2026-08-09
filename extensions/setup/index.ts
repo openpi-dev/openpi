@@ -92,12 +92,12 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Recaps, Workflow limits, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Next-action suggestions, Workflow limits, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
         "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
-        "Prefer one ask_user call with up to three independent questions covering Recaps, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
+        "Prefer one ask_user call with up to three independent questions covering Next-action suggestions, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
       ];
 
   return [
@@ -112,7 +112,7 @@ export function buildInteractiveSetupPrompt(options: {
     ...configurationState,
     "",
     "Before asking, briefly explain what can be configured and the practical impact:",
-    "- Run recaps: disabled (no recap), local fallback (no model call but mechanical output), or model-generated (better recap with an extra model call). A model recap also chooses provider/model and thinking level.",
+    "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion is ephemeral dim text in an empty editor; Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
     "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
@@ -139,29 +139,23 @@ export default function myPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure My Pi Setup",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures run recaps, workflow fan-out, UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
+      "Apply a user-requested configuration change for this Pi setup. Configures next-action suggestions, workflow fan-out, UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to an active TUI footer.",
     parameters: Type.Object({
-      summaries_enabled: Type.Optional(
+      suggestions_enabled: Type.Optional(
         Type.Boolean({
           description:
-            "Whether run recap cards are enabled. Omit to preserve the current value.",
+            "Whether model-generated next-action ghost suggestions are enabled. Omit to preserve the current value.",
         }),
       ),
-      summary_use_local_fallback: Type.Optional(
-        Type.Boolean({
-          description:
-            "Set true to clear the configured summary model and use local fallback. Omit unless requested.",
-        }),
-      ),
-      summary_provider: Type.Optional(
+      suggestion_provider: Type.Optional(
         Type.String({ description: "Configured Pi provider id." }),
       ),
-      summary_model: Type.Optional(
+      suggestion_model: Type.Optional(
         Type.String({ description: "Configured Pi model id." }),
       ),
-      summary_reasoning: Type.Optional(
+      suggestion_reasoning: Type.Optional(
         StringEnum(REASONING_LEVELS, {
-          description: "Reasoning level for the summary model.",
+          description: "Reasoning level for the suggestion model.",
         }),
       ),
       workflow_concurrency: Type.Optional(
@@ -251,46 +245,44 @@ export default function myPiSetup(pi: ExtensionAPI) {
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       const modelFields = [
-        params.summary_provider,
-        params.summary_model,
-        params.summary_reasoning,
+        params.suggestion_provider,
+        params.suggestion_model,
+        params.suggestion_reasoning,
       ];
       const supplied = modelFields.filter(
         (value) => value !== undefined,
       ).length;
       if (supplied !== 0 && supplied !== modelFields.length) {
         throw new Error(
-          "summary_provider, summary_model, and summary_reasoning must be provided together, or all omitted for local fallback.",
-        );
-      }
-
-      if (
-        params.summary_use_local_fallback &&
-        (params.summary_provider || params.summary_model)
-      ) {
-        throw new Error(
-          "summary_use_local_fallback clears the recap model, so it cannot be combined with summary_provider or summary_model. Send one or the other.",
+          "suggestion_provider, suggestion_model, and suggestion_reasoning must be provided together, or all omitted.",
         );
       }
 
       const buildConfig = (current: MyPiSetupConfig) => {
-        let model = current.summaries.model;
-        if (params.summary_use_local_fallback) model = undefined;
-        if (params.summary_provider && params.summary_model) {
+        let model = current.suggestions.model;
+        if (params.suggestion_provider && params.suggestion_model) {
           const resolved = ctx.modelRegistry.find(
-            params.summary_provider,
-            params.summary_model,
+            params.suggestion_provider,
+            params.suggestion_model,
           );
           if (!resolved) {
             throw new Error(
-              `Unknown configured model: ${params.summary_provider}/${params.summary_model}`,
+              `Unknown configured model: ${params.suggestion_provider}/${params.suggestion_model}`,
             );
           }
           model = {
             provider: resolved.provider,
             model: resolved.id,
-            reasoning: params.summary_reasoning!,
+            reasoning: params.suggestion_reasoning!,
           };
+        }
+        const suggestionsEnabled =
+          params.suggestions_enabled ??
+          (params.suggestion_provider ? true : current.suggestions.enabled);
+        if (suggestionsEnabled && !model) {
+          throw new Error(
+            "Next-action suggestions require suggestion_provider, suggestion_model, and suggestion_reasoning.",
+          );
         }
 
         const footer = applyFooterConfig(
@@ -317,8 +309,8 @@ export default function myPiSetup(pi: ExtensionAPI) {
         );
 
         const config: MyPiSetupConfig = {
-          summaries: {
-            enabled: params.summaries_enabled ?? current.summaries.enabled,
+          suggestions: {
+            enabled: suggestionsEnabled,
             ...(model ? { model } : {}),
           },
           workflows: {
@@ -358,13 +350,13 @@ export default function myPiSetup(pi: ExtensionAPI) {
       };
 
       // Patch the document as it is on disk now, not as it was when this call
-      // started, and report any stored value that had to be normalized.
+      // started, and report any stored value that was normalized or migrated.
       const { config, replaced } = await updateSetupConfig(buildConfig);
       pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, config);
       const text = formatSetupConfig(config);
       const note =
         replaced.length > 0
-          ? ` Replaced invalid stored values: ${replaced.join(", ")}.`
+          ? ` Normalized or migrated stored values: ${replaced.join(", ")}.`
           : "";
       if (ctx.hasUI) ctx.ui.notify(`${text}${note}`, "info");
       return {

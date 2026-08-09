@@ -11,15 +11,27 @@ import setupExtension, {
 test("registers one natural-language setup command and one constrained tool", () => {
   const commands = new Set<string>();
   const tools = new Set<string>();
+  let parameterNames: string[] = [];
   const api = {
     registerCommand: (name: string) => commands.add(name),
-    registerTool: (tool: { name: string }) => tools.add(tool.name),
+    registerTool: (tool: { name: string; parameters: unknown }) => {
+      tools.add(tool.name);
+      parameterNames = Object.keys(
+        (tool.parameters as { properties: Record<string, unknown> }).properties,
+      );
+    },
   } as unknown as ExtensionAPI;
 
   setupExtension(api);
 
   assert.deepEqual(commands, new Set(["my-pi-setup"]));
   assert.deepEqual(tools, new Set(["configure_my_pi_setup"]));
+  assert.equal(parameterNames.includes("suggestions_enabled"), true);
+  assert.equal(parameterNames.includes("suggestion_model"), true);
+  assert.equal(
+    parameterNames.some((name) => name.startsWith("summary")),
+    false,
+  );
 });
 
 test("the role-model schema exposes every built-in role as an optional property", () => {
@@ -42,7 +54,7 @@ test("the role-model schema exposes every built-in role as an optional property"
 
 test("builds a model-guided first-run setup prompt with impacts", () => {
   const message = buildInteractiveSetupPrompt({
-    currentConfiguration: "Run recaps: disabled",
+    currentConfiguration: "Next-action suggestions: disabled",
     currentModel: "seal/gpt-5.6-sol",
     currentThinking: "high",
     savedConfigExists: false,
@@ -51,7 +63,8 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /This is the first setup/);
   assert.match(message, /Use ask_user/);
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
-  assert.match(message, /local fallback.*mechanical output/);
+  assert.match(message, /ephemeral dim text/);
+  assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
   assert.match(message, /powerline.*powerline-mono.*compact/);
@@ -109,7 +122,7 @@ test("partially assigns and clears validated subagent role models", () => {
 test("builds a focused review prompt when configuration already exists", () => {
   const message = buildInteractiveSetupPrompt({
     currentConfiguration:
-      "Run recaps: seal/deepseek-v4-flash · off\nWorkflows: 8 concurrent agents · 128 total calls",
+      "Next-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls",
     currentModel: "seal/gpt-5.6-sol",
     currentThinking: "high",
     savedConfigExists: true,
@@ -119,7 +132,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Recaps, Workflow limits, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Next-action suggestions, Workflow limits, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.doesNotMatch(message, /This is the first setup/);

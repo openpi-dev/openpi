@@ -231,32 +231,3 @@ export function serializeRunTranscript(
   const tail = [...reversedTail].reverse().join("");
   return `${head}${marker}${tail}`;
 }
-
-export function buildFallbackRecap(entries: readonly SessionEntry[]) {
-  const toolNames: string[] = [];
-  let finalAssistantText = "";
-
-  for (const entry of entries) {
-    if (entry.type !== "message" || entry.message.role !== "assistant")
-      continue;
-    for (const block of entry.message.content) {
-      if (block.type === "toolCall") toolNames.push(block.name);
-      if (block.type === "text" && block.text.trim()) {
-        finalAssistantText = redactSecrets(block.text.trim());
-      }
-    }
-  }
-
-  const tools = [...new Set(toolNames)];
-  const activity =
-    tools.length > 0
-      ? ` The run used ${toolNames.length} tool call${toolNames.length === 1 ? "" : "s"} across ${tools.join(", ")}.`
-      : "";
-  const result = finalAssistantText
-    ? ` ${capped(finalAssistantText.replace(/\s+/g, " "), 700, "final response capped")}`
-    : "";
-
-  return {
-    recap: `The main-agent run completed.${activity}${result}`.trim(),
-  };
-}

@@ -36,7 +36,7 @@
 pi install git:github.com/tt-a1i/my-pi-setup
 ```
 
-重启 Pi，或者在当前 Session 运行 `/reload`。安装默认不会切换主题、不会指定模型，也不会额外调用摘要模型。
+重启 Pi，或者在当前 Session 运行 `/reload`。安装默认不会切换主题、不会指定模型，也不会额外调用下一步预测模型。
 
 然后只需要正常描述任务：
 
@@ -72,7 +72,7 @@ My Pi Setup 把这些能力组织成一套一致的 Pi-native 工作流：
   ├─ Pi subagents ───── 独立 Context 的并行调研、实现与审查
   ├─ Workflows ──────── 多阶段 fan-out → structured result → synthesis
   ├─ Context Pivot ──── 同一 Session 内从旧阶段切换到干净的新阶段
-  └─ Run Recap ──────── 每轮结束后的可读回顾卡片，不污染模型上下文
+  └─ Next Suggestion ─── 每轮结束后在空输入框预测一个可选的下一步
 ```
 
 ---
@@ -465,17 +465,16 @@ Subagents、Workflows 和后台终端状态属于基础可观察性，不是可�
 - 大型 ASCII Header 默认关闭；
 - Footer 可以通过统一配置关闭，恢复 Pi 原生 Footer。
 
-### 11. Run Recap，不占主 Context
+### 11. Next-action Suggestion，不打断对话
 
-每轮 Agent 完整结束后，聊天中会出现一张 Recap 卡片：
+主 Agent 的完整运行结束后，配置的轻量模型会预测用户最可能输入的一条下一步动作，并以暗色 ghost text 显示在空输入框里：
 
-- 做了什么；
-- 关键结果和失败；
-- 下一步是什么。
+- 按 `Right` 将建议填入输入框，但不会自动提交；
+- 输入任意其他内容会立即丢弃建议；
+- 输入框非空、后台结果已过期或没有具体下一步时都不显示；
+- 建议只存在于当前 TUI 状态，不写入 Session history，也不会进入模型 Context。
 
-Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续模型上下文。
-
-默认关闭。用户可通过 `/my-pi-setup` 显式选择当前 Pi Registry 中任意可用模型生成摘要，或启用不调用模型的本地 fallback。
+默认关闭。用户可通过 `/my-pi-setup` 显式选择当前 Pi Registry 中任意可用模型和 reasoning level；启用后，每个完整结束的主 Agent run 最多增加一次小型模型调用。`Right` 之所以优先于 `Tab`，是为了不抢占编辑器的 autocomplete 键。
 
 ---
 
@@ -490,7 +489,7 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
 | 编排脚本只能靠 `return` 值说话，跑一半被中断就什么都没留下 | `log()` 实时叙述进度，`usage()` 读取累计 Token，两者都进最终报告                    |
 | Context 快满时被动 Compact                                 | Context Pivot 在阶段变化时主动建立干净工作面                                        |
 | 每个插件一套配置命令                                       | `/my-pi-setup` 用自然语言统一配置                                                   |
-| 插件默认绑定作者的模型和 Provider                          | 不写死模型；默认继承当前 Pi，摘要默认零模型调用                                     |
+| 插件默认绑定作者的模型和 Provider                          | 不写死模型；默认继承当前 Pi，下一步预测默认零模型调用                               |
 | 后台任务只能看一条最终输出                                 | Terminal、Subagent、Workflow 都可实时观察和取消；Subagent 还可接管继续              |
 
 ### 一条完整路径
@@ -510,7 +509,7 @@ Recap 使用 `pi.appendEntry()`，会随 Session 保存，但不会进入后续�
   ↓
 测试、Git、Context、成本与后台状态持续显示在 Footer
   ↓
-本轮结束生成不进入模型 Context 的 Recap
+本轮结束后可在空输入框显示一个不进入模型 Context 的下一步建议
 ```
 
 这套设计的重点不是“工具更多”，而是让后台任务、Agent 和 Context 都有清晰的所有权与生命周期。
@@ -581,9 +580,8 @@ pi install npm:pi-intercom
 无参数命令始终进入模型主持的交互入口：首次使用时先解释可配置项和影响，再完成初始化；已有配置时先解释当前设置，并询问保留、修改某一类，还是重新检查全部。后面直接跟自然语言则跳过总览，只修改指定设置：
 
 ```text
-/my-pi-setup 开启摘要，使用 seal/deepseek-v4-flash，关闭推理
-/my-pi-setup 开启本地 fallback 摘要，不调用模型
-/my-pi-setup 关闭自动摘要
+/my-pi-setup 开启下一步预测，使用 seal/deepseek-v4-flash，关闭推理
+/my-pi-setup 关闭下一步预测
 /my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
 /my-pi-setup 显示大标题
 /my-pi-setup 隐藏大标题
@@ -609,7 +607,7 @@ pi install npm:pi-intercom
 
 | 配置                     |                                                   默认值 |
 | ------------------------ | -------------------------------------------------------: |
-| Run Recap                |    默认关闭；运行 `/my-pi-setup` 选择模型或本地 fallback |
+| Next-action suggestion   | 默认关闭；运行 `/my-pi-setup` 选择模型；`Right` 仅填入不提交 |
 | Workflow 并发            |                                                        8 |
 | Workflow 最大 Agent 调用 |                                                      128 |
 | 大型 Header              |                                                     关闭 |
@@ -665,7 +663,7 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 
 ### 没有隐式模型消费
 
-仓库不写死私有 Provider 或模型名。Summary 默认不调用模型；Subagent 默认继承父 Session 的模型与思考等级。
+仓库不写死私有 Provider 或模型名。Next-action suggestion 默认关闭；Subagent 默认继承父 Session 的模型与思考等级。
 
 ### Context 是资源，不是垃圾桶
 
@@ -673,7 +671,7 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 - 多阶段依赖交给 Workflow；
 - 阶段变化使用 Context Pivot；
 - 真正跨 Session 使用 Handoff；
-- Recap 留给人看，不塞回模型 Context。
+- 下一步建议只做临时输入提示，不写入 Session 或模型 Context。
 
 ### 后台能力必须可观察、可终止
 
@@ -739,7 +737,7 @@ Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结�
 <details>
 <summary><strong>安装后会自动调用额外模型吗？</strong></summary>
 
-不会。Run Recap 默认关闭，只有用户通过 `/my-pi-setup` 显式选择模型后才会调用摘要模型；也可显式启用不调用模型的本地 fallback。Pi Subagent 只有在任务实际触发时才运行，并默认继承当前模型。
+不会。Next-action suggestion 默认关闭，只有用户通过 `/my-pi-setup` 显式选择模型后，才会在完整结束的主 Agent run 后调用一次预测模型。Pi Subagent 也只有在任务实际触发时才运行，并默认继承当前模型。
 
 </details>
 
@@ -790,7 +788,7 @@ extensions/
 ├── ask-user/              # 结构化用户输入
 ├── file-search/           # fd / rg 与二进制解析
 ├── file-mutation-display/ # Write / Edit 紧凑预览
-├── summaries/             # Run Recap
+├── suggestions/           # Next-action ghost suggestion
 ├── git-info/              # Git / PR 与 /lg
 ├── model-info/            # Model / Context / Cost / Throughput
 ├── turn-time/             # 每次请求结束后的耗时行
@@ -825,7 +823,7 @@ npm test
 - Subagent 并发、结果去重、取消、Context 使用量；
 - Workflow 沙箱、调用预算、结构化输出、Artifact 原子写入；
 - `fd` / `rg` argv、官方二进制下载、SHA-256 和输出截断；
-- Session 搜索、Summary 脱敏、配置边界与 TUI 选择状态。
+- Session 搜索、下一步预测输入脱敏、配置边界与 TUI 选择状态。
 
 历史方案、研究与多模型评估归档在 [`docs/design/`](docs/design/)。
 

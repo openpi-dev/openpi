@@ -97,7 +97,7 @@ export const FOOTER_PRESET_DEFINITIONS: Record<
   },
 };
 
-export interface SummaryModelConfig {
+export interface SuggestionModelConfig {
   readonly provider: string;
   readonly model: string;
   readonly reasoning: ReasoningLevel;
@@ -113,9 +113,9 @@ export const POST_EDIT_COMMAND_MAX_CHARS = 500;
 export const SETUP_CONFIG_CHANGED_CHANNEL = "my-pi-setup:config-changed";
 
 export interface MyPiSetupConfig {
-  readonly summaries: {
+  readonly suggestions: {
     readonly enabled: boolean;
-    readonly model?: SummaryModelConfig;
+    readonly model?: SuggestionModelConfig;
   };
   readonly workflows: {
     readonly concurrency: number;
@@ -147,7 +147,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
-  summaries: { enabled: false },
+  suggestions: { enabled: false },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
@@ -384,10 +384,16 @@ function boundedInteger(value: unknown, fallback: number, maximum: number) {
 export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   if (!isRecord(value)) return DEFAULT_SETUP_CONFIG;
 
-  const summaries = isRecord(value.summaries) ? value.summaries : {};
-  const enabled =
-    typeof summaries.enabled === "boolean" ? summaries.enabled : false;
-  const rawModel = isRecord(summaries.model) ? summaries.model : undefined;
+  // `summaries` is the pre-suggestion config key. Read it once as a migration
+  // source; every subsequent save writes only the canonical `suggestions` key.
+  const suggestions = isRecord(value.suggestions)
+    ? value.suggestions
+    : isRecord(value.summaries)
+      ? value.summaries
+      : {};
+  const requestedEnabled =
+    typeof suggestions.enabled === "boolean" ? suggestions.enabled : false;
+  const rawModel = isRecord(suggestions.model) ? suggestions.model : undefined;
   const model =
     rawModel &&
     typeof rawModel.provider === "string" &&
@@ -407,7 +413,10 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
-    summaries: { enabled, ...(model ? { model } : {}) },
+    suggestions: {
+      enabled: requestedEnabled && Boolean(model),
+      ...(model ? { model } : {}),
+    },
     workflows: {
       concurrency: boundedInteger(
         workflows.concurrency,
@@ -486,7 +495,7 @@ function readDocumentForWrite() {
 }
 
 /**
- * Known fields whose on-disk value normalization had to replace. Absent fields
+ * Known fields whose on-disk value was normalized or migrated. Absent fields
  * are not reported: only a value the user wrote and will silently lose.
  */
 function replacedFields(
@@ -498,6 +507,14 @@ function replacedFields(
     return JSON.stringify(raw) === JSON.stringify(normalized) ? [] : [path];
   }
   const paths: string[] = [];
+  if (
+    path === "" &&
+    "summaries" in raw &&
+    !("suggestions" in raw) &&
+    "suggestions" in normalized
+  ) {
+    paths.push("summaries → suggestions");
+  }
   for (const [key, value] of Object.entries(normalized)) {
     if (!(key in raw)) continue;
     const here = path ? `${path}.${key}` : key;
@@ -523,16 +540,16 @@ export async function saveSetupConfig(config: MyPiSetupConfig) {
 }
 
 export function formatSetupConfig(config = loadSetupConfig()) {
-  const summary = !config.summaries.enabled
-    ? "Run recaps: disabled"
-    : config.summaries.model
-      ? `Run recaps: ${config.summaries.model.provider}/${config.summaries.model.model} · ${config.summaries.model.reasoning}`
-      : "Run recaps: local fallback (no model calls)";
+  const suggestionModel = config.suggestions.model;
+  const suggestions =
+    !config.suggestions.enabled || !suggestionModel
+      ? "Next-action suggestions: disabled"
+      : `Next-action suggestions: ${suggestionModel.provider}/${suggestionModel.model} · ${suggestionModel.reasoning} · Right accepts`;
   const footer = config.ui.customFooter
     ? `on · ${config.ui.footerStyle} · ${formatFooterLines(config.ui.footerLines)}`
     : "off";
   return [
-    summary,
+    suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
@@ -549,7 +566,7 @@ export { isFooterItem, isFooterLayoutItem, isFooterStyle, isFooterPreset };
  * Read-modify-write against the document as it is on disk right now, so a
  * config changed by another session since this one loaded it is patched
  * rather than replaced wholesale. Returns the fields whose stored value was
- * invalid and had to be normalized, so the caller can say so out loud.
+ * normalized or migrated, so the caller can say so out loud.
  */
 export async function updateSetupConfig(
   mutate: (current: MyPiSetupConfig) => MyPiSetupConfig,
