@@ -282,7 +282,7 @@ Context 超过约 30K Tokens 且任务切换阶段时，用自包含 Brief 替�
 </td>
 <td width="50%" valign="top">
 <strong>Next-action Suggestion</strong><br/><br/>
-完整主 Agent Run 结束后，可在空编辑器的独立暗色行预测一个下一步。<code>Right</code> 只填入、不提交；其他输入取消。默认关闭且不写入 Session 或模型 Context。
+完整主 Agent Run 结束后，可在空编辑器首行显示一条暗色 inline 建议。行尾为中文 IME 预留预编辑区域，避免拼音覆盖建议；<code>Right</code> 只填入、不提交，其他输入取消。默认关闭且不写入 Session 或模型 Context。
 </td>
 </tr>
 </table>

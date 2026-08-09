@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
-import { CURSOR_MARKER } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
 import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
@@ -86,23 +86,32 @@ test("latest-wins state rejects stale or non-empty-editor offers", () => {
   assert.equal(state.isActive(), false);
 });
 
-test("renders the ghost on an IME-safe row without changing editor contents", () => {
+test("renders the ghost on the first row with reserved IME preedit cells", () => {
+  const width = 40;
   const lines = renderGhostSuggestion(
-    ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(19)}`, "bottom"],
-    20,
+    ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(width - 1)}`, "bottom"],
+    width,
     "run the full test suite",
     (text) => `\u001b[2m${text}\u001b[22m`,
   );
 
-  // macOS IME preedit is terminal-owned and appears at CURSOR_MARKER. The
-  // suggestion must never share that row or it flickers underneath preedit.
-  assert.equal(lines[1]!.includes("run the full test"), false);
-  assert.equal(lines[1]!.includes(CURSOR_MARKER), true);
-  assert.match(lines[2]!, /\u001b\[2mrun the full test/);
-  assert.equal(lines[2]!.includes("suite"), false);
-  assert.equal(lines[2]!.includes(CURSOR_MARKER), false);
-  assert.equal(lines[0], "top");
-  assert.equal(lines[3], "bottom");
+  assert.equal(lines.length, 3);
+  assert.match(
+    lines[1]!,
+    /\u001b\[7m \u001b\[0m\u001b\[2mrun the full test suite/,
+  );
+  assert.equal(lines[2], "bottom");
+
+  // The visible fake cursor and ghost stay on the first editor row. The hidden
+  // hardware cursor moves after them, leaving cells where terminal-owned CJK
+  // IME preedit can draw without overwriting the suggestion.
+  const markerIndex = lines[1]!.indexOf(CURSOR_MARKER);
+  assert.ok(markerIndex > lines[1]!.indexOf("run the full test suite"));
+  assert.equal(
+    visibleWidth(lines[1]!.slice(markerIndex + CURSOR_MARKER.length)),
+    12,
+  );
+  assert.equal(visibleWidth(lines[1]!), width);
 });
 
 test("Right accepts into an empty editor without submitting", () => {
@@ -131,6 +140,33 @@ test("an invisible suggestion never steals Right from a custom editor", () => {
   assert.equal(base.getText(), "");
   assert.deepEqual(base.inputs, ["\u001b[C"]);
   assert.equal(state.peek(), undefined);
+});
+
+test("an editor too narrow to reserve an IME cell does not steal Right", () => {
+  const base = new FakeEditor();
+  const { state, editor } = suggestionEditor({ base });
+  state.offer(state.begin(), "run tests", true);
+  editor.render(9);
+
+  editor.handleInput("\u001b[C");
+
+  assert.equal(base.getText(), "");
+  assert.deepEqual(base.inputs, ["\u001b[C"]);
+  assert.equal(state.peek(), undefined);
+});
+
+test("supports a custom editor cursor with a selective reverse reset", () => {
+  const selectiveCursor = "\u001b[7m \u001b[27m";
+  const lines = renderGhostSuggestion(
+    ["top", `${CURSOR_MARKER}${selectiveCursor}${" ".repeat(39)}`, "bottom"],
+    40,
+    "run tests",
+    (text) => `\u001b[2m${text}\u001b[22m`,
+  );
+
+  assert.equal(lines.length, 3);
+  assert.match(lines[1]!, /\u001b\[7m \u001b\[27m\u001b\[2mrun tests/);
+  assert.ok(lines[1]!.indexOf(CURSOR_MARKER) > lines[1]!.indexOf("run tests"));
 });
 
 test("any other editor input cancels then passes through", () => {

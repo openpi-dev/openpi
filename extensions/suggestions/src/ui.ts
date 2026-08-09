@@ -12,7 +12,10 @@ import {
   BelowEditorStripState,
 } from "../../shared/below-editor-navigation.ts";
 
-const FAKE_CURSOR = "\u001b[7m \u001b[0m";
+const FAKE_CURSOR_PATTERN = /\u001b\[7m \u001b\[(?:0|27)m/;
+const IME_PREEDIT_MIN_COLUMNS = 12;
+const IME_PREEDIT_MAX_COLUMNS = 32;
+const GHOST_MIN_COLUMNS = 8;
 
 export interface SuggestionToken {
   readonly generation: number;
@@ -83,13 +86,27 @@ function isStripNavigation(data: string) {
 }
 
 function ghostGeometry(lines: readonly string[], width: number) {
-  const index = lines.findIndex((line) => line.includes(FAKE_CURSOR));
+  const index = lines.findIndex((line) => FAKE_CURSOR_PATTERN.test(line));
   if (index === -1) return undefined;
   const line = lines[index]!;
-  const cursorStart = line.indexOf(FAKE_CURSOR);
-  const prefix = line.slice(0, cursorStart).replaceAll(CURSOR_MARKER, "");
-  const available = Math.max(0, width - visibleWidth(prefix));
-  return available > 0 ? { index, prefix, available } : undefined;
+  const cursor = line.match(FAKE_CURSOR_PATTERN);
+  if (!cursor || cursor.index === undefined) return undefined;
+  const beforeCursor = line
+    .slice(0, cursor.index)
+    .replaceAll(CURSOR_MARKER, "");
+  const prefix = `${beforeCursor}${cursor[0]}`;
+  const remaining = Math.max(0, width - visibleWidth(prefix));
+  // One terminal cell must remain after the hidden hardware cursor. At
+  // narrower widths, suppress the ghost rather than placing the cursor at the
+  // terminal's out-of-range column width.
+  if (remaining <= GHOST_MIN_COLUMNS) return undefined;
+
+  const desiredPreedit = Math.min(
+    IME_PREEDIT_MAX_COLUMNS,
+    Math.max(IME_PREEDIT_MIN_COLUMNS, Math.floor(width * 0.3)),
+  );
+  const preedit = Math.min(desiredPreedit, remaining - GHOST_MIN_COLUMNS);
+  return { index, prefix, available: remaining - preedit, preedit };
 }
 
 export function renderGhostSuggestion(
@@ -100,24 +117,26 @@ export function renderGhostSuggestion(
 ) {
   const geometry = ghostGeometry(lines, width);
   if (!geometry) return [...lines];
-  const { index, prefix, available } = geometry;
+  const { index, prefix, available, preedit } = geometry;
   const ghost = truncateToWidth(suggestion, available, "…");
   const content = `${prefix}${dim(ghost)}`;
-  const ghostLine =
-    content + " ".repeat(Math.max(0, width - visibleWidth(content)));
+  const padding = " ".repeat(
+    Math.max(0, width - preedit - visibleWidth(content)),
+  );
   const rendered = [...lines];
-  // macOS IMEs draw uncommitted preedit text directly on the hardware-cursor
-  // row, before the editor receives any input event. A same-row ghost fights
-  // that terminal-owned text and flickers. Keep the suggestion inside the
-  // editor, but on its own row immediately below the cursor.
-  rendered.splice(index + 1, 0, ghostLine);
+  // CJK IMEs draw uncommitted preedit at the terminal's hidden hardware
+  // cursor before the editor receives an input event. Keep the visible fake
+  // cursor and ghost inline, but move that hardware anchor to reserved cells
+  // at the row end so preedit cannot overwrite the suggestion.
+  rendered[index] =
+    `${content}${padding}${CURSOR_MARKER}${" ".repeat(preedit)}`;
   return rendered;
 }
 
 /**
- * Transparent editor wrapper that shows one dim suggestion on a dedicated row
- * inside an empty editor. Right accepts without submitting; any other editor
- * interaction cancels the pending or visible suggestion. Existing management-strip
+ * Transparent editor wrapper that shows one dim inline suggestion in an empty
+ * editor. Right accepts without submitting; any other editor interaction
+ * cancels the pending or visible suggestion. Existing management-strip
  * navigation keeps precedence while a strip is focused.
  */
 export class NextActionSuggestionEditor extends BelowEditorNavigationEditor {

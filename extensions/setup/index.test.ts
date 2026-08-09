@@ -63,8 +63,8 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /This is the first setup/);
   assert.match(message, /Use ask_user/);
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
-  assert.match(message, /dedicated dim row/);
-  assert.match(message, /CJK IME preedit cannot overlap/);
+  assert.match(message, /dim inline text on the first row/);
+  assert.match(message, /reserved cells.*CJK IME preedit/);
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
