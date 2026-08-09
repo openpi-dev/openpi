@@ -2,10 +2,11 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { Worktree, WorktreeCleanup } from "../shared/worktree.ts";
-import { safeStringify, writeFileAtomic } from "./serialization.ts";
+import { writeFileAtomic } from "./serialization.ts";
 
 export const WORKTREE_HANDOFF_VERSION = 1;
 const PATCH_MAX_BYTES = 512 * 1024;
+const MANIFEST_MAX_BYTES = 1024 * 1024;
 const GIT_MAX_BUFFER = PATCH_MAX_BYTES + 64 * 1024;
 
 export interface WorktreeHandoffManifest {
@@ -42,21 +43,39 @@ export type WorktreeHandoffPreparation =
   | { readonly ok: false; readonly reason: string };
 
 function git(cwd: string, args: readonly string[]) {
-  return execFileSync("git", args, {
+  const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  if (output.includes("\uFFFD")) {
+    throw new Error("Git handoff output is not valid UTF-8");
+  }
+  return output;
 }
 
 function nulPaths(value: string) {
+  if (value.includes("\uFFFD")) {
+    throw new Error("Git path inventory is not valid UTF-8");
+  }
   return value.split("\0").filter(Boolean).sort();
 }
 
 function boundedError(error: unknown) {
   const text = error instanceof Error ? error.message : String(error);
   return text.slice(0, 4096);
+}
+
+function serializeCompleteManifest(manifest: WorktreeHandoffManifest) {
+  const serialized = JSON.stringify(manifest, null, 2);
+  const bytes = Buffer.byteLength(serialized, "utf8");
+  if (bytes > MANIFEST_MAX_BYTES) {
+    throw new Error(
+      `worktree handoff manifest exceeded ${MANIFEST_MAX_BYTES} bytes`,
+    );
+  }
+  return serialized;
 }
 
 /**
@@ -110,6 +129,7 @@ export function prepareWorktreeHandoff(options: {
       patch = git(worktree, [
         "diff",
         "--no-ext-diff",
+        "--no-textconv",
         "--binary",
         options.worktree.baseSha,
         "--",
@@ -141,12 +161,16 @@ export function prepareWorktreeHandoff(options: {
       patch: { format: "git-diff-binary", content: patch },
       numstat: git(worktree, [
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--numstat",
         options.worktree.baseSha,
         "--",
       ]),
       nameStatus: git(worktree, [
         "diff",
+        "--no-ext-diff",
+        "--no-textconv",
         "--name-status",
         options.worktree.baseSha,
         "--",
@@ -168,13 +192,7 @@ export function prepareWorktreeHandoff(options: {
     // and the manifest says exactly what was not captured.
     const artifact = path.join("worktrees", `agent-${options.agentIndex}.json`);
     const absolutePath = path.join(options.runDir, artifact);
-    writeFileAtomic(
-      absolutePath,
-      safeStringify(manifest, {
-        maxBytes: 1024 * 1024,
-        maxStringBytes: PATCH_MAX_BYTES,
-      }),
-    );
+    writeFileAtomic(absolutePath, serializeCompleteManifest(manifest));
     return { ok: true, artifact, absolutePath, manifest };
   } catch (error) {
     return { ok: false, reason: boundedError(error) };
@@ -186,12 +204,6 @@ export function finalizeWorktreeHandoff(
   cleanup: WorktreeCleanup,
 ) {
   const manifest = { ...prepared.manifest, cleanup };
-  writeFileAtomic(
-    prepared.absolutePath,
-    safeStringify(manifest, {
-      maxBytes: 1024 * 1024,
-      maxStringBytes: PATCH_MAX_BYTES,
-    }),
-  );
+  writeFileAtomic(prepared.absolutePath, serializeCompleteManifest(manifest));
   return manifest;
 }
