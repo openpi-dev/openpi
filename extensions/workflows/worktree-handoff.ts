@@ -8,6 +8,7 @@ export const WORKTREE_HANDOFF_VERSION = 1;
 const PATCH_MAX_BYTES = 512 * 1024;
 const MANIFEST_MAX_BYTES = 1024 * 1024;
 const GIT_MAX_BUFFER = PATCH_MAX_BYTES + 64 * 1024;
+const HANDOFF_GIT_TIMEOUT_MS = 5_000;
 
 export interface WorktreeHandoffManifest {
   readonly version: typeof WORKTREE_HANDOFF_VERSION;
@@ -42,12 +43,15 @@ export type WorktreeHandoffPreparation =
     }
   | { readonly ok: false; readonly reason: string };
 
-function git(cwd: string, args: readonly string[]) {
+function boundedGit(cwd: string, args: readonly string[], deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Git handoff deadline exceeded");
   const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
+    timeout: Math.min(remaining, HANDOFF_GIT_TIMEOUT_MS),
   });
   if (output.includes("\uFFFD")) {
     throw new Error("Git handoff output is not valid UTF-8");
@@ -90,6 +94,9 @@ export function prepareWorktreeHandoff(options: {
   repoCwd: string;
   worktree: Worktree;
 }): WorktreeHandoffPreparation {
+  const deadline = Date.now() + HANDOFF_GIT_TIMEOUT_MS;
+  const git = (cwd: string, args: readonly string[]) =>
+    boundedGit(cwd, args, deadline);
   try {
     if (!options.worktree.baseSha) {
       return { ok: false, reason: "worktree creation baseline is unknown" };

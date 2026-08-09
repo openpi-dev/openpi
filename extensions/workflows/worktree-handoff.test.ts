@@ -102,6 +102,11 @@ test("handoff captures tracked binary patch plus untracked and ignored inventori
     assert.equal(finalized.cleanup?.removed, false);
     const disk = JSON.parse(fs.readFileSync(prepared.absolutePath, "utf8"));
     assert.equal(disk.cleanup.removed, false);
+    assert.equal(
+      disk.patch.content,
+      prepared.manifest.patch.content,
+      "a safety artifact must never silently truncate its recovery patch",
+    );
   });
 });
 
