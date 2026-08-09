@@ -425,6 +425,32 @@ You are read-only and must never write files.
   );
 });
 
+test("a malformed higher-precedence role blocks broader fallback", async () => {
+  await withTempDir(async (root) => {
+    const { agentDir, cwd } = await seed(root, {
+      project: {
+        "implementer.md": `---
+name: implementer
+description: Intended read-only override.
+tool: [read]
+---
+Do not write.
+`,
+      },
+    });
+    const loaded = loadAgentTypes({ agentDir, cwd, projectTrusted: true });
+    assert.equal(
+      loaded.agentTypes.has("implementer"),
+      false,
+      "rejected override must not expose the write-capable builtin",
+    );
+    assert.match(
+      loaded.diagnostics.map((entry) => entry.message).join("\n"),
+      /blocks fallback to built-in:implementer/,
+    );
+  });
+});
+
 test("every key the parser reads is accepted without a warning", () => {
   const parsed = parseAgentType(VALID, "explore", "explore.md");
   assert.ok(parsed.agentType);

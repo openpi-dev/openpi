@@ -20,22 +20,22 @@ Types are markdown files with YAML frontmatter, one per file:
 name: explore
 description: Read-only codebase exploration. Returns file:line references.
 tools: [read, grep, find, ls, fd, rg]
-model: anthropic/claude-sonnet-5   # optional
-reasoning_effort: medium           # optional
+model: anthropic/claude-sonnet-5 # optional
+reasoning_effort: medium # optional
 ---
 
 You are a read-only exploration agent. Locate code and report concrete
 file:line references. You cannot modify files — do not attempt to.
 ```
 
-| Field | Required | Meaning |
-| --- | --- | --- |
-| `name` | yes | `[a-z0-9-]`, ≤64 chars, and must equal the filename stem. |
-| `description` | yes | Shown to the parent model when it picks a type. ≤1024 chars. |
-| `tools` | no | Tool allowlist. **Omit to inherit the normal tool set.** |
-| `model` | no | `provider/model-id`, or a bare id resolved against the current provider. |
-| `reasoning_effort` | no | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`. |
-| body | no | Appended to the child's system prompt. ≤16384 chars. |
+| Field              | Required | Meaning                                                                  |
+| ------------------ | -------- | ------------------------------------------------------------------------ |
+| `name`             | yes      | `[a-z0-9-]`, ≤64 chars, and must equal the filename stem.                |
+| `description`      | yes      | Shown to the parent model when it picks a type. ≤1024 chars.             |
+| `tools`            | no       | Tool allowlist. **Omit to inherit the normal tool set.**                 |
+| `model`            | no       | `provider/model-id`, or a bare id resolved against the current provider. |
+| `reasoning_effort` | no       | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.               |
+| body               | no       | Appended to the child's system prompt. ≤16384 chars.                     |
 
 `name` must match the filename so a renamed file cannot keep answering to its
 old name. An explicit `model` or `reasoning_effort` argument on `subagent_spawn`,
@@ -47,12 +47,12 @@ All built-ins omit a model, so they inherit the parent model unless configured
 through `/my-pi-setup`. Their complete definitions can be replaced by a custom
 file with the same name.
 
-| Role | Tools | Effort | Purpose |
-| --- | --- | --- | --- |
-| `explorer` | `read grep find ls fd rg` | `high` | Read-only codebase tracing. Use `high` for routine, local, direct tracing; `xhigh` for interacting state transitions, concurrency or trust boundaries, or subtle multi-path lifecycle/control-flow; `max` only for exceptionally difficult broad unfamiliar architecture with unresolved competing flows. |
-| `implementer` | `read bash edit write grep find ls fd rg` | `high` | Focused implementation and relevant checks. |
-| `reviewer` | `read grep find ls fd rg` | `medium` | Read-only correctness, safety, and regression review. |
-| `advisor` | `read grep find ls fd rg` | `xhigh` | Deep read-only analysis and technical advice. |
+| Role          | Tools                                     | Effort   | Purpose                                                                                                                                                                                                                                                                                                   |
+| ------------- | ----------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `explorer`    | `read grep find ls fd rg`                 | `high`   | Read-only codebase tracing. Use `high` for routine, local, direct tracing; `xhigh` for interacting state transitions, concurrency or trust boundaries, or subtle multi-path lifecycle/control-flow; `max` only for exceptionally difficult broad unfamiliar architecture with unresolved competing flows. |
+| `implementer` | `read bash edit write grep find ls fd rg` | `high`   | Focused implementation and relevant checks.                                                                                                                                                                                                                                                               |
+| `reviewer`    | `read grep find ls fd rg`                 | `medium` | Read-only correctness, safety, and regression review.                                                                                                                                                                                                                                                     |
+| `advisor`     | `read grep find ls fd rg`                 | `xhigh`  | Deep read-only analysis and technical advice.                                                                                                                                                                                                                                                             |
 
 Built-ins have concise role prompts and no provider or model names. Their tool
 allowlists still intersect with plan mode and the child denylist.
@@ -61,11 +61,11 @@ allowlists still intersect with plan mode and the child denylist.
 
 Definitions are layered at each `session_start`:
 
-| Priority | Source | Loaded |
-| --- | --- | --- |
-| lowest | package built-ins | Always. |
-| middle | `~/.pi/agent/agents/*.md` | Always. |
-| highest | `<cwd>/.pi/agents/*.md` | **Only in a trusted project.** |
+| Priority | Source                    | Loaded                         |
+| -------- | ------------------------- | ------------------------------ |
+| lowest   | package built-ins         | Always.                        |
+| middle   | `~/.pi/agent/agents/*.md` | Always.                        |
+| highest  | `<cwd>/.pi/agents/*.md`   | **Only in a trusted project.** |
 
 A project file supplies an attacker-controllable system prompt and tool list, so
 an untrusted repository contributes none. Each higher layer replaces the
@@ -80,11 +80,12 @@ session-only trust decisions and cross-cwd session replacements without ever
 loading an untrusted project's prompt before trust resolves. Edits take effect
 on `/reload` or a new session — the same as skills.
 
-A malformed file is skipped and reported as a warning at session start; it never
-prevents the other types from loading, and never blocks spawning. Unknown
-frontmatter keys make that file malformed rather than being ignored: this fails
-closed when `tools` or another restriction field is misspelled instead of
-silently giving the child the inherited full tool set.
+A malformed file is reported at session start and never prevents unrelated types
+from loading. Its own filename is blocked at that precedence layer: a broken
+project `implementer.md` cannot silently fall back to the broader global or
+built-in `implementer`. Unknown frontmatter keys make that file malformed rather
+than being ignored, so a misspelled `tools` or restriction field cannot expose
+the inherited full tool set.
 
 ## Model and effort precedence
 
@@ -111,7 +112,7 @@ subagent_spawn({ prompt: "...", name: "auth audit", agent_type: "explorer" })
 Workflow scripts use the same role without hardcoding its configured model:
 
 ```js
-await agent("Map the auth flow", { agent_type: "explorer" })
+await agent("Map the auth flow", { agent_type: "explorer" });
 ```
 
 The `agent_type` parameter is always available because the built-in roles are
@@ -127,7 +128,8 @@ this package's existing child denylist:
 ```js
 // pi: dist/core/agent-session.js
 const isAllowedTool = (name) =>
-    (!allowedToolNames || allowedToolNames.has(name)) && !excludedToolNames?.has(name);
+  (!allowedToolNames || allowedToolNames.has(name)) &&
+  !excludedToolNames?.has(name);
 ```
 
 Two consequences worth being precise about:

@@ -263,6 +263,8 @@ export type ParseAgentTypeResult =
     }
   | {
       readonly agentType?: undefined;
+      /** A malformed higher-precedence file blocks fallback to this name. */
+      readonly rejectedName: string;
       readonly diagnostics: AgentTypeDiagnostic[];
     };
 
@@ -279,6 +281,7 @@ export function parseAgentType(
 ): ParseAgentTypeResult {
   const diagnostics: AgentTypeDiagnostic[] = [];
   const fail = (message: string) => ({
+    rejectedName: stem,
     diagnostics: [...diagnostics, { source, message }],
   });
 
@@ -384,6 +387,7 @@ export function parseAgentType(
 /** Read one directory of `*.md` agent types. A missing directory is normal. */
 function loadDirectory(directory: string) {
   const agentTypes: AgentType[] = [];
+  const rejectedNames = new Set<string>();
   const diagnostics: AgentTypeDiagnostic[] = [];
 
   let entries: fs.Dirent[];
@@ -398,23 +402,17 @@ function loadDirectory(directory: string) {
         message: `could not read agent types: ${error instanceof Error ? error.message : String(error)}`,
       });
     }
-    return { agentTypes, diagnostics };
+    return { agentTypes, rejectedNames, diagnostics };
   }
 
   const files = entries
     .filter((entry) => {
       if (!entry.name.endsWith(".md")) return false;
       if (entry.isFile()) return true;
-      // A symlinked type is the normal shape when these live in a dotfiles
-      // repo, and `isFile()` is false for one. Skipping it silently means the
-      // user's type simply never appears — no diagnostic, no enum entry. Pi's
-      // own skills loader resolves symlinks for exactly this reason.
-      if (!entry.isSymbolicLink()) return false;
-      try {
-        return fs.statSync(path.join(directory, entry.name)).isFile();
-      } catch {
-        return false;
-      }
+      // A symlinked type is normal for dotfiles. Include every `.md` symlink
+      // and let readFile reject broken/directory targets: silently skipping a
+      // higher-precedence `implementer.md` would expose the broader fallback.
+      return entry.isSymbolicLink();
     })
     .map((entry) => entry.name)
     .sort();
@@ -422,8 +420,11 @@ function loadDirectory(directory: string) {
   if (files.length > AGENT_TYPE_LIMITS.files) {
     diagnostics.push({
       source: directory,
-      message: `more than ${AGENT_TYPE_LIMITS.files} agent types; ignoring the rest`,
+      message: `more than ${AGENT_TYPE_LIMITS.files} agent types; rejecting the rest so they cannot fall back to broader definitions`,
     });
+    for (const file of files.slice(AGENT_TYPE_LIMITS.files)) {
+      rejectedNames.add(file.slice(0, -3));
+    }
   }
 
   for (const file of files.slice(0, AGENT_TYPE_LIMITS.files)) {
@@ -432,6 +433,7 @@ function loadDirectory(directory: string) {
     try {
       content = fs.readFileSync(filePath, "utf8");
     } catch (error) {
+      rejectedNames.add(file.slice(0, -3));
       diagnostics.push({
         source: filePath,
         message: `could not read file: ${error instanceof Error ? error.message : String(error)}`,
@@ -441,9 +443,10 @@ function loadDirectory(directory: string) {
     const result = parseAgentType(content, file.slice(0, -3), filePath);
     diagnostics.push(...result.diagnostics);
     if (result.agentType) agentTypes.push(result.agentType);
+    else rejectedNames.add(result.rejectedName);
   }
 
-  return { agentTypes, diagnostics };
+  return { agentTypes, rejectedNames, diagnostics };
 }
 
 export interface LoadAgentTypesOptions {
@@ -464,16 +467,24 @@ export function loadAgentTypes(options: LoadAgentTypesOptions) {
   );
   const project = options.projectTrusted
     ? loadDirectory(path.join(options.cwd, ".pi", AGENT_TYPES_DIR_NAME))
-    : { agentTypes: [], diagnostics: [] };
+    : { agentTypes: [], rejectedNames: new Set<string>(), diagnostics: [] };
 
   const diagnostics = [...global.diagnostics, ...project.diagnostics];
-  const agentTypes = new Map<string, AgentType>();
-  for (const layer of [
-    BUILT_IN_AGENT_TYPES,
-    global.agentTypes,
-    project.agentTypes,
-  ]) {
-    for (const agentType of layer) {
+  const agentTypes = new Map<string, AgentType>(
+    BUILT_IN_AGENT_TYPES.map((agentType) => [agentType.name, agentType]),
+  );
+  for (const layer of [global, project]) {
+    for (const rejectedName of layer.rejectedNames) {
+      const shadowed = agentTypes.get(rejectedName);
+      if (shadowed) {
+        diagnostics.push({
+          source: rejectedName,
+          message: `malformed higher-precedence definition blocks fallback to ${shadowed.source}`,
+        });
+      }
+      agentTypes.delete(rejectedName);
+    }
+    for (const agentType of layer.agentTypes) {
       const shadowed = agentTypes.get(agentType.name);
       if (shadowed) {
         diagnostics.push({
