@@ -14,6 +14,8 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "rg",
 ]);
 const GIT_OUTPUT_LIMIT = 32 * 1024 * 1024;
+const REPLAY_IDENTITY_TIMEOUT_MS = 5_000;
+const REPLAY_RESOURCE_FILE_LIMIT = 8 * 1024 * 1024;
 
 /**
  * Replay is an allowlist, not a best guess. An omitted tool list inherits the
@@ -45,12 +47,15 @@ function digest(value: string | Buffer) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function git(cwd: string, args: readonly string[]) {
+function boundedGit(cwd: string, args: readonly string[], deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("Replay identity deadline exceeded");
   const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_LIMIT,
     stdio: ["ignore", "pipe", "ignore"],
+    timeout: Math.min(remaining, REPLAY_IDENTITY_TIMEOUT_MS),
   });
   if (output.includes("\uFFFD")) {
     throw new Error("Git output contains a path that is not valid UTF-8");
@@ -63,6 +68,9 @@ function canonicalPath(value: string) {
 }
 
 function repositoryFingerprint(cwd: string) {
+  const deadline = Date.now() + REPLAY_IDENTITY_TIMEOUT_MS;
+  const git = (gitCwd: string, args: readonly string[]) =>
+    boundedGit(gitCwd, args, deadline);
   const root = canonicalPath(git(cwd, ["rev-parse", "--show-toplevel"]).trim());
   const head = git(root, ["rev-parse", "--verify", "HEAD"]).trim();
   const diff = git(root, [
@@ -110,6 +118,7 @@ function repositoryFingerprint(cwd: string) {
     throw new Error("untracked paths are not valid UTF-8");
   }
 
+  let untrackedBytes = 0;
   const untracked = untrackedOutput
     .split("\0")
     .filter(Boolean)
@@ -117,6 +126,10 @@ function repositoryFingerprint(cwd: string) {
     .map((relativePath) => {
       const filePath = path.join(root, relativePath);
       const stat = fs.lstatSync(filePath);
+      untrackedBytes += stat.size;
+      if (untrackedBytes > GIT_OUTPUT_LIMIT) {
+        throw new Error("untracked files exceed replay fingerprint limit");
+      }
       if (stat.isSymbolicLink()) {
         throw new Error(
           `untracked symlink makes replay identity incomplete: ${relativePath}`,
@@ -135,16 +148,28 @@ function resourceFile(pathname: string) {
   const canonical = canonicalPath(pathname);
   const stat = fs.statSync(canonical);
   if (!stat.isFile()) throw new Error(`resource is not a file: ${canonical}`);
+  if (stat.size > REPLAY_RESOURCE_FILE_LIMIT) {
+    throw new Error(`resource exceeds replay fingerprint limit: ${canonical}`);
+  }
   return { path: canonical, content: digest(fs.readFileSync(canonical)) };
 }
 
 function resourceFingerprint(loader: ReplayResourceLoader) {
   const agentsFiles = loader
     .getAgentsFiles()
-    .agentsFiles.map((file) => ({
-      path: canonicalPath(file.path),
-      content: digest(file.content),
-    }))
+    .agentsFiles.map((file) => {
+      if (
+        Buffer.byteLength(file.content, "utf8") > REPLAY_RESOURCE_FILE_LIMIT
+      ) {
+        throw new Error(
+          `agent resource exceeds replay fingerprint limit: ${file.path}`,
+        );
+      }
+      return {
+        path: canonicalPath(file.path),
+        content: digest(file.content),
+      };
+    })
     .sort((left, right) => left.path.localeCompare(right.path));
   const skills = loader
     .getSkills()
