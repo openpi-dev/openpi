@@ -25,6 +25,26 @@ export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 export const CHILD_SAFE_PACKAGE_TOOL_NAMES = ["fd", "rg"] as const;
 
 /**
+ * pi-intercom resources are unsafe inside concurrent in-process child sessions.
+ * It stores session identity and optional supervisor bridge metadata in
+ * process.env, which is shared by every Direct/Workflow child in this process.
+ * Loading it in children can therefore cross-wire identities; the parent
+ * extension remains loaded and fully usable.
+ */
+function isPiIntercomNpmResource(resource: {
+  resolvedPath?: string;
+  filePath?: string;
+}) {
+  const resourcePath = resource.resolvedPath ?? resource.filePath;
+  if (!resourcePath) return false;
+  const segments = path.resolve(resourcePath).split(path.sep);
+  return segments.some(
+    (segment, index) =>
+      segment === "node_modules" && segments[index + 1] === "pi-intercom",
+  );
+}
+
+/**
  * Tools that headless children must not receive. Children run without a UI and
  * cannot orchestrate, so every parent-only tool this package ships is denied.
  * Grouped by owning extension; keep in sync with the extensions (guarded by the
@@ -112,6 +132,16 @@ export async function createChildResources(options: ChildResourceOptions) {
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
+    extensionsOverride: (base) => ({
+      ...base,
+      extensions: base.extensions.filter(
+        (extension) => !isPiIntercomNpmResource(extension),
+      ),
+    }),
+    skillsOverride: (base) => ({
+      ...base,
+      skills: base.skills.filter((skill) => !isPiIntercomNpmResource(skill)),
+    }),
   });
   await loader.reload();
   return { loader, settingsManager };

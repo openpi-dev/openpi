@@ -546,6 +546,18 @@ npm install
 pi install ~/work/my-pi-setup
 ```
 
+### 可选：连接多个顶层 Pi Session
+
+需要在同一台机器上的独立 Pi Session 之间传递上下文时，可单独安装 [pi-intercom](https://github.com/nicobailon/pi-intercom)：
+
+```bash
+pi install npm:pi-intercom
+```
+
+重启或 `/reload` 后，用 `Alt+M` 或 `/intercom` 选择目标 Session。它通过本地 IPC 传递消息；传输本身不调用模型，但默认会在目标 Session 空闲时触发一个模型 Turn，正在工作的交互式 Session 则把消息放进 steering queue；忙碌的无头 Session 会回复当前不可用。可在 `~/.pi/agent/intercom/config.json` 中将 `inboundTrigger` 改为 `"replies"` 或 `"never"`。
+
+`pi-intercom` 只在顶层 Session 加载。My Pi Setup 的 Direct Subagent 与 Workflow child 是同一进程内并发的 Pi Session，而 pi-intercom 当前使用进程级身份变量；为避免 child 身份串线，child Resource Loader 会移除它的扩展与 Skill。跨顶层 Session 通信用 pi-intercom，父子委派仍用 `subagent_*` / Workflow 原生结果通道。
+
 ### 可选：GitHub Dark 主题
 
 安装包会注册主题，但不会替你切换。通过 Pi `/settings` 选择 `github-dark-default`，或在 `~/.pi/agent/settings.json` 中设置：

@@ -214,28 +214,67 @@ test("child denylist keeps extension and workflow structured tools available", a
   });
 });
 
-test("resource loading gates project extensions but retains global extensions", async () => {
+test("resource loading gates project resources and keeps only the pi-intercom package parent-only", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
     const agentDir = path.join(directory, "agent");
+    const intercomPackageDir = path.join(
+      agentDir,
+      "npm",
+      "node_modules",
+      "pi-intercom",
+    );
     await mkdir(path.join(cwd, ".pi", "extensions"), { recursive: true });
     await mkdir(path.join(agentDir, "extensions"), { recursive: true });
-    const extensionSource = (name: string) => `
+    await mkdir(path.join(agentDir, "skills", "global-fixture"), {
+      recursive: true,
+    });
+    await mkdir(path.join(intercomPackageDir, "skills", "pi-intercom"), {
+      recursive: true,
+    });
+    const extensionSource = (names: string[]) => `
       export default function (pi) {
-        pi.registerTool({
-          name: ${JSON.stringify(name)}, label: ${JSON.stringify(name)},
-          description: "fixture", parameters: { type: "object", properties: {} },
+        for (const name of ${JSON.stringify(names)}) pi.registerTool({
+          name, label: name, description: "fixture",
+          parameters: { type: "object", properties: {} },
           async execute() { return { content: [{ type: "text", text: "ok" }] }; }
         });
       }
     `;
     await writeFile(
       path.join(agentDir, "extensions", "global.ts"),
-      extensionSource("global_fixture"),
+      extensionSource(["global_fixture", "intercom"]),
     );
     await writeFile(
       path.join(cwd, ".pi", "extensions", "project.ts"),
-      extensionSource("project_fixture"),
+      extensionSource(["project_fixture"]),
+    );
+    await writeFile(
+      path.join(intercomPackageDir, "index.ts"),
+      extensionSource(["intercom"]),
+    );
+    await writeFile(
+      path.join(intercomPackageDir, "package.json"),
+      JSON.stringify({
+        name: "pi-intercom",
+        version: "0.9.3",
+        pi: {
+          extensions: ["./index.ts"],
+          skills: ["./skills"],
+        },
+      }),
+    );
+    await writeFile(
+      path.join(intercomPackageDir, "skills", "pi-intercom", "SKILL.md"),
+      "---\nname: pi-intercom\ndescription: fixture\n---\n",
+    );
+    await writeFile(
+      path.join(agentDir, "skills", "global-fixture", "SKILL.md"),
+      "---\nname: global-fixture\ndescription: fixture\n---\n",
+    );
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: ["npm:pi-intercom@0.9.3"] }),
     );
 
     const untrusted = await createChildResources({
@@ -243,22 +282,53 @@ test("resource loading gates project extensions but retains global extensions", 
       agentDir,
       projectTrusted: false,
     });
-    const untrustedTools = untrusted.loader
-      .getExtensions()
-      .extensions.flatMap((extension) => [...extension.tools.keys()]);
+    const untrustedExtensions = untrusted.loader.getExtensions().extensions;
+    const untrustedTools = untrustedExtensions.flatMap((extension) => [
+      ...extension.tools.keys(),
+    ]);
     assert.equal(untrustedTools.includes("global_fixture"), true);
+    assert.equal(untrustedTools.includes("intercom"), true);
     assert.equal(untrustedTools.includes("project_fixture"), false);
+    assert.equal(
+      untrustedExtensions.some(
+        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.9.3",
+      ),
+      false,
+      JSON.stringify(
+        untrustedExtensions.map((extension) => extension.sourceInfo),
+      ),
+    );
 
     const trusted = await createChildResources({
       cwd,
       agentDir,
       projectTrusted: true,
     });
-    const trustedTools = trusted.loader
-      .getExtensions()
-      .extensions.flatMap((extension) => [...extension.tools.keys()]);
+    const trustedExtensions = trusted.loader.getExtensions().extensions;
+    const trustedTools = trustedExtensions.flatMap((extension) => [
+      ...extension.tools.keys(),
+    ]);
     assert.equal(trustedTools.includes("global_fixture"), true);
+    assert.equal(trustedTools.includes("intercom"), true);
     assert.equal(trustedTools.includes("project_fixture"), true);
+    assert.equal(
+      trustedExtensions.some(
+        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.9.3",
+      ),
+      false,
+    );
+
+    const childSkills = trusted.loader.getSkills().skills;
+    assert.equal(
+      childSkills.some((skill) => skill.name === "global-fixture"),
+      true,
+    );
+    assert.equal(
+      childSkills.some(
+        (skill) => skill.sourceInfo.source === "npm:pi-intercom@0.9.3",
+      ),
+      false,
+    );
   });
 });
 
