@@ -823,7 +823,7 @@ npm test
 
 ## 来源与致谢
 
-本项目基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，并针对 Pi-native 子代理、统一自然语言配置、Context Pivot、Session 浏览、结构化提问、可配置 Workflow Fan-out、后台超时与资源清理进行了持续打磨。
+本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，感谢原作者提供的起点；现作为独立发行版维护，并针对 Pi-native 子代理、统一自然语言配置、Context Pivot、Session 浏览、结构化提问、可配置 Workflow Fan-out、后台超时与资源清理进行了持续打磨。
 
 `extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
