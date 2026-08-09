@@ -33,6 +33,7 @@ import {
   formatElapsed,
   formatUsage,
   aggregateUsage,
+  isWorkflowRunId,
   MAX_LOG_TEXT,
   phaseGroups,
   resultJson,
@@ -49,6 +50,7 @@ import {
   type WorkflowDetails,
   type WorkflowLogEntry,
 } from "./model.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -100,8 +102,11 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
     if (typeof entry.text !== "string") continue;
     transcript.push({
       role: entry.role,
-      text: entry.text,
-      name: typeof entry.name === "string" ? entry.name : undefined,
+      text: sanitizeTerminalText(entry.text),
+      name:
+        typeof entry.name === "string"
+          ? sanitizeLine(entry.name, 160) || undefined
+          : undefined,
       isError: entry.isError === true,
       timestamp:
         typeof entry.timestamp === "number" ? entry.timestamp : undefined,
@@ -111,7 +116,7 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
 }
 
 /** Leniently normalize a workflow.json (including runs from older tooling). */
-function normalizeDetails(
+export function normalizePersistedWorkflowDetails(
   runId: string,
   raw: unknown,
 ): WorkflowDetails | undefined {
@@ -134,10 +139,18 @@ function normalizeDetails(
     agents.push({
       index: typeof a.index === "number" ? a.index : agents.length + 1,
       label:
-        typeof a.label === "string" ? a.label : `agent-${agents.length + 1}`,
-      phase: typeof a.phase === "string" ? a.phase : undefined,
+        typeof a.label === "string"
+          ? sanitizeLine(a.label, 160) || `agent-${agents.length + 1}`
+          : `agent-${agents.length + 1}`,
+      phase:
+        typeof a.phase === "string"
+          ? sanitizeLine(a.phase, 160) || undefined
+          : undefined,
       state,
-      model: typeof a.model === "string" ? a.model : undefined,
+      model:
+        typeof a.model === "string"
+          ? sanitizeLine(a.model, 240) || undefined
+          : undefined,
       contextWindow:
         typeof a.contextWindow === "number" &&
         Number.isFinite(a.contextWindow) &&
@@ -148,9 +161,10 @@ function normalizeDetails(
       finishedAt: typeof a.finishedAt === "number" ? a.finishedAt : undefined,
       error:
         typeof a.error === "string" && a.error !== "[undefined]"
-          ? a.error
+          ? sanitizeLine(a.error, 2_000) || undefined
           : undefined,
-      preview: typeof a.preview === "string" ? a.preview : "",
+      preview:
+        typeof a.preview === "string" ? sanitizeLine(a.preview, 4_000) : "",
       usage: {
         input: 0,
         output: 0,
@@ -188,10 +202,11 @@ function normalizeDetails(
     if (!item || typeof item !== "object") continue;
     const p = item as Record<string, unknown>;
     if (typeof p.title !== "string") continue;
-    phases.push({
-      title: p.title,
-      ...(typeof p.detail === "string" ? { detail: p.detail } : {}),
-    });
+    const title = sanitizeLine(p.title, 160);
+    if (!title) continue;
+    const detail =
+      typeof p.detail === "string" ? sanitizeLine(p.detail, 2_000) : "";
+    phases.push({ title, ...(detail ? { detail } : {}) });
   }
 
   const rawLogs = Array.isArray(record.logs) ? record.logs : [];
@@ -221,15 +236,15 @@ function normalizeDetails(
       typeof record.sessionId === "string" ? record.sessionId : undefined,
     name:
       typeof record.name === "string"
-        ? record.name
+        ? sanitizeLine(record.name, 160) || undefined
         : typeof meta.name === "string"
-          ? meta.name
+          ? sanitizeLine(meta.name, 160) || undefined
           : undefined,
     description:
       typeof record.description === "string"
-        ? record.description
+        ? sanitizeLine(record.description, 2_000) || undefined
         : typeof meta.description === "string"
-          ? meta.description
+          ? sanitizeLine(meta.description, 2_000) || undefined
           : undefined,
     background: record.background === true,
     status,
@@ -238,7 +253,9 @@ function normalizeDetails(
       typeof record.finishedAt === "number" ? record.finishedAt : undefined,
     phases,
     currentPhase:
-      typeof record.currentPhase === "string" ? record.currentPhase : undefined,
+      typeof record.currentPhase === "string"
+        ? sanitizeLine(record.currentPhase, 160) || undefined
+        : undefined,
     agents,
     ...(logs.length > 0 ? { logs } : {}),
     ...(typeof record.logsDropped === "number" && record.logsDropped > 0
@@ -257,7 +274,10 @@ function normalizeDetails(
       typeof record.resumedFrom === "string" ? record.resumedFrom : undefined,
     resumeNote:
       typeof record.resumeNote === "string" ? record.resumeNote : undefined,
-    error: typeof record.error === "string" ? record.error : undefined,
+    error:
+      typeof record.error === "string"
+        ? sanitizeLine(record.error, 2_000) || undefined
+        : undefined,
   };
 }
 
@@ -288,7 +308,7 @@ export function loadRunEntries(
 ): RunEntry[] {
   let names: string[] = [];
   try {
-    names = fs.readdirSync(runsDir()).filter((name) => name.startsWith("wf_"));
+    names = fs.readdirSync(runsDir()).filter(isWorkflowRunId);
   } catch {
     // No runs yet.
   }
@@ -303,7 +323,7 @@ export function loadRunEntries(
       const raw = JSON.parse(
         fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"),
       );
-      const details = normalizeDetails(runId, raw);
+      const details = normalizePersistedWorkflowDetails(runId, raw);
       const touchedAt = Math.max(
         details?.startedAt ?? 0,
         details?.finishedAt ?? 0,
@@ -977,7 +997,7 @@ export class WorkflowDashboard {
         if (agent.error) {
           agentRows.push(
             truncateToWidth(
-              `       ${theme.fg("error", agent.error)}`,
+              `       ${theme.fg("error", sanitizeLine(agent.error, 2_000))}`,
               agentsInner,
               "…",
             ),
@@ -1057,7 +1077,7 @@ export class WorkflowDashboard {
       const contentWidth = Math.max(8, width - 4);
       const styled = theme.fg(
         entry.role === "thinking" ? "dim" : entry.isError ? "error" : "text",
-        entry.text,
+        sanitizeTerminalText(entry.text),
       );
       for (const line of wrapTextWithAnsi(styled, contentWidth)) {
         rows.push(`   ${line}`);
@@ -1131,8 +1151,9 @@ function transcriptLabel(entry: TranscriptEntry): string {
   if (entry.role === "user") return "USER";
   if (entry.role === "assistant") return "ASSISTANT";
   if (entry.role === "thinking") return "THINKING";
-  if (entry.role === "tool") return `TOOL ${entry.name ?? "unknown"}`;
-  return `RESULT ${entry.name ?? "unknown"}`;
+  const name = entry.name ? sanitizeLine(entry.name, 160) : "unknown";
+  if (entry.role === "tool") return `TOOL ${name}`;
+  return `RESULT ${name}`;
 }
 
 function transcriptColor(

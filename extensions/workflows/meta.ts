@@ -10,6 +10,7 @@ import {
   type Property,
   type VariableDeclaration,
 } from "acorn";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 
 /** Static workflow metadata and source preparation helpers. */
 
@@ -114,6 +115,13 @@ function literalValue(node: Expression, depth = 0): unknown {
   throw new Error("workflow metadata must contain only static literals");
 }
 
+function cleanMetaLine(value: string, maxLength: number) {
+  return sanitizeTerminalText(value)
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, maxLength);
+}
+
 function sanitizeMeta(value: unknown): WorkflowMeta {
   const meta: WorkflowMeta = { phases: [] };
   if (!value || typeof value !== "object") return meta;
@@ -122,21 +130,26 @@ function sanitizeMeta(value: unknown): WorkflowMeta {
     description?: unknown;
     phases?: unknown;
   };
-  if (typeof raw.name === "string") meta.name = raw.name.slice(0, 160);
+  if (typeof raw.name === "string") {
+    const name = cleanMetaLine(raw.name, 160);
+    if (name) meta.name = name;
+  }
   if (typeof raw.description === "string") {
-    meta.description = raw.description.slice(0, 2_000);
+    const description = cleanMetaLine(raw.description, 2_000);
+    if (description) meta.description = description;
   }
   if (Array.isArray(raw.phases)) {
     for (const item of raw.phases.slice(0, 64)) {
       if (!item || typeof item !== "object") continue;
       const phase = item as { title?: unknown; detail?: unknown };
-      if (typeof phase.title !== "string" || !phase.title.trim()) continue;
-      meta.phases.push({
-        title: phase.title.slice(0, 160),
-        ...(typeof phase.detail === "string"
-          ? { detail: phase.detail.slice(0, 2_000) }
-          : {}),
-      });
+      if (typeof phase.title !== "string") continue;
+      const title = cleanMetaLine(phase.title, 160);
+      if (!title) continue;
+      const detail =
+        typeof phase.detail === "string"
+          ? cleanMetaLine(phase.detail, 2_000)
+          : "";
+      meta.phases.push({ title, ...(detail ? { detail } : {}) });
     }
   }
   return meta;

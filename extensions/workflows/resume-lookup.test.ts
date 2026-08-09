@@ -12,6 +12,10 @@ const { findRunDir } = await import("./index.ts");
 
 const runs = join(agentDir, "workflows");
 mkdirSync(join(runs, "wf_1a2b3c4d5e6f"), { recursive: true });
+mkdirSync(join(runs, "4d5e6f"), { recursive: true });
+mkdirSync(join(runs, "wf_\u001b]52;c;clipboard\u0007bad0"), {
+  recursive: true,
+});
 
 // A directory a traversal could reach, holding a journal a replay would trust.
 const planted = join(agentDir, "planted");
@@ -29,6 +33,7 @@ test("a run id is resolved by exact match or by hex suffix", () => {
     join(runs, "wf_1a2b3c4d5e6f"),
   );
   assert.equal(findRunDir("wf_nosuchrun"), undefined);
+  assert.equal(findRunDir("bad0"), undefined);
 });
 
 test("a traversing run id cannot reach a journal outside the runs directory", () => {

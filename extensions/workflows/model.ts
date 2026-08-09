@@ -9,6 +9,7 @@ import {
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { WorktreeCleanup } from "../shared/worktree.ts";
 import type { AcceptanceLedger } from "./acceptance.ts";
 import { safeStringify } from "./serialization.ts";
@@ -127,11 +128,35 @@ export interface WorkflowDetails {
 export const MAX_LOG_ENTRIES = 100;
 export const MAX_LOG_TEXT = 300;
 
+/** Only generated workflow directory names may cross the artifact boundary. */
+export function isWorkflowRunId(value: string): boolean {
+  return /^wf_[0-9a-f]+$/i.test(value);
+}
+
+export function isWorkflowRunTarget(value: string): boolean {
+  return isWorkflowRunId(value) || /^[0-9a-f]+$/i.test(value);
+}
+
 /**
  * Flatten model-authored text into one safe terminal line. Workflow scripts are
  * written by the model, so an escape sequence in a `log()` or `phase()` string
  * would otherwise repaint the user's screen; newlines would break row layout.
  */
+export function sanitizeWorkflowDisplayText(
+  value: string,
+  maxLength = 16 * 1024,
+): string {
+  return [...sanitizeTerminalText(value)].slice(0, maxLength).join("");
+}
+
+export function sanitizeWorkflowDisplayLine(
+  value: string,
+  maxLength = 2_000,
+): string {
+  const line = sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
+  return [...line].slice(0, maxLength).join("");
+}
+
 export function sanitizeLine(value: string, maxLength: number): string {
   // Code-point slicing, not code-unit: cutting a surrogate pair in half leaves
   // a lone surrogate that renders as a replacement glyph.

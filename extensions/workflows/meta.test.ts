@@ -19,6 +19,19 @@ test("metadata is decoded statically and removed from executable source", () => 
   assert.equal(prepared.source.split("\n").length, source.split("\n").length);
 });
 
+test("metadata cannot inject terminal controls into strip or dashboard text", () => {
+  const prepared = prepareWorkflowScript(`export const meta = {
+    name: "audit\\u001b]52;c;clipboard\\u0007\\nnow",
+    description: "line\\n two",
+    phases: [{ title: "Scan\\u001b[31m", detail: "files\\nnext" }],
+  }; return 1;`);
+  assert.deepEqual(prepared.meta, {
+    name: "audit now",
+    description: "line two",
+    phases: [{ title: "Scan", detail: "files next" }],
+  });
+});
+
 test("export-like text in strings, comments, regexes, and templates is untouched", () => {
   const source = `
     const string = "export default notSyntax";

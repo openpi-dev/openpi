@@ -132,6 +132,21 @@ test("result message stays quiet when nothing was isolated", () => {
   assert.doesNotMatch(msg, /Isolated worktrees/);
 });
 
+test("workflow status text cannot replay terminal controls from artifacts", () => {
+  const restored = details([
+    agentRecord({
+      label: "impl\u001b]52;c;clipboard\u0007",
+      error: "failed\u001b[31m\u001b[0m",
+    }),
+  ]);
+  restored.name = "audit\u001b]52;c;clipboard\u0007";
+  restored.logs = [{ at: 1, text: "log\u001b[2J" }];
+  restored.result = { text: "result\u001b]52;c;clipboard\u0007" };
+  const message = buildWorkflowResultMessage(restored, "/tmp/wf_abc123");
+  assert.doesNotMatch(message, /[\u001b\u0007]/);
+  assert.match(message, /^Workflow "audit" completed/);
+});
+
 test("result message carries the script's narration and what it dropped", () => {
   // log() lines are often the only record of work the return value omits, so
   // the model's copy of the run has to include them.

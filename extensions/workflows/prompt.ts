@@ -1,3 +1,4 @@
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   countStates,
   formatElapsed,
@@ -181,7 +182,7 @@ export function buildWorkflowResultMessage(
   }
   if (details.result !== undefined)
     lines.push("", "Result:", resultJson(details.result));
-  return lines.join("\n");
+  return sanitizeTerminalText(lines.join("\n"));
 }
 
 /** Builds the follow-up message that delivers a settled background workflow to the parent model. */

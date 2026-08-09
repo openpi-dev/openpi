@@ -5,6 +5,8 @@ import {
   MAX_LOG_ENTRIES,
   MAX_LOG_TEXT,
   sanitizeLine,
+  sanitizeWorkflowDisplayLine,
+  sanitizeWorkflowDisplayText,
   createUsageReader,
   type AgentRecord,
   type WorkflowDetails,
@@ -60,6 +62,18 @@ function runSandbox(
     ...overrides,
   });
 }
+
+test("active workflow previews and errors cannot inject terminal controls", () => {
+  const input =
+    "preview\u001b]52;c;clipboard\u0007\nerror\u001b[31mred\u001b[0m";
+  assert.equal(sanitizeWorkflowDisplayText(input), "preview\nerrorred");
+  assert.equal(sanitizeWorkflowDisplayText("abcdef", 3), "abc");
+  assert.equal(
+    sanitizeWorkflowDisplayLine("error\n\n\nnext\u001b]52;c;hidden\u0007"),
+    "error next",
+  );
+  assert.equal(sanitizeWorkflowDisplayLine("a\n".repeat(20_000)).length, 2_000);
+});
 
 test("a log line is flattened into one safe terminal row", () => {
   // Scripts are model-authored, so an escape sequence here would repaint the

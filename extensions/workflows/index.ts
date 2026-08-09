@@ -69,7 +69,11 @@ import {
   type ReplayCache,
 } from "./journal.ts";
 import { RunController } from "./controller.ts";
-import { sessionWorkflowRunIds, showWorkflowDashboard } from "./dashboard.ts";
+import {
+  normalizePersistedWorkflowDetails,
+  sessionWorkflowRunIds,
+  showWorkflowDashboard,
+} from "./dashboard.ts";
 import {
   extractMeta,
   prepareWorkflowScript,
@@ -83,9 +87,13 @@ import {
   emptyUsage,
   formatElapsed,
   formatUsage,
+  isWorkflowRunId,
+  isWorkflowRunTarget,
   phaseGroups,
   resultJson,
   sanitizeLine,
+  sanitizeWorkflowDisplayLine,
+  sanitizeWorkflowDisplayText,
   stateSquare,
   statusColor,
   statusWord,
@@ -208,18 +216,21 @@ export function findRunDir(target: string) {
   // runs directory and replay a planted journal.json as genuine agent output —
   // reported as `ok (replayed)` with no agent having run and no artifact to
   // audit. Run ids are `wf_` plus hex; a suffix match is a hex tail.
-  if (!/^(wf_)?[0-9a-f]+$/i.test(trimmed)) return undefined;
+  const fullId = isWorkflowRunId(trimmed);
+  if (!isWorkflowRunTarget(trimmed)) return undefined;
   const base = path.join(getAgentDir(), "workflows");
-  const exact = path.join(base, trimmed);
-  try {
-    if (fs.statSync(exact).isDirectory()) return exact;
-  } catch {
-    // Fall through to a suffix scan.
+  if (fullId) {
+    const exact = path.join(base, trimmed);
+    try {
+      if (fs.statSync(exact).isDirectory()) return exact;
+    } catch {
+      // Fall through to a suffix scan.
+    }
   }
   try {
     const match = fs
       .readdirSync(base)
-      .filter((name) => name.startsWith("wf_"))
+      .filter(isWorkflowRunId)
       .find((name) => name.endsWith(trimmed));
     return match ? path.join(base, match) : undefined;
   } catch {
@@ -228,9 +239,8 @@ export function findRunDir(target: string) {
 }
 
 function errorText(error: unknown): string {
-  return (error instanceof Error ? error.message : String(error)).slice(
-    0,
-    16 * 1024,
+  return sanitizeWorkflowDisplayLine(
+    error instanceof Error ? error.message : String(error),
   );
 }
 
@@ -319,7 +329,7 @@ function listRuns(
   const base = path.join(getAgentDir(), "workflows");
   let names: string[] = [];
   try {
-    names = fs.readdirSync(base).filter((name) => name.startsWith("wf_"));
+    names = fs.readdirSync(base).filter(isWorkflowRunId);
   } catch {
     // No runs yet.
   }
@@ -806,7 +816,7 @@ export default function workflows(pi: ExtensionAPI) {
         }
         details.status = status;
         details.finishedAt = Date.now();
-        if (error) details.error = error;
+        if (error) details.error = sanitizeWorkflowDisplayLine(error);
         return true;
       };
 
@@ -853,10 +863,9 @@ export default function workflows(pi: ExtensionAPI) {
           optsValue && typeof optsValue === "object"
             ? (optsValue as AgentCallOptions)
             : {};
-        const label =
-          typeof opts.label === "string" && opts.label.trim()
-            ? opts.label.trim().slice(0, 160)
-            : `agent-${index}`;
+        const requestedLabel =
+          typeof opts.label === "string" ? sanitizeLine(opts.label, 160) : "";
+        const label = requestedLabel || `agent-${index}`;
 
         if (runSettled || controller.signal.aborted) {
           return {
@@ -870,7 +879,7 @@ export default function workflows(pi: ExtensionAPI) {
           label,
           phase:
             typeof opts.phase === "string"
-              ? opts.phase.slice(0, 160)
+              ? sanitizeLine(opts.phase, 160) || undefined
               : details.currentPhase,
           state: "running",
           model: ctx.model?.id,
@@ -887,7 +896,7 @@ export default function workflows(pi: ExtensionAPI) {
         const fail = (error: string): ScriptAgentResult => {
           if (record.state === "running" && !runSettled) {
             record.state = "error";
-            record.error = error;
+            record.error = sanitizeWorkflowDisplayLine(error);
             record.finishedAt = Date.now();
             emit();
           }
@@ -1063,7 +1072,10 @@ export default function workflows(pi: ExtensionAPI) {
           record.state = "done";
           record.replayed = true;
           record.finishedAt = Date.now();
-          record.preview = cached.output.slice(0, PREVIEW_LENGTH);
+          record.preview = sanitizeWorkflowDisplayText(
+            cached.output,
+            PREVIEW_LENGTH,
+          );
           if (acceptanceContract) {
             record.acceptance = evaluateAcceptance(
               acceptanceContract,
@@ -1172,7 +1184,10 @@ export default function workflows(pi: ExtensionAPI) {
                 signal: runSignal,
                 onProgress: (progress) => {
                   if (runSettled || record.state !== "running") return;
-                  record.preview = progress.preview.slice(0, PREVIEW_LENGTH);
+                  record.preview = sanitizeWorkflowDisplayText(
+                    progress.preview,
+                    PREVIEW_LENGTH,
+                  );
                   record.usage = progress.usage;
                   record.model = progress.model ?? record.model;
                   record.contextWindow =
@@ -1194,8 +1209,8 @@ export default function workflows(pi: ExtensionAPI) {
               record.contextWindow =
                 outcome.contextWindow ?? record.contextWindow;
               record.transcript = outcome.transcript;
-              record.preview = (outcome.output || record.preview).slice(
-                0,
+              record.preview = sanitizeWorkflowDisplayText(
+                outcome.output || record.preview,
                 PREVIEW_LENGTH,
               );
               record.finishedAt = Date.now();
@@ -1210,7 +1225,10 @@ export default function workflows(pi: ExtensionAPI) {
               const outcomeOk = judged.ok;
               record.state = outcomeOk ? "done" : "error";
               if (outcomeOk) delete record.error;
-              else record.error = judged.error;
+              else
+                record.error = judged.error
+                  ? sanitizeWorkflowDisplayLine(judged.error)
+                  : undefined;
               emit();
 
               // Only provably read-only successes with a complete, stable
@@ -1492,7 +1510,10 @@ export default function workflows(pi: ExtensionAPI) {
       const elapsed = formatElapsed(details.startedAt, details.finishedAt);
       let header =
         `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        `${theme.fg("accent", details.name ?? details.runId)} ` +
+        `${theme.fg(
+          "accent",
+          sanitizeWorkflowDisplayLine(details.name ?? details.runId),
+        )} ` +
         theme.fg(
           "dim",
           `${settled}/${details.agents.length} agents · ${elapsed} · `,
@@ -1501,7 +1522,10 @@ export default function workflows(pi: ExtensionAPI) {
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
       if (details.background) header += theme.fg("dim", " (background)");
       if (details.status === "running" && details.currentPhase) {
-        header += theme.fg("muted", ` · ${details.currentPhase}`);
+        header += theme.fg(
+          "muted",
+          ` · ${sanitizeWorkflowDisplayLine(details.currentPhase)}`,
+        );
       }
       const totals = formatUsage(aggregateUsage(details.agents));
 
@@ -1509,8 +1533,16 @@ export default function workflows(pi: ExtensionAPI) {
         let text = header;
         for (const agent of details.agents) {
           const context = agentContext(agent);
-          text += `\n  ${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)}${
-            agent.phase ? theme.fg("dim", ` (${agent.phase})`) : ""
+          text += `\n  ${stateSquare(agent.state, theme)} ${theme.fg(
+            "accent",
+            sanitizeWorkflowDisplayLine(agent.label),
+          )}${
+            agent.phase
+              ? theme.fg(
+                  "dim",
+                  ` (${sanitizeWorkflowDisplayLine(agent.phase)})`,
+                )
+              : ""
           }${theme.fg(
             "dim",
             `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
@@ -1519,11 +1551,17 @@ export default function workflows(pi: ExtensionAPI) {
         // Only the tail collapsed: the newest lines are the ones that say
         // where the run is now.
         for (const entry of (details.logs ?? []).slice(-3)) {
-          text += `\n  ${theme.fg("muted", "›")} ${theme.fg("dim", entry.text)}`;
+          text += `\n  ${theme.fg("muted", "›")} ${theme.fg(
+            "dim",
+            sanitizeWorkflowDisplayLine(entry.text),
+          )}`;
         }
         if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
         if (details.error)
-          text += `\n  ${theme.fg("error", `Error: ${details.error}`)}`;
+          text += `\n  ${theme.fg(
+            "error",
+            `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
+          )}`;
         text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
         return new Text(text, 0, 0);
       }
@@ -1532,32 +1570,57 @@ export default function workflows(pi: ExtensionAPI) {
       container.addChild(new Text(header, 0, 0));
       if (details.description) {
         container.addChild(
-          new Text(theme.fg("dim", details.description), 0, 0),
+          new Text(
+            theme.fg("dim", sanitizeWorkflowDisplayLine(details.description)),
+            0,
+            0,
+          ),
         );
       }
 
       for (const group of phaseGroups(details)) {
         container.addChild(new Spacer(1));
         container.addChild(
-          new Text(theme.fg("muted", `─── ${group.title} ───`), 0, 0),
+          new Text(
+            theme.fg(
+              "muted",
+              `─── ${sanitizeWorkflowDisplayLine(group.title)} ───`,
+            ),
+            0,
+            0,
+          ),
         );
         for (const agent of group.agents) {
           const usage = formatUsage(agent.usage, agent.model);
           const context = agentContext(agent);
-          let line = `${stateSquare(agent.state, theme)} ${theme.fg("accent", agent.label)} ${theme.fg(
+          let line = `${stateSquare(agent.state, theme)} ${theme.fg(
+            "accent",
+            sanitizeWorkflowDisplayLine(agent.label),
+          )} ${theme.fg(
             "dim",
             [context, formatElapsed(agent.startedAt, agent.finishedAt)]
               .filter(Boolean)
               .join(" · "),
           )}`;
-          if (usage) line += ` ${theme.fg("dim", usage)}`;
+          if (usage)
+            line += ` ${theme.fg("dim", sanitizeWorkflowDisplayLine(usage))}`;
           container.addChild(new Text(line, 0, 0));
           if (agent.error) {
             container.addChild(
-              new Text(`  ${theme.fg("error", agent.error)}`, 0, 0),
+              new Text(
+                `  ${theme.fg("error", sanitizeWorkflowDisplayLine(agent.error))}`,
+                0,
+                0,
+              ),
             );
           } else if (agent.preview) {
-            const preview = agent.preview.split("\n").slice(0, 2).join(" ");
+            const preview = sanitizeWorkflowDisplayText(
+              agent.preview,
+              PREVIEW_LENGTH,
+            )
+              .split("\n")
+              .slice(0, 2)
+              .join(" ");
             container.addChild(new Text(`  ${theme.fg("dim", preview)}`, 0, 0));
           }
         }
@@ -1581,7 +1644,10 @@ export default function workflows(pi: ExtensionAPI) {
         for (const entry of details.logs) {
           container.addChild(
             new Text(
-              `${theme.fg("muted", "›")} ${theme.fg("dim", entry.text)}`,
+              `${theme.fg("muted", "›")} ${theme.fg(
+                "dim",
+                sanitizeWorkflowDisplayLine(entry.text),
+              )}`,
               0,
               0,
             ),
@@ -1592,7 +1658,14 @@ export default function workflows(pi: ExtensionAPI) {
       if (details.error) {
         container.addChild(new Spacer(1));
         container.addChild(
-          new Text(theme.fg("error", `Error: ${details.error}`), 0, 0),
+          new Text(
+            theme.fg(
+              "error",
+              `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
+            ),
+            0,
+            0,
+          ),
         );
       }
 
@@ -1619,6 +1692,7 @@ export default function workflows(pi: ExtensionAPI) {
 
   /** Resolve a run id (exact or suffix) to its details from live, settled, or disk. */
   const resolveRunDetails = (target: string): WorkflowDetails | undefined => {
+    if (!isWorkflowRunTarget(target)) return undefined;
     for (const [runId, run] of activeRuns) {
       if (runId === target || runId.endsWith(target)) return run.details;
     }
@@ -1629,24 +1703,26 @@ export default function workflows(pi: ExtensionAPI) {
     const base = path.join(getAgentDir(), "workflows");
     let names: string[] = [];
     try {
-      names = fs.readdirSync(base).filter((name) => name.startsWith("wf_"));
+      names = fs.readdirSync(base).filter(isWorkflowRunId);
     } catch {
       return undefined;
     }
     const match = names.find((n) => n === target || n.endsWith(target));
     if (!match) return undefined;
     try {
-      const parsed = JSON.parse(
+      const parsed: unknown = JSON.parse(
         fs.readFileSync(path.join(base, match, "workflow.json"), "utf8"),
-      ) as WorkflowDetails;
+      );
+      const details = normalizePersistedWorkflowDetails(match, parsed);
+      if (!details) return undefined;
       // A run absent from activeRuns cannot still be running this session; a
       // persisted "running" is a run that was hard-killed or missed the
       // shutdown settle deadline. Normalize it to "aborted" so this detail path
       // agrees with listRuns and with workflow_stop (which reports it stopped).
-      if (parsed.status === "running") {
-        return { ...parsed, status: "aborted" };
+      if (details.status === "running") {
+        return { ...details, status: "aborted" };
       }
-      return parsed;
+      return details;
     } catch {
       return undefined;
     }
@@ -1663,6 +1739,9 @@ export default function workflows(pi: ExtensionAPI) {
       }),
     }),
     execute(_toolCallId, params) {
+      if (!isWorkflowRunTarget(params.runId)) {
+        throw new Error("Workflow run id must be a generated id or hex suffix");
+      }
       const entry = [...activeRuns.entries()].find(
         ([runId, run]) =>
           (runId === params.runId || runId.endsWith(params.runId)) &&
@@ -1709,6 +1788,11 @@ export default function workflows(pi: ExtensionAPI) {
         };
       };
       if (params.runId) {
+        if (!isWorkflowRunTarget(params.runId)) {
+          throw new Error(
+            "Workflow run id must be a generated id or hex suffix",
+          );
+        }
         const details = resolveRunDetails(params.runId);
         if (!details) {
           const running = [...activeRuns.keys()];
@@ -1757,17 +1841,21 @@ export default function workflows(pi: ExtensionAPI) {
           : (message.content
               ?.map((part) => (part.type === "text" ? part.text : ""))
               .join("") ?? "");
-      if (!details) return new Text(body, 0, 0);
+      const safeBody = sanitizeWorkflowDisplayText(body);
+      if (!details) return new Text(safeBody, 0, 0);
       const { done, failed } = countStates(details);
       const settled = done + failed;
       let header =
         `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        `${theme.fg("accent", details.name ?? details.runId)} ` +
+        `${theme.fg(
+          "accent",
+          sanitizeWorkflowDisplayLine(details.name ?? details.runId),
+        )} ` +
         theme.fg("dim", `${settled}/${details.agents.length} agents · `) +
         theme.fg(statusColor(details.status), statusWord(details.status));
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
-      if (expanded) return new Text(`${header}\n\n${body}`, 0, 0);
-      const preview = body.split("\n").slice(0, 8).join("\n");
+      if (expanded) return new Text(`${header}\n\n${safeBody}`, 0, 0);
+      const preview = safeBody.split("\n").slice(0, 8).join("\n");
       return new Text(
         `${header}\n${preview}\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`,
         0,
