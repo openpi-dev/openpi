@@ -106,6 +106,24 @@ test("result message names where isolated work ended up", () => {
   assert.doesNotMatch(msg, /\[plain\].*worktree/);
 });
 
+test("result message surfaces explicit acceptance state", () => {
+  const msg = buildWorkflowResultMessage(
+    details([
+      agentRecord({
+        state: "error",
+        error: "Acceptance rejected",
+        acceptance: {
+          status: "rejected",
+          criteria: [{ id: "tests", status: "rejected", evidence: [] }],
+          errors: [],
+        },
+      }),
+    ]),
+    "/tmp/wf_abc123",
+  );
+  assert.match(msg, /acceptance rejected/);
+});
+
 test("result message stays quiet when nothing was isolated", () => {
   const msg = buildWorkflowResultMessage(
     details([agentRecord({})]),
@@ -141,6 +159,7 @@ test("result message carries the script's narration and what it dropped", () => 
 test("the tool description teaches log() and usage() as distinct from phase()", () => {
   // The description is the only place the model learns these exist.
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /• log\(message\)/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /acceptance\?/);
   assert.match(
     WORKFLOW_TOOL_DESCRIPTION,
     /Unlike phase\(\), it does not touch/,

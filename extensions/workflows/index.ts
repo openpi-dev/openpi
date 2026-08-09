@@ -127,6 +127,13 @@ import {
 } from "./replay-safety.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import {
+  acceptanceInstruction,
+  acceptanceSchema,
+  applyAcceptance,
+  evaluateAcceptance,
+  parseAcceptanceContract,
+} from "./acceptance.ts";
+import {
   finalizeWorktreeHandoff,
   prepareWorktreeHandoff,
 } from "./worktree-handoff.ts";
@@ -150,6 +157,7 @@ interface ScriptAgentResult {
   ok: boolean;
   output: string;
   structured?: unknown;
+  acceptance?: AgentRecord["acceptance"];
   error?: string;
 }
 
@@ -158,6 +166,7 @@ interface AgentCallOptions {
   label?: unknown;
   phase?: unknown;
   schema?: unknown;
+  acceptance?: unknown;
   model?: unknown;
   provider?: unknown;
   effort?: unknown;
@@ -883,13 +892,26 @@ export default function workflows(pi: ExtensionAPI) {
           return { ok: false, output: "", error };
         };
 
-        const prompt = buildWorkflowAgentPrompt(
+        const basePrompt =
           typeof promptValue === "string"
             ? promptValue
-            : String(promptValue ?? ""),
-        );
-        if (!prompt.trim())
+            : String(promptValue ?? "");
+        if (!basePrompt.trim())
           return fail("agent() requires a non-empty prompt string");
+        let acceptanceContract: ReturnType<typeof parseAcceptanceContract>;
+        try {
+          acceptanceContract = parseAcceptanceContract(opts.acceptance);
+        } catch (error) {
+          return fail(`agent "${label}": ${errorText(error)}`);
+        }
+        const effectiveSchema = acceptanceContract
+          ? acceptanceSchema(opts.schema, acceptanceContract)
+          : opts.schema;
+        const prompt = buildWorkflowAgentPrompt(
+          acceptanceContract
+            ? `${basePrompt}\n\n${acceptanceInstruction(acceptanceContract)}`
+            : basePrompt,
+        );
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
 
@@ -994,7 +1016,7 @@ export default function workflows(pi: ExtensionAPI) {
         if (replaySafe) {
           try {
             replayResources = await getResources(
-              opts.schema !== undefined,
+              effectiveSchema !== undefined,
               ctx.cwd,
               agentType?.body,
             );
@@ -1024,6 +1046,7 @@ export default function workflows(pi: ExtensionAPI) {
                 : undefined,
               model: model ? `${model.provider}/${model.id}` : undefined,
               effort: thinkingLevel,
+              acceptance: acceptanceContract,
               replayIdentity: identity,
             },
           });
@@ -1036,6 +1059,12 @@ export default function workflows(pi: ExtensionAPI) {
           record.replayed = true;
           record.finishedAt = Date.now();
           record.preview = cached.output.slice(0, PREVIEW_LENGTH);
+          if (acceptanceContract) {
+            record.acceptance = evaluateAcceptance(
+              acceptanceContract,
+              cached.structured,
+            );
+          }
           emit();
           // Re-journal so a chain of resumes keeps working: run C resuming from
           // B still finds what B replayed from A.
@@ -1046,6 +1075,7 @@ export default function workflows(pi: ExtensionAPI) {
             ...(cached.structured !== undefined
               ? { structured: cached.structured }
               : {}),
+            ...(record.acceptance ? { acceptance: record.acceptance } : {}),
           };
         }
 
@@ -1110,7 +1140,7 @@ export default function workflows(pi: ExtensionAPI) {
               const resources = await Promise.race([
                 replayResources ??
                   getResources(
-                    opts.schema !== undefined,
+                    effectiveSchema !== undefined,
                     agentCwd,
                     agentType?.body,
                   ),
@@ -1125,7 +1155,7 @@ export default function workflows(pi: ExtensionAPI) {
               }
               const outcome = await runAgent({
                 prompt,
-                schema: opts.schema,
+                schema: effectiveSchema,
                 model,
                 thinkingLevel,
                 cwd: agentCwd,
@@ -1163,12 +1193,18 @@ export default function workflows(pi: ExtensionAPI) {
                 PREVIEW_LENGTH,
               );
               record.finishedAt = Date.now();
-              record.state = outcome.ok ? "done" : "error";
-              if (outcome.ok) {
-                delete record.error;
-              } else {
-                record.error = outcome.error ?? "Agent failed";
-              }
+              const judged = applyAcceptance({
+                contract: acceptanceContract,
+                structured: outcome.structured,
+                agentOk: outcome.ok,
+                ...(outcome.error ? { agentError: outcome.error } : {}),
+              });
+              const acceptance = judged.ledger;
+              if (acceptance) record.acceptance = acceptance;
+              const outcomeOk = judged.ok;
+              record.state = outcomeOk ? "done" : "error";
+              if (outcomeOk) delete record.error;
+              else record.error = judged.error;
               emit();
 
               // Only provably read-only successes with a complete, stable
@@ -1189,7 +1225,7 @@ export default function workflows(pi: ExtensionAPI) {
                 : undefined;
               if (
                 !runSettled &&
-                outcome.ok &&
+                outcomeOk &&
                 completedKey !== undefined &&
                 completedKey === callKey
               ) {
@@ -1203,14 +1239,13 @@ export default function workflows(pi: ExtensionAPI) {
               }
 
               return {
-                ok: outcome.ok,
+                ok: outcomeOk,
                 output: outcome.output,
                 ...(outcome.structured !== undefined
                   ? { structured: outcome.structured }
                   : {}),
-                ...(outcome.error !== undefined
-                  ? { error: outcome.error }
-                  : {}),
+                ...(acceptance ? { acceptance } : {}),
+                ...(record.error !== undefined ? { error: record.error } : {}),
               };
             } finally {
               // Reclaim as this agent settles, not at run end: a pipeline can

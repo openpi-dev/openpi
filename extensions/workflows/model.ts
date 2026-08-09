@@ -10,6 +10,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import type { WorktreeCleanup } from "../shared/worktree.ts";
+import type { AcceptanceLedger } from "./acceptance.ts";
 import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
@@ -76,6 +77,8 @@ export interface AgentRecord {
   usage: AgentUsage;
   /** Replayed from a prior run's journal instead of actually executed. */
   replayed?: boolean;
+  /** Explicit caller-supplied acceptance result; never inferred from role/task. */
+  acceptance?: AcceptanceLedger;
   /** Branch of the isolated worktree this agent ran in, when it holds commits. */
   worktreeBranch?: string;
   /** Isolated worktree kept on disk because automatic cleanup was unsafe. */

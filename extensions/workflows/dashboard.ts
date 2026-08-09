@@ -26,6 +26,7 @@ import {
   wrapTextWithAnsi,
   type TUI,
 } from "@earendil-works/pi-tui";
+import { isAcceptanceLedger } from "./acceptance.ts";
 import {
   agentContext,
   countStates,
@@ -160,6 +161,7 @@ function normalizeDetails(
         ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
       },
       ...(a.replayed === true ? { replayed: true } : {}),
+      ...(isAcceptanceLedger(a.acceptance) ? { acceptance: a.acceptance } : {}),
       ...(typeof a.worktreeBranch === "string"
         ? { worktreeBranch: a.worktreeBranch }
         : {}),

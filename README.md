@@ -250,7 +250,7 @@ return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(c
 - `agent()` 启动隔离的 Pi Agent；`agent_type` 复用与 `subagent_spawn` 相同的角色提示词、强制工具边界、模型配置和默认 effort，显式 model/provider 与 effort 仍优先；
 - `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
 - `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
-- JSON Schema 提供结构化结果；
+- JSON Schema 提供结构化结果；可选 `acceptance: { criteria: [...] }` 让同一个 Agent 提交显式 evidence ledger，不会暗中追加 reviewer 或执行 shell；缺失、格式错误或被拒绝的条件会令该 Agent `ok: false`，同时保留输出和 ledger；
 - 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；

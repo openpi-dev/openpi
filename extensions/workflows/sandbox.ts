@@ -25,6 +25,7 @@ export interface SandboxAgentOptions {
   label?: unknown;
   phase?: unknown;
   schema?: unknown;
+  acceptance?: unknown;
   model?: unknown;
   provider?: unknown;
   effort?: unknown;
@@ -96,6 +97,7 @@ function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
     ...(value.label !== undefined ? { label: value.label } : {}),
     ...(value.phase !== undefined ? { phase: value.phase } : {}),
     ...(value.schema !== undefined ? { schema: value.schema } : {}),
+    ...(value.acceptance !== undefined ? { acceptance: value.acceptance } : {}),
     ...(value.model !== undefined ? { model: value.model } : {}),
     ...(value.provider !== undefined ? { provider: value.provider } : {}),
     ...(value.effort !== undefined ? { effort: value.effort } : {}),

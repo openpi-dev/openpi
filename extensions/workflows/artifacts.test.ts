@@ -68,6 +68,11 @@ test("live artifact persistence includes current agents and transcripts", () => 
       startedAt: 2,
       preview: "working",
       usage: emptyUsage(),
+      acceptance: {
+        status: "accepted",
+        criteria: [{ id: "tests", status: "accepted", evidence: ["npm test"] }],
+        errors: [],
+      },
       transcript: [
         { role: "user", text: "current prompt" },
         {
@@ -92,6 +97,7 @@ test("live artifact persistence includes current agents and transcripts", () => 
     ) as Record<string, TranscriptEntry[]>;
     assert.equal(workflow.agents.length, 1);
     assert.equal(workflow.agents[0]?.label, "running-fixture");
+    assert.equal(workflow.agents[0]?.acceptance?.status, "accepted");
     assert.equal(transcripts["1"]?.[0]?.text, "current prompt");
     assert.deepEqual(
       {
