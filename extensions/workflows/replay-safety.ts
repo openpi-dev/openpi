@@ -46,12 +46,16 @@ function digest(value: string | Buffer) {
 }
 
 function git(cwd: string, args: readonly string[]) {
-  return execFileSync("git", args, {
+  const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
     encoding: "utf8",
     maxBuffer: GIT_OUTPUT_LIMIT,
     stdio: ["ignore", "pipe", "ignore"],
   });
+  if (output.includes("\uFFFD")) {
+    throw new Error("Git output contains a path that is not valid UTF-8");
+  }
+  return output;
 }
 
 function canonicalPath(value: string) {
@@ -61,7 +65,41 @@ function canonicalPath(value: string) {
 function repositoryFingerprint(cwd: string) {
   const root = canonicalPath(git(cwd, ["rev-parse", "--show-toplevel"]).trim());
   const head = git(root, ["rev-parse", "--verify", "HEAD"]).trim();
-  const diff = git(root, ["diff", "--no-ext-diff", "--binary", "HEAD", "--"]);
+  const diff = git(root, [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--binary",
+    "HEAD",
+    "--",
+  ]);
+  const trackedModes = git(root, ["ls-files", "-s", "-z"]);
+  // Tracked symlinks can expose changing content outside Git, while gitlinks
+  // can expose submodule state absent from the parent diff. Neither has a
+  // complete bounded identity here, so execute instead of replaying.
+  if (
+    trackedModes
+      .split("\0")
+      .some(
+        (entry) => entry.startsWith("120000 ") || entry.startsWith("160000 "),
+      )
+  ) {
+    throw new Error("symlinks and gitlinks make replay identity incomplete");
+  }
+  // Ignored files are observable to a read-capable child but are commonly too
+  // large or secret-bearing to hash (node_modules, .env, build output). A
+  // complete identity cannot pretend they do not exist, so disable replay.
+  const ignoredOutput = git(root, [
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "--directory",
+    "-z",
+  ]);
+  if (ignoredOutput.length > 0) {
+    throw new Error("ignored files make the replay identity incomplete");
+  }
   const untrackedOutput = git(root, [
     "ls-files",
     "--others",
@@ -80,7 +118,9 @@ function repositoryFingerprint(cwd: string) {
       const filePath = path.join(root, relativePath);
       const stat = fs.lstatSync(filePath);
       if (stat.isSymbolicLink()) {
-        return [relativePath, "symlink", fs.readlinkSync(filePath)] as const;
+        throw new Error(
+          `untracked symlink makes replay identity incomplete: ${relativePath}`,
+        );
       }
       if (!stat.isFile()) {
         throw new Error(`unsupported untracked resource: ${relativePath}`);

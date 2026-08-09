@@ -118,7 +118,14 @@ test("canonical cwd and repository state participate in replay identity", () => 
     assert.notEqual(replayKey(nested, resourcePath), original);
 
     writeFileSync(path.join(cwd, "tracked.txt"), "two\n");
-    assert.notEqual(replayKey(cwd, resourcePath), original);
+    const dirtyTwo = replayKey(cwd, resourcePath);
+    assert.notEqual(dirtyTwo, original);
+    writeFileSync(path.join(cwd, "tracked.txt"), "three\n");
+    assert.notEqual(
+      replayKey(cwd, resourcePath),
+      dirtyTwo,
+      "tracked content must distinguish identical porcelain status entries",
+    );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
   }
@@ -139,6 +146,45 @@ test("loaded resource content and trust participate in replay identity", () => {
     );
   } finally {
     rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("ignored observable files disable replay rather than returning stale output", () => {
+  const cwd = repository();
+  try {
+    const resourcePath = path.join(cwd, "resource.md");
+    writeFileSync(resourcePath, "resource\n");
+    writeFileSync(path.join(cwd, ".gitignore"), "secret.txt\n");
+    git(cwd, "add", ".gitignore");
+    git(cwd, "commit", "-qm", "ignore secret");
+    writeFileSync(path.join(cwd, "secret.txt"), "one\n");
+    assert.equal(
+      createReplayIdentity(cwd, loader(resourcePath), true),
+      undefined,
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("tracked and untracked symlinks disable replay", () => {
+  for (const tracked of [true, false]) {
+    const cwd = repository();
+    try {
+      const resourcePath = path.join(cwd, "resource.md");
+      writeFileSync(resourcePath, "resource\n");
+      symlinkSync("tracked.txt", path.join(cwd, "observable-link"));
+      if (tracked) {
+        git(cwd, "add", "observable-link");
+        git(cwd, "commit", "-qm", "track symlink");
+      }
+      assert.equal(
+        createReplayIdentity(cwd, loader(resourcePath), true),
+        undefined,
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   }
 });
 
