@@ -33,6 +33,10 @@ import {
 import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
 import { emptyUsage, type AgentUsage, type TranscriptEntry } from "./model.ts";
 import {
+  createReplayFilesystemBoundary,
+  type ReplayFilesystemBoundaryOptions,
+} from "./replay-safety.ts";
+import {
   buildWorkflowAgentPrompt,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
@@ -98,6 +102,8 @@ export interface RunAgentOptions {
   tools?: readonly string[];
   signal?: AbortSignal;
   onProgress?: (progress: AgentProgress) => void;
+  /** Canonical repository boundary required before this call can be journaled. */
+  replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions;
   /** Test-only override for the per-tool execution timeout. */
   toolCallTimeoutMs?: number;
   /** Test-only override for the first assistant response-event timeout. */
@@ -136,7 +142,10 @@ export function workflowChildTools(
 }
 
 interface WorkflowToolSession {
-  getAllTools(): Array<{ name: string }>;
+  getAllTools(): Array<{
+    name: string;
+    sourceInfo?: { path: string; source: string; origin: string };
+  }>;
   getToolDefinition(name: string): ToolDefinition | undefined;
   subscribe(listener: AgentSessionEventListener): () => void;
 }
@@ -145,11 +154,22 @@ interface WorkflowToolSession {
 export function guardWorkflowChildTools(
   session: WorkflowToolSession,
   timeoutMs?: number,
+  replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions,
 ) {
-  const guard = createToolCallTimeoutGuard(timeoutMs);
-  guard.apply(session);
+  const boundary = replayFilesystemBoundary
+    ? createReplayFilesystemBoundary(replayFilesystemBoundary)
+    : undefined;
+  const timeout = createToolCallTimeoutGuard(timeoutMs);
+  const apply = () => {
+    // Keep the replay boundary outermost: if the timeout rejects before a
+    // cooperative tool finishes aborting, path revalidation still completes
+    // before the child can use or journal the timeout result.
+    timeout.apply(session);
+    boundary?.apply(session);
+  };
+  apply();
   return session.subscribe((event) => {
-    if (event.type === "agent_start") guard.apply(session);
+    if (event.type === "agent_start") apply();
   });
 }
 
@@ -491,7 +511,7 @@ export async function runAgent(
   let settled = false;
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
-  let unsubscribeToolTimeout: (() => void) | undefined;
+  let unsubscribeToolGuards: (() => void) | undefined;
   try {
     customTools =
       options.schema !== undefined
@@ -518,13 +538,14 @@ export async function runAgent(
       ...childToolPolicy(childTools),
     }));
     await bindChildSessionExtensions(session, childTools);
-    unsubscribeToolTimeout = guardWorkflowChildTools(
+    unsubscribeToolGuards = guardWorkflowChildTools(
       session,
       options.toolCallTimeoutMs,
+      options.replayFilesystemBoundary,
     );
   } catch (error) {
     settled = true;
-    unsubscribeToolTimeout?.();
+    unsubscribeToolGuards?.();
     const cleanup = session
       ? await shutdownAndDisposeChildSession(session, {
           abort: true,
@@ -685,7 +706,7 @@ export async function runAgent(
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
     unsubscribe();
-    unsubscribeToolTimeout?.();
+    unsubscribeToolGuards?.();
     sync();
     output = truncateUtf8(
       finalOutput(childSession.messages),

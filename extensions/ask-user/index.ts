@@ -131,6 +131,15 @@ function safeSingleLine(text: string) {
   return sanitizeTerminalText(text).replace(/\s+/g, " ").trim();
 }
 
+const optionLabelIdentity = (label: string) =>
+  safeSingleLine(label)
+    // ZWNJ/ZWJ are preserved in displayed text for legitimate shaping, but
+    // cannot serve as option identity because many terminals render them
+    // invisibly. Normalize after removal because an inserted joiner can block
+    // composition of the characters on either side.
+    .replace(/\p{Cf}/gu, "")
+    .normalize("NFC");
+
 function wrapText(text: string, width: number): string[] {
   const safe = sanitizeTerminalText(text);
   const renderWidth = Math.max(1, width);
@@ -201,6 +210,14 @@ export default function askUser(pi: ExtensionAPI) {
         ) {
           throw new Error(
             `ask_user question "${question.id}" requires between ${MIN_OPTIONS} and ${MAX_OPTIONS} options.`,
+          );
+        }
+        const labels = question.options.map((option) =>
+          optionLabelIdentity(option.label),
+        );
+        if (new Set(labels).size !== labels.length) {
+          throw new Error(
+            `ask_user question "${question.id}" option labels must be unique.`,
           );
         }
       }

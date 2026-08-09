@@ -1,3 +1,5 @@
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+
 export interface SessionInfoLike {
   id: string;
   name?: string;
@@ -85,14 +87,18 @@ export function formatRelativeTime(date: Date): string {
   return `${diffDay}d ago`;
 }
 
+const cleanDisplayLine = (text: string) =>
+  sanitizeTerminalText(text).replace(/\s+/gu, " ").trim();
+
 export function buildSessionLabel(session: SessionInfoLike): string {
-  const trimmedName = session.name?.trim();
+  const trimmedName = cleanDisplayLine(session.name ?? "");
   if (trimmedName) return trimmedName;
-  return session.id.length > 8 ? session.id.slice(0, 8) : session.id;
+  const id = cleanDisplayLine(session.id);
+  return id.length > 8 ? id.slice(0, 8) : id;
 }
 
 const normalizeSnippet = (text: string, maxLength: number): string => {
-  const cleaned = text.replace(/\s+/g, " ").trim();
+  const cleaned = cleanDisplayLine(text);
   const fallback = cleaned.length > 0 ? cleaned : "No messages";
   if (maxLength < 1) return "";
   if (fallback.length <= maxLength) return fallback;
@@ -105,7 +111,7 @@ export function buildSessionDescription(
   snippetMax = 60,
 ): string {
   const snippet = normalizeSnippet(session.firstMessage ?? "", snippetMax);
-  return `${formatTimestamp(session.modified)} • ${snippet} — ${session.cwd}`;
+  return `${formatTimestamp(session.modified)} • ${snippet} — ${cleanDisplayLine(session.cwd)}`;
 }
 
 export interface SessionSearchEntry {
@@ -181,32 +187,51 @@ export function getSessionPaneLayout(width: number): SessionPaneLayout {
   };
 }
 
-const cleanPreviewText = (text: string): string => text.replace(/\s+$/g, "");
+const cleanPreviewText = (text: string) =>
+  sanitizeTerminalText(text).replace(/\s+$/g, "");
+
+function sanitizePreviewValue(value: unknown): unknown {
+  if (typeof value === "string") return sanitizeTerminalText(value);
+  if (Array.isArray(value)) return value.map(sanitizePreviewValue);
+  if (typeof value !== "object" || value === null) return value;
+  return Object.fromEntries(
+    Object.entries(value).map(([key, nested]) => [
+      sanitizeTerminalText(key),
+      sanitizePreviewValue(nested),
+    ]),
+  );
+}
 
 function textBlocksFromContent(
   content: PreviewContent | undefined,
 ): PreviewBlock[] {
   if (!content) return [];
-  if (typeof content === "string")
-    return content.trim()
-      ? [{ kind: "assistant", text: cleanPreviewText(content) }]
-      : [];
+  if (typeof content === "string") {
+    const text = cleanPreviewText(content);
+    return text.trim() ? [{ kind: "assistant", text }] : [];
+  }
 
   const blocks: PreviewBlock[] = [];
   for (const part of content) {
-    if (part.type === "text" && part.text.trim()) {
-      blocks.push({ kind: "assistant", text: cleanPreviewText(part.text) });
+    if (part.type === "text") {
+      const text = cleanPreviewText(part.text);
+      if (text.trim()) blocks.push({ kind: "assistant", text });
     } else if (part.type === "image") {
+      const mimeType = cleanDisplayLine(part.mimeType ?? "");
       blocks.push({
         kind: "notice",
-        text: `[image${part.mimeType ? `: ${part.mimeType}` : ""}]`,
+        text: `[image${mimeType ? `: ${mimeType}` : ""}]`,
       });
     } else if (part.type === "toolCall") {
       const args =
         part.arguments && Object.keys(part.arguments).length > 0
-          ? JSON.stringify(part.arguments)
+          ? JSON.stringify(sanitizePreviewValue(part.arguments))
           : undefined;
-      blocks.push({ kind: "toolCall", name: part.name, args });
+      blocks.push({
+        kind: "toolCall",
+        name: cleanDisplayLine(part.name),
+        args,
+      });
     } else if (part.type === "thinking") {
       blocks.push({
         kind: "thinking",
@@ -255,7 +280,9 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
       ? [
           {
             kind: "toolResult",
-            name: message.toolName,
+            name: message.toolName
+              ? cleanDisplayLine(message.toolName)
+              : undefined,
             text,
             isError: message.isError,
           },
@@ -269,7 +296,7 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
       ? [
           {
             kind: "bash",
-            command,
+            command: cleanPreviewText(command),
             output: cleanPreviewText(message.output ?? ""),
             isError: message.isError,
           },
@@ -300,7 +327,13 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
     message.summary ?? contentToPlainText(message.content),
   );
   return text
-    ? [{ kind: "custom", label: message.role || "Message", text }]
+    ? [
+        {
+          kind: "custom",
+          label: cleanDisplayLine(message.role) || "Message",
+          text,
+        },
+      ]
     : [];
 }
 
@@ -328,7 +361,7 @@ export function buildSessionPreview(
   const messageCount = session.messageCount ?? messages.length;
   return {
     title: buildSessionLabel(session),
-    subtitle: `${formatTimestamp(session.modified)} · ${messageCount} messages · ${session.cwd}`,
+    subtitle: `${formatTimestamp(session.modified)} · ${messageCount} messages · ${cleanDisplayLine(session.cwd)}`,
     blocks:
       blocks.length > 0
         ? blocks
@@ -340,7 +373,9 @@ export function buildPreviewError(
   session: SessionInfoLike,
   error: unknown,
 ): SessionPreview {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = cleanPreviewText(
+    error instanceof Error ? error.message : String(error),
+  );
   return {
     title: buildSessionLabel(session),
     subtitle: `${formatTimestamp(session.modified)} · preview unavailable`,

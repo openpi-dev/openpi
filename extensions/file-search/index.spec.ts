@@ -1,8 +1,10 @@
 import { NodeServices } from "@effect/platform-node";
 import { assert, it } from "@effect/vitest";
-import { homedir } from "node:os";
+import { randomUUID } from "node:crypto";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join } from "node:path";
-import { Effect, FileSystem } from "effect";
+import { Writable } from "node:stream";
+import { Effect, Fiber, FileSystem } from "effect";
 import { HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 import {
   buildFdArgs,
@@ -22,9 +24,17 @@ import {
   type ReleaseAsset,
   type ResolvedBinary,
 } from "./src/binaries.ts";
-import { formatCapturedOutput, formatOutput } from "./src/output.ts";
+import {
+  COMPLETE_OUTPUT_MAX_BYTES,
+  formatCapturedOutput,
+  formatOutput,
+} from "./src/output.ts";
 import { executeSearchProcess } from "./src/process.ts";
-import { installNotifications, makeBinaryInitializers } from "./index.ts";
+import {
+  expandedPreview,
+  installNotifications,
+  makeBinaryInitializers,
+} from "./index.ts";
 
 // --- argument construction -------------------------------------------------
 
@@ -387,6 +397,26 @@ it("notifications: only fresh installs notify", () => {
 
 // --- output truncation -------------------------------------------------------
 
+it("result previews sanitize search output before applying theme styles", () => {
+  const rendered = expandedPreview(
+    {
+      content: [
+        {
+          type: "text",
+          text: "safe\u001b]52;c;payload\u0007 result\u202e spoof\u202c\nnext\u001b[31m red\u001b[0m",
+        },
+      ],
+    },
+    "/tmp/\u001bPsecret\u001b\\output\u2066x\u2069.txt",
+    { fg: (_color, text) => `<styled>${text}</styled>` },
+  );
+
+  assert.notMatch(rendered, /[\u001b\u202e\u202c\u2066\u2069]/u);
+  assert.match(rendered, /<styled>safe result spoof<\/styled>/);
+  assert.match(rendered, /<styled>next red<\/styled>/);
+  assert.match(rendered, /Full output: \/tmp\/outputx\.txt/);
+});
+
 it.effect("process output is streamed to a complete spill file", () =>
   Effect.gen(function* () {
     const result = yield* executeSearchProcess({
@@ -412,6 +442,159 @@ it.effect("process output is streamed to a complete spill file", () =>
     });
   }).pipe(Effect.provide(NodeServices.layer)),
 );
+
+it.effect(
+  "oversized stdout chunks stop at the capture cap and remove the partial artifact",
+  () =>
+    Effect.gen(function* () {
+      const prefix = `pi-search-cap-${randomUUID()}-`;
+      const result = yield* executeSearchProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          'process.stdout.write("x".repeat(4096)); setInterval(() => {}, 1000)',
+        ],
+        cwd: process.cwd(),
+        tempPrefix: prefix,
+        maxCaptureBytes: 1024,
+      });
+      const formatted = formatCapturedOutput(result.output);
+
+      assert.isTrue(result.output.captureLimitExceeded);
+      assert.equal(result.output.captureLimitBytes, 1024);
+      assert.equal(result.output.totalBytes, 1024);
+      assert.equal(result.output.preview, "x".repeat(1024));
+      assert.isUndefined(result.output.fullOutputPath);
+      assert.isTrue(formatted.truncated);
+      assert.match(
+        formatted.text,
+        /exceeded the 1\.0KB complete-output capture limit/,
+      );
+      assert.match(formatted.text, /partial temporary artifact was removed/);
+
+      const fs = yield* FileSystem.FileSystem;
+      const leftovers = (yield* fs.readDirectory(tmpdir())).filter((entry) =>
+        entry.startsWith(prefix),
+      );
+      assert.deepEqual(leftovers, []);
+    }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live(
+  "output failure keeps SIGKILL escalation armed until a resistant child closes",
+  () => {
+    if (process.platform === "win32") return Effect.void;
+    const id = randomUUID();
+    const marker = join(tmpdir(), `pi-search-resistant-${id}.pid`);
+    const prefix = `pi-search-resistant-${id}-`;
+    let childPid: number | undefined;
+
+    return Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const exit = yield* Effect.exit(
+        executeSearchProcess({
+          command: process.execPath,
+          args: [
+            "-e",
+            `const fs = require("node:fs"); process.on("SIGTERM", () => {}); fs.writeFileSync(${JSON.stringify(marker)}, String(process.pid)); process.stdout.write("trigger"); setInterval(() => {}, 1000)`,
+          ],
+          cwd: process.cwd(),
+          tempPrefix: prefix,
+          createOutput: () =>
+            new Writable({
+              write(_chunk, _encoding, callback) {
+                callback(new Error("forced output failure"));
+              },
+            }),
+        }),
+      );
+      assert.equal(exit._tag, "Failure");
+      const pid = Number.parseInt(yield* fs.readFileString(marker), 10);
+      childPid = pid;
+      assert.isTrue(Number.isSafeInteger(pid));
+
+      yield* Effect.sleep(1_250);
+      assert.throws(() => process.kill(pid, 0));
+      childPid = undefined;
+
+      const leftovers = (yield* fs.readDirectory(tmpdir())).filter((entry) =>
+        entry.startsWith(prefix),
+      );
+      assert.deepEqual(leftovers, []);
+    }).pipe(
+      Effect.ensuring(
+        Effect.gen(function* () {
+          const pendingPid = childPid;
+          if (pendingPid !== undefined) {
+            yield* Effect.sync(() => {
+              try {
+                process.kill(-pendingPid, "SIGKILL");
+              } catch {
+                // The failing assertion leaves cleanup to this finalizer.
+              }
+            });
+          }
+          const fs = yield* FileSystem.FileSystem;
+          yield* fs.remove(marker, { force: true }).pipe(Effect.orDie);
+        }),
+      ),
+      Effect.provide(NodeServices.layer),
+    );
+  },
+);
+
+it.live("timeout interruption removes an in-progress capture artifact", () =>
+  Effect.gen(function* () {
+    const prefix = `pi-search-timeout-${randomUUID()}-`;
+    const exit = yield* Effect.exit(
+      executeSearchProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          'process.stdout.write("started"); setInterval(() => {}, 1000)',
+        ],
+        cwd: process.cwd(),
+        tempPrefix: prefix,
+      }).pipe(Effect.timeout(100)),
+    );
+    assert.equal(exit._tag, "Failure");
+
+    const fs = yield* FileSystem.FileSystem;
+    const leftovers = (yield* fs.readDirectory(tmpdir())).filter((entry) =>
+      entry.startsWith(prefix),
+    );
+    assert.deepEqual(leftovers, []);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it.live("explicit cancellation removes an in-progress capture artifact", () =>
+  Effect.gen(function* () {
+    const prefix = `pi-search-cancel-${randomUUID()}-`;
+    const fiber = yield* Effect.forkChild(
+      executeSearchProcess({
+        command: process.execPath,
+        args: [
+          "-e",
+          'process.stdout.write("started"); setInterval(() => {}, 1000)',
+        ],
+        cwd: process.cwd(),
+        tempPrefix: prefix,
+      }),
+    );
+    yield* Effect.sleep(100);
+    yield* Fiber.interrupt(fiber);
+
+    const fs = yield* FileSystem.FileSystem;
+    const leftovers = (yield* fs.readDirectory(tmpdir())).filter((entry) =>
+      entry.startsWith(prefix),
+    );
+    assert.deepEqual(leftovers, []);
+  }).pipe(Effect.provide(NodeServices.layer)),
+);
+
+it("complete-output capture uses the documented 10 MiB production limit", () => {
+  assert.equal(COMPLETE_OUTPUT_MAX_BYTES, 10 * 1024 * 1024);
+});
 
 it("output: small results pass through untouched", async () => {
   const formatted = await formatOutput("a.ts\nb.ts\n", {

@@ -108,6 +108,29 @@ test("creates Codex-shaped v2 goals with a 4000-character objective and positive
   );
 });
 
+test("goal input and restored snapshots strip terminal and bidi spoofing controls", () => {
+  const created = createGoalSnapshot(
+    {
+      objective:
+        "Ship \u001b[31mred\u001b[0m safely\u202e spoof\u202c 👩\u200d💻",
+    },
+    0,
+    NOW,
+    "goal_terminal_safe",
+  );
+  assert.equal(created.objective, "Ship red safely spoof 👩\u200d💻");
+
+  const restored = restoreGoalSnapshot([
+    entry({
+      ...created,
+      objective: "Restore\u001b]52;c;payload\u0007 goal\u2066x\u2069",
+      reason: "  blocked\u001bPsecret\u001b\\ now\u200f  ",
+    }),
+  ]);
+  assert.equal(restored?.objective, "Restore goalx");
+  assert.equal(restored?.reason, "blocked now");
+});
+
 test("v1 migration pauses active work once, folds distinct success criteria, and maps terminal statuses", () => {
   const restored = restoreGoalState([entry(legacy())]);
   assert.equal(restored.migrated, true);

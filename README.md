@@ -11,7 +11,7 @@
 
 <p align="center">
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.82+" src="https://img.shields.io/badge/Pi-0.82%2B-2f81f7?style=flat-square"></a>
-  <img alt="Node.js 22+" src="https://img.shields.io/badge/Node.js-22%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
+  <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white">
   <a href="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml/badge.svg"></a>
   <img alt="Model neutral" src="https://img.shields.io/badge/models-user--selected-bc8cff?style=flat-square">
@@ -325,7 +325,7 @@ cwd  model  thinking  context  cache  cost  throughput   git  PR
 | `git` / `pr` | 当前分支与对应 PR                        |
 | `flex`       | 同一行左右对齐的分隔点                   |
 
-Subagent 与 Workflow 状态属于 Footer 的基础可观察性：活动时自动出现，空闲时不占空间。后台终端使用编辑器上方状态条和 `/ps`，不混进 Footer。Nerd Font 只改善 Powerline 分隔符 ``，不是硬依赖。
+Subagent 与 Workflow 状态属于 Footer 的基础可观察性：活动时自动出现，空闲时不占空间。后台终端使用编辑器上方状态条和 `/ps`，不混进 Footer。本地 Git 状态自动刷新；GitHub PR 查询只有用户显式运行 `/pr` 时才会发起。Nerd Font 只改善 Powerline 分隔符 ``，不是硬依赖。
 
 ### 输出密度按内容类型独立控制
 
@@ -337,7 +337,7 @@ Subagent 与 Workflow 状态属于 Footer 的基础可观察性：活动时自�
 
 ### 文件搜索是一等工具
 
-`fd` 与 `rg` 使用结构化参数，不拼接 Shell；默认遵守 `.gitignore`，支持 Glob、类型、Smart Case、固定字符串和上下文。结果限制为 50KB / 2000 行，完整截断内容保存在 Session 临时文件中，Shutdown 时清理。
+`fd` 与 `rg` 使用结构化参数，不拼接 Shell；默认遵守 `.gitignore`，支持 Glob、类型、Smart Case、固定字符串和上下文。结果限制为 50KB / 2000 行；不超过 10 MiB 的完整截断内容保存在 Session 临时文件中并于 Shutdown 时清理，超过该上限时搜索会终止且部分临时文件会立即删除。
 
 macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载固定官方版本、校验 SHA-256 后原子安装。其他架构和平台需自行提供 `fd` 与 `rg`。
 
@@ -411,7 +411,7 @@ macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载�
 ### 要求
 
 - Pi `0.82.0` 或更新版本；
-- Node.js 22+；
+- Node.js 22.19.0 或更新版本；
 - macOS/Linux 的 arm64 或 x64 可自动安装 `fd` / `rg`；其他架构和平台需自行安装。
 
 ### Pi Package
@@ -429,7 +429,7 @@ npm install
 pi install ~/work/my-pi-setup
 ```
 
-安装或更新后重启 Pi，或运行 `/reload`。
+安装或更新后重启 Pi，或运行 `/reload`。Pi 提供的 `pi-ai`、`pi-coding-agent`、`pi-tui` 和 `typebox` 按官方 Package 契约声明为 Peer Dependencies；仓库中的开发依赖仅用于本地检查，不随包重复提供 Host SDK。
 
 ### 可选：多个顶层 Pi Session 通信
 

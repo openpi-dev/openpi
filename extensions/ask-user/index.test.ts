@@ -167,6 +167,62 @@ async function runQuestionnaire(
   return execute("ask-1", params, new AbortController().signal, undefined, ctx);
 }
 
+test("option labels with the same terminal-safe display identity are rejected before UI", async () => {
+  let uiOpened = false;
+  await assert.rejects(
+    runQuestionnaire(
+      {
+        questions: [
+          {
+            id: "database",
+            header: "Database",
+            question: "Which database?",
+            options: [
+              { label: "Café", description: "Composed Unicode" },
+              {
+                label: "  \u001b[31mCafe\u200d\u0301\u001b[0m\n",
+                description:
+                  "Joiner blocks composition until identity normalization",
+              },
+            ],
+          },
+        ],
+      },
+      () => {
+        uiOpened = true;
+        throw new Error("UI must not open for ambiguous option labels");
+      },
+    ),
+    /question "database" option labels must be unique/,
+  );
+  assert.equal(uiOpened, false);
+});
+
+test("visibly distinct option labels remain valid", async () => {
+  const result = await runQuestionnaire(
+    {
+      questions: [
+        {
+          id: "accent",
+          header: "Accent",
+          question: "Which spelling?",
+          options: [
+            { label: "Café", description: "Accented spelling" },
+            { label: "Cafe", description: "Plain spelling" },
+          ],
+        },
+      ],
+    },
+    (component) => {
+      component.handleInput(input.enter);
+      component.handleInput(input.enter);
+    },
+  );
+  assert.deepEqual(result.details.answers, [
+    { id: "accent", selected: "Café" },
+  ]);
+});
+
 const reviewQuestions = {
   questions: [
     {

@@ -137,6 +137,52 @@ export function isWorkflowRunTarget(value: string): boolean {
   return isWorkflowRunId(value) || /^[0-9a-f]+$/i.test(value);
 }
 
+const RUN_RESOLUTION_MATCH_LIMIT = 8;
+
+function boundedRunList(runIds: readonly string[]) {
+  if (runIds.length === 0) return "none";
+  const shown = runIds
+    .slice(0, RUN_RESOLUTION_MATCH_LIMIT)
+    .map((runId) => sanitizeLine(runId, 80));
+  const omitted = runIds.length - shown.length;
+  return `${shown.join(", ")}${omitted > 0 ? `, … (+${omitted} more)` : ""}`;
+}
+
+/** Resolve a generated id exactly, or a hex suffix only when it is unique. */
+export function resolveWorkflowRunTarget(
+  target: string,
+  candidates: Iterable<string>,
+) {
+  const trimmed = target.trim();
+  if (!isWorkflowRunTarget(trimmed)) {
+    return {
+      ok: false,
+      error: "Workflow run id must be a generated id or hex suffix",
+    } as const;
+  }
+
+  const normalizedTarget = trimmed.toLowerCase();
+  const runIds = [...new Set([...candidates].filter(isWorkflowRunId))].sort();
+  if (isWorkflowRunId(normalizedTarget) && runIds.includes(normalizedTarget)) {
+    return { ok: true, runId: normalizedTarget } as const;
+  }
+
+  const matches = runIds.filter((runId) => runId.endsWith(normalizedTarget));
+  if (matches.length === 1) return { ok: true, runId: matches[0]! } as const;
+
+  const displayTarget = sanitizeLine(trimmed, 80);
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      error: `No workflow run matching "${displayTarget}". Available: ${boundedRunList(runIds)}.`,
+    } as const;
+  }
+  return {
+    ok: false,
+    error: `Workflow run suffix "${displayTarget}" is ambiguous. Matches: ${boundedRunList(matches)}. Use a longer suffix or full run id.`,
+  } as const;
+}
+
 /**
  * Flatten model-authored text into one safe terminal line. Workflow scripts are
  * written by the model, so an escape sequence in a `log()` or `phase()` string
@@ -160,7 +206,7 @@ export function sanitizeWorkflowDisplayLine(
 export function sanitizeLine(value: string, maxLength: number): string {
   // Code-point slicing, not code-unit: cutting a surrogate pair in half leaves
   // a lone surrogate that renders as a replacement glyph.
-  const flat = value.replace(/[\u0000-\u001f\u007f-\u009f]+/g, " ").trim();
+  const flat = sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
   const points = [...flat];
   const clipped =
     points.length > maxLength ? points.slice(0, maxLength).join("") : flat;

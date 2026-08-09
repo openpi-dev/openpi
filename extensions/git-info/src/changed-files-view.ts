@@ -7,27 +7,13 @@ import {
   visibleWidth,
 } from "@earendil-works/pi-tui";
 import { Effect } from "effect";
+import { sanitizeTerminalText } from "../../shared/terminal-text.ts";
 import { runCommand } from "./process.ts";
+
+export { sanitizeTerminalText };
 
 const DIFF_SCROLL_STEP = 5;
 const MAX_DIFF_LINES = 20_000;
-// Strip terminal control sequences from repository-controlled paths and diff
-// text before applying trusted theme styling.
-// eslint-disable-next-line no-control-regex
-const OSC_PATTERN =
-  /(?:\u001b\]|\u009d)(?:[^\u0007\u001b\u009c]|\u001b(?!\\))*(?:\u0007|\u001b\\|\u009c)/g;
-// eslint-disable-next-line no-control-regex
-const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
-// eslint-disable-next-line no-control-regex
-const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
-
-export function sanitizeTerminalText(text: string) {
-  return text
-    .replace(OSC_PATTERN, "")
-    .replace(CSI_PATTERN, "")
-    .replace(ESCAPE_PATTERN, "")
-    .replace(/[\u0000-\u0008\u000b-\u001f\u007f-\u009f]/g, "");
-}
 
 interface ChangedPath {
   path: string;
@@ -213,7 +199,7 @@ export async function showChangedFiles(
       }
 
       function styleDiffLine(line: string) {
-        const expanded = line.replaceAll("\t", "    ");
+        const expanded = sanitizeTerminalText(line).replaceAll("\t", "    ");
         if (
           expanded.startsWith("diff --git") ||
           expanded.startsWith("index ")
@@ -356,7 +342,11 @@ export async function showChangedFiles(
                 1,
                 sidebarWidth - visibleWidth(marker) - visibleWidth(stats) - 1,
               );
-              const name = truncateToWidth(file.name, nameWidth, "…");
+              const name = truncateToWidth(
+                cleanDisplayPath(file.name),
+                nameWidth,
+                "…",
+              );
               const gap = " ".repeat(
                 Math.max(
                   1,
@@ -368,7 +358,7 @@ export async function showChangedFiles(
               );
               sidebar = `${marker}${name}${gap}${styledStats}`;
             } else {
-              sidebar = `  ${theme.fg("dim", truncateToWidth(file.path, Math.max(1, sidebarWidth - 2), "…"))}`;
+              sidebar = `  ${theme.fg("dim", truncateToWidth(cleanDisplayPath(file.path), Math.max(1, sidebarWidth - 2), "…"))}`;
             }
 
             sidebar = padToWidth(sidebar, sidebarWidth);

@@ -3,6 +3,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   budgetLimitPrompt,
   continuationPrompt,
@@ -152,10 +153,11 @@ export class GoalController {
       }
     } catch (error) {
       this.goal = undefined;
-      this.lockedReason =
+      this.lockedReason = sanitizeTerminalText(
         error instanceof GoalRestoreError || error instanceof Error
           ? error.message
-          : String(error);
+          : String(error),
+      );
     }
   }
 

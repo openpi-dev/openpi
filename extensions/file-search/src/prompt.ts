@@ -1,7 +1,7 @@
 /** Model-facing text for the fd and rg tools. */
 
 export const FD_TOOL_DESCRIPTION =
-  "Find files and directories by name with fd. Respects .gitignore by default. Results are limited to 1000 entries unless a higher limit is given; output is limited to 2000 lines or 50KB, and complete truncated output is saved to a temporary file.";
+  "Find files and directories by name with fd. Respects .gitignore by default. Results are limited to 1000 entries unless a higher limit is given; output is limited to 2000 lines or 50KB, and complete truncated output up to 10 MiB is saved to a temporary file.";
 
 export const FD_PROMPT_SNIPPET =
   "Find files and directories by name with fd (fast, gitignore-aware).";
@@ -25,7 +25,7 @@ export const FD_PARAMETER_DESCRIPTIONS = {
 };
 
 export const RG_TOOL_DESCRIPTION =
-  "Search file contents with ripgrep. Uses smart-case matching, respects .gitignore by default, and returns at most 100 matches per file unless a different max_matches_per_file value is given. Output is limited to 2000 lines or 50KB; complete truncated output is saved to a temporary file.";
+  "Search file contents with ripgrep. Uses smart-case matching, respects .gitignore by default, and returns at most 100 matches per file unless a different max_matches_per_file value is given. Output is limited to 2000 lines or 50KB; complete truncated output up to 10 MiB is saved to a temporary file.";
 
 export const RG_PROMPT_SNIPPET =
   "Search file contents with ripgrep (fast regex content search).";

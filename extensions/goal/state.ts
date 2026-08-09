@@ -1,3 +1,5 @@
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+
 export const GOAL_ENTRY_TYPE = "session-goal";
 export const GOAL_STATUSES = [
   "active",
@@ -105,7 +107,7 @@ export function canResumeGoal(goal: GoalSnapshot) {
 
 export function normalizeGoalObjective(value: unknown) {
   if (typeof value !== "string") fail("goal objective must be a string");
-  const objective = value.trim();
+  const objective = sanitizeTerminalText(value).trim();
   if (!objective) fail("goal objective must not be empty");
   if (Array.from(objective).length > GOAL_LIMITS.objectiveChars) {
     fail(
@@ -672,7 +674,7 @@ function validateBlockedAudit(value: unknown, continuationCount: unknown) {
 
 export function normalizeGoalReason(value: unknown) {
   if (typeof value !== "string") fail("reason must be a string");
-  const reason = value.replace(/\s+/gu, " ").trim();
+  const reason = sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
   if (!reason) fail("reason must not be blank");
   if (Array.from(reason).length > GOAL_LIMITS.reasonChars) {
     fail(`reason exceeds ${GOAL_LIMITS.reasonChars} characters`);

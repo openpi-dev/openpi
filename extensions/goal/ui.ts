@@ -1,5 +1,6 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { GoalSnapshot } from "./state.ts";
 
 export interface GoalToolDetails {
@@ -74,7 +75,11 @@ export function goalFooterText(goal: GoalSnapshot) {
 }
 
 export function truncateGoalObjective(objective: string, width = 44) {
-  return truncateToWidth(objective.replace(/\s+/gu, " "), width, "…");
+  return truncateToWidth(
+    sanitizeTerminalText(objective).replace(/\s+/gu, " "),
+    width,
+    "…",
+  );
 }
 
 export function goalContinuationLabel(details: unknown) {
@@ -92,7 +97,10 @@ export function renderGoalTool(
 ) {
   if (!details?.goal) {
     return new Text(
-      theme.fg("dim", details?.message ?? "No goal is currently set."),
+      theme.fg(
+        "dim",
+        sanitizeTerminalText(details?.message ?? "No goal is currently set."),
+      ),
       0,
       0,
     );
@@ -102,15 +110,17 @@ export function renderGoalTool(
     ? `${formatTokensCompact(goal.tokensUsed)} / ${formatTokensCompact(goal.tokenBudget)} tokens`
     : `${formatGoalElapsedSeconds(goal.timeUsedSeconds)} · ${formatTokensCompact(goal.tokensUsed)} tokens`;
   const lines = [
-    `${theme.fg("accent", theme.bold("Goal"))} ${theme.fg(statusColor(goal), statusLabel(goal.status))}`,
+    `${theme.fg("accent", theme.bold("Goal"))} ${theme.fg(statusColor(goal), sanitizeTerminalText(statusLabel(goal.status)))}`,
     theme.fg(
       "text",
-      expanded ? goal.objective : truncateGoalObjective(goal.objective, 70),
+      expanded
+        ? sanitizeTerminalText(goal.objective)
+        : truncateGoalObjective(goal.objective, 70),
     ),
     theme.fg("dim", usage),
   ];
   if (expanded && goal.reason) {
-    lines.push(theme.fg("dim", `Reason: ${goal.reason}`));
+    lines.push(theme.fg("dim", `Reason: ${sanitizeTerminalText(goal.reason)}`));
   }
   // ToolExecutionComponent normally paints the enclosing Box, but terminals
   // can expose an unpainted suffix when a styled child line resets its own
@@ -139,7 +149,7 @@ export function statusLabel(status: GoalSnapshot["status"]) {
     case "budget_limited":
       return "limited by budget";
     default:
-      return status;
+      return sanitizeTerminalText(status);
   }
 }
 

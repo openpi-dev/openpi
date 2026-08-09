@@ -8,10 +8,11 @@ import test from "node:test";
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-resume-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
-const { findRunDir } = await import("./index.ts");
+const { findRunDir, resolveRunDir } = await import("./index.ts");
 
 const runs = join(agentDir, "workflows");
 mkdirSync(join(runs, "wf_1a2b3c4d5e6f"), { recursive: true });
+mkdirSync(join(runs, "wf_ffeeddcc5e6f"), { recursive: true });
 mkdirSync(join(runs, "4d5e6f"), { recursive: true });
 mkdirSync(join(runs, "wf_\u001b]52;c;clipboard\u0007bad0"), {
   recursive: true,
@@ -34,6 +35,15 @@ test("a run id is resolved by exact match or by hex suffix", () => {
   );
   assert.equal(findRunDir("wf_nosuchrun"), undefined);
   assert.equal(findRunDir("bad0"), undefined);
+});
+
+test("an ambiguous short suffix cannot resume either matching run", () => {
+  assert.equal(findRunDir("5e6f"), undefined);
+  const collision = resolveRunDir("5e6f");
+  assert.equal(collision.ok, false);
+  assert.match(collision.error, /ambiguous/i);
+  assert.equal(findRunDir("wf_1a2b3c4d5e6f"), join(runs, "wf_1a2b3c4d5e6f"));
+  assert.equal(findRunDir("wf_ffeeddcc5e6f"), join(runs, "wf_ffeeddcc5e6f"));
 });
 
 test("a traversing run id cannot reach a journal outside the runs directory", () => {

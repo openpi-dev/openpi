@@ -98,17 +98,29 @@ export default function uiCustomization(pi: ExtensionAPI) {
   let requestRender: (() => void) | undefined;
   let activeSession: ExtensionContext | undefined;
 
-  const stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
-    if (!isModelInfoState(value)) return;
-    modelInfo = value;
-    requestRender?.();
-  });
+  let stopModelListener: (() => void) | undefined;
+  let stopGitListener: (() => void) | undefined;
 
-  const stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
-    if (!isGitInfoState(value)) return;
-    gitInfo = value;
-    requestRender?.();
-  });
+  const stopDashboardListeners = () => {
+    stopModelListener?.();
+    stopGitListener?.();
+    stopModelListener = undefined;
+    stopGitListener = undefined;
+  };
+
+  const startDashboardListeners = () => {
+    stopDashboardListeners();
+    stopModelListener = pi.events.on(MODEL_INFO_CHANNEL, (value) => {
+      if (!isModelInfoState(value)) return;
+      modelInfo = value;
+      requestRender?.();
+    });
+    stopGitListener = pi.events.on(GIT_INFO_CHANNEL, (value) => {
+      if (!isGitInfoState(value)) return;
+      gitInfo = value;
+      requestRender?.();
+    });
+  };
 
   // Kept for process lifetime so configure_my_pi_setup still refreshes later sessions.
   pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
@@ -187,6 +199,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     modelInfo = emptyModelInfoState();
     gitInfo = emptyGitInfoState();
     activeSession = ctx;
+    startDashboardListeners();
     install(ctx);
   });
 
@@ -194,8 +207,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
     // Drop the session pointer first so a late config event cannot reinstall
     // against a shut-down context. The config listener stays armed for later sessions.
     activeSession = undefined;
-    stopModelListener();
-    stopGitListener();
+    stopDashboardListeners();
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);

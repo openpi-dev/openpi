@@ -145,7 +145,7 @@ export default function gitInfo(pi: ExtensionAPI) {
           return;
         }
 
-        if (forcePullRequest || branchChanged) {
+        if (forcePullRequest) {
           queriedPrBranch = branchName;
           const pullRequest = yield* lookupPullRequest(ctx, branchName);
           if (refreshGeneration !== generation) return;
@@ -251,7 +251,7 @@ export default function gitInfo(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("pr", {
-    description: "Refresh git and pull request information",
+    description: "Look up pull request information for the current branch",
     handler: async (_args, ctx) => {
       await runEffect(getRuntime(), refresh(ctx, true), {
         signal: ctx.signal,

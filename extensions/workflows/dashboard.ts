@@ -37,6 +37,7 @@ import {
   MAX_LOG_TEXT,
   phaseGroups,
   resultJson,
+  resolveWorkflowRunTarget,
   sanitizeLine,
   shortenHome,
   stateSquare,
@@ -51,6 +52,7 @@ import {
   type WorkflowLogEntry,
 } from "./model.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { writeFileAtomic } from "./serialization.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -500,12 +502,21 @@ export class WorkflowDashboard {
     this.onAbort = onAbort;
     this.refresh();
     if (initialRunId) {
-      const entry = this.entries.find(
-        (e) => e.runId === initialRunId || e.runId.endsWith(initialRunId),
+      const resolution = resolveWorkflowRunTarget(
+        initialRunId,
+        this.entries.map((entry) => entry.runId),
       );
-      if (entry) {
-        this.listIndex = this.entries.indexOf(entry);
-        this.enterEntry(entry, true);
+      if (resolution.ok) {
+        const entry = this.entries.find(
+          (candidate) => candidate.runId === resolution.runId,
+        );
+        if (entry) {
+          this.listIndex = this.entries.indexOf(entry);
+          this.enterEntry(entry, true);
+        }
+      } else {
+        this.notice = resolution.error;
+        this.noticeAt = Date.now();
       }
     }
     this.timer = setInterval(() => {
@@ -590,7 +601,7 @@ export class WorkflowDashboard {
     if (!entry) return;
     const target = path.join(runsDir(), entry.runId, "report.md");
     try {
-      fs.writeFileSync(target, buildReport(entry.details), "utf8");
+      writeFileAtomic(target, buildReport(entry.details));
       this.notice = `saved ${shortenHome(target)}`;
     } catch (error) {
       this.notice = `save failed: ${error instanceof Error ? error.message : String(error)}`;

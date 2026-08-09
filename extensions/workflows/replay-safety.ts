@@ -1,11 +1,16 @@
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import { homedir } from "node:os";
 import * as path from "node:path";
-import type { DefaultResourceLoader } from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
+import type {
+  DefaultResourceLoader,
+  ToolDefinition,
+} from "@earendil-works/pi-coding-agent";
 import { effectiveChildToolAllowlist } from "../shared/child-session.ts";
 
-const REPLAY_SAFE_TOOL_NAMES = new Set([
+const REPLAY_FILESYSTEM_TOOL_NAMES = new Set([
   "read",
   "grep",
   "find",
@@ -13,6 +18,13 @@ const REPLAY_SAFE_TOOL_NAMES = new Set([
   "fd",
   "rg",
 ]);
+const REPLAY_BUILTIN_FILESYSTEM_TOOL_NAMES = new Set([
+  "read",
+  "grep",
+  "find",
+  "ls",
+]);
+const REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES = new Set(["fd", "rg"]);
 const GIT_OUTPUT_LIMIT = 32 * 1024 * 1024;
 const REPLAY_IDENTITY_TIMEOUT_MS = 5_000;
 const REPLAY_RESOURCE_FILE_LIMIT = 8 * 1024 * 1024;
@@ -31,9 +43,274 @@ export function isReplaySafeAgentCall(options: {
   }
   return (
     effectiveChildToolAllowlist(options.tools)?.every((tool) =>
-      REPLAY_SAFE_TOOL_NAMES.has(tool),
+      REPLAY_FILESYSTEM_TOOL_NAMES.has(tool),
     ) === true
   );
+}
+
+interface ReplayFilesystemToolRegistry {
+  getAllTools(): Array<{
+    name: string;
+    sourceInfo?: {
+      path: string;
+      source: string;
+      origin: string;
+    };
+  }>;
+  getToolDefinition(name: string): ToolDefinition | undefined;
+}
+
+class ReplayFilesystemBoundaryViolation extends Error {}
+
+interface ReplayFilesystemObservation {
+  lexicalPath: string;
+  canonicalPath: string;
+  revision: string;
+}
+
+function pathIsWithin(root: string, candidate: string) {
+  const relative = path.relative(root, candidate);
+  return (
+    relative === "" ||
+    (relative !== ".." &&
+      !relative.startsWith(`..${path.sep}`) &&
+      !path.isAbsolute(relative))
+  );
+}
+
+function filesystemRevision(pathname: string) {
+  try {
+    const stat = fs.statSync(pathname, { bigint: true });
+    return [
+      stat.dev,
+      stat.ino,
+      stat.mode,
+      stat.nlink,
+      stat.size,
+      stat.mtimeNs,
+      stat.ctimeNs,
+    ].join(":");
+  } catch {
+    throw new ReplayFilesystemBoundaryViolation();
+  }
+}
+
+function observeReplayFilesystemPath(
+  repositoryRoot: string,
+  lexicalPath: string,
+): ReplayFilesystemObservation {
+  let canonical: string;
+  try {
+    canonical = canonicalPath(lexicalPath);
+  } catch {
+    throw new ReplayFilesystemBoundaryViolation();
+  }
+  if (!pathIsWithin(repositoryRoot, canonical)) {
+    throw new ReplayFilesystemBoundaryViolation();
+  }
+  return {
+    lexicalPath,
+    canonicalPath: canonical,
+    revision: filesystemRevision(canonical),
+  };
+}
+
+function assertReplayFilesystemObservationStable(
+  repositoryRoot: string,
+  previous: ReplayFilesystemObservation,
+) {
+  const current = observeReplayFilesystemPath(
+    repositoryRoot,
+    previous.lexicalPath,
+  );
+  if (
+    current.canonicalPath !== previous.canonicalPath ||
+    current.revision !== previous.revision
+  ) {
+    throw new ReplayFilesystemBoundaryViolation();
+  }
+}
+
+function normalizedObservationPath(raw: string) {
+  let normalized = raw.trim();
+  if (normalized.startsWith("@")) normalized = normalized.slice(1);
+  normalized = normalized.replace(
+    /[\u00A0\u2000-\u200A\u202F\u205F\u3000]/g,
+    " ",
+  );
+  if (normalized === "~") return homedir();
+  if (
+    normalized.startsWith("~/") ||
+    (process.platform === "win32" && normalized.startsWith("~\\"))
+  ) {
+    return path.join(homedir(), normalized.slice(2));
+  }
+  if (normalized.startsWith("file://")) {
+    try {
+      return fileURLToPath(normalized);
+    } catch {
+      throw new ReplayFilesystemBoundaryViolation();
+    }
+  }
+  return normalized;
+}
+
+function hasPathParameter(definition: ToolDefinition) {
+  if (!definition.parameters || typeof definition.parameters !== "object") {
+    return false;
+  }
+  const properties = (definition.parameters as { properties?: unknown })
+    .properties;
+  return (
+    properties !== null &&
+    typeof properties === "object" &&
+    Object.hasOwn(properties, "path")
+  );
+}
+
+function hasKnownReplayFilesystemImplementation(tool: {
+  name: string;
+  sourceInfo?: { path: string; source: string; origin: string };
+}) {
+  if (REPLAY_BUILTIN_FILESYSTEM_TOOL_NAMES.has(tool.name)) {
+    return (
+      tool.sourceInfo?.source === "builtin" &&
+      tool.sourceInfo.path === `<builtin:${tool.name}>`
+    );
+  }
+  if (!REPLAY_PACKAGE_FILESYSTEM_TOOL_NAMES.has(tool.name)) return false;
+  return (
+    tool.sourceInfo?.origin === "package" &&
+    tool.sourceInfo.path
+      .split(path.sep)
+      .join("/")
+      .endsWith("/extensions/file-search/index.ts")
+  );
+}
+
+export interface ReplayFilesystemBoundaryOptions {
+  repositoryRoot: string;
+  cwd: string;
+  onViolation?: () => void;
+}
+
+/**
+ * Replayable filesystem tools are confined to existing canonical paths in the
+ * repository. Lexical containment rejects absolute, ~, and ../ escapes before
+ * they can observe the external filesystem; realpath containment rejects
+ * in-repository symlinks that escape. Unknown tool implementations and paths
+ * that cannot be canonicalized are denied rather than guessed safe.
+ *
+ * This is not an OS-atomic filesystem sandbox. The process-wide Workflow lease
+ * excludes known in-process writers, and the before/after path revision check
+ * rejects endpoint changes during execution. An unrelated external process can
+ * still perform an undetectable ABA change between those checks.
+ */
+export function createReplayFilesystemBoundary(
+  options: ReplayFilesystemBoundaryOptions,
+) {
+  const repositoryRoot = canonicalPath(options.repositoryRoot);
+  const cwd = canonicalPath(options.cwd);
+  if (!pathIsWithin(repositoryRoot, cwd)) {
+    throw new Error("Replay cwd is outside the canonical repository");
+  }
+  const wrapped = new WeakSet<ToolDefinition>();
+
+  const deny = () => {
+    options.onViolation?.();
+    throw new Error(
+      "Replay filesystem boundary blocked an external, changing, symlink-escaping, or unverifiable path.",
+    );
+  };
+
+  const boundedParams = (toolName: string, params: unknown) => {
+    if (!params || typeof params !== "object" || Array.isArray(params)) {
+      throw new ReplayFilesystemBoundaryViolation();
+    }
+    const input = params as Record<string, unknown>;
+    const rawPath = input.path;
+    if (rawPath === undefined) {
+      if (toolName === "read") {
+        throw new ReplayFilesystemBoundaryViolation();
+      }
+      return {
+        params,
+        observation: observeReplayFilesystemPath(repositoryRoot, cwd),
+      };
+    }
+    if (typeof rawPath !== "string") {
+      throw new ReplayFilesystemBoundaryViolation();
+    }
+
+    const normalized = normalizedObservationPath(rawPath);
+    const lexicalPath = path.resolve(cwd, normalized);
+    if (!pathIsWithin(repositoryRoot, lexicalPath)) {
+      throw new ReplayFilesystemBoundaryViolation();
+    }
+
+    const observation = observeReplayFilesystemPath(
+      repositoryRoot,
+      lexicalPath,
+    );
+    return {
+      params: {
+        ...input,
+        path: path.isAbsolute(normalized)
+          ? observation.canonicalPath
+          : path.relative(cwd, observation.canonicalPath) || ".",
+      },
+      observation,
+    };
+  };
+
+  const wrap = (
+    tool: ReturnType<ReplayFilesystemToolRegistry["getAllTools"]>[number],
+    definition: ToolDefinition,
+  ) => {
+    if (wrapped.has(definition)) return;
+    wrapped.add(definition);
+    const knownImplementation =
+      definition.name === tool.name &&
+      hasPathParameter(definition) &&
+      hasKnownReplayFilesystemImplementation(tool);
+    const execute = definition.execute;
+    definition.execute = async (toolCallId, params, signal, onUpdate, ctx) => {
+      try {
+        if (!knownImplementation) {
+          throw new ReplayFilesystemBoundaryViolation();
+        }
+        const bounded = boundedParams(tool.name, params);
+        try {
+          return await execute.call(
+            definition,
+            toolCallId,
+            bounded.params,
+            signal,
+            onUpdate,
+            ctx,
+          );
+        } finally {
+          assertReplayFilesystemObservationStable(
+            repositoryRoot,
+            bounded.observation,
+          );
+        }
+      } catch (error) {
+        if (error instanceof ReplayFilesystemBoundaryViolation) return deny();
+        throw error;
+      }
+    };
+  };
+
+  return {
+    apply(registry: ReplayFilesystemToolRegistry) {
+      for (const tool of registry.getAllTools()) {
+        if (!REPLAY_FILESYSTEM_TOOL_NAMES.has(tool.name)) continue;
+        const definition = registry.getToolDefinition(tool.name);
+        if (definition) wrap(tool, definition);
+      }
+    },
+  };
 }
 
 export interface ReplayWorkspaceLease {
@@ -46,8 +323,8 @@ export interface ReplayWorkspaceLease {
 
 /**
  * Endpoint fingerprints cannot detect an ABA write (change, observe, restore)
- * from a sibling workflow agent. Track every non-replay-safe call across its
- * whole scheduled lifetime and refuse hits/journaling across any overlap.
+ * from any Workflow agent in this process. Track every non-replay-safe call
+ * across its whole scheduled lifetime and refuse hits/journaling across overlap.
  */
 export function createReplayWorkspaceGuard() {
   let epoch = 0;
@@ -80,6 +357,26 @@ export function createReplayWorkspaceGuard() {
       };
     },
   };
+}
+
+// One process-global coordinator also survives duplicate extension module
+// instances and hot reloads. It is deliberately conservative across unrelated
+// repositories: correctness beats a replay hit, and this avoids another
+// lifecycle-sensitive workspace registry.
+const PROCESS_REPLAY_WORKSPACE_GUARD_KEY =
+  "__ttA1iMyPiSetupReplayWorkspaceGuard" as const;
+type ReplayProcessGlobal = typeof globalThis & {
+  [PROCESS_REPLAY_WORKSPACE_GUARD_KEY]?: ReturnType<
+    typeof createReplayWorkspaceGuard
+  >;
+};
+const replayProcessGlobal = globalThis as ReplayProcessGlobal;
+const processReplayWorkspaceGuard = (replayProcessGlobal[
+  PROCESS_REPLAY_WORKSPACE_GUARD_KEY
+] ??= createReplayWorkspaceGuard());
+
+export function beginProcessReplayWorkspaceLease(replaySafe: boolean) {
+  return processReplayWorkspaceGuard.begin(replaySafe);
 }
 
 interface ReplayResourceLoader extends Pick<
@@ -189,7 +486,12 @@ function repositoryFingerprint(cwd: string) {
       return [relativePath, "file", digest(fs.readFileSync(filePath))] as const;
     });
 
-  return digest(JSON.stringify({ root, head, diff: digest(diff), untracked }));
+  return {
+    root,
+    fingerprint: digest(
+      JSON.stringify({ root, head, diff: digest(diff), untracked }),
+    ),
+  };
 }
 
 function resourceFile(pathname: string) {
@@ -260,9 +562,12 @@ export function createReplayIdentity(
 ) {
   try {
     const canonicalCwd = canonicalPath(cwd);
+    const repository = repositoryFingerprint(canonicalCwd);
     return {
+      version: 3,
       cwd: canonicalCwd,
-      repository: repositoryFingerprint(canonicalCwd),
+      repositoryRoot: repository.root,
+      repository: repository.fingerprint,
       resources: resourceFingerprint(loader),
       projectTrusted,
     };

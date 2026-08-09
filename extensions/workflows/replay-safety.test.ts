@@ -3,6 +3,9 @@ import { execFileSync } from "node:child_process";
 import {
   mkdtempSync,
   mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -10,8 +13,12 @@ import {
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
+import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import { agentCallKey } from "./journal.ts";
 import {
+  beginProcessReplayWorkspaceLease,
+  createReplayFilesystemBoundary,
   createReplayIdentity,
   createReplayWorkspaceGuard,
   isReplaySafeAgentCall,
@@ -95,6 +102,226 @@ test("only provably read-only agent calls are replay-safe", () => {
   );
 });
 
+function replayToolSource(name: string) {
+  return name === "fd" || name === "rg"
+    ? {
+        path: "/fixture/extensions/file-search/index.ts",
+        source: "fixture-package",
+        scope: "user" as const,
+        origin: "package" as const,
+      }
+    : {
+        path: `<builtin:${name}>`,
+        source: "builtin",
+        scope: "temporary" as const,
+        origin: "top-level" as const,
+      };
+}
+
+function filesystemTool(name: string, observe: (path: string) => string) {
+  return {
+    name,
+    label: name,
+    description: name,
+    parameters: Type.Object({ path: Type.Optional(Type.String()) }),
+    async execute(_toolCallId: string, params: { path?: string }) {
+      return {
+        content: [{ type: "text" as const, text: observe(params.path ?? ".") }],
+        details: {},
+      };
+    },
+  } satisfies ToolDefinition;
+}
+
+test("replay filesystem boundary permits repo-local observers and rejects escaping paths", async () => {
+  const cwd = repository();
+  const outside = mkdtempSync(path.join(tmpdir(), "pi-replay-outside-"));
+  try {
+    const outsideFile = path.join(outside, "outside.txt");
+    writeFileSync(outsideFile, "external one\n");
+    const observations: string[] = [];
+    const definitions = new Map(
+      ["read", "grep", "find", "ls", "fd", "rg"].map((name) => {
+        const definition = filesystemTool(name, (pathname) => {
+          observations.push(pathname);
+          return readFileSync(path.resolve(cwd, pathname), "utf8");
+        });
+        return [name, definition] as const;
+      }),
+    );
+    const boundary = createReplayFilesystemBoundary({
+      repositoryRoot: cwd,
+      cwd,
+    });
+    boundary.apply({
+      getAllTools: () =>
+        [...definitions.keys()].map((name) => ({
+          name,
+          sourceInfo: replayToolSource(name),
+        })),
+      getToolDefinition: (name) => definitions.get(name),
+    });
+
+    for (const definition of definitions.values()) {
+      const local = await definition.execute("local", {
+        path: "tracked.txt",
+      });
+      assert.equal(local.content[0]?.type, "text");
+      assert.equal(
+        local.content[0]?.type === "text" ? local.content[0].text : "",
+        "one\n",
+      );
+
+      for (const escapingPath of [
+        outsideFile,
+        path.relative(cwd, outsideFile),
+        "~",
+        "~/outside.txt",
+        `@${outsideFile}`,
+      ]) {
+        await assert.rejects(
+          definition.execute("escape", { path: escapingPath }),
+          /Replay filesystem boundary blocked/,
+        );
+      }
+    }
+
+    assert.equal(
+      observations.length,
+      definitions.size,
+      "blocked calls must never reach a filesystem observer",
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("replay filesystem boundary fails closed for symlinks and uncertain paths", async () => {
+  const cwd = repository();
+  const outside = mkdtempSync(path.join(tmpdir(), "pi-replay-symlink-"));
+  try {
+    const outsideFile = path.join(outside, "outside.txt");
+    writeFileSync(outsideFile, "external one\n");
+    symlinkSync(outsideFile, path.join(cwd, "external-link"));
+    let observations = 0;
+    let violations = 0;
+    const definition = filesystemTool("read", (pathname) => {
+      observations++;
+      return readFileSync(path.resolve(cwd, pathname), "utf8");
+    });
+    const boundary = createReplayFilesystemBoundary({
+      repositoryRoot: cwd,
+      cwd,
+      onViolation: () => {
+        violations++;
+      },
+    });
+    boundary.apply({
+      getAllTools: () => [
+        { name: "read", sourceInfo: replayToolSource("read") },
+      ],
+      getToolDefinition: () => definition,
+    });
+
+    await assert.rejects(
+      definition.execute("symlink", { path: "external-link" }),
+      /Replay filesystem boundary blocked/,
+    );
+    await assert.rejects(
+      definition.execute("missing", { path: "missing.txt" }),
+      /Replay filesystem boundary blocked/,
+    );
+    writeFileSync(outsideFile, "external two\n");
+    await assert.rejects(
+      definition.execute("stale", { path: outsideFile }),
+      /Replay filesystem boundary blocked/,
+    );
+
+    assert.equal(observations, 0);
+    assert.equal(violations, 3);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("replay filesystem boundary rejects path swaps during async execution", async () => {
+  for (const swap of ["rename", "symlink"] as const) {
+    const cwd = repository();
+    const outside = mkdtempSync(path.join(tmpdir(), "pi-replay-swap-"));
+    try {
+      const tracked = path.join(cwd, "tracked.txt");
+      const replacement = path.join(cwd, "replacement.txt");
+      const outsideFile = path.join(outside, "outside.txt");
+      writeFileSync(replacement, "replacement\n");
+      writeFileSync(outsideFile, "external\n");
+      let violations = 0;
+      const definition = filesystemTool("read", (pathname) => {
+        const observed = readFileSync(path.resolve(cwd, pathname), "utf8");
+        rmSync(tracked);
+        if (swap === "rename") renameSync(replacement, tracked);
+        else symlinkSync(outsideFile, tracked);
+        return observed;
+      });
+      createReplayFilesystemBoundary({
+        repositoryRoot: cwd,
+        cwd,
+        onViolation: () => {
+          violations++;
+        },
+      }).apply({
+        getAllTools: () => [
+          { name: "read", sourceInfo: replayToolSource("read") },
+        ],
+        getToolDefinition: () => definition,
+      });
+
+      await assert.rejects(
+        definition.execute("swap", { path: "tracked.txt" }),
+        /Replay filesystem boundary blocked/,
+      );
+      assert.equal(violations, 1, `${swap} must make the call non-journalable`);
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+      rmSync(outside, { recursive: true, force: true });
+    }
+  }
+});
+
+test("replay filesystem boundary rejects unknown observer implementations", async () => {
+  const cwd = repository();
+  try {
+    let observations = 0;
+    const definition = filesystemTool("read", () => {
+      observations++;
+      return "unsafe";
+    });
+    createReplayFilesystemBoundary({ repositoryRoot: cwd, cwd }).apply({
+      getAllTools: () => [
+        {
+          name: "read",
+          sourceInfo: {
+            path: path.join(cwd, ".pi/extensions/read.ts"),
+            source: "project",
+            scope: "project",
+            origin: "top-level",
+          },
+        },
+      ],
+      getToolDefinition: () => definition,
+    });
+
+    await assert.rejects(
+      definition.execute("unknown", { path: "tracked.txt" }),
+      /Replay filesystem boundary blocked/,
+    );
+    assert.equal(observations, 0);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
 test("workspace guard rejects replay and journaling across unsafe overlap", () => {
   const guard = createReplayWorkspaceGuard();
   const reader = guard.begin(true);
@@ -121,11 +348,46 @@ test("workspace guard rejects replay and journaling across unsafe overlap", () =
   laterReader.end();
 });
 
+test("process-wide guard coordinates overlapping calls from different workflow runs", () => {
+  const firstRunReader = beginProcessReplayWorkspaceLease(true);
+  assert.equal(firstRunReader.canReplay, true);
+
+  const secondRunWriter = beginProcessReplayWorkspaceLease(false);
+  assert.equal(
+    firstRunReader.canJournal(),
+    false,
+    "a writer in another run must invalidate the reader",
+  );
+  const thirdRunReader = beginProcessReplayWorkspaceLease(true);
+  assert.equal(
+    thirdRunReader.canReplay,
+    false,
+    "a reader in another run cannot replay across the writer",
+  );
+
+  secondRunWriter.end();
+  assert.equal(thirdRunReader.canJournal(), false);
+  thirdRunReader.end();
+  firstRunReader.end();
+
+  const laterRunReader = beginProcessReplayWorkspaceLease(true);
+  assert.equal(laterRunReader.canReplay, true);
+  assert.equal(laterRunReader.canJournal(), true);
+  laterRunReader.end();
+});
+
 test("canonical cwd and repository state participate in replay identity", () => {
   const cwd = repository();
   try {
     const resourcePath = path.join(cwd, "resource.md");
     writeFileSync(resourcePath, "resource one\n");
+    const originalIdentity = createReplayIdentity(
+      cwd,
+      loader(resourcePath),
+      true,
+    );
+    assert.equal(originalIdentity?.version, 3);
+    assert.equal(originalIdentity?.repositoryRoot, realpathSync(cwd));
     const original = replayKey(cwd, resourcePath);
 
     const alias = path.join(path.dirname(cwd), `${path.basename(cwd)}-alias`);

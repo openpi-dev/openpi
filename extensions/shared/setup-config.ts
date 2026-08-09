@@ -1,7 +1,17 @@
+import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
-import { mkdir, rename, unlink, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { existsSync, readFileSync, watch, type Stats } from "node:fs";
+import {
+  link,
+  mkdir,
+  readFile,
+  readdir,
+  rename,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
+import { basename, join } from "node:path";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_ROLE_NAMES,
@@ -167,6 +177,13 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
 };
 
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
+const SETUP_CONFIG_LOCK_PATH = `${SETUP_CONFIG_PATH}.lock`;
+const SETUP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
+const SETUP_CONFIG_LOCK_VERSION = 1;
+const ESTIMATED_PROCESS_STARTED_AT = Math.max(
+  1,
+  Math.round(Date.now() - process.uptime() * 1_000),
+);
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -523,10 +540,376 @@ function replacedFields(
   return paths;
 }
 
-export async function saveSetupConfig(config: MyPiSetupConfig) {
-  readDocumentForWrite();
-  const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
+const isErrno = (error: unknown, code: string) =>
+  error instanceof Error && "code" in error && error.code === code;
+
+interface LockIdentity {
+  readonly pid: number;
+  readonly processStartedAt: number;
+  readonly processStartedAtVerified: boolean;
+  readonly token: string;
+}
+
+interface LockOwner extends LockIdentity {
+  readonly version: typeof SETUP_CONFIG_LOCK_VERSION;
+  readonly createdAt: number;
+}
+
+type LockOwnerRead =
+  | { kind: "owner"; owner: LockOwner }
+  | { kind: "missing" }
+  | { kind: "unknown" };
+
+type ProcessLiveness = "live" | "dead" | "unknown";
+
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+const isPositiveInteger = (value: unknown): value is number =>
+  typeof value === "number" && Number.isSafeInteger(value) && value > 0;
+
+function parseLockOwner(value: unknown): LockOwner | undefined {
+  if (!isRecord(value)) return undefined;
+  if (value.version !== SETUP_CONFIG_LOCK_VERSION) return undefined;
+  if (!isPositiveInteger(value.pid)) return undefined;
+  if (!isPositiveInteger(value.processStartedAt)) return undefined;
+  if (typeof value.processStartedAtVerified !== "boolean") return undefined;
+  if (!isPositiveInteger(value.createdAt)) return undefined;
+  if (typeof value.token !== "string" || !UUID_PATTERN.test(value.token))
+    return undefined;
+  return {
+    version: SETUP_CONFIG_LOCK_VERSION,
+    pid: value.pid,
+    processStartedAt: value.processStartedAt,
+    processStartedAtVerified: value.processStartedAtVerified,
+    createdAt: value.createdAt,
+    token: value.token,
+  };
+}
+
+const sameOwner = (left: LockOwner, right: LockOwner) =>
+  left.version === right.version &&
+  left.pid === right.pid &&
+  left.processStartedAt === right.processStartedAt &&
+  left.processStartedAtVerified === right.processStartedAtVerified &&
+  left.createdAt === right.createdAt &&
+  left.token === right.token;
+
+const sameFile = (left: Stats, right: Stats) =>
+  left.dev === right.dev && left.ino === right.ino;
+
+const queryProcessStartedAt = (pid: number) =>
+  new Promise<number | undefined>((resolve) => {
+    if (process.platform === "win32") {
+      resolve(undefined);
+      return;
+    }
+    try {
+      execFile(
+        "ps",
+        ["-o", "lstart=", "-p", String(pid)],
+        {
+          encoding: "utf8",
+          env: { ...process.env, LC_ALL: "C" },
+          timeout: 1_000,
+        },
+        (error, stdout) => {
+          const startedAt = error ? Number.NaN : Date.parse(stdout.trim());
+          resolve(Number.isFinite(startedAt) ? startedAt : undefined);
+        },
+      );
+    } catch {
+      resolve(undefined);
+    }
+  });
+
+const makeLockIdentity = async (): Promise<LockIdentity> => {
+  const processStartedAt = await queryProcessStartedAt(process.pid);
+  return {
+    pid: process.pid,
+    processStartedAt: processStartedAt ?? ESTIMATED_PROCESS_STARTED_AT,
+    processStartedAtVerified: processStartedAt !== undefined,
+    token: randomUUID(),
+  };
+};
+
+/**
+ * The owner document is fully written before `link()` atomically publishes the
+ * lock path. Its companion hard link remains for the whole critical section.
+ * A dead-owner recovery atomically renames that companion to its own PID/token,
+ * so another recovery can take over if the recovering process is also killed.
+ */
+const makeLockOwner = async (): Promise<LockOwner> => ({
+  version: SETUP_CONFIG_LOCK_VERSION,
+  ...(await makeLockIdentity()),
+  createdAt: Date.now(),
+});
+
+const claimPathFor = (owner: LockOwner) =>
+  `${SETUP_CONFIG_LOCK_PATH}.owner.${owner.pid}.${owner.processStartedAt}.${owner.token}`;
+
+const recoveryPathFor = (owner: LockOwner, recovery: LockIdentity) =>
+  `${claimPathFor(owner)}.recovering.${recovery.pid}.${recovery.processStartedAt}.${recovery.processStartedAtVerified ? 1 : 0}.${recovery.token}`;
+
+const parseRecoveryIdentity = (owner: LockOwner, name: string) => {
+  const prefix = `${basename(claimPathFor(owner))}.recovering.`;
+  if (!name.startsWith(prefix)) return undefined;
+  const [rawPid, rawStartedAt, rawVerified, token, ...extra] = name
+    .slice(prefix.length)
+    .split(".");
+  const pid = Number(rawPid);
+  const processStartedAt = Number(rawStartedAt);
+  if (
+    extra.length > 0 ||
+    !isPositiveInteger(pid) ||
+    !isPositiveInteger(processStartedAt) ||
+    (rawVerified !== "0" && rawVerified !== "1") ||
+    !token ||
+    !UUID_PATTERN.test(token)
+  ) {
+    return undefined;
+  }
+  return {
+    pid,
+    processStartedAt,
+    processStartedAtVerified: rawVerified === "1",
+    token,
+  } satisfies LockIdentity;
+};
+
+async function readLockOwner(path: string): Promise<LockOwnerRead> {
+  try {
+    const owner = parseLockOwner(JSON.parse(await readFile(path, "utf8")));
+    return owner ? { kind: "owner", owner } : { kind: "unknown" };
+  } catch (error) {
+    return isErrno(error, "ENOENT") ? { kind: "missing" } : { kind: "unknown" };
+  }
+}
+
+async function processLiveness(
+  identity: LockIdentity,
+): Promise<ProcessLiveness> {
+  try {
+    process.kill(identity.pid, 0);
+  } catch (error) {
+    return isErrno(error, "ESRCH") ? "dead" : "unknown";
+  }
+  if (!identity.processStartedAtVerified) return "unknown";
+  const processStartedAt = await queryProcessStartedAt(identity.pid);
+  if (processStartedAt === undefined) return "unknown";
+  return processStartedAt === identity.processStartedAt ? "live" : "dead";
+}
+
+const lockTimeoutError = () =>
+  new Error(
+    `Timed out waiting for another Pi process to finish updating ${SETUP_CONFIG_PATH}.`,
+  );
+
+function waitForSetupConfigLock(deadline: number) {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) return Promise.reject(lockTimeoutError());
+
+  return new Promise<void>((resolve, reject) => {
+    let settled = false;
+    let watcher: ReturnType<typeof watch> | undefined;
+    const timer = setTimeout(() => {
+      // fs.watch may coalesce or drop events. Recheck the atomic lock path at
+      // the deadline so a released lock cannot become a false timeout.
+      if (!existsSync(SETUP_CONFIG_LOCK_PATH)) finish();
+      else finish(lockTimeoutError());
+    }, remaining);
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      watcher?.close();
+      if (error) reject(error);
+      else resolve();
+    };
+
+    try {
+      const lockName = basename(SETUP_CONFIG_LOCK_PATH);
+      watcher = watch(getAgentDir(), (_event, filename) => {
+        if (filename === null || filename.toString() === lockName) finish();
+      });
+      watcher.on("error", finish);
+      // Close the race where the owner released the lock before the watcher
+      // became active. The caller always retries the atomic link afterwards.
+      if (!existsSync(SETUP_CONFIG_LOCK_PATH)) queueMicrotask(finish);
+    } catch (error) {
+      finish(error);
+    }
+  });
+}
+
+async function findRecoveryClaim(owner: LockOwner) {
+  const prefix = `${basename(claimPathFor(owner))}.recovering.`;
+  let names: string[];
+  try {
+    names = (await readdir(getAgentDir())).filter((name) =>
+      name.startsWith(prefix),
+    );
+  } catch {
+    return undefined;
+  }
+  if (names.length !== 1) return undefined;
+  const name = names[0]!;
+  const recovery = parseRecoveryIdentity(owner, name);
+  return recovery ? { path: join(getAgentDir(), name), recovery } : undefined;
+}
+
+async function takeRecoveryClaim(owner: LockOwner, lockStat: Stats) {
+  const ownerClaimPath = claimPathFor(owner);
+  const recovery = await makeLockIdentity();
+  const recoveryPath = recoveryPathFor(owner, recovery);
+  const claimOwner = await readLockOwner(ownerClaimPath);
+
+  if (claimOwner.kind === "owner") {
+    if (!sameOwner(claimOwner.owner, owner)) return undefined;
+    try {
+      if (!sameFile(lockStat, await stat(ownerClaimPath))) return undefined;
+      await rename(ownerClaimPath, recoveryPath);
+      return recoveryPath;
+    } catch (error) {
+      return isErrno(error, "ENOENT") ? null : undefined;
+    }
+  }
+  if (claimOwner.kind === "unknown") return undefined;
+
+  const existing = await findRecoveryClaim(owner);
+  if (!existing) return undefined;
+  if ((await processLiveness(existing.recovery)) !== "dead") return undefined;
+  const existingOwner = await readLockOwner(existing.path);
+  if (
+    existingOwner.kind !== "owner" ||
+    !sameOwner(existingOwner.owner, owner)
+  ) {
+    return undefined;
+  }
+  try {
+    if (!sameFile(lockStat, await stat(existing.path))) return undefined;
+    await rename(existing.path, recoveryPath);
+    return recoveryPath;
+  } catch (error) {
+    return isErrno(error, "ENOENT") ? null : undefined;
+  }
+}
+
+async function restoreOwnerClaim(owner: LockOwner, recoveryPath: string) {
+  try {
+    await link(recoveryPath, claimPathFor(owner));
+    await unlink(recoveryPath);
+  } catch {
+    // Keep every uncertain ownership artifact in place; a later writer will
+    // fail closed rather than unlinking a lock it cannot prove is stale.
+  }
+}
+
+async function recoverStaleSetupConfigLock() {
+  const lockRead = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
+  if (lockRead.kind === "missing") return true;
+  if (
+    lockRead.kind !== "owner" ||
+    (await processLiveness(lockRead.owner)) !== "dead"
+  ) {
+    return false;
+  }
+
+  let lockStat: Stats;
+  try {
+    lockStat = await stat(SETUP_CONFIG_LOCK_PATH);
+  } catch (error) {
+    return isErrno(error, "ENOENT");
+  }
+
+  const recoveryPath = await takeRecoveryClaim(lockRead.owner, lockStat);
+  if (recoveryPath === null) return true;
+  if (!recoveryPath) return false;
+
+  const currentLock = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
+  const recoveryOwner = await readLockOwner(recoveryPath);
+  try {
+    if (
+      currentLock.kind !== "owner" ||
+      recoveryOwner.kind !== "owner" ||
+      !sameOwner(currentLock.owner, lockRead.owner) ||
+      !sameOwner(recoveryOwner.owner, lockRead.owner) ||
+      (await processLiveness(currentLock.owner)) !== "dead" ||
+      !sameFile(await stat(SETUP_CONFIG_LOCK_PATH), await stat(recoveryPath))
+    ) {
+      await restoreOwnerClaim(lockRead.owner, recoveryPath);
+      return false;
+    }
+
+    await unlink(SETUP_CONFIG_LOCK_PATH);
+    await unlink(recoveryPath).catch(() => undefined);
+    return true;
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) {
+      await unlink(recoveryPath).catch(() => undefined);
+      return true;
+    }
+    await restoreOwnerClaim(lockRead.owner, recoveryPath);
+    throw error;
+  }
+}
+
+async function releaseSetupConfigLock(owner: LockOwner, claimPath: string) {
+  const lockRead = await readLockOwner(SETUP_CONFIG_LOCK_PATH);
+  const claimRead = await readLockOwner(claimPath);
+  if (
+    lockRead.kind !== "owner" ||
+    claimRead.kind !== "owner" ||
+    !sameOwner(lockRead.owner, owner) ||
+    !sameOwner(claimRead.owner, owner) ||
+    !sameFile(await stat(SETUP_CONFIG_LOCK_PATH), await stat(claimPath))
+  ) {
+    throw new Error(
+      `Refusing to release setup config lock with uncertain ownership at ${SETUP_CONFIG_LOCK_PATH}.`,
+    );
+  }
+  await unlink(SETUP_CONFIG_LOCK_PATH);
+  await unlink(claimPath).catch(() => undefined);
+}
+
+async function withSetupConfigLock<A>(action: () => Promise<A>) {
   await mkdir(getAgentDir(), { recursive: true });
+  const owner = await makeLockOwner();
+  const claimPath = claimPathFor(owner);
+  await writeFile(claimPath, `${JSON.stringify(owner)}\n`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 0o600,
+  });
+  const deadline = Date.now() + SETUP_CONFIG_LOCK_TIMEOUT_MS;
+  let acquired = false;
+
+  try {
+    while (true) {
+      try {
+        await link(claimPath, SETUP_CONFIG_LOCK_PATH);
+        acquired = true;
+        break;
+      } catch (error) {
+        if (!isErrno(error, "EEXIST")) throw error;
+        if (await recoverStaleSetupConfigLock()) continue;
+        await waitForSetupConfigLock(deadline);
+      }
+    }
+
+    try {
+      return await action();
+    } finally {
+      await releaseSetupConfigLock(owner, claimPath);
+      acquired = false;
+    }
+  } finally {
+    if (!acquired) await unlink(claimPath).catch(() => undefined);
+  }
+}
+
+async function writeSetupConfig(config: MyPiSetupConfig) {
+  const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await writeFile(tempPath, `${JSON.stringify(config, null, 2)}\n`, {
       encoding: "utf8",
@@ -537,6 +920,13 @@ export async function saveSetupConfig(config: MyPiSetupConfig) {
     await unlink(tempPath).catch(() => undefined);
     throw error;
   }
+}
+
+export async function saveSetupConfig(config: MyPiSetupConfig) {
+  await withSetupConfigLock(async () => {
+    readDocumentForWrite();
+    await writeSetupConfig(config);
+  });
 }
 
 export function formatSetupConfig(config = loadSetupConfig()) {
@@ -571,9 +961,11 @@ export { isFooterItem, isFooterLayoutItem, isFooterStyle, isFooterPreset };
 export async function updateSetupConfig(
   mutate: (current: MyPiSetupConfig) => MyPiSetupConfig,
 ) {
-  const raw = readDocumentForWrite();
-  const current = parseSetupConfig(raw);
-  const config = mutate(current);
-  await saveSetupConfig(config);
-  return { config, replaced: replacedFields(raw, current) };
+  return withSetupConfigLock(async () => {
+    const raw = readDocumentForWrite();
+    const current = parseSetupConfig(raw);
+    const config = mutate(current);
+    await writeSetupConfig(config);
+    return { config, replaced: replacedFields(raw, current) };
+  });
 }

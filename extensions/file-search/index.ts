@@ -21,6 +21,7 @@ import { Text } from "@earendil-works/pi-tui";
 import { Cause, Data, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
 import { StringEnum } from "@earendil-works/pi-ai";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   buildFdArgs,
   buildRgArgs,
@@ -105,6 +106,9 @@ export interface RgToolDetails {
 
 const EXEC_TIMEOUT_MS = 60_000;
 
+const displayArgument = (value: string) =>
+  sanitizeTerminalText(value).replace(/\s+/gu, " ").trim();
+
 function causeMessage<E>(cause: Cause.Cause<E>) {
   const [first] = Cause.prettyErrors(cause);
   return first?.message ?? Cause.pretty(cause);
@@ -180,6 +184,14 @@ export default function fileSearchTools(pi: ExtensionAPI) {
         cwd: ctx.cwd,
         tempPrefix: `pi-${tool}-`,
       });
+
+      if (result.output.captureLimitExceeded) {
+        return {
+          output: result.output,
+          noMatches: false,
+          binarySource: binary.source,
+        } satisfies SearchOutcome;
+      }
 
       // ripgrep exits 1 for "no matches"; fd exits 0 even with no results.
       if (tool === "rg" && result.code === 1 && result.output.lineCount === 0) {
@@ -269,11 +281,15 @@ export default function fileSearchTools(pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("fd "));
-      text += theme.fg("accent", args.pattern ? `"${args.pattern}"` : "(all)");
-      if (args.path) text += theme.fg("muted", ` in ${args.path}`);
+      text += theme.fg(
+        "accent",
+        args.pattern ? `"${displayArgument(args.pattern)}"` : "(all)",
+      );
+      if (args.path)
+        text += theme.fg("muted", ` in ${displayArgument(args.path)}`);
       const flags = [
         args.type && `type=${args.type}`,
-        args.extension && `ext=${args.extension}`,
+        args.extension && `ext=${displayArgument(args.extension)}`,
         args.glob && "glob",
         args.hidden && "hidden",
         args.max_depth !== undefined && `depth≤${args.max_depth}`,
@@ -361,11 +377,12 @@ export default function fileSearchTools(pi: ExtensionAPI) {
 
     renderCall(args, theme) {
       let text = theme.fg("toolTitle", theme.bold("rg "));
-      text += theme.fg("accent", `"${args.pattern}"`);
-      if (args.path) text += theme.fg("muted", ` in ${args.path}`);
+      text += theme.fg("accent", `"${displayArgument(args.pattern)}"`);
+      if (args.path)
+        text += theme.fg("muted", ` in ${displayArgument(args.path)}`);
       const flags = [
-        args.glob && `glob=${args.glob}`,
-        args.file_type && `type=${args.file_type}`,
+        args.glob && `glob=${displayArgument(args.glob)}`,
+        args.file_type && `type=${displayArgument(args.file_type)}`,
         args.fixed_strings && "literal",
         args.hidden && "hidden",
         args.context !== undefined && `ctx=${args.context}`,
@@ -398,7 +415,7 @@ interface ThemeLike {
   fg(color: string, text: string): string;
 }
 
-function expandedPreview(
+export function expandedPreview(
   result: { content: { type: string; text?: string }[] },
   fullOutputPath: string | undefined,
   theme: ThemeLike,
@@ -406,7 +423,7 @@ function expandedPreview(
   let text = "";
   const content = result.content[0];
   if (content?.type === "text" && content.text) {
-    const lines = content.text.split("\n");
+    const lines = sanitizeTerminalText(content.text).split("\n");
     for (const line of lines.slice(0, PREVIEW_LINES)) {
       text += `\n${theme.fg("dim", line)}`;
     }
@@ -415,7 +432,7 @@ function expandedPreview(
     }
   }
   if (fullOutputPath) {
-    text += `\n${theme.fg("dim", `Full output: ${fullOutputPath}`)}`;
+    text += `\n${theme.fg("dim", `Full output: ${displayArgument(fullOutputPath)}`)}`;
   }
   return text;
 }

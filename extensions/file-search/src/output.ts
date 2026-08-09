@@ -1,7 +1,7 @@
 /**
  * Shared output shaping for the fd and rg tools: standard pi truncation
- * (2000 lines / 50KB) with the full output persisted to a temp file when
- * anything is cut off.
+ * (2000 lines / 50KB) with complete output persisted to a temp file up to the
+ * documented 10 MiB capture limit.
  */
 
 import { mkdtemp, writeFile } from "node:fs/promises";
@@ -13,6 +13,9 @@ import {
   formatSize,
   truncateHead,
 } from "@earendil-works/pi-coding-agent";
+
+/** Maximum complete fd/rg output retained in a temporary artifact (10 MiB). */
+export const COMPLETE_OUTPUT_MAX_BYTES = 10 * 1024 * 1024;
 
 export interface FormattedOutput {
   readonly text: string;
@@ -26,6 +29,8 @@ export interface CapturedOutput {
   readonly lineCount: number;
   readonly totalBytes: number;
   readonly truncated: boolean;
+  readonly captureLimitExceeded: boolean;
+  readonly captureLimitBytes: number;
   readonly fullOutputPath?: string;
 }
 
@@ -61,6 +66,24 @@ function truncationNotice(options: {
 /** Format output already captured by a bounded-memory streaming process. */
 export function formatCapturedOutput(captured: CapturedOutput) {
   const trimmed = captured.preview.replace(/\n+$/, "");
+  const truncation = truncateHead(trimmed, {
+    maxLines: DEFAULT_MAX_LINES,
+    maxBytes: DEFAULT_MAX_BYTES,
+  });
+  const content = truncation.content;
+  const outputLines = content === "" ? 0 : content.split("\n").length;
+  const outputBytes = Buffer.byteLength(content);
+
+  if (captured.captureLimitExceeded) {
+    return {
+      text:
+        `${content}\n\n[Output truncated: search output exceeded the ${formatSize(captured.captureLimitBytes)} complete-output capture limit. ` +
+        "The search was stopped and its partial temporary artifact was removed.]",
+      lineCount: captured.lineCount,
+      truncated: true,
+    } satisfies FormattedOutput;
+  }
+
   if (!captured.truncated || !captured.fullOutputPath) {
     return {
       text: trimmed,
@@ -69,13 +92,6 @@ export function formatCapturedOutput(captured: CapturedOutput) {
     } satisfies FormattedOutput;
   }
 
-  const truncation = truncateHead(trimmed, {
-    maxLines: DEFAULT_MAX_LINES,
-    maxBytes: DEFAULT_MAX_BYTES,
-  });
-  const content = truncation.content;
-  const outputLines = content === "" ? 0 : content.split("\n").length;
-  const outputBytes = Buffer.byteLength(content);
   return {
     text: truncationNotice({
       content,

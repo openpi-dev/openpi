@@ -88,8 +88,8 @@ import {
   formatElapsed,
   formatUsage,
   isWorkflowRunId,
-  isWorkflowRunTarget,
   phaseGroups,
+  resolveWorkflowRunTarget,
   resultJson,
   sanitizeLine,
   sanitizeWorkflowDisplayLine,
@@ -130,8 +130,8 @@ import {
   type WorkflowModel,
 } from "./runner.ts";
 import {
+  beginProcessReplayWorkspaceLease,
   createReplayIdentity,
-  createReplayWorkspaceGuard,
   isReplaySafeAgentCall,
 } from "./replay-safety.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
@@ -205,37 +205,32 @@ const WorkflowParams = Type.Object({
 
 type WorkflowInput = Static<typeof WorkflowParams>;
 
-/**
- * Locate a prior run's directory by exact or suffix match, the same convention
- * workflow_stop/workflow_status already accept, so a partial id works here too.
- */
-export function findRunDir(target: string) {
-  const trimmed = target.trim();
-  // Shape-checked before it touches the filesystem. This value is
-  // model-supplied, so `path.join(base, "../../elsewhere")` would escape the
-  // runs directory and replay a planted journal.json as genuine agent output —
-  // reported as `ok (replayed)` with no agent having run and no artifact to
-  // audit. Run ids are `wf_` plus hex; a suffix match is a hex tail.
-  const fullId = isWorkflowRunId(trimmed);
-  if (!isWorkflowRunTarget(trimmed)) return undefined;
+/** Resolve a persisted run without letting a suffix collision choose one. */
+export function resolveRunDir(target: string) {
   const base = path.join(getAgentDir(), "workflows");
-  if (fullId) {
-    const exact = path.join(base, trimmed);
-    try {
-      if (fs.statSync(exact).isDirectory()) return exact;
-    } catch {
-      // Fall through to a suffix scan.
-    }
-  }
+  let names: string[] = [];
   try {
-    const match = fs
-      .readdirSync(base)
-      .filter(isWorkflowRunId)
-      .find((name) => name.endsWith(trimmed));
-    return match ? path.join(base, match) : undefined;
+    names = fs
+      .readdirSync(base, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .filter(isWorkflowRunId);
   } catch {
-    return undefined;
+    // The shared resolver reports the empty candidate set usefully.
   }
+
+  // Shape validation happens before any target-derived path is built. This
+  // value is model-supplied, so traversal must never reach a planted journal.
+  const resolution = resolveWorkflowRunTarget(target, names);
+  return resolution.ok
+    ? { ...resolution, runDir: path.join(base, resolution.runId) }
+    : resolution;
+}
+
+/** Backward-compatible directory lookup for callers that only need a hit. */
+export function findRunDir(target: string) {
+  const resolution = resolveRunDir(target);
+  return resolution.ok ? resolution.runDir : undefined;
 }
 
 function errorText(error: unknown): string {
@@ -608,18 +603,19 @@ export default function workflows(pi: ExtensionAPI) {
       const stopMatch = arg.match(/^(?:stop\s+(\S+)|(\S+)\s+stop)$/i);
       if (stopMatch) {
         const target = stopMatch[1] ?? stopMatch[2];
-        const entry = [...activeRuns.entries()].find(
-          ([runId, run]) =>
-            (runId === target || runId.endsWith(target)) &&
-            run.details.status === "running",
+        const running = [...activeRuns].filter(
+          ([, run]) => run.details.status === "running",
         );
-        if (!entry) {
-          ctx.ui.notify(`No running workflow matching "${target}".`, "warning");
+        const resolution = resolveWorkflowRunTarget(
+          target,
+          running.map(([runId]) => runId),
+        );
+        if (!resolution.ok) {
+          ctx.ui.notify(resolution.error, "warning");
           return;
         }
-        const [runId, run] = entry;
-        run.controller.abort("Stopped by user");
-        ctx.ui.notify(`Stopping workflow ${runId}…`, "info");
+        activeRuns.get(resolution.runId)?.controller.abort("Stopped by user");
+        ctx.ui.notify(`Stopping workflow ${resolution.runId}…`, "info");
         return;
       }
 
@@ -637,18 +633,23 @@ export default function workflows(pi: ExtensionAPI) {
         sessionWorkflowRunIds(ctx),
         startedSince,
       );
-      if (runs.length === 0) {
-        ctx.ui.notify("No workflow runs for this request.", "info");
+      if (arg) {
+        const resolution = resolveWorkflowRunTarget(
+          arg,
+          runs.map((run) => run.runId),
+        );
+        if (!resolution.ok) {
+          ctx.ui.notify(resolution.error, "warning");
+          return;
+        }
+        const run = runs.find(
+          (candidate) => candidate.runId === resolution.runId,
+        );
+        if (run) ctx.ui.notify(runDetailText(run, activeDetails()), "info");
         return;
       }
-      if (arg) {
-        const run = runs.find((r) => r.runId === arg || r.runId.endsWith(arg));
-        ctx.ui.notify(
-          run
-            ? runDetailText(run, activeDetails())
-            : `No workflow run matching "${arg}".`,
-          run ? "info" : "warning",
-        );
+      if (runs.length === 0) {
+        ctx.ui.notify("No workflow runs for this request.", "info");
         return;
       }
       const labels = runs.map(
@@ -712,18 +713,17 @@ export default function workflows(pi: ExtensionAPI) {
       // A missing or unreadable source degrades to a normal full run — resume
       // is an optimization and must not become a new way to fail.
       const journalEntries: JournalEntry[] = [];
-      const replayWorkspace = createReplayWorkspaceGuard();
       let replay: ReplayCache | undefined;
       if (params.resume_from_run_id) {
-        const sourceDir = findRunDir(params.resume_from_run_id);
-        const journal = sourceDir ? loadJournal(sourceDir) : undefined;
-        if (journal && journal.entries.length > 0) {
+        const source = resolveRunDir(params.resume_from_run_id);
+        const journal = source.ok ? loadJournal(source.runDir) : undefined;
+        if (source.ok && journal && journal.entries.length > 0) {
           replay = createReplayCache(journal);
-          details.resumedFrom = path.basename(sourceDir!);
+          details.resumedFrom = source.runId;
         } else {
-          details.resumeNote = sourceDir
-            ? `No replayable results found in ${path.basename(sourceDir)}; ran everything fresh.`
-            : `No workflow run matching "${params.resume_from_run_id}"; ran everything fresh.`;
+          details.resumeNote = source.ok
+            ? `No replayable results found in ${source.runId}; ran everything fresh.`
+            : `${source.error}; ran everything fresh.`;
         }
       }
 
@@ -1022,7 +1022,7 @@ export default function workflows(pi: ExtensionAPI) {
           tools: agentType?.tools,
           isolation: opts.isolation,
         });
-        const replayLease = replayWorkspace.begin(replaySafe);
+        const replayLease = beginProcessReplayWorkspaceLease(replaySafe);
         let replayResources:
           Awaited<ReturnType<typeof getResources>> | undefined;
         let replayIdentity: ReturnType<typeof createReplayIdentity> | undefined;
@@ -1064,6 +1064,7 @@ export default function workflows(pi: ExtensionAPI) {
             },
           });
         const callKey = replayIdentity ? replayKey(replayIdentity) : undefined;
+        let replayBoundaryViolated = false;
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
         const cached =
@@ -1176,11 +1177,25 @@ export default function workflows(pi: ExtensionAPI) {
                 schema: effectiveSchema,
                 model,
                 thinkingLevel,
-                cwd: agentCwd,
+                // Replay-safe calls use the same canonical cwd as the
+                // identity and filesystem boundary, so a symlink spelling of
+                // the checkout cannot retarget relative tool paths.
+                cwd: replayIdentity?.cwd ?? agentCwd,
                 loader: resources.loader,
                 settingsManager: resources.settingsManager,
                 modelRegistry: ctx.modelRegistry,
                 ...(agentType?.tools ? { tools: agentType.tools } : {}),
+                ...(replayIdentity
+                  ? {
+                      replayFilesystemBoundary: {
+                        repositoryRoot: replayIdentity.repositoryRoot,
+                        cwd: replayIdentity.cwd,
+                        onViolation: () => {
+                          replayBoundaryViolated = true;
+                        },
+                      },
+                    }
+                  : {}),
                 signal: runSignal,
                 onProgress: (progress) => {
                   if (runSettled || record.state !== "running") return;
@@ -1252,6 +1267,7 @@ export default function workflows(pi: ExtensionAPI) {
                 outcomeOk &&
                 completedKey !== undefined &&
                 completedKey === callKey &&
+                !replayBoundaryViolated &&
                 replayLease.canJournal()
               ) {
                 journalEntries.push({
@@ -1690,41 +1706,54 @@ export default function workflows(pi: ExtensionAPI) {
     },
   });
 
-  /** Resolve a run id (exact or suffix) to its details from live, settled, or disk. */
-  const resolveRunDetails = (target: string): WorkflowDetails | undefined => {
-    if (!isWorkflowRunTarget(target)) return undefined;
-    for (const [runId, run] of activeRuns) {
-      if (runId === target || runId.endsWith(target)) return run.details;
-    }
-    for (const [runId, details] of settledRuns) {
-      if (runId === target || runId.endsWith(target)) return details;
-    }
-    // Fall back to a persisted run this session may not still track in memory.
+  /** Resolve one run from live, settled, or persisted state. */
+  const resolveRunDetails = (target: string) => {
     const base = path.join(getAgentDir(), "workflows");
-    let names: string[] = [];
+    let persistedIds: string[] = [];
     try {
-      names = fs.readdirSync(base).filter(isWorkflowRunId);
+      persistedIds = fs.readdirSync(base).filter(isWorkflowRunId);
     } catch {
-      return undefined;
+      // In-memory runs remain inspectable without the artifact directory.
     }
-    const match = names.find((n) => n === target || n.endsWith(target));
-    if (!match) return undefined;
+    const resolution = resolveWorkflowRunTarget(target, [
+      ...activeRuns.keys(),
+      ...settledRuns.keys(),
+      ...persistedIds,
+    ]);
+    if (!resolution.ok) return resolution;
+
+    const active = activeRuns.get(resolution.runId);
+    if (active) return { ok: true, details: active.details } as const;
+    const settled = settledRuns.get(resolution.runId);
+    if (settled) return { ok: true, details: settled } as const;
+
     try {
       const parsed: unknown = JSON.parse(
-        fs.readFileSync(path.join(base, match, "workflow.json"), "utf8"),
+        fs.readFileSync(
+          path.join(base, resolution.runId, "workflow.json"),
+          "utf8",
+        ),
       );
-      const details = normalizePersistedWorkflowDetails(match, parsed);
-      if (!details) return undefined;
+      const details = normalizePersistedWorkflowDetails(
+        resolution.runId,
+        parsed,
+      );
+      if (!details) throw new Error("invalid workflow details");
       // A run absent from activeRuns cannot still be running this session; a
       // persisted "running" is a run that was hard-killed or missed the
-      // shutdown settle deadline. Normalize it to "aborted" so this detail path
-      // agrees with listRuns and with workflow_stop (which reports it stopped).
-      if (details.status === "running") {
-        return { ...details, status: "aborted" };
-      }
-      return details;
+      // shutdown settle deadline.
+      return {
+        ok: true,
+        details:
+          details.status === "running"
+            ? { ...details, status: "aborted" as const }
+            : details,
+      } as const;
     } catch {
-      return undefined;
+      return {
+        ok: false,
+        error: `Workflow run ${resolution.runId} could not be read.`,
+      } as const;
     }
   };
 
@@ -1739,25 +1768,23 @@ export default function workflows(pi: ExtensionAPI) {
       }),
     }),
     execute(_toolCallId, params) {
-      if (!isWorkflowRunTarget(params.runId)) {
-        throw new Error("Workflow run id must be a generated id or hex suffix");
-      }
-      const entry = [...activeRuns.entries()].find(
-        ([runId, run]) =>
-          (runId === params.runId || runId.endsWith(params.runId)) &&
-          run.details.status === "running",
+      const running = [...activeRuns].filter(
+        ([, run]) => run.details.status === "running",
       );
-      if (!entry) {
-        const running = [...activeRuns.keys()];
-        throw new Error(
-          `No running workflow matching "${params.runId}". Running: ${running.join(", ") || "none"}.`,
-        );
-      }
-      const [runId] = entry;
-      stopRun(runId);
+      const resolution = resolveWorkflowRunTarget(
+        params.runId,
+        running.map(([runId]) => runId),
+      );
+      if (!resolution.ok) throw new Error(resolution.error);
+      stopRun(resolution.runId);
       return Promise.resolve({
-        content: [{ type: "text", text: `Stopping workflow ${runId}.` }],
-        details: { runId, status: "aborting" },
+        content: [
+          {
+            type: "text",
+            text: `Stopping workflow ${resolution.runId}.`,
+          },
+        ],
+        details: { runId: resolution.runId, status: "aborting" },
       });
     },
   });
@@ -1788,18 +1815,9 @@ export default function workflows(pi: ExtensionAPI) {
         };
       };
       if (params.runId) {
-        if (!isWorkflowRunTarget(params.runId)) {
-          throw new Error(
-            "Workflow run id must be a generated id or hex suffix",
-          );
-        }
-        const details = resolveRunDetails(params.runId);
-        if (!details) {
-          const running = [...activeRuns.keys()];
-          throw new Error(
-            `No workflow matching "${params.runId}". Active: ${running.join(", ") || "none"}.`,
-          );
-        }
+        const resolution = resolveRunDetails(params.runId);
+        if (!resolution.ok) throw new Error(resolution.error);
+        const details = resolution.details;
         const runDir = path.join(getAgentDir(), "workflows", details.runId);
         return Promise.resolve({
           content: [

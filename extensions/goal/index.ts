@@ -5,6 +5,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { GOAL_CONTINUATION_TYPE, GoalController } from "./controller.ts";
 import {
   GOAL_LIMITS,
@@ -43,7 +44,7 @@ export function parseGoalCommand(args: string) {
 }
 
 export function statusText(goal: GoalSnapshot | undefined, problem?: string) {
-  if (problem) return `Failed to read goal: ${problem}`;
+  if (problem) return `Failed to read goal: ${sanitizeTerminalText(problem)}`;
   if (!goal) return `${GOAL_USAGE}\n\nNo goal is currently set.`;
   const commands =
     goal.status === "active"
@@ -53,8 +54,8 @@ export function statusText(goal: GoalSnapshot | undefined, problem?: string) {
         : "Commands: /goal edit, /goal clear";
   return [
     "Goal",
-    `Status: ${statusLabel(goal.status)}`,
-    `Objective: ${goal.objective}`,
+    `Status: ${sanitizeTerminalText(statusLabel(goal.status))}`,
+    `Objective: ${sanitizeTerminalText(goal.objective)}`,
     `Time used: ${formatGoalElapsedSeconds(goal.timeUsedSeconds)}`,
     `Tokens used: ${formatTokensCompact(goal.tokensUsed)}`,
     ...(goal.tokenBudget === undefined
@@ -286,7 +287,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
     },
     renderCall(args, theme) {
       return new Text(
-        `${theme.fg("toolTitle", theme.bold("update_goal"))} ${theme.fg("muted", args.status)}`,
+        `${theme.fg("toolTitle", theme.bold("update_goal"))} ${theme.fg("muted", sanitizeTerminalText(args.status))}`,
         0,
         0,
       );
@@ -406,7 +407,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
     ) {
       const shouldResume = await ctx.ui.confirm(
         "Resume paused goal?",
-        `Goal: ${goal.objective}\n\nMark it active and continue when idle?`,
+        `Goal: ${sanitizeTerminalText(goal.objective)}\n\nMark it active and continue when idle?`,
       );
       if (shouldResume) {
         controller.resume();
@@ -505,8 +506,8 @@ function publicGoal(goal: GoalSnapshot, threadId?: string) {
 
 function goalUpdateMessage(goal: GoalSnapshot) {
   const parts = [
-    `Goal ${statusLabel(goal.status)}`,
-    `Objective: ${goal.objective}`,
+    `Goal ${sanitizeTerminalText(statusLabel(goal.status))}`,
+    `Objective: ${sanitizeTerminalText(goal.objective)}`,
   ];
   if (goal.timeUsedSeconds > 0) {
     parts.push(`Time: ${formatGoalElapsedSeconds(goal.timeUsedSeconds)}.`);

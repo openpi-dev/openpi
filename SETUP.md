@@ -1,6 +1,6 @@
 # Setup
 
-Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
+Use Node.js 22.19.0 or newer. Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
 
 ```sh
 cd ~/.pi/agent
@@ -64,4 +64,4 @@ Session Tasks remain advisory multi-item work intent and do not determine Goal c
 - `/goal ...` controls the persistent autonomous session objective.
 - `/context-pivot <next phase>` deliberately compacts a long current session into a next-phase brief. It requires at least 30,000 context tokens and is rejected below that; use the separate `/handoff` skill when work should move to a genuinely new session.
 - `/cron every <5m> <prompt>`, `/cron in <30s> <prompt>`, `/cron list`, and `/cron remove <id>` schedule a prompt for this session. Jobs are in-memory and session-scoped (cleared on shutdown), fire only while the session is idle, and use a duration grammar (`30s`/`5m`/`2h`, minimum 30s) rather than crontab fields, because the scheduler polls about every 30 seconds.
-- `/plan [objective]` explores read-only before changing anything: while armed it blocks `edit`, `write`, mutating Bash, `subagent_send`, `workflow`, and `bg_start`, while read/grep/find/ls/fd/rg and verified read-only Git/GitHub commands stay available. It permits `subagent_spawn`, but the harness narrows every newly spawned planning child to investigation-only tools; agent types can narrow that list further, never widen it. `/plan done` asks for approval and then releases the gate; `/plan off` cancels.
+- `/plan [objective]` explores read-only before changing anything: while armed it blocks `edit`, `write`, mutating Bash, `subagent_send`, `workflow`, and `bg_start`, while read/grep/find/ls/fd/rg and verified read-only Git/GitHub commands stay available. It permits `subagent_spawn`, but the harness narrows every newly spawned planning child to investigation-only tools; agent types can narrow that list further, never widen it. The model must submit the complete plan through parent-only `plan_ready`; the write gate stays closed until `/plan` prepares an editable implementation prompt for the current or a fresh Session. `/plan off` cancels.

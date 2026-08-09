@@ -78,12 +78,10 @@ test("active workflow previews and errors cannot inject terminal controls", () =
 test("a log line is flattened into one safe terminal row", () => {
   // Scripts are model-authored, so an escape sequence here would repaint the
   // user's screen and a newline would break row layout.
-  const dirty = "step \u001b[31m1\u001b[0m\ndone\ttidily";
+  const dirty = "step \u001b[31m1\u001b[0m\ndone\ttidily\u202ereordered\u202c";
   const clean = sanitizeLine(dirty, MAX_LOG_TEXT);
-  // Control characters become spaces: the text survives, but it can no longer
-  // move the cursor or start a new row.
   assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(clean));
-  assert.equal(clean.replace(/\s+/g, " "), "step [31m1 [0m done tidily");
+  assert.equal(clean, "step 1 done tidilyreordered");
 });
 
 test("clipping a long line never splits a surrogate pair", () => {

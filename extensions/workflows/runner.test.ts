@@ -520,6 +520,59 @@ test("workflow agents reject a missing declared tool before prompting", async ()
   });
 });
 
+test("workflow child guards enforce the replay filesystem boundary", async () => {
+  await withTempDir(async (cwd) => {
+    let observations = 0;
+    let violations = 0;
+    const read = {
+      name: "read",
+      label: "read",
+      description: "fixture",
+      parameters: Type.Object({ path: Type.String() }),
+      async execute(_toolCallId: string, _params: { path: string }) {
+        observations++;
+        return {
+          content: [{ type: "text" as const, text: "observed" }],
+          details: {},
+        };
+      },
+    } satisfies ToolDefinition;
+    const session = {
+      getAllTools: () => [
+        {
+          name: "read",
+          sourceInfo: {
+            path: "<builtin:read>",
+            source: "builtin",
+            origin: "top-level",
+          },
+        },
+      ],
+      getToolDefinition: () => read,
+      subscribe: () => () => {},
+    };
+    const unsubscribe = guardWorkflowChildTools(session, 1_000, {
+      repositoryRoot: cwd,
+      cwd,
+      onViolation: () => {
+        violations++;
+      },
+    });
+
+    assert.equal(
+      (await read.execute("local", { path: "." })).content[0]?.text,
+      "observed",
+    );
+    await assert.rejects(
+      read.execute("external", { path: path.dirname(cwd) }),
+      /Replay filesystem boundary blocked/,
+    );
+    assert.equal(observations, 1);
+    assert.equal(violations, 1);
+    unsubscribe();
+  });
+});
+
 test("workflow children guard structured, normal, and dynamically registered tools", async () => {
   const structuredResult = {
     content: [{ type: "text" as const, text: "recorded" }],

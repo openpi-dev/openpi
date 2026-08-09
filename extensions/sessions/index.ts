@@ -35,7 +35,7 @@ import {
   type SessionPreview,
   formatRelativeTime,
 } from "./sessions.js";
-import { execFile } from "node:child_process";
+import { createSessionStatsLoader, type SessionStats } from "./git-stats.js";
 
 const DEFAULT_VISIBLE = 12;
 const SNIPPET_MAX = 60;
@@ -290,100 +290,9 @@ const renderPreviewBlock = (
   return renderTextBlock(`◇ ${block.label}`, block.text, width, theme, "muted");
 };
 
-interface SessionStats {
-  add: number;
-  mod: number;
-  del: number;
-}
-
-/**
- * Module scope: these outlive a session, which is the point (the picker is
- * reopened constantly), but they are capped so a long-lived process cannot
- * accumulate one entry per session forever.
- */
-const MAX_CACHED_STATS = 256;
-const statsCache = new Map<string, SessionStats>();
-const statsLoading = new Set<string>();
-
-/** A stuck git call must not hold its key in statsLoading for the process's life. */
-const GIT_STATS_TIMEOUT_MS = 3_000;
-
-const execGit = (args: string[], cwd: string): Promise<string> =>
-  new Promise((resolve) => {
-    execFile(
-      "git",
-      args,
-      { cwd, encoding: "utf8", timeout: GIT_STATS_TIMEOUT_MS },
-      (error, stdout) => {
-        resolve(error ? "" : stdout);
-      },
-    );
-  });
-
-const loadSessionStats = (
-  session: SessionInfoLike,
-  isLatestForCwd: boolean,
-  tui: any,
-) => {
-  const key = session.path;
-  if (statsCache.has(key) || statsLoading.has(key)) return;
-
-  statsLoading.add(key);
-
-  const after = session.created
-    ? session.created.toISOString()
-    : new Date(session.modified.getTime() - 24 * 3600 * 1000).toISOString();
-  const before = session.modified.toISOString();
-  Promise.all([
-    execGit(
-      [
-        "log",
-        `--after=${after}`,
-        `--before=${before}`,
-        "--numstat",
-        "--pretty=format:",
-      ],
-      session.cwd,
-    ),
-    isLatestForCwd
-      ? execGit(["diff", "--numstat"], session.cwd)
-      : Promise.resolve(""),
-  ])
-    .then(([logOut, diffOut]) => {
-      let added = 0;
-      let deleted = 0;
-      const parseOut = (out: string) => {
-        const lines = out.split("\n");
-        for (const line of lines) {
-          const parts = line.trim().split(/\s+/);
-          if (parts.length >= 2) {
-            const a = parseInt(parts[0], 10);
-            const d = parseInt(parts[1], 10);
-            if (!isNaN(a)) added += a;
-            if (!isNaN(d)) deleted += d;
-          }
-        }
-      };
-      parseOut(logOut);
-      parseOut(diffOut);
-
-      const mod = Math.min(added, deleted);
-      const add = added - mod;
-      const del = deleted - mod;
-
-      if (statsCache.size >= MAX_CACHED_STATS) {
-        const oldest = statsCache.keys().next().value;
-        if (oldest !== undefined) statsCache.delete(oldest);
-      }
-      statsCache.set(key, { add, mod, del });
-      tui.requestRender();
-    })
-    .finally(() => {
-      // Always release the key: a retained loading marker would block every
-      // later retry for this session.
-      statsLoading.delete(key);
-    });
-};
+/** Cached across picker openings, while the loader bounds process-wide Git work. */
+const statsLoader = createSessionStatsLoader();
+const statsCache = statsLoader.cache;
 
 const formatItemLabel = (
   session: SessionInfoLike,
@@ -654,37 +563,55 @@ async function showSessionPicker(
       let activePreview: SessionPreview | undefined;
       let previewTimer: ReturnType<typeof setTimeout> | undefined;
       let previewSeq = 0;
+      let statsController = new AbortController();
+      let statsGeneration = 0;
+      let workspaceLoadSeq = 0;
+      let disposed = false;
+      let settled = false;
 
       let focus: "list" | "preview" = "list";
       let showAllWorkspaces = false;
       let isLoading = false;
 
+      const disposePicker = () => {
+        if (disposed) return;
+        disposed = true;
+        workspaceLoadSeq++;
+        statsGeneration++;
+        statsController.abort();
+        previewSeq++;
+        if (previewTimer) clearTimeout(previewTimer);
+      };
+      const finishPicker = (result: SessionInfoLike | null) => {
+        if (settled) return;
+        settled = true;
+        disposePicker();
+        done(result);
+      };
       const previewKey = (session: SessionInfoLike): string =>
         `${session.path}:${session.modified.getTime()}`;
 
-      // Group by CWD to find latest session per CWD
-      const getLatestSessionMap = (list: SessionInfoLike[]) => {
-        const latestMap = new Map<string, string>();
-        for (const s of list) {
-          if (!latestMap.has(s.cwd)) {
-            latestMap.set(s.cwd, s.path);
-          }
-        }
-        return latestMap;
+      const cancelStatsLoad = () => {
+        statsGeneration++;
+        statsController.abort();
       };
-
       const triggerStatsLoad = (list: SessionInfoLike[]) => {
-        const latestMap = getLatestSessionMap(list);
-        for (const s of list) {
-          const isLatest = latestMap.get(s.cwd) === s.path;
-          loadSessionStats(s, isLatest, tui);
-        }
+        cancelStatsLoad();
+        statsController = new AbortController();
+        const generation = statsGeneration;
+        const signal = statsController.signal;
+        void statsLoader.load(list, signal, () => {
+          if (disposed || signal.aborted || generation !== statsGeneration)
+            return;
+          tui.requestRender();
+        });
       };
 
-      // Initial stats load
       triggerStatsLoad(sorted);
 
       const loadWorkspaceSessions = async (allWorkspaces: boolean) => {
+        const loadSeq = ++workspaceLoadSeq;
+        cancelStatsLoad();
         isLoading = true;
         tui.requestRender();
         try {
@@ -694,6 +621,8 @@ async function showSessionPicker(
           } else {
             results = await SessionManager.list(ctx.cwd);
           }
+          if (disposed || loadSeq !== workspaceLoadSeq) return;
+
           sorted = sortSessions(results);
           for (const s of sorted) {
             sessionByPath.set(s.path, s);
@@ -713,13 +642,16 @@ async function showSessionPicker(
           rebuild();
           schedulePreviewLoad();
         } catch (error) {
+          if (disposed || loadSeq !== workspaceLoadSeq) return;
           ctx.ui.notify(
             `Failed to load sessions: ${error instanceof Error ? error.message : error}`,
             "error",
           );
         } finally {
-          isLoading = false;
-          tui.requestRender();
+          if (!disposed && loadSeq === workspaceLoadSeq) {
+            isLoading = false;
+            tui.requestRender();
+          }
         }
       };
 
@@ -823,8 +755,8 @@ async function showSessionPicker(
           );
           selectList.setSelectedIndex(selectedIndex >= 0 ? selectedIndex : 0);
           selectList.onSelect = (item) =>
-            done(sessionByPath.get(item.value) ?? null);
-          selectList.onCancel = () => done(null);
+            finishPicker(sessionByPath.get(item.value) ?? null);
+          selectList.onCancel = () => finishPicker(null);
           selectList.onSelectionChange = (item) => setSelectedPath(item.value);
           container.addChild(selectList);
         }
@@ -901,8 +833,8 @@ async function showSessionPicker(
           );
           selectList.setSelectedIndex(selectedIndex >= 0 ? selectedIndex : 0);
           selectList.onSelect = (item) =>
-            done(sessionByPath.get(item.value) ?? null);
-          selectList.onCancel = () => done(null);
+            finishPicker(sessionByPath.get(item.value) ?? null);
+          selectList.onCancel = () => finishPicker(null);
           selectList.onSelectionChange = (item) => setSelectedPath(item.value);
 
           leftLines = [
@@ -965,6 +897,7 @@ async function showSessionPicker(
           previewCache.clear();
           rebuild();
         },
+        dispose: disposePicker,
         handleInput: (data) => {
           if (data === "\u0014" || data === "\u001bw") {
             showAllWorkspaces = !showAllWorkspaces;

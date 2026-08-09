@@ -91,6 +91,43 @@ test("goal tool result paints every row through the supplied status background",
   assert.ok(rendered.every((line) => line.endsWith("</green>")));
 });
 
+test("goal rendering sanitizes replayed objective, reason, status, and messages", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const replayed = {
+    ...goal,
+    objective: "safe\u001b[31m red\u001b[0m\u202e spoof\u202c",
+    reason: "because\u001b]52;c;payload\u0007 now",
+    status: "active\u202e" as typeof goal.status,
+  };
+  const rendered = renderGoalTool(
+    { goal: replayed, message: "ignored" },
+    true,
+    theme,
+  )
+    .render(80)
+    .map((line) => line.trimEnd());
+
+  assert.deepEqual(rendered, [
+    "Goal active",
+    "safe red spoof",
+    "12.5K / 50K tokens",
+    "Reason: because now",
+  ]);
+  assert.deepEqual(
+    renderGoalTool(
+      { message: "failed\u001bPsecret\u001b\\ safely\u2066x\u2069" },
+      false,
+      theme,
+    )
+      .render(80)
+      .map((line) => line.trimEnd()),
+    ["failed safelyx"],
+  );
+});
+
 test("continuation rows are one-line labels and never reveal prompt bodies", () => {
   assert.equal(
     goalContinuationLabel({
