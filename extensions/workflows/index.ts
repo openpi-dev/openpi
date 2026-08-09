@@ -899,14 +899,15 @@ export default function workflows(pi: ExtensionAPI) {
         if (!basePrompt.trim())
           return fail("agent() requires a non-empty prompt string");
         let acceptanceContract: ReturnType<typeof parseAcceptanceContract>;
+        let effectiveSchema: unknown;
         try {
           acceptanceContract = parseAcceptanceContract(opts.acceptance);
+          effectiveSchema = acceptanceContract
+            ? acceptanceSchema(opts.schema, acceptanceContract)
+            : opts.schema;
         } catch (error) {
           return fail(`agent "${label}": ${errorText(error)}`);
         }
-        const effectiveSchema = acceptanceContract
-          ? acceptanceSchema(opts.schema, acceptanceContract)
-          : opts.schema;
         const prompt = buildWorkflowAgentPrompt(
           acceptanceContract
             ? `${basePrompt}\n\n${acceptanceInstruction(acceptanceContract)}`

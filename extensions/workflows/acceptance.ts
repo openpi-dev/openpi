@@ -116,14 +116,44 @@ export function acceptanceSchema(
     },
     required: ["criteria"],
   };
-  const acceptanceProperty = {
-    type: "object",
-    properties: { acceptance: ledger },
-    required: ["acceptance"],
+  if (schema === undefined) {
+    return {
+      type: "object",
+      properties: { acceptance: ledger },
+      required: ["acceptance"],
+    };
+  }
+  if (!record(schema) || schema.type !== "object") {
+    throw new Error("acceptance can only compose with an object JSON Schema");
+  }
+  const properties =
+    schema.properties === undefined
+      ? {}
+      : record(schema.properties)
+        ? schema.properties
+        : undefined;
+  if (!properties) {
+    throw new Error("acceptance schema properties must be an object");
+  }
+  if (Object.hasOwn(properties, "acceptance")) {
+    throw new Error(
+      'the caller schema already defines reserved property "acceptance"',
+    );
+  }
+  const required =
+    schema.required === undefined
+      ? []
+      : Array.isArray(schema.required) &&
+          schema.required.every((entry) => typeof entry === "string")
+        ? schema.required
+        : undefined;
+  if (!required)
+    throw new Error("acceptance schema required must be a string array");
+  return {
+    ...schema,
+    properties: { ...properties, acceptance: ledger },
+    required: [...new Set([...required, "acceptance"])],
   };
-  return schema === undefined
-    ? acceptanceProperty
-    : { allOf: [schema, acceptanceProperty] };
 }
 
 export function isAcceptanceLedger(value: unknown): value is AcceptanceLedger {

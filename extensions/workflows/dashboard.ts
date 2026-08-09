@@ -395,6 +395,7 @@ function buildReport(details: WorkflowDetails): string {
       const stats = [
         agent.model,
         agentContext(agent),
+        agent.acceptance ? `acceptance:${agent.acceptance.status}` : undefined,
         formatElapsed(agent.startedAt, agent.finishedAt),
       ]
         .filter(Boolean)
@@ -954,7 +955,13 @@ export class WorkflowDashboard {
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", "❯")
             : " ";
-        const stats = [agent.model, agentContext(agent)]
+        const stats = [
+          agent.model,
+          agentContext(agent),
+          agent.acceptance
+            ? `acceptance:${agent.acceptance.status}`
+            : undefined,
+        ]
           .filter(Boolean)
           .join(" · ");
         const label =
@@ -1073,6 +1080,7 @@ export class WorkflowDashboard {
       [
         agent.model,
         agentContext(agent),
+        agent.acceptance ? `acceptance:${agent.acceptance.status}` : undefined,
         formatElapsed(agent.startedAt, agent.finishedAt),
       ]
         .filter(Boolean)

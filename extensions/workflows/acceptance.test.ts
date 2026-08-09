@@ -107,14 +107,31 @@ test("acceptance composes with an existing structured schema", () => {
   const schema = acceptanceSchema(
     {
       type: "object",
+      additionalProperties: false,
       properties: { answer: { type: "string" } },
       required: ["answer"],
     },
     contract,
-  ) as { allOf?: unknown[] };
-  assert.equal(schema.allOf?.length, 2);
+  ) as { properties: Record<string, unknown>; required: string[] };
+  assert.ok(schema.properties.acceptance);
+  assert.deepEqual(schema.required, ["answer", "acceptance"]);
   assert.equal(
     (acceptanceSchema(undefined, contract) as { type?: string }).type,
     "object",
+  );
+  assert.throws(
+    () => acceptanceSchema({ type: "string" }, contract),
+    /object JSON Schema/,
+  );
+  assert.throws(
+    () =>
+      acceptanceSchema(
+        {
+          type: "object",
+          properties: { acceptance: { type: "string" } },
+        },
+        contract,
+      ),
+    /reserved property/,
   );
 });
