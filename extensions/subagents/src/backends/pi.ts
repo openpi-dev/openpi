@@ -39,12 +39,10 @@ import {
   childToolPolicy,
   createChildResources,
   shutdownAndDisposeChildSession,
-  waitBounded,
 } from "../../../shared/child-session.ts";
-import {
-  reclaimWorktree,
-  WORKTREE_GIT_TIMEOUT_MS,
-} from "../../../shared/worktree.ts";
+import { reclaimWorktree } from "../../../shared/worktree.ts";
+
+const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
 
 // --- Model + effort resolution -----------------------------------------------
 
@@ -402,31 +400,17 @@ const makePiSession = (
         } catch {
           // Continue with abort/dispose.
         }
-        await waitBounded(session.abort(), CHILD_SHUTDOWN_TIMEOUT_MS);
-        await shutdownAndDisposeChildSession(session);
-        // The session scope is the worktree's lifetime: reclaim only after the
-        // child is truly done writing, and never let a git failure block the
-        // rest of teardown.
+        await shutdownAndDisposeChildSession(session, {
+          abort: true,
+          timeoutMs: CHILD_SHUTDOWN_TIMEOUT_MS,
+        });
+        // A direct child can run multiple turns, so its worktree lives until
+        // this session scope closes. Cleanup is fail-closed and shares a hard
+        // deadline; unknown/dirty/ignored/detached work is preserved.
         if (task.worktree) {
-          const cleanup = await Promise.race([
-            reclaimWorktree(task.worktree.repoCwd, task.worktree),
-            new Promise<undefined>((resolve) => {
-              setTimeout(resolve, WORKTREE_GIT_TIMEOUT_MS);
-            }),
-          ]).catch(() => undefined);
-          emit({
-            _tag: "WorktreeCleaned",
-            cleanup: cleanup ?? {
-              removed: false,
-              branchDeleted: false,
-              reason: "worktree cleanup timed out or failed",
-              branch: task.worktree.branch,
-              ...(task.worktree.baseSha
-                ? { baseSha: task.worktree.baseSha }
-                : {}),
-              detached: false,
-            },
-          });
+          await reclaimWorktree(task.worktree.repoCwd, task.worktree, {
+            timeoutMs: DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS,
+          }).catch(() => {});
         }
         Queue.endUnsafe(events);
       }),

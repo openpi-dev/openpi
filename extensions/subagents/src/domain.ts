@@ -8,7 +8,6 @@
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
-import type { WorktreeCleanup } from "../../shared/worktree.ts";
 
 export const BACKEND_NAMES = ["pi"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
@@ -199,7 +198,6 @@ export type SubagentEvent =
       readonly contextWindow?: number;
     }
   | { readonly _tag: "MetaChanged"; readonly meta: Partial<SubagentMeta> }
-  | { readonly _tag: "WorktreeCleaned"; readonly cleanup: WorktreeCleanup }
   /** Non-fatal diagnostics. Fatal failures arrive as a RunSettled outcome. */
   | { readonly _tag: "BackendError"; readonly message: string };
 
@@ -231,8 +229,6 @@ export interface SubagentSnapshot {
   readonly finalText: string;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
-  /** Present after an isolated session scope has been reclaimed or preserved. */
-  readonly worktreeCleanup?: WorktreeCleanup;
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */

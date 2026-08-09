@@ -86,14 +86,32 @@ interface GitResult {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
+  /** Spawn/timeout failure rather than a normal numeric Git exit status. */
+  readonly exception: boolean;
 }
 
-function runGit(args: readonly string[], cwd: string): Promise<GitResult> {
+function runGit(
+  args: readonly string[],
+  cwd: string,
+  timeoutMs = WORKTREE_GIT_TIMEOUT_MS,
+): Promise<GitResult> {
+  if (timeoutMs <= 0) {
+    return Promise.resolve({
+      code: 1,
+      stdout: "",
+      stderr: "git operation deadline exceeded",
+      exception: true,
+    });
+  }
   return new Promise((resolve) => {
     execFile(
       "git",
-      [...args],
-      { cwd, encoding: "utf8", timeout: WORKTREE_GIT_TIMEOUT_MS },
+      ["-c", "core.fsmonitor=false", ...args],
+      {
+        cwd,
+        encoding: "utf8",
+        timeout: Math.min(timeoutMs, WORKTREE_GIT_TIMEOUT_MS),
+      },
       (error, stdout, stderr) => {
         const code =
           error && typeof (error as { code?: unknown }).code === "number"
@@ -105,6 +123,8 @@ function runGit(args: readonly string[], cwd: string): Promise<GitResult> {
           code,
           stdout: stdout ?? "",
           stderr: (stderr ?? "") || (error ? error.message : ""),
+          exception:
+            !!error && typeof (error as { code?: unknown }).code !== "number",
         });
       },
     );
@@ -297,7 +317,11 @@ export interface WorktreeCommitCount {
 export async function reclaimWorktree(
   repoCwd: string,
   worktree: Worktree,
+  options: { timeoutMs?: number } = {},
 ): Promise<WorktreeCleanup> {
+  const deadline = Date.now() + (options.timeoutMs ?? WORKTREE_GIT_TIMEOUT_MS);
+  const run = (args: readonly string[]) =>
+    runGit(args, repoCwd, deadline - Date.now());
   const base = {
     removed: false,
     branchDeleted: false,
@@ -312,10 +336,13 @@ export async function reclaimWorktree(
 
   // Inspect everything that automatic removal could destroy before asking Git
   // to remove anything. An unknown state is productive until proven otherwise.
-  const head = await runGit(
-    ["-C", worktree.path, "rev-parse", "--verify", "HEAD"],
-    repoCwd,
-  );
+  const head = await run([
+    "-C",
+    worktree.path,
+    "rev-parse",
+    "--verify",
+    "HEAD",
+  ]);
   const headSha = head.code === 0 ? firstLine(head.stdout) : "";
   if (!headSha) {
     return preserve(
@@ -323,19 +350,32 @@ export async function reclaimWorktree(
     );
   }
 
-  const symbolic = await runGit(
-    ["-C", worktree.path, "symbolic-ref", "--quiet", "--short", "HEAD"],
-    repoCwd,
-  );
+  const symbolic = await run([
+    "-C",
+    worktree.path,
+    "symbolic-ref",
+    "--quiet",
+    "--short",
+    "HEAD",
+  ]);
+  if (symbolic.code !== 0 && (symbolic.code !== 1 || symbolic.exception)) {
+    return preserve(
+      firstLine(symbolic.stderr) || "could not inspect worktree branch",
+      { headSha },
+    );
+  }
   const headBranch = symbolic.code === 0 ? firstLine(symbolic.stdout) : "";
   const detached = !headBranch;
   const branch = headBranch || worktree.branch;
   const observed = { branch, headSha, detached };
 
-  const status = await runGit(
-    ["-C", worktree.path, "status", "--porcelain=v1", "--untracked-files=all"],
-    repoCwd,
-  );
+  const status = await run([
+    "-C",
+    worktree.path,
+    "status",
+    "--porcelain=v1",
+    "--untracked-files=all",
+  ]);
   if (status.code !== 0) {
     return preserve(
       firstLine(status.stderr) || "could not inspect worktree status",
@@ -346,18 +386,15 @@ export async function reclaimWorktree(
   const untracked = statusLines.some((line) => line.startsWith("??"));
   const dirty = statusLines.length > 0;
 
-  const ignoredFiles = await runGit(
-    [
-      "-C",
-      worktree.path,
-      "ls-files",
-      "--others",
-      "--ignored",
-      "--exclude-standard",
-      "-z",
-    ],
-    repoCwd,
-  );
+  const ignoredFiles = await run([
+    "-C",
+    worktree.path,
+    "ls-files",
+    "--others",
+    "--ignored",
+    "--exclude-standard",
+    "-z",
+  ]);
   if (ignoredFiles.code !== 0) {
     return preserve(
       firstLine(ignoredFiles.stderr) || "could not inspect ignored files",
@@ -374,10 +411,26 @@ export async function reclaimWorktree(
       ignored,
     });
   }
+  const mergeBase = await run(["merge-base", worktree.baseSha, headSha]);
+  if (mergeBase.code !== 0) {
+    return preserve(
+      firstLine(mergeBase.stderr) || "could not compare HEAD with its baseline",
+      { ...observed, dirty, untracked, ignored },
+    );
+  }
+  if (firstLine(mergeBase.stdout) !== worktree.baseSha) {
+    return preserve("worktree HEAD no longer descends from its baseline", {
+      ...observed,
+      dirty,
+      untracked,
+      ignored,
+    });
+  }
   const commitCount = await worktreeCommitCount(
     repoCwd,
     headSha,
     worktree.baseSha,
+    deadline - Date.now(),
   );
   if (!commitCount.ok || commitCount.count === undefined) {
     return preserve(
@@ -405,11 +458,14 @@ export async function reclaimWorktree(
     ].filter(Boolean);
     return preserve(`worktree contains ${contents.join(" and ")}`, inspected);
   }
-  // A detached commit has no surviving ref. Removing its checkout would leave
-  // the only durable result dangling even though the tree itself is clean.
-  if (detached && commitCount.count > 0) {
+  // Detachment is itself an intentional checkout-state change, and productive
+  // detached commits have no surviving ref. Preserve all detached checkouts
+  // rather than guessing that a clean one is disposable.
+  if (detached) {
     return preserve(
-      "detached HEAD contains commits not reachable from its base",
+      commitCount.count > 0
+        ? "detached HEAD contains commits not reachable from its base"
+        : "worktree HEAD is detached",
       {
         ...inspected,
         branch: worktree.branch,
@@ -417,7 +473,7 @@ export async function reclaimWorktree(
     );
   }
 
-  const removed = await runGit(["worktree", "remove", worktree.path], repoCwd);
+  const removed = await run(["worktree", "remove", worktree.path]);
   if (removed.code !== 0) {
     return preserve(
       firstLine(removed.stderr) || "git declined to remove the worktree",
@@ -430,7 +486,7 @@ export async function reclaimWorktree(
 
   // Only delete the branch this module created, after proving it is clean and
   // has no commits beyond its immutable creation baseline.
-  const deleted = await runGit(["branch", "-D", worktree.branch], repoCwd);
+  const deleted = await run(["branch", "-D", worktree.branch]);
   return {
     ...base,
     ...inspected,
@@ -449,10 +505,12 @@ export async function worktreeCommitCount(
   repoCwd: string,
   head: string,
   base: string,
+  timeoutMs = WORKTREE_GIT_TIMEOUT_MS,
 ): Promise<WorktreeCommitCount> {
   const result = await runGit(
     ["rev-list", "--count", `${base}..${head}`],
     repoCwd,
+    timeoutMs,
   );
   if (result.code !== 0) {
     return {

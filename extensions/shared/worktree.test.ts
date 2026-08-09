@@ -213,6 +213,26 @@ describe("worktree lifecycle", () => {
     git(repo, "branch", "-D", result.worktree.branch);
   });
 
+  test("preserves a clean detached checkout instead of guessing it is empty", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "detached-clean",
+      id: "1",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    git(result.worktree.path, "checkout", "--quiet", "--detach");
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, false);
+    assert.equal(cleanup.detached, true);
+    assert.equal(cleanup.commits, 0);
+    assert.match(cleanup.reason ?? "", /HEAD is detached/);
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
   test("preserves a detached HEAD that contains child commits", async () => {
     const result = await createWorktree({
       cwd: repo,
@@ -235,6 +255,48 @@ describe("worktree lifecycle", () => {
     git(repo, "branch", "-D", result.worktree.branch);
   });
 
+  test("preserves a clean branch whose history moved behind its baseline", async () => {
+    fs.writeFileSync(path.join(repo, "a.txt"), "second\n");
+    git(repo, "commit", "--quiet", "-am", "second");
+    const result = await createWorktree({
+      cwd: repo,
+      label: "rewritten",
+      id: "1",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    git(result.worktree.path, "reset", "--quiet", "--hard", "HEAD^");
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, false);
+    assert.match(cleanup.reason ?? "", /no longer descends/);
+    assert.ok(fs.existsSync(result.worktree.path));
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+    git(repo, "reset", "--quiet", "--hard", "HEAD^");
+  });
+
+  test("a cleanup deadline preserves the checkout before any mutation", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "deadline",
+      id: "deadline",
+    });
+    assert.ok(result.ok);
+    if (!result.ok) return;
+
+    const cleanup = await reclaimWorktree(repo, result.worktree, {
+      timeoutMs: 0,
+    });
+    assert.equal(cleanup.removed, false);
+    assert.match(cleanup.reason ?? "", /deadline exceeded/);
+    assert.ok(fs.existsSync(result.worktree.path));
+
+    git(repo, "worktree", "remove", "--force", result.worktree.path);
+    git(repo, "branch", "-D", result.worktree.branch);
+  });
+
   test("preserves when the immutable base cannot be inspected", async () => {
     const result = await createWorktree({
       cwd: repo,
@@ -249,7 +311,10 @@ describe("worktree lifecycle", () => {
       baseSha: "does-not-exist",
     });
     assert.equal(cleanup.removed, false);
-    assert.match(cleanup.reason ?? "", /ambiguous argument|rev-list/);
+    assert.match(
+      cleanup.reason ?? "",
+      /ambiguous argument|rev-list|not a valid object name/i,
+    );
     assert.ok(fs.existsSync(result.worktree.path));
 
     git(repo, "worktree", "remove", "--force", result.worktree.path);

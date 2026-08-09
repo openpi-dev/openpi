@@ -52,6 +52,8 @@ export const MAX_RUNNING = 4;
 export const MAX_RUNNING_BTW = 2;
 export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
+/** Session abort/shutdown (5s) plus bounded direct-worktree cleanup (4s). */
+const ENTRY_CLOSE_TIMEOUT_MS = 10_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
 const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
@@ -98,7 +100,6 @@ interface MutableSnapshot {
   queued: SubagentSnapshot["queued"];
   finalText: string;
   turns: number;
-  worktreeCleanup?: SubagentSnapshot["worktreeCleanup"];
 }
 
 interface Entry {
@@ -449,9 +450,6 @@ const makeManager = Effect.gen(function* () {
       case "MetaChanged":
         s.meta = { ...s.meta, ...event.meta };
         break;
-      case "WorktreeCleaned":
-        s.worktreeCleanup = event.cleanup;
-        break;
       case "BackendError":
         s.errorText = bounded(event.message);
         break;
@@ -609,7 +607,7 @@ const makeManager = Effect.gen(function* () {
         // Bound the close like disposeAll does: a stuck backend finalizer
         // must not hang cancel after the run is already settled.
         yield* closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
+          Effect.timeout(ENTRY_CLOSE_TIMEOUT_MS),
           Effect.ignore,
         );
       }
@@ -697,7 +695,7 @@ const makeManager = Effect.gen(function* () {
       all,
       (entry) =>
         closeEntryScope(entry).pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
+          Effect.timeout(ENTRY_CLOSE_TIMEOUT_MS),
           Effect.ignore,
         ),
       { concurrency: "unbounded" },

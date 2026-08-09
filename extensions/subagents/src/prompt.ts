@@ -75,7 +75,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   workingDir:
     "Trusted working directory for the autonomous child (default: current working directory)",
   isolation:
-    'Set to "worktree" to run this child in its own git worktree on its own branch, branched from HEAD. Use it whenever children may edit the same files or stage changes concurrently — without it, parallel children share one checkout and one git index, so their edits and `git add`s overwrite each other. The child should COMMIT its work; on teardown the worktree directory is reclaimed and the branch is kept for you to inspect or merge (an empty branch is deleted, and uncommitted changes keep the directory instead). Requires a git repository, and the checkout starts clean, so anything gitignored (build output, .env) will not be there.',
+    'Set to "worktree" to run this child in its own git worktree on its own branch, branched from HEAD. Use it whenever children may edit the same files or stage changes concurrently — without it, parallel children share one checkout and one git index, so their edits and `git add`s overwrite each other. The child should COMMIT its work. A direct child can receive later subagent_send turns, so its checkout lives with that child Session. On retirement it is reclaimed only when a bounded inspection proves it empty; commits, dirty/untracked/ignored files, detached HEAD, timeout, or Git failure preserve it. Requires a git repository, and the checkout starts clean, so anything gitignored (build output, .env) will not be there.',
   model:
     'Optional model override, as "provider/model-id" or a bare id resolved against the current provider. Precedence: explicit spawn model > selected type file model > configured built-in role model > parent model. Never guess a model name.',
   reasoningEffort:
@@ -106,10 +106,10 @@ export function buildSubagentSpawnResult(options: {
       ? ` It can only use: ${effectiveTools.join(", ")}.`
       : " It has no tools available."
     : "";
-  // Without the branch name the parent has no way to find committed work after
-  // the isolated directory is reclaimed.
+  // Direct child sessions can be steered after settling, so their checkout is
+  // retained until the session retires; fail-closed cleanup preserves work.
   const worktreeNote = options.worktreeBranch
-    ? ` Isolated in its own worktree on branch "${options.worktreeBranch}" — its edits are invisible here until you merge that branch, and the directory is reclaimed when it finishes.`
+    ? ` Isolated in its own worktree on branch "${options.worktreeBranch}" — its edits are invisible here until you merge that branch. The checkout stays available for later send/review and is reclaimed on Session retirement only when bounded inspection proves it empty.`
     : "";
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}\n` +

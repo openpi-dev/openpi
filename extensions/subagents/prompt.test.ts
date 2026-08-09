@@ -118,10 +118,12 @@ test("a spawned isolated child reports the branch its work will land on", () => 
     cwd: "/repo/.git/pi-worktrees/impl-1",
     worktreeBranch: "pi/impl-1",
   });
-  // Without the branch name the parent cannot find committed work once the
-  // isolated directory is reclaimed.
+  // The path/branch remain discoverable because a settled direct child can be
+  // sent another turn in the same isolated checkout.
   assert.match(isolated, /branch "pi\/impl-1"/);
   assert.match(isolated, /invisible here until you merge/);
+  assert.match(isolated, /stays available for later send\/review/);
+  assert.match(isolated, /bounded inspection proves it empty/);
 
   const plain = buildSubagentSpawnResult({
     id: "sa-2",
