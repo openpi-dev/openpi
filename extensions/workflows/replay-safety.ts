@@ -29,9 +29,57 @@ export function isReplaySafeAgentCall(options: {
   if (options.isolation !== undefined || options.tools === undefined) {
     return false;
   }
-  return effectiveChildToolAllowlist(options.tools)?.every((tool) =>
-    REPLAY_SAFE_TOOL_NAMES.has(tool),
+  return (
+    effectiveChildToolAllowlist(options.tools)?.every((tool) =>
+      REPLAY_SAFE_TOOL_NAMES.has(tool),
+    ) === true
   );
+}
+
+export interface ReplayWorkspaceLease {
+  /** A cache lookup is safe at this instant. */
+  readonly canReplay: boolean;
+  /** True only if no unsafe call overlapped this call's full execution. */
+  canJournal(): boolean;
+  end(): void;
+}
+
+/**
+ * Endpoint fingerprints cannot detect an ABA write (change, observe, restore)
+ * from a sibling workflow agent. Track every non-replay-safe call across its
+ * whole scheduled lifetime and refuse hits/journaling across any overlap.
+ */
+export function createReplayWorkspaceGuard() {
+  let epoch = 0;
+  let activeUnsafe = 0;
+  return {
+    begin(replaySafe: boolean): ReplayWorkspaceLease {
+      const startEpoch = epoch;
+      const canReplay = replaySafe && activeUnsafe === 0;
+      let ended = false;
+      if (!replaySafe) {
+        activeUnsafe += 1;
+        epoch += 1;
+      }
+      return {
+        canReplay,
+        canJournal: () =>
+          !ended &&
+          replaySafe &&
+          canReplay &&
+          activeUnsafe === 0 &&
+          epoch === startEpoch,
+        end: () => {
+          if (ended) return;
+          ended = true;
+          if (!replaySafe) {
+            activeUnsafe -= 1;
+            epoch += 1;
+          }
+        },
+      };
+    },
+  };
 }
 
 interface ReplayResourceLoader extends Pick<

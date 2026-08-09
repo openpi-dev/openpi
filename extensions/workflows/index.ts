@@ -123,6 +123,7 @@ import {
 } from "./runner.ts";
 import {
   createReplayIdentity,
+  createReplayWorkspaceGuard,
   isReplaySafeAgentCall,
 } from "./replay-safety.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
@@ -701,6 +702,7 @@ export default function workflows(pi: ExtensionAPI) {
       // A missing or unreadable source degrades to a normal full run — resume
       // is an optimization and must not become a new way to fail.
       const journalEntries: JournalEntry[] = [];
+      const replayWorkspace = createReplayWorkspaceGuard();
       let replay: ReplayCache | undefined;
       if (params.resume_from_run_id) {
         const sourceDir = findRunDir(params.resume_from_run_id);
@@ -1011,6 +1013,7 @@ export default function workflows(pi: ExtensionAPI) {
           tools: agentType?.tools,
           isolation: opts.isolation,
         });
+        const replayLease = replayWorkspace.begin(replaySafe);
         let replayResources:
           Awaited<ReturnType<typeof getResources>> | undefined;
         let replayIdentity: ReturnType<typeof createReplayIdentity> | undefined;
@@ -1054,7 +1057,8 @@ export default function workflows(pi: ExtensionAPI) {
         const callKey = replayIdentity ? replayKey(replayIdentity) : undefined;
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
-        const cached = callKey ? replay?.take(callKey) : undefined;
+        const cached =
+          callKey && replayLease.canReplay ? replay?.take(callKey) : undefined;
         if (cached) {
           record.state = "done";
           record.replayed = true;
@@ -1070,6 +1074,7 @@ export default function workflows(pi: ExtensionAPI) {
           // Re-journal so a chain of resumes keeps working: run C resuming from
           // B still finds what B replayed from A.
           journalEntries.push(cached);
+          replayLease.end();
           return {
             ok: true,
             output: cached.output,
@@ -1228,7 +1233,8 @@ export default function workflows(pi: ExtensionAPI) {
                 !runSettled &&
                 outcomeOk &&
                 completedKey !== undefined &&
-                completedKey === callKey
+                completedKey === callKey &&
+                replayLease.canJournal()
               ) {
                 journalEntries.push({
                   key: completedKey,
@@ -1305,7 +1311,8 @@ export default function workflows(pi: ExtensionAPI) {
               }
             }
           }, invocationSignal)
-          .catch((error) => fail(errorText(error)));
+          .catch((error) => fail(errorText(error)))
+          .finally(() => replayLease.end());
       };
 
       const runScript = async () => {

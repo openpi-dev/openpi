@@ -13,6 +13,7 @@ import { test } from "node:test";
 import { agentCallKey } from "./journal.ts";
 import {
   createReplayIdentity,
+  createReplayWorkspaceGuard,
   isReplaySafeAgentCall,
 } from "./replay-safety.ts";
 
@@ -92,6 +93,32 @@ test("only provably read-only agent calls are replay-safe", () => {
     isReplaySafeAgentCall({ tools: ["read"], isolation: "worktree" }),
     false,
   );
+});
+
+test("workspace guard rejects replay and journaling across unsafe overlap", () => {
+  const guard = createReplayWorkspaceGuard();
+  const reader = guard.begin(true);
+  assert.equal(reader.canReplay, true);
+  assert.equal(reader.canJournal(), true);
+
+  const writer = guard.begin(false);
+  assert.equal(
+    reader.canJournal(),
+    false,
+    "an ABA write cannot be endpoint-hashed",
+  );
+  const overlappingReader = guard.begin(true);
+  assert.equal(overlappingReader.canReplay, false);
+  writer.end();
+  assert.equal(overlappingReader.canJournal(), false);
+  overlappingReader.end();
+  reader.end();
+
+  const laterReader = guard.begin(true);
+  assert.equal(laterReader.canReplay, true);
+  assert.equal(laterReader.canJournal(), true);
+  laterReader.end();
+  laterReader.end();
 });
 
 test("canonical cwd and repository state participate in replay identity", () => {
