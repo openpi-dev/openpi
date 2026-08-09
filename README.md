@@ -188,7 +188,7 @@ subagent_spawn({
 
 **内置 Agent 角色**：`explorer`、`implementer`、`reviewer`、`advisor` 始终可选，既可用于 `subagent_spawn.agent_type`，也可用于 Workflow 的 `agent(..., { agent_type })`；分别用于只读探索、实现、只读审查和深度只读建议。默认没有模型，继承父会话。它们的精确工具边界和 effort 见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。`explorer` 默认 high：常规、局部、直接追踪用 high；交互状态转换、并发或信任边界、细微多路径生命周期/控制流用 xhigh；只有极其困难、宽泛陌生架构且存在未决竞争流时才用 max。
 
-**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示。Subagent 的显式 `model` 或 Workflow 的显式 `model/provider` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式调用 > 所选类型默认值 > 父会话。生成的 `subagent_spawn.agent_type` roster 会显示每种类型的默认 effort 或父级继承，Workflow 使用同一套名字和定义。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 或 Workflow `agent()` 调用立即读取生效，无需 reload。
+**Agent 类型覆盖与模型优先级**：可在 `~/.pi/agent/agents/*.md` 和受信任项目的 `.pi/agents/*.md` 定义同名文件，完整定义的优先级为内置 < 全局 < 项目，所有覆盖都会诊断提示；更高优先级的同名文件若损坏会阻断较宽松定义的 fallback，而不是悄悄退回。Subagent 的显式 `model` 或 Workflow 的显式 `model/provider` > 所选类型文件的 `model` > `/my-pi-setup` 给该内置角色指定的模型 > 父模型继承；effort 为显式调用 > 所选类型默认值 > 父会话。生成的 `subagent_spawn.agent_type` roster 会显示每种类型的默认 effort 或父级继承，Workflow 使用同一套名字和定义。`/my-pi-setup` 的角色模型为部分映射，未设置即继承，清除一个角色即可恢复继承；下一次 spawn 或 Workflow `agent()` 调用立即读取生效，无需 reload。
 
 工具限制由 harness 强制执行，不是提示词约定：一个 `tools: [read, grep, find, ls]` 的类型，子 Agent 手里根本没有 `write`/`edit`/`bash` 可调用。该白名单只能收窄——它与既有的子会话工具黑名单按 AND 组合，写进去也拿不到被禁用的工具；同时它能激活 Pi 默认不启用的 `grep`/`find`/`ls`。父会话专属工具也会在生成 roster 和 spawn 结果中移除，绝不宣传为子 Agent 可用。未受信任的项目目录不会贡献任何类型：扩展先安全注册内置和全局 roster，随后在 `session_start` 用当前 `cwd` 与 live Trust 刷新 Subagent 和 Workflow 共用的语义，因此临时 Trust 和跨目录 Session 也正确生效。文件格式见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)；文件修改后 `/reload` 生效（与 Skills 一致）。
 
@@ -205,8 +205,8 @@ subagent_spawn({
 - Worktree 建在 `.git/pi-worktrees/` 下，不在工作区里——放工作区会让父仓库 `git status` 多出未跟踪条目，破坏 Agent 判断「我改了什么」的依据；
 - Trust 按分支来源目录继承，所以子 Agent 照常拿到项目 Skills 和 AGENTS.md；
 - 顶层 `node_modules` 会 symlink 进去，否则全新 checkout 里跑不了构建和测试（实测 `ERR_MODULE_NOT_FOUND`）；
-- 子 Agent 结束时自动回收：**提交过就保留分支**供你 review 或 merge，没提交过的空分支直接删掉，**有未提交改动则整个目录保留**（用 `git worktree remove` 的原生拒绝作为判据，不使用 `--force`）；
-- 分支名会写在 spawn 结果里——目录回收后它是找到那份工作的唯一线索；
+- Direct Subagent 的同一 Session 可以通过 `subagent_send` 继续运行，因此 checkout 与 Session 同寿命；Session 退役时只在限时检查完整证明 checkout 为空后回收，任何提交、dirty/untracked/ignored、detached HEAD、超时或 Git 探测失败都会保留路径/分支；
+- Workflow 的隔离 Agent 是一次性调用：清理前先写 handoff manifest；只有状态被完整证明为空时才删分支，任何提交、dirty/untracked/ignored、detached HEAD 或 Git 探测失败都会保留对应结果；
 - 代价：需要 git 仓库，且 checkout 是干净的，gitignore 掉的东西（构建产物、`.env`）不在里面。只读子 Agent 不需要开。
 
 > `subagent_wait` 是显式的阻塞工具，而 `subagent_spawn` 不是。默认工作流是 **spawn → 主 Agent 继续工作 → 结果自动回传**。Subagent 结果默认保留原有完整模式；Bash 与 Write/Edit 默认折叠。Bash 只保留单行命令、首段输出和最终状态，Write/Edit 最多保留三行渲染内容（包含操作标题），两者都会显示隐藏行数。三类结果都可通过 `/my-pi-setup` 分别选择默认全部展开或折叠，折叠视图使用当前 `app.tools.expand` 快捷键（默认 `Ctrl+O`）临时展开全文。极端输出仍受 Session 字节和行数上限保护。
@@ -239,9 +239,12 @@ const checked = await pipeline(
 );
 
 phase("Synthesize");
-return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(checked)}`, {
-  agent_type: "advisor",
-});
+return await agent(
+  `Synthesize tradeoffs and recommendations: ${JSON.stringify(checked)}`,
+  {
+    agent_type: "advisor",
+  },
+);
 ```
 
 - `phase()` 展示阶段进度；
@@ -250,7 +253,7 @@ return await agent(`Synthesize tradeoffs and recommendations: ${JSON.stringify(c
 - `agent()` 启动隔离的 Pi Agent；`agent_type` 复用与 `subagent_spawn` 相同的角色提示词、强制工具边界、模型配置和默认 effort，显式 model/provider 与 effort 仍优先；
 - `pipeline()` 逐项流水线，阶段之间无 barrier——多阶段 fan-out 的默认选择；
 - `parallel()` 并发 fan-out，但它是 barrier：只在某个阶段确实需要**上一阶段全部结果**时才用（跨项去重、总数为零时提前退出、prompt 里要对比其他发现）；
-- JSON Schema 提供结构化结果；可选 `acceptance: { criteria: [...] }` 让同一个 Agent 提交显式 evidence ledger，不会暗中追加 reviewer 或执行 shell；缺失、格式错误或被拒绝的条件会令该 Agent `ok: false`，同时保留输出和 ledger；
+- JSON Schema 提供结构化结果；可选 `acceptance: { criteria: [...] }` 让同一个 Agent 提交显式 evidence ledger，不会暗中追加 reviewer 或执行 shell；缺失、格式错误或被拒绝的条件会令该 Agent `ok: false`，同时保留输出和 ledger，并在 Dashboard/产物中显示状态；
 - 前台运行可实时查看，后台运行结束后自动通知；模型也可用 `workflow_status` 主动查看、用 `workflow_stop` 取消后台运行，与 `subagent_*` / `bg_*` 能力对等；
 - `/workflows` 查看阶段、Agent、Transcript、Token 与成本；`/workflows <id> stop` 或 Dashboard 里的 `x` 取消运行中的 Workflow；
 - 运行中或刚结束的 Workflow 会在输入框下方显示一行实时摘要；编辑器为空时按 `↓` 聚焦，按 `Enter` 或 `→` 打开，随后用 `↑/↓` 选择阶段或 Agent、`→` 下钻、`←` 返回；
@@ -289,7 +292,7 @@ workflow({ script: <改过的脚本>, resume_from_run_id: "wf_1a2b3c4d5e6f" })
 
 匹配依据是**调用内容**（prompt 加 schema/model/provider/effort），不是调用序号。这一点是必须的：`pipeline()` 没有阶段 barrier，调用发起顺序取决于各 Agent 的真实耗时，同一脚本两次运行的 `#4` 可能是不同的调用——按序号重放会把 A 的结果喂给 B，静默返回错误答案。按内容匹配则顺序无关。
 
-副作用是脚本里的 `Date.now()` 之类只会让 prompt 变化、导致 cache miss，**不会返回错的结果**。`label` 和 `phase` 只影响展示，改名不会失效；失败的调用从不缓存（重跑往往正是为了让它重试）。带 `isolation` 的调用同样不缓存——它真正的产物是一组 commit，重放一段文本会让 resume 报告一份并不存在的工作。运行结果里会明确报告「重放了几个、实跑了几个」，找不到对应 run 时不报错，只是全新跑一遍并说明。缓存写在 `journal.json`，上限 2MB，超出时丢弃最旧的条目。
+副作用是脚本里的 `Date.now()` 之类只会让 prompt 变化、导致 cache miss，**不会返回错的结果**。`label` 和 `phase` 只影响展示，改名不会失效；失败的调用从不缓存（重跑往往正是为了让它重试）。只有工具能力和项目/资源指纹都能证明为只读且完整的调用才缓存；可写、无限制、带 `isolation`、存在可观察 ignored 文件或无法完整指纹的调用都会实跑——它们可能有副作用或依赖未纳入 Git 的内容，重放一段文本会返回并不存在或已经过期的工作。运行结果里会明确报告「重放了几个、实跑了几个」，找不到对应 run 时不报错，只是全新跑一遍并说明。缓存写在 `journal.json`，上限 2MB，超出时丢弃最旧的条目。
 
 **并行写入**用 worktree 隔离，每个实现 Agent 一份独立 checkout 和分支：
 
@@ -592,16 +595,16 @@ pi install ~/work/my-pi-setup
 
 安装默认值：
 
-| 配置                     |                                                默认值 |
-| ------------------------ | ----------------------------------------------------: |
-| Run Recap                | 默认关闭；运行 `/my-pi-setup` 选择模型或本地 fallback |
-| Workflow 并发            |                                                     8 |
-| Workflow 最大 Agent 调用 |                                                   128 |
-| 大型 Header              |                                                  关闭 |
-| Dashboard Footer         |                                                  开启 |
-| Post-edit 命令           |       默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
+| 配置                     |                                                   默认值 |
+| ------------------------ | -------------------------------------------------------: |
+| Run Recap                |    默认关闭；运行 `/my-pi-setup` 选择模型或本地 fallback |
+| Workflow 并发            |                                                        8 |
+| Workflow 最大 Agent 调用 |                                                      128 |
+| 大型 Header              |                                                     关闭 |
+| Dashboard Footer         |                                                     开启 |
+| Post-edit 命令           |          默认关闭；最多 500 字符；仅成功 Write/Edit Turn |
 | Agent 角色模型           | explorer / implementer / reviewer / advisor 均继承父模型 |
-| 主题                     |                                    不修改用户现有选择 |
+| 主题                     |                                       不修改用户现有选择 |
 
 Post-edit 只在交互式 TUI 中运行，并以成功的 Write/Edit 工具结果判断当前 Turn 是否发生了受支持的文件修改；它不会猜测任意 Bash 命令是否改了文件。每个发生修改的 Turn 排队执行一次，命令最长 500 字符，失败只显示通知。角色模型由 Subagent 和 Workflow `agent_type` 共用，只接受当前 Pi Registry 能解析的 provider/model，并保存 Registry 规范化后的值；传入 `null` 只清除对应角色，未提及的角色保持原样。
 
