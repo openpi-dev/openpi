@@ -15,6 +15,10 @@ import askUser, {
   formatReviewAnswer,
 } from "./index.ts";
 import {
+  prospectiveAnswerDraftFits,
+  sanitizeAnswerDraftEditorInput,
+} from "./limits.ts";
+import {
   ASK_USER_PROMPT_GUIDELINES,
   buildAskUserResultMessage,
 } from "./prompt.ts";
@@ -23,10 +27,11 @@ test("formats selected, noted, and custom answers", () => {
   const answers = [
     { id: "db", selected: "Postgres (Recommended)", note: "SQLite in tests" },
     { id: "region", custom: "Singapore" },
+    { id: "scope", rephrase: true as const },
   ];
   assert.equal(
     formatAnswers(answers),
-    "db: Postgres (Recommended) — SQLite in tests\nregion: Singapore",
+    "db: Postgres (Recommended) — SQLite in tests\nregion: Singapore\nscope: Rephrase or split this question",
   );
   assert.match(
     buildAskUserResultMessage({ kind: "answered", answers }),
@@ -49,6 +54,8 @@ test("prompt requires genuine ambiguity, recommendations, and no continue questi
   assert.match(text, /genuine ambiguity/);
   assert.match(text, /recommendation first/);
   assert.match(text, /Never use it to ask whether to continue/);
+  assert.match(text, /one question per independent finding/);
+  assert.match(text, /blank free-form answer.*rephrased or split/i);
 });
 
 test("dismissal does not imply an answer", () => {
@@ -56,6 +63,22 @@ test("dismissal does not imply an answer", () => {
     buildAskUserResultMessage({ kind: "dismissed" }),
     /Do not assume answers/,
   );
+});
+
+test("model-facing answers strip terminal controls and structural newlines", () => {
+  const message = buildAskUserResultMessage({
+    kind: "answered",
+    answers: [
+      {
+        id: "safe\nspoofed",
+        custom: "answer\u001b]52;c;payload\u0007\nnext",
+        note: "note\ncontinued",
+      },
+    ],
+  });
+  assert.equal(stripVTControlCharacters(message), message);
+  assert.doesNotMatch(message, /payload|\nnext|\ncontinued/);
+  assert.match(message, /safe spoofed: answer next — note: note continued/);
 });
 
 test("answer drafts have a UTF-8 byte bound", () => {
@@ -73,6 +96,19 @@ test("answer drafts have a UTF-8 byte bound", () => {
       "界".repeat(Math.floor(MAX_ANSWER_DRAFT_UTF8_BYTES / 3) + 1),
     ),
     false,
+  );
+  assert.equal(
+    prospectiveAnswerDraftFits(
+      "a".repeat(4_000),
+      `\u001b[200~${"b".repeat(4_001)}\u001b[201~`,
+    ),
+    false,
+  );
+  assert.equal(
+    sanitizeAnswerDraftEditorInput(
+      "\u001b[200~safe\u202e\u001b]52;c;payload\u0007tail\u001b[201~",
+    ),
+    "\u001b[200~safetail\u001b[201~",
   );
 });
 
@@ -139,10 +175,14 @@ async function runQuestionnaire(
 
   const ctx = {
     mode: "tui",
+    hasUI: true,
     ui: {
       custom: async (
         factory: (
-          tui: { requestRender(): void },
+          tui: {
+            requestRender(): void;
+            terminal: { rows: number; columns: number };
+          },
           theme: typeof identityTheme,
           keybindings: object,
           done: (value: AskUserAnswer[] | null) => void,
@@ -151,7 +191,10 @@ async function runQuestionnaire(
         new Promise<AskUserAnswer[] | null>((resolve) => {
           let calls = 0;
           const component = factory(
-            { requestRender() {} },
+            {
+              requestRender() {},
+              terminal: { rows: 24, columns: 100 },
+            },
             identityTheme,
             {},
             (value) => {
@@ -330,18 +373,107 @@ test("free-form text survives leaving and reopening its draft editor", async () 
   assert.deepEqual(result.details.answers, [{ id: "db", custom: "draft" }]);
 });
 
+test("active TUI drafts strip terminal and bidi spoofing controls", async () => {
+  let draftScreen = "";
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3"); // Write my own answer
+      component.handleInput(
+        "\u001b[200~safe\u202e\u001b]52;c;payload\u0007tail\u001b[201~",
+      );
+      draftScreen = component.render(100).join("\n");
+      component.handleInput(input.enter); // answer -> review
+      component.handleInput(input.enter); // submit
+    },
+  );
+
+  const plainDraftScreen = stripVTControlCharacters(draftScreen);
+  assert.doesNotMatch(plainDraftScreen, /payload|\u202e/);
+  assert.match(plainDraftScreen, /safetail/);
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: "safetail" }]);
+});
+
+test("compact paste content survives Escape and reopening the draft", async () => {
+  const draft = "界".repeat(600);
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3"); // Write my own answer
+      component.handleInput(`\u001b[200~${draft}\u001b[201~`);
+      component.handleInput(input.escape); // preserve expanded draft
+      component.handleInput(input.enter); // reopen Other
+      component.handleInput(input.enter); // save -> review
+      component.handleInput(input.enter); // submit
+    },
+  );
+
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: draft }]);
+});
+
+test("a blank free-form draft explicitly requests a rephrased question", async () => {
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component, doneCalls) => {
+      component.handleInput("3"); // Write my own answer
+      component.handleInput(input.enter); // blank -> rephrase draft -> review
+      assert.equal(doneCalls(), 0);
+      assert.match(
+        stripVTControlCharacters(component.render(100).join("\n")),
+        /Rephrase or split this question/,
+      );
+      component.handleInput(input.up); // submit -> question row
+      component.handleInput(input.enter); // reopen rephrase draft
+      assert.match(
+        stripVTControlCharacters(component.render(100).join("\n")),
+        /❯ ✎ Write my own answer/,
+      );
+      component.handleInput(input.enter); // reopen blank editor
+      component.handleInput(input.enter); // keep rephrase draft -> review
+      component.handleInput(input.enter); // explicit submit
+    },
+  );
+
+  assert.deepEqual(result.details.answers, [{ id: "db", rephrase: true }]);
+  assert.match(
+    buildAskUserResultMessage({
+      kind: "answered",
+      answers: result.details.answers,
+    }),
+    /\[rephrase or split this question\]/,
+  );
+});
+
 test("an oversized compact paste is rejected without clearing the existing draft", async () => {
   const result = await runQuestionnaire(
     { questions: [reviewQuestions.questions[0]!] },
     (component, doneCalls) => {
       component.handleInput("3"); // Write my own answer
       for (const character of "kept") component.handleInput(character);
-      component.handleInput(
-        `\u001b[200~${"x".repeat(MAX_ANSWER_DRAFT_UTF8_BYTES + 1)}\u001b[201~`,
-      );
+      component.handleInput(`\u001b[200~${"x".repeat(1_000_000)}\u001b[201~`);
       component.handleInput(input.enter); // existing bounded draft -> review
       assert.equal(doneCalls(), 0);
       component.handleInput(input.enter); // explicit submit
+    },
+  );
+
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: "kept" }]);
+});
+
+test("split oversized bracketed paste is discarded before Editor accumulates it", async () => {
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component, doneCalls) => {
+      component.handleInput("3"); // Write my own answer
+      for (const character of "kept") component.handleInput(character);
+      component.handleInput("\u001b[200~");
+      component.handleInput("x".repeat(4_000));
+      component.handleInput("x".repeat(4_001));
+      component.handleInput("\u001b[20");
+      component.handleInput("1~");
+      component.handleInput(input.enter); // bounded original draft -> review
+      assert.equal(doneCalls(), 0);
+      component.handleInput(input.enter); // submit
     },
   );
 
@@ -378,4 +510,207 @@ test("dismissing the review returns no draft answers", async () => {
 
   assert.equal(result.details.cancelled, true);
   assert.deepEqual(result.details.answers, []);
+});
+
+interface CapturedInteractionTool {
+  executionMode?: string;
+  promptGuidelines?: string[];
+  execute: unknown;
+}
+
+function captureInteractionTools() {
+  const tools = new Map<string, CapturedInteractionTool>();
+  const pi = {
+    registerTool(definition: CapturedInteractionTool & { name: string }) {
+      tools.set(definition.name, definition);
+    },
+  } as unknown as ExtensionAPI;
+  askUser(pi);
+  return tools;
+}
+
+test("interaction tools are sequential and expose bounded usage guidance", () => {
+  const tools = captureInteractionTools();
+  assert.equal(tools.get("ask_user")?.executionMode, "sequential");
+  assert.match(
+    tools.get("ask_user")?.promptGuidelines?.join("\n") ?? "",
+    /one question per independent finding/,
+  );
+  assert.equal(tools.get("human_handoff")?.executionMode, "sequential");
+  assert.match(
+    tools.get("human_handoff")?.promptGuidelines?.join("\n") ?? "",
+    /only for an action the user must perform outside the available tools/,
+  );
+});
+
+test("RPC dialogs preserve drafts, allow revision, and require explicit review", async () => {
+  const execute = toolsExecute<AskUserExecute>("ask_user");
+  let selectCalls = 0;
+  const notes = ["first note", "revised note"];
+  const ctx = {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(title: string, options: string[]) {
+        selectCalls++;
+        assert.equal(stripVTControlCharacters(title), title);
+        assert.ok(
+          options.every(
+            (option) => stripVTControlCharacters(option) === option,
+          ),
+        );
+        if (title === "Review answers") {
+          return selectCalls === 2 ? options[0] : options.at(-2);
+        }
+        return selectCalls === 1 ? options[0] : options[1];
+      },
+      async input() {
+        return notes.shift();
+      },
+      notify() {
+        throw new Error("bounded RPC answers should not notify");
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await execute(
+    "ask-rpc",
+    { questions: [reviewQuestions.questions[0]!] },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+
+  assert.equal(selectCalls, 4);
+  assert.deepEqual(result.details.answers, [
+    { id: "db", selected: "SQLite", note: "revised note" },
+  ]);
+  assert.equal(result.details.cancelled, false);
+});
+
+test("RPC dialogs show an option preview before accepting that choice", async () => {
+  const execute = toolsExecute<AskUserExecute>("ask_user");
+  let selectCalls = 0;
+  let preview = "";
+  const ctx = {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(title: string, options: string[]) {
+        selectCalls++;
+        if (title === "Review answers") return options.at(-2);
+        return selectCalls === 1 ? options[0] : options[1];
+      },
+      async confirm(_title: string, message: string) {
+        preview = message;
+        return false;
+      },
+      async input() {
+        return "";
+      },
+      notify() {
+        throw new Error("bounded RPC answers should not notify");
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await execute(
+    "ask-rpc-preview",
+    {
+      questions: [
+        {
+          id: "deploy",
+          header: "Deploy",
+          question: "Which deployment?",
+          options: [
+            {
+              label: "Production",
+              description: "Deploy to users",
+              preview: "replicas: 3\nregion: sg",
+            },
+            { label: "Staging", description: "Deploy for testing" },
+          ],
+        },
+      ],
+    },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+
+  assert.equal(preview, "replicas: 3\nregion: sg");
+  assert.deepEqual(result.details.answers, [
+    { id: "deploy", selected: "Staging" },
+  ]);
+});
+
+type HumanHandoffExecute = (
+  toolCallId: string,
+  params: {
+    title: string;
+    instructions: string;
+    completionSignal: string;
+  },
+  signal: AbortSignal,
+  onUpdate: undefined,
+  ctx: ExtensionContext,
+) => Promise<{
+  content: Array<{ type: "text"; text: string }>;
+  details: { status: string; note?: string };
+}>;
+
+function toolsExecute<T>(name: string) {
+  const execute = captureInteractionTools().get(name)?.execute;
+  assert.ok(execute, `${name} must be registered`);
+  return execute as T;
+}
+
+test("human handoff reviews status and tells the agent to verify completion", async () => {
+  const execute = toolsExecute<HumanHandoffExecute>("human_handoff");
+  let selectCalls = 0;
+  let confirmCalls = 0;
+  const ctx = {
+    mode: "rpc",
+    hasUI: true,
+    ui: {
+      async select(title: string, options: string[]) {
+        selectCalls++;
+        assert.match(title, /Sign in/);
+        assert.match(title, /Done when: dashboard shows account/);
+        return options[0];
+      },
+      async input() {
+        return "signed in";
+      },
+      async confirm(_title: string, message: string) {
+        confirmCalls++;
+        assert.match(message, /Expected completion signal/);
+        return confirmCalls === 2;
+      },
+      notify() {
+        throw new Error("bounded handoff notes should not notify");
+      },
+    },
+  } as unknown as ExtensionContext;
+
+  const result = await execute(
+    "handoff-1",
+    {
+      title: "Sign in",
+      instructions: "Complete the browser login.",
+      completionSignal: "dashboard shows account",
+    },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+
+  assert.equal(selectCalls, 2, "a rejected review must reopen the handoff");
+  assert.equal(confirmCalls, 2);
+  assert.deepEqual(result.details, {
+    status: "completed",
+    note: "signed in",
+  });
+  assert.match(result.content[0]?.text ?? "", /not proof of completion/i);
+  assert.match(result.content[0]?.text ?? "", /Verify the expected signal/);
 });

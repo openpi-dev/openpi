@@ -1,8 +1,15 @@
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+
 interface AskUserAnswer {
   readonly id: string;
   readonly selected?: string;
   readonly note?: string;
   readonly custom?: string;
+  readonly rephrase?: true;
+}
+
+function safeSingleLine(value: string) {
+  return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
 
 /** Model-facing schema descriptions for structured user questions. */
@@ -23,7 +30,7 @@ export const ASK_USER_PARAMETER_DESCRIPTIONS = {
 };
 
 export const ASK_USER_TOOL_DESCRIPTION =
-  "Ask the user one to three short, independent multiple-choice questions and wait for explicitly reviewed answers. Each question gets a free-form answer option, and the user may add notes, revise any draft answer from the review screen, or dismiss the request. Prefer one question unless several independent decisions should be answered together.";
+  "Ask the user one to three short, independent multiple-choice questions and wait for explicitly reviewed answers. Each question gets a free-form answer option; submitting it blank requests a clearer or split question. The user may add notes, revise any draft answer from the review screen, or dismiss the request. Prefer one question unless several independent decisions should be answered together.";
 
 export const ASK_USER_PROMPT_SNIPPET =
   "Ask 1-3 structured user questions with draft answers, final review, optional notes, and free-form answers";
@@ -32,6 +39,8 @@ export const ASK_USER_PROMPT_GUIDELINES = [
   "Use ask_user only for a genuine ambiguity or user preference that cannot be resolved from the code, docs, or conversation and would materially change the result. Never use it to ask whether to continue.",
   'Before calling ask_user, analyze the choice: provide mutually exclusive options, put your recommendation first, suffix its label with "(Recommended)", and explain each option\'s impact or tradeoff.',
   "Prefer one ask_user question. Include up to three only when the decisions are independent and batching them avoids unnecessary round trips.",
+  "For review findings that genuinely require user disposition, use one question per independent finding and batch at most three; do not ask about findings your instructions already authorize you to fix.",
+  "A blank free-form answer means the user wants the question rephrased or split. Do not treat it as consent, rejection, or an empty factual answer.",
 ];
 
 export function buildAskUserResultMessage(
@@ -51,8 +60,16 @@ export function buildAskUserResultMessage(
     case "answered":
       return `User answered:\n${outcome.answers
         .map((answer) => {
-          const value = answer.custom ?? answer.selected ?? "(unanswered)";
-          return `- ${answer.id}: ${value}${answer.note ? ` — note: ${answer.note}` : ""}`;
+          const id = safeSingleLine(answer.id);
+          const value = answer.rephrase
+            ? "[rephrase or split this question]"
+            : safeSingleLine(
+                answer.custom ?? answer.selected ?? "(unanswered)",
+              );
+          const note = answer.note
+            ? ` — note: ${safeSingleLine(answer.note)}`
+            : "";
+          return `- ${id}: ${value}${note}`;
         })
         .join("\n")}`;
   }

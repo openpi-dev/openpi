@@ -276,9 +276,9 @@ Context 超过约 30K Tokens 且任务切换阶段时，用自包含 Brief 替�
 </tr>
 <tr>
 <td width="50%" valign="top">
-<strong>Structured Questions</strong><br/><br/>
-<code>ask_user</code><br/>
-一次显示 1–3 个真正影响结果的问题，每题 2–5 个互斥选项，支持推荐项、Notes、代码预览、自由输入和中文 IME；答案先作为草稿，最终复核后才提交。
+<strong>Reviewed Human Input</strong><br/><br/>
+<code>ask_user</code> · <code>human_handoff</code><br/>
+<code>ask_user</code> 在 TUI/RPC 中收集 1–3 个结构化决策，支持 Notes、预览、草稿修改与提交前复核；空白自由输入会要求模型重写或拆分问题。只有用户能完成的登录、授权或硬件操作才使用 parent-only handoff，Done 后仍须验证完成信号。
 </td>
 <td width="50%" valign="top">
 <strong>Next-action Suggestion</strong><br/><br/>
@@ -482,8 +482,9 @@ pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷
 | `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                      |
 | `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                        |
 | `context_pivot`                                                                                          | Context 阶段切换                    |
-| `ask_user`                                                                                               | 带草稿与提交前复核的结构化用户决策  |
-| `plan_ready`                                                                                             | 显式完成计划，不自动开始实施      |
+| `ask_user`                                                                                               | TUI/RPC 中带草稿与提交前复核的结构化用户决策 |
+| `human_handoff`                                                                                          | 等待用户专属操作并返回待验证的状态          |
+| `plan_ready`                                                                                             | 显式完成计划，不自动开始实施                |
 | `fd`, `rg`                                                                                               | 文件发现与内容搜索                  |
 | `configure_my_pi_setup`                                                                                  | 受限配置写入                        |
 

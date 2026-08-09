@@ -38,7 +38,13 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
 
 test("effective child allowlists never advertise parent-only tools", () => {
   assert.deepEqual(
-    effectiveChildToolAllowlist(["read", "subagent_spawn", "bg_start"]),
+    effectiveChildToolAllowlist([
+      "read",
+      "subagent_spawn",
+      "bg_start",
+      "ask_user",
+      "human_handoff",
+    ]),
     ["read"],
   );
   assert.deepEqual(effectiveChildToolAllowlist(["subagent_spawn"]), []);
@@ -546,6 +552,10 @@ const KNOWN_FACTORY_TOOLS: Record<
     tool: "edit",
     classification: "child-safe-builtin",
   },
+  "createHumanHandoffToolDefinition(...)": {
+    tool: "human_handoff",
+    classification: "excluded",
+  },
 };
 
 test("every registered package tool is classified child-safe or excluded (fail-closed drift guard)", async () => {
@@ -584,6 +594,10 @@ test("every registered package tool is classified child-safe or excluded (fail-c
         (CHILD_EXCLUDED_TOOL_NAMES as readonly string[]).includes(known.tool),
         `factory tool "${known.tool}" is parent-only but missing from CHILD_EXCLUDED_TOOL_NAMES`,
       );
+      // Inline registrations enter `registered` through their literal name.
+      // An opaque factory has no such literal at the call site, so record the
+      // reviewed mapping here before the bidirectional drift checks below.
+      registered.add(known.tool);
     }
   }
   // The wrapped builtins are what motivated this branch; assert the scan saw

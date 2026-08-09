@@ -62,8 +62,9 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "workflow",
   "workflow_stop",
   "workflow_status",
-  // ask-user — headless children have no user to ask
+  // ask-user — headless children have no user to ask or handoff to
   "ask_user",
+  "human_handoff",
   // plan-mode — completion controls the parent session's write gate and UI
   "plan_ready",
   // tasks — the parent session owns its work-intent ledger

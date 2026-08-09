@@ -51,7 +51,7 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
   (`createAgentSession` + `SessionManager.create(cwd)` → real session files visible in
   `/resume`), with child resources loaded per-cwd (`DefaultResourceLoader`, trust-gated
   project resources) and a tool denylist (`excludeTools`: the subagent_* tools,
-  `workflow`, `ask_user`).
+  `workflow`, `ask_user`, `human_handoff`).
 - Settlement is driven by session lifecycle events (`agent_start` re-marks running;
   `agent_settled` settles). Failure detection: thrown prompt error, last assistant
   `stopReason === "error" | "aborted"`, error text bounded to 4096 chars.
