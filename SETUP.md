@@ -1,11 +1,18 @@
 # Setup
 
-Use Node.js 22.19.0 or newer. Clone or copy this repository to `~/.pi/agent`, then install its dependencies:
+Use Node.js 22.19.0 or newer. Install the public Pi package:
 
 ```sh
-cd ~/.pi/agent
-npm install
+pi install npm:@tt-a1i/openpi
 ```
+
+To inspect the current source before loading it, install directly from GitHub instead:
+
+```sh
+pi install git:github.com/tt-a1i/my-pi-setup
+```
+
+Pi installs the package dependencies automatically. Restart Pi or run `/reload` after installation.
 
 ## fd and rg tools
 

@@ -1,14 +1,42 @@
 {
-  "name": "@tt-a1i/my-pi-setup",
-  "private": true,
+  "name": "@tt-a1i/openpi",
   "version": "0.1.0",
-  "description": "Curated Pi extensions, skills, and theme for a multi-agent coding setup",
+  "description": "OpenPI — a Pi-native multi-agent workbench with background execution, isolated subagents, replay-safe workflows, goals, tasks, and observable TUI",
+  "license": "UNLICENSED",
+  "author": "tt-a1i",
   "keywords": [
     "pi-package",
     "pi",
     "coding-agent",
-    "multi-agent"
+    "multi-agent",
+    "subagents",
+    "workflows"
   ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tt-a1i/my-pi-setup.git"
+  },
+  "homepage": "https://github.com/tt-a1i/my-pi-setup#readme",
+  "bugs": {
+    "url": "https://github.com/tt-a1i/my-pi-setup/issues"
+  },
+  "files": [
+    "extensions",
+    "!extensions/**/*.test.ts",
+    "!extensions/**/*.spec.ts",
+    "!extensions/**/tsconfig.json",
+    "!extensions/*/docs",
+    "skills",
+    "themes",
+    "assets",
+    "scripts/prepare-effect-tsgo.mjs",
+    "README.md",
+    "SETUP.md",
+    "THIRD_PARTY_NOTICES.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "pi": {
     "extensions": [
       "./extensions"
@@ -18,7 +46,8 @@
     ],
     "themes": [
       "./themes"
-    ]
+    ],
+    "image": "https://raw.githubusercontent.com/tt-a1i/my-pi-setup/main/assets/openpi-package.png"
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-beta.99",
@@ -48,6 +77,7 @@
     "node": ">=22.19.0"
   },
   "scripts": {
+    "prepublishOnly": "npm run format:check && npm run check && npm test",
     "check": "tsc --noEmit",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
     "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",

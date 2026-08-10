@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
-  <title id="title">My Pi Setup</title>
+  <title id="title">OpenPI</title>
   <desc id="desc">A Pi-native runtime layer for background terminals, isolated subagents, dynamic workflows, and clean context.</desc>
 
   <defs>
@@ -37,7 +37,7 @@
       <text x="33" y="22" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" letter-spacing="1">PI NATIVE</text>
     </g>
 
-    <text x="0" y="112" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="64" font-weight="760" letter-spacing="-2">My Pi Setup</text>
+    <text x="0" y="112" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="64" font-weight="760" letter-spacing="-2">OpenPI</text>
     <text x="0" y="155" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="21">Keep the harness small. Give it a real runtime.</text>
 
     <g transform="translate(0 198)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">

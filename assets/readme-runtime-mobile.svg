@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="1100" viewBox="0 0 720 1100" role="img" aria-labelledby="title desc">
-  <title id="title">My Pi Setup runtime model</title>
+  <title id="title">OpenPI runtime model</title>
   <desc id="desc">A mobile-readable diagram of parent control, execution paths, continuity, and observability.</desc>
   <defs>
     <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">

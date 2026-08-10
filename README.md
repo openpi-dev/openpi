@@ -1,7 +1,7 @@
 <p align="center">
   <picture>
     <source media="(max-width: 640px)" srcset="assets/readme-hero-mobile.svg">
-    <img src="assets/readme-hero.svg" alt="My Pi Setup — a Pi-native multi-agent runtime" width="100%" />
+    <img src="assets/readme-hero.svg" alt="OpenPI — a Pi-native multi-agent workbench" width="100%" />
   </picture>
 </p>
 
@@ -10,7 +10,7 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.82+" src="https://img.shields.io/badge/Pi-0.82%2B-2f81f7?style=flat-square"></a>
+  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <img alt="TypeScript strict" src="https://img.shields.io/badge/TypeScript-strict-3178c6?style=flat-square&logo=typescript&logoColor=white">
   <a href="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/my-pi-setup/actions/workflows/ci.yml/badge.svg"></a>
@@ -20,6 +20,10 @@
 <p align="center">
   一套在真实开发中持续使用的 <a href="https://pi.dev">Pi</a> 扩展包。<br />
   不替你选模型，不强制主题，安装后也不会偷偷增加模型调用。
+</p>
+
+<p align="center">
+  <sub>OpenPI 是独立社区项目，与 Physical Intelligence 的 openpi 机器人项目及 Pi 官方均无关联。</sub>
 </p>
 
 <p align="center">
@@ -37,7 +41,7 @@
 ## 快速开始
 
 ```bash
-pi install git:github.com/tt-a1i/my-pi-setup
+pi install npm:@tt-a1i/openpi
 ```
 
 重启 Pi，或在当前 Session 运行 `/reload`。然后直接描述任务：
@@ -97,7 +101,7 @@ Tasks 记工作项，Goal 驱动持续目标，Context Pivot 在阶段变化时�
 <p align="center">
   <picture>
     <source media="(max-width: 640px)" srcset="assets/readme-runtime-mobile.svg">
-    <img src="assets/readme-runtime.svg" alt="My Pi Setup runtime model" width="100%" />
+    <img src="assets/readme-runtime.svg" alt="OpenPI runtime model" width="100%" />
   </picture>
 </p>
 
@@ -153,7 +157,7 @@ subagent_spawn({
 | `reviewer`    | 正确性与回归审查 | medium      | 只读发现工具                     |
 | `advisor`     | 深度技术建议   | xhigh       | 只读发现工具                     |
 
-角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 完整覆盖。精确格式、工具清单与优先级见 [`extensions/subagents/docs/agent-types.md`](extensions/subagents/docs/agent-types.md)。
+角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 完整覆盖。精确格式、工具清单与优先级见 [`extensions/subagents/docs/agent-types.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/extensions/subagents/docs/agent-types.md)。
 
 <details>
 <summary><strong>并行写文件时如何隔离 Worktree？</strong></summary>
@@ -402,7 +406,7 @@ macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载�
 | 内置角色模型             | `explorer / implementer / reviewer / advisor` 均继承父模型   |
 | 主题                     | 保留用户现有选择                                             |
 
-任何新增的模型、开关、权限、并发或 UI 偏好都必须接入 `/my-pi-setup`。仓库的 [`AGENTS.md`](AGENTS.md) 用测试守住这份单一入口契约。
+任何新增的模型、开关、权限、并发或 UI 偏好都必须接入 `/my-pi-setup`。仓库的 [`AGENTS.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/AGENTS.md) 用测试守住这份单一入口契约。
 
 ---
 
@@ -410,11 +414,17 @@ macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载�
 
 ### 要求
 
-- Pi `0.82.0` 或更新版本；
+- Pi `0.84.1` 或更新版本；
 - Node.js 22.19.0 或更新版本；
 - macOS/Linux 的 arm64 或 x64 可自动安装 `fd` / `rg`；其他架构和平台需自行安装。
 
 ### Pi Package
+
+```bash
+pi install npm:@tt-a1i/openpi
+```
+
+需要直接审计当前源码时，也可以从 GitHub 安装：
 
 ```bash
 pi install git:github.com/tt-a1i/my-pi-setup
@@ -616,7 +626,7 @@ npm test
 
 测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox/Replay/Acceptance、Worktree 数据保全、文件搜索二进制校验、Session 状态恢复、配置迁移和 TUI 渲染。
 
-设计记录与多模型评估见 [`docs/design/`](docs/design/)。欢迎通过 [Issues](https://github.com/tt-a1i/my-pi-setup/issues) 提交可复现 Bug 或真实工作流；新增能力应优先复用 Pi 原生原语，并遵守 [`AGENTS.md`](AGENTS.md) 的单一配置入口与 child-session 边界。
+设计记录与多模型评估见 [`docs/design/`](https://github.com/tt-a1i/my-pi-setup/tree/main/docs/design)。欢迎通过 [Issues](https://github.com/tt-a1i/my-pi-setup/issues) 提交可复现 Bug 或真实工作流；新增能力应优先复用 Pi 原生原语，并遵守 [`AGENTS.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/AGENTS.md) 的单一配置入口与 child-session 边界。
 
 ---
 
