@@ -45,7 +45,7 @@ or `model`/`provider` or `effort` on Workflow `agent()`, overrides the type's ow
 ## Built-in roles
 
 All built-ins omit a model, so they inherit the parent model unless configured
-through `/my-pi-setup`. Their complete definitions can be replaced by a custom
+through `/openpi-setup`. Their complete definitions can be replaced by a custom
 file with the same name.
 
 | Role          | Tools                                     | Effort   | Purpose                                                                                                                                                                                                                                                                                                   |
@@ -94,14 +94,14 @@ no-override case.
 ## Model and effort precedence
 
 For an `agent_type` child, model selection is: explicit call model → selected
-type file `model` → `/my-pi-setup` assignment for that built-in role name →
+type file `model` → `/openpi-setup` assignment for that built-in role name →
 inherited parent model. Effort is: explicit call effort → selected type default
 (including a built-in) → parent effort. The generated `subagent_spawn.agent_type`
 roster shows each type's default effort or explicit parent inheritance; Workflow
 uses the same names and definitions. A custom `explorer.md` therefore replaces
 the built-in definition, while an explicit call argument still wins.
 
-`/my-pi-setup` can assign any model currently present in Pi's registry to one or
+`/openpi-setup` can assign any model currently present in Pi's registry to one or
 more built-in roles. Assignments are partial; omitted roles stay unchanged, and
 setting a role to `null` clears it back to parent-model inheritance. The
 assignment is read when each child is created, so it applies to the next spawn

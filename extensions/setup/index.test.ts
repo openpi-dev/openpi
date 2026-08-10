@@ -5,10 +5,11 @@ import { SUBAGENT_ROLE_NAMES } from "../shared/subagent-roles.ts";
 import setupExtension, {
   applySubagentRoleModelUpdates,
   buildInteractiveSetupPrompt,
+  shouldOfferPiIntercom,
   SUBAGENT_ROLE_MODELS_SCHEMA,
 } from "./index.ts";
 
-test("registers one natural-language setup command and one constrained tool", () => {
+test("registers the canonical setup command, legacy alias, and one constrained tool", () => {
   const commands = new Set<string>();
   const tools = new Set<string>();
   let parameterNames: string[] = [];
@@ -24,12 +25,46 @@ test("registers one natural-language setup command and one constrained tool", ()
 
   setupExtension(api);
 
-  assert.deepEqual(commands, new Set(["my-pi-setup"]));
+  assert.deepEqual(commands, new Set(["openpi-setup", "my-pi-setup"]));
   assert.deepEqual(tools, new Set(["configure_my_pi_setup"]));
   assert.equal(parameterNames.includes("suggestions_enabled"), true);
   assert.equal(parameterNames.includes("suggestion_model"), true);
   assert.equal(
     parameterNames.some((name) => name.startsWith("summary")),
+    false,
+  );
+});
+
+test("offers optional Intercom only for an idle argument-free TUI setup", () => {
+  const status = { configured: false, installed: false, active: false };
+  assert.equal(
+    shouldOfferPiIntercom({ request: "", status, mode: "tui", idle: true }),
+    true,
+  );
+  assert.equal(
+    shouldOfferPiIntercom({
+      request: "关闭下一步预测",
+      status,
+      mode: "tui",
+      idle: true,
+    }),
+    false,
+  );
+  assert.equal(
+    shouldOfferPiIntercom({ request: "", status, mode: "rpc", idle: true }),
+    false,
+  );
+  assert.equal(
+    shouldOfferPiIntercom({ request: "", status, mode: "tui", idle: false }),
+    false,
+  );
+  assert.equal(
+    shouldOfferPiIntercom({
+      request: "",
+      status: { ...status, installed: true },
+      mode: "tui",
+      idle: true,
+    }),
     false,
   );
 });
@@ -77,6 +112,9 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Recommend compact/);
   assert.match(message, /Post-edit defaults off/);
   assert.match(message, /Agent role models/);
+  assert.match(message, /Intercom: optional cross-session messaging/);
+  assert.match(message, /native setup confirmation/);
+  assert.match(message, /parent-only/);
   assert.match(message, /explorer, implementer, reviewer, and advisor/);
   assert.match(message, /subagent_spawn and workflow agent_type/);
   assert.match(message, /subagent_role_models=\{explorer/);

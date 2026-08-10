@@ -46,6 +46,11 @@ test("the manifest enforces the documented Node floor", () => {
   assert.equal(manifest.engines?.node, ">=22.19.0");
 });
 
+test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
+  assert.equal(manifest.dependencies?.["pi-intercom"], undefined);
+  assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);
+});
+
 test("the public OpenPI package has complete gallery and registry metadata", () => {
   assert.equal(manifest.name, "@tt-a1i/openpi");
   assert.equal(manifest.private, undefined);

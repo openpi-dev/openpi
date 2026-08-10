@@ -32,27 +32,27 @@ Pi will load the extensions, skills, and theme from their directories the next t
 
 ## Configure this package
 
-Use the single package-owned command. With no arguments, the current model explains the configurable areas and their impact, then uses `ask_user`: first run initializes them; later runs explain the saved state and ask whether to keep it, change one area, or review everything. With arguments, it treats the rest as a targeted natural-language request:
+Use the single canonical package-owned command. `/my-pi-setup` remains a compatibility alias. With no arguments, when optional pi-intercom is absent, the interactive TUI first offers a reviewed global installation; declining changes nothing. Acceptance installs the fixed `npm:pi-intercom` source through Pi's package manager. A new private config receives `confirmSend: true` and `inboundTrigger: "replies"`; an existing preference file is never rewritten and must already define both fields. Package download failure writes no config, while uncertain activation retains the safe new config. Setup asks for `/reload` instead of loading a new broker into the running Session. The current model then explains the remaining configurable areas and uses `ask_user`: first run initializes them; later runs explain the saved state and ask whether to keep it, change one area, or review everything. With arguments, it treats the rest as a targeted natural-language request:
 
 ```text
-/my-pi-setup
-/my-pi-setup 开启下一步预测，使用 seal/deepseek-v4-flash，关闭推理
-/my-pi-setup 关闭下一步预测
-/my-pi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
-/my-pi-setup 显示大标题
-/my-pi-setup 切换 Footer 为 powerline
-/my-pi-setup 用 mono powerline Footer
-/my-pi-setup Footer 用 compact
-/my-pi-setup Footer 两行：cwd flex model / context cost flex git
-/my-pi-setup Footer 只显示 model、thinking、context、cache 和 git
-/my-pi-setup 关闭自定义状态栏
-/my-pi-setup 编辑后自动跑 npm run format
-/my-pi-setup 关闭 post-edit 命令
-/my-pi-setup 给 explorer 指定当前 Registry 中可用的模型
-/my-pi-setup 清除 explorer 的模型，让它继承父模型
+/openpi-setup
+/openpi-setup 开启下一步预测，使用 seal/deepseek-v4-flash，关闭推理
+/openpi-setup 关闭下一步预测
+/openpi-setup workflow 同时跑 16 个 agent，总任务最多 256 个
+/openpi-setup 显示大标题
+/openpi-setup 切换 Footer 为 powerline
+/openpi-setup 用 mono powerline Footer
+/openpi-setup Footer 用 compact
+/openpi-setup Footer 两行：cwd flex model / context cost flex git
+/openpi-setup Footer 只显示 model、thinking、context、cache 和 git
+/openpi-setup 关闭自定义状态栏
+/openpi-setup 编辑后自动跑 npm run format
+/openpi-setup 关闭 post-edit 命令
+/openpi-setup 给 explorer 指定当前 Registry 中可用的模型
+/openpi-setup 清除 explorer 的模型，让它继承父模型
 ```
 
-Next-action suggestions default to off. Run `/my-pi-setup` to explicitly choose an available model and reasoning level. After a fully settled main-agent run, one suggestion may appear as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. `Right` accepts it into the editor without submitting, while any other editor input dismisses it. Suggestions are ephemeral and never enter session history or model context. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on with a one-line Powerline layout (`cwd model thinking context cache cost throughput |flex| git pr`). Footer presets are `powerline`, `powerline-mono`, and `compact`; style can also be set independently to `plain`, `powerline`, or `powerline-mono`. Custom layouts use a 2D `footerLines` array with at most one `flex` per row for left/right alignment. Nerd Font only affects powerline separator glyphs (``); metric text stays readable without it. Footer changes apply immediately in the active TUI session. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews. Bash defaults to a folded one-line command with bounded output and a hidden-line count. Write/Edit defaults to an extra-short folded preview capped at three rendered lines including the operation header; its hidden-line hint remains inside the operation's status background. Select full independently for any category to keep it expanded. Compact views temporarily expand with `app.tools.expand` (`Ctrl+O` by default). An optional post-edit command is off by default: set one (for example `npm run format`, maximum 500 characters) and it runs once in the background after each interactive-TUI turn with successful Write/Edit operations, with failures reported as a notification. It deliberately does not guess whether arbitrary Bash commands changed files. Built-in Agent roles `explorer`, `implementer`, `reviewer`, and `advisor` are shared by `subagent_spawn.agent_type` and Workflow `agent(..., { agent_type })`; all inherit the parent model by default. `/my-pi-setup` may assign a currently available Registry model to any subset; clearing one returns it to inheritance and omitted roles stay unchanged. Model precedence is explicit call > selected role-file model > setup assignment > parent inheritance; effort is explicit call > selected role > parent. A trusted project `.pi/agents/<role>.md` overrides global `~/.pi/agent/agents/<role>.md`, which overrides the complete built-in role definition; overrides are diagnosed. Role-model changes apply to the next spawn or Workflow agent call without reload. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
+Next-action suggestions default to off. Run `/openpi-setup` to explicitly choose an available model and reasoning level. After a fully settled main-agent run, one suggestion may appear as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. `Right` accepts it into the editor without submitting, while any other editor input dismisses it. Suggestions are ephemeral and never enter session history or model context. Workflows default to 8 concurrent agents and 128 total agent calls per run; configurable hard maxima are 64 and 1024. The large decorative header defaults off and the custom dashboard footer defaults on with a one-line Powerline layout (`cwd model thinking context cache cost throughput |flex| git pr`). Footer presets are `powerline`, `powerline-mono`, and `compact`; style can also be set independently to `plain`, `powerline`, or `powerline-mono`. Custom layouts use a 2D `footerLines` array with at most one `flex` per row for left/right alignment. Nerd Font only affects powerline separator glyphs (``); metric text stays readable without it. Footer changes apply immediately in the active TUI session. Subagent results default to the existing full display; users who do not usually inspect implementation detail can select compact previews. Bash defaults to a folded one-line command with bounded output and a hidden-line count. Write/Edit defaults to an extra-short folded preview capped at three rendered lines including the operation header; its hidden-line hint remains inside the operation's status background. Select full independently for any category to keep it expanded. Compact views temporarily expand with `app.tools.expand` (`Ctrl+O` by default). An optional post-edit command is off by default: set one (for example `npm run format`, maximum 500 characters) and it runs once in the background after each interactive-TUI turn with successful Write/Edit operations, with failures reported as a notification. It deliberately does not guess whether arbitrary Bash commands changed files. Built-in Agent roles `explorer`, `implementer`, `reviewer`, and `advisor` are shared by `subagent_spawn.agent_type` and Workflow `agent(..., { agent_type })`; all inherit the parent model by default. `/openpi-setup` may assign a currently available Registry model to any subset; clearing one returns it to inheritance and omitted roles stay unchanged. Model precedence is explicit call > selected role-file model > setup assignment > parent inheritance; effort is explicit call > selected role > parent. A trusted project `.pi/agents/<role>.md` overrides global `~/.pi/agent/agents/<role>.md`, which overrides the complete built-in role definition; overrides are diagnosed. Role-model changes apply to the next spawn or Workflow agent call without reload. Configuration is stored privately at `~/.pi/agent/my-pi-setup.json`.
 
 ## Session Goal and Tasks
 
@@ -62,7 +62,7 @@ Model callers use `get_goal`, `create_goal`, and `update_goal`. `create_goal` is
 
 There are no normal user-facing Turn, no-progress, or wall-clock caps; a hidden 1000-continuation circuit breaker exists only to stop runaway automation. An optional `token_budget` must only be positive. Goal non-cached Assistant input-plus-output Token and elapsed-time usage are persisted; crossing the budget marks `budget_limited` and queues one wrap-up Turn. Active goals continue after reload/resume. Fork and tree navigation defer inherited active continuation until the first explicit user input; paused, blocked, and usage-limited goals remain stopped and can prompt for Resume. A v1 active/waiting goal migrates once to paused. Assistant aborts pause an active goal and Assistant errors block it. Print/json automation is inert. Footer text mirrors Codex (`Pursuing goal (…)`, resume hints, `Goal unmet`, `Goal achieved`) without showing the objective or legacy Turn counts. An achieved Footer remains visible until the next explicit interactive/RPC input, then a branch-persisted acknowledgement hides only the Footer while `/goal` retains the completed record.
 
-Session Tasks remain advisory multi-item work intent and do not determine Goal completion. They are scoped to the current request batch: once every item is done or dropped, the batch closes and the next `tasks_add` starts again at T1. Active items persist in a polished Claude Code-style panel above the editor; `Ctrl+Shift+T` or `/tasks hide|show|toggle` controls visibility, while `/tasks` opens the full list. No `/my-pi-setup` setting or secondary judge model is required.
+Session Tasks remain advisory multi-item work intent and do not determine Goal completion. They are scoped to the current request batch: once every item is done or dropped, the batch closes and the next `tasks_add` starts again at T1. Active items persist in a polished Claude Code-style panel above the editor; `Ctrl+Shift+T` or `/tasks hide|show|toggle` controls visibility, while `/tasks` opens the full list. No `/openpi-setup` setting or secondary judge model is required.
 
 ## Other commands added by this fork
 

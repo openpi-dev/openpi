@@ -1,9 +1,8 @@
 <p align="center">
-  <picture>
-    <source media="(max-width: 640px)" srcset="assets/readme-hero-mobile.svg">
-    <img src="assets/readme-hero.svg" alt="OpenPI — a Pi-native multi-agent workbench" width="100%" />
-  </picture>
+  <img src="assets/openpi-package.png" alt="OpenPI logo" width="240" />
 </p>
+
+<h1 align="center">OpenPI</h1>
 
 <p align="center">
   <strong>给 Pi 补上后台执行、多 Agent 编排、持久任务和可观测终端，同时保留它原本的轻量与可控。</strong>
@@ -54,7 +53,7 @@ pi install npm:@tt-a1i/openpi
 Pi 会把长期进程放到后台，把独立任务交给隔离 Context 的子 Agent，并在结果完成时自动继续。Subagent 和 Workflow 状态显示在 Footer；后台终端有编辑器上方状态条，完整信息分别从 `/ps`、`/subagents` 和 `/workflows` 查看。
 
 > [!IMPORTANT]
-> 默认安装是安静的：不修改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。所有用户偏好统一通过 `/my-pi-setup` 显式配置。
+> 默认安装是安静的：不修改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。所有用户偏好统一通过 `/openpi-setup` 显式配置。
 
 > [!TIP]
 > `subagent_spawn` 会立即返回。主 Agent 应继续处理确定性工作；只有下一步确实依赖子 Agent 结果时，才调用 `subagent_wait`。
@@ -181,7 +180,7 @@ Worktree 建在 `.git/pi-worktrees/`，拥有独立 checkout 和分支。Direct 
 <details>
 <summary><strong>模型与 Agent Type 的优先级</strong></summary>
 
-模型：显式调用 > Agent Type 文件 > `/my-pi-setup` 的角色模型 > 父模型继承。
+模型：显式调用 > Agent Type 文件 > `/openpi-setup` 的角色模型 > 父模型继承。
 
 Effort：显式调用 > Agent Type 默认值 > 父会话。
 
@@ -336,7 +335,7 @@ Subagent 与 Workflow 状态属于 Footer 的基础可观察性：活动时自�
 - Subagent 结果默认完整显示；
 - Bash 默认折叠为单行命令、有限输出与最终状态；
 - Write/Edit 默认最多显示三行渲染内容；
-- 三类结果都能在 `/my-pi-setup` 中独立切换 `full` / `compact`；
+- 三类结果都能在 `/openpi-setup` 中独立切换 `full` / `compact`；
 - 折叠内容用 Pi 当前的 `app.tools.expand` 快捷键临时展开，默认是 `Ctrl+O`。
 
 ### 文件搜索是一等工具
@@ -370,22 +369,23 @@ macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载�
 
 ## 统一配置
 
-本包只有一个用户配置入口：
+本包只有一个 canonical 用户配置入口；旧命令保留为兼容别名：
 
 ```text
-/my-pi-setup
+/openpi-setup
+/my-pi-setup  # legacy alias
 ```
 
-无参数时，当前模型先解释已有设置与影响，再引导修改。直接跟自然语言则只改指定项：
+无参数时，若未安装可选的 pi-intercom，OpenPI 会先用原生确认框说明权限与安全默认值；拒绝不会产生任何改动。随后当前模型解释已有设置与影响并引导修改。直接跟自然语言则只改指定项：
 
 ```text
-/my-pi-setup 开启下一步预测，选择当前 Registry 里的轻量模型，minimal 推理
-/my-pi-setup workflow 同时跑 16 个 agent，总调用最多 256
-/my-pi-setup Footer 两行：cwd flex model / context cost flex git
-/my-pi-setup Footer 用 mono powerline
-/my-pi-setup Bash 展开，Write/Edit 保持紧凑
-/my-pi-setup 编辑后自动跑 npm run format
-/my-pi-setup 给 explorer 指定模型，让 reviewer 继承父模型
+/openpi-setup 开启下一步预测，选择当前 Registry 里的轻量模型，minimal 推理
+/openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup Footer 两行：cwd flex model / context cost flex git
+/openpi-setup Footer 用 mono powerline
+/openpi-setup Bash 展开，Write/Edit 保持紧凑
+/openpi-setup 编辑后自动跑 npm run format
+/openpi-setup 给 explorer 指定模型，让 reviewer 继承父模型
 ```
 
 配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离。升级不会覆盖。
@@ -404,9 +404,10 @@ macOS/Linux 的 arm64 与 x64 环境缺少二进制时，会通过 HTTPS 下载�
 | Write/Edit 输出          | `compact`                                                    |
 | Post-edit 命令           | 关闭；单条命令最多 500 字符                                  |
 | 内置角色模型             | `explorer / implementer / reviewer / advisor` 均继承父模型   |
+| pi-intercom              | 不静默安装；进入 `/openpi-setup` 后由用户明确选择             |
 | 主题                     | 保留用户现有选择                                             |
 
-任何新增的模型、开关、权限、并发或 UI 偏好都必须接入 `/my-pi-setup`。仓库的 [`AGENTS.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/AGENTS.md) 用测试守住这份单一入口契约。
+任何新增的模型、开关、权限、并发或 UI 偏好都必须接入 `/openpi-setup`。仓库的 [`AGENTS.md`](https://github.com/tt-a1i/my-pi-setup/blob/main/AGENTS.md) 用测试守住这份单一入口契约。
 
 ---
 
@@ -443,13 +444,15 @@ pi install ~/work/my-pi-setup
 
 ### 可选：多个顶层 Pi Session 通信
 
+运行 `/openpi-setup`，在原生确认框中选择安装即可；也可手动执行：
+
 ```bash
 pi install npm:pi-intercom
 ```
 
-pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷键、命令与 `inboundTrigger` 配置以当前安装版本的文档为准。
+setup 使用 Pi 官方 Package Manager 安装固定来源 `npm:pi-intercom`。新建的私有配置默认 `confirmSend: true`、`inboundTrigger: "replies"`；已有偏好文件绝不重写，缺少这两个字段或配置损坏时会拒绝安装并给出修复要求。包下载失败不会写配置；启用持久化状态不确定时保留安全配置但明确报告失败。安装成功后需运行 `/reload`。
 
-本包只保证一件事：pi-intercom 留在顶层 Session，child 不加载它。跨顶层 Session 用 pi-intercom；父子委派继续使用 `subagent_*` 和 Workflow 原生结果通道。
+pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。OpenPI 保证它只留在顶层 Session，Direct/Workflow child 不加载扩展或 Skill，Replay 也不复用其调用。跨顶层 Session 用 pi-intercom；父子委派继续使用 `subagent_*` 和 Workflow 原生结果通道。
 
 ### 可选：GitHub Dark 主题
 
@@ -467,7 +470,8 @@ pi-intercom 通过本地 IPC 传递消息；传输本身不调用模型。快捷
 
 | 命令                        | 作用                                                            |
 | --------------------------- | --------------------------------------------------------------- |
-| `/my-pi-setup [自然语言]`   | 查看或修改本包配置                                              |
+| `/openpi-setup [自然语言]`  | 查看或修改 OpenPI 配置；可选择安装 pi-intercom                  |
+| `/my-pi-setup [自然语言]`   | `/openpi-setup` 的兼容别名                                      |
 | `/ps`                       | 查看、跟踪和终止后台终端                                        |
 | `/subagents`                | 查看、取消或接管子 Agent                                        |
 | `/btw`                      | 在旁路 Pi Context 中提问，不打断主任务                          |
@@ -527,7 +531,7 @@ Terminal、Subagent、Workflow 都有 ID、状态、检查入口、取消路径�
 <details>
 <summary><strong>安装后会自动调用额外模型吗？</strong></summary>
 
-不会。Next-action suggestion 默认关闭；只有用户通过 `/my-pi-setup` 显式选择模型后，完整主 Agent Run 结束时才可能增加一次小型预测调用。Subagent 与 Workflow 也只在任务实际触发时运行。
+不会。Next-action suggestion 默认关闭；只有用户通过 `/openpi-setup` 显式选择模型后，完整主 Agent Run 结束时才可能增加一次小型预测调用。Subagent 与 Workflow 也只在任务实际触发时运行。
 
 </details>
 
@@ -581,7 +585,7 @@ Plan Mode 仍可启动只读 Subagent，但会把工具收窄到发现工具；`
 
 ```text
 extensions/
-├── setup/                 # /my-pi-setup 与受限配置工具
+├── setup/                 # /openpi-setup、兼容别名与受限配置工具
 ├── background-terminals/  # 长进程、日志、/ps
 ├── subagents/             # Pi-native Backend、角色、/subagents
 ├── workflows/             # DSL、Runner、Sandbox、Replay、Artifacts

@@ -263,7 +263,7 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
       path.join(intercomPackageDir, "package.json"),
       JSON.stringify({
         name: "pi-intercom",
-        version: "0.9.3",
+        version: "0.10.0",
         pi: {
           extensions: ["./index.ts"],
           skills: ["./skills"],
@@ -280,7 +280,7 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     );
     await writeFile(
       path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: ["npm:pi-intercom@0.9.3"] }),
+      JSON.stringify({ packages: ["npm:pi-intercom@0.10.0"] }),
     );
 
     const untrusted = await createChildResources({
@@ -297,7 +297,7 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     assert.equal(untrustedTools.includes("project_fixture"), false);
     assert.equal(
       untrustedExtensions.some(
-        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.9.3",
+        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.10.0",
       ),
       false,
       JSON.stringify(
@@ -319,7 +319,7 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     assert.equal(trustedTools.includes("project_fixture"), true);
     assert.equal(
       trustedExtensions.some(
-        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.9.3",
+        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.10.0",
       ),
       false,
     );
@@ -331,7 +331,7 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     );
     assert.equal(
       childSkills.some(
-        (skill) => skill.sourceInfo.source === "npm:pi-intercom@0.9.3",
+        (skill) => skill.sourceInfo.source === "npm:pi-intercom@0.10.0",
       ),
       false,
     );

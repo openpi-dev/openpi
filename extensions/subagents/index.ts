@@ -633,7 +633,7 @@ export default function (pi: ExtensionAPI) {
         ? planModeChildTools(declaredChildTools)
         : declaredChildTools;
       const childTools = effectiveChildToolAllowlist(requestedChildTools);
-      // Read at spawn time so `/my-pi-setup` changes affect the next child
+      // Read at spawn time so `/openpi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model
       // inheritance in the backend.
       const model = selectSubagentModel(

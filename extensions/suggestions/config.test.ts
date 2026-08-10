@@ -33,6 +33,15 @@ test("setup defaults to disabled next-action suggestions", () => {
   );
 });
 
+test("setup status appends optional integration inventory only when supplied", () => {
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG, [
+      "Intercom: not installed · optional setup component",
+    ]),
+    /advisor inherit\nIntercom: not installed · optional setup component$/,
+  );
+});
+
 test("setup config accepts suggestion models and migrates the recap key", () => {
   const configured = parseSetupConfig({
     summaries: {
