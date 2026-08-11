@@ -54,7 +54,7 @@ test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () 
 test("the public OpenPI package has complete gallery and registry metadata", () => {
   assert.equal(manifest.name, "@tt-a1i/openpi");
   assert.equal(manifest.private, undefined);
-  assert.equal(manifest.license, "UNLICENSED");
+  assert.equal(manifest.license, "MIT");
   assert.ok(manifest.keywords?.includes("pi-package"));
   assert.equal(manifest.publishConfig?.access, "public");
   assert.equal(

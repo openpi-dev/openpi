@@ -2,7 +2,7 @@
   "name": "@tt-a1i/openpi",
   "version": "0.1.0",
   "description": "OpenPI — a Pi-native multi-agent workbench with background execution, isolated subagents, replay-safe workflows, goals, tasks, and observable TUI",
-  "license": "UNLICENSED",
+  "license": "MIT",
   "author": "tt-a1i",
   "keywords": [
     "pi-package",

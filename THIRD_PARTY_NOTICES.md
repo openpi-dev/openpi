@@ -10,7 +10,6 @@ The upstream project is distributed under the MIT License. Its notice states
 `Copyright (c) 2026`; the complete license text is included at
 [`extensions/sessions/LICENSE.upstream`](extensions/sessions/LICENSE.upstream).
 
-The remainder of this repository retains its upstream licensing status; no
-project-wide license is asserted here. The npm package therefore declares
-`UNLICENSED`; publication does not grant permission to copy, modify, or
-redistribute code beyond rights supplied by an applicable upstream license.
+OpenPI is distributed under the MIT License; see [`LICENSE`](LICENSE). Portions
+identified in this notice retain their original copyright notices and license
+terms. The project-wide MIT license does not replace or remove those notices.

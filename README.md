@@ -18,7 +18,7 @@
   <a href="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
-  <img alt="License: UNLICENSED" src="https://img.shields.io/badge/license-UNLICENSED-8b949e?style=flat-square">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
 
 <p align="center">
@@ -95,7 +95,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 跨 Session   | 可选 parent-only `pi-intercom`；父子通信仍走 Subagent / Workflow 原生通道                                 |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
 
-源码公开可审计，但当前项目为 `UNLICENSED`；公开源码不等同于已授予开源许可证。
+OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
 ---
 
