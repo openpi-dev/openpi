@@ -467,6 +467,8 @@ export function createFirstResponseWatchdog(
   const timeoutMs = options.timeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_resolve, reject) => {
+    // This timer owns the awaited watchdog outcome. Keep it referenced so a
+    // short-lived Node 22 process cannot exit with the promise still pending.
     timer = setTimeout(() => {
       timer = undefined;
       const model = options.model ? ` for ${options.model}` : "";
@@ -477,7 +479,6 @@ export function createFirstResponseWatchdog(
       );
       void onTimeout().catch(() => {});
     }, timeoutMs);
-    timer.unref?.();
   });
 
   const cancel = () => {
@@ -487,6 +488,7 @@ export function createFirstResponseWatchdog(
 
   return {
     markResponse: cancel,
+    cancel,
     async waitFor<T>(operation: Promise<T>) {
       try {
         return await Promise.race([operation, timeout]);
@@ -622,6 +624,7 @@ export async function runAgent(
   };
 
   let markFirstResponse = () => {};
+  let cancelFirstResponseWatchdog = () => {};
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
     if (isAssistantResponseEvent(event)) markFirstResponse();
@@ -696,6 +699,7 @@ export async function runAgent(
         },
       );
       markFirstResponse = watchdog.markResponse;
+      cancelFirstResponseWatchdog = watchdog.cancel;
       await Promise.race([
         watchdog.waitFor(
           childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
@@ -706,6 +710,7 @@ export async function runAgent(
   } catch (error) {
     promptErrorMessage = errorText(error);
   } finally {
+    cancelFirstResponseWatchdog();
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
     unsubscribe();

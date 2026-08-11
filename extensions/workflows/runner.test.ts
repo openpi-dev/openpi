@@ -463,6 +463,21 @@ test("first assistant response disarms the watchdog without limiting the run", a
   assert.equal(result, "done");
 });
 
+test("explicit watchdog cancellation disarms a pending operation", async () => {
+  let timedOut = false;
+  const watchdog = createFirstResponseWatchdog(
+    async () => {
+      timedOut = true;
+    },
+    { timeoutMs: 5 },
+  );
+  void watchdog.waitFor(new Promise<never>(() => {}));
+  watchdog.cancel();
+
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.equal(timedOut, false);
+});
+
 test("structured role children keep their terminating tool without widening capabilities", () => {
   assert.deepEqual(workflowChildTools(["read", "rg"], true), [
     "read",

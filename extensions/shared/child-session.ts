@@ -267,11 +267,12 @@ async function waitUntil(
   const remaining = Math.max(0, deadline - Date.now());
   let timer: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<{ error: string; timedOut: true }>((resolve) => {
+    // This timer owns the awaited deadline contract. Keep it referenced so a
+    // short-lived Node 22 process cannot exit with the promise still pending.
     timer = setTimeout(
       () => resolve({ error: `${label} timed out`, timedOut: true }),
       remaining,
     );
-    timer.unref?.();
   });
   const completed = operation.then(
     () => ({ timedOut: false as const }),
