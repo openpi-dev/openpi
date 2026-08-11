@@ -1,8 +1,5 @@
 <p align="center">
-  <picture>
-    <source media="(max-width: 820px)" srcset="assets/readme-hero-mobile.svg">
-    <img src="assets/readme-hero.svg" alt="OpenPI — Pi-native background execution, isolated subagents, dynamic workflows, and observable context" width="100%" />
-  </picture>
+  <img src="assets/openpi-package.png" alt="OpenPI logo" width="240" />
 </p>
 
 <h1 align="center">OpenPI</h1>
