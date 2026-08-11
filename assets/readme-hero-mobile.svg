@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="720" height="900" viewBox="0 0 720 900" role="img" aria-labelledby="title desc">
   <title id="title">OpenPI</title>
-  <desc id="desc">A mobile-readable overview of the Pi-native multi-agent runtime.</desc>
+  <desc id="desc">OpenPI — small harness, deep extensions, clean context.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop stop-color="#0d1117"/>
@@ -21,7 +21,7 @@
     <text x="42" y="28" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="18" font-weight="700" letter-spacing="1">PI NATIVE</text>
 
     <text x="0" y="122" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="66" font-weight="760" letter-spacing="-2">OpenPI</text>
-    <text x="0" y="168" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24">Small harness. Real runtime.</text>
+    <text x="0" y="168" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="24">Small harness. Deep extensions. Clean context.</text>
   </g>
 
   <g transform="translate(48 250)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="23" font-weight="600">

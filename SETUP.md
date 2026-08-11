@@ -9,14 +9,14 @@ pi install npm:@tt-a1i/openpi
 To inspect the current source before loading it, install directly from GitHub instead:
 
 ```sh
-pi install git:github.com/tt-a1i/my-pi-setup
+pi install git:github.com/tt-a1i/openpi
 ```
 
 Pi installs the package dependencies automatically. Restart Pi or run `/reload` after installation.
 
 ## fd and rg tools
 
-The `file-search` extension registers `fd` and `rg` as model tools. No setup is normally needed: at startup it silently uses a system-installed `fd` (or `fdfind` on Debian/Ubuntu) and `rg` when available, or an existing fallback binary in `~/.pi/agent/bin/`. Only when neither exists does it download an official release binary (macOS/Linux, arm64/x64, over HTTPS) into `~/.pi/agent/bin/` and show a one-time notification. If your platform is unsupported, install `fd` and `rg` with your package manager and restart pi.
+The `file-search` extension registers `fd` and `rg` as model tools. No setup is normally needed: at startup it silently uses a system-installed `fd` (or `fdfind` on Debian/Ubuntu) and `rg` when available, or an existing fallback in this package's private `bin/` directory. Only when neither exists does it download an official release binary (macOS/Linux, arm64/x64, over HTTPS) into that package-local directory and show a one-time notification. If your platform is unsupported, install `fd` and `rg` with your package manager and restart Pi.
 
 ## Theme
 

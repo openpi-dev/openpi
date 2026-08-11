@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="500" viewBox="0 0 1200 500" role="img" aria-labelledby="title desc">
   <title id="title">OpenPI</title>
-  <desc id="desc">A Pi-native runtime layer for background terminals, isolated subagents, dynamic workflows, and clean context.</desc>
+  <desc id="desc">OpenPI — small harness, deep extensions, clean context.</desc>
 
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
@@ -34,11 +34,11 @@
     <g>
       <rect width="112" height="34" rx="17" fill="#12233d" stroke="#2f81f7"/>
       <circle cx="18" cy="17" r="5" fill="#3fb950"/>
-      <text x="33" y="22" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="700" letter-spacing="1">PI NATIVE</text>
+      <text x="33" y="22" fill="#a5d6ff" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="700" letter-spacing="0.7">PI NATIVE</text>
     </g>
 
     <text x="0" y="112" fill="#f0f6fc" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="64" font-weight="760" letter-spacing="-2">OpenPI</text>
-    <text x="0" y="155" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="21">Keep the harness small. Give it a real runtime.</text>
+    <text x="0" y="155" fill="#8b949e" font-family="-apple-system, BlinkMacSystemFont, Segoe UI, sans-serif" font-size="20">Small harness. Deep extensions. Clean context.</text>
 
     <g transform="translate(0 198)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">
       <path d="M5 9h14M12 2l7 7-7 7" fill="none" stroke="#58a6ff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -62,14 +62,14 @@
     <circle cx="22" cy="22" r="5" fill="#f85149"/>
     <circle cx="40" cy="22" r="5" fill="#d29922"/>
     <circle cx="58" cy="22" r="5" fill="#3fb950"/>
-    <text x="229" y="27" text-anchor="middle" fill="#7d8590" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13">pi · main</text>
+    <text x="229" y="27" text-anchor="middle" fill="#7d8590" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="15">pi · main</text>
 
-    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14">
+    <g font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="16">
       <text x="24" y="78" fill="#7d8590">$ pi</text>
       <rect x="24" y="92" width="410" height="44" rx="9" fill="#0d1117" stroke="#21262d"/>
       <circle cx="44" cy="114" r="5" fill="#58a6ff"/>
       <text x="59" y="119" fill="#f0f6fc">main agent</text>
-      <text x="320" y="119" fill="#7d8590">orchestrating</text>
+      <text x="320" y="119" fill="#7d8590" font-size="14">orchestrating</text>
 
       <path d="M47 136V155M47 155H379" fill="none" stroke="#30363d" stroke-width="2"/>
       <path d="M90 155V169M229 155V169M379 155V169" stroke="#30363d" stroke-width="2"/>
@@ -91,18 +91,18 @@
 
       <rect x="24" y="256" width="410" height="34" rx="8" fill="#0d1117" stroke="#21262d"/>
       <text x="38" y="278" fill="#7d8590">context</text>
-      <rect x="104" y="268" width="166" height="10" rx="5" fill="#21262d"/>
-      <rect x="104" y="268" width="61" height="10" rx="5" fill="#2f81f7"/>
+      <rect x="115" y="268" width="155" height="10" rx="5" fill="#21262d"/>
+      <rect x="115" y="268" width="57" height="10" rx="5" fill="#2f81f7"/>
       <text x="285" y="278" fill="#c9d1d9">37%</text>
       <text x="338" y="278" fill="#3fb950">settled</text>
 
       <path d="M24 308H434" stroke="#21262d"/>
       <rect x="24" y="318" width="410" height="18" rx="4" fill="#0b1720"/>
-      <text x="34" y="332" fill="#39c5cf" font-size="13">run tests and open the PR</text>
+      <text x="34" y="332" fill="#39c5cf" font-size="15">run tests and open the PR</text>
     </g>
   </g>
 
-  <g transform="translate(70 444)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="13" font-weight="600" letter-spacing="0.4">
+  <g transform="translate(70 444)" font-family="ui-monospace, SFMono-Regular, Menlo, monospace" font-size="14" font-weight="600" letter-spacing="0.25">
     <text fill="#58a6ff">BACKGROUND</text>
     <circle cx="110" cy="-4" r="2" fill="#30363d"/>
     <text x="126" fill="#3fb950">SUBAGENTS</text>
