@@ -18,7 +18,14 @@ import type { Theme, WorkflowDetails } from "./model.ts";
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-workflows-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
 
-const { loadRunEntries, WorkflowDashboard } = await import("./dashboard.ts");
+const {
+  buildWorkflowReport,
+  loadRunEntries,
+  normalizePersistedWorkflowDetails,
+  recoverStaleWorkflowDetails,
+  workflowGraphSummary,
+  WorkflowDashboard,
+} = await import("./dashboard.ts");
 
 const SESSION = "session-1";
 
@@ -43,6 +50,138 @@ function writeRun(
     }),
   );
 }
+
+test("persisted nonterminal invocation facts are projected as uncertain", () => {
+  const restored = normalizePersistedWorkflowDetails("wf_dead", {
+    status: "running",
+    startedAt: 10,
+    agents: [
+      {
+        index: 1,
+        label: "writer",
+        state: "running",
+        startedAt: 11,
+        invocation: {
+          identity: { runId: "wf_dead", callIndex: 1 },
+          intentState: "requested",
+          admissionState: "claimed",
+          executionState: "running",
+          requestedAt: 11,
+          claimedAt: 12,
+          runningAt: 13,
+        },
+      },
+    ],
+    phases: [],
+  });
+
+  assert.equal(restored?.agents[0]?.invocation?.executionState, "uncertain");
+  assert.equal(restored?.agents[0]?.invocation?.outcome, "uncertain");
+});
+
+test("stale recovery reconciles the run and every active agent", () => {
+  const details = normalizePersistedWorkflowDetails("wf_stale", {
+    status: "running",
+    startedAt: 10,
+    agents: [
+      {
+        index: 1,
+        callId: "wf_stale:1",
+        label: "running",
+        state: "running",
+        startedAt: 11,
+      },
+      {
+        index: 2,
+        callId: "wf_stale:2",
+        label: "done",
+        state: "done",
+        startedAt: 11,
+      },
+    ],
+    phases: [],
+  })!;
+
+  recoverStaleWorkflowDetails(details, 100);
+
+  assert.equal(details.status, "aborted");
+  assert.equal(details.finishedAt, 100);
+  assert.equal(details.agents[0]?.state, "error");
+  assert.equal(details.agents[0]?.finishedAt, 100);
+  assert.equal(details.agents[1]?.state, "done");
+  assert.equal(details.graph?.nodes[0]?.state, "error");
+});
+
+test("persisted usage is normalized to finite nonnegative numbers", () => {
+  const details = normalizePersistedWorkflowDetails("wf_usage", {
+    status: "completed",
+    startedAt: 10,
+    agents: [
+      {
+        index: 1,
+        label: "corrupt",
+        state: "done",
+        startedAt: 11,
+        usage: {
+          input: Infinity,
+          output: -1,
+          cacheRead: "12",
+          cacheWrite: null,
+          cost: "boom",
+          contextTokens: 512,
+          turns: NaN,
+        },
+      },
+    ],
+    phases: [],
+  });
+
+  assert.deepEqual(details?.agents[0]?.usage, {
+    input: 0,
+    output: 0,
+    cacheRead: 0,
+    cacheWrite: 0,
+    cost: 0,
+    contextTokens: 512,
+    turns: 0,
+  });
+});
+
+test("saved reports expose the bounded derived graph as observability", () => {
+  const details = normalizePersistedWorkflowDetails("wf_graph_report", {
+    status: "completed",
+    startedAt: 10,
+    agents: [
+      {
+        index: 1,
+        callId: "wf_graph_report:1",
+        label: "scan",
+        state: "done",
+        startedAt: 11,
+      },
+      {
+        index: 2,
+        callId: "wf_graph_report:2",
+        inputCallIds: ["wf_graph_report:1"],
+        label: "verify",
+        state: "done",
+        startedAt: 12,
+      },
+    ],
+    phases: [],
+  })!;
+
+  details.graph!.omitted = { nodes: 2, edges: 3, diagnostics: 1 };
+  const report = buildWorkflowReport(details);
+  assert.match(report, /## Derived graph/);
+  assert.match(report, /scan → verify/);
+  assert.match(report, /observability only/);
+  assert.match(report, /2 nodes, 3 edges, 1 diagnostics omitted/);
+  assert.match(
+    workflowGraphSummary(details.graph!),
+    /2 nodes, 3 edges, 1 diagnostics omitted/,
+  );
+});
 
 test("the dashboard reports the current request, not the session's history", () => {
   writeRun("wf_a1", 1_000);

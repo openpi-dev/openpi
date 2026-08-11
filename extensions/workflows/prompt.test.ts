@@ -181,6 +181,11 @@ test("the tool description teaches log() and usage() as distinct from phase()", 
   );
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /• usage\(\)/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /agent_type\?/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /operator\?/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /inputs\?/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /result ref/i);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /same workflow run/i);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /not.*cross-restart/i);
   assert.match(
     WORKFLOW_TOOL_DESCRIPTION,
     /same named preset and enforced capabilities as subagent_spawn/,

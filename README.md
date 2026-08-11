@@ -204,17 +204,20 @@ const checked = await pipeline(
     }),
   (scan, file) =>
     scan.ok
-      ? agent(`Verify these findings in ${file}: ${scan.output}`, {
+      ? agent(`Verify the findings in ${file}`, {
           agent_type: "reviewer",
           label: `verify:${file}`,
+          inputs: [scan.ref],
         })
       : null,
 );
 
 phase("Report");
-log(`${checked.filter(Boolean).length}/${checked.length} files verified`);
-return await agent(`Synthesize: ${JSON.stringify(checked)}`, {
+const verified = checked.filter((result) => result?.ok);
+log(`${verified.length}/${checked.length} files verified`);
+return await agent("Synthesize the verified findings", {
   agent_type: "advisor",
+  inputs: verified.map((result) => result.ref),
 });
 ```
 
@@ -223,7 +226,7 @@ return await agent(`Synthesize: ${JSON.stringify(checked)}`, {
 | `phase()`    | 标记当前阶段                                                         |
 | `log()`      | 向实时界面与最终报告追加一行进度                                     |
 | `usage()`    | 读取累计 Token、缓存与成本的单调 lower bound；它不是预算限制器        |
-| `agent()`    | 启动一个隔离 Pi Agent，可指定 role、schema、acceptance 或 worktree    |
+| `agent()`    | 启动 Pi Agent；可指定 role、schema、acceptance、inputs、operator 或 worktree |
 | `pipeline()` | 每个 item 完成上一阶段后立即进入下一阶段；多阶段 fan-out 的默认选择   |
 | `parallel()` | 并发 barrier；只有下一阶段确实需要全部结果时使用                      |
 
@@ -241,6 +244,12 @@ Workflow 默认并发 8 个 Agent、单次最多 128 次调用；可分别配置
 - 旧 journal、指纹失败，或与不可缓存调用发生不安全重叠。
 
 匹配依据是调用内容，不是调用序号，因此 `pipeline()` 的并发完成顺序变化不会把 A 的结果错配给 B。失败调用从不缓存。Journal 上限 2MB，超出后丢弃最旧条目并显式报告。
+
+每次 `agent()` 都持久记录独立的 intent、admission 和 execution 状态。崩溃后仍未终结的调用只会恢复为 `uncertain`，不会猜成成功或安全重试；这不是跨重启 exactly-once。
+
+成功调用返回 opaque `ref`。同一 Workflow Run 内可用 `inputs: [previous.ref]` 注入上游结果；每个结论最多 16KiB、合计最多 48KiB，并明确标为不可信数据。Artifacts 从显式 ref 派生只读 Graph，用于观察 lineage，不参与调度。
+
+`operator: "name"` 在同一 Run 内复用一个内存 Child Session，并把同名 activation 串行化。首个 activation 固定 model、role/tool surface、effort、structured mode 与 cwd；Operator 不与 per-call Worktree 或 Replay 混用，也不承诺跨重启保留会话。
 
 可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。条件缺失、格式错误或被拒绝时，该调用 `ok: false`，但原始输出与 ledger 仍保留；不会暗中再启动 reviewer 或 shell。
 

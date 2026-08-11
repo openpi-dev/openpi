@@ -46,12 +46,19 @@ import {
   SQUARE,
   type Theme,
   type AgentRecord,
+  type AgentUsage,
   type PhaseGroup,
   type TranscriptEntry,
   type WorkflowDetails,
   type WorkflowLogEntry,
+  workflowGraphRecords,
 } from "./model.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { projectWorkflowGraph } from "./graph-projection.ts";
+import {
+  classifyInterruptedInvocation,
+  decodeInvocationRecord,
+} from "./invocation-ledger.ts";
 import { writeFileAtomic } from "./serialization.ts";
 
 const NOTICE_TTL_MS = 4000;
@@ -84,6 +91,30 @@ function isWorktreeCleanup(
     typeof cleanup.branch === "string" &&
     typeof cleanup.detached === "boolean"
   );
+}
+
+function normalizeUsage(value: unknown): AgentUsage {
+  const raw = value && typeof value === "object" ? value : {};
+  const record = raw as Record<string, unknown>;
+  const number = (field: string) => {
+    const candidate = record[field];
+    return typeof candidate === "number" &&
+      Number.isFinite(candidate) &&
+      candidate >= 0
+      ? candidate
+      : 0;
+  };
+  return {
+    input: number("input"),
+    output: number("output"),
+    cacheRead: number("cacheRead"),
+    cacheWrite: number("cacheWrite"),
+    cost: number("cost"),
+    ...(number("contextTokens") > 0
+      ? { contextTokens: number("contextTokens") }
+      : {}),
+    turns: number("turns"),
+  };
 }
 
 function normalizeTranscript(value: unknown): TranscriptEntry[] {
@@ -138,12 +169,46 @@ export function normalizePersistedWorkflowDetails(
         : a.state === "running"
           ? "running"
           : "done";
+    const index = typeof a.index === "number" ? a.index : agents.length + 1;
+    const decodedInvocation = decodeInvocationRecord(a.invocation);
+    const invocation =
+      decodedInvocation &&
+      decodedInvocation.executionState !== "settled" &&
+      decodedInvocation.executionState !== "uncertain"
+        ? classifyInterruptedInvocation(
+            decodedInvocation,
+            Math.max(
+              Date.now(),
+              decodedInvocation.requestedAt,
+              decodedInvocation.claimedAt ?? 0,
+              decodedInvocation.runningAt ?? 0,
+            ),
+          )
+        : decodedInvocation;
     agents.push({
-      index: typeof a.index === "number" ? a.index : agents.length + 1,
+      index,
+      ...(typeof a.callId === "string" && a.callId
+        ? { callId: sanitizeLine(a.callId, 256) }
+        : {}),
+      ...(invocation ? { invocation } : {}),
+      ...(typeof a.operatorKey === "string" && a.operatorKey
+        ? { operatorKey: sanitizeLine(a.operatorKey, 80) }
+        : {}),
+      ...(Array.isArray(a.inputCallIds)
+        ? {
+            inputCallIds: a.inputCallIds
+              .filter((value): value is string => typeof value === "string")
+              .slice(0, 64)
+              .map((value) => sanitizeLine(value, 256)),
+          }
+        : {}),
+      ...(typeof a.resultRef === "string" && a.resultRef
+        ? { resultRef: sanitizeLine(a.resultRef, 256) }
+        : {}),
       label:
         typeof a.label === "string"
-          ? sanitizeLine(a.label, 160) || `agent-${agents.length + 1}`
-          : `agent-${agents.length + 1}`,
+          ? sanitizeLine(a.label, 160) || `agent-${index}`
+          : `agent-${index}`,
       phase:
         typeof a.phase === "string"
           ? sanitizeLine(a.phase, 160) || undefined
@@ -167,15 +232,7 @@ export function normalizePersistedWorkflowDetails(
           : undefined,
       preview:
         typeof a.preview === "string" ? sanitizeLine(a.preview, 4_000) : "",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        cost: 0,
-        turns: 0,
-        ...(a.usage && typeof a.usage === "object" ? (a.usage as object) : {}),
-      },
+      usage: normalizeUsage(a.usage),
       ...(a.replayed === true ? { replayed: true } : {}),
       ...(isAcceptanceLedger(a.acceptance) ? { acceptance: a.acceptance } : {}),
       ...(typeof a.worktreeBranch === "string"
@@ -263,6 +320,11 @@ export function normalizePersistedWorkflowDetails(
     ...(typeof record.logsDropped === "number" && record.logsDropped > 0
       ? { logsDropped: record.logsDropped }
       : {}),
+    ...(agents.some((agent) => agent.callId)
+      ? {
+          graph: projectWorkflowGraph(workflowGraphRecords(agents)),
+        }
+      : {}),
     result: record.result,
     resultArtifact:
       typeof record.resultArtifact === "string"
@@ -281,6 +343,25 @@ export function normalizePersistedWorkflowDetails(
         ? sanitizeLine(record.error, 2_000) || undefined
         : undefined,
   };
+}
+
+/** Reconcile durable facts from a run that has no live owner in this process. */
+export function recoverStaleWorkflowDetails(
+  details: WorkflowDetails,
+  recoveredAt = Date.now(),
+): WorkflowDetails {
+  if (details.status !== "running") return details;
+  details.status = "aborted";
+  details.finishedAt = details.finishedAt ?? recoveredAt;
+  details.error = details.error ?? "Recovered stale run that was not active";
+  for (const agent of details.agents) {
+    if (agent.state !== "running") continue;
+    agent.state = "error";
+    agent.error = agent.error ?? "Run ended before this agent settled";
+    agent.finishedAt = details.finishedAt;
+  }
+  details.graph = projectWorkflowGraph(workflowGraphRecords(details.agents));
+  return details;
 }
 
 export function sessionWorkflowRunIds(ctx: ExtensionContext): Set<string> {
@@ -365,18 +446,7 @@ export function loadRunEntries(
             // Older or partially written artifacts simply lack transcripts.
           }
         }
-        if (details.status === "running") {
-          details.status = "aborted";
-          details.finishedAt = details.finishedAt ?? Date.now();
-          details.error =
-            details.error ?? "Recovered stale run that was not active";
-          for (const agent of details.agents) {
-            if (agent.state !== "running") continue;
-            agent.state = "error";
-            agent.error = agent.error ?? "Run ended before this agent settled";
-            agent.finishedAt = details.finishedAt;
-          }
-        }
+        recoverStaleWorkflowDetails(details);
         entries.push({ runId, details, live: false });
       }
     } catch {
@@ -386,7 +456,22 @@ export function loadRunEntries(
   return entries.sort((a, b) => b.details.startedAt - a.details.startedAt);
 }
 
-function buildReport(details: WorkflowDetails): string {
+export function workflowGraphSummary(
+  graph: NonNullable<WorkflowDetails["graph"]>,
+) {
+  const omitted = [
+    graph.omitted.nodes > 0 ? `${graph.omitted.nodes} nodes` : undefined,
+    graph.omitted.edges > 0 ? `${graph.omitted.edges} edges` : undefined,
+    graph.omitted.diagnostics > 0
+      ? `${graph.omitted.diagnostics} diagnostics`
+      : undefined,
+  ].filter(Boolean);
+  return `${graph.nodes.length} nodes · ${graph.edges.length} edges${
+    omitted.length > 0 ? ` · ${omitted.join(", ")} omitted` : ""
+  }`;
+}
+
+export function buildWorkflowReport(details: WorkflowDetails): string {
   const { done, failed } = countStates(details);
   const lines: string[] = [
     `# Workflow ${details.name ?? details.runId}`,
@@ -426,6 +511,26 @@ function buildReport(details: WorkflowDetails): string {
         `- **${agent.label}** — ${status}${stats ? ` (${stats})` : ""}`,
       );
       if (agent.error) lines.push(`  - error: ${agent.error}`);
+    }
+  }
+
+  if (details.graph && details.graph.nodes.length > 0) {
+    const labels = new Map(
+      details.graph.nodes.map((node) => [node.callId, node.label] as const),
+    );
+    lines.push(
+      "",
+      "## Derived graph",
+      "",
+      `_observability only · ${workflowGraphSummary(details.graph)}_`,
+    );
+    for (const edge of details.graph.edges) {
+      lines.push(
+        `- ${labels.get(edge.source) ?? edge.source} → ${labels.get(edge.target) ?? edge.target}`,
+      );
+    }
+    for (const diagnostic of details.graph.diagnostics) {
+      lines.push(`- ⚠ ${diagnostic.code}: ${resultJson(diagnostic)}`);
     }
   }
 
@@ -601,7 +706,7 @@ export class WorkflowDashboard {
     if (!entry) return;
     const target = path.join(runsDir(), entry.runId, "report.md");
     try {
-      writeFileAtomic(target, buildReport(entry.details));
+      writeFileAtomic(target, buildWorkflowReport(entry.details));
       this.notice = `saved ${shortenHome(target)}`;
     } catch (error) {
       this.notice = `save failed: ${error instanceof Error ? error.message : String(error)}`;
@@ -918,9 +1023,15 @@ export class WorkflowDashboard {
       ),
     );
     const totals = formatUsage(aggregateUsage(d.agents));
+    const graphSummary = d.graph ? workflowGraphSummary(d.graph) : undefined;
+    const subRight = [graphSummary, totals].filter(Boolean).join(" · ");
     const subLeft = " " + theme.fg("muted", d.description ?? d.runId);
     lines.push(
-      this.split(subLeft, totals ? theme.fg("dim", `${totals} `) : " ", width),
+      this.split(
+        subLeft,
+        subRight ? theme.fg("dim", `${subRight} `) : " ",
+        width,
+      ),
     );
 
     const groups = this.groups();

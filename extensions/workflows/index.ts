@@ -38,6 +38,7 @@ import {
   getMarkdownTheme,
   keyHint,
   type ExtensionAPI,
+  type SessionManager,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
@@ -62,6 +63,17 @@ import {
   loadJournal,
   persistWorkflowJson,
 } from "./artifacts.ts";
+import { createWorkflowHandoffRegistry } from "./handoff.ts";
+import {
+  classifyInterruptedInvocation,
+  createInvocationIdentity,
+  requestInvocation,
+  transitionInvocation,
+} from "./invocation-ledger.ts";
+import {
+  normalizeWorkflowOperatorKey,
+  WorkflowOperatorRegistry,
+} from "./operator.ts";
 import {
   agentCallKey,
   createReplayCache,
@@ -71,6 +83,7 @@ import {
 import { RunController } from "./controller.ts";
 import {
   normalizePersistedWorkflowDetails,
+  recoverStaleWorkflowDetails,
   sessionWorkflowRunIds,
   showWorkflowDashboard,
 } from "./dashboard.ts";
@@ -98,6 +111,7 @@ import {
   statusColor,
   statusWord,
   createUsageReader,
+  refreshWorkflowGraph,
   SQUARE,
   type AgentRecord,
   type WorkflowDetails,
@@ -166,6 +180,8 @@ interface ScriptAgentResult {
   ok: boolean;
   output: string;
   structured?: unknown;
+  /** Opaque same-run handle for bounded downstream handoff. */
+  ref?: string;
   acceptance?: AgentRecord["acceptance"];
   error?: string;
 }
@@ -180,6 +196,10 @@ interface AgentCallOptions {
   provider?: unknown;
   effort?: unknown;
   isolation?: unknown;
+  /** Reuse one in-memory child Session within this workflow run. */
+  operator?: unknown;
+  /** Same-run result refs to hydrate as bounded untrusted input data. */
+  inputs?: unknown;
 }
 
 const WorkflowParams = Type.Object({
@@ -745,6 +765,8 @@ export default function workflows(pi: ExtensionAPI) {
         workflowConfig.concurrency,
         workflowConfig.maxAgentCalls,
       );
+      const handoffs = createWorkflowHandoffRegistry();
+      const operators = new WorkflowOperatorRegistry();
 
       // Each concurrent child gets its own extension runtime. Children use the
       // parent's live trust decision; an isolated child gets its own cwd (its
@@ -779,6 +801,7 @@ export default function workflows(pi: ExtensionAPI) {
       };
       const emit = (checkpoint = true) => {
         if (runSettled) return;
+        refreshWorkflowGraph(details);
         if (checkpoint) persistence.checkpoint();
         if (emitTimer) return;
         emitTimer = setTimeout(
@@ -809,6 +832,16 @@ export default function workflows(pi: ExtensionAPI) {
         );
         for (const record of details.agents) {
           if (record.state !== "running") continue;
+          if (
+            record.invocation &&
+            record.invocation.executionState !== "settled" &&
+            record.invocation.executionState !== "uncertain"
+          ) {
+            record.invocation = classifyInterruptedInvocation(
+              record.invocation,
+              Date.now(),
+            );
+          }
           record.state = "error";
           record.error =
             record.error ?? "Agent did not settle before run cleanup";
@@ -816,6 +849,7 @@ export default function workflows(pi: ExtensionAPI) {
         }
         details.status = status;
         details.finishedAt = Date.now();
+        refreshWorkflowGraph(details);
         if (error) details.error = sanitizeWorkflowDisplayLine(error);
         return true;
       };
@@ -874,8 +908,15 @@ export default function workflows(pi: ExtensionAPI) {
             error: "Workflow was aborted before this agent started",
           };
         }
+        const startedAt = Date.now();
+        const callId = `${details.runId}:call:${index}`;
         const record: AgentRecord = {
           index,
+          callId,
+          invocation: requestInvocation(
+            createInvocationIdentity(details.runId, index),
+            startedAt,
+          ),
           label,
           phase:
             typeof opts.phase === "string"
@@ -884,20 +925,49 @@ export default function workflows(pi: ExtensionAPI) {
           state: "running",
           model: ctx.model?.id,
           contextWindow: ctx.model?.contextWindow,
-          startedAt: Date.now(),
+          startedAt,
           preview: "",
           usage: emptyUsage(),
           transcript: [],
         };
         details.agents.push(record);
+        refreshWorkflowGraph(details);
         persistence.checkpoint({ immediate: true });
         emit(false);
 
         const fail = (error: string): ScriptAgentResult => {
           if (record.state === "running" && !runSettled) {
+            const at = Date.now();
+            if (
+              record.invocation?.admissionState === "pending" &&
+              record.invocation.executionState === "pending"
+            ) {
+              record.invocation = transitionInvocation(record.invocation, {
+                status: "rejected",
+                at,
+              });
+            } else if (
+              record.invocation?.admissionState === "claimed" &&
+              record.invocation.executionState === "running"
+            ) {
+              record.invocation = transitionInvocation(record.invocation, {
+                status: "settled",
+                outcome: "error",
+                at,
+              });
+            } else if (
+              record.invocation &&
+              record.invocation.executionState !== "settled" &&
+              record.invocation.executionState !== "uncertain"
+            ) {
+              record.invocation = classifyInterruptedInvocation(
+                record.invocation,
+                at,
+              );
+            }
             record.state = "error";
             record.error = sanitizeWorkflowDisplayLine(error);
-            record.finishedAt = Date.now();
+            record.finishedAt = at;
             emit();
           }
           return { ok: false, output: "", error };
@@ -909,6 +979,45 @@ export default function workflows(pi: ExtensionAPI) {
             : String(promptValue ?? "");
         if (!basePrompt.trim())
           return fail("agent() requires a non-empty prompt string");
+
+        let operatorKey: string | undefined;
+        try {
+          if (opts.operator !== undefined) {
+            operatorKey = normalizeWorkflowOperatorKey(String(opts.operator));
+            if (opts.isolation !== undefined) {
+              throw new Error(
+                "workflow operators cannot use per-call worktree isolation",
+              );
+            }
+            record.operatorKey = operatorKey;
+          }
+        } catch (error) {
+          return fail(`agent "${label}": ${errorText(error)}`);
+        }
+
+        let inputRefs: string[] = [];
+        let promptWithHandoffs = basePrompt;
+        try {
+          if (opts.inputs !== undefined) {
+            if (
+              !Array.isArray(opts.inputs) ||
+              !opts.inputs.every((value) => typeof value === "string")
+            ) {
+              throw new Error(
+                "inputs must be an array of workflow result refs",
+              );
+            }
+            inputRefs = [...opts.inputs];
+          }
+          const entries = handoffs.resolveEntries(inputRefs);
+          record.inputCallIds = entries.flatMap((entry) =>
+            entry.callId ? [entry.callId] : [],
+          );
+          promptWithHandoffs = handoffs.appendToPrompt(basePrompt, inputRefs);
+        } catch (error) {
+          return fail(`agent "${label}": ${errorText(error)}`);
+        }
+
         let acceptanceContract: ReturnType<typeof parseAcceptanceContract>;
         let effectiveSchema: unknown;
         try {
@@ -921,8 +1030,8 @@ export default function workflows(pi: ExtensionAPI) {
         }
         const prompt = buildWorkflowAgentPrompt(
           acceptanceContract
-            ? `${basePrompt}\n\n${acceptanceInstruction(acceptanceContract)}`
-            : basePrompt,
+            ? `${promptWithHandoffs}\n\n${acceptanceInstruction(acceptanceContract)}`
+            : promptWithHandoffs,
         );
         if (controller.signal.aborted)
           return fail("Workflow was aborted before this agent started");
@@ -1012,16 +1121,36 @@ export default function workflows(pi: ExtensionAPI) {
         }
         record.model = model?.id;
         record.contextWindow = model?.contextWindow;
+        const operatorFingerprint = operatorKey
+          ? agentCallKey("workflow-operator", {
+              execution: {
+                agentType: agentType
+                  ? {
+                      name: agentType.name,
+                      body: agentType.body,
+                      tools: agentType.tools,
+                    }
+                  : undefined,
+                model: model ? `${model.provider}/${model.id}` : undefined,
+                effort: thinkingLevel,
+                structured: effectiveSchema !== undefined,
+              },
+            })
+          : undefined;
 
         // Replay is deliberately narrower than execution: only a named type
         // whose effective tool allowlist is entirely known read-only can be
         // cached. General-purpose children inherit bash/edit/write, custom
         // tools have unknown effects, and worktrees have state a string result
         // cannot restore.
-        const replaySafe = isReplaySafeAgentCall({
-          tools: agentType?.tools,
-          isolation: opts.isolation,
-        });
+        // A reused operator's later activation depends on prior in-memory
+        // conversation state, which a cached string cannot reconstruct.
+        const replaySafe =
+          operatorKey === undefined &&
+          isReplaySafeAgentCall({
+            tools: agentType?.tools,
+            isolation: opts.isolation,
+          });
         const replayLease = beginProcessReplayWorkspaceLease(replaySafe);
         let replayResources:
           Awaited<ReturnType<typeof getResources>> | undefined;
@@ -1070,9 +1199,14 @@ export default function workflows(pi: ExtensionAPI) {
         const cached =
           callKey && replayLease.canReplay ? replay?.take(callKey) : undefined;
         if (cached) {
+          const finishedAt = Date.now();
+          record.invocation = transitionInvocation(record.invocation!, {
+            status: "replayed",
+            at: finishedAt,
+          });
           record.state = "done";
           record.replayed = true;
-          record.finishedAt = Date.now();
+          record.finishedAt = finishedAt;
           record.preview = sanitizeWorkflowDisplayText(
             cached.output,
             PREVIEW_LENGTH,
@@ -1083,6 +1217,16 @@ export default function workflows(pi: ExtensionAPI) {
               cached.structured,
             );
           }
+          const ref = handoffs.register({
+            callId,
+            settled: true,
+            ok: true,
+            output: cached.output,
+            ...(cached.structured !== undefined
+              ? { structured: cached.structured }
+              : {}),
+          });
+          if (ref) record.resultRef = ref;
           emit();
           // Re-journal so a chain of resumes keeps working: run C resuming from
           // B still finds what B replayed from A.
@@ -1094,12 +1238,24 @@ export default function workflows(pi: ExtensionAPI) {
             ...(cached.structured !== undefined
               ? { structured: cached.structured }
               : {}),
+            ...(ref ? { ref } : {}),
             ...(record.acceptance ? { acceptance: record.acceptance } : {}),
           };
         }
 
         return controller
           .schedule(async (runSignal) => {
+            const claimedAt = Date.now();
+            record.invocation = transitionInvocation(record.invocation!, {
+              status: "claimed",
+              at: claimedAt,
+            });
+            refreshWorkflowGraph(details);
+            persistence.checkpoint({ immediate: true });
+            record.invocation = transitionInvocation(record.invocation, {
+              status: "running",
+              at: Date.now(),
+            });
             record.model = model?.id;
             record.contextWindow = model?.contextWindow;
             emit();
@@ -1172,45 +1328,58 @@ export default function workflows(pi: ExtensionAPI) {
               if (runSettled) {
                 throw new Error("Workflow was settled before agent creation");
               }
-              const outcome = await runAgent({
-                prompt,
-                schema: effectiveSchema,
-                model,
-                thinkingLevel,
-                // Replay-safe calls use the same canonical cwd as the
-                // identity and filesystem boundary, so a symlink spelling of
-                // the checkout cannot retarget relative tool paths.
-                cwd: replayIdentity?.cwd ?? agentCwd,
-                loader: resources.loader,
-                settingsManager: resources.settingsManager,
-                modelRegistry: ctx.modelRegistry,
-                ...(agentType?.tools ? { tools: agentType.tools } : {}),
-                ...(replayIdentity
-                  ? {
-                      replayFilesystemBoundary: {
-                        repositoryRoot: replayIdentity.repositoryRoot,
-                        cwd: replayIdentity.cwd,
-                        onViolation: () => {
-                          replayBoundaryViolated = true;
+              const runChild = (sessionManager?: SessionManager) =>
+                runAgent({
+                  prompt,
+                  schema: effectiveSchema,
+                  model,
+                  thinkingLevel,
+                  // Replay-safe calls use the same canonical cwd as the
+                  // identity and filesystem boundary, so a symlink spelling of
+                  // the checkout cannot retarget relative tool paths.
+                  cwd: replayIdentity?.cwd ?? agentCwd,
+                  loader: resources.loader,
+                  settingsManager: resources.settingsManager,
+                  ...(sessionManager ? { sessionManager } : {}),
+                  modelRegistry: ctx.modelRegistry,
+                  ...(agentType?.tools ? { tools: agentType.tools } : {}),
+                  ...(replayIdentity
+                    ? {
+                        replayFilesystemBoundary: {
+                          repositoryRoot: replayIdentity.repositoryRoot,
+                          cwd: replayIdentity.cwd,
+                          onViolation: () => {
+                            replayBoundaryViolated = true;
+                          },
                         },
-                      },
-                    }
-                  : {}),
-                signal: runSignal,
-                onProgress: (progress) => {
-                  if (runSettled || record.state !== "running") return;
-                  record.preview = sanitizeWorkflowDisplayText(
-                    progress.preview,
-                    PREVIEW_LENGTH,
-                  );
-                  record.usage = progress.usage;
-                  record.model = progress.model ?? record.model;
-                  record.contextWindow =
-                    progress.contextWindow ?? record.contextWindow;
-                  record.transcript = progress.transcript;
-                  emit();
-                },
-              });
+                      }
+                    : {}),
+                  signal: runSignal,
+                  onProgress: (progress) => {
+                    if (runSettled || record.state !== "running") return;
+                    record.preview = sanitizeWorkflowDisplayText(
+                      progress.preview,
+                      PREVIEW_LENGTH,
+                    );
+                    record.usage = progress.usage;
+                    record.model = progress.model ?? record.model;
+                    record.contextWindow =
+                      progress.contextWindow ?? record.contextWindow;
+                    record.transcript = progress.transcript;
+                    emit();
+                  },
+                });
+              const outcome = operatorKey
+                ? await operators.activate(
+                    {
+                      key: operatorKey,
+                      fingerprint: operatorFingerprint!,
+                      cwd: agentCwd,
+                      signal: runSignal,
+                    },
+                    runChild,
+                  )
+                : await runChild();
 
               if (runSettled || record.state !== "running") {
                 return {
@@ -1228,7 +1397,8 @@ export default function workflows(pi: ExtensionAPI) {
                 outcome.output || record.preview,
                 PREVIEW_LENGTH,
               );
-              record.finishedAt = Date.now();
+              const finishedAt = Date.now();
+              record.finishedAt = finishedAt;
               const judged = applyAcceptance({
                 contract: acceptanceContract,
                 structured: outcome.structured,
@@ -1238,12 +1408,27 @@ export default function workflows(pi: ExtensionAPI) {
               const acceptance = judged.ledger;
               if (acceptance) record.acceptance = acceptance;
               const outcomeOk = judged.ok;
+              record.invocation = transitionInvocation(record.invocation!, {
+                status: "settled",
+                outcome: outcomeOk ? "success" : "error",
+                at: finishedAt,
+              });
               record.state = outcomeOk ? "done" : "error";
               if (outcomeOk) delete record.error;
               else
                 record.error = judged.error
                   ? sanitizeWorkflowDisplayLine(judged.error)
                   : undefined;
+              const ref = handoffs.register({
+                callId,
+                settled: true,
+                ok: outcomeOk,
+                output: outcome.output,
+                ...(outcome.structured !== undefined
+                  ? { structured: outcome.structured }
+                  : {}),
+              });
+              if (ref) record.resultRef = ref;
               emit();
 
               // Only provably read-only successes with a complete, stable
@@ -1285,6 +1470,7 @@ export default function workflows(pi: ExtensionAPI) {
                 ...(outcome.structured !== undefined
                   ? { structured: outcome.structured }
                   : {}),
+                ...(ref ? { ref } : {}),
                 ...(acceptance ? { acceptance } : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
               };
@@ -1379,12 +1565,16 @@ export default function workflows(pi: ExtensionAPI) {
         const settled = await controller.settle({
           abort: status !== "completed",
         });
+        const operatorsSettled = await waitBounded(operators.close(), 1_000);
         if (runSettled) return;
-        if (!settled) {
+        if (!settled || !operatorsSettled) {
           status = "failed";
+          const cleanupError = !settled
+            ? "agent shutdown deadline exceeded"
+            : "workflow operator cleanup deadline exceeded";
           details.error = details.error
-            ? `${details.error}; agent shutdown deadline exceeded`
-            : "Agent shutdown deadline exceeded";
+            ? `${details.error}; ${cleanupError}`
+            : cleanupError[0]!.toUpperCase() + cleanupError.slice(1);
         }
         if (runSettled) return;
         terminalize(status, details.error);
@@ -1744,10 +1934,7 @@ export default function workflows(pi: ExtensionAPI) {
       // shutdown settle deadline.
       return {
         ok: true,
-        details:
-          details.status === "running"
-            ? { ...details, status: "aborted" as const }
-            : details,
+        details: recoverStaleWorkflowDetails(details),
       } as const;
     } catch {
       return {

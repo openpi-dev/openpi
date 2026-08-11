@@ -118,6 +118,49 @@ test("live artifact persistence includes current agents and transcripts", () => 
   }
 });
 
+test("workflow persistence derives a non-authoritative graph from explicit result refs", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-graph-"));
+  try {
+    const details = workflowDetails();
+    details.agents.push(
+      {
+        index: 1,
+        callId: "wf_fixture:call:1",
+        label: "source",
+        state: "done",
+        startedAt: 2,
+        preview: "",
+        usage: emptyUsage(),
+        resultRef: "opaque-source",
+        transcript: [],
+      },
+      {
+        index: 2,
+        callId: "wf_fixture:call:2",
+        label: "target",
+        state: "running",
+        startedAt: 3,
+        preview: "",
+        usage: emptyUsage(),
+        inputCallIds: ["wf_fixture:call:1"],
+        transcript: [],
+      },
+    );
+
+    persistWorkflowJson(directory, details);
+
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.graph?.coverage, "explicit_result_refs_only");
+    assert.deepEqual(stored.graph?.edges, [
+      { source: "wf_fixture:call:1", target: "wf_fixture:call:2" },
+    ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("workflow checkpoints throttle updates and support immediate/final flushes", async () => {
   const details = workflowDetails();
   const snapshots: WorkflowDetails[] = [];

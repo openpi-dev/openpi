@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { test } from "node:test";
 import {
   DefaultResourceLoader,
+  SessionManager,
   SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
@@ -165,6 +166,23 @@ function parallelToolMessages(): AgentSession["messages"] {
     },
   ];
 }
+
+test("runAgent uses a caller-supplied in-memory session manager", async () => {
+  const harness = runnerHarness({});
+  const sessionManager = SessionManager.inMemory(process.cwd());
+  let observed: unknown;
+  const factory: WorkflowAgentSessionFactory = async (options) => {
+    observed = options?.sessionManager;
+    return harness.factory(options);
+  };
+
+  await runHarnessAgent(harness, {
+    sessionManager,
+    sessionFactory: factory,
+  });
+
+  assert.equal(observed, sessionManager);
+});
 
 test("completed parallel tool calls pair lifecycle timings with calls and results", () => {
   const timings = new Map<string, ToolExecutionTiming>();

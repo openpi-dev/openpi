@@ -97,6 +97,8 @@ export interface RunAgentOptions {
   cwd: string;
   loader: DefaultResourceLoader;
   settingsManager: SettingsManager;
+  /** Optional per-run manager reused by one logical workflow operator. */
+  sessionManager?: SessionManager;
   modelRegistry: ExtensionContext["modelRegistry"];
   /** Agent Type allowlist; childToolPolicy can only narrow capabilities. */
   tools?: readonly string[];
@@ -533,7 +535,8 @@ export async function runAgent(
         : {}),
       resourceLoader: options.loader,
       settingsManager: options.settingsManager,
-      sessionManager: SessionManager.inMemory(options.cwd),
+      sessionManager:
+        options.sessionManager ?? SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
       ...childToolPolicy(childTools),
     }));

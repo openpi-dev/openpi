@@ -1,4 +1,8 @@
-import type { TranscriptEntry, WorkflowDetails } from "./model.ts";
+import {
+  refreshWorkflowGraph,
+  type TranscriptEntry,
+  type WorkflowDetails,
+} from "./model.ts";
 import {
   boundedJournal,
   parseJournal,
@@ -101,6 +105,7 @@ export function persistWorkflowJson(
   details: WorkflowDetails,
   journal?: readonly JournalEntry[],
 ) {
+  refreshWorkflowGraph(details);
   const transcripts = Object.fromEntries(
     details.agents.map((agent) => [
       agent.index,

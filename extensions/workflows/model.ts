@@ -12,6 +12,12 @@ import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { WorktreeCleanup } from "../shared/worktree.ts";
 import type { AcceptanceLedger } from "./acceptance.ts";
+import {
+  projectWorkflowGraph,
+  type WorkflowGraphProjection,
+  type WorkflowGraphRecord,
+} from "./graph-projection.ts";
+import type { InvocationRecord } from "./invocation-ledger.ts";
 import { safeStringify } from "./serialization.ts";
 
 export type Theme = ExtensionContext["ui"]["theme"];
@@ -65,6 +71,15 @@ export interface TranscriptEntry {
 
 export interface AgentRecord {
   index: number;
+  /** Stable identity and independent intent/admission/execution status planes. */
+  callId?: string;
+  invocation?: InvocationRecord;
+  /** Ephemeral same-run child Session reused for this logical operator. */
+  operatorKey?: string;
+  /** Explicit result-reference dependencies used by the derived graph. */
+  inputCallIds?: string[];
+  /** Opaque same-run reference returned to the workflow script. */
+  resultRef?: string;
   label: string;
   phase?: string;
   state: AgentState;
@@ -122,7 +137,44 @@ export interface WorkflowDetails {
   resumedFrom?: string;
   /** Why a requested resume produced no cache, for an honest result message. */
   resumeNote?: string;
+  /** Read-only lineage projection; never execution or admission authority. */
+  graph?: WorkflowGraphProjection;
   error?: string;
+}
+
+export function workflowGraphRecords(
+  agents: readonly AgentRecord[],
+): WorkflowGraphRecord[] {
+  return agents.flatMap((agent) =>
+    agent.callId
+      ? [
+          {
+            callId: agent.callId,
+            index: agent.index,
+            label: agent.label,
+            state: agent.state,
+            ...(agent.invocation
+              ? {
+                  admissionState: agent.invocation.admissionState,
+                  executionState: agent.invocation.executionState,
+                }
+              : {}),
+            ...(agent.operatorKey ? { operatorKey: agent.operatorKey } : {}),
+            ...(agent.inputCallIds
+              ? { inputCallIds: [...agent.inputCallIds] }
+              : {}),
+            ...(agent.resultRef ? { resultRef: agent.resultRef } : {}),
+          },
+        ]
+      : [],
+  );
+}
+
+/** Refresh the descriptive graph without granting it scheduling authority. */
+export function refreshWorkflowGraph(details: WorkflowDetails) {
+  const records = workflowGraphRecords(details.agents);
+  details.graph = projectWorkflowGraph(records);
+  return details.graph;
 }
 
 export const MAX_LOG_ENTRIES = 100;

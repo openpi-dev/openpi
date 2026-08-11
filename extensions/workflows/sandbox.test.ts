@@ -400,6 +400,36 @@ test("acceptance reaches the host verbatim, per agent call", async () => {
   ]);
 });
 
+test("operator and result-reference inputs reach the host verbatim", async () => {
+  const seen: unknown[] = [];
+  const result = await run(
+    `
+      const first = await agent("first", { operator: "runtime" });
+      return await agent("second", { operator: "runtime", inputs: [first.ref] });
+    `,
+    {
+      onAgent: async (prompt, options) => {
+        seen.push({
+          prompt,
+          operator: options.operator,
+          inputs: options.inputs,
+        });
+        return {
+          ok: true,
+          output: prompt,
+          ref: prompt === "first" ? "wfref_fixture" : "wfref_second",
+        };
+      },
+    },
+  );
+
+  assert.deepEqual(seen, [
+    { prompt: "first", operator: "runtime", inputs: undefined },
+    { prompt: "second", operator: "runtime", inputs: ["wfref_fixture"] },
+  ]);
+  assert.equal((result as { ref?: string }).ref, "wfref_second");
+});
+
 test("isolation reaches the host verbatim, per agent call", async () => {
   // The sandbox is where a script-authored option could silently vanish, so
   // pin that isolation survives the IPC boundary and stays per-call.
