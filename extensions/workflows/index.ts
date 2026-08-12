@@ -436,6 +436,7 @@ export default function workflows(pi: ExtensionAPI) {
    * it, not the whole session's run history.
    */
   let turnStartedAt = 0;
+  let workflowNavigationInstalled = false;
   let agentTypes = loadAgentTypes({
     agentDir: getAgentDir(),
     cwd: process.cwd(),
@@ -539,6 +540,11 @@ export default function workflows(pi: ExtensionAPI) {
 
   const installWorkflowNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
+    // One-shot: session_start re-fires on every /resume; re-wrapping stacks
+    // another WorkflowNavigationEditor layer and replaces the editor
+    // component (structural change → full-viewport repaint on resume).
+    if (workflowNavigationInstalled) return;
+    workflowNavigationInstalled = true;
     const previous = ctx.ui.getEditorComponent();
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       const base =
