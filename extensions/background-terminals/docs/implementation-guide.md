@@ -28,9 +28,10 @@ the key simplification vs. subagents' `send()`).
 - Full stdout and stderr are captured **separately and completely** in private spill files;
   bounded in-memory tails keep `/ps` responsive (§7.4).
 - Tool responses to the model are **always truncated** with the pi truncation utilities.
-- When a process exits, the model is woken **exactly once** via `pi.sendMessage(...,
-  { deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
-  deferred-delivery/consumed dance as subagents (§9).
+- When processes exit, every settlement reaches the model **exactly once** — no polling —
+  using the same deferred-delivery/consumed dance as subagents (§9). Idle settlements share
+  one fixed 200 ms batch window and one `followUp + triggerTurn`; a busy backlog enters the
+  next turn without forcing a reply per process.
 - While ≥1 process is running, a one-line widget renders **directly above the editor**:
   `N background terminal(s) running • /ps to view` (§10).
 - `/ps` opens a two-stage full-screen overlay (list → detail with scrollable stdout/stderr),
@@ -571,48 +572,40 @@ settlement `Deferred` and the subagents `waitFor` result shaping is the template
 
 ## 9. Completion notification — exactly once, no polling, no turn races
 
-This is the subtlest requirement. Copy the subagents solution wholesale; it exists precisely
-to solve this problem (see comments in `extensions/subagents/index.ts` lines 168–222 and
-`result-delivery.ts`).
+This is the subtlest requirement. It extends the subagent deferred-delivery pattern with a
+small idle batcher; the `Map` remains the source of truth and the timer only decides when to
+drain it.
 
 ### 9.1 Mechanism
 
-On settle, the manager invokes a hook `onSettled(snap, consumed)` registered by `index.ts`
-(same `view.setOnSettled` bridge). The hook:
+On settle, the manager invokes `onSettled(snap, consumed)` registered by `index.ts`:
 
-```ts
-const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();  // copy the 20-line module
+1. A consumed result is removed because `bg_status` or `bg_kill` returns that final state.
+2. Otherwise a bounded snapshot copy is deferred in the id-keyed result map. Idle delivery
+   drains at most `MAX_RUNNING` results at a time. A busy backlog stays retractable until
+   `agent_settled`, so `bg_status`/`bg_kill` can still consume it without duplicate context.
+   `bg_start` reserves against running + pending + concurrent starts, preventing a ninth
+   identity from entering this bounded window without evicting or prematurely queueing any.
+3. If the session is idle, the first result starts one fixed 200 ms timer. Later settlements
+   join that window; they do not extend it.
+4. At expiry, drain the complete batch into one `followUp + triggerTurn`. If the agent became
+   busy, retain the map instead.
+5. `agent_settled` cancels any idle timer and drains the backlog as one `nextTurn` message,
+   avoiding an extra model turn. Shutdown cancels the timer before clearing the map.
 
-const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
-  if (consumed) { resultDelivery.consume([snap.id]); return; }
-  // Defer a deep-enough copy: the live snapshot keeps mutating (late output flushes).
-  resultDelivery.defer({ ...snap, stdout: { ...snap.stdout }, stderr: { ...snap.stderr } });
-  if (sessionContext?.isIdle()) flushResults();
-};
-
-pi.on("agent_settled", flushResults);
-
-const flushResults = () => {
-  for (const snap of resultDelivery.drain()) {
-    pi.sendMessage({
-      customType: "background-terminal-result",
-      content: buildTerminalResultMessage(snap),   // prompt.ts; truncateTail'd output inside
-      display: true,
-      details: { id: snap.id, title: snap.title, status: snap.status, exitCode: snap.exitCode, signal: snap.signal },
-    }, { deliverAs: "followUp", triggerTurn: true });
-  }
-};
-```
+`bg_watch` is a distinct message path and remains immediate; readiness and failure signatures
+never wait for the settlement batch window.
 
 ### 9.2 Why this is race-free (the reasoning to preserve in code comments)
 
-- `deliverAs: "followUp"` queues the message until the agent has no more tool calls; it never
-  interrupts a mid-turn stream (docs/extensions.md § pi.sendMessage).
-- `triggerTurn: true` wakes the model immediately **iff idle**; if busy, the queued follow-up
-  is delivered when the current run settles — either way exactly one delivery.
-- The `Map`-keyed `resultDelivery` (keyed by id, `drain()` clears) makes double-delivery
-  structurally impossible even if both the `isIdle()` fast-path and the `agent_settled` event
-  fire: whoever drains first wins, the second drain sees an empty map.
+- `deliverAs: "followUp"` queues the idle batch until the agent has no more tool calls; it
+  never interrupts a mid-turn stream (docs/extensions.md § pi.sendMessage).
+- One fixed 200 ms window bounds latency and prevents a continuous stream of exits from
+  postponing delivery indefinitely.
+- `agent_settled` cancels the timer before draining as `nextTurn`; an opaque timer token also
+  makes an already-queued stale callback harmless.
+- The `Map`-keyed `resultDelivery` (keyed by id, `drain()` clears) makes double delivery
+  structurally impossible: whichever path drains first wins, and the other sees an empty map.
 - The `consumed` flag closes the remaining hole: if the model is *currently inside*
   `bg_kill` (which returns the final state itself), the settle must not ALSO queue a message.
   Manager computes `consumed` = "a kill/status collection is in flight for this id" at settle
@@ -633,10 +626,10 @@ line 352) — belt and suspenders for the settled-before-kill-started ordering.
 `buildTerminalResultMessage` (prompt.ts): first line
 `Background terminal bt-3 "dev server" exited (exit 1) after 4m12s.` (or `(SIGTERM)` /
 `was killed`), then tail-truncated stdout (≤ 16 KiB) and, if non-empty, stderr (≤ 8 KiB) in
-labeled sections, with truncation notes pointing at the spill file. Register a
-`pi.registerMessageRenderer("background-terminal-result", ...)` for a collapsed preview —
-copy the subagent-result renderer (index.ts lines 514–561: icon by status, header line,
-8-line preview, "ctrl+o to expand").
+labeled sections, with truncation notes pointing at the spill file. A single-result renderer
+shows the terminal's normal compact log tail. A multi-result renderer shows a bounded
+per-terminal identity/status summary and leaves the globally bounded (48 KiB), newest-tail
+logs behind expansion; it must never label a batch as `terminal ?`.
 
 ## 10. Widget above the editor
 
