@@ -129,9 +129,17 @@ export default function uiCustomization(pi: ExtensionAPI) {
     requestRender?.();
   });
 
+  let installedSignature: string | undefined;
   function install(ctx: ExtensionContext) {
     if (ctx.mode !== "tui") return;
     const config = loadSetupConfig().ui;
+    // Idempotent: session_start re-fires on every /resume, and each
+    // setHeader/setFooter destroys and rebuilds the header/footer components
+    // (structural change → full-viewport repaint). Re-install only when the
+    // configured signature actually changed.
+    const signature = `${config.showHeader ? "h" : "-"}:${config.customFooter ? "f" : "-"}`;
+    if (signature === installedSignature) return;
+    installedSignature = signature;
 
     if (config.showHeader) {
       ctx.ui.setHeader((tui) => {
