@@ -22,6 +22,7 @@ import {
   childToolPolicy,
   effectiveChildToolAllowlist,
   createChildResources,
+  isParentOnlyPackageExtension,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
   type DisposableChildSession,
@@ -218,6 +219,21 @@ test("child denylist keeps extension and workflow structured tools available", a
     ]);
     assert.equal(shutdowns, 1);
   });
+});
+
+test("task reminder extension is parent-only for child resources", () => {
+  const packageExtension = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    "../multi-signal-sync/index.ts",
+  );
+  assert.equal(
+    isParentOnlyPackageExtension({ resolvedPath: packageExtension }),
+    true,
+  );
+  assert.equal(
+    isParentOnlyPackageExtension({ resolvedPath: `${packageExtension}.copy` }),
+    false,
+  );
 });
 
 test("resource loading gates project resources and keeps only the pi-intercom package parent-only", async () => {

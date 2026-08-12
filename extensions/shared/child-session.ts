@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DefaultResourceLoader,
   getAgentDir,
@@ -41,6 +42,23 @@ function isPiIntercomNpmResource(resource: {
   return segments.some(
     (segment, index) =>
       segment === "node_modules" && segments[index + 1] === "pi-intercom",
+  );
+}
+
+const MULTI_SIGNAL_SYNC_EXTENSION_PATH = fileURLToPath(
+  new URL("../multi-signal-sync/index.ts", import.meta.url),
+);
+
+/** Parent task reminders are meaningless in children, which cannot use tasks_*. */
+export function isParentOnlyPackageExtension(resource: {
+  resolvedPath?: string;
+  filePath?: string;
+}) {
+  const resourcePath = resource.resolvedPath ?? resource.filePath;
+  return (
+    resourcePath !== undefined &&
+    path.resolve(resourcePath) ===
+      path.resolve(MULTI_SIGNAL_SYNC_EXTENSION_PATH)
   );
 }
 
@@ -138,7 +156,9 @@ export async function createChildResources(options: ChildResourceOptions) {
     extensionsOverride: (base) => ({
       ...base,
       extensions: base.extensions.filter(
-        (extension) => !isPiIntercomNpmResource(extension),
+        (extension) =>
+          !isPiIntercomNpmResource(extension) &&
+          !isParentOnlyPackageExtension(extension),
       ),
     }),
     skillsOverride: (base) => ({

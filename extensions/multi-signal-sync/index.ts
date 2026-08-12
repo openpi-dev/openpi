@@ -21,30 +21,24 @@
  * **Trust surface**: regex detection only; no exec, no auto task mutation.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 
-/** A. Bash commands indicating a commit happened. */
-const COMMIT_PATTERNS = [/\bgit\s+commit\b/];
+/** A. Shell command segments that invoke git commit. */
+const COMMIT_PATTERN =
+  /(?:^|(?:&&|\|\||;|\n)\s*)git\s+(?:-[cC]\s+\S+\s+)*commit\b/;
 
-/** B. Bash commands indicating verification passed (tsc/test/verify). */
-const VERIFY_PATTERNS = [
-  /\btsc\b/,
-  /\bnpx\s+tsc\b/,
-  /\bnpm\s+run\s+verify/,
-  /\bnode\s+scripts\/verify/,
-  /--test\b/,
-  /\bverify:/,
-];
+/** B. Shell command segments that invoke a repository verification command. */
+const VERIFY_PATTERN =
+  /(?:^|(?:&&|\|\||;|\n)\s*)(?:(?:bun|npm|pnpm|yarn)\s+(?:run\s+)?(?:check|lint|test|typecheck|verify)\b|(?:bunx|npx)\s+(?:tsc|vitest)\b|node\s+--test\b|(?:tsc|vitest\s+run)\b)/;
 
 /** C. Owner authorization phrases (user message). */
-const AUTHORIZATION_PATTERNS = [
-  /授权/,
-  /同意/,
-  /批准/,
-  /裁定/,
-  /\bapproved\b/i,
-  /\bauthorized\b/i,
-];
+const AUTHORIZATION_PATTERN =
+  /授权|(?<!不)同意|批准|裁定|\bapproved\b|\bauthorized\b/i;
+const AUTHORIZATION_NEGATION_PATTERN =
+  /未授权|未经授权|不批准|不予批准|未批准|未同意|尚未同意|没有同意|不同意|not\s+(?:approved|authorized)\b/i;
 
 type SignalKind = "commit" | "verify" | "authorization";
 
@@ -56,10 +50,10 @@ const SIGNAL_LABEL: Record<SignalKind, string> = {
 };
 
 export default function multiSignalSync(pi: ExtensionAPI) {
-  let signals: SignalKind[] = [];      // context 注入用（下轮消费）
+  let signals: SignalKind[] = []; // context 注入用（下轮消费）
   let pendingNotify: SignalKind[] = []; // agent_settled footer 驻留用（本轮消费）
-  let statusShown = false;              // footer 驻留状态已显示标记
-  let generation = 0;
+  let statusShown = false; // footer 驻留状态已显示标记
+  let lastAuthorizationMessageKey: string | undefined;
 
   /** Add a signal to both channels (dedupe). */
   const addSignal = (kind: SignalKind) => {
@@ -73,17 +67,26 @@ export default function multiSignalSync(pi: ExtensionAPI) {
    */
   pi.on(
     "tool_result",
-    (event: { toolName: string; isError?: boolean; input?: unknown; params?: unknown }) => {
+    (event: {
+      toolName: string;
+      isError?: boolean;
+      input?: unknown;
+      params?: unknown;
+    }) => {
       if (event.isError) return;
       if (event.toolName !== "bash") return;
 
       const command = extractCommand(event);
       if (!command) return;
+      const executableText = stripQuotedSegments(command);
 
-      if (COMMIT_PATTERNS.some((pattern) => pattern.test(command))) {
+      if (
+        COMMIT_PATTERN.test(executableText) &&
+        !/(?:^|\s)--dry-run(?:\s|$)/.test(executableText)
+      ) {
         addSignal("commit");
       }
-      if (VERIFY_PATTERNS.some((pattern) => pattern.test(command))) {
+      if (VERIFY_PATTERN.test(executableText)) {
         addSignal("verify");
       }
     },
@@ -94,8 +97,12 @@ export default function multiSignalSync(pi: ExtensionAPI) {
    * then inject reminder into next turn's messages if any signal detected.
    */
   pi.on("context", (event) => {
-    // C: authorization in last user message
-    if (lastUserMessageHasAuthorization(event.messages)) {
+    // C: consume each authorization-bearing user message once. `context` fires
+    // before every model call, so matching only the text would retrigger on
+    // every tool follow-up in the same user turn.
+    const authorization = findLastUserAuthorization(event.messages);
+    if (authorization && authorization.key !== lastAuthorizationMessageKey) {
+      lastAuthorizationMessageKey = authorization.key;
       addSignal("authorization");
     }
 
@@ -137,16 +144,23 @@ export default function multiSignalSync(pi: ExtensionAPI) {
 
   /** Reset on session lifecycle. */
   pi.on("session_start", () => {
-    generation++;
     signals = [];
     pendingNotify = [];
     statusShown = false;
+    lastAuthorizationMessageKey = undefined;
   });
 
-  pi.on("session_shutdown", () => {
-    generation++;
+  pi.on("session_shutdown", (_event, ctx) => {
     signals = [];
     pendingNotify = [];
+    lastAuthorizationMessageKey = undefined;
+    if (statusShown && ctx.hasUI) {
+      try {
+        ctx.ui.setStatus("multi-signal-sync", undefined);
+      } catch {
+        // UI may already be disposed.
+      }
+    }
     statusShown = false;
   });
 }
@@ -198,15 +212,61 @@ function injectSyncReminder(
  * Check the last user message for authorization phrases (signal C).
  * Iterates messages from the end; finds the most recent user message.
  */
-function lastUserMessageHasAuthorization(messages: unknown[]): boolean {
+function findLastUserAuthorization(
+  messages: unknown[],
+): { key: string } | undefined {
   for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index] as { role?: string; content?: unknown } | undefined;
-    if (!message || message.role !== "user") continue;
-    const text = messageContentText(message.content);
-    if (!text) return false; // last user message has no text → no auth signal
-    return AUTHORIZATION_PATTERNS.some((pattern) => pattern.test(text));
+    const message = messages[index] as
+      | { role?: string; content?: unknown }
+      | undefined;
+    if (message?.role !== "user") continue;
+    const text = stripQuotedSegments(messageContentText(message.content));
+    if (
+      !AUTHORIZATION_PATTERN.test(text) ||
+      AUTHORIZATION_NEGATION_PATTERN.test(text)
+    ) {
+      return undefined;
+    }
+    return { key: `${index}:${text}` };
   }
-  return false;
+  return undefined;
+}
+
+/**
+ * Remove quoted examples before heuristic matching. Preserve quote delimiters so
+ * removing their contents cannot join two surrounding words into a command.
+ */
+function stripQuotedSegments(text: string): string {
+  const closingQuote: Record<string, string> = {
+    '"': '"',
+    "'": "'",
+    "“": "”",
+    "‘": "’",
+  };
+  let result = "";
+  let closing: string | undefined;
+  let escaped = false;
+  for (const character of text) {
+    if (closing) {
+      if (escaped) {
+        escaped = false;
+      } else if (character === "\\" && (closing === '"' || closing === "'")) {
+        escaped = true;
+      } else if (character === closing) {
+        result += character;
+        closing = undefined;
+      }
+      continue;
+    }
+    const nextClosing = closingQuote[character];
+    if (nextClosing) {
+      result += character;
+      closing = nextClosing;
+    } else {
+      result += character;
+    }
+  }
+  return result;
 }
 
 /** Flatten message content (string or blocks) to text. */
