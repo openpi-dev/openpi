@@ -284,7 +284,7 @@ Workflow 在清理隔离 checkout 前原子保存有界 Handoff Manifest：track
 
 | 能力          | 使用方式                                | 它负责什么                                                          |
 | ------------- | --------------------------------------- | ------------------------------------------------------------------- |
-| Tasks         | `tasks_add` / `tasks_update` / `/tasks` | 跨 Agent Run 与用户回合记录当前批次工作意图；不执行工作             |
+| Tasks         | `tasks_add` / `tasks_update` / `/tasks` | 逐项同步当前批次工作意图并刷新完整快照；不推断完成、不执行工作      |
 | Goal          | `/goal <目标>`                          | 驱动一个持续到终态的自主目标；完成前要求证据审计                    |
 | Plan Mode     | `/plan [目标]`                          | 只读调研；`plan_ready` 后才准备可编辑的实施 Prompt，不自动执行      |
 | Context Pivot | `/context-pivot <下一阶段>`             | Context 超过约 30K Tokens 且任务换阶段时，用自包含 Brief 替换旧噪音 |

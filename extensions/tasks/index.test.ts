@@ -3,7 +3,9 @@ import test from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
+import type { Component } from "@earendil-works/pi-tui";
 import sessionTasks, {
   findTaskConflict,
   injectTaskProjection,
@@ -16,6 +18,21 @@ const sourceInfo = (path: string) => ({
   scope: "user" as const,
   origin: "top-level" as const,
 });
+
+const plainTheme = {
+  fg: (_name: string, text: string) => text,
+  bold: (text: string) => text,
+  strikethrough: (text: string) => text,
+} as unknown as Theme;
+
+function widgetLines(widget: unknown) {
+  if (typeof widget !== "function") return [];
+  const component = (widget as (tui: unknown, theme: Theme) => Component)(
+    undefined,
+    plainTheme,
+  );
+  return component.render(120);
+}
 
 function widgetHarness(
   initialBranch: unknown[] = [],
@@ -162,6 +179,89 @@ test("persistent task widget restores, updates, and expands all tasks", async ()
   assert.equal(h.widgets.at(-1), undefined);
   await h.emit("session_shutdown");
   assert.equal(h.widgets.at(-1), undefined);
+});
+
+test("four tracked tasks refresh after every explicit progress transition", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  const add = h.tools.get("tasks_add");
+  const update = h.tools.get("tasks_update");
+
+  const added = await add.execute(
+    "add-four",
+    {
+      items: Array.from({ length: 4 }, (_, index) => ({
+        subject: `Task ${index + 1}`,
+      })),
+    },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  assert.match(
+    added.content[0]?.text ?? "",
+    /Current task snapshot \(4 items\)/,
+  );
+  assert.equal(added.details.items.length, 4);
+
+  for (let id = 1; id <= 4; id++) {
+    const widgetWritesBeforeStart = h.widgets.length;
+    const started = await update.execute(
+      `start-${id}`,
+      { id, status: "in_progress" },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    assert.equal(h.widgets.length, widgetWritesBeforeStart + 1);
+    assert.match(
+      started.content[0]?.text ?? "",
+      new RegExp(`T${id} \\[in_progress\\] Task ${id}`),
+    );
+    assert.match(
+      widgetLines(h.widgets.at(-1)).join("\n"),
+      new RegExp(`T${id} Task ${id}`),
+    );
+
+    const widgetWritesBeforeDone = h.widgets.length;
+    const completed = await update.execute(
+      `done-${id}`,
+      { id, status: "done", note: `evidence-${id}` },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+    assert.equal(h.widgets.length, widgetWritesBeforeDone + 1);
+    if (id < 4) {
+      assert.match(
+        completed.content[0]?.text ?? "",
+        new RegExp(`T${id} \\[done\\] Task ${id}`),
+      );
+      assert.equal(completed.details.items.length, 4);
+      assert.match(
+        widgetLines(h.widgets.at(-1))[0] ?? "",
+        new RegExp(`${id} done`),
+      );
+    } else {
+      assert.match(completed.content[0]?.text ?? "", /Task batch closed/);
+      assert.equal(h.widgets.at(-1), undefined);
+    }
+  }
+});
+
+test("task tools teach immediate reconciliation without inferring completion signals", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  const addGuidance = h.tools.get("tasks_add").promptGuidelines.join("\n");
+  const updateGuidance = h.tools
+    .get("tasks_update")
+    .promptGuidelines.join("\n");
+
+  assert.match(addGuidance, /before starting each tracked item/i);
+  assert.match(updateGuidance, /immediately after each tracked item/i);
+  assert.match(updateGuidance, /before (?:sending )?(?:a )?final answer/i);
+  assert.match(updateGuidance, /commit.*passing test.*authorization/i);
+  assert.match(updateGuidance, /does not by itself prove/i);
 });
 
 test("task panel commands report actual visibility and conflicts block the shortcut", async () => {
