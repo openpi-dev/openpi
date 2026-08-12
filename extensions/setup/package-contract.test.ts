@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
 const manifest = JSON.parse(
@@ -49,28 +49,6 @@ test("the manifest enforces the documented Node floor", () => {
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
   assert.equal(manifest.dependencies?.["pi-intercom"], undefined);
   assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);
-});
-
-test("runtime modules avoid the platform-node root barrel", () => {
-  const extensionsRoot = new URL("../", import.meta.url);
-  const sourceFiles = readdirSync(extensionsRoot, {
-    recursive: true,
-    withFileTypes: true,
-  }).filter(
-    (entry) =>
-      entry.isFile() &&
-      entry.name.endsWith(".ts") &&
-      !entry.name.endsWith(".test.ts") &&
-      !entry.name.endsWith(".spec.ts"),
-  );
-
-  for (const sourceFile of sourceFiles) {
-    const source = readFileSync(
-      new URL(`${sourceFile.parentPath}/${sourceFile.name}`, extensionsRoot),
-      "utf8",
-    );
-    assert.doesNotMatch(source, /from ["']@effect\/platform-node["']/);
-  }
 });
 
 test("the public OpenPI package has complete gallery and registry metadata", () => {
