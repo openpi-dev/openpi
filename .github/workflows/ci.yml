@@ -42,8 +42,10 @@ jobs:
           trap 'rm -rf "$root"' EXIT
           mkdir "$root/app" "$root/agent"
           printf '{"private":true}\n' >"$root/app/package.json"
-          tarball="$(npm pack --ignore-scripts --silent --pack-destination "$root")"
-          npm install --prefix "$root/app" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "$root/$tarball"
+          npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
+          tarballs=("$root"/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          npm install --prefix "$root/app" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "${tarballs[0]}"
           test ! -e "$root/app/node_modules/ioredis"
           package="$root/app/node_modules/@tt-a1i/openpi"
           PI_CODING_AGENT_DIR="$root/agent" ./node_modules/.bin/pi \
