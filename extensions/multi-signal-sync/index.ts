@@ -56,12 +56,14 @@ const SIGNAL_LABEL: Record<SignalKind, string> = {
 };
 
 export default function multiSignalSync(pi: ExtensionAPI) {
-  let signals: SignalKind[] = [];
+  let signals: SignalKind[] = [];      // context 注入用（下轮消费）
+  let pendingNotify: SignalKind[] = []; // agent_settled notify 用（本轮消费）
   let generation = 0;
 
-  /** Add a signal (dedupe). */
+  /** Add a signal to both channels (dedupe). */
   const addSignal = (kind: SignalKind) => {
     if (!signals.includes(kind)) signals.push(kind);
+    if (!pendingNotify.includes(kind)) pendingNotify.push(kind);
   };
 
   /**
@@ -111,11 +113,12 @@ export default function multiSignalSync(pi: ExtensionAPI) {
    * Channel 1 — agent_settled: TUI notify (user-visible, advisory).
    */
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
-    if (signals.length === 0) return;
+    if (pendingNotify.length === 0) return;
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
 
     try {
-      const labels = signals.map((s) => SIGNAL_LABEL[s]).join(" + ");
+      const labels = pendingNotify.map((s) => SIGNAL_LABEL[s]).join(" + ");
+      pendingNotify = [];
       ctx.ui.notify(
         `⚠️ 检测到完成信号（${labels}）— 请检查 tasks 状态同步（如有完成项，tasks_update done 带 commit SHA）`,
         "warning",
@@ -129,11 +132,13 @@ export default function multiSignalSync(pi: ExtensionAPI) {
   pi.on("session_start", () => {
     generation++;
     signals = [];
+    pendingNotify = [];
   });
 
   pi.on("session_shutdown", () => {
     generation++;
     signals = [];
+    pendingNotify = [];
   });
 }
 
