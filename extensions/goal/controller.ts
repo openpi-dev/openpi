@@ -68,7 +68,8 @@ export function countAssistantTokens(messages: readonly unknown[]) {
 
 export function lastAssistantStopReason(messages: readonly unknown[]) {
   return lastAssistantMessage(messages)?.stopReason as
-    AssistantStopReason | undefined;
+    | AssistantStopReason
+    | undefined;
 }
 
 export function isUsageLimitError(messages: readonly unknown[]) {

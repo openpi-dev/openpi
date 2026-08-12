@@ -379,14 +379,15 @@ export function beginProcessReplayWorkspaceLease(replaySafe: boolean) {
   return processReplayWorkspaceGuard.begin(replaySafe);
 }
 
-interface ReplayResourceLoader extends Pick<
-  DefaultResourceLoader,
-  | "getAgentsFiles"
-  | "getAppendSystemPrompt"
-  | "getExtensions"
-  | "getSkills"
-  | "getSystemPrompt"
-> {}
+interface ReplayResourceLoader
+  extends Pick<
+    DefaultResourceLoader,
+    | "getAgentsFiles"
+    | "getAppendSystemPrompt"
+    | "getExtensions"
+    | "getSkills"
+    | "getSystemPrompt"
+  > {}
 
 function digest(value: string | Buffer) {
   return createHash("sha256").update(value).digest("hex");

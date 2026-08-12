@@ -205,7 +205,8 @@ const makeManager = Effect.gen(function* () {
   let reservedBtw = 0;
   let disposed = false;
   let onSettled:
-    ((snap: SubagentSnapshot, consumed: boolean) => void) | undefined;
+    | ((snap: SubagentSnapshot, consumed: boolean) => void)
+    | undefined;
 
   const notify = (id?: string) => {
     const waiters = changeWaiters;
@@ -636,16 +637,17 @@ const makeManager = Effect.gen(function* () {
             pruneSettled();
           }),
         ),
-        Effect.map((): ReadonlyArray<CancelResult> =>
-          unique.map((id) => {
-            const snapshot = entries.get(id)?.snapshot;
-            return {
-              id,
-              title: snapshot?.title ?? "?",
-              status: snapshot?.status ?? "error",
-              cancelled: runningIds.includes(id),
-            };
-          }),
+        Effect.map(
+          (): ReadonlyArray<CancelResult> =>
+            unique.map((id) => {
+              const snapshot = entries.get(id)?.snapshot;
+              return {
+                id,
+                title: snapshot?.title ?? "?",
+                status: snapshot?.status ?? "error",
+                cancelled: runningIds.includes(id),
+              };
+            }),
         ),
       );
     });

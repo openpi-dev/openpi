@@ -72,7 +72,12 @@ const MONO_COLORS: readonly PowerlineColors[] = [
 ];
 
 export type SegmentTone =
-  "text" | "muted" | "dim" | "warning" | "error" | "accent";
+  | "text"
+  | "muted"
+  | "dim"
+  | "warning"
+  | "error"
+  | "accent";
 
 export interface FooterSegment {
   readonly id: FooterItem;

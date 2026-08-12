@@ -33,7 +33,11 @@ const HumanHandoffParams = Type.Object({
 
 export type HumanHandoffInput = Static<typeof HumanHandoffParams>;
 export type HumanHandoffStatus =
-  "completed" | "unable" | "dismissed" | "cancelled" | "unavailable";
+  | "completed"
+  | "unable"
+  | "dismissed"
+  | "cancelled"
+  | "unavailable";
 
 export interface HumanHandoffDetails {
   status: HumanHandoffStatus;

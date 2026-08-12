@@ -204,43 +204,38 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
   });
 });
 
-test(
-  "a SIGTERM-resistant child is escalated to SIGKILL within the teardown bound",
-  { skip: process.platform === "win32" },
-  async () => {
-    await withManager(async (manager, runtime) => {
-      const snap = await runTool(
-        runtime,
-        manager.start({
-          command: `exec ${nodeCmd(
-            'process.on("SIGTERM", () => process.stdout.write("term\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
-          )}`,
-          title: "term-resistant",
-          cwd,
-        }),
-      );
-      assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
-        ),
-        "child installed its SIGTERM handler",
-      );
+test("a SIGTERM-resistant child is escalated to SIGKILL within the teardown bound", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: `exec ${nodeCmd(
+          'process.on("SIGTERM", () => process.stdout.write("term\\n")); process.stdout.write("ready\\n"); setInterval(() => {}, 1000);',
+        )}`,
+        title: "term-resistant",
+        cwd,
+      }),
+    );
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(snap.id)?.stdout.text ?? "").includes("ready"),
+      ),
+      "child installed its SIGTERM handler",
+    );
 
-      const startedAt = Date.now();
-      const [result] = await runTool(runtime, manager.kill([snap.id]));
-      const elapsed = Date.now() - startedAt;
+    const startedAt = Date.now();
+    const [result] = await runTool(runtime, manager.kill([snap.id]));
+    const elapsed = Date.now() - startedAt;
 
-      assert.equal(result.status, "killed");
-      assert.equal(manager.view.get(snap.id)?.signal, "SIGKILL");
-      assert.match(manager.view.get(snap.id)?.stdout.text ?? "", /term/);
-      assert.ok(elapsed >= 1_500, `SIGKILL was not immediate (${elapsed}ms)`);
-      assert.ok(
-        elapsed < 4_500,
-        `termination exceeded its bound (${elapsed}ms)`,
-      );
-    });
-  },
-);
+    assert.equal(result.status, "killed");
+    assert.equal(manager.view.get(snap.id)?.signal, "SIGKILL");
+    assert.match(manager.view.get(snap.id)?.stdout.text ?? "", /term/);
+    assert.ok(elapsed >= 1_500, `SIGKILL was not immediate (${elapsed}ms)`);
+    assert.ok(elapsed < 4_500, `termination exceeded its bound (${elapsed}ms)`);
+  });
+});
 
 test("concurrent overlapping multi-id kills observe each settlement exactly once", async () => {
   await withManager(async (manager, runtime) => {
@@ -291,148 +286,140 @@ test("concurrent overlapping multi-id kills observe each settlement exactly once
   });
 });
 
-test(
-  "kill terminates the whole process tree (grandchildren die)",
-  { skip: process.platform === "win32" },
-  async () => {
-    await withManager(async (manager, runtime) => {
-      const sentinelDir = fs.mkdtempSync(
-        path.join(os.tmpdir(), "bt-tree-test-"),
-      );
-      const sentinel = path.join(sentinelDir, "heartbeat");
-      const snap = await runTool(
-        runtime,
-        manager.start({
-          // sh spawns node in the background and prints the grandchild pid,
-          // then waits forever so the group stays alive.
-          command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & echo "child:$!"; wait`,
-          title: "tree",
-          cwd,
-        }),
-      );
+test("kill terminates the whole process tree (grandchildren die)", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const sentinelDir = fs.mkdtempSync(path.join(os.tmpdir(), "bt-tree-test-"));
+    const sentinel = path.join(sentinelDir, "heartbeat");
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        // sh spawns node in the background and prints the grandchild pid,
+        // then waits forever so the group stays alive.
+        command: `node -e 'const fs = require("node:fs"); const file = ${JSON.stringify(sentinel)}; let n = 0; fs.writeFileSync(file, String(n)); setInterval(() => fs.writeFileSync(file, String(++n)), 25)' & echo "child:$!"; wait`,
+        title: "tree",
+        cwd,
+      }),
+    );
 
-      // Wait for the grandchild pid line.
-      assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
-        "grandchild pid was printed",
-      );
-      const text = manager.view.get(snap.id)?.stdout.text ?? "";
-      const match = /child:(\d+)/.exec(text);
-      assert.ok(match, "parsed grandchild pid");
-      const grandchild = Number(match[1]);
-      assert.equal(processGone(grandchild), false);
-      assert.ok(
-        await pollUntil(() => fs.existsSync(sentinel)),
-        "heartbeat exists",
-      );
-      const heartbeatBefore = fs.readFileSync(sentinel, "utf8");
-      assert.ok(
-        await pollUntil(
-          () => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore,
-        ),
-        "heartbeat belongs to the live grandchild",
-      );
+    // Wait for the grandchild pid line.
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+      ),
+      "grandchild pid was printed",
+    );
+    const text = manager.view.get(snap.id)?.stdout.text ?? "";
+    const match = /child:(\d+)/.exec(text);
+    assert.ok(match, "parsed grandchild pid");
+    const grandchild = Number(match[1]);
+    assert.equal(processGone(grandchild), false);
+    assert.ok(
+      await pollUntil(() => fs.existsSync(sentinel)),
+      "heartbeat exists",
+    );
+    const heartbeatBefore = fs.readFileSync(sentinel, "utf8");
+    assert.ok(
+      await pollUntil(
+        () => fs.readFileSync(sentinel, "utf8") !== heartbeatBefore,
+      ),
+      "heartbeat belongs to the live grandchild",
+    );
 
-      await runTool(runtime, manager.kill([snap.id]));
-      assert.ok(
-        await pollUntil(() => processGone(grandchild)),
-        "grandchild process is gone after group kill",
-      );
-      const stoppedAt = fs.readFileSync(sentinel, "utf8");
-      await new Promise((resolve) => setTimeout(resolve, 100));
-      assert.equal(
-        fs.readFileSync(sentinel, "utf8"),
-        stoppedAt,
-        "the unique grandchild heartbeat stopped",
-      );
-      fs.rmSync(sentinelDir, { recursive: true, force: true });
-    });
-  },
-);
+    await runTool(runtime, manager.kill([snap.id]));
+    assert.ok(
+      await pollUntil(() => processGone(grandchild)),
+      "grandchild process is gone after group kill",
+    );
+    const stoppedAt = fs.readFileSync(sentinel, "utf8");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(
+      fs.readFileSync(sentinel, "utf8"),
+      stoppedAt,
+      "the unique grandchild heartbeat stopped",
+    );
+    fs.rmSync(sentinelDir, { recursive: true, force: true });
+  });
+});
 
-test(
-  "a shell exit with inherited pipes open settles naturally and reaps descendants",
-  { skip: process.platform === "win32" },
-  async () => {
-    await withManager(async (manager, runtime) => {
-      const snap = await runTool(
-        runtime,
-        manager.start({
-          command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
-          title: "exited-shell",
-          cwd,
-        }),
-      );
-      assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
-        "descendant pid was printed",
-      );
-      const match = /child:(\d+)/.exec(
-        manager.view.get(snap.id)?.stdout.text ?? "",
-      );
-      assert.ok(match);
-      const grandchild = Number(match[1]);
-      assert.ok(snap.pid);
-      assert.ok(await pollUntil(() => processGone(snap.pid!)), "shell exited");
-      assert.equal(manager.view.get(snap.id)?.status, "running");
+test("a shell exit with inherited pipes open settles naturally and reaps descendants", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+        title: "exited-shell",
+        cwd,
+      }),
+    );
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+      ),
+      "descendant pid was printed",
+    );
+    const match = /child:(\d+)/.exec(
+      manager.view.get(snap.id)?.stdout.text ?? "",
+    );
+    assert.ok(match);
+    const grandchild = Number(match[1]);
+    assert.ok(snap.pid);
+    assert.ok(await pollUntil(() => processGone(snap.pid!)), "shell exited");
+    assert.equal(manager.view.get(snap.id)?.status, "running");
 
-      assert.ok(
-        await pollUntil(
-          () => manager.view.get(snap.id)?.status !== "running",
-          7_000,
-        ),
-        "entry settled after the bounded post-exit grace",
-      );
-      assert.equal(manager.view.get(snap.id)?.status, "done");
-      assert.equal(manager.view.get(snap.id)?.exitCode, 0);
-      assert.ok(
-        await pollUntil(() => processGone(grandchild)),
-        "surviving process-group descendant was reaped",
-      );
-    });
-  },
-);
+    assert.ok(
+      await pollUntil(
+        () => manager.view.get(snap.id)?.status !== "running",
+        7_000,
+      ),
+      "entry settled after the bounded post-exit grace",
+    );
+    assert.equal(manager.view.get(snap.id)?.status, "done");
+    assert.equal(manager.view.get(snap.id)?.exitCode, 0);
+    assert.ok(
+      await pollUntil(() => processGone(grandchild)),
+      "surviving process-group descendant was reaped",
+    );
+  });
+});
 
-test(
-  "kill preserves a natural exit observed before the signal point",
-  { skip: process.platform === "win32" },
-  async () => {
-    await withManager(async (manager, runtime) => {
-      const snap = await runTool(
-        runtime,
-        manager.start({
-          command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
-          title: "natural-race",
-          cwd,
-        }),
-      );
-      assert.ok(
-        await pollUntil(() =>
-          (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
-        ),
-      );
-      const match = /child:(\d+)/.exec(
-        manager.view.get(snap.id)?.stdout.text ?? "",
-      );
-      assert.ok(match);
-      const grandchild = Number(match[1]);
-      assert.ok(snap.pid);
-      assert.ok(await pollUntil(() => processGone(snap.pid!)));
-      assert.equal(manager.view.get(snap.id)?.status, "running");
+test("kill preserves a natural exit observed before the signal point", {
+  skip: process.platform === "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: `node -e "setInterval(()=>{},1e3)" & echo "child:$!"; exit 0`,
+        title: "natural-race",
+        cwd,
+      }),
+    );
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+      ),
+    );
+    const match = /child:(\d+)/.exec(
+      manager.view.get(snap.id)?.stdout.text ?? "",
+    );
+    assert.ok(match);
+    const grandchild = Number(match[1]);
+    assert.ok(snap.pid);
+    assert.ok(await pollUntil(() => processGone(snap.pid!)));
+    assert.equal(manager.view.get(snap.id)?.status, "running");
 
-      const [result] = await runTool(runtime, manager.kill([snap.id]));
-      assert.equal(result.wasRunning, true);
-      assert.equal(result.killed, false);
-      assert.equal(result.status, "done");
-      assert.equal(result.exit, "exit 0");
-      assert.ok(await pollUntil(() => processGone(grandchild)));
-    });
-  },
-);
+    const [result] = await runTool(runtime, manager.kill([snap.id]));
+    assert.equal(result.wasRunning, true);
+    assert.equal(result.killed, false);
+    assert.equal(result.status, "done");
+    assert.equal(result.exit, "exit 0");
+    assert.ok(await pollUntil(() => processGone(grandchild)));
+  });
+});
 
 test("concurrency cap rejects an extra start; a failed spawn releases its slot", async () => {
   await withManager(async (manager, runtime) => {

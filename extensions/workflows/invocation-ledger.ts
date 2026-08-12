@@ -5,9 +5,15 @@ export interface InvocationIdentity {
 
 export type InvocationIntentState = "requested";
 export type InvocationAdmissionState =
-  "pending" | "claimed" | "replayed" | "rejected";
+  | "pending"
+  | "claimed"
+  | "replayed"
+  | "rejected";
 export type InvocationExecutionState =
-  "pending" | "running" | "settled" | "uncertain";
+  | "pending"
+  | "running"
+  | "settled"
+  | "uncertain";
 export type InvocationOutcome = "success" | "error" | "uncertain";
 
 /**

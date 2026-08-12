@@ -9,7 +9,11 @@
 import { Data } from "effect";
 
 export type TerminalStatus =
-  "running" | "done" | "failed" | "killed" | "timed_out";
+  | "running"
+  | "done"
+  | "failed"
+  | "killed"
+  | "timed_out";
 // "done"      = exited with code 0
 // "failed"    = exited non-zero, or a spawn-level runtime error after start
 // "killed"    = terminated by bg_kill, the /ps UI, or session teardown
