@@ -390,7 +390,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 ```bash
 git clone https://github.com/tt-a1i/openpi.git ~/work/openpi
 cd ~/work/openpi
-npm install
+bun install --frozen-lockfile
 pi install ~/work/openpi
 ```
 
@@ -514,12 +514,15 @@ skills/                    # Background terminal 与 Subagent 指南
 themes/                    # github-dark-default
 ```
 
+开发工具链使用 Bun `1.3.14` 管理依赖和脚本，Biome 负责 TypeScript / JavaScript / JSON 格式与基础 lint；产品运行时仍是 Node，测试仍由 `node:test` 与 Vitest 执行：
+
 ```bash
-npm install
-npm run format:check
-npm run check
-npm test
+bun install --frozen-lockfile
+bun run check
+bun run test
 ```
+
+npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm Registry 安装 OpenPI。
 
 测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [`docs/design/`](docs/design/)，问题请提交到 [GitHub Issues](https://github.com/tt-a1i/openpi/issues)。
 

@@ -15,6 +15,7 @@ const manifest = JSON.parse(
   keywords?: string[];
   files?: string[];
   publishConfig?: { access?: string };
+  packageManager?: string;
   repository?: { type?: string; url?: string };
   homepage?: string;
   bugs?: { url?: string };
@@ -57,9 +58,12 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   assert.equal(manifest.license, "MIT");
   assert.ok(manifest.keywords?.includes("pi-package"));
   assert.equal(manifest.publishConfig?.access, "public");
+  assert.equal(manifest.packageManager, "bun@1.3.14");
+  assert.equal(manifest.devDependencies?.["@biomejs/biome"], "2.5.8");
+  assert.equal(manifest.devDependencies?.prettier, undefined);
   assert.equal(
     manifest.scripts?.prepublishOnly,
-    "npm run format:check && npm run check && npm test",
+    "bun run check && bun run test",
   );
   assert.deepEqual(manifest.repository, {
     type: "git",

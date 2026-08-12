@@ -55,13 +55,13 @@
     "effect": "^4.0.0-beta.99"
   },
   "devDependencies": {
+    "@biomejs/biome": "2.5.8",
     "@earendil-works/pi-ai": "^0.84.1",
     "@earendil-works/pi-coding-agent": "^0.84.1",
     "@earendil-works/pi-tui": "^0.84.1",
     "@effect/tsgo": "^0.24.2",
     "@effect/vitest": "^4.0.0-beta.99",
     "@types/node": "^26.1.1",
-    "prettier": "^3.9.5",
     "typebox": "^1.3.6",
     "typescript": "^7.0.2",
     "vitest": "4.1.10"
@@ -77,11 +77,14 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "prepublishOnly": "npm run format:check && npm run check && npm test",
-    "check": "tsc --noEmit",
+    "prepublishOnly": "bun run check && bun run test",
+    "check": "bun run format:check && bun run lint && bun run typecheck",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
-    "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
-    "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint . --error-on-warnings",
+    "typecheck": "tsc --noEmit",
     "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts"
-  }
+  },
+  "packageManager": "bun@1.3.14"
 }
