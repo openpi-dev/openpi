@@ -199,12 +199,14 @@ export default function sessionTasks(pi: ExtensionAPI) {
     items,
     total: snapshot().items.length,
     revision: snapshot().revision,
-    // From the live snapshot, not `items`: a tools_update carries only the one
-    // row it touched, and a header counted from that would claim the batch is
-    // a single task.
     counts: taskCounts(snapshot().items),
     ...(batchClosed ? { batchClosed: true } : {}),
   });
+
+  const mutationResultText = (summary: string) => {
+    const current = snapshot();
+    return `${summary}\nCurrent task snapshot (${current.items.length} ${current.items.length === 1 ? "item" : "items"}):\n${tasks.render()}`;
+  };
 
   const registerTools = () => {
     if (toolsRegistered || conflict) return;
@@ -218,6 +220,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         "Add stable work-intent items to the current session tasks",
       promptGuidelines: [
         "Use tasks_add only for work spanning multiple agent runs or user turns, or when the user explicitly provides a task list; do not use it as a per-step scratchpad within one run.",
+        "Before starting each tracked item, call tasks_update to mark it in_progress; concurrent work may have multiple in_progress items.",
         "Task tools record advisory intent only; Subagents and Workflows execute work, while files, git, tests, tool results, artifacts, and user confirmation remain truth.",
       ],
       parameters: Type.Object({
@@ -243,10 +246,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Added ${mutation.items.map((item) => `T${item.id}`).join(", ")}.`,
+              text: mutationResultText(
+                `Added ${mutation.items.map((item) => `T${item.id}`).join(", ")}.`,
+              ),
             },
           ],
-          details: toolDetails("add", mutation.items),
+          details: toolDetails("add", snapshot().items),
         });
       },
       renderCall(args, theme) {
@@ -273,7 +278,9 @@ export default function sessionTasks(pi: ExtensionAPI) {
       description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked, done, and dropped status changes require a fresh note explaining the blocker, observable evidence, or drop reason.`,
       promptSnippet: "Update one session task item by stable ID",
       promptGuidelines: [
-        "Keep tasks_update status current when tracked work materially changes, but avoid ceremonial status churn.",
+        "Immediately after each tracked item reaches a real outcome, call tasks_update to set done, blocked, or dropped before moving to the next tracked item.",
+        "Before sending a final answer, reconcile every task touched in the current request; do not leave completed work pending or in_progress.",
+        "A commit, passing test, or authorization is task-scoped evidence only; it does not by itself prove a task is done or identify which task to update.",
         "Before setting a task item to done, include a note citing an observable check, artifact, commit, tool result, or user confirmation; Tasks record this claim but do not verify it.",
       ],
       parameters: Type.Object({
@@ -309,14 +316,16 @@ export default function sessionTasks(pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: changed
-                ? closesBatch
-                  ? `${params.status === "dropped" ? "Dropped" : "Completed"} T${params.id}. Task batch closed; the next tasks_add starts again at T1.`
-                  : `Updated T${params.id}.`
-                : `T${params.id} already has that state; no update recorded.`,
+              text: mutationResultText(
+                changed
+                  ? closesBatch
+                    ? `${params.status === "dropped" ? "Dropped" : "Completed"} T${params.id}. Task batch closed; the next tasks_add starts again at T1.`
+                    : `Updated T${params.id}.`
+                  : `T${params.id} already has that state; no update recorded.`,
+              ),
             },
           ],
-          details: toolDetails("update", mutation.items, closesBatch),
+          details: toolDetails("update", snapshot().items, closesBatch),
         });
       },
       renderCall(args, theme) {
