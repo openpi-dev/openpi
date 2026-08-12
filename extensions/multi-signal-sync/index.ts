@@ -13,7 +13,7 @@
  * A/B/C are detectable — this extension covers A/B/C.
  *
  * **Dual-channel reminder**:
- * 1. `pi.on("agent_settled")` → `ctx.ui.notify` (TUI warning, user sees)
+ * 1. `pi.on("agent_settled")` → pin onto the Tasks widget (TUI, user sees)
  * 2. `pi.on("context")` → `injectSyncReminder` (context injection, agent sees next turn)
  *
  * **Pattern**: post-edit extension (tool_result flag + agent_settled debounce)
@@ -21,7 +21,11 @@
  * **Trust surface**: regex detection only; no exec, no auto task mutation.
  */
 
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
+import { setTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
 
 /** A. Bash commands indicating a commit happened. */
 const COMMIT_PATTERNS = [/\bgit\s+commit\b/];
@@ -56,9 +60,9 @@ const SIGNAL_LABEL: Record<SignalKind, string> = {
 };
 
 export default function multiSignalSync(pi: ExtensionAPI) {
-  let signals: SignalKind[] = [];      // context 注入用（下轮消费）
-  let pendingNotify: SignalKind[] = []; // agent_settled footer 驻留用（本轮消费）
-  let statusShown = false;              // footer 驻留状态已显示标记
+  let signals: SignalKind[] = []; // context 注入用（下轮消费）
+  let pendingNotify: SignalKind[] = []; // agent_settled Tasks-widget 驻留用（本轮消费）
+  let statusShown = false; // footer 驻留状态已显示标记
   let generation = 0;
 
   /** Add a signal to both channels (dedupe). */
@@ -73,7 +77,12 @@ export default function multiSignalSync(pi: ExtensionAPI) {
    */
   pi.on(
     "tool_result",
-    (event: { toolName: string; isError?: boolean; input?: unknown; params?: unknown }) => {
+    (event: {
+      toolName: string;
+      isError?: boolean;
+      input?: unknown;
+      params?: unknown;
+    }) => {
       if (event.isError) return;
       if (event.toolName !== "bash") return;
 
@@ -111,9 +120,11 @@ export default function multiSignalSync(pi: ExtensionAPI) {
   });
 
   /**
-   * Channel 1 — agent_settled: footer 驻留状态（Persistent Status Indicator，跨 render 显示）。
-   * 信号轮：setStatus 驻留显示（持续可见，非瞬时 notify）。
-   * 下一轮（无新信号）：清除 footer 状态。
+   * Channel 1 — agent_settled: pin the completion reminder onto the Tasks
+   * widget (Persistent Status Indicator，跨 render 显示). It renders as the
+   * first row under the `◆ Tasks` census header, so the reminder lives where
+   * the list it asks to sync is — not in the footer status bar below the
+   * input. 下一轮（无新信号）：清除该行。
    */
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
@@ -121,13 +132,10 @@ export default function multiSignalSync(pi: ExtensionAPI) {
       if (pendingNotify.length > 0) {
         const labels = pendingNotify.map((s) => SIGNAL_LABEL[s]).join(" + ");
         pendingNotify = [];
-        ctx.ui.setStatus(
-          "multi-signal-sync",
-          `⚠️ 完成信号（${labels}）— 请同步 tasks`,
-        );
+        setTaskWidgetAttachment(`⚠️ 完成信号（${labels}）— 请同步 tasks`);
         statusShown = true;
       } else if (statusShown) {
-        ctx.ui.setStatus("multi-signal-sync", undefined);
+        setTaskWidgetAttachment(undefined);
         statusShown = false;
       }
     } catch {
@@ -141,6 +149,7 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     signals = [];
     pendingNotify = [];
     statusShown = false;
+    setTaskWidgetAttachment(undefined);
   });
 
   pi.on("session_shutdown", () => {
@@ -148,6 +157,7 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     signals = [];
     pendingNotify = [];
     statusShown = false;
+    setTaskWidgetAttachment(undefined);
   });
 }
 
@@ -200,7 +210,8 @@ function injectSyncReminder(
  */
 function lastUserMessageHasAuthorization(messages: unknown[]): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
-    const message = messages[index] as { role?: string; content?: unknown } | undefined;
+    const message = messages[index] as
+      { role?: string; content?: unknown } | undefined;
     if (!message || message.role !== "user") continue;
     const text = messageContentText(message.content);
     if (!text) return false; // last user message has no text → no auth signal
