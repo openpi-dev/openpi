@@ -79,7 +79,7 @@ live at the repository root. This extension keeps only a scoped `tsconfig.json`:
 }
 ```
 
-Run `npm install`, `npm run check`, and `npm test` from the repository root. Per AGENTS.md,
+Run `bun install --frozen-lockfile`, `bun run check`, and `bun run test` from the repository root. Per AGENTS.md,
 avoid explicit return types unless needed and never use `as any` without exhausting typed
 alternatives.
 
@@ -849,8 +849,8 @@ tricks; they exist on any machine running pi)
   as follow-up after the turn, not mid-stream, and only once.
 - `/new` and `/reload` with a running process → process is dead afterwards (`ps aux | grep`),
   no orphan, widget cleared.
-- `npm run check` green; `npm test` green; repo-root `npm run format:check` clean for the new
-  files (prettier covers `extensions/**/*.ts`).
+- `bun run check` green; `bun run test` green; Biome checks the repository's TypeScript,
+  JavaScript, and JSON files.
 
 ## 15. Pitfalls (each burned someone in the reference code)
 
@@ -892,7 +892,8 @@ tricks; they exist on any machine running pi)
 
 ## 16. Acceptance checklist
 
-- [ ] Root `npm ci`, `npm run check`, and `npm test` are green (TS7 + Effect LS included).
+- [ ] Root `bun install --frozen-lockfile`, `bun run check`, and `bun run test` are green
+      (TS7 + Effect LS included).
 - [ ] Manager, output, result-delivery, and ps-selection tests pass through the root suite.
 - [ ] Tools registered: `bg_start`, `bg_status`, `bg_list`, `bg_kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
@@ -917,4 +918,4 @@ tricks; they exist on any machine running pi)
 - [ ] Concurrency cap enforced race-free; ids are `bt-N`; cwd resolved against `ctx.cwd` and
       validated; timestamps and elapsed rendering consistent with subagents.
 - [ ] Code style: model strings in `prompt.ts`, Effect only in the async core, plain TS
-      callbacks for stream plumbing, no `as any`, prettier-clean.
+      callbacks for stream plumbing, no `as any`, Biome-clean.

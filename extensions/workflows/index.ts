@@ -1153,7 +1153,8 @@ export default function workflows(pi: ExtensionAPI) {
           });
         const replayLease = beginProcessReplayWorkspaceLease(replaySafe);
         let replayResources:
-          Awaited<ReturnType<typeof getResources>> | undefined;
+          | Awaited<ReturnType<typeof getResources>>
+          | undefined;
         let replayIdentity: ReturnType<typeof createReplayIdentity> | undefined;
         if (replaySafe) {
           try {

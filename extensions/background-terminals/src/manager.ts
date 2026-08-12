@@ -313,7 +313,8 @@ const makeManager = Effect.gen(function* () {
   let disposed = false;
   let spillDir: string | undefined | null;
   let onSettled:
-    ((snap: TerminalSnapshot, consumed: boolean) => void) | undefined;
+    | ((snap: TerminalSnapshot, consumed: boolean) => void)
+    | undefined;
 
   const notify = (id?: string) => {
     for (const listener of [...listeners]) {

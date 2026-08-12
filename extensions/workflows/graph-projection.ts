@@ -140,10 +140,12 @@ function findCycles(
     if (!indexes.has(node.callId)) visit(node.callId);
   }
   cycles.sort((left, right) => order.get(left[0]!)! - order.get(right[0]!)!);
-  return cycles.map((callIds): WorkflowGraphDiagnostic => ({
-    code: "cycle",
-    callIds,
-  }));
+  return cycles.map(
+    (callIds): WorkflowGraphDiagnostic => ({
+      code: "cycle",
+      callIds,
+    }),
+  );
 }
 
 export function projectWorkflowGraph<Record extends WorkflowGraphRecord>(

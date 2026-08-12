@@ -51,7 +51,11 @@ export type AgentState = "running" | "done" | "error";
 export type WorkflowStatus = "running" | "completed" | "failed" | "aborted";
 
 export type TranscriptRole =
-  "user" | "assistant" | "thinking" | "tool" | "toolResult";
+  | "user"
+  | "assistant"
+  | "thinking"
+  | "tool"
+  | "toolResult";
 
 export interface TranscriptEntry {
   role: TranscriptRole;

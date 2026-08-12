@@ -99,8 +99,8 @@ test("resolution rejects requests above the configured reference limit", () => {
     maxRefs: 2,
     tokenGenerator: () => `opaque-result-${++generated}`,
   });
-  const refs = ["one", "two", "three"].map((output) =>
-    registry.register({ settled: true, ok: true, output })!,
+  const refs = ["one", "two", "three"].map(
+    (output) => registry.register({ settled: true, ok: true, output })!,
   );
 
   assert.throws(() => registry.resolve(refs), /at most 2 references/);
