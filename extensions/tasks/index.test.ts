@@ -406,3 +406,24 @@ test("blocked task matching a successful subagent is closed as the unblock signa
   assert.equal(ledger?.data.revision, 2);
   assert.deepEqual(ledger?.data.items, []);
 });
+
+test("repeated session_start does not rebuild an already-installed widget", async () => {
+  const h = widgetHarness([
+    {
+      type: "custom",
+      customType: "session-tasks",
+      data: {
+        version: 1,
+        revision: 1,
+        nextId: 2,
+        items: [{ id: 1, subject: "Open task", status: "pending" }],
+      },
+    },
+  ]);
+  await h.emit("session_start");
+  const afterFirst = h.widgets.length;
+  assert.ok(afterFirst > 0);
+  // /resume re-fires session_start; the widget must not be destroyed/rebuild.
+  await h.emit("session_start");
+  assert.equal(h.widgets.length, afterFirst);
+});

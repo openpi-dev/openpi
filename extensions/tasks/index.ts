@@ -104,6 +104,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let notifiedProblem: string | undefined;
   let taskWidgetVisible = true;
   let taskWidgetExpanded = false;
+  let taskWidgetInstalled = false;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
@@ -133,8 +134,17 @@ export default function sessionTasks(pi: ExtensionAPI) {
       taskWidgetVisible &&
       !problemMessage() &&
       (hasActionableTasks() || getTaskWidgetAttachment() !== undefined);
+    // Idempotent: pi re-fires session_start on every /resume, and each
+    // setWidget call destroys and rebuilds the widget component — a structural
+    // change that forces a full-viewport repaint. Skip when the widget is
+    // already installed in the same state (one source of the double refresh
+    // on resume).
+    if (shown === taskWidgetInstalled) {
+      return shown;
+    }
     if (!shown) {
       ui.setWidget(TASK_WIDGET_KEY, undefined);
+      taskWidgetInstalled = false;
       return false;
     }
     ui.setWidget(TASK_WIDGET_KEY, (tui, theme) => {
@@ -158,6 +168,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         },
       };
     });
+    taskWidgetInstalled = true;
     return true;
   };
 
