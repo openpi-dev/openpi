@@ -1,5 +1,5 @@
 import { keyHint, type Theme } from "@earendil-works/pi-coding-agent";
-import { Text, truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import { type Component, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { sanitizeText } from "./output-view.ts";
 
 const STREAM_PREVIEW_LINES = 2;
@@ -100,6 +100,57 @@ function fixedRows(rows: string[]): Component {
     },
     invalidate() {},
   };
+}
+
+interface TerminalBatchResult {
+  readonly id: string;
+  readonly title: string;
+  readonly status: string;
+  readonly exitCode?: number;
+  readonly signal?: string;
+}
+
+/** Render a batch as a truthful per-terminal summary; expand reveals raw logs. */
+export function renderTerminalBatchResult(
+  content: string,
+  expanded: boolean,
+  theme: Theme,
+  results: readonly TerminalBatchResult[],
+  omitted = 0,
+): Component {
+  if (expanded) return new Text(sanitizeText(content), 0, 0);
+  const rows = [
+    theme.fg("accent", `${results.length} background terminals completed`),
+    ...results.map((result) => {
+      const failed =
+        result.status === "failed" || result.status === "timed_out";
+      const icon = failed
+        ? theme.fg("error", "x")
+        : result.status === "killed"
+          ? theme.fg("muted", "■")
+          : theme.fg("success", "■");
+      const how =
+        result.status === "timed_out"
+          ? "timed out"
+          : result.status === "killed"
+            ? "killed"
+            : (result.signal ?? `exit ${result.exitCode ?? "?"}`);
+      return `${icon} ${theme.fg("accent", result.id)}${theme.fg("muted", ` · ${result.title} · ${how}`)}`;
+    }),
+    ...(omitted > 0
+      ? [
+          theme.fg(
+            "dim",
+            `… ${omitted} older result${omitted === 1 ? "" : "s"} omitted`,
+          ),
+        ]
+      : []),
+    theme.fg(
+      "dim",
+      `… logs hidden · ${keyHint("app.tools.expand", "to expand")}`,
+    ),
+  ];
+  return fixedRows(rows);
 }
 
 /** Render terminal results compactly by default; expanded mode preserves all text. */

@@ -22,6 +22,8 @@ export const STATUS_STDERR_MAX = 8 * 1024;
 export const RESULT_STDOUT_MAX = 8 * 1024;
 /** Completion follow-up stderr tail. Keep this concise; /ps has the detailed view. */
 export const RESULT_STDERR_MAX = 4 * 1024;
+/** Global model-facing cap for one batched completion message. */
+export const RESULT_BATCH_MAX = 48 * 1024;
 const STATUS_STDOUT_MAX_LINES = 400;
 const STATUS_STDERR_MAX_LINES = 200;
 const RESULT_STDOUT_MAX_LINES = 40;
@@ -176,6 +178,39 @@ export function buildTerminalResultMessage(snap: TerminalSnapshot) {
   if (snap.stderr.totalBytes > 0) {
     text += `\n\n${outputSection("stderr", snap.stderr, RESULT_STDERR_MAX, RESULT_STDERR_MAX_LINES)}`;
   }
+  return text;
+}
+
+/** Preserve every retained terminal identity while globally bounding batch logs. */
+export function buildTerminalBatchResultMessage(
+  messages: readonly string[],
+  omitted = 0,
+) {
+  if (messages.length === 1 && omitted === 0) return messages[0]!;
+  const summaries = messages.map(
+    (message) => message.split("\n", 1)[0] || "Background terminal result",
+  );
+  const header = [
+    `${messages.length} background terminal result${messages.length === 1 ? "" : "s"}:`,
+    ...summaries.map((summary) => `- ${summary}`),
+    omitted > 0
+      ? `- ${omitted} older result${omitted === 1 ? "" : "s"} omitted from this bounded batch; use bg_list/bg_status for retained details.`
+      : "",
+  ]
+    .filter(Boolean)
+    .join("\n");
+  const logsHeader = "\n\nLogs (newest tail):\n";
+  const truncationMarker =
+    "\n[batch logs truncated at the 48 KiB model-context limit; use bg_status or /ps for retained details.]";
+  const fixedBytes = Buffer.byteLength(
+    `${header}${logsHeader}${truncationMarker}`,
+    "utf8",
+  );
+  const logs = truncateTail(messages.join("\n\n"), {
+    maxBytes: Math.max(1, RESULT_BATCH_MAX - fixedBytes),
+    maxLines: DEFAULT_MAX_LINES,
+  });
+  const text = `${header}${logsHeader}${logs.content}${logs.truncated ? truncationMarker : ""}`;
   return text;
 }
 

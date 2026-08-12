@@ -6,6 +6,7 @@ import {
   BG_START_TOOL_DESCRIPTION,
   buildKillReport,
   buildStatusResult,
+  buildTerminalBatchResultMessage,
   buildTerminalResultMessage,
 } from "./src/prompt.ts";
 
@@ -114,6 +115,30 @@ test("completion message reports kill, timeout, or exit and omits empty stderr",
   );
   assert.match(failed, /exited \(exit 3\)/);
   assert.match(failed, /stderr:\nboom/);
+});
+
+test("batched completion preserves identities and globally bounds log tails", () => {
+  const messages = Array.from({ length: 8 }, (_, index) =>
+    buildTerminalResultMessage(
+      snap({
+        id: `bt-${index + 1}`,
+        title: `job-${index + 1}`,
+        stdout: view({
+          text: `${Array.from({ length: 100 }, (_, line) => `${index + 1}-${line}-${"x".repeat(300)}`).join("\n")}\nnewest-${index + 1}`,
+          totalBytes: 30_500,
+        }),
+      }),
+    ),
+  );
+  const batch = buildTerminalBatchResultMessage(messages, 4);
+
+  assert.ok(Buffer.byteLength(batch, "utf8") <= 48 * 1024);
+  for (let index = 1; index <= 8; index++) {
+    assert.match(batch, new RegExp(`Background terminal bt-${index}`));
+  }
+  assert.match(batch, /4 older results omitted/);
+  assert.match(batch, /batch logs truncated/);
+  assert.match(batch, /newest-8/);
 });
 
 test("completion output is a shorter tail than the detailed status view", () => {

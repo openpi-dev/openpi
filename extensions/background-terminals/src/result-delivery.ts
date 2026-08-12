@@ -11,14 +11,28 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
   return {
     defer(result: T) {
       pending.set(result.id, result);
+      return pending.size;
     },
     consume(ids: Iterable<string>) {
       for (const id of ids) pending.delete(id);
     },
-    drain() {
-      const results = [...pending.values()];
-      pending.clear();
+    drain(maxResults = Number.POSITIVE_INFINITY) {
+      const results: T[] = [];
+      for (const [id, result] of pending) {
+        if (results.length >= maxResults) break;
+        results.push(result);
+        pending.delete(id);
+      }
       return results;
+    },
+    restore(results: readonly T[]) {
+      const current = [...pending.values()];
+      pending.clear();
+      for (const result of results) pending.set(result.id, result);
+      for (const result of current) pending.set(result.id, result);
+    },
+    size() {
+      return pending.size;
     },
     clear() {
       pending.clear();
@@ -36,6 +50,65 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
  * result in context — carried alongside the user's next message — without
  * demanding a reply.
  */
+export interface IdleResultBatcherOptions<TimerHandle> {
+  readonly delayMs: number;
+  readonly isIdle: () => boolean;
+  readonly flush: (wake: boolean) => void;
+  readonly startTimer: (callback: () => void, delayMs: number) => TimerHandle;
+  readonly clearTimer: (timer: TimerHandle) => void;
+}
+
+/**
+ * Coalesce settlements that arrive while the agent is idle without turning
+ * the window into a sliding delay. A token rejects stale callbacks after
+ * cancellation, including callbacks already queued by the host event loop.
+ */
+export function createIdleResultBatcher<TimerHandle>(
+  options: IdleResultBatcherOptions<TimerHandle>,
+) {
+  let timer: TimerHandle | undefined;
+  let active: symbol | undefined;
+
+  const cancel = () => {
+    active = undefined;
+    if (timer !== undefined) options.clearTimer(timer);
+    timer = undefined;
+  };
+
+  return {
+    schedule() {
+      if (active !== undefined) return;
+      const token = Symbol("idle-result-batch");
+      active = token;
+      timer = options.startTimer(() => {
+        if (active !== token) return;
+        active = undefined;
+        timer = undefined;
+        if (options.isIdle()) options.flush(true);
+      }, options.delayMs);
+    },
+    flushNow() {
+      const wake = options.isIdle();
+      cancel();
+      options.flush(wake);
+    },
+    flushWithoutWake() {
+      cancel();
+      options.flush(false);
+    },
+    clear: cancel,
+  };
+}
+
+export function hasTerminalCapacity(options: {
+  readonly running: number;
+  readonly pending: number;
+  readonly reserved: number;
+  readonly maximum: number;
+}) {
+  return options.running + options.pending + options.reserved < options.maximum;
+}
+
 export function resultDeliveryOptions(wake: boolean) {
   return wake
     ? ({ deliverAs: "followUp", triggerTurn: true } as const)
