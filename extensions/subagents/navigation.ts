@@ -10,6 +10,12 @@ import {
 } from "../shared/activity-status.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "./src/domain.ts";
+import {
+  failureStreakOf,
+  isStalled,
+  lastActivityOf,
+  lastIntentOf,
+} from "./src/domain.ts";
 import { formatContextUtilization } from "./src/format.ts";
 
 export interface SubagentStripEntry {
@@ -161,12 +167,23 @@ export class SubagentStripWidget {
       const latestTool = [...item.liveTools]
         .reverse()
         .find((tool) => tool.done !== true);
+      // Visibility triad: live tool → intent fallback → stall warning. A
+      // running row must never render as a bare title with no sign of life.
       const action = latestTool
         ? ` ${this.theme.fg("dim", "⚙")} ${this.theme.fg("muted", `${latestTool.name}${latestTool.argsPreview ? ` ${cleanLine(latestTool.argsPreview)}` : ""}`)}`
-        : "";
+        : lastIntentOf(item)
+          ? ` ${this.theme.fg("dim", "💬")} ${this.theme.fg("muted", cleanLine(lastIntentOf(item)!))}`
+          : isStalled(item, Date.now())
+            ? ` ${this.theme.fg("error", `⚠ 无活动 ${Math.max(1, Math.round((Date.now() - lastActivityOf(item)) / 60_000))}m`)}`
+            : "";
+      const failures = failureStreakOf(item);
+      const failureMark =
+        failures >= 2
+          ? ` ${this.theme.fg("warning", `✗ 连败 ${failures}`)}`
+          : "";
       lines.push(
         truncateToWidth(
-          `  ${statusSquare(item, this.theme)} ${title}${model ? this.theme.fg("dim", ` · ${model}`) : ""}${action}`,
+          `  ${statusSquare(item, this.theme)} ${title}${model ? this.theme.fg("dim", ` · ${model}`) : ""}${action}${failureMark}`,
           width,
         ),
       );

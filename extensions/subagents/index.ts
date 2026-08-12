@@ -95,6 +95,10 @@ import {
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { recordSettledSubagent } from "../shared/task-reconcile.ts";
 import {
+  resetRunningSubagentDescriptions,
+  setRunningSubagentDescriptions,
+} from "../shared/task-reconcile.ts";
+import {
   PLAN_MODE_CHANNEL,
   planModeAllowsDeclaredTools,
   planModeChildTools,
@@ -205,7 +209,17 @@ export default function (pi: ExtensionAPI) {
         navigationManager = manager;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
-        unsubStatus = manager.view.subscribe(() => updateStatus(manager));
+        unsubStatus = manager.view.subscribe(() => {
+          // Light-up source: keep the running-child descriptions fresh so the
+          // tasks widget can highlight pending tasks already being worked on.
+          setRunningSubagentDescriptions(
+            manager.view
+              .list()
+              .filter((snap) => snap.status === "running")
+              .map((snap) => snap.title || snap.id),
+          );
+          updateStatus(manager);
+        });
         updateStatus(manager);
         return manager;
       });
@@ -442,6 +456,7 @@ export default function (pi: ExtensionAPI) {
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
+    resetRunningSubagentDescriptions();
     try {
       sessionContext?.ui.setWidget(widgetKey, undefined);
     } catch {

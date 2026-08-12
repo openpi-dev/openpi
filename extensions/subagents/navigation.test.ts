@@ -195,3 +195,52 @@ test("subagent HUD hides itself when nothing is running or unread", () => {
     widget.dispose();
   }
 });
+
+test("running rows show intent fallback, failure streak, and stall warning", () => {
+  const strip = new BelowEditorStripState();
+  const now = Date.now();
+  const make = (overrides: Record<string, unknown>) => {
+    const base = {
+      ...snapshot("sa-1", "running", now - 60_000),
+      ...overrides,
+    };
+    const widget = new SubagentStripWidget(
+      { requestRender() {} } as unknown as TUI,
+      theme,
+      strip,
+      () => ({
+        snapshot: base as never,
+        counts: { running: 1, done: 0, failed: 0 },
+      }),
+      () => [base as never],
+    );
+    return widget;
+  };
+
+  // Intent fallback when no tool is in flight.
+  const intent = make({
+    liveTools: [],
+    liveAssistant: { text: "inspecting the registry", thinking: "" },
+  });
+  try {
+    assert.match(intent.render(120)[1]!, /💬 inspecting the registry/);
+  } finally {
+    intent.dispose();
+  }
+
+  // Failure streak.
+  const failing = make({ liveTools: [], consecutiveFailures: 3 });
+  try {
+    assert.match(failing.render(120)[1]!, /✗ 连败 3/);
+  } finally {
+    failing.dispose();
+  }
+
+  // Stall warning when silent past the threshold (createdAt 60s ago).
+  const stalled = make({ liveTools: [], createdAt: now - 400_000 });
+  try {
+    assert.match(stalled.render(120)[1]!, /⚠ 无活动 \d+m/);
+  } finally {
+    stalled.dispose();
+  }
+});
