@@ -6,18 +6,17 @@
  * tasks drift from reality (e.g., T4 blocked→done by owner authorization,
  * but task still shows blocked).
  *
- * **Pattern**: post-edit extension (`pi.on("tool_result")` + `pi.on("agent_settled")`).
- * - `tool_result` handler: hot path, only flips a boolean flag (no await/exec).
- * - `agent_settled`: debounces a turn's commit burst into ONE reminder.
- * - Fire-and-forget: `ctx.ui.notify` is best-effort, never blocks the pipeline.
+ * **Dual-channel reminder** (v2 enhancement):
+ * 1. `pi.on("agent_settled")` → `ctx.ui.notify` (TUI warning, user sees)
+ * 2. `pi.on("context")` → `injectCommitReminder` (context injection, agent sees next turn)
  *
+ * The context injection is the stronger channel: it appends a `<commit-task-sync>`
+ * block to the next turn's messages, so the agent CANNOT miss it (unlike ui.notify
+ * which is advisory/TUI-only). Pattern: `injectTaskProjection` in tasks/index.ts.
+ *
+ * **Pattern**: post-edit extension (`pi.on("tool_result")` flag + `pi.on("agent_settled")` debounce).
  * **Trust surface**: detect `git commit` string in bash command + `!event.isError`.
  * Does NOT execute commands, does NOT auto-modify tasks (agent decides).
- *
- * **Limitation**: `ui.notify` is advisory (agent may miss it). A stronger version
- * would inject a system-prompt or context hint on the next turn, but that requires
- * the context-injection hook (see injectTaskProjection in tasks/index.ts).
- * This first version uses notify — minimal, safe, non-blocking.
  */
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
@@ -27,8 +26,15 @@ const COMMIT_PATTERNS = [
   /\bgit\s+commit\b/,
 ];
 
+/** Reminder text injected into next turn's context (agent-visible). */
+const REMINDER_TEXT = `⚠️ 上轮检测到 git commit 成功。请检查 tasks 状态同步：
+- 如有完成项（commit/reviewer/授权后 done），**立即 tasks_update done** 带 commit SHA + reviewer 结论
+- 如有 blocked→done（业主授权/ADR 落地），同步 status
+- 这是 commit-task-sync hook 自动提醒（防 tasks 残留，不靠 agent 记忆力）
+commit-task-sync 检测到 commit → 注入此提示到下轮上下文。注入后自动清除（仅提醒一次）。`;
+
 export default function commitTaskSync(pi: ExtensionAPI) {
-  let committedThisTurn = false;
+  let commitDetected = false;
   let generation = 0;
 
   /**
@@ -41,26 +47,21 @@ export default function commitTaskSync(pi: ExtensionAPI) {
       if (event.isError) return;
       if (event.toolName !== "bash") return;
 
-      // Extract command string from event (field name varies by pi version;
-      // try common shapes: input.command, params.command, params, input as string)
       const command = extractCommand(event);
       if (!command) return;
 
       if (COMMIT_PATTERNS.some((pattern) => pattern.test(command))) {
-        committedThisTurn = true;
+        commitDetected = true;
       }
     },
   );
 
   /**
-   * agent_settled: turn ended. If committed this turn, remind agent to sync tasks.
-   * Debounces multiple commits in one turn into a single reminder.
+   * Channel 1 — agent_settled: TUI notify (user-visible, advisory).
+   * Does NOT reset commitDetected (context handler owns the reset).
    */
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
-    if (!committedThisTurn) return;
-    committedThisTurn = false;
-
-    // Only in interactive TUI (not headless RPC, like post-edit).
+    if (!commitDetected) return;
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
 
     try {
@@ -73,16 +74,61 @@ export default function commitTaskSync(pi: ExtensionAPI) {
     }
   });
 
+  /**
+   * Channel 2 — context: inject reminder into next turn's messages (agent-visible, mandatory).
+   * This is the STRONGER channel: agent cannot miss it (it's in the conversation context).
+   * Resets commitDetected after injection (remind once per commit).
+   *
+   * Pattern: injectTaskProjection in tasks/index.ts (:483) — return { messages } to replace.
+   */
+  pi.on("context", (event) => {
+    if (!commitDetected) return;
+    commitDetected = false; // Inject once, then reset
+
+    const messages = injectCommitReminder(event.messages);
+    if (messages) {
+      return { messages: messages as typeof event.messages };
+    }
+  });
+
   /** Reset on session lifecycle. */
   pi.on("session_start", () => {
     generation++;
-    committedThisTurn = false;
+    commitDetected = false;
   });
 
   pi.on("session_shutdown", () => {
     generation++;
-    committedThisTurn = false;
+    commitDetected = false;
   });
+}
+
+/**
+ * Inject commit-task-sync reminder into messages (agent-visible next turn).
+ * Pattern: injectTaskProjection in tasks/index.ts — clone, append block to last user message.
+ */
+function injectCommitReminder(messages: unknown[]): unknown[] | undefined {
+  const next = structuredClone(messages) as Array<{
+    role?: string;
+    content?: unknown;
+  }>;
+  for (let index = next.length - 1; index >= 0; index--) {
+    const message = next[index];
+    if (message.role !== "user") continue;
+    const block = {
+      type: "text",
+      text: `\n\n<commit-task-sync>\n${REMINDER_TEXT}\n</commit-task-sync>`,
+    };
+    if (typeof message.content === "string") {
+      message.content = [{ type: "text", text: message.content }, block];
+    } else if (Array.isArray(message.content)) {
+      message.content.push(block);
+    } else {
+      return undefined;
+    }
+    return next;
+  }
+  return undefined;
 }
 
 /**
