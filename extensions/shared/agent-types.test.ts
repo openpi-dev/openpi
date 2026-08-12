@@ -16,7 +16,7 @@ import {
   parseAgentType,
   roleModelForAgentType,
   selectSubagentModel,
-} from "./src/agent-types.ts";
+} from "./agent-types.ts";
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   childToolPolicy,

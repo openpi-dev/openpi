@@ -11,7 +11,7 @@ import {
 const CHARS_PER_ESTIMATED_TOKEN = 4;
 const LIVE_UPDATE_INTERVAL_MS = 200;
 
-function getSessionMetrics(ctx: ExtensionContext) {
+export function getSessionMetrics(ctx: ExtensionContext) {
   let cost = 0;
   let cacheRead = 0;
   let promptTokens = 0;
@@ -38,7 +38,7 @@ function getSessionMetrics(ctx: ExtensionContext) {
   };
 }
 
-function estimateContentTokens(characters: number) {
+export function estimateContentTokens(characters: number) {
   return Math.ceil(characters / CHARS_PER_ESTIMATED_TOKEN);
 }
 

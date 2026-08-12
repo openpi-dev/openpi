@@ -3,7 +3,7 @@
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { effectiveChildToolAllowlist } from "../../shared/child-session.ts";
-import type { AgentType } from "./agent-types.ts";
+import type { AgentType } from "../../shared/agent-types.ts";
 import { MAX_RUNNING } from "./manager.ts";
 
 /** Describes subagent_spawn, including the fixed concurrency cap. */

@@ -49,7 +49,7 @@ import {
   resolveAgentModel,
   roleModelForAgentType,
   selectSubagentModel,
-} from "../subagents/src/agent-types.ts";
+} from "../shared/agent-types.ts";
 import {
   createWorktree,
   reclaimWorktree,

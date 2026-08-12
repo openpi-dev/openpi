@@ -84,3 +84,27 @@ test("buildReminderText carries signal labels and context", () => {
   assert.match(buildReminderText(["commit", "verify"]), /commit \+ 验证通过/);
   assert.match(buildReminderText(["commit"], "commit-task-sync"), /git commit/);
 });
+
+test("signal boundary cases: chains, amend, case sensitivity", () => {
+  // Chained commands still carry the signal.
+  assert.deepEqual(detectSignals("git add . && git commit -m x"), ["commit"]);
+  assert.deepEqual(detectSignals("git commit --amend -m x"), ["commit"]);
+  // The pattern is case-sensitive by design (shell commands are lowercase).
+  assert.deepEqual(detectSignals("Git Commit"), []);
+  // A plain echo containing the phrase is still text-matched (documented
+  // limitation: detection is command-text based, like any regex detector).
+  assert.deepEqual(detectSignals('echo "git commit"'), ["commit"]);
+  // Verify patterns do not match bare test runners without the markers.
+  assert.deepEqual(detectSignals("npm test"), []);
+  assert.deepEqual(detectSignals("node --test --grep x"), ["verify"]);
+  // Empty and whitespace commands are null-safe.
+  assert.deepEqual(detectSignals(""), []);
+  assert.deepEqual(detectSignals("   "), []);
+});
+
+test("extractCommand is null-safe on malformed events", () => {
+  assert.equal(extractCommand({ input: { command: 42 } }), null);
+  assert.equal(extractCommand({ input: null }), null);
+  assert.equal(extractCommand({ params: [] }), null);
+  assert.equal(extractCommand({ input: { command: "" } }), "");
+});

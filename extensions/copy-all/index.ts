@@ -3,7 +3,7 @@ import {
   type ExtensionAPI,
 } from "@earendil-works/pi-coding-agent";
 
-function textFromContent(content: unknown) {
+export function textFromContent(content: unknown) {
   if (typeof content === "string") return content;
   if (!Array.isArray(content)) return "";
 

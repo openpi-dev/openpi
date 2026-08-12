@@ -77,11 +77,12 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "prepublishOnly": "npm run format:check && npm run check && npm test",
+    "prepublishOnly": "npm run format:check && npm run check && npm run check:ddd && npm test",
     "check": "tsc --noEmit",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
     "format": "prettier --write \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
     "format:check": "prettier --check \"extensions/**/*.{ts,cjs}\" \"scripts/**/*.{js,mjs,cjs,ts}\" \".github/**/*.{yml,yaml}\" \"*.json\"",
-    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts"
+    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts",
+    "check:ddd": "node scripts/check-ddd-boundaries.mjs"
   }
 }

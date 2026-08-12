@@ -8,7 +8,7 @@
  *
  * The allowlist can only ever NARROW. Pi composes it with the child denylist as
  * `(!allowed || allowed.has(name)) && !excluded.has(name)`, so naming an
- * excluded tool here cannot resurrect it (see `../../shared/child-session.ts`).
+ * excluded tool here cannot resurrect it (see `./child-session.ts`).
  *
  * Discovery is two-tier: `<agentDir>/agents/*.md` always, and `<cwd>/.pi/agents/
  * *.md` only in a trusted project — a project file supplies an
@@ -30,15 +30,27 @@ import {
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
-} from "../../shared/child-session.ts";
-import { sanitizeTerminalText } from "../../shared/terminal-text.ts";
+} from "./child-session.ts";
+import { sanitizeTerminalText } from "./terminal-text.ts";
 import {
   isSubagentRoleName,
   type SubagentRoleModel,
-} from "../../shared/subagent-roles.ts";
-import { REASONING_EFFORTS, type ReasoningEffort } from "./domain.ts";
+} from "./subagent-roles.ts";
 
 /** Directory name scanned under both the agent dir and a project's `.pi`. */
+/** Reasoning levels accepted by agent types and the spawn tool. */
+export const REASONING_EFFORTS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+] as const;
+
+export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
+
 export const AGENT_TYPES_DIR_NAME = "agents";
 
 /** Bounds mirroring the Agent Skills conventions Pi uses for `SKILL.md`. */

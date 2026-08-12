@@ -50,15 +50,15 @@ import {
   roleModelForAgentType,
   selectSubagentModel,
   type AgentType,
-} from "./src/agent-types.ts";
+} from "../shared/agent-types.ts";
 import { deriveBtwTitle, isModelVisible } from "./src/by-the-way.ts";
 import {
   BACKEND_NAMES,
   formatElapsed,
   latestText,
-  REASONING_EFFORTS,
   type SubagentSnapshot,
 } from "./src/domain.ts";
+import { REASONING_EFFORTS } from "../shared/agent-types.ts";
 import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
@@ -81,8 +81,10 @@ import {
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { createDeferredResultDelivery } from "./src/result-delivery.ts";
-import { resultDeliveryOptions } from "../background-terminals/src/result-delivery.ts";
+import {
+  createDeferredResultDelivery,
+  resultDeliveryOptions,
+} from "../shared/result-delivery.ts";
 import {
   effectiveChildToolAllowlist,
   resolveStandaloneChildProjectTrust,

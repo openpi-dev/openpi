@@ -23,7 +23,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
-import { resolveAgentModel } from "../agent-types.ts";
+import { resolveAgentModel } from "../../../shared/agent-types.ts";
 import type { SubagentBackend, SubagentSession } from "../backend.ts";
 import type {
   SpawnTask,

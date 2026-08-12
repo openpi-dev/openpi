@@ -11,7 +11,12 @@ interface TurnTimeData {
 }
 
 /** Sub-second requests are noise, not information. */
-const MIN_REPORTED_MS = 1_000;
+export const MIN_REPORTED_MS = 1_000;
+
+/** Whether a finished turn is worth recording (sub-second = noise). */
+export function shouldReportTurnTime(ms: number) {
+  return ms >= MIN_REPORTED_MS;
+}
 
 export function formatTurnDuration(ms: number) {
   const seconds = Math.round(ms / 1000);
@@ -51,7 +56,7 @@ export default function (pi: ExtensionAPI) {
     if (startedAt === undefined) return;
     const ms = Date.now() - startedAt;
     startedAt = undefined;
-    if (ms < MIN_REPORTED_MS) return;
+    if (!shouldReportTurnTime(ms)) return;
     pi.appendEntry<TurnTimeData>("turn-time", { ms });
   });
 

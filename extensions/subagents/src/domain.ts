@@ -8,27 +8,16 @@
 
 import type { ModelRegistry } from "@earendil-works/pi-coding-agent";
 import { Data } from "effect";
+import {
+  REASONING_EFFORTS,
+  type ReasoningEffort,
+} from "../../shared/agent-types.ts";
 
 export const BACKEND_NAMES = ["pi"] as const;
 export type BackendName = (typeof BACKEND_NAMES)[number];
 
 /** Who initiated the session. User asides stay out of model-facing tooling. */
 export type SubagentOrigin = "model" | "btw";
-
-/**
- * Reasoning-effort scale; these are pi's thinking levels, used directly as the
- * level. Omitted = inherit the parent session's level.
- */
-export const REASONING_EFFORTS = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "max",
-] as const;
-export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export type SubagentStatus = "running" | "done" | "error";
 

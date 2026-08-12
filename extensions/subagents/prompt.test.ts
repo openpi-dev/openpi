@@ -11,7 +11,7 @@ import {
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { BUILT_IN_AGENT_TYPES, type AgentType } from "./src/agent-types.ts";
+import { BUILT_IN_AGENT_TYPES, type AgentType } from "../shared/agent-types.ts";
 
 test("the generated agent_type schema exposes each effective capability and effort default", () => {
   const parentOnlyType: AgentType = {
