@@ -36,3 +36,22 @@ jobs:
           output="$(PI_CODING_AGENT_DIR="$agent_dir" ./node_modules/.bin/pi --offline --no-session --mode rpc </dev/null)"
           grep -q '"statusKey":"plan-mode"' <<<"$output"
           grep -q '"widgetKey":"session-tasks-panel"' <<<"$output"
+      - name: Smoke-test packed extensions without optional peers
+        run: |
+          root="$(mktemp -d)"
+          trap 'rm -rf "$root"' EXIT
+          mkdir "$root/app" "$root/agent"
+          printf '{"private":true}\n' >"$root/app/package.json"
+          npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
+          tarballs=("$root"/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          npm install --prefix "$root/app" --ignore-scripts --legacy-peer-deps --no-audit --no-fund "${tarballs[0]}"
+          test ! -e "$root/app/node_modules/ioredis"
+          package="$root/app/node_modules/@tt-a1i/openpi"
+          PI_CODING_AGENT_DIR="$root/agent" ./node_modules/.bin/pi \
+            --offline \
+            --mode rpc \
+            --no-extensions \
+            --extension "$package/extensions/file-search/index.ts" \
+            --extension "$package/extensions/git-info/index.ts" \
+            </dev/null
