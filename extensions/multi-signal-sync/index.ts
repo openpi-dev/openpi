@@ -57,7 +57,8 @@ const SIGNAL_LABEL: Record<SignalKind, string> = {
 
 export default function multiSignalSync(pi: ExtensionAPI) {
   let signals: SignalKind[] = [];      // context 注入用（下轮消费）
-  let pendingNotify: SignalKind[] = []; // agent_settled notify 用（本轮消费）
+  let pendingNotify: SignalKind[] = []; // agent_settled footer 驻留用（本轮消费）
+  let statusShown = false;              // footer 驻留状态已显示标记
   let generation = 0;
 
   /** Add a signal to both channels (dedupe). */
@@ -110,21 +111,27 @@ export default function multiSignalSync(pi: ExtensionAPI) {
   });
 
   /**
-   * Channel 1 — agent_settled: TUI notify (user-visible, advisory).
+   * Channel 1 — agent_settled: footer 驻留状态（Persistent Status Indicator，跨 render 显示）。
+   * 信号轮：setStatus 驻留显示（持续可见，非瞬时 notify）。
+   * 下一轮（无新信号）：清除 footer 状态。
    */
   pi.on("agent_settled", (_event: unknown, ctx: ExtensionContext) => {
-    if (pendingNotify.length === 0) return;
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
-
     try {
-      const labels = pendingNotify.map((s) => SIGNAL_LABEL[s]).join(" + ");
-      pendingNotify = [];
-      ctx.ui.notify(
-        `⚠️ 检测到完成信号（${labels}）— 请检查 tasks 状态同步（如有完成项，tasks_update done 带 commit SHA）`,
-        "warning",
-      );
+      if (pendingNotify.length > 0) {
+        const labels = pendingNotify.map((s) => SIGNAL_LABEL[s]).join(" + ");
+        pendingNotify = [];
+        ctx.ui.setStatus(
+          "multi-signal-sync",
+          `⚠️ 完成信号（${labels}）— 请同步 tasks`,
+        );
+        statusShown = true;
+      } else if (statusShown) {
+        ctx.ui.setStatus("multi-signal-sync", undefined);
+        statusShown = false;
+      }
     } catch {
-      // Session may have ended; best-effort notification.
+      // Session may have ended; best-effort status update.
     }
   });
 
@@ -133,12 +140,14 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     generation++;
     signals = [];
     pendingNotify = [];
+    statusShown = false;
   });
 
   pi.on("session_shutdown", () => {
     generation++;
     signals = [];
     pendingNotify = [];
+    statusShown = false;
   });
 }
 
