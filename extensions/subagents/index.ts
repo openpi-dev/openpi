@@ -288,8 +288,16 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  // One-shot editor wrapper: pi re-fires session_start on every /resume, and
+  // re-wrapping each time both stacks another BelowEditorNavigationEditor
+  // layer AND replaces the editor component (a structural change that forces a
+  // full-viewport repaint — one source of the double refresh on resume).
+  // Install once per runtime; later sessions reuse the installed wrapper.
+  let navigationInstalled = false;
   const installSubagentNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
+    if (navigationInstalled) return;
+    navigationInstalled = true;
     const previous = ctx.ui.getEditorComponent();
     ctx.ui.setEditorComponent((tui, theme, keybindings) => {
       const base =
