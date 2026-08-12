@@ -93,6 +93,7 @@ import {
   BelowEditorStripState,
 } from "../shared/below-editor-navigation.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
+import { recordSettledSubagent } from "../shared/task-reconcile.ts";
 import {
   PLAN_MODE_CHANNEL,
   planModeAllowsDeclaredTools,
@@ -379,6 +380,15 @@ export default function (pi: ExtensionAPI) {
       deliverBtwResult({ ...snap, meta: { ...snap.meta } });
       return;
     }
+    // Reconciliation bridge (omp's #reconcileTodosWithSubagents): record the
+    // settled child so the tasks extension can auto-close a matching open
+    // task at agent_settled. Failed/aborted children are recorded with
+    // ok=false and deliberately left open by the reconciler.
+    recordSettledSubagent({
+      id: snap.id,
+      description: snap.title || snap.id,
+      ok: snap.status === "done",
+    });
     // Mark the finish in the transcript. The result itself reaches the model
     // separately; this line is for the reader watching the run.
     pi.appendEntry<SubagentFinishedData>("subagent-finished", {

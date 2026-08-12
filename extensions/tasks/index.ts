@@ -1,4 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import { readFileSync, writeFileSync } from "node:fs";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -15,8 +16,11 @@ import {
   applyTaskUpdate,
   createSessionTasks,
   emptyTaskSnapshot,
+  markdownToTasks,
   projectTasks,
   restoreTaskSnapshot,
+  taskMatchesDescription,
+  tasksToMarkdown,
   type TaskFilter,
   type TaskItem,
   type TaskSnapshot,
@@ -30,6 +34,10 @@ import {
   type TaskToolDetails,
 } from "./ui.ts";
 import { getTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
+import {
+  drainSettledSubagents,
+  resetSettledSubagents,
+} from "../shared/task-reconcile.ts";
 
 const TOOL_NAMES = ["tasks_add", "tasks_update", "tasks_list"] as const;
 const TASK_WIDGET_KEY = "session-tasks-panel";
@@ -420,6 +428,65 @@ export default function sessionTasks(pi: ExtensionAPI) {
         if (ctx.hasUI) ctx.ui.notify(taskWidgetFeedback(shown), "info");
         return;
       }
+      // omp's /todo export|import: round-trip the batch through an editable
+      // Markdown checklist so the user can re-plan without dictating to the
+      // agent. Import replaces the batch wholesale (ids reassigned in order).
+      if (action === "export") {
+        const pathArg = args.trim().slice("export".length).trim();
+        const outPath = pathArg || "tasks.md";
+        try {
+          writeFileSync(outPath, tasksToMarkdown(snapshot()), "utf8");
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Tasks exported to ${outPath} (edit it, then /tasks import)`,
+              "info",
+            );
+          }
+        } catch (error) {
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Export failed: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+          }
+        }
+        return;
+      }
+      if (action === "import") {
+        const pathArg = args.trim().slice("import".length).trim();
+        const inPath = pathArg || "tasks.md";
+        let markdown: string;
+        try {
+          markdown = readFileSync(inPath, "utf8");
+        } catch (error) {
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Import failed: ${error instanceof Error ? error.message : String(error)}`,
+              "error",
+            );
+          }
+          return;
+        }
+        const parsed = markdownToTasks(markdown);
+        if (parsed.errors.length > 0) {
+          if (ctx.hasUI) {
+            ctx.ui.notify(
+              `Import rejected: ${parsed.errors.join("; ")}`,
+              "warning",
+            );
+          }
+          return;
+        }
+        const mutation = applyTaskAdd(emptyTaskSnapshot(), parsed.items);
+        persistThenCommit(mutation.snapshot);
+        if (ctx.hasUI) {
+          ctx.ui.notify(
+            `Imported ${parsed.items.length} task(s) — batch restarted at T1`,
+            "info",
+          );
+        }
+        return;
+      }
       await openTasksScreen(ctx, snapshot());
     },
   });
@@ -469,6 +536,8 @@ export default function sessionTasks(pi: ExtensionAPI) {
     frozenProjection = "";
     taskWidgetVisible = true;
     taskWidgetExpanded = false;
+    cancelIdleRecap();
+    resetSettledSubagents();
     registerTools();
     notifyProblem(ctx);
     updateTaskWidget(ctx);
@@ -491,6 +560,9 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   pi.on("agent_start", () => {
     activeRun = true;
+    // Any new activity cancels the idle recap wait: the agent is working
+    // again, so "task still open" is already visible in the widget.
+    cancelIdleRecap();
     if (coldRun) {
       frozenProjection = !problemMessage() ? projectTasks(snapshot()) : "";
       coldRun = false;
@@ -500,7 +572,9 @@ export default function sessionTasks(pi: ExtensionAPI) {
   pi.on("agent_settled", (_event, ctx) => {
     activeRun = false;
     frozenProjection = "";
+    reconcileTasksWithSubagents();
     notifyBlockedTasks(ctx);
+    scheduleIdleRecap(ctx);
   });
 
   // Blocked tasks are the one state that needs a human in the loop (owner
@@ -534,6 +608,90 @@ export default function sessionTasks(pi: ExtensionAPI) {
     }
   };
 
+  // ── Reconciliation (omp's #reconcileTodosWithSubagents) ────────────────────
+  // A settled subagent whose title matches an open task is the completion
+  // signal for that task: auto-close it (with the child id as evidence). A
+  // blocked task matching a *successful* child is unblocked-and-closed — the
+  // wait it described is over. Failed/aborted children never auto-close
+  // anything; that decision stays with the user or the next agent turn.
+  const reconcileTasksWithSubagents = () => {
+    const records = drainSettledSubagents();
+    if (records.length === 0) return;
+    const current = snapshot();
+    let changed = false;
+    let next = current;
+    for (const record of records) {
+      if (!record.ok) continue; // failed children stay open, by design
+      const match = next.items.find(
+        (item) =>
+          (item.status === "pending" ||
+            item.status === "in_progress" ||
+            item.status === "blocked") &&
+          taskMatchesDescription(item.subject, record.description),
+      );
+      if (!match) continue;
+      const mutation = applyTaskUpdate(next, {
+        id: match.id,
+        status: "done",
+        note: `自动：子代理 ${record.id} 完成`,
+      });
+      changed = true;
+      next = mutation.snapshot;
+    }
+    if (changed) {
+      persistThenCommit(next);
+      notifyReconciled(records.length);
+    }
+  };
+
+  let reconciledNotifiedAt = 0;
+  const notifyReconciled = (count: number) => {
+    if (!ui || uiMode !== "tui") return;
+    if (Date.now() - reconciledNotifiedAt < 30_000) return;
+    reconciledNotifiedAt = Date.now();
+    ui.notify(`任务自动对账：${count} 个子代理结果已核对`, "info");
+  };
+
+  // ── Idle recap (omp's #runIdleRecap, notify-only variant) ────────────────
+  // A turn that ends with open work can stall silently until the user happens
+  // to ask. omp runs an ephemeral model turn to recap; here the cheaper
+  // equivalent is a delayed notice: if no new agent turn starts within the
+  // window and open/blocked tasks remain, surface them once. Any activity
+  // (agent_start, a new settled turn) re-arms the wait.
+  const IDLE_RECAP_DELAY_MS = 120_000;
+  let idleRecapTimer: ReturnType<typeof setTimeout> | undefined;
+  let idleRecapNotifiedAt = 0;
+
+  const cancelIdleRecap = () => {
+    if (idleRecapTimer) {
+      clearTimeout(idleRecapTimer);
+      idleRecapTimer = undefined;
+    }
+  };
+
+  const scheduleIdleRecap = (ctx: ExtensionContext) => {
+    cancelIdleRecap();
+    if (!ctx.hasUI) return;
+    if (!hasActionableTasks()) return;
+    idleRecapTimer = setTimeout(() => {
+      idleRecapTimer = undefined;
+      if (activeRun) return;
+      if (Date.now() - idleRecapNotifiedAt < IDLE_RECAP_DELAY_MS) return;
+      const open = snapshot().items.filter(
+        (item) => item.status === "in_progress" || item.status === "blocked",
+      );
+      if (open.length === 0) return;
+      idleRecapNotifiedAt = Date.now();
+      const sample = open[0]!;
+      const blocked = open.filter((item) => item.status === "blocked").length;
+      ctx.ui.notify(
+        `任务仍开放：T${sample.id} ${sample.subject}${open.length > 1 ? `（+${open.length - 1} 项）` : ""}${blocked > 0 ? ` · ${blocked} 项等你决策` : ""} — 检查进度或上报决策点`,
+        "warning",
+      );
+    }, IDLE_RECAP_DELAY_MS);
+    idleRecapTimer.unref?.();
+  };
+
   pi.on("context", (event) => {
     if (!activeRun || !frozenProjection || problemMessage()) return;
     const messages = injectTaskProjection(event.messages, frozenProjection);
@@ -541,6 +699,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", () => {
+    cancelIdleRecap();
     try {
       ui?.setWidget(TASK_WIDGET_KEY, undefined);
     } catch {
