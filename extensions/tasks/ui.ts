@@ -12,7 +12,9 @@ import {
   type TUI,
 } from "@earendil-works/pi-tui";
 import type { TaskItem, TaskSnapshot } from "./tasks.ts";
+import { taskMatchesDescription } from "./tasks.ts";
 import { getTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
+import { getRunningSubagentDescriptions } from "../shared/task-reconcile.ts";
 
 const STATUS_ICON: Record<TaskItem["status"], string> = {
   pending: "○",
@@ -310,20 +312,30 @@ export function renderTaskWidget(
       item.status === "in_progress"
         ? SPINNER_FRAMES[spinnerFrame(now)]
         : STATUS_ICON[item.status];
+    // Light up (omp): a pending task a running subagent's title matches is
+    // already being worked on — render it accent so the overlap is visible
+    // before the reconcile closes it.
+    const litUp =
+      item.status === "pending" &&
+      getRunningSubagentDescriptions().some((description) =>
+        taskMatchesDescription(item.subject, description),
+      );
     // The in-flight row's subject carries the shimmer sweep instead of the
     // static full-weight bold: the whole row flows, so "still running" reads
     // at a glance from across the room.
     const subject =
       item.status === "in_progress"
         ? shimmerText(item.subject, theme, now)
-        : subjectStyle(item.status, theme)(item.subject);
+        : litUp
+          ? theme.bold(theme.fg("accent", item.subject))
+          : subjectStyle(item.status, theme)(item.subject);
     const branch = index === visible.length - 1 && hidden === 0 ? "╰─" : "├─";
     lines.push(
       truncateToWidth(
         // Same subject weighting as the full list, so the item in flight reads
         // the same wherever you happen to be looking; done subjects carry the
         // same strikethrough as the tool result and the /tasks screen.
-        `${theme.fg("dim", branch)} ${theme.fg(color, icon)} ${theme.fg("dim", `T${item.id}`.padStart(idWidth))} ${subject}`,
+        `${theme.fg("dim", branch)} ${theme.fg(litUp ? "accent" : color, icon)} ${theme.fg("dim", `T${item.id}`.padStart(idWidth))} ${subject}`,
         width,
       ),
     );

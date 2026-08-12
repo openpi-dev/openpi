@@ -12,6 +12,7 @@ import {
   TASK_WIDGET_LIMIT,
 } from "./ui.ts";
 import { setTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
+import { setRunningSubagentDescriptions } from "../shared/task-reconcile.ts";
 
 // strikethrough is marked rather than dropped, so a test can assert which
 // subjects got struck without matching real ANSI escapes.
@@ -409,4 +410,39 @@ test("the tool result header counts the batch, not the rows it happens to show",
     component.render(100).join("\n").split("\n")[0]!,
     /4 tasks \(3 done, 1 in progress, 0 open\)/,
   );
+});
+
+test("pending tasks light up when a running subagent matches them", () => {
+  const snapshot = {
+    version: 1 as const,
+    revision: 1,
+    nextId: 3,
+    items: [
+      { id: 1, subject: "memc 切片2 实施", status: "pending" as const },
+      { id: 2, subject: "审计报告", status: "pending" as const },
+    ],
+  };
+  const marked = {
+    fg: (name: string, text: string) => `<${name}>${text}</${name}>`,
+    bold: (text: string) => `*${text}*`,
+    strikethrough: (text: string) => `<s>${text}</s>`,
+  } as unknown as Theme;
+  // 任务行（非 header）在点亮前无 accent。
+  const row = (now: number) =>
+    renderTaskWidget(snapshot, marked, 100, false, now)
+      .join("\n")
+      .split("\n")
+      .slice(1)
+      .join("\n");
+  assert.doesNotMatch(row(0), /<accent>/);
+  setRunningSubagentDescriptions(["memc 切片 2 实施"]);
+  try {
+    const lines = renderTaskWidget(snapshot, marked, 100, false, 0).join("\n");
+    assert.match(lines, /\*<accent>memc 切片2 实施<\/accent>\*/);
+    assert.match(lines, /<accent>○<\/accent>/);
+    // The unmatched task stays muted.
+    assert.doesNotMatch(lines, /<accent>审计报告<\/accent>/);
+  } finally {
+    setRunningSubagentDescriptions([]);
+  }
 });
