@@ -9,7 +9,7 @@
  * before executing, and report a clear error if it failed.
  */
 
-import { NodeServices } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type {
