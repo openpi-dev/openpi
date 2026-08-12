@@ -33,7 +33,6 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  CustomEditor,
   getAgentDir,
   getMarkdownTheme,
   keyHint,
@@ -131,11 +130,14 @@ import {
   WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import {
-  WorkflowNavigationEditor,
   WorkflowStripState,
   WorkflowStripWidget,
   type WorkflowStripEntry,
 } from "./navigation.ts";
+import {
+  installEditorEnhancements,
+  registerEditorStrip,
+} from "../shared/editor-strip-port.ts";
 import {
   createWorkflowResources,
   runAgent,
@@ -436,7 +438,6 @@ export default function workflows(pi: ExtensionAPI) {
    * it, not the whole session's run history.
    */
   let turnStartedAt = 0;
-  let workflowNavigationInstalled = false;
   let agentTypes = loadAgentTypes({
     agentDir: getAgentDir(),
     cwd: process.cwd(),
@@ -540,31 +541,22 @@ export default function workflows(pi: ExtensionAPI) {
 
   const installWorkflowNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
-    // One-shot: session_start re-fires on every /resume; re-wrapping stacks
-    // another WorkflowNavigationEditor layer and replaces the editor
-    // component (structural change → full-viewport repaint on resume).
-    if (workflowNavigationInstalled) return;
-    workflowNavigationInstalled = true;
-    const previous = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const base =
-        previous?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings);
-      return new WorkflowNavigationEditor(
-        base,
-        keybindings,
-        stripState,
-        () => Boolean(stripEntry()),
-        () => {
-          const entry = stripEntry();
-          if (entry) void openDashboard(ctx, entry.runId);
-        },
-        () => {
-          requestWidgetRender?.();
-          tui.requestRender();
-        },
-      );
+    // DDD editor port: register this strip binding; the shared installer
+    // wraps the editor once per runtime (no nested wrappers, no restacking
+    // on /resume).
+    registerEditorStrip({
+      id: "workflows",
+      state: stripState,
+      canManage: () => Boolean(stripEntry()),
+      open: () => {
+        const entry = stripEntry();
+        if (entry) void openDashboard(ctx, entry.runId);
+      },
+      requestRender: () => {
+        requestWidgetRender?.();
+      },
     });
+    installEditorEnhancements(ctx);
   };
 
   pi.on("session_start", (_event, ctx) => {

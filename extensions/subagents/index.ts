@@ -33,7 +33,6 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  CustomEditor,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   defineTool,
@@ -88,10 +87,11 @@ import {
   effectiveChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
+import { BelowEditorStripState } from "../shared/below-editor-navigation.ts";
 import {
-  BelowEditorNavigationEditor,
-  BelowEditorStripState,
-} from "../shared/below-editor-navigation.ts";
+  installEditorEnhancements,
+  registerEditorStrip,
+} from "../shared/editor-strip-port.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { recordSettledSubagent } from "../shared/task-reconcile.ts";
 import {
@@ -288,36 +288,26 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
-  // One-shot editor wrapper: pi re-fires session_start on every /resume, and
-  // re-wrapping each time both stacks another BelowEditorNavigationEditor
-  // layer AND replaces the editor component (a structural change that forces a
-  // full-viewport repaint — one source of the double refresh on resume).
-  // Install once per runtime; later sessions reuse the installed wrapper.
-  let navigationInstalled = false;
+  // DDD editor port: register this extension's strip binding instead of
+  // wrapping the editor itself. The shared installer (editor-strip-port.ts)
+  // wraps the editor exactly once per runtime, composing every extension's
+  // bindings in registration order — no nested wrappers, no restacking on
+  // /resume (structural change → full-viewport repaint avoided).
   const installSubagentNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
-    if (navigationInstalled) return;
-    navigationInstalled = true;
-    const previous = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const base =
-        previous?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings);
-      return new BelowEditorNavigationEditor(
-        base,
-        keybindings,
-        stripState,
-        () => Boolean(stripEntry()),
-        () => {
-          const entry = stripEntry();
-          if (entry) void openDashboard(ctx, entry.snapshot.id);
-        },
-        () => {
-          requestWidgetRender?.();
-          tui.requestRender();
-        },
-      );
+    registerEditorStrip({
+      id: "subagents",
+      state: stripState,
+      canManage: () => Boolean(stripEntry()),
+      open: () => {
+        const entry = stripEntry();
+        if (entry) void openDashboard(ctx, entry.snapshot.id);
+      },
+      requestRender: () => {
+        requestWidgetRender?.();
+      },
     });
+    installEditorEnhancements(ctx);
   };
 
   /**
