@@ -5,6 +5,9 @@ import {
   buildSessionLabel,
   buildSessionPreview,
   filterSessionEntries,
+  formatRelativeTime,
+  formatTimestamp,
+  getSessionPaneLayout,
   parseLimit,
   type SessionInfoLike,
 } from "./sessions.ts";
@@ -94,4 +97,38 @@ test("persisted session labels and preview content are terminal-safe", () => {
     output: "okdone",
     isError: undefined,
   });
+});
+
+test("parseLimit clamps to positive integers with default fallback", () => {
+  assert.equal(parseLimit(undefined), 5);
+  assert.equal(parseLimit("10"), 10);
+  assert.equal(parseLimit("0"), 5);
+  assert.equal(parseLimit("-3"), 5);
+  assert.equal(parseLimit("abc"), 5);
+  assert.equal(parseLimit("7", 3), 7);
+});
+
+test("formatTimestamp renders local YYYY-MM-DD HH:mm", () => {
+  const date = new Date(2026, 7, 13, 9, 5);
+  assert.equal(formatTimestamp(date), "2026-08-13 09:05");
+});
+
+test("formatRelativeTime buckets seconds/minutes/hours/days", () => {
+  const now = Date.now();
+  assert.equal(formatRelativeTime(new Date(now - 30_000)), "Just now");
+  assert.equal(formatRelativeTime(new Date(now - 5 * 60_000)), "5m ago");
+  assert.equal(formatRelativeTime(new Date(now - 3 * 3_600_000)), "3h ago");
+  assert.equal(formatRelativeTime(new Date(now - 26 * 3_600_000)), "Yesterday");
+  assert.equal(formatRelativeTime(new Date(now - 3 * 86_400_000)), "3d ago");
+});
+
+test("getSessionPaneLayout adapts to width", () => {
+  assert.equal(getSessionPaneLayout(60).mode, "single");
+  const mid = getSessionPaneLayout(100);
+  assert.equal(mid.mode, "split");
+  assert.ok(mid.listWidth < 100 && mid.previewWidth > 0);
+  const wide = getSessionPaneLayout(200);
+  // The list pane is a bounded narrow rail; the preview takes the rest.
+  assert.equal(wide.listWidth, 58);
+  assert.ok(wide.previewWidth > wide.listWidth);
 });
