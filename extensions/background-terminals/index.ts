@@ -224,6 +224,18 @@ export default function (pi: ExtensionAPI) {
     clearTimer: (timer) => clearTimeout(timer),
   });
 
+  let backlogNotifiedAt = 0;
+  const notifyBacklog = (pending: number) => {
+    const ui = sessionContext?.ui;
+    if (!ui || !sessionContext?.hasUI) return;
+    if (Date.now() - backlogNotifiedAt < 60_000) return;
+    backlogNotifiedAt = Date.now();
+    ui.notify(
+      `${pending} 个后台终端结果待消费 — 槽位已满；bg_status 查看或 bg_kill 释放`,
+      "warning",
+    );
+  };
+
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
     // A settled terminal has delivered its final result and will emit no more
     // output, so any watch armed on it can never match — disarm it now instead
@@ -248,6 +260,13 @@ export default function (pi: ExtensionAPI) {
     if (pending >= MAX_RUNNING && sessionContext?.isIdle()) {
       idleResultBatcher.flushNow();
       return;
+    }
+    // Backlog notice: while the agent is busy the results cannot auto-flush,
+    // so slots fill silently and the next bg_start fails with a puzzle. One
+    // notification names the backlog and the remedy (omp-style surface: the
+    // problem must be visible before it blocks work).
+    if (pending === MAX_RUNNING && !sessionContext?.isIdle()) {
+      notifyBacklog(pending);
     }
     // Give near-simultaneous idle settlements one fixed, bounded window to
     // join this result. This costs one model turn for a batch instead of one
@@ -350,16 +369,24 @@ export default function (pi: ExtensionAPI) {
       const running = manager.view
         .list()
         .filter((entry) => entry.status === "running").length;
+      const pendingCount = resultDelivery.size();
       if (
         !hasTerminalCapacity({
           running,
-          pending: resultDelivery.size(),
+          pending: pendingCount,
           reserved: startReservations,
           maximum: MAX_RUNNING,
         })
       ) {
+        // Actionable diagnostics: the count names each slot occupant
+        // (running process vs finished-but-undelivered result vs starting
+        // reservation), and the remedy names both consuming (bg_status) and
+        // discarding (bg_kill — kill also frees the result slot).
         throw new Error(
-          `Max ${MAX_RUNNING} background terminals may be running or awaiting delivery. Let the current turn settle, or inspect a finished terminal with bg_status before starting another.`,
+          `Max ${MAX_RUNNING} background terminals may be running or awaiting delivery (${running} running, ${pendingCount} awaiting delivery, ${startReservations} starting).` +
+            (pendingCount > 0
+              ? " Finished results occupy a slot until delivered — view with bg_status (or bg_kill to discard) to free it."
+              : " Let the current turn settle before starting another."),
         );
       }
       startReservations++;

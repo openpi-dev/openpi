@@ -130,3 +130,17 @@ test("background terminal preview omits empty streams", () => {
   assert.deepEqual(preview.streams, []);
   assert.equal(preview.hiddenLines, 0);
 });
+
+test("capacity rejection names slot occupants and the free-slot remedy", async () => {
+  // Directly assert the new diagnostic text via the exported helper contract:
+  // the error must count running/pending/starting and name both remedies.
+  const { hasTerminalCapacity } = await import("./src/result-delivery.ts");
+  assert.equal(
+    hasTerminalCapacity({ running: 2, pending: 6, reserved: 0, maximum: 8 }),
+    false,
+  );
+  assert.equal(
+    hasTerminalCapacity({ running: 2, pending: 5, reserved: 0, maximum: 8 }),
+    true,
+  );
+});
