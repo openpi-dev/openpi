@@ -11,6 +11,7 @@ import {
   TASKS_ENTRY_TYPE,
   TASKS_LIMITS,
   TASK_STATUSES,
+  WAITING_ON,
   TaskRestoreError,
   applyTaskAdd,
   applyTaskUpdate,
@@ -326,7 +327,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
     pi.registerTool({
       name: "tasks_update",
       label: "Tasks Update",
-      description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked/done/dropped transitions require a fresh note (blocker, observable evidence, or drop reason).`,
+      description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked/done/dropped transitions require a fresh note; use waitingOn (owner/third_party/info) to classify a blocked item's open question, and evidence to cite what verified a done item.`,
       promptSnippet: "Update one session task item by stable ID",
       promptGuidelines: [
         "Keep tasks_update status current when tracked work materially changes, but avoid ceremonial status churn.",
@@ -347,6 +348,25 @@ export default function sessionTasks(pi: ExtensionAPI) {
         note: Type.Optional(
           Type.Union([
             Type.String({ maxLength: TASKS_LIMITS.noteChars }),
+            Type.Null(),
+          ]),
+        ),
+        waitingOn: Type.Optional(
+          Type.Union([
+            StringEnum(WAITING_ON, {
+              description:
+                "What a blocked task is waiting on: owner (human decision/ruling), third_party (external), info (missing information). Only valid while status is blocked.",
+            }),
+            Type.Null(),
+          ]),
+        ),
+        evidence: Type.Optional(
+          Type.Union([
+            Type.String({
+              maxLength: TASKS_LIMITS.noteChars,
+              description:
+                "Evidence reference for done/dropped: commit SHA, file path, or verification result.",
+            }),
             Type.Null(),
           ]),
         ),

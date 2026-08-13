@@ -684,3 +684,81 @@ test("markdown import reports unrecognized lines and markers", () => {
   assert.equal(parsed.items.length, 1);
   assert.equal(parsed.items[0]?.subject, "ok");
 });
+
+test("waitingOn classifies blocked open questions and is rejected elsewhere", () => {
+  const blocked = createSessionTasks();
+  const added = blocked.add([
+    {
+      subject: "等待业主裁定",
+      status: "blocked",
+      note: "T11 节奏",
+      waitingOn: "owner",
+    },
+  ]);
+  blocked.commit(added.snapshot);
+  const item = blocked.list()[0];
+  assert.equal(item?.status, "blocked");
+  assert.equal(item?.waitingOn, "owner");
+  // waitingOn on a non-blocked item is a contradiction.
+  assert.throws(() =>
+    blocked.add([{ subject: "X", status: "pending", waitingOn: "owner" }]),
+  );
+  // Invalid classification rejected.
+  assert.throws(() =>
+    blocked.add([
+      {
+        subject: "Y",
+        status: "blocked",
+        note: "n",
+        waitingOn: "bogus" as "owner",
+      },
+    ]),
+  );
+});
+
+test("evidence reference rides on done items and clears on reopen", () => {
+  const tasks = createSessionTasks();
+  tasks.commit(
+    tasks.add([{ subject: "Verify", evidence: "abc1234 (npm test)" }]).snapshot,
+  );
+  tasks.commit(
+    tasks.update({
+      id: 1,
+      status: "done",
+      note: "verified",
+      evidence: "abc1234 (npm test)",
+    }).snapshot,
+  );
+  const done = tasks.list();
+  assert.equal(done.length, 0); // batch closed
+  // Reopen path: update with evidence cleared.
+  const reopened = tasks.add([{ subject: "Again" }]);
+  tasks.commit(reopened.snapshot);
+  tasks.commit(
+    tasks.update({ id: 1, status: "in_progress", evidence: null }).snapshot,
+  );
+  assert.equal(tasks.list()[0]?.evidence, undefined);
+});
+
+test("projection carries the waiting classification for blocked items", () => {
+  const tasks = createSessionTasks();
+  tasks.commit(
+    tasks.add([
+      {
+        subject: "T11 平台真相确认开放",
+        status: "blocked",
+        note: "等裁定",
+        waitingOn: "owner",
+      },
+      {
+        subject: "外部服务",
+        status: "blocked",
+        note: "等 BFF",
+        waitingOn: "third_party",
+      },
+    ]).snapshot,
+  );
+  const projection = projectTasks(tasks.snapshot());
+  assert.match(projection, /等你决策/);
+  assert.match(projection, /等第三方/);
+});

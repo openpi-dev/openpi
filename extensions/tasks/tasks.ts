@@ -15,7 +15,19 @@ export interface TaskItem {
   detail?: string;
   status: TaskStatus;
   note?: string;
+  /**
+   * What a blocked task is waiting on (plan-tree's open-question separation):
+   * "owner" = a human decision/ruling, "third_party" = an external service or
+   * actor, "info" = missing information. Technical blockers omit this.
+   */
+  waitingOn?: "owner" | "third_party" | "info";
+  /** Evidence reference for done/dropped: commit SHA, file path, or verification. */
+  evidence?: string;
 }
+
+/** plan-tree-aligned waiting classification for blocked tasks. */
+export const WAITING_ON = ["owner", "third_party", "info"] as const;
+export type WaitingOn = (typeof WAITING_ON)[number];
 
 export interface TaskSnapshot {
   version: 1;
@@ -29,6 +41,8 @@ export interface TaskAddInput {
   detail?: string;
   status?: TaskStatus;
   note?: string;
+  waitingOn?: WaitingOn;
+  evidence?: string;
 }
 
 export interface TaskUpdateInput {
@@ -37,6 +51,8 @@ export interface TaskUpdateInput {
   detail?: string | null;
   status?: TaskStatus;
   note?: string | null;
+  waitingOn?: WaitingOn | null;
+  evidence?: string | null;
 }
 
 export interface TaskFilter {
@@ -148,9 +164,32 @@ export function normalizeSingleInProgress(
   );
 }
 const SNAPSHOT_KEYS = new Set(["version", "revision", "nextId", "items"]);
-const ITEM_KEYS = new Set(["id", "subject", "detail", "status", "note"]);
-const ADD_KEYS = new Set(["subject", "detail", "status", "note"]);
-const UPDATE_KEYS = new Set(["id", "subject", "detail", "status", "note"]);
+const ITEM_KEYS = new Set([
+  "id",
+  "subject",
+  "detail",
+  "status",
+  "note",
+  "waitingOn",
+  "evidence",
+]);
+const ADD_KEYS = new Set([
+  "subject",
+  "detail",
+  "status",
+  "note",
+  "waitingOn",
+  "evidence",
+]);
+const UPDATE_KEYS = new Set([
+  "id",
+  "subject",
+  "detail",
+  "status",
+  "note",
+  "waitingOn",
+  "evidence",
+]);
 const PROJECTION_HEADER =
   "Session tasks: advisory context, not an instruction to resume unrelated work. " +
   "Real files, git, tests, tools, artifacts, and user confirmation are truth. " +
@@ -242,6 +281,12 @@ export function applyTaskAdd(
         ...(hasOwn(addition, "detail") ? { detail: addition.detail } : {}),
         status: addition.status ?? "pending",
         ...(hasOwn(addition, "note") ? { note: addition.note } : {}),
+        ...(hasOwn(addition, "waitingOn")
+          ? { waitingOn: addition.waitingOn }
+          : {}),
+        ...(hasOwn(addition, "evidence")
+          ? { evidence: addition.evidence }
+          : {}),
       },
       `additions[${index}]`,
     );
@@ -290,6 +335,19 @@ export function applyTaskUpdate(
     note = undefined;
   if (hasOwn(update, "note")) note = update.note ?? undefined;
 
+  // waitingOn only means something while blocked; leaving blocked clears it.
+  // Evidence only means something while done/dropped; leaving those clears it.
+  let waitingOn = previous.waitingOn;
+  if (statusChanged && previous.status === "blocked") waitingOn = undefined;
+  if (hasOwn(update, "waitingOn")) waitingOn = update.waitingOn ?? undefined;
+  let evidence = previous.evidence;
+  if (
+    statusChanged &&
+    (previous.status === "done" || previous.status === "dropped")
+  )
+    evidence = undefined;
+  if (hasOwn(update, "evidence")) evidence = update.evidence ?? undefined;
+
   const changed = validateItem(
     {
       id: previous.id,
@@ -303,6 +361,8 @@ export function applyTaskUpdate(
           : { detail: previous.detail }),
       status,
       ...(note === undefined ? {} : { note }),
+      ...(waitingOn === undefined ? {} : { waitingOn }),
+      ...(evidence === undefined ? {} : { evidence }),
     },
     "updated item",
   );
@@ -459,7 +519,11 @@ export function projectTasks(snapshot: TaskSnapshot): string {
 
   let output = PROJECTION_HEADER;
   for (const item of actionable) {
-    const line = `\nT${item.id} [${item.status}] ${singleLine(item.subject)}`;
+    const waiting =
+      item.status === "blocked" && item.waitingOn
+        ? ` (${item.waitingOn === "owner" ? "等你决策" : item.waitingOn === "third_party" ? "等第三方" : "缺信息"})`
+        : "";
+    const line = `\nT${item.id} [${item.status}]${waiting} ${singleLine(item.subject)}`;
     if (charCount(output + line) > TASKS_LIMITS.projectionChars) break;
     output += line;
   }
@@ -668,13 +732,40 @@ function validateItem(value: unknown, path: string): TaskItem {
   if (REQUIRED_NOTE_STATUSES.has(status) && note === undefined) {
     fail(`${path}.note is required for ${status}`);
   }
+  // waitingOn: only meaningful while blocked (plan-tree's open-question
+  // classification); a non-blocked item carrying it is a contradiction.
+  const waitingOn = hasOwn(value, "waitingOn")
+    ? validateWaitingOn(value.waitingOn, `${path}.waitingOn`)
+    : undefined;
+  if (waitingOn !== undefined && status !== "blocked") {
+    fail(`${path}.waitingOn is only valid while status is blocked`);
+  }
+  const evidence = hasOwn(value, "evidence")
+    ? normalizeText(
+        value.evidence,
+        `${path}.evidence`,
+        TASKS_LIMITS.noteChars,
+        true,
+      )
+    : undefined;
   return {
     id: value.id as number,
     subject,
     ...(detail !== undefined ? { detail } : {}),
     status,
     ...(note !== undefined ? { note } : {}),
+    ...(waitingOn !== undefined ? { waitingOn } : {}),
+    ...(evidence !== undefined ? { evidence } : {}),
   };
+}
+
+function validateWaitingOn(value: unknown, path: string): WaitingOn {
+  if (typeof value !== "string" || !WAITING_ON.includes(value as WaitingOn)) {
+    fail(
+      `${path} must be one of ${WAITING_ON.map((w) => `"${w}"`).join(", ")}`,
+    );
+  }
+  return value as WaitingOn;
 }
 
 function validateStatus(value: unknown, path: string): TaskStatus {

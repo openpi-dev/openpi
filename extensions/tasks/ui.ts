@@ -229,11 +229,21 @@ export function renderTaskRows(
       );
     }
     if (item.note) {
+      const waitingLabel =
+        item.status === "blocked" && item.waitingOn
+          ? item.waitingOn === "owner"
+            ? "等你决策"
+            : item.waitingOn === "third_party"
+              ? "等第三方"
+              : "缺信息"
+          : "Blocked";
       const label =
         item.status === "blocked"
-          ? "Blocked"
+          ? waitingLabel
           : item.status === "done"
-            ? "Evidence"
+            ? item.evidence
+              ? `Evidence ${item.evidence}`
+              : "Evidence"
             : item.status === "dropped"
               ? "Reason"
               : "Note";
