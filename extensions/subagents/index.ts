@@ -60,7 +60,11 @@ import {
 } from "./src/domain.ts";
 import { REASONING_EFFORTS } from "../shared/agent-types.ts";
 import { formatContextUtilization } from "./src/format.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+import {
+  MAX_TRACKED,
+  SubagentManager,
+  type SubagentManagerShape,
+} from "./src/manager.ts";
 import {
   buildSubagentResultMessage,
   createAgentTypeParameterSchema,
@@ -200,7 +204,12 @@ export default function (pi: ExtensionAPI) {
   let widgetVisible = false;
   let requestWidgetRender: (() => void) | undefined;
   let dashboardOpen = false;
-  const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+  // Bounded backlog (shared-kernel cap): a busy session settles children
+  // without draining, so the deferred map must have its own ceiling or it
+  // grows unbounded and flushes into context in one lump. Evicted results
+  // stay reachable in the tracked history (subagent_status).
+  const resultDelivery =
+    createDeferredResultDelivery<SubagentSnapshot>(MAX_TRACKED);
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
 

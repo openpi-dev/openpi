@@ -14,7 +14,7 @@
  * Usage: node scripts/reapply-kernel-resume-patch.mjs [--check]
  *   --check  verify whether the patch is applied (exit 0 = applied).
  */
-import { readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 
 const KERNEL =
@@ -67,6 +67,13 @@ try {
       "Cannot locate the original block — the kernel layout changed; re-derive the patch manually.",
     );
     process.exit(1);
+  }
+  // Keep the pristine upstream file for rollback before the first patch.
+  // (The old script only *claimed* a backup in its log line but never wrote
+  // one — after a pi upgrade the unpatched original was unrecoverable.)
+  const backupPath = `${TARGET}.bak-resume-render`;
+  if (!existsSync(backupPath)) {
+    writeFileSync(backupPath, source, "utf8");
   }
   writeFileSync(TARGET, source.replace(OLD, NEW), "utf8");
   console.log(

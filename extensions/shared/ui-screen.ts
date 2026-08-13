@@ -22,3 +22,13 @@ export function requestWidgetRepaint(tui: { requestRender(): void }): void {
   if (customScreenOpen) return;
   tui.requestRender();
 }
+
+/**
+ * Reset screen state at session boundaries. The flag is only cleared by the
+ * /tasks finally block; a session destroyed while the screen is open (reload,
+ * shutdown) would otherwise leak `true` into the next session and silently
+ * freeze every widget animation (adversarial finding).
+ */
+export function resetCustomScreenOpen(): void {
+  customScreenOpen = false;
+}

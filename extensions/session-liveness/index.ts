@@ -16,6 +16,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { requestWidgetRepaint } from "../shared/ui-screen.ts";
 import {
+  resetSessionLiveness,
   subscribeSessionLiveness,
   type SessionLiveness,
 } from "../shared/session-liveness.ts";
@@ -32,6 +33,7 @@ export default function sessionLiveness(pi: ExtensionAPI) {
   };
   let installed = false;
   let timer: ReturnType<typeof setInterval> | undefined;
+  let unsubLiveness: (() => void) | undefined;
   const frames = buildGradientBarFrames(10);
 
   const hide = (ui: ExtensionUIContext) => {
@@ -77,7 +79,14 @@ export default function sessionLiveness(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     if (ctx.mode !== "tui" || !ctx.hasUI) return;
-    subscribeSessionLiveness((state) => {
+    // pi re-fires session_start on every /resume: without an explicit
+    // unsubscribe each start would stack another listener (and its captured
+    // old ctx) onto the shared bus — N resumes ⇒ N duplicate install/hide
+    // callbacks per liveness change (adversarial finding). Reset the bus at
+    // the session boundary, then subscribe exactly once for this session.
+    unsubLiveness?.();
+    resetSessionLiveness();
+    unsubLiveness = subscribeSessionLiveness((state) => {
       last = state;
       if (state.active) install(ctx.ui);
       else hide(ctx.ui);
@@ -85,6 +94,8 @@ export default function sessionLiveness(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    unsubLiveness?.();
+    unsubLiveness = undefined;
     hide(ctx.ui);
   });
 }

@@ -37,6 +37,7 @@ import {
 import { getTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
 import {
   requestWidgetRepaint,
+  resetCustomScreenOpen,
   setCustomScreenOpen,
 } from "../shared/ui-screen.ts";
 import {
@@ -641,6 +642,10 @@ export default function sessionTasks(pi: ExtensionAPI) {
   });
 
   pi.on("session_start", (_event, ctx) => {
+    // The /tasks overlay may have been open when this session's predecessor
+    // died; the finally block never ran, so the shared screen flag would
+    // otherwise leak across sessions and freeze every widget animation.
+    resetCustomScreenOpen();
     ui = ctx.hasUI ? ctx.ui : undefined;
     uiMode = ctx.hasUI ? ctx.mode : undefined;
     restore(ctx);
@@ -663,6 +668,9 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   pi.on("session_tree", (_event, ctx) => {
     restore(ctx);
+    // A new branch restarts the work state; a recap timer armed against the
+    // previous branch's settle must not fire against the new context.
+    cancelIdleRecap();
     taskWidgetExpanded = false;
     coldRun = true;
     activeRun = false;
@@ -823,6 +831,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", () => {
+    resetCustomScreenOpen();
     cancelIdleRecap();
     try {
       ui?.setWidget(TASK_WIDGET_KEY, undefined);
