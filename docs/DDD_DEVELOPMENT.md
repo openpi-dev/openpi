@@ -43,3 +43,18 @@
 | subagent 可见性 | `subagents/src/domain.ts`（isStalled/lastIntentOf…） | `subagents/src/manager.ts`（事件折叠） | `subagents/navigation.ts`（HUD） |
 | 编辑器装配 | — | — | `shared/editor-strip-port.ts`（端口+单一安装器） |
 | 跨扩展对账 | — | `shared/task-reconcile.ts`（桥） | tasks widget / subagents onSettled |
+
+## 工具描述纪律（Tool Description Discipline）
+
+工具定义每请求常驻模型上下文——是提示工程的一部分。实证（MetaTool arxiv 2310.03128：描述信息量↑ → 工具选择准确率↑，性能下降只与工具列表长度相关；Anthropic 工程指南：精炼描述可获显著改进）表明：
+
+**信息完整 + 表达精简 = 最优**（准确率与成本兼得）。
+
+| 规则 | 说明 |
+|---|---|
+| **约束必留** | 默认值、硬上限、互斥（如 ui_footer_lines ↔ ui_footer_items）、必填 note、否定澄清（"never blocked for difficulty"）——一个字不能省，删了会直接降低选择/参数准确率 |
+| **叙述可删** | 使用场景举例的叙述部分、背景、为什么、历史原因——不改变工具契约 |
+| **示例签名保留** | 正确用法签名/失败模式示例（如 bg_watch 的 `"Ready in\|Traceback\|ERROR\|FAILED\|Killed"`）是信息，不是叙述 |
+| **参数无歧义命名** | 参数名（user → user_id）比参数 description 更省 token 且更有效（Anthropic） |
+| **工具数控制** | 列表长度是选择准确率的最大威胁——优先合并/收敛重复工具（共享内核），而非只压描述 |
+| **精简后核对** | 每次精简工具描述后，逐项对照精简前：约束/示例/否定澄清是否全部保留（本会话已实践：8 工具 −7.3% 字符，契约信息 100% 保留） |
