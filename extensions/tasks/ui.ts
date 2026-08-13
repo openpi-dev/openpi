@@ -440,7 +440,7 @@ class TasksScreen implements Component {
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly keybindings: KeybindingsManager;
-  private readonly snapshot: TaskSnapshot;
+  private readonly getSnapshot: () => TaskSnapshot;
   private readonly done: () => void;
   private readonly onSyncStale: () => void;
 
@@ -448,14 +448,14 @@ class TasksScreen implements Component {
     tui: TUI,
     theme: Theme,
     keybindings: KeybindingsManager,
-    snapshot: TaskSnapshot,
+    getSnapshot: () => TaskSnapshot,
     done: () => void,
     onSyncStale: () => void = () => {},
   ) {
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
-    this.snapshot = snapshot;
+    this.getSnapshot = getSnapshot;
     this.done = done;
     this.onSyncStale = onSyncStale;
   }
@@ -497,14 +497,17 @@ class TasksScreen implements Component {
   }
 
   render(width: number) {
-    const body = renderTaskRows(this.snapshot.items, this.theme, width - 4);
+    // Live snapshot: the s-key sync mutates tasks while the screen is open,
+    // and a stale render would make the sync look like a no-op.
+    const snapshot = this.getSnapshot();
+    const body = renderTaskRows(snapshot.items, this.theme, width - 4);
     const rows = Math.max(8, (this.tui.terminal.rows || 30) - 8);
     const maxOffset = Math.max(0, body.length - rows);
     this.offset = Math.min(this.offset, maxOffset);
     const visible = body.slice(this.offset, this.offset + rows);
     const lines = [
       truncateToWidth(
-        `${this.theme.fg("accent", this.theme.bold("Session tasks"))}  ${renderTaskSummary(taskCounts(this.snapshot.items), this.theme)}`,
+        `${this.theme.fg("accent", this.theme.bold("Session tasks"))}  ${renderTaskSummary(taskCounts(snapshot.items), this.theme)}`,
         width,
       ),
       this.theme.fg("border", "─".repeat(Math.max(0, width))),
@@ -528,12 +531,12 @@ class TasksScreen implements Component {
 
 export async function openTasksScreen(
   ctx: ExtensionCommandContext,
-  snapshot: TaskSnapshot,
+  getSnapshot: () => TaskSnapshot,
   onSyncStale: () => void = () => {},
 ) {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI)
-      ctx.ui.notify(`${snapshot.items.length} task item(s)`, "info");
+      ctx.ui.notify(`${getSnapshot().items.length} task item(s)`, "info");
     return;
   }
   await ctx.ui.custom<void>(
@@ -542,7 +545,7 @@ export async function openTasksScreen(
         tui,
         theme,
         keybindings,
-        snapshot,
+        getSnapshot,
         () => done(),
         onSyncStale,
       ),

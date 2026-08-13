@@ -515,31 +515,35 @@ export default function sessionTasks(pi: ExtensionAPI) {
       }
       taskWidgetPaused = true;
       try {
-        await openTasksScreen(ctx, snapshot(), () => {
-          // Manual sync: the user confirms the frozen (⚠ 未同步) items are
-          // finished, so close them with a manual-sync note.
-          const stale = snapshot().items.filter(
-            (item) => item.status === "in_progress",
-          );
-          if (stale.length === 0) {
-            if (ctx.hasUI)
-              ctx.ui.notify("No stale in-progress items to sync.", "info");
-            return;
-          }
-          let next = snapshot();
-          for (const item of stale) {
-            const mutation = applyTaskUpdate(next, {
-              id: item.id,
-              status: "done",
-              note: "手动同步（⚠ 未同步）",
-            });
-            next = mutation.snapshot;
-          }
-          persistThenCommit(next);
-          if (ctx.hasUI) {
-            ctx.ui.notify(`同步完成：${stale.length} 项已标记 done`, "info");
-          }
-        });
+        await openTasksScreen(
+          ctx,
+          () => snapshot(),
+          () => {
+            // Manual sync: the user confirms the frozen (⚠ 未同步) items are
+            // finished, so close them with a manual-sync note.
+            const stale = snapshot().items.filter(
+              (item) => item.status === "in_progress",
+            );
+            if (stale.length === 0) {
+              if (ctx.hasUI)
+                ctx.ui.notify("No stale in-progress items to sync.", "info");
+              return;
+            }
+            let next = snapshot();
+            for (const item of stale) {
+              const mutation = applyTaskUpdate(next, {
+                id: item.id,
+                status: "done",
+                note: "手动同步（⚠ 未同步）",
+              });
+              next = mutation.snapshot;
+            }
+            persistThenCommit(next);
+            if (ctx.hasUI) {
+              ctx.ui.notify(`同步完成：${stale.length} 项已标记 done`, "info");
+            }
+          },
+        );
       } finally {
         taskWidgetPaused = false;
         updateTaskWidget(ctx);
