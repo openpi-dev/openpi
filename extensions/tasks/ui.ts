@@ -559,5 +559,10 @@ export async function openTasksScreen(
         () => done(),
         onSyncStale,
       ),
+    // Overlay, not editor replacement (omp's Hub/Dashboard style): the screen
+    // composites over the whole viewport, so the above-editor widgets and
+    // their animation timers are visually isolated while it is open — no
+    // flicker loop, and the editor container is left untouched.
+    { overlay: true, overlayOptions: { anchor: "top-center", width: "100%" } },
   );
 }

@@ -36,6 +36,10 @@ import {
 } from "./ui.ts";
 import { getTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
 import {
+  requestWidgetRepaint,
+  setCustomScreenOpen,
+} from "../shared/ui-screen.ts";
+import {
   drainSettledSubagents,
   resetSettledSubagents,
   subscribeToSettledSubagents,
@@ -109,7 +113,6 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetInstalled = false;
   let taskWidgetInstalledRevision = -1;
   let unsubSettled: (() => void) | undefined;
-  let taskWidgetPaused = false;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
@@ -161,12 +164,11 @@ export default function sessionTasks(pi: ExtensionAPI) {
       // advancing about one cell per frame (omp uses 30fps for its loader; the
       // widget is text-only and 8 fps is plenty to read as flowing).
       const timer = setInterval(() => {
-        // Redraw only while something is live: the /tasks screen pauses it,
-        // and outside a running turn the animation is frozen anyway, so a
-        // 120ms full-viewport repaint would only fight user input rendering.
-        if (taskWidgetPaused) return;
+        // Redraw only while something is live: outside a running turn the
+        // animation is frozen anyway, and the shared screen state pauses the
+        // widget during /tasks — so a 120ms repaint never fights the screen.
         if (!activeRun) return;
-        tui.requestRender();
+        requestWidgetRepaint(tui);
       }, 120);
       timer.unref?.();
       return {
@@ -565,7 +567,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         }
         return;
       }
-      taskWidgetPaused = true;
+      setCustomScreenOpen(true);
       try {
         await openTasksScreen(
           ctx,
@@ -597,7 +599,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
           },
         );
       } finally {
-        taskWidgetPaused = false;
+        setCustomScreenOpen(false);
         updateTaskWidget(ctx);
       }
     },

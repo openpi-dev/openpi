@@ -9,6 +9,7 @@ import {
   type ActivityCounts,
 } from "../shared/activity-status.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { requestWidgetRepaint } from "../shared/ui-screen.ts";
 import { formatElapsed, type SubagentSnapshot } from "./src/domain.ts";
 import {
   failureStreakOf,
@@ -119,7 +120,7 @@ export class SubagentStripWidget {
     this.strip = strip;
     this.getEntry = getEntry;
     this.getEntries = getEntries;
-    this.timer = setInterval(() => this.tui.requestRender(), 500);
+    this.timer = setInterval(() => requestWidgetRepaint(this.tui), 500);
     this.timer.unref?.();
   }
 

@@ -5,6 +5,7 @@ import {
   belowEditorStripInput,
   fitNavigationSides,
 } from "../shared/below-editor-navigation.ts";
+import { requestWidgetRepaint } from "../shared/ui-screen.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   aggregateUsage,
@@ -52,7 +53,7 @@ export class WorkflowStripWidget {
     this.theme = theme;
     this.strip = strip;
     this.getEntry = getEntry;
-    this.timer = setInterval(() => this.tui.requestRender(), 500);
+    this.timer = setInterval(() => requestWidgetRepaint(this.tui), 500);
     this.timer.unref?.();
   }
 

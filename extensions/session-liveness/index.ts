@@ -14,6 +14,7 @@ import type {
   ExtensionAPI,
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
+import { requestWidgetRepaint } from "../shared/ui-screen.ts";
 import {
   subscribeSessionLiveness,
   type SessionLiveness,
@@ -54,7 +55,7 @@ export default function sessionLiveness(pi: ExtensionAPI) {
           bold(text: string): string;
         },
       ) => {
-        timer = setInterval(() => tui.requestRender(), 120);
+        timer = setInterval(() => requestWidgetRepaint(tui), 120);
         timer.unref?.();
         return {
           render(width: number, now = Date.now()) {
