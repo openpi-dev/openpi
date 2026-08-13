@@ -14,7 +14,7 @@ test("start descriptions identify the shell contract essentials", () => {
   assert.match(BG_START_TOOL_DESCRIPTION, /NO stdin/);
   assert.match(BG_START_TOOL_DESCRIPTION, /timeout_seconds/);
   assert.match(BG_START_TOOL_DESCRIPTION, /killed on session end/);
-  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /shell command/);
+  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /[Ss]hell command/);
   assert.match(
     BG_START_PARAMETER_DESCRIPTIONS.timeoutSeconds,
     /Optional runtime limit/,
