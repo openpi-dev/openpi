@@ -9,15 +9,12 @@ import {
   buildTerminalResultMessage,
 } from "./src/prompt.ts";
 
-test("start descriptions identify the platform-specific shell contract", () => {
-  assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
-  assert.match(BG_START_TOOL_DESCRIPTION, /cmd\.exe \/d \/s \/c on Windows/);
-  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /sh -c on POSIX/);
-  assert.match(
-    BG_START_PARAMETER_DESCRIPTIONS.command,
-    /cmd\.exe \/d \/s \/c on Windows/,
-  );
+test("start descriptions identify the shell contract essentials", () => {
+  assert.match(BG_START_TOOL_DESCRIPTION, /platform shell/);
+  assert.match(BG_START_TOOL_DESCRIPTION, /NO stdin/);
   assert.match(BG_START_TOOL_DESCRIPTION, /timeout_seconds/);
+  assert.match(BG_START_TOOL_DESCRIPTION, /killed on session end/);
+  assert.match(BG_START_PARAMETER_DESCRIPTIONS.command, /shell command/);
   assert.match(
     BG_START_PARAMETER_DESCRIPTIONS.timeoutSeconds,
     /Optional runtime limit/,

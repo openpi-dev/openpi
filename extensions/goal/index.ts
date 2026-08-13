@@ -179,7 +179,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
     name: "create_goal",
     label: "Create Goal",
     description:
-      "Create a goal only when explicitly requested by the user or system/developer instructions; do not infer goals from ordinary tasks.\nSet token_budget only when an explicit token budget is requested. Fails if an unfinished goal exists; use update_goal only for status.",
+      "Create a goal only when explicitly requested; never infer from ordinary tasks. token_budget only when explicitly requested. Fails if an unfinished goal exists.",
     promptSnippet: "Create an explicitly requested persistent thread goal",
     promptGuidelines: [
       "Use create_goal only when the user or system/developer instructions explicitly request a persistent autonomous goal; never infer one from an ordinary task.",
@@ -241,7 +241,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
     name: "update_goal",
     label: "Update Goal",
     description:
-      "Update the existing goal to mark it achieved or report a genuine blocker.\nSet status to `complete` only when the objective has actually been achieved and no required work remains.\nReport status `blocked` only when a blocking condition leaves no meaningful work possible; give a specific `blocker` and reuse that exact string each following goal turn (the controller marks the goal blocked only after the same blocker recurs on three consecutive goal turns).\nDo not report `blocked` merely because the work is hard, slow, uncertain, incomplete, or would benefit from clarification.\nDo not mark a goal complete merely because its budget is nearly exhausted or because you are stopping work.\nWhen marking a budgeted goal achieved, report the final token usage from the tool result to the user.",
+      "Update the goal: complete only when the objective is actually achieved; blocked only when a blocking condition leaves no work possible — reuse the exact `blocker` string across turns (three consecutive identical blockers mark it blocked). Never blocked for difficulty/slowness/uncertainty; never complete for budget exhaustion. Report final token usage on completion.",
     promptSnippet: "Mark an existing goal complete or strictly blocked",
     promptGuidelines: [
       "Call update_goal with complete only after a requirement-by-requirement evidence audit proves the entire objective is done.",
@@ -259,8 +259,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
           Type.String({
             minLength: 1,
             maxLength: GOAL_LIMITS.reasonChars,
-            description:
-              "Required when status is `blocked`; omit for `complete`. Reuse exactly the same specific description on each consecutive goal turn while the blocker persists.",
+            description: "Required when blocked; reuse the exact same string each turn.",
           }),
         ),
       },

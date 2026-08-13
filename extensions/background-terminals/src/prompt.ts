@@ -28,12 +28,12 @@ const RESULT_STDOUT_MAX_LINES = 40;
 const RESULT_STDERR_MAX_LINES = 20;
 
 export const BG_START_TOOL_DESCRIPTION =
-  "Start a long-running shell command as a background terminal (executed via the platform shell — sh -c on POSIX, cmd.exe /d /s /c on Windows). " +
-  "Fire-and-forget: this returns immediately with an id, and you get a message with the final output when the process exits. " +
-  "The process receives NO stdin (immediate EOF) and there is no way to send input later — interactive commands will not work; use bg_kill to stop a stuck one. " +
-  `Terminals are session-scoped: they are killed when the session ends or reloads. Output shown to you is tail-truncated (stdout ${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); output is captured to a log file when one can be opened, and to the /ps viewer. ` +
-  "Set timeout_seconds for finite work such as builds or tests; omit it for servers and watchers. " +
-  `Max ${MAX_RUNNING} background terminals can run at once.`;
+  "Start a long-running shell command as a background terminal (platform shell). Fire-and-forget: returns an id; final output arrives on exit. " +
+  "Process receives NO stdin and cannot take input later — use bg_kill to stop a stuck one. " +
+  "Session-scoped: killed on session end/reload. Output tail-truncated (stdout " +
+  `${formatSize(STATUS_STDOUT_MAX)}, stderr ${formatSize(STATUS_STDERR_MAX)}); captured to a log file when possible. ` +
+  "Set timeout_seconds for finite work; omit for servers/watchers. " +
+  `Max ${MAX_RUNNING} terminals at once.`;
 
 export const BG_START_PROMPT_SNIPPET =
   "Run a long-lived shell command in the background (dev servers, builds, watchers); output is captured and you're notified on exit";
@@ -73,7 +73,7 @@ export const BG_KILL_PARAMETER_DESCRIPTIONS = {
 
 /** Describes mid-run output watching, including the failure-coverage rule. */
 export const BG_WATCH_TOOL_DESCRIPTION =
-  'Wake yourself when a running background terminal\'s output matches one of several literal signatures, instead of waiting for it to exit. Use this for a process that does not exit on its own — a dev server printing "Ready", a watcher rebuilding, a long job logging progress — so you are notified mid-run rather than polling bg_status. Separate alternatives with |. A watch is one-shot: it fires once, then disarms. IMPORTANT: silence is not success — include failure signatures too, or a crash looks identical to still-working. Prefer "Ready in|Traceback|ERROR|FAILED|Killed". Exiting processes already notify you automatically, so do not add a watch just for completion.';
+  'Wake yourself when a running background terminal\'s output matches literal signatures (pipe-separated), instead of polling. One-shot: fires once, then disarms. IMPORTANT: silence is not success — include failure signatures too. Prefer "Ready in|Traceback|ERROR|FAILED|Killed". Exiting processes notify automatically.';
 
 /** Model-facing schema descriptions for the watch target and pattern. */
 export const BG_WATCH_PARAMETER_DESCRIPTIONS = {

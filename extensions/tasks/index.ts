@@ -254,7 +254,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
     pi.registerTool({
       name: "tasks_add",
       label: "Tasks Add",
-      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session tasks. Use this only for work spanning multiple agent runs or user turns, or for an explicit user task list. When every item in a batch reaches done/dropped the batch closes and the list clears; the next tasks_add starts a fresh batch numbered from T1, so a T-id only identifies work within its own batch (past evidence remains in the session history, not this list).`,
+      description: `${TOOL_PURPOSE} Add one or more stable-ID items to the current Pi session tasks. Use only for work spanning multiple runs/turns or an explicit user task list. A batch closes when all items are done/dropped; the next add restarts at T1.`,
       promptSnippet:
         "Add stable work-intent items to the current session tasks",
       promptGuidelines: [
@@ -311,7 +311,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
     pi.registerTool({
       name: "tasks_update",
       label: "Tasks Update",
-      description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked, done, and dropped status changes require a fresh note explaining the blocker, observable evidence, or drop reason.`,
+      description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked/done/dropped transitions require a fresh note (blocker, observable evidence, or drop reason).`,
       promptSnippet: "Update one session task item by stable ID",
       promptGuidelines: [
         "Keep tasks_update status current when tracked work materially changes, but avoid ceremonial status churn.",
@@ -382,7 +382,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
       name: "tasks_list",
       label: "Tasks List",
       description:
-        "Reads the current session's work-intent tasks, optionally filtered by ID and status; does not execute, schedule, or delegate work.",
+        "Reads the current session's work-intent tasks, optionally filtered by ID/status.",
       promptSnippet: "List current session work-intent task items",
       parameters: Type.Object({
         id: Type.Optional(Type.Integer({ minimum: 1 })),

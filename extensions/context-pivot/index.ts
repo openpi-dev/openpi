@@ -67,7 +67,7 @@ export default function contextPivot(pi: ExtensionAPI) {
     name: "context_pivot",
     label: "Context Pivot",
     description:
-      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /handoff instead for a genuinely new session.",
+      "Replace a long noisy context with a concise next-phase brief (same session). Use at >=30k tokens when work changes phase (research→implementation→review); below 30k rejected. Use /handoff for a genuinely new session.",
     promptSnippet:
       "Compress a long current session into a clean brief before changing phase",
     promptGuidelines: [

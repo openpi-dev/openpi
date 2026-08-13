@@ -207,7 +207,7 @@ export default function planMode(pi: ExtensionAPI) {
     name: "plan_ready",
     label: "Plan Ready",
     description:
-      "Finish an active Plan Mode workflow with the complete implementation-ready Markdown plan. Call it alone as the final action only after research and material user decisions are complete.",
+      "Finish an active Plan Mode workflow with the complete implementation-ready Markdown plan; call it alone, only after research and material decisions are complete.",
     promptSnippet:
       "Complete active Plan Mode with one explicit implementation-ready plan",
     promptGuidelines: [
