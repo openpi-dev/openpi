@@ -125,6 +125,10 @@ export default function uiCustomization(pi: ExtensionAPI) {
   // Kept for process lifetime so configure_my_pi_setup still refreshes later sessions.
   pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
     if (!activeSession || activeSession.mode !== "tui") return;
+    // A config-change event IS the change signal — the idempotence signature
+    // exists to absorb repeated session_start calls with unchanged config,
+    // not to swallow real user edits. Reset it so install() re-applies.
+    installedSignature = undefined;
     install(activeSession);
     requestRender?.();
   });
@@ -216,6 +220,11 @@ export default function uiCustomization(pi: ExtensionAPI) {
     // against a shut-down context. The config listener stays armed for later sessions.
     activeSession = undefined;
     stopDashboardListeners();
+    // The idempotence signature must die with the session: it was written by
+    // the install this shutdown just unmounted, and a stale signature would
+    // silently skip the next session's header/footer install (adversarial
+    // finding: same cross-session state-residue class as the /tasks flag).
+    installedSignature = undefined;
     requestRender = undefined;
     if (ctx.mode === "tui") {
       ctx.ui.setHeader(undefined);
