@@ -71,7 +71,7 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     signals = [];
     // Cross-extension dedupe: whichever signal extension's handler runs
     // first wins the single injection; the other skips.
-    if (!claimSignalInjection(detected, REMINDER_TAG)) return;
+    if (!claimSignalInjection(detected)) return;
     const messages = injectReminder(
       event.messages,
       buildReminderText(detected, REMINDER_TAG),

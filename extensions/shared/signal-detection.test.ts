@@ -82,15 +82,17 @@ test("injectReminder appends to the last user message and clones input", () => {
   );
 });
 
-test("claimSignalInjection allows one injection per signature", () => {
-  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), true);
-  // Same signature again (the sibling extension) is refused.
-  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), false);
-  // A different signal set or context is a fresh claim.
-  assert.equal(claimSignalInjection(["verify"], "multi-signal-sync"), true);
-  assert.equal(claimSignalInjection(["commit"], "commit-task-sync"), true);
+test("claimSignalInjection dedupes across extensions by signal set", () => {
+  assert.equal(claimSignalInjection(["commit"]), true);
+  // The sibling extension claiming the same signal is refused — one
+  // injection regardless of which handler runs first.
+  assert.equal(claimSignalInjection(["commit"]), false);
+  // A different signal set is a fresh claim.
+  assert.equal(claimSignalInjection(["verify"]), true);
+  // A superset is a fresh claim too.
+  assert.equal(claimSignalInjection(["commit", "verify"]), true);
   resetSignalInjectionClaim();
-  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), true);
+  assert.equal(claimSignalInjection(["commit"]), true);
 });
 
 test("buildReminderText carries terse signal labels per context", () => {

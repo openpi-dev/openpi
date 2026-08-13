@@ -72,7 +72,7 @@ export default function commitTaskSync(pi: ExtensionAPI) {
     commitDetected = false;
     // Cross-extension dedupe: multi-signal-sync also detects commit; one
     // injection is enough.
-    if (!claimSignalInjection(["commit"], REMINDER_TAG)) return;
+    if (!claimSignalInjection(["commit"])) return;
     const messages = injectReminder(
       event.messages,
       buildReminderText(["commit"], REMINDER_TAG),

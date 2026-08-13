@@ -130,15 +130,15 @@ export function buildReminderText(
 // multi-signal-sync and commit-task-sync both detect the same commit event
 // and both inject a reminder on the next context hook. The reminder is
 // advisory; injecting it twice wastes model tokens. A single shared claim
-// gate lets whichever extension's handler runs first win the injection;
-// the other skips. Cleared on session boundaries by the extensions.
+// gate — keyed on the SIGNAL SET, deliberately not on the injecting
+// extension — lets whichever handler runs first win the injection; the
+// sibling skips. Cleared on session boundaries by the extensions.
 let claimedSignature = "";
 
 export function claimSignalInjection(
   signals: readonly SignalKind[],
-  context: string,
 ): boolean {
-  const signature = `${[...signals].sort().join("+")}@${context}`;
+  const signature = [...signals].sort().join("+");
   if (signature === claimedSignature) return false;
   claimedSignature = signature;
   return true;
