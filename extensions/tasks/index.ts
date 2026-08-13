@@ -114,6 +114,11 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetInstalled = false;
   let taskWidgetInstalledRevision = -1;
   let unsubSettled: (() => void) | undefined;
+  // Session generation: a /tasks overlay from a dying session must not clear
+  // the shared screen flag of the session that replaced it (its finally block
+  // may still run after the new session_start). Only the generation that
+  // opened the screen may close it (adversarial finding on the lifecycle fix).
+  let sessionGeneration = 0;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
@@ -568,6 +573,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         }
         return;
       }
+      const screenGeneration = sessionGeneration;
       setCustomScreenOpen(true);
       try {
         await openTasksScreen(
@@ -600,7 +606,11 @@ export default function sessionTasks(pi: ExtensionAPI) {
           },
         );
       } finally {
-        setCustomScreenOpen(false);
+        // Only this session's screen may release the flag: a stale finally
+        // from a replaced session must not unlock the new session's screen.
+        if (screenGeneration === sessionGeneration) {
+          setCustomScreenOpen(false);
+        }
         updateTaskWidget(ctx);
       }
     },
@@ -646,6 +656,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
     // died; the finally block never ran, so the shared screen flag would
     // otherwise leak across sessions and freeze every widget animation.
     resetCustomScreenOpen();
+    sessionGeneration += 1;
     ui = ctx.hasUI ? ctx.ui : undefined;
     uiMode = ctx.hasUI ? ctx.mode : undefined;
     restore(ctx);
