@@ -29,16 +29,9 @@ the key simplification vs. subagents' `send()`).
 - Full stdout and stderr are captured **separately and completely** in private spill files;
   bounded in-memory tails keep `/ps` responsive (§7.4).
 - Tool responses to the model are **always truncated** with the pi truncation utilities.
-<<<<<<< Updated upstream
-- When processes exit, every settlement reaches the model **exactly once** — no polling —
-  using the same deferred-delivery/consumed dance as subagents (§9). Idle settlements share
-  one fixed 200 ms batch window and one `followUp + triggerTurn`; a busy backlog enters the
-  next turn without forcing a reply per process.
-=======
 - When a process exits, the model is woken **exactly once** via `pi.sendMessage(...,
 { deliverAs: "followUp", triggerTurn: true })` — no polling — using the same
   deferred-delivery/consumed dance as subagents (§9).
->>>>>>> Stashed changes
 - While ≥1 process is running, a one-line widget renders **directly above the editor**:
   `N background terminal(s) running • /ps to view` (§10).
 - `/ps` opens a two-stage full-screen overlay (list → detail with scrollable stdout/stderr),
@@ -87,7 +80,7 @@ live at the repository root. This extension keeps only a scoped `tsconfig.json`:
 }
 ```
 
-Run `bun install --frozen-lockfile`, `bun run check`, and `bun run test` from the repository root. Per AGENTS.md,
+Run `npm install`, `npm run check`, and `npm test` from the repository root. Per AGENTS.md,
 avoid explicit return types unless needed and never use `as any` without exhausting typed
 alternatives.
 
@@ -623,43 +616,15 @@ settlement `Deferred` and the subagents `waitFor` result shaping is the template
 
 ## 9. Completion notification — exactly once, no polling, no turn races
 
-This is the subtlest requirement. It extends the subagent deferred-delivery pattern with a
-small idle batcher; the `Map` remains the source of truth and the timer only decides when to
-drain it.
+This is the subtlest requirement. Copy the subagents solution wholesale; it exists precisely
+to solve this problem (see comments in `extensions/subagents/index.ts` lines 168–222 and
+`result-delivery.ts`).
 
 ### 9.1 Mechanism
 
-On settle, the manager invokes `onSettled(snap, consumed)` registered by `index.ts`:
+On settle, the manager invokes a hook `onSettled(snap, consumed)` registered by `index.ts`
+(same `view.setOnSettled` bridge). The hook:
 
-<<<<<<< Updated upstream
-1. A consumed result is removed because `bg_status` or `bg_kill` returns that final state.
-2. Otherwise a bounded snapshot copy is deferred in the id-keyed result map. Idle delivery
-   drains at most `MAX_RUNNING` results at a time. A busy backlog stays retractable until
-   `agent_settled`, so `bg_status`/`bg_kill` can still consume it without duplicate context.
-   `bg_start` reserves against running + pending + concurrent starts, preventing a ninth
-   identity from entering this bounded window without evicting or prematurely queueing any.
-3. If the session is idle, the first result starts one fixed 200 ms timer. Later settlements
-   join that window; they do not extend it.
-4. At expiry, drain the complete batch into one `followUp + triggerTurn`. If the agent became
-   busy, retain the map instead.
-5. `agent_settled` cancels any idle timer and drains the backlog as one `nextTurn` message,
-   avoiding an extra model turn. Shutdown cancels the timer before clearing the map.
-
-`bg_watch` is a distinct message path and remains immediate; readiness and failure signatures
-never wait for the settlement batch window.
-
-### 9.2 Why this is race-free (the reasoning to preserve in code comments)
-
-- `deliverAs: "followUp"` queues the idle batch until the agent has no more tool calls; it
-  never interrupts a mid-turn stream (docs/extensions.md § pi.sendMessage).
-- One fixed 200 ms window bounds latency and prevents a continuous stream of exits from
-  postponing delivery indefinitely.
-- `agent_settled` cancels the timer before draining as `nextTurn`; an opaque timer token also
-  makes an already-queued stale callback harmless.
-- The `Map`-keyed `resultDelivery` (keyed by id, `drain()` clears) makes double delivery
-  structurally impossible: whichever path drains first wins, and the other sees an empty map.
-- The `consumed` flag closes the remaining hole: if the model is *currently inside*
-=======
 ```ts
 const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>(); // copy the 20-line module
 
@@ -710,7 +675,6 @@ const flushResults = () => {
   structurally impossible even if both the `isIdle()` fast-path and the `agent_settled` event
   fire: whoever drains first wins, the second drain sees an empty map.
 - The `consumed` flag closes the remaining hole: if the model is _currently inside_
->>>>>>> Stashed changes
   `bg_kill` (which returns the final state itself), the settle must not ALSO queue a message.
   Manager computes `consumed` = "a kill/status collection is in flight for this id" at settle
   time (subagents: `waitInterest`; here: the `kill()`-marked id set).
@@ -730,10 +694,10 @@ line 352) — belt and suspenders for the settled-before-kill-started ordering.
 `buildTerminalResultMessage` (prompt.ts): first line
 `Background terminal bt-3 "dev server" exited (exit 1) after 4m12s.` (or `(SIGTERM)` /
 `was killed`), then tail-truncated stdout (≤ 16 KiB) and, if non-empty, stderr (≤ 8 KiB) in
-labeled sections, with truncation notes pointing at the spill file. A single-result renderer
-shows the terminal's normal compact log tail. A multi-result renderer shows a bounded
-per-terminal identity/status summary and leaves the globally bounded (48 KiB), newest-tail
-logs behind expansion; it must never label a batch as `terminal ?`.
+labeled sections, with truncation notes pointing at the spill file. Register a
+`pi.registerMessageRenderer("background-terminal-result", ...)` for a collapsed preview —
+copy the subagent-result renderer (index.ts lines 514–561: icon by status, header line,
+8-line preview, "ctrl+o to expand").
 
 ## 10. Widget above the editor
 
@@ -961,8 +925,8 @@ tricks; they exist on any machine running pi)
   as follow-up after the turn, not mid-stream, and only once.
 - `/new` and `/reload` with a running process → process is dead afterwards (`ps aux | grep`),
   no orphan, widget cleared.
-- `bun run check` green; `bun run test` green; Biome checks the repository's TypeScript,
-  JavaScript, and JSON files.
+- `npm run check` green; `npm test` green; repo-root `npm run format:check` clean for the new
+  files (prettier covers `extensions/**/*.ts`).
 
 ## 15. Pitfalls (each burned someone in the reference code)
 
@@ -1004,8 +968,7 @@ tricks; they exist on any machine running pi)
 
 ## 16. Acceptance checklist
 
-- [ ] Root `bun install --frozen-lockfile`, `bun run check`, and `bun run test` are green
-      (TS7 + Effect LS included).
+- [ ] Root `npm ci`, `npm run check`, and `npm test` are green (TS7 + Effect LS included).
 - [ ] Manager, output, result-delivery, and ps-selection tests pass through the root suite.
 - [ ] Tools registered: `bg_start`, `bg_status`, `bg_list`, `bg_kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
@@ -1030,4 +993,4 @@ tricks; they exist on any machine running pi)
 - [ ] Concurrency cap enforced race-free; ids are `bt-N`; cwd resolved against `ctx.cwd` and
       validated; timestamps and elapsed rendering consistent with subagents.
 - [ ] Code style: model strings in `prompt.ts`, Effect only in the async core, plain TS
-      callbacks for stream plumbing, no `as any`, Biome-clean.
+      callbacks for stream plumbing, no `as any`, prettier-clean.

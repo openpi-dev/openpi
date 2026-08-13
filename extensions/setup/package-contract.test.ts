@@ -63,7 +63,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   assert.equal(manifest.devDependencies?.prettier, undefined);
   assert.equal(
     manifest.scripts?.prepublishOnly,
-"bun run check && bun run check:ddd && bun run test",
+    "bun run check && bun run check:ddd && bun run test",
   );
   assert.deepEqual(manifest.repository, {
     type: "git",

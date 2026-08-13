@@ -103,7 +103,6 @@ export function hasTerminalCapacity(options: {
   return options.running + options.pending + options.reserved < options.maximum;
 }
 
-
 /**
  * How a settled result reaches the model.
  *

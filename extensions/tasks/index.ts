@@ -271,7 +271,6 @@ export default function sessionTasks(pi: ExtensionAPI) {
     ...(batchClosed ? { batchClosed: true } : {}),
   });
 
-
   const registerTools = () => {
     if (toolsRegistered || conflict) return;
     toolsRegistered = true;

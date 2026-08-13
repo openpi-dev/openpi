@@ -37,7 +37,6 @@ export default function multiSignalSync(pi: ExtensionAPI) {
   let signals: SignalKind[] = []; // context 注入用（下轮消费）
   let pendingNotify: SignalKind[] = []; // agent_settled Tasks-widget 驻留用（本轮消费）
   let statusShown = false;
-  let generation = 0;
 
   const addSignal = (kind: SignalKind) => {
     if (!signals.includes(kind)) signals.push(kind);
@@ -106,7 +105,6 @@ export default function multiSignalSync(pi: ExtensionAPI) {
 
   /** Reset on session lifecycle. */
   pi.on("session_start", () => {
-    generation++;
     signals = [];
     pendingNotify = [];
     statusShown = false;
@@ -115,7 +113,6 @@ export default function multiSignalSync(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", () => {
-    generation++;
     signals = [];
     pendingNotify = [];
     statusShown = false;

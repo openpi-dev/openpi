@@ -24,7 +24,6 @@ const REMINDER_TAG = "commit-task-sync";
 
 export default function commitTaskSync(pi: ExtensionAPI) {
   let commitDetected = false;
-  let generation = 0;
 
   /** tool_result: hot path. Only flip a boolean. */
   pi.on(
@@ -85,12 +84,10 @@ export default function commitTaskSync(pi: ExtensionAPI) {
 
   /** Reset on session lifecycle. */
   pi.on("session_start", () => {
-    generation++;
     commitDetected = false;
   });
 
   pi.on("session_shutdown", () => {
-    generation++;
     commitDetected = false;
     resetSignalInjectionClaim();
   });

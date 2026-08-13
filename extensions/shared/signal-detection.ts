@@ -104,7 +104,8 @@ export function messageContentText(content: unknown): string {
 export function lastUserMessageHasAuthorization(messages: unknown[]): boolean {
   for (let index = messages.length - 1; index >= 0; index--) {
     const message = messages[index] as
-      { role?: string; content?: unknown } | undefined;
+      | { role?: string; content?: unknown }
+      | undefined;
     if (!message || message.role !== "user") continue;
     const text = messageContentText(message.content);
     if (!text) return false; // last user message has no text → no auth signal

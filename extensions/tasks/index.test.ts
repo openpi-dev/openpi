@@ -596,7 +596,7 @@ test("/tasks sync marks stale in-progress items done via callback", async () => 
     return list;
   };
   // Directly exercise applyTaskUpdate semantics used by the sync callback.
-  const { applyTaskUpdate, createSessionTasks } = await import("./tasks.ts");
+  const { applyTaskUpdate } = await import("./tasks.ts");
   const base = {
     version: 1 as const,
     revision: 1,

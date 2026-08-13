@@ -115,9 +115,8 @@ function appAwareEditor(editor: EditorComponent): AppAwareEditor | undefined {
  *   - anything else → blur and fall through to the base editor
  */
 export class CompositeStripEditor implements EditorComponent, Focusable {
-  private readonly fallbackActions = new Map<string, () => void>();
+  readonly fallbackActions = new Map<string, () => void>();
   private readonly base: EditorComponent;
-  private readonly keybindings: KeybindingsManager;
   private readonly getBindings: () => readonly EditorStripBinding[];
   private focusedIndex = -1;
   private fallbackEscape?: () => void;
@@ -132,8 +131,8 @@ export class CompositeStripEditor implements EditorComponent, Focusable {
     getBindings: () => readonly EditorStripBinding[],
   ) {
     this.base = base;
-    this.keybindings = keybindings;
     this.getBindings = getBindings;
+    void keybindings; // retained for the EditorComponent signature
   }
 
   private manageable(): readonly EditorStripBinding[] {
@@ -277,9 +276,8 @@ export class CompositeStripEditor implements EditorComponent, Focusable {
       return;
     }
     if (matchesKey(data, Key.down)) {
-      const currentIndex = manageable.findIndex(
-        (binding) => this.getBindings()[this.focusedIndex] === binding,
-      );
+      const focusedBinding = this.getBindings()[this.focusedIndex];
+      const currentIndex = manageable.indexOf(focusedBinding);
       const next = manageable[(currentIndex + 1) % manageable.length];
       if (next) {
         this.setFocusedIndex(this.getBindings().indexOf(next));
