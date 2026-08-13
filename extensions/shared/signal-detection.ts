@@ -135,9 +135,7 @@ export function buildReminderText(
 // sibling skips. Cleared on session boundaries by the extensions.
 let claimedSignature = "";
 
-export function claimSignalInjection(
-  signals: readonly SignalKind[],
-): boolean {
+export function claimSignalInjection(signals: readonly SignalKind[]): boolean {
   const signature = [...signals].sort().join("+");
   if (signature === claimedSignature) return false;
   claimedSignature = signature;

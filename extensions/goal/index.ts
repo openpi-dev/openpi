@@ -259,7 +259,8 @@ export default function sessionGoal(pi: ExtensionAPI) {
           Type.String({
             minLength: 1,
             maxLength: GOAL_LIMITS.reasonChars,
-            description: "Required when blocked; reuse the exact same string each turn.",
+            description:
+              "Required when blocked; reuse the exact same string each turn.",
           }),
         ),
       },
