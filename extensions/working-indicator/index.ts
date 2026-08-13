@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { buildGradientBarFrames } from "./frames.ts";
+import { buildGradientBarFrames } from "../shared/gradient-bar.ts";
 
 /**
  * working-indicator: swap pi's built-in braille spinner for a flowing

@@ -75,6 +75,23 @@ function statusSquare(snapshot: SubagentSnapshot, theme: Theme) {
  */
 export const SUBAGENT_HUD_ROWS = 4;
 
+/** Thinking glyphs: shown while a running subagent is mid-reasoning (no tool
+ *  in flight, no intent text) so its row visibly moves instead of looking
+ *  frozen — a glance must be able to tell the session is still alive. */
+export const THINKING_FRAMES = [
+  "⠋",
+  "⠙",
+  "⠹",
+  "⠸",
+  "⠼",
+  "⠴",
+  "⠦",
+  "⠧",
+  "⠇",
+  "⠏",
+] as const;
+export const THINKING_FRAME_MS = 120;
+
 /**
  * Anchored multi-row subagent HUD above the editor, mirroring omp's sticky
  * "Subagents" block: one header line with live metrics, then a bounded row per
@@ -112,7 +129,7 @@ export class SubagentStripWidget {
 
   invalidate() {}
 
-  render(width: number) {
+  render(width: number, now = Date.now()) {
     if (width <= 0) return [];
     const entry = this.getEntry();
     // Nothing running and nothing unread: the HUD has nothing to say and hides
@@ -173,9 +190,11 @@ export class SubagentStripWidget {
         ? ` ${this.theme.fg("dim", "⚙")} ${this.theme.fg("muted", `${latestTool.name}${latestTool.argsPreview ? ` ${cleanLine(latestTool.argsPreview)}` : ""}`)}`
         : lastIntentOf(item)
           ? ` ${this.theme.fg("dim", "💬")} ${this.theme.fg("muted", cleanLine(lastIntentOf(item)!))}`
-          : isStalled(item, Date.now())
-            ? ` ${this.theme.fg("error", `⚠ 无活动 ${Math.max(1, Math.round((Date.now() - lastActivityOf(item)) / 60_000))}m`)}`
-            : "";
+          : isStalled(item, now)
+            ? ` ${this.theme.fg("error", `⚠ 无活动 ${Math.max(1, Math.round((now - lastActivityOf(item)) / 60_000))}m`)}`
+            : // Mid-reasoning with no visible signal: animate so the row reads
+              // alive (omp's HUD stays visibly active via event-driven updates).
+              ` ${this.theme.fg("dim", THINKING_FRAMES[Math.floor(now / THINKING_FRAME_MS) % THINKING_FRAMES.length])}`;
       const failures = failureStreakOf(item);
       const failureMark =
         failures >= 2

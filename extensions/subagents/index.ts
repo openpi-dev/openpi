@@ -96,6 +96,7 @@ import {
 } from "../shared/editor-strip-port.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { recordSettledSubagent } from "../shared/task-reconcile.ts";
+import { setRunningSubagents } from "../shared/session-liveness.ts";
 import {
   resetRunningSubagentDescriptions,
   setRunningSubagentDescriptions,
@@ -214,13 +215,14 @@ export default function (pi: ExtensionAPI) {
         unsubStatus = manager.view.subscribe(() => {
           // Light-up source: keep the running-child descriptions fresh so the
           // tasks widget can highlight pending tasks already being worked on.
+          const running = manager.view
+            .list()
+            .filter((snap) => snap.status === "running");
           setRunningSubagentDescriptions(
-            manager.view
-              .list()
-              .filter((snap) => snap.status === "running")
-              .map((snap) => snap.title || snap.id),
+            running.map((snap) => snap.title || snap.id),
           );
           updateStatus(manager);
+          setRunningSubagents(running.length);
         });
         updateStatus(manager);
         return manager;

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { buildGradientBarFrames, gradientBarFrame } from "./frames.ts";
+import { buildGradientBarFrames, gradientBarFrame } from "./gradient-bar.ts";
 
 test("gradient bar frame has one ANSI-colored block per cell", () => {
   const frame = gradientBarFrame(10, 3);

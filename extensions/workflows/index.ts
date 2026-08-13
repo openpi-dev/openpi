@@ -138,6 +138,7 @@ import {
   installEditorEnhancements,
   registerEditorStrip,
 } from "../shared/editor-strip-port.ts";
+import { setRunningWorkflows } from "../shared/session-liveness.ts";
 import {
   createWorkflowResources,
   runAgent,
@@ -495,6 +496,7 @@ export default function workflows(pi: ExtensionAPI) {
       // Activity is reported by the HUD above the editor (header metrics,
       // per-agent rows) — deliberately NOT also pinned to the footer status
       // bar, so workflow state lives in exactly one place.
+      setRunningWorkflows(activeRuns.size);
       updateWorkflowWidget();
     } catch {
       // UI may be unavailable.
