@@ -353,6 +353,20 @@ export function renderTaskWidget(
       truncateToWidth(theme.fg("dim", `╰─ … ${hidden} more tasks`), width),
     );
   }
+  // Frozen in-progress items are stale (⚠ 未同步): give the one-line
+  // resolution path right where the marker is, so the user does not have to
+  // remember the /tasks workflow.
+  if (now === 0 && visible.some((item) => item.status === "in_progress")) {
+    lines.push(
+      truncateToWidth(
+        theme.fg(
+          "dim",
+          `  ⚠ 未同步 → /tasks → 确认列表 → 按 s → 全部 done → esc 返回`,
+        ),
+        width,
+      ),
+    );
+  }
   return lines;
 }
 

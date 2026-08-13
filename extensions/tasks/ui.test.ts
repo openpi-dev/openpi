@@ -462,3 +462,23 @@ test("frozen in-progress rows carry the stale marker; live rows do not", () => {
   const live = renderTaskWidget(snapshot, theme, 100, false, 1_000).join("\n");
   assert.doesNotMatch(live, /未同步/);
 });
+
+test("stale widget appends the one-line sync path under the list", () => {
+  const snapshot = {
+    version: 1 as const,
+    revision: 1,
+    nextId: 2,
+    items: [{ id: 1, subject: "Leftover", status: "in_progress" as const }],
+  };
+  const frozen = renderTaskWidget(snapshot, theme, 120, false, 0);
+  assert.ok(
+    frozen.some((line) =>
+      line.includes(
+        "⚠ 未同步 → /tasks → 确认列表 → 按 s → 全部 done → esc 返回",
+      ),
+    ),
+  );
+  // Live frame has no stale path line.
+  const live = renderTaskWidget(snapshot, theme, 120, false, 1_000);
+  assert.ok(!live.some((line) => line.includes("→ /tasks →")));
+});
