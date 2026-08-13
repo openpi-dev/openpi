@@ -170,7 +170,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
             theme,
             width,
             taskWidgetExpanded,
-            Date.now(),
+            // The shimmer sweep and spinner glyph only mean "in flight" while
+            // an agent turn is actually running. After the turn settles the
+            // frozen frame (now=0) shows the plain status honestly — a
+            // settled session must not keep spinning a task that is not being
+            // worked on.
+            activeRun ? Date.now() : 0,
           ),
         invalidate() {},
         dispose() {

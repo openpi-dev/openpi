@@ -329,13 +329,21 @@ export function renderTaskWidget(
         : litUp
           ? theme.bold(theme.fg("accent", item.subject))
           : subjectStyle(item.status, theme)(item.subject);
+    // Frozen frame (now === 0) means the turn settled: a still-in-progress
+    // item is leftover state, not work in flight. Mark it instead of letting
+    // the plain status read as "running" (omp keeps todo rows static; we keep
+    // the honesty and add the explicit marker).
+    const staleMark =
+      item.status === "in_progress" && now === 0
+        ? ` ${theme.fg("warning", "⚠ 未同步")}`
+        : "";
     const branch = index === visible.length - 1 && hidden === 0 ? "╰─" : "├─";
     lines.push(
       truncateToWidth(
         // Same subject weighting as the full list, so the item in flight reads
         // the same wherever you happen to be looking; done subjects carry the
         // same strikethrough as the tool result and the /tasks screen.
-        `${theme.fg("dim", branch)} ${theme.fg(litUp ? "accent" : color, icon)} ${theme.fg("dim", `T${item.id}`.padStart(idWidth))} ${subject}`,
+        `${theme.fg("dim", branch)} ${theme.fg(litUp ? "accent" : color, icon)} ${theme.fg("dim", `T${item.id}`.padStart(idWidth))} ${subject}${staleMark}`,
         width,
       ),
     );

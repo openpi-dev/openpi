@@ -446,3 +446,19 @@ test("pending tasks light up when a running subagent matches them", () => {
     setRunningSubagentDescriptions([]);
   }
 });
+
+test("frozen in-progress rows carry the stale marker; live rows do not", () => {
+  const snapshot = {
+    version: 1 as const,
+    revision: 1,
+    nextId: 2,
+    items: [
+      { id: 1, subject: "Leftover task", status: "in_progress" as const },
+    ],
+  };
+  const frozen = renderTaskWidget(snapshot, theme, 100, false, 0).join("\n");
+  assert.match(frozen, /⚠ 未同步/);
+  // Live frame (turn running) animates and carries no stale marker.
+  const live = renderTaskWidget(snapshot, theme, 100, false, 1_000).join("\n");
+  assert.doesNotMatch(live, /未同步/);
+});
