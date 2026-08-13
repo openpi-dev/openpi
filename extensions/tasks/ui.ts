@@ -428,6 +428,7 @@ class TasksScreen implements Component {
   private readonly keybindings: KeybindingsManager;
   private readonly snapshot: TaskSnapshot;
   private readonly done: () => void;
+  private readonly onSyncStale: () => void;
 
   constructor(
     tui: TUI,
@@ -435,12 +436,14 @@ class TasksScreen implements Component {
     keybindings: KeybindingsManager,
     snapshot: TaskSnapshot,
     done: () => void,
+    onSyncStale: () => void = () => {},
   ) {
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
     this.snapshot = snapshot;
     this.done = done;
+    this.onSyncStale = onSyncStale;
   }
 
   handleInput(data: string) {
@@ -473,6 +476,10 @@ class TasksScreen implements Component {
       this.offset += 10;
       this.tui.requestRender();
     }
+    if (data === "s") {
+      this.onSyncStale();
+      this.tui.requestRender();
+    }
   }
 
   render(width: number) {
@@ -492,7 +499,10 @@ class TasksScreen implements Component {
     while (lines.length < rows + 2) lines.push("");
     lines.push(
       truncateToWidth(
-        this.theme.fg("dim", "j/k or ↑/↓ scroll · pgup/pgdn page · esc close"),
+        this.theme.fg(
+          "dim",
+          "j/k or ↑/↓ scroll · pgup/pgdn page · s sync stale · esc close",
+        ),
         width,
       ),
     );
@@ -505,6 +515,7 @@ class TasksScreen implements Component {
 export async function openTasksScreen(
   ctx: ExtensionCommandContext,
   snapshot: TaskSnapshot,
+  onSyncStale: () => void = () => {},
 ) {
   if (ctx.mode !== "tui") {
     if (ctx.hasUI)
@@ -513,6 +524,13 @@ export async function openTasksScreen(
   }
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) =>
-      new TasksScreen(tui, theme, keybindings, snapshot, () => done()),
+      new TasksScreen(
+        tui,
+        theme,
+        keybindings,
+        snapshot,
+        () => done(),
+        onSyncStale,
+      ),
   );
 }
