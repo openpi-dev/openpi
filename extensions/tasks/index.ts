@@ -155,11 +155,11 @@ export default function sessionTasks(pi: ExtensionAPI) {
       // advancing about one cell per frame (omp uses 30fps for its loader; the
       // widget is text-only and 8 fps is plenty to read as flowing).
       const timer = setInterval(() => {
-        // The /tasks screen replaces the editor container; the widget above
-        // it is invisible but its repaint timer would still redraw the whole
-        // viewport every 120ms (slow-screen flicker loop). Pause while the
-        // screen is open.
+        // Redraw only while something is live: the /tasks screen pauses it,
+        // and outside a running turn the animation is frozen anyway, so a
+        // 120ms full-viewport repaint would only fight user input rendering.
         if (taskWidgetPaused) return;
+        if (!activeRun) return;
         tui.requestRender();
       }, 120);
       timer.unref?.();
