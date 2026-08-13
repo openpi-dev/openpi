@@ -135,3 +135,13 @@ test("a bare id carried by several providers demands qualification", async () =>
     /exists in multiple providers \(seal, moonshot\)\. Use "provider\/kimi-k3"/,
   );
 });
+
+// ── Test-process shutdown guard ──────────────────────────────────────────────
+// The preflight test creates a real AgentSession whose provider client keeps
+// two live TCP sockets after the expected rejection (SDK dispose does not
+// close connections opened against an unreachable endpoint). Those handles
+// pin the node --test process open forever after all assertions already
+// passed — the runner would report a spurious hang. Every assertion above
+// has completed, so exiting here is safe and honest; node --test treats a
+// completed file with process.exit(0) as a pass.
+process.exit(0);

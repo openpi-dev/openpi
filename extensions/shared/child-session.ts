@@ -9,6 +9,12 @@ import {
 } from "@earendil-works/pi-coding-agent";
 
 export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
+/** Extension binding on child startup: the SDK can hang here (provider
+ * client init, extension runner) with nothing bounding it — the shutdown
+ * path is deadline-protected but the startup path was a bare await, which
+ * hung the whole test run (pi-backend.test.ts 498s) whenever the bind
+ * never settled (adversarial finding: every async boundary needs a bound). */
+export const CHILD_BIND_TIMEOUT_MS = 10_000;
 
 /**
  * The only package tools a headless child may keep. Read-only discovery tools
@@ -206,7 +212,14 @@ export async function bindChildSessionExtensions(
   session: ChildSessionStartup,
   requestedTools?: readonly string[],
 ) {
-  await session.bindExtensions({ mode: "print" });
+  const bound = await waitUntil(
+    session.bindExtensions({ mode: "print" }),
+    Date.now() + CHILD_BIND_TIMEOUT_MS,
+    "Child extensions bind",
+  );
+  if (bound.error) {
+    throw new Error(bound.error);
+  }
   const requested = effectiveChildToolAllowlist(requestedTools);
   if (!requested) return;
 
