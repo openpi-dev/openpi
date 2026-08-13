@@ -37,6 +37,7 @@ import { getTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
 import {
   drainSettledSubagents,
   resetSettledSubagents,
+  subscribeToSettledSubagents,
 } from "../shared/task-reconcile.ts";
 
 const TOOL_NAMES = ["tasks_add", "tasks_update", "tasks_list"] as const;
@@ -105,6 +106,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetVisible = true;
   let taskWidgetExpanded = false;
   let taskWidgetInstalled = false;
+  let unsubSettled: (() => void) | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
@@ -549,6 +551,10 @@ export default function sessionTasks(pi: ExtensionAPI) {
     taskWidgetExpanded = false;
     cancelIdleRecap();
     resetSettledSubagents();
+    unsubSettled?.();
+    unsubSettled = subscribeToSettledSubagents(() =>
+      reconcileTasksWithSubagents(),
+    );
     registerTools();
     notifyProblem(ctx);
     updateTaskWidget(ctx);

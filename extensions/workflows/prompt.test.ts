@@ -175,36 +175,32 @@ test("the tool description teaches log() and usage() as distinct from phase()", 
   // The description is the only place the model learns these exist.
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /• log\(message\)/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /acceptance\?/);
-  assert.match(
-    WORKFLOW_TOOL_DESCRIPTION,
-    /Unlike phase\(\), it does not touch/,
-  );
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /run's narrator \(100 latest kept\)/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /• usage\(\)/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /agent_type\?/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /operator\?/);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /inputs\?/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /result ref/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /same workflow run/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /not.*cross-restart/i);
   assert.match(
     WORKFLOW_TOOL_DESCRIPTION,
-    /same named preset and enforced capabilities as subagent_spawn/,
+    /opaque refs from successful calls in THIS run/i,
   );
   assert.match(
     WORKFLOW_TOOL_DESCRIPTION,
-    /explicit model.*type-file model.*configured built-in role model.*parent model/,
+    /observability, never scheduling authority/,
   );
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /frozen by first activation/);
   assert.match(
     WORKFLOW_TOOL_DESCRIPTION,
-    /explicit effort.*type default.*parent effort/,
+    /explicit model\/provider\/effort overrides it/,
   );
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /check `ok` before using the result/);
   assert.match(
     WORKFLOW_PROMPT_GUIDELINES.join("\n"),
     /select a matching agent_type.*do not hardcode that role's model/,
   );
   // usage() reports; it does not enforce. Saying otherwise would invite a
   // script to rely on a limit that does not exist.
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /reading, not a limit/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /total is a LOWER BOUND/);
   // The worked example should actually use them, not just describe them.
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /^log\(`done — /m);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /if \(dropped\) log/);
 });

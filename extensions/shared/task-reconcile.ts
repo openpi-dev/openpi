@@ -17,12 +17,24 @@ export interface SettledSubagentRecord {
 }
 
 let settled: SettledSubagentRecord[] = [];
+let settledListeners: Array<() => void> = [];
+
+/** Subscribe to immediate reconciliation pulses (called synchronously on
+ *  recordSettledSubagent, so the tasks extension reconciles without waiting
+ *  for the turn to settle — omp's event-driven timing). */
+export function subscribeToSettledSubagents(listener: () => void): () => void {
+  settledListeners.push(listener);
+  return () => {
+    settledListeners = settledListeners.filter((l) => l !== listener);
+  };
+}
 
 /** Running-child descriptions, refreshed by the subagents extension. */
 let runningDescriptions: string[] = [];
 
 export function recordSettledSubagent(record: SettledSubagentRecord): void {
   settled.push(record);
+  for (const listener of settledListeners) listener();
 }
 
 /**
@@ -51,4 +63,5 @@ export function drainSettledSubagents(): SettledSubagentRecord[] {
 
 export function resetSettledSubagents(): void {
   settled = [];
+  settledListeners = [];
 }

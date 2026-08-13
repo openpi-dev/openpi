@@ -9,7 +9,10 @@ import sessionTasks, {
   injectTaskProjection,
   taskConflictMessage,
 } from "./index.ts";
-import { recordSettledSubagent } from "../shared/task-reconcile.ts";
+import {
+  recordSettledSubagent,
+  resetSettledSubagents,
+} from "../shared/task-reconcile.ts";
 
 const sourceInfo = (path: string) => ({
   path,
@@ -23,6 +26,7 @@ function widgetHarness(
   initialTools: unknown[] = [],
   mode: "tui" | "rpc" = "tui",
 ) {
+  resetSettledSubagents();
   const handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
   const tools = new Map<string, any>();
   const commands = new Map<string, any>();
@@ -426,4 +430,38 @@ test("repeated session_start does not rebuild an already-installed widget", asyn
   // /resume re-fires session_start; the widget must not be destroyed/rebuild.
   await h.emit("session_start");
   assert.equal(h.widgets.length, afterFirst);
+});
+
+test("reconciliation fires immediately on settle, not only at agent_settled", async () => {
+  const h = widgetHarness([
+    {
+      type: "custom",
+      customType: "session-tasks",
+      data: {
+        version: 1,
+        revision: 1,
+        nextId: 2,
+        items: [{ id: 1, subject: "memp 浏览器实测", status: "in_progress" }],
+      },
+    },
+  ]);
+  await h.emit("session_start");
+  // Settle a matching subagent WITHOUT emitting agent_settled: the pulse
+  // listener must reconcile immediately (omp's event-driven timing).
+  recordSettledSubagent({
+    id: "sa-9",
+    description: "memp 浏览器实测",
+    ok: true,
+  });
+  const list = await h.tools
+    .get("tasks_list")
+    .execute("l1", {}, undefined, undefined, h.ctx);
+  // Single-item batch: reconcile closes it immediately (no agent_settled).
+  assert.match(list.content[0].text, /No task items/);
+  const ledger = h.entries.find(
+    (entry) => entry.customType === "session-tasks",
+  );
+  // The reconcile committed revision 2 and the single-item batch then closed.
+  assert.equal(ledger?.data.revision, 2);
+  assert.deepEqual(ledger?.data.items, []);
 });
