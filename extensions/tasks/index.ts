@@ -355,7 +355,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
           Type.Union([
             StringEnum(WAITING_ON, {
               description:
-                "What a blocked task is waiting on: owner (human decision/ruling), third_party (external), info (missing information). Only valid while status is blocked.",
+                "Blocked classification: owner/third_party/info (blocked only).",
             }),
             Type.Null(),
           ]),
@@ -365,7 +365,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
             Type.String({
               maxLength: TASKS_LIMITS.noteChars,
               description:
-                "Evidence reference for done/dropped: commit SHA, file path, or verification result.",
+                "Done/dropped evidence: commit, path, or verification.",
             }),
             Type.Null(),
           ]),
