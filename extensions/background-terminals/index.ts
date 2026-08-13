@@ -30,6 +30,7 @@ import { loadSetupConfig } from "../shared/setup-config.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import {
+  MAX_PENDING,
   MAX_RUNNING,
   TerminalManager,
   type TerminalManagerShape,
@@ -95,7 +96,8 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   let startReservations = 0;
-  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  const resultDelivery =
+    createDeferredResultDelivery<TerminalSnapshot>(MAX_PENDING);
   /** Active bg_watch disarm callbacks, keyed by terminal id (one per id). */
   const watchers = new Map<string, () => void>();
 
@@ -107,6 +109,13 @@ export default function (pi: ExtensionAPI) {
       .runPromise(TerminalManager)
       .then((manager) => {
         manager.view.setOnSettled(onSettled);
+        // Pruned entries leave the registry: their deferred result copy is
+        // unreachable via bg_status/bg_kill (UnknownTerminalError), so the
+        // pending slot must be released in lockstep or it is occupied until
+        // session restart (adversarial finding: orphan deadlock).
+        manager.view.setOnPruned((id) => {
+          resultDelivery.consume([id]);
+        });
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateWidget(manager));
         updateWidget(manager);
@@ -248,11 +257,25 @@ export default function (pi: ExtensionAPI) {
     }
     // Defer a deep-enough copy: the live snapshot's output views keep
     // mutating (late flushes) after settle.
-    const pending = resultDelivery.defer({
+    const { size: pending, dropped } = resultDelivery.defer({
       ...snap,
       stdout: { ...snap.stdout },
       stderr: { ...snap.stderr },
     });
+    if (dropped > 0) {
+      const ui = sessionContext?.ui;
+      if (
+        ui &&
+        sessionContext?.hasUI &&
+        Date.now() - backlogNotifiedAt >= 60_000
+      ) {
+        backlogNotifiedAt = Date.now();
+        ui.notify(
+          `${dropped} 个最老的后台结果因积压超限被丢弃（上限 ${MAX_PENDING}）— 及时 bg_status/bg_kill 消费`,
+          "warning",
+        );
+      }
+    }
     // Pending settlements remain retractable while busy, so bg_status/bg_kill
     // can consume them before they are committed to context. bg_start applies
     // backpressure across running + pending + reserved work, keeping this map
@@ -265,7 +288,7 @@ export default function (pi: ExtensionAPI) {
     // so slots fill silently and the next bg_start fails with a puzzle. One
     // notification names the backlog and the remedy (omp-style surface: the
     // problem must be visible before it blocks work).
-    if (pending === MAX_RUNNING && !sessionContext?.isIdle()) {
+    if (pending >= MAX_RUNNING && !sessionContext?.isIdle()) {
       notifyBacklog(pending);
     }
     // Give near-simultaneous idle settlements one fixed, bounded window to

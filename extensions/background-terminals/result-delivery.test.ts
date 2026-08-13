@@ -32,9 +32,9 @@ test("a result consumed by a kill/status is not delivered", () => {
 
 test("defer reports pending cardinality without evicting identities", () => {
   const delivery = createDeferredResultDelivery<{ id: string }>();
-  assert.equal(delivery.defer({ id: "bt-1" }), 1);
-  assert.equal(delivery.defer({ id: "bt-2" }), 2);
-  assert.equal(delivery.defer({ id: "bt-3" }), 3);
+  assert.deepEqual(delivery.defer({ id: "bt-1" }), { size: 1, dropped: 0 });
+  assert.deepEqual(delivery.defer({ id: "bt-2" }), { size: 2, dropped: 0 });
+  assert.deepEqual(delivery.defer({ id: "bt-3" }), { size: 3, dropped: 0 });
 
   assert.deepEqual(delivery.drain(), [
     { id: "bt-1" },

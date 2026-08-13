@@ -7,13 +7,26 @@
  * settlement itself. Keyed by id, so double delivery is structurally
  * impossible — whoever drains first wins.
  */
-export function createDeferredResultDelivery<T extends { id: string }>() {
+export function createDeferredResultDelivery<T extends { id: string }>(
+  maxPending = Number.POSITIVE_INFINITY,
+) {
   const pending = new Map<string, T>();
 
   return {
+    /** Defer one result. Returns the new size plus how many oldest entries
+     * were evicted to stay under `maxPending` (queue bound: settlement is
+     * not capacity-gated, so the backlog itself must be bounded or dead
+     * results alone can exhaust every bg_start slot — adversarial finding). */
     defer(result: T) {
       pending.set(result.id, result);
-      return pending.size;
+      let dropped = 0;
+      while (pending.size > maxPending) {
+        const oldest = pending.keys().next().value;
+        if (oldest === undefined) break;
+        pending.delete(oldest);
+        dropped++;
+      }
+      return { size: pending.size, dropped };
     },
     consume(ids: Iterable<string>) {
       for (const id of ids) pending.delete(id);

@@ -37,6 +37,10 @@ import { OutputBuffer } from "./output.ts";
 
 export const MAX_RUNNING = 8;
 export const MAX_TRACKED = 32;
+/** Deferred-result backlog bound: settlement is not capacity-gated, so the
+ * pending queue needs its own ceiling or dead results alone can occupy every
+ * start slot (adversarial finding). Twice the running limit gives headroom. */
+export const MAX_PENDING = MAX_RUNNING * 2;
 const MAX_SETTLED_HISTORY = MAX_TRACKED * 4;
 /** In-memory retained cap per stream. */
 export const RETAINED_PER_STREAM = 2 * 1024 * 1024;
@@ -152,6 +156,9 @@ export interface TerminalReadModel {
   /** Fire-and-forget kill (dashboard/detail `x`). Not marked consumed: the
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
+  /** Pruned-entry hook: release the deferred result slot in lockstep (an
+   * evicted entry's pending copy is unreachable by bg_status/bg_kill). */
+  setOnPruned(hook: (id: string) => void): void;
   /**
    * Register the settle hook. `consumed` is true when an active bg_kill is
    * collecting the result (so it must not also be delivered as a follow-up).
@@ -315,6 +322,10 @@ const makeManager = Effect.gen(function* () {
   let onSettled:
     | ((snap: TerminalSnapshot, consumed: boolean) => void)
     | undefined;
+  /** Pruned-entry notification: the deferred result copy becomes an orphan
+   * (unreachable by bg_status/bg_kill → UnknownTerminalError) once the entry
+   * leaves the registry, so the pending slot must be released in lockstep. */
+  let onPruned: ((id: string) => void) | undefined;
 
   const notify = (id?: string) => {
     for (const listener of [...listeners]) {
@@ -388,6 +399,11 @@ const makeManager = Effect.gen(function* () {
       if (entries.size <= MAX_TRACKED) break;
       entries.delete(entry.snapshot.id);
       runCleanup(closeEntryScope(entry));
+      try {
+        onPruned?.(entry.snapshot.id);
+      } catch {
+        // A pending-map callback must never corrupt pruning.
+      }
     }
   };
 
@@ -967,6 +983,9 @@ const makeManager = Effect.gen(function* () {
     },
     setOnSettled: (hook) => {
       onSettled = hook;
+    },
+    setOnPruned: (hook) => {
+      onPruned = hook;
     },
   };
 
