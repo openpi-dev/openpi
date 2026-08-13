@@ -13,9 +13,11 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   buildReminderText,
+  claimSignalInjection,
   detectSignals,
   extractCommand,
   injectReminder,
+  resetSignalInjectionClaim,
 } from "../shared/signal-detection.ts";
 
 const REMINDER_TAG = "commit-task-sync";
@@ -68,6 +70,9 @@ export default function commitTaskSync(pi: ExtensionAPI) {
   pi.on("context", (event) => {
     if (!commitDetected) return;
     commitDetected = false;
+    // Cross-extension dedupe: multi-signal-sync also detects commit; one
+    // injection is enough.
+    if (!claimSignalInjection(["commit"], REMINDER_TAG)) return;
     const messages = injectReminder(
       event.messages,
       buildReminderText(["commit"], REMINDER_TAG),
@@ -87,5 +92,6 @@ export default function commitTaskSync(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     generation++;
     commitDetected = false;
+    resetSignalInjectionClaim();
   });
 }

@@ -22,10 +22,12 @@ import { setTaskWidgetAttachment } from "../shared/task-widget-attachment.ts";
 import {
   SIGNAL_LABEL,
   buildReminderText,
+  claimSignalInjection,
   detectSignals,
   extractCommand,
   injectReminder,
   lastUserMessageHasAuthorization,
+  resetSignalInjectionClaim,
   type SignalKind,
 } from "../shared/signal-detection.ts";
 
@@ -67,6 +69,9 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     if (signals.length === 0) return;
     const detected = signals;
     signals = [];
+    // Cross-extension dedupe: whichever signal extension's handler runs
+    // first wins the single injection; the other skips.
+    if (!claimSignalInjection(detected, REMINDER_TAG)) return;
     const messages = injectReminder(
       event.messages,
       buildReminderText(detected, REMINDER_TAG),
@@ -106,6 +111,7 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     pendingNotify = [];
     statusShown = false;
     setTaskWidgetAttachment(undefined);
+    resetSignalInjectionClaim();
   });
 
   pi.on("session_shutdown", () => {
@@ -114,5 +120,6 @@ export default function multiSignalSync(pi: ExtensionAPI) {
     pendingNotify = [];
     statusShown = false;
     setTaskWidgetAttachment(undefined);
+    resetSignalInjectionClaim();
   });
 }
