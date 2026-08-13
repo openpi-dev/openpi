@@ -2,12 +2,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { SUBAGENT_ROLE_NAMES } from "../shared/subagent-roles.ts";
-import setupExtension, {
+import {
+  SUBAGENT_ROLE_MODELS_SCHEMA,
   applySubagentRoleModelUpdates,
   buildInteractiveSetupPrompt,
   shouldOfferPiIntercom,
-  SUBAGENT_ROLE_MODELS_SCHEMA,
-} from "./index.ts";
+} from "./domain.ts";
+import setupExtension from "./index.ts";
 
 test("registers the canonical setup command, legacy alias, and one constrained tool", () => {
   const commands = new Set<string>();

@@ -4,53 +4,18 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  MIN_CONTEXT_PIVOT_TOKENS,
+  buildPivotSummary,
+  estimateContextTokens,
+  shouldPivot,
+} from "./policy.ts";
 
-export const MIN_CONTEXT_PIVOT_TOKENS = 30_000;
 const STATUS_KEY = "context-pivot";
 
 interface PendingPivot {
   brief: string;
   generation: number;
-}
-
-interface ContextUsage {
-  tokens?: number | null;
-  percent?: number | null;
-  contextWindow?: number | null;
-}
-
-export function estimateContextTokens(
-  usage: ContextUsage | null | undefined,
-): number | null {
-  if (!usage) return null;
-  if (typeof usage.tokens === "number") {
-    return Number.isFinite(usage.tokens) && usage.tokens >= 0
-      ? usage.tokens
-      : null;
-  }
-  if (
-    typeof usage.percent !== "number" ||
-    !Number.isFinite(usage.percent) ||
-    usage.percent < 0 ||
-    typeof usage.contextWindow !== "number" ||
-    !Number.isFinite(usage.contextWindow) ||
-    usage.contextWindow <= 0
-  ) {
-    return null;
-  }
-  return (usage.contextWindow * usage.percent) / 100;
-}
-
-export function buildPivotSummary(brief: string): string {
-  return [
-    "## Context Pivot — Continue in a Clean Context",
-    "",
-    "The previous phase was deliberately compressed. Continue from this brief instead of reconstructing discarded mechanics.",
-    "",
-    "## Next Phase",
-    "",
-    brief.trim(),
-  ].join("\n");
 }
 
 function impossibleKeptId(entries: readonly SessionEntry[]) {
@@ -60,16 +25,12 @@ function impossibleKeptId(entries: readonly SessionEntry[]) {
 function validateBrief(brief: string, ctx: ExtensionContext) {
   if (!brief.trim())
     throw new Error("context_pivot requires a non-empty brief.");
-
   const tokens = estimateContextTokens(ctx.getContextUsage());
-  if (tokens === null) {
+  if (!shouldPivot(tokens)) {
     throw new Error(
-      "Context usage is unavailable; context pivot was not started.",
-    );
-  }
-  if (tokens < MIN_CONTEXT_PIVOT_TOKENS) {
-    throw new Error(
-      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
+      tokens === null
+        ? "Context usage is unavailable; context pivot was not started."
+        : `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
     );
   }
 }

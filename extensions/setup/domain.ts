@@ -1,0 +1,145 @@
+/**
+ * Setup domain layer (DDD): pure decision/prompt/schema functions. Zero I/O,
+ * zero ui — every branch here is unit-testable. Wiring lives in index.ts.
+ */
+
+import { Type } from "typebox";
+import {
+  SUBAGENT_ROLE_NAMES,
+  type SubagentRoleModel,
+  type SubagentRoleModels,
+} from "../shared/subagent-roles.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import type { PiIntercomStatus } from "./intercom.ts";
+
+const subagentRoleModelValueSchema = Type.Union([
+  Type.Object(
+    {
+      provider: Type.String({ description: "Available Pi provider id." }),
+      model: Type.String({ description: "Available Pi model id." }),
+    },
+    { additionalProperties: false },
+  ),
+  Type.Null(),
+]);
+
+export const SUBAGENT_ROLE_MODELS_SCHEMA = Type.Partial(
+  Type.Record(
+    Type.Union(SUBAGENT_ROLE_NAMES.map((role) => Type.Literal(role))),
+    subagentRoleModelValueSchema,
+  ),
+  {
+    additionalProperties: false,
+    description:
+      "Partial built-in-role model assignments shared by subagent_spawn and workflow agent_type. Each value is an available {provider, model}; null clears that role to inherit the parent model, and omitted roles are preserved.",
+  },
+);
+
+export function applySubagentRoleModelUpdates(
+  current: SubagentRoleModels,
+  updates:
+    | Partial<
+        Record<(typeof SUBAGENT_ROLE_NAMES)[number], SubagentRoleModel | null>
+      >
+    | undefined,
+  findModel: (
+    provider: string,
+    model: string,
+  ) => { readonly provider: string; readonly id: string } | undefined,
+) {
+  if (!updates) return current;
+
+  const roleModels = { ...current };
+  for (const role of SUBAGENT_ROLE_NAMES) {
+    const update = updates[role];
+    if (update === undefined) continue;
+    if (update === null) {
+      delete roleModels[role];
+      continue;
+    }
+    const resolved = findModel(update.provider, update.model);
+    if (!resolved) {
+      throw new Error(
+        `Unknown configured subagent role model for ${role}: ${update.provider}/${update.model}`,
+      );
+    }
+    roleModels[role] = { provider: resolved.provider, model: resolved.id };
+  }
+  return roleModels;
+}
+
+export function safeSetupNotice(value: unknown, maximum = 500) {
+  return sanitizeTerminalText(
+    value instanceof Error ? value.message : String(value),
+  )
+    .replace(/\s+/gu, " ")
+    .trim()
+    .slice(0, maximum);
+}
+
+export function shouldOfferPiIntercom(options: {
+  readonly request: string;
+  readonly status: PiIntercomStatus;
+  readonly mode: string;
+  readonly idle: boolean;
+}) {
+  return (
+    !options.request &&
+    !options.status.active &&
+    !options.status.installed &&
+    !options.status.diagnostic &&
+    options.mode === "tui" &&
+    options.idle
+  );
+}
+
+export function buildInteractiveSetupPrompt(options: {
+  currentConfiguration: string;
+  currentModel: string;
+  currentThinking: string;
+  savedConfigExists: boolean;
+}) {
+  const configurationState = options.savedConfigExists
+    ? [
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Next-action suggestions, Workflow limits, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
+      ]
+    : [
+        "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
+        "Prefer one ask_user call with up to three independent questions covering Next-action suggestions, Workflow limits, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
+      ];
+
+  return [
+    "Guide me through configuring the installed OpenPI package interactively.",
+    "",
+    "Current configuration:",
+    options.currentConfiguration,
+    `Current Pi model: ${options.currentModel}`,
+    `Current Pi thinking level: ${options.currentThinking}`,
+    `Saved configuration exists: ${options.savedConfigExists ? "yes" : "no"}`,
+    "",
+    ...configurationState,
+    "",
+    "Before asking, briefly explain what can be configured and the practical impact:",
+    "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
+    "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
+    "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (default one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text). Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Nerd Font only affects powerline separator glyphs; text stays readable without it. Changes apply immediately in the active TUI session.",
+    "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
+    "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
+    "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full (always expanded) or compact (Claude Code-style folded preview with a hidden-line count). Compact output can still be temporarily expanded with the configured app.tools.expand key (Ctrl+O by default). Bash and Write/Edit default to compact. Recommend compact for users who do not usually inspect implementation details.",
+    "- Agent role models: built-in explorer, implementer, reviewer, and advisor roles are shared by subagent_spawn and workflow agent_type, and inherit the parent model by default. Assign only an available registry model to an individual role when needed; clearing that role returns it to inheritance. Custom agent-type files still override a built-in role's complete definition.",
+    "- Intercom: optional cross-session messaging is installed only after a native setup confirmation. It stays parent-only; Direct/Workflow children and Replay cannot use it. The status above is informational for this model-guided step—do not install packages or edit its config yourself.",
+    "",
+    "Natural-language configuration examples the user might ask for:",
+    '- "switch footer to powerline" → ui_footer_preset=powerline',
+    '- "use mono powerline" → ui_footer_preset=powerline-mono',
+    '- "compact footer" → ui_footer_preset=compact',
+    '- "two custom lines: cwd flex model / context cost flex git" → ui_footer_lines=[["cwd","flex","model"],["context","cost","flex","git"]]',
+    '- "run npm run format after Write/Edit turns" → post_edit_command="npm run format"',
+    '- "turn off post-edit" → post_edit_command=""',
+    '- "make explorer use my available fast model" → subagent_role_models={explorer:{provider:"…",model:"…"}}',
+    '- "make explorer inherit again" → subagent_role_models={explorer:null}',
+    "",
+    "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
+  ];
+}

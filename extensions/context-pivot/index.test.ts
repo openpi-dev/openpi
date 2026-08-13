@@ -4,7 +4,7 @@ import {
   buildPivotSummary,
   estimateContextTokens,
   MIN_CONTEXT_PIVOT_TOKENS,
-} from "./index.ts";
+} from "./policy.ts";
 
 test("estimates context from exact tokens or percentage", () => {
   assert.equal(estimateContextTokens({ tokens: 42_000 }), 42_000);

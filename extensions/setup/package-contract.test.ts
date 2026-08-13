@@ -59,7 +59,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   assert.equal(manifest.publishConfig?.access, "public");
   assert.equal(
     manifest.scripts?.prepublishOnly,
-    "npm run format:check && npm run check && npm test",
+    "npm run format:check && npm run check && npm run check:ddd && npm test",
   );
   assert.deepEqual(manifest.repository, {
     type: "git",

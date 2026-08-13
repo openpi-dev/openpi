@@ -13,14 +13,12 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { isMutatingTool, shouldRunCommand } from "./policy.ts";
 import {
   loadSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
 } from "../shared/setup-config.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
-
-/** Tools whose success means a file on disk changed. */
-const MUTATING_TOOLS = new Set(["write", "edit"]);
 
 export default function postEdit(
   pi: ExtensionAPI,
@@ -41,9 +39,7 @@ export default function postEdit(
   const runNext = (ctx: ExtensionContext, runGeneration: number) => {
     if (
       runGeneration !== generation ||
-      active ||
-      pendingRuns === 0 ||
-      !command
+      !shouldRunCommand(pendingRuns, Boolean(active), command)
     ) {
       return;
     }
@@ -98,7 +94,7 @@ export default function postEdit(
     // Hot path: only a boolean flip. No await, no exec, no config read that
     // could throw — anything heavier here would tax every tool call.
     if (event.isError) return;
-    if (MUTATING_TOOLS.has(event.toolName)) filesChanged = true;
+    if (isMutatingTool(event.toolName)) filesChanged = true;
   });
 
   pi.on("agent_settled", (_event, ctx: ExtensionContext) => {
