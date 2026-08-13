@@ -27,7 +27,9 @@ const CSI_PATTERN = /(?:\u001b\[|\u009b)[0-?]*[ -/]*[@-~]/g;
 const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
 
 const RESET = "\x1b[0m";
-const POWERLINE_ARROW = "\ue0b0"; //  — decorative; text remains readable without Nerd Font
+// U+203A (›) is covered by plain system fonts (e.g. Ubuntu Sans Mono);
+// U+E0B0 (powerline PUA) falls back to arbitrary fonts on stock systems.
+const POWERLINE_ARROW = "\u203a";
 
 /** Higher = keep longer when the line is too narrow. */
 const PRIORITY: Record<FooterItem, number> = {
@@ -72,7 +74,12 @@ const MONO_COLORS: readonly PowerlineColors[] = [
 ];
 
 export type SegmentTone =
-  "text" | "muted" | "dim" | "warning" | "error" | "accent";
+  | "text"
+  | "muted"
+  | "dim"
+  | "warning"
+  | "error"
+  | "accent";
 
 export interface FooterSegment {
   readonly id: FooterItem;

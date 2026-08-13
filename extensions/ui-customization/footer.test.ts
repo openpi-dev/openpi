@@ -85,7 +85,7 @@ test("powerline emits ANSI256 seams and stays within width", () => {
 
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /\x1b\[38;5;\d+;48;5;\d+m/);
-  assert.match(lines[0]!, /\ue0b0/);
+  assert.match(lines[0]!, /\u203a/);
   assert.ok(visibleWidth(lines[0]!) <= 80);
   assert.match(lines[0]!, /project/);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);

@@ -1,4 +1,4 @@
-import { NodeServices } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, it } from "@effect/vitest";
 import { randomUUID } from "node:crypto";
 import { homedir, tmpdir } from "node:os";

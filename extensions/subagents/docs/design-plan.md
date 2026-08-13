@@ -29,13 +29,13 @@ Source: `extensions/subagents/` (`index.ts`, `manager.ts`, `prompt.ts`,
 
 ### 1.1 Tools exposed to the parent LLM
 
-| Tool | Parameters | Behavior |
-|---|---|---|
-| `subagent_spawn` | `prompt`, `title`, `working_dir?`, `model?`, `provider?`, `reasoning_effort?` | Fire-and-forget spawn. Returns immediately with an id (`sa-N`). Enforces `MAX_RUNNING = 4` with a synchronous reservation so parallel tool calls can't race past the cap. Validates `working_dir`, resolves model against the registry (inherit parent model/thinking level by default), truncates title to 160 chars. |
-| `subagent_wait` | `ids[]` (max 64) | Blocks until all listed subagents settle; respects the tool `AbortSignal`; streams `Waiting for ...` via `onUpdate`. Marks the awaited results "consumed" so they are not also auto-delivered. Output budgets: 48KB total, 16KB per agent, with per-section fallbacks (`[omitted: ...]`). Errors on unknown ids (lists known ids). |
-| `subagent_cancel` | `ids[]` | Aborts running subagents (marks consumed first to avoid duplicate delivery), waits for settlement, reports per-id `Cancelled ...` / `was already <status>`. Partial transcripts remain on disk. |
-| `subagent_check` | `id` | Non-blocking peek: status line, turn count, error text, up to 2KB/20 lines of latest output (includes the live streaming assistant message). Does not consume the result. |
-| `subagent_list` | — | One `describeSubagent()` line per agent: `id [status] "title" (provider/model, ctx%, elapsed, cwd)`. |
+| Tool              | Parameters                                                                    | Behavior                                                                                                                                                                                                                                                                                                                           |
+| ----------------- | ----------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `subagent_spawn`  | `prompt`, `title`, `working_dir?`, `model?`, `provider?`, `reasoning_effort?` | Fire-and-forget spawn. Returns immediately with an id (`sa-N`). Enforces `MAX_RUNNING = 4` with a synchronous reservation so parallel tool calls can't race past the cap. Validates `working_dir`, resolves model against the registry (inherit parent model/thinking level by default), truncates title to 160 chars.             |
+| `subagent_wait`   | `ids[]` (max 64)                                                              | Blocks until all listed subagents settle; respects the tool `AbortSignal`; streams `Waiting for ...` via `onUpdate`. Marks the awaited results "consumed" so they are not also auto-delivered. Output budgets: 48KB total, 16KB per agent, with per-section fallbacks (`[omitted: ...]`). Errors on unknown ids (lists known ids). |
+| `subagent_cancel` | `ids[]`                                                                       | Aborts running subagents (marks consumed first to avoid duplicate delivery), waits for settlement, reports per-id `Cancelled ...` / `was already <status>`. Partial transcripts remain on disk.                                                                                                                                    |
+| `subagent_check`  | `id`                                                                          | Non-blocking peek: status line, turn count, error text, up to 2KB/20 lines of latest output (includes the live streaming assistant message). Does not consume the result.                                                                                                                                                          |
+| `subagent_list`   | —                                                                             | One `describeSubagent()` line per agent: `id [status] "title" (provider/model, ctx%, elapsed, cwd)`.                                                                                                                                                                                                                               |
 
 Prompt metadata (all strings live in `prompt.ts`): `subagent_spawn` has a
 `promptSnippet` and two `promptGuidelines` (delegate self-contained tasks; don't block on
@@ -45,8 +45,8 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
 ### 1.2 State tracking (v1 `SubagentManager`)
 
 - Plain class with `Map<string, Subagent>`; each `Subagent` = `{ id, title, prompt, cwd,
-  session: AgentSession, status: "running" | "done" | "error", createdAt, settledAt?,
-  errorText?, unsubscribeLifecycle }`.
+session: AgentSession, status: "running" | "done" | "error", createdAt, settledAt?,
+errorText?, unsubscribeLifecycle }`.
 - Children are **in-process pi `AgentSession`s** created via the SDK
   (`createAgentSession` + `SessionManager.create(cwd)` → real session files visible in
   `/resume`), with child resources loaded per-cwd (`DefaultResourceLoader`, trust-gated
@@ -74,15 +74,15 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
   consume a deferred result before flush (that's why it is a buffer, not an immediate
   send).
 - Delivery = `pi.sendMessage({ customType: "subagent-result", content, display: true,
-  details: { id, title, status } }, { deliverAs: "followUp", triggerTurn: true })`.
+details: { id, title, status } }, { deliverAs: "followUp", triggerTurn: true })`.
   Content is built by `buildSubagentResultMessage` (`Subagent sa-N "title"
-  finished/failed.` + optional `Error:` line + output truncated to 24KB/600 lines with a
+finished/failed.` + optional `Error:` line + output truncated to 24KB/600 lines with a
   pointer to the child session file for the full transcript).
 
 ### 1.4 UI (carried over into v2 essentially as-is)
 
 1. **Footer status** (`ctx.ui.setStatus("subagents", ...)`): `subagents: ■ 2 running ·
-   ■ 1 done · ■ 1 failed · /subagents to view` (warning/success/error colored squares;
+■ 1 done · ■ 1 failed · /subagents to view` (warning/success/error colored squares;
    cleared when no subagents). Driven by manager change listener.
 2. **`subagent-result` message renderer**: status icon (`■`/`x`) + bold accent header
    `subagent sa-N · title · finished/failed`; collapsed = first 8 body lines +
@@ -90,14 +90,14 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
 3. **`/subagents` command** → `openSubagentPicker` loop (TUI mode only; notifies and
    bails in non-TUI or when there are no subagents):
    - **SubagentDashboard** — fullscreen overlay (`anchor: "center", width: "100%",
-     maxHeight: "100%"`), bordered list panel titled `agents · settled/total`. Each row:
+maxHeight: "100%"`), bordered list panel titled `agents · settled/total`. Each row:
      selection marker `❯`, status glyph, title, dim id on the left; model id · context
      utilization (`%/capacity`) · elapsed · status word on the right. Scroll window
      centered on the selection with `... N more` markers. 1Hz ticker re-render for
      elapsed/token columns + manager change subscription. Keys: `tui.select.up/down`
      **and** `j`/`k` to move, `tui.select.confirm` to take over, `x` to abort the
      selected running agent, `tui.select.cancel` to close. Hint line shows the
-     *configured* keys via `keybindings.getKeys()`.
+     _configured_ keys via `keybindings.getKeys()`.
    - **TakeoverView** — fullscreen overlay for one subagent: header line (status glyph,
      `id · title · status · elapsed · provider/model · ctx%`), fixed-height transcript
      viewport (error line and scroll indicator consume viewport rows so height never
@@ -113,9 +113,9 @@ the concurrency cap, and that children can't orchestrate/see the parent conversa
      assistant message**, **live tool executions** (running/done/error marker + first
      output line preview, tracked from `tool_execution_*` events until the final tool
      result message lands), and **queued steering/follow-up messages** (`> [queued
-     steer] ...`) so Enter visibly acknowledges input.
+steer] ...`) so Enter visibly acknowledges input.
 
-**V2 requirement:** all of the above renders from a *normalized* per-subagent view
+**V2 requirement:** all of the above renders from a _normalized_ per-subagent view
 instead of poking at `sub.session` directly — that is the main UI refactor, everything
 else ports over mostly verbatim.
 
@@ -126,11 +126,11 @@ else ports over mostly verbatim.
 These shape the interface even though v1-of-v2 stubs the internals. (Traced from the
 "T3 Code" codebase which integrates Codex and Claude Code.)
 
-| | Interactive sessions | One-shot tasks | Event shape | Interrupt | Steering |
-|---|---|---|---|---|---|
-| **pi** | In-process `createAgentSession()` (pi SDK); real session files; `session.subscribe()` | `session.prompt()` and read final assistant message (or `pi -p` subprocess, not needed) | `AgentSessionEvent` (message_start/update/end, tool_execution_*, agent_start/settled, queue_update, ...) | `session.abort()` | `session.steer()` / `followUp()` |
-| **Claude Code** | `@anthropic-ai/claude-agent-sdk` `query()` — SDK launches the `claude` executable and streams JSON messages (assistant/user/result/system, streaming partials, tool_use blocks) | `claude -p --output-format json` | SDK message stream (async iterable) | `query.interrupt()` / abort controller | streaming-input mode: push more user messages into the input iterable |
-| **Codex** | spawn `codex app-server` child process, JSON-RPC over stdin/stdout (`newConversation` / `sendUserTurn`, notifications: `agentMessageDelta`, `execCommandBegin/End`, `taskComplete`, `tokenCount`, ...) | `codex exec` (prints result to stdout, `--json` for events) | JSON-RPC notifications | `interruptConversation` request | send another `sendUserTurn` on the same conversation |
+|                 | Interactive sessions                                                                                                                                                                                   | One-shot tasks                                                                          | Event shape                                                                                              | Interrupt                              | Steering                                                              |
+| --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------- | -------------------------------------- | --------------------------------------------------------------------- |
+| **pi**          | In-process `createAgentSession()` (pi SDK); real session files; `session.subscribe()`                                                                                                                  | `session.prompt()` and read final assistant message (or `pi -p` subprocess, not needed) | `AgentSessionEvent` (message_start/update/end, tool_execution_*, agent_start/settled, queue_update, ...) | `session.abort()`                      | `session.steer()` / `followUp()`                                      |
+| **Claude Code** | `@anthropic-ai/claude-agent-sdk` `query()` — SDK launches the `claude` executable and streams JSON messages (assistant/user/result/system, streaming partials, tool_use blocks)                        | `claude -p --output-format json`                                                        | SDK message stream (async iterable)                                                                      | `query.interrupt()` / abort controller | streaming-input mode: push more user messages into the input iterable |
+| **Codex**       | spawn `codex app-server` child process, JSON-RPC over stdin/stdout (`newConversation` / `sendUserTurn`, notifications: `agentMessageDelta`, `execCommandBegin/End`, `taskComplete`, `tokenCount`, ...) | `codex exec` (prints result to stdout, `--json` for events)                             | JSON-RPC notifications                                                                                   | `interruptConversation` request        | send another `sendUserTurn` on the same conversation                  |
 
 Common denominator all three can supply:
 
@@ -154,7 +154,7 @@ That is exactly what the normalized event model below encodes.
 - Single `effect` package (v4 beta). Services defined with
   `ServiceMap.Service<T>()("id", ...)` / `ServiceMap.Key`; wiring via `Layer`;
   `ManagedRuntime.make(layer)` at the extension edge with `runtime.runPromise(effect,
-  { signal })` inside `async execute()` tool handlers and `await runtime.dispose()` on
+{ signal })` inside `async execute()` tool handlers and `await runtime.dispose()` on
   `session_shutdown`.
 - `Effect.gen` generators throughout the internals. `async`/`Promise` appears **only**
   in: tool `execute()` bodies, `pi.on(...)` handlers, the `/subagents` command handler,
@@ -170,29 +170,30 @@ That is exactly what the normalized event model below encodes.
 
 ```ts
 type BackendName = "pi" | "claude" | "codex";
-type SubagentStatus = "running" | "done" | "error";   // unchanged from v1
+type SubagentStatus = "running" | "done" | "error"; // unchanged from v1
 
 interface SpawnTask {
   prompt: string;
   title: string;
   cwd: string;
   // Generic model hint; each backend interprets/validates it its own way.
-  model?: string;            // pi: "provider/model-id"; claude: model alias; codex: model slug
-  reasoningEffort?: string;  // pi thinking level; codex reasoning effort; claude: ignored/mapped
-  parentContext: {           // resolved by the tool layer, passed opaquely
+  model?: string; // pi: "provider/model-id"; claude: model alias; codex: model slug
+  reasoningEffort?: string; // pi thinking level; codex reasoning effort; claude: ignored/mapped
+  parentContext: {
+    // resolved by the tool layer, passed opaquely
     parentCwd: string;
     projectTrusted: boolean;
-    inheritedModelRef?: { provider: string; id: string };  // pi only
+    inheritedModelRef?: { provider: string; id: string }; // pi only
     inheritedThinkingLevel?: string;
   };
 }
 
 interface SubagentMeta {
   backend: BackendName;
-  modelLabel?: string;         // "anthropic/claude-opus-4-5", "gpt-5-codex", ...
-  contextWindow?: number;      // for utilization %, when known
-  sessionFilePath?: string;    // pi session file / claude JSONL / codex rollout path
-  nativeSessionId?: string;    // claude session id, codex conversation id
+  modelLabel?: string; // "anthropic/claude-opus-4-5", "gpt-5-codex", ...
+  contextWindow?: number; // for utilization %, when known
+  sessionFilePath?: string; // pi session file / claude JSONL / codex rollout path
+  nativeSessionId?: string; // claude session id, codex conversation id
 }
 ```
 
@@ -204,20 +205,28 @@ their native streams into this; nothing downstream knows which backend produced 
 ```ts
 type SubagentEvent =
   // lifecycle
-  | { _tag: "RunStarted" }                       // pi agent_start / claude init / codex turn start
-  | { _tag: "RunSettled"; outcome: RunOutcome }  // terminal per run (a session can run again via send())
+  | { _tag: "RunStarted" } // pi agent_start / claude init / codex turn start
+  | { _tag: "RunSettled"; outcome: RunOutcome } // terminal per run (a session can run again via send())
   // transcript building blocks
-  | { _tag: "UserMessage"; text: string }        // initial prompt + takeover sends, echoed by backend
+  | { _tag: "UserMessage"; text: string } // initial prompt + takeover sends, echoed by backend
   | { _tag: "AssistantDelta"; kind: "text" | "thinking"; delta: string }
-  | { _tag: "AssistantMessage"; parts: TranscriptPart[] }  // finalized message (replaces live buffer)
-  | { _tag: "ToolStart";  toolId: string; name: string; argsPreview?: string }
+  | { _tag: "AssistantMessage"; parts: TranscriptPart[] } // finalized message (replaces live buffer)
+  | { _tag: "ToolStart"; toolId: string; name: string; argsPreview?: string }
   | { _tag: "ToolUpdate"; toolId: string; outputPreview?: string }
-  | { _tag: "ToolEnd";    toolId: string; isError: boolean; outputPreview?: string }
+  | {
+      _tag: "ToolEnd";
+      toolId: string;
+      isError: boolean;
+      outputPreview?: string;
+    }
   // bookkeeping
-  | { _tag: "QueueChanged"; queued: ReadonlyArray<{ text: string; kind: "steer" | "follow-up" }> }
+  | {
+      _tag: "QueueChanged";
+      queued: ReadonlyArray<{ text: string; kind: "steer" | "follow-up" }>;
+    }
   | { _tag: "UsageChanged"; tokens?: number; contextWindow?: number }
-  | { _tag: "MetaChanged";  meta: Partial<SubagentMeta> }  // model switched, session file known, ...
-  | { _tag: "BackendError"; message: string };   // non-fatal diagnostics (fatal → RunSettled outcome)
+  | { _tag: "MetaChanged"; meta: Partial<SubagentMeta> } // model switched, session file known, ...
+  | { _tag: "BackendError"; message: string }; // non-fatal diagnostics (fatal → RunSettled outcome)
 
 type RunOutcome =
   | { _tag: "Completed"; finalText: string }
@@ -232,15 +241,15 @@ type TranscriptPart =
 
 Mapping sanity check against what the v1 UI renders:
 
-| v1 render source | v2 event source |
-|---|---|
-| `sub.session.messages` (user/assistant/toolResult) | fold of `UserMessage` / `AssistantMessage` / `ToolEnd` into the snapshot transcript |
-| streaming message (`agent.state.streamingMessage`) | live buffer fed by `AssistantDelta` (cleared on `AssistantMessage`/`RunSettled`) |
-| live tool map from `tool_execution_*` | `ToolStart/Update/End` (entries drop when the finalized assistant/tool item lands, same as v1) |
-| queued steer/follow-up messages | `QueueChanged` |
-| status / errorText / settledAt | `RunStarted` / `RunSettled` |
-| model + context utilization columns | `MetaChanged` + `UsageChanged` |
-| `finalOutput` / `latestOutput` for check/wait/result delivery | `RunOutcome.finalText` (+ live buffer for `latestOutput`) |
+| v1 render source                                              | v2 event source                                                                                |
+| ------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `sub.session.messages` (user/assistant/toolResult)            | fold of `UserMessage` / `AssistantMessage` / `ToolEnd` into the snapshot transcript            |
+| streaming message (`agent.state.streamingMessage`)            | live buffer fed by `AssistantDelta` (cleared on `AssistantMessage`/`RunSettled`)               |
+| live tool map from `tool_execution_*`                         | `ToolStart/Update/End` (entries drop when the finalized assistant/tool item lands, same as v1) |
+| queued steer/follow-up messages                               | `QueueChanged`                                                                                 |
+| status / errorText / settledAt                                | `RunStarted` / `RunSettled`                                                                    |
+| model + context utilization columns                           | `MetaChanged` + `UsageChanged`                                                                 |
+| `finalOutput` / `latestOutput` for check/wait/result delivery | `RunOutcome.finalText` (+ live buffer for `latestOutput`)                                      |
 
 Previews (`argsPreview`, `outputPreview`) are pre-flattened single-line strings because
 the UI only ever shows one sanitized line — this avoids leaking three different native
@@ -254,7 +263,7 @@ One interface; three implementations; a registry keyed by `BackendName`.
 interface SubagentBackend {
   readonly name: BackendName;
   readonly capabilities: {
-    steering: boolean;         // can send() into a live run (all three eventually; stubs: true)
+    steering: boolean; // can send() into a live run (all three eventually; stubs: true)
     modelSelection: boolean;
     reasoningEffort: boolean;
   };
@@ -265,11 +274,13 @@ interface SubagentBackend {
    * session/process. Returns a live handle immediately (fire-and-forget semantics
    * live in the manager, not here).
    */
-  spawn(task: SpawnTask): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
+  spawn(
+    task: SpawnTask,
+  ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope>;
 }
 
 interface SubagentSession {
-  readonly meta: Effect.Effect<SubagentMeta>;                 // snapshot; also updated via MetaChanged
+  readonly meta: Effect.Effect<SubagentMeta>; // snapshot; also updated via MetaChanged
   /** All activity. Single consumer (the manager). Ends after the final RunSettled on close. */
   readonly events: Stream.Stream<SubagentEvent, never>;
   /** Steer while running, or start a fresh run when idle (v1 `manager.send` semantics). */
@@ -283,8 +294,10 @@ interface SubagentSession {
 // Registry: a plain ServiceMap.Key holding a ReadonlyMap<BackendName, SubagentBackend>,
 // built by a Layer that collects the three backend layers. Adding a 4th backend = one
 // new file + one line in the registry layer.
-class BackendRegistry extends ServiceMap.Key<BackendRegistry,
-  ReadonlyMap<BackendName, SubagentBackend>>()("subagents/BackendRegistry") {}
+class BackendRegistry extends ServiceMap.Key<
+  BackendRegistry,
+  ReadonlyMap<BackendName, SubagentBackend>
+>()("subagents/BackendRegistry") {}
 ```
 
 Design choices worth calling out:
@@ -312,50 +325,70 @@ plain mutable map guarded by the single-threaded JS model) of entries plus a
 
 ```ts
 interface SubagentEntry {
-  id: string;                    // "sa-N", same scheme as v1
+  id: string; // "sa-N", same scheme as v1
   backend: BackendName;
-  title: string; prompt: string; cwd: string;
-  scope: Scope.Closeable;        // owns the SubagentSession
+  title: string;
+  prompt: string;
+  cwd: string;
+  scope: Scope.Closeable; // owns the SubagentSession
   session: SubagentSession;
-  eventPump: Fiber.Fiber<void>;  // folds events → snapshot, fires settle hooks
+  eventPump: Fiber.Fiber<void>; // folds events → snapshot, fires settle hooks
 }
 
-interface SubagentSnapshot {      // what the UI and tools read; plain immutable data
-  id: string; backend: BackendName; title: string; cwd: string;
+interface SubagentSnapshot {
+  // what the UI and tools read; plain immutable data
+  id: string;
+  backend: BackendName;
+  title: string;
+  cwd: string;
   status: SubagentStatus;
-  createdAt: number; settledAt?: number;
+  createdAt: number;
+  settledAt?: number;
   errorText?: string;
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
-  transcript: ReadonlyArray<TranscriptItem>;    // finalized items
+  transcript: ReadonlyArray<TranscriptItem>; // finalized items
   liveAssistant?: { text: string; thinking: string };
-  liveTools: ReadonlyArray<LiveToolState>;      // v1's LiveToolEvent, verbatim
+  liveTools: ReadonlyArray<LiveToolState>; // v1's LiveToolEvent, verbatim
   queued: ReadonlyArray<{ text: string; kind: "steer" | "follow-up" }>;
-  finalText: string;             // last Completed finalText (v1 finalOutput)
-  latestText: string;            // finalText or live buffer (v1 latestOutput)
-  turns: number;                 // count of AssistantMessage events (for subagent_check)
+  finalText: string; // last Completed finalText (v1 finalOutput)
+  latestText: string; // finalText or live buffer (v1 latestOutput)
+  turns: number; // count of AssistantMessage events (for subagent_check)
 }
 
-class SubagentManager extends ServiceMap.Key<SubagentManager, {
-  spawn(backend: BackendName, task: SpawnTask):
-    Effect.Effect<SubagentSnapshot, SpawnError | ConcurrencyLimitError | BackendUnavailable>;
-  waitFor(ids: string[], onPending?: (pending: string[]) => void):
-    Effect.Effect<void, SubagentNotFound>;      // interruption = tool signal abort
-  cancel(ids: string[]): Effect.Effect<CancelReport, SubagentNotFound>;
-  send(id: string, text: string): Effect.Effect<void, SubagentNotFound | SendError>;
-  get(id: string): Effect.Effect<SubagentSnapshot | undefined>;
-  list: Effect.Effect<ReadonlyArray<SubagentSnapshot>>;
-  disposeAll: Effect.Effect<void>;
-  /** Synchronous read model for the TUI (see 3.6). */
-  readonly view: SubagentReadModel;
-}>()("subagents/SubagentManager") {}
+class SubagentManager extends ServiceMap.Key<
+  SubagentManager,
+  {
+    spawn(
+      backend: BackendName,
+      task: SpawnTask,
+    ): Effect.Effect<
+      SubagentSnapshot,
+      SpawnError | ConcurrencyLimitError | BackendUnavailable
+    >;
+    waitFor(
+      ids: string[],
+      onPending?: (pending: string[]) => void,
+    ): Effect.Effect<void, SubagentNotFound>; // interruption = tool signal abort
+    cancel(ids: string[]): Effect.Effect<CancelReport, SubagentNotFound>;
+    send(
+      id: string,
+      text: string,
+    ): Effect.Effect<void, SubagentNotFound | SendError>;
+    get(id: string): Effect.Effect<SubagentSnapshot | undefined>;
+    list: Effect.Effect<ReadonlyArray<SubagentSnapshot>>;
+    disposeAll: Effect.Effect<void>;
+    /** Synchronous read model for the TUI (see 3.6). */
+    readonly view: SubagentReadModel;
+  }
+>()("subagents/SubagentManager") {}
 ```
 
 Behavior preserved from v1, expressed in Effect terms:
 
 - **Concurrency cap**: `MAX_RUNNING = 4` enforced with a synchronous
   reserve-before-first-yield counter (same race-avoidance rationale as v1); the cap
-  counts *running* agents across all backends (see Open Questions for per-backend caps).
+  counts _running_ agents across all backends (see Open Questions for per-backend caps).
 - **Settlement**: the per-subagent event pump fiber updates the snapshot on every event;
   on `RunSettled` it computes `status`/`errorText` (bounded to 4096 chars) and invokes
   the settle hook with `consumed = waitInterest > 0`. `waitFor` keeps the same
@@ -378,13 +411,13 @@ imperative and render synchronously — they cannot `yield*` effects. Bridge:
 
 ```ts
 interface SubagentReadModel {
-  list(): ReadonlyArray<SubagentSnapshot>;         // sync snapshot reads
+  list(): ReadonlyArray<SubagentSnapshot>; // sync snapshot reads
   get(id: string): SubagentSnapshot | undefined;
-  subscribe(listener: () => void): () => void;     // any-change notification (dashboard, footer)
+  subscribe(listener: () => void): () => void; // any-change notification (dashboard, footer)
   subscribeTo(id: string, l: () => void): () => void; // per-agent (takeover view)
   // sync fire-and-forget commands, executed via the ManagedRuntime under the hood:
-  requestSend(id: string, text: string): void;     // TakeoverView input submit
-  requestAbort(id: string): void;                  // dashboard `x`, takeover app.clear
+  requestSend(id: string, text: string): void; // TakeoverView input submit
+  requestAbort(id: string): void; // dashboard `x`, takeover app.clear
 }
 ```
 
@@ -392,13 +425,13 @@ The manager's event pump writes each new snapshot into this store (plain mutable
 listener set) as its last step, so the UI is always at most one microtask behind the
 Effect world and v1's dashboard/takeover code ports with only these substitutions:
 
-| v1 | v2 |
-|---|---|
-| `manager.list()` / `manager.get(id)` | `view.list()` / `view.get(id)` |
-| `manager.addChangeListener` | `view.subscribe` |
+| v1                                                                | v2                                                                                                          |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------- |
+| `manager.list()` / `manager.get(id)`                              | `view.list()` / `view.get(id)`                                                                              |
+| `manager.addChangeListener`                                       | `view.subscribe`                                                                                            |
 | `sub.session.subscribe(handleSessionEvent)` + local live-tool map | `view.subscribeTo(id, ...)` + read `snapshot.liveTools` / `liveAssistant` (the fold moved into the manager) |
-| `manager.send(sub, text)` / `manager.abort(sub)` | `view.requestSend(id, text)` / `view.requestAbort(id)` |
-| `buildTranscriptLines(sub, ...)` reading `session.messages` | `buildTranscriptLines(snapshot, ...)` reading `snapshot.transcript` + live state + `snapshot.queued` |
+| `manager.send(sub, text)` / `manager.abort(sub)`                  | `view.requestSend(id, text)` / `view.requestAbort(id)`                                                      |
+| `buildTranscriptLines(sub, ...)` reading `session.messages`       | `buildTranscriptLines(snapshot, ...)` reading `snapshot.transcript` + live state + `snapshot.queued`        |
 
 Keybindings, layout math, scroll behavior, 1Hz ticker, 50ms render throttle, sanitize
 logic: copied as-is.
@@ -416,10 +449,10 @@ Layer graph:
   extension-docs guidance to not start background resources in the factory;
   `ManagedRuntime` builds its layer on first run, which satisfies this, but we still
   gate creation behind `session_start`). `session_shutdown`: `runtime.runPromise(
-  manager.disposeAll)` then `await runtime.dispose()`, then recreate on the next
+manager.disposeAll)` then `await runtime.dispose()`, then recreate on the next
   `session_start` (handles `/new`, `/resume`, `/reload`).
 - **Tool handlers are the async boundary.** Each `execute(toolCallId, params, signal,
-  onUpdate, ctx)` builds one `Effect.gen` program and runs it with
+onUpdate, ctx)` builds one `Effect.gen` program and runs it with
   `runtime.runPromise(program, { signal })`; tool-visible errors are converted from
   tagged errors to `Error` messages matching v1 wording. `onUpdate` and `ctx`
   (model registry, cwd, trust) are captured into the program as plain values/callbacks.
@@ -429,9 +462,9 @@ Layer graph:
   backend-interpreted (pi validates against the registry; claude/codex validate against
   their own known-model rules — stubs accept anything). `describeSubagent` lines and the
   dashboard gain the backend name (e.g. `sa-3 [running] "title" (codex, gpt-5-codex,
-  41%/272k, 1m32s, /repo)`).
+41%/272k, 1m32s, /repo)`).
 - `pi.registerMessageRenderer("subagent-result", ...)`, `pi.registerCommand(
-  "subagents", ...)`, footer status updates, and the result-delivery flush hooks
+"subagents", ...)`, footer status updates, and the result-delivery flush hooks
   (`agent_settled`, idle-check on settle) are wired exactly like v1 — these all live
   outside the runtime and call into it only via `runPromise`/the read model.
 
@@ -448,7 +481,7 @@ views are exercised end to end:
   streaming is visible), one fake `ToolStart/Update/End` cycle (`bash` with an args
   preview), `UsageChanged` ramping tokens, a final `AssistantMessage`, and `RunSettled`
   with `Completed` — final text echoes the task: `"[stub:claude] completed: <first 200
-  chars of prompt>"`. Total runtime ~3–6s (configurable per profile) so `subagent_wait`,
+chars of prompt>"`. Total runtime ~3–6s (configurable per profile) so `subagent_wait`,
   the footer counters, and the dashboard's running→done transition are observable.
 - **send**: emits `UserMessage` + `QueueChanged` (briefly, to exercise the queued-line
   rendering) and runs another scripted turn — so takeover steering works.
@@ -501,12 +534,13 @@ extensions/subagents/
 ```
 
 Notes:
+
 - This historical plan originally gave the extension its own package. The repository now
   declares `effect` once in the root `package.json`; extension-level TypeScript scope remains
   in `tsconfig.json`.
 - v1's `child-session.ts` trust/tool-policy helpers are **not** copied in v1 of v2 (the
   stubs don't need them); the real pi backend will bring the needed subset into
-  `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic *is*
+  `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic _is_
   still referenced by the design (SpawnTask.parentContext.projectTrusted) so the tool
   layer computes trust the same way v1 does.
 - Suggested project scripts (per house rules, to be added): `check` (`tsc --noEmit`),
@@ -535,7 +569,7 @@ Recommendation: (a) during development, rename to final names when v2 replaces v
    per-spawn override. Which surface do you want the parent LLM to have?
 2. **One-shot exec mode.** Should the interface expose a separate cheap
    `exec(task): Effect<RunOutcome>` (mapping to `codex exec` / `claude -p
-   --output-format json` / a fresh in-memory pi session), or is one interactive-session
+--output-format json` / a fresh in-memory pi session), or is one interactive-session
    path enough? Exec would forfeit takeover/steering for that subagent — is a
    `mode: "session" | "exec"` spawn parameter desirable, or backend-internal
    optimization only?
@@ -564,6 +598,6 @@ Recommendation: (a) during development, rename to final names when v2 replaces v
 9. **Effect version pinning.** Effect v4 is beta — pin an exact `4.0.0-beta.x` and
    accept manual bumps, or track the beta dist-tag?
 10. **Persistence across reloads.** v1 loses all subagents on `session_shutdown`
-    (disposeAll). Codex/Claude children are external processes that *could* outlive a
+    (disposeAll). Codex/Claude children are external processes that _could_ outlive a
     pi reload — should v2 keep v1's kill-everything behavior (proposed for v1 of v2) or
     plan for reattach later?

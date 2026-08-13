@@ -128,7 +128,8 @@ test("plan_ready fails preflight unless it is the only tool call", () => {
 
 test("Plan Ready keeps the write gate closed until the user prepares an editable implementation prompt", async () => {
   let commandHandler:
-    ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
   let toolHandler:
     | ((event: {
         toolName: string;
@@ -264,7 +265,8 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
 
 test("fresh implementation links a new session and prefills without submitting", async () => {
   let commandHandler:
-    ((args: string, ctx: ExtensionCommandContext) => Promise<void>) | undefined;
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
   let readyExecute: PlanReadyExecute | undefined;
   let parentSession: string | undefined;
   let editorText = "";
@@ -423,9 +425,11 @@ test("persisted Plan Mode state restores branch-locally and fails closed", () =>
 
 test("session reload and tree navigation restore the branch-local write gate", () => {
   let sessionStart:
-    ((event: unknown, ctx: ExtensionContext) => void) | undefined;
+    | ((event: unknown, ctx: ExtensionContext) => void)
+    | undefined;
   let sessionTree:
-    ((event: unknown, ctx: ExtensionContext) => void) | undefined;
+    | ((event: unknown, ctx: ExtensionContext) => void)
+    | undefined;
   let toolHandler:
     | ((event: { toolName: string; input?: Record<string, unknown> }) => {
         block?: boolean;
@@ -495,7 +499,8 @@ test("the stance is broadcast on every change, including shutdown", () => {
   // restricted in the session that follows.
   const emitted: unknown[] = [];
   let commandHandler:
-    ((args: string, ctx: ExtensionContext) => Promise<void>) | undefined;
+    | ((args: string, ctx: ExtensionContext) => Promise<void>)
+    | undefined;
   let shutdown: (() => void) | undefined;
   const pi = {
     registerTool() {},

@@ -17,10 +17,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   advanceDeliveredJobs,
+  type CronJob,
   dueJobs,
   formatInterval,
   parseCronCommand,
-  type CronJob,
 } from "./schedule.ts";
 
 /** How often the scheduler looks for due jobs. */
@@ -55,20 +55,47 @@ export default function cron(
     stopPolling = undefined;
   };
 
-  const fire = (job: CronJob) => {
+  const fire = (due: readonly CronJob[]) => {
+    if (due.length === 0) return true;
     try {
-      pi.sendMessage(
-        {
-          customType: "cron-fire",
-          content: job.prompt,
-          display: true,
-          details: { id: job.id, recurring: job.intervalMs !== undefined },
-        },
-        { deliverAs: "followUp", triggerTurn: true },
-      );
+      const jobs = due.map((job) => ({
+        id: job.id,
+        prompt: job.prompt,
+        recurring: job.intervalMs !== undefined,
+      }));
+      const message =
+        due.length === 1
+          ? {
+              customType: "cron-fire",
+              content: `[cron ${jobs[0]!.id} · ${jobs[0]!.recurring ? "recurring" : "once"}]\n${jobs[0]!.prompt}`,
+              display: true,
+              details: jobs[0],
+            }
+          : {
+              customType: "cron-fire",
+              content: `${due.length} scheduled prompts are due:\n\n${jobs
+                .map(
+                  (job) =>
+                    `[cron ${job.id} · ${job.recurring ? "recurring" : "once"}]\n${job.prompt}`,
+                )
+                .join("\n\n")}`,
+              display: true,
+              details: { count: jobs.length, jobs },
+            };
+      pi.sendMessage<
+        | { id: number; prompt: string; recurring: boolean }
+        | {
+            count: number;
+            jobs: Array<{ id: number; prompt: string; recurring: boolean }>;
+          }
+      >(message, {
+        deliverAs: "followUp",
+        triggerTurn: true,
+      });
       return true;
     } catch {
-      // Session may be shutting down; leave the job due for the next tick.
+      // Session may be shutting down; leave the whole batch due for the next
+      // tick. A partial advance would silently lose prompts.
       return false;
     }
   };
@@ -83,10 +110,10 @@ export default function cron(
     const due = dueJobs(jobs, now);
     if (due.length === 0) return;
     const deliveredIds = new Set<number>();
-    for (const job of due) {
-      if (fire(job)) deliveredIds.add(job.id);
+    if (fire(due)) {
+      for (const job of due) deliveredIds.add(job.id);
     }
-    jobs = advanceDeliveredJobs(jobs, deliveredIds, now);
+    jobs = advanceDeliveredJobs(jobs, deliveredIds, runtime.now());
     if (jobs.length === 0) stopTicker();
   };
 

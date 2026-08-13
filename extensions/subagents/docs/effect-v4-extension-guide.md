@@ -60,14 +60,14 @@ the house style.
 
 ### The LSP / language-service, precisely
 
-- `typescript@7` is the native TypeScript implementation used by `npm run check`.
+- `typescript@7` is the native TypeScript implementation used by `bun run typecheck`.
 - The root `prepare` script patches the Effect Language Service into TypeScript when the
   development-only `@effect/tsgo` package is installed. It exits cleanly for production
   installs that omit dev dependencies.
 - The root plugin configuration keeps Effect errors in the check exit code while printing
   existing warning-level diagnostics without failing the build.
-- Practical sequence: run `npm install` or `npm ci` at the repository root, then
-  `npm run check`. If editor diagnostics look stale, run `npm run prepare`.
+- Practical sequence: run `bun install --frozen-lockfile` at the repository root, then
+  `bun run check`. If editor diagnostics look stale, run `bun run prepare`.
 
 ---
 
@@ -265,13 +265,12 @@ Effect LS, and only touch runtime code that has a real async/resource concern.
 The root scripts are the canonical checks and cover every extension:
 
 ```bash
-npm install
-npm run format:check
-npm run check
-npm test
+bun install --frozen-lockfile
+bun run check
+bun run test
 ```
 
-For a clean-install check, use `npm ci`. If an extension fails with
+For a clean dependency-install check, use `bun install --frozen-lockfile`. If an extension fails with
 `Effect.fork`/`ServiceMap`/`Either` errors, it is using stale v3/early-beta APIs — consult
 the rename table in `effect-v4-notes.md`.
 
@@ -292,5 +291,5 @@ the rename table in `effect-v4-notes.md`.
    in `session_shutdown` run them.
 5. **Don't over-test.** A `check` that passes plus one focused runtime test (where behavior
    is non-obvious) beats a wall of defensive unit tests.
-6. **Don't invent nested package scripts.** Run `npm run check`, `npm test`, and formatting
+6. **Don't invent nested package scripts.** Run `bun run check` and `bun run test`
    from the repository root so every extension uses the same dependency tree and gates.

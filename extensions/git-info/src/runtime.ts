@@ -1,4 +1,4 @@
-import { NodeServices } from "@effect/platform-node";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Cause, Exit, Layer, ManagedRuntime, type Effect } from "effect";
 import { CommandRunner, CommandRunnerLive } from "./process.ts";
 

@@ -3,6 +3,7 @@ import test from "node:test";
 import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
 import {
   buildCompactTerminalPreview,
+  renderTerminalBatchResult,
   renderTerminalResult,
 } from "./src/ui/tool-result.ts";
 
@@ -83,6 +84,40 @@ test("compact renderer stays bounded, shows the tail, and advertises expansion",
     .join("\n");
   assert.match(expanded, /test 1 passed/);
   assert.match(expanded, /test 20 passed/);
+});
+
+test("batched terminal rendering preserves identity without inventing a singular terminal", () => {
+  const results = [
+    { id: "bt-1", title: "tests", status: "done", exitCode: 0 },
+    { id: "bt-2", title: "build", status: "failed", exitCode: 1 },
+  ];
+  const content = [
+    'bt-1 [done] "tests"',
+    "stdout:",
+    "passed",
+    "",
+    'bt-2 [failed] "build"',
+    "stderr:",
+    "compile error",
+  ].join("\n");
+
+  const compact = renderTerminalBatchResult(content, false, theme, results, 3)
+    .render(100)
+    .join("\n");
+  assert.match(compact, /2 background terminals completed/);
+  assert.match(compact, /bt-1 · tests · exit 0/);
+  assert.match(compact, /bt-2 · build · exit 1/);
+  assert.doesNotMatch(compact, /terminal \?/);
+  assert.doesNotMatch(compact, /compile error/);
+  assert.match(compact, /3 older results omitted/);
+  assert.match(compact, /expand/);
+
+  const expanded = renderTerminalBatchResult(content, true, theme, results)
+    .render(120)
+    .join("\n");
+  assert.match(expanded, /bt-1 \[done\]/);
+  assert.match(expanded, /bt-2 \[failed\]/);
+  assert.match(expanded, /compile error/);
 });
 
 test("background terminal preview omits empty streams", () => {

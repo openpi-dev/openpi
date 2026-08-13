@@ -107,6 +107,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetVisible = true;
   let taskWidgetExpanded = false;
   let taskWidgetInstalled = false;
+  let taskWidgetInstalledRevision = -1;
   let unsubSettled: (() => void) | undefined;
   let taskWidgetPaused = false;
   let ui: ExtensionContext["ui"] | undefined;
@@ -140,15 +141,19 @@ export default function sessionTasks(pi: ExtensionAPI) {
       (hasActionableTasks() || getTaskWidgetAttachment() !== undefined);
     // Idempotent: pi re-fires session_start on every /resume, and each
     // setWidget call destroys and rebuilds the widget component — a structural
-    // change that forces a full-viewport repaint. Skip when the widget is
-    // already installed in the same state (one source of the double refresh
-    // on resume).
-    if (shown === taskWidgetInstalled) {
+    // change that forces a full-viewport repaint. Skip only when the visible
+    // state AND the snapshot revision are unchanged — a state transition must
+    // refresh the content (one source of the double refresh on resume).
+    if (
+      shown === taskWidgetInstalled &&
+      current.revision === taskWidgetInstalledRevision
+    ) {
       return shown;
     }
     if (!shown) {
       ui.setWidget(TASK_WIDGET_KEY, undefined);
       taskWidgetInstalled = false;
+      taskWidgetInstalledRevision = -1;
       return false;
     }
     ui.setWidget(TASK_WIDGET_KEY, (tui, theme) => {
@@ -185,6 +190,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
       };
     });
     taskWidgetInstalled = true;
+    taskWidgetInstalledRevision = current.revision;
     return true;
   };
 
@@ -247,6 +253,11 @@ export default function sessionTasks(pi: ExtensionAPI) {
     return true;
   };
 
+  const mutationResultText = (summary: string) => {
+    const current = snapshot();
+    return `${summary}\nCurrent task snapshot (${current.items.length} ${current.items.length === 1 ? "item" : "items"}):\n${tasks.render()}`;
+  };
+
   const toolDetails = (
     action: TaskToolDetails["action"],
     items: TaskItem[],
@@ -256,12 +267,10 @@ export default function sessionTasks(pi: ExtensionAPI) {
     items,
     total: snapshot().items.length,
     revision: snapshot().revision,
-    // From the live snapshot, not `items`: a tools_update carries only the one
-    // row it touched, and a header counted from that would claim the batch is
-    // a single task.
     counts: taskCounts(snapshot().items),
     ...(batchClosed ? { batchClosed: true } : {}),
   });
+
 
   const registerTools = () => {
     if (toolsRegistered || conflict) return;
@@ -275,6 +284,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         "Add stable work-intent items to the current session tasks",
       promptGuidelines: [
         "Use tasks_add only for work spanning multiple agent runs or user turns, or when the user explicitly provides a task list; do not use it as a per-step scratchpad within one run.",
+        "Before starting each tracked item, call tasks_update to mark it in_progress; concurrent work may have multiple in_progress items.",
         "Task tools record advisory intent only; Subagents and Workflows execute work, while files, git, tests, tool results, artifacts, and user confirmation remain truth.",
       ],
       parameters: Type.Object({
@@ -300,10 +310,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: `Added ${mutation.items.map((item) => `T${item.id}`).join(", ")}.`,
+              text: mutationResultText(
+                `Added ${mutation.items.map((item) => `T${item.id}`).join(", ")}.`,
+              ),
             },
           ],
-          details: toolDetails("add", mutation.items),
+          details: toolDetails("add", snapshot().items),
         });
       },
       renderCall(args, theme) {
@@ -330,7 +342,9 @@ export default function sessionTasks(pi: ExtensionAPI) {
       description: `${TOOL_PURPOSE} Patch one task item by numeric ID. blocked/done/dropped transitions require a fresh note; use waitingOn (owner/third_party/info) to classify a blocked item's open question, and evidence to cite what verified a done item.`,
       promptSnippet: "Update one session task item by stable ID",
       promptGuidelines: [
-        "Keep tasks_update status current when tracked work materially changes, but avoid ceremonial status churn.",
+        "Immediately after each tracked item reaches a real outcome, call tasks_update to set done, blocked, or dropped before moving to the next tracked item.",
+        "Before sending a final answer, reconcile every task touched in the current request; do not leave completed work pending or in_progress.",
+        "A commit, passing test, or authorization is task-scoped evidence only; it does not by itself prove a task is done or identify which task to update.",
         "Before setting a task item to done, include a note citing an observable check, artifact, commit, tool result, or user confirmation; Tasks record this claim but do not verify it.",
       ],
       parameters: Type.Object({
@@ -385,14 +399,16 @@ export default function sessionTasks(pi: ExtensionAPI) {
           content: [
             {
               type: "text" as const,
-              text: changed
-                ? closesBatch
-                  ? `${params.status === "dropped" ? "Dropped" : "Completed"} T${params.id}. Task batch closed; the next tasks_add starts again at T1.`
-                  : `Updated T${params.id}.`
-                : `T${params.id} already has that state; no update recorded.`,
+              text: mutationResultText(
+                changed
+                  ? closesBatch
+                    ? `${params.status === "dropped" ? "Dropped" : "Completed"} T${params.id}. Task batch closed; the next tasks_add starts again at T1.`
+                    : `Updated T${params.id}.`
+                  : `T${params.id} already has that state; no update recorded.`,
+              ),
             },
           ],
-          details: toolDetails("update", mutation.items, closesBatch),
+          details: toolDetails("update", snapshot().items, closesBatch),
         });
       },
       renderCall(args, theme) {

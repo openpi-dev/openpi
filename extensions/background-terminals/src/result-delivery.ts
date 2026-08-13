@@ -4,5 +4,8 @@
  */
 export {
   createDeferredResultDelivery,
+  createIdleResultBatcher,
+  hasTerminalCapacity,
   resultDeliveryOptions,
+  type IdleResultBatcherOptions,
 } from "../../shared/result-delivery.ts";

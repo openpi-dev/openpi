@@ -29,7 +29,11 @@ import { Type } from "typebox";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
-import { TerminalManager, type TerminalManagerShape } from "./src/manager.ts";
+import {
+  MAX_RUNNING,
+  TerminalManager,
+  type TerminalManagerShape,
+} from "./src/manager.ts";
 import {
   BG_KILL_PARAMETER_DESCRIPTIONS,
   BG_KILL_TOOL_DESCRIPTION,
@@ -45,6 +49,7 @@ import {
   buildKillReport,
   buildStartResult,
   buildStatusResult,
+  buildTerminalBatchResultMessage,
   buildTerminalResultMessage,
   buildWatchArmedResult,
   buildWatchMatchMessage,
@@ -52,23 +57,29 @@ import {
 } from "./src/prompt.ts";
 import {
   createDeferredResultDelivery,
+  createIdleResultBatcher,
+  hasTerminalCapacity,
   resultDeliveryOptions,
 } from "./src/result-delivery.ts";
-import {
-  assertWatchableOutput,
-  compileWatchPattern,
-  createChunkMatcher,
-  matchCapturedOutput,
-} from "./src/watch.ts";
 import {
   createTerminalRuntime,
   runTool,
   type TerminalRuntime,
 } from "./src/runtime.ts";
 import { openTerminalPicker } from "./src/ui/ps.ts";
-import { renderTerminalResult } from "./src/ui/tool-result.ts";
+import {
+  renderTerminalBatchResult,
+  renderTerminalResult,
+} from "./src/ui/tool-result.ts";
+import {
+  assertWatchableOutput,
+  compileWatchPattern,
+  createChunkMatcher,
+  matchCapturedOutput,
+} from "./src/watch.ts";
 
 const WIDGET_KEY = "background-terminals";
+const IDLE_RESULT_BATCH_MS = 200;
 
 interface WatchToolDetails {
   id: string;
@@ -83,6 +94,7 @@ export default function (pi: ExtensionAPI) {
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
+  let startReservations = 0;
   const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
   /** Active bg_watch disarm callbacks, keyed by terminal id (one per id). */
   const watchers = new Map<string, () => void>();
@@ -160,7 +172,9 @@ export default function (pi: ExtensionAPI) {
           customType: "background-terminal-result",
           // One message per flush, not per terminal: five processes exiting
           // together are one event to react to, not five.
-          content: snaps.map(buildTerminalResultMessage).join("\n\n"),
+          content: buildTerminalBatchResultMessage(
+            snaps.map(buildTerminalResultMessage),
+          ),
           display: true,
           details:
             snaps.length === 1
@@ -198,11 +212,17 @@ export default function (pi: ExtensionAPI) {
   };
 
   const flushResults = (wake: boolean) => {
-    const snaps = resultDelivery.drain();
-    if (!deliverResults(snaps, wake)) {
-      for (const snap of snaps) resultDelivery.defer(snap);
-    }
+    const snaps = resultDelivery.drain(MAX_RUNNING);
+    if (!deliverResults(snaps, wake)) resultDelivery.restore(snaps);
   };
+
+  const idleResultBatcher = createIdleResultBatcher({
+    delayMs: IDLE_RESULT_BATCH_MS,
+    isIdle: () => sessionContext?.isIdle() === true,
+    flush: flushResults,
+    startTimer: (callback, delayMs) => setTimeout(callback, delayMs),
+    clearTimer: (timer) => clearTimeout(timer),
+  });
 
   const onSettled = (snap: TerminalSnapshot, consumed: boolean) => {
     // A settled terminal has delivered its final result and will emit no more
@@ -216,14 +236,23 @@ export default function (pi: ExtensionAPI) {
     }
     // Defer a deep-enough copy: the live snapshot's output views keep
     // mutating (late flushes) after settle.
-    resultDelivery.defer({
+    const pending = resultDelivery.defer({
       ...snap,
       stdout: { ...snap.stdout },
       stderr: { ...snap.stderr },
     });
-    // Settled while the model sits idle: it has nothing else in flight, so
-    // this is the result it is waiting on — wake it.
-    if (sessionContext?.isIdle()) flushResults(true);
+    // Pending settlements remain retractable while busy, so bg_status/bg_kill
+    // can consume them before they are committed to context. bg_start applies
+    // backpressure across running + pending + reserved work, keeping this map
+    // bounded without dropping or prematurely queueing any result.
+    if (pending >= MAX_RUNNING && sessionContext?.isIdle()) {
+      idleResultBatcher.flushNow();
+      return;
+    }
+    // Give near-simultaneous idle settlements one fixed, bounded window to
+    // join this result. This costs one model turn for a batch instead of one
+    // turn per process, while preserving the immediate path after 200 ms.
+    if (sessionContext?.isIdle()) idleResultBatcher.schedule();
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -236,7 +265,14 @@ export default function (pi: ExtensionAPI) {
   // double delivery is structurally impossible — whoever drains first wins.
   // These finished while the model was working on something else, so they go
   // into context without forcing a turn per stale process.
-  pi.on("agent_settled", () => flushResults(false));
+  pi.on("agent_settled", () => {
+    idleResultBatcher.flushWithoutWake();
+    // A failed send is restored exactly. Drain it in bounded chunks on later
+    // settled turns rather than growing a single unbounded message.
+    if (sessionContext?.isIdle() && resultDelivery.size() > 0) {
+      idleResultBatcher.schedule();
+    }
+  });
 
   // /new, /resume, /fork, /reload, and quit all emit session_shutdown for
   // the old extension instance. Processes never survive a session
@@ -245,6 +281,7 @@ export default function (pi: ExtensionAPI) {
   // bounded so a wedged process cannot hang shutdown.
   pi.on("session_shutdown", async () => {
     sessionContext = undefined;
+    idleResultBatcher.clear();
     resultDelivery.clear();
     for (const disarm of [...watchers.values()]) disarm();
     watchers.clear();
@@ -256,6 +293,7 @@ export default function (pi: ExtensionAPI) {
       // UI may already be gone.
     }
     widgetRunning = 0;
+    startReservations = 0;
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
@@ -309,15 +347,36 @@ export default function (pi: ExtensionAPI) {
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 80) || "terminal";
-      const snap = await runTool(
-        getRuntime(),
-        manager.start({
-          command,
-          title,
-          cwd,
-          timeoutSeconds: params.timeout_seconds,
-        }),
-      );
+      const running = manager.view
+        .list()
+        .filter((entry) => entry.status === "running").length;
+      if (
+        !hasTerminalCapacity({
+          running,
+          pending: resultDelivery.size(),
+          reserved: startReservations,
+          maximum: MAX_RUNNING,
+        })
+      ) {
+        throw new Error(
+          `Max ${MAX_RUNNING} background terminals may be running or awaiting delivery. Let the current turn settle, or inspect a finished terminal with bg_status before starting another.`,
+        );
+      }
+      startReservations++;
+      let snap: TerminalSnapshot;
+      try {
+        snap = await runTool(
+          getRuntime(),
+          manager.start({
+            command,
+            title,
+            cwd,
+            timeoutSeconds: params.timeout_seconds,
+          }),
+        );
+      } finally {
+        startReservations--;
+      }
 
       return {
         content: [{ type: "text", text: buildStartResult(snap) }],
@@ -591,7 +650,24 @@ export default function (pi: ExtensionAPI) {
         status?: string;
         exitCode?: number;
         signal?: string;
+        results?: Array<{
+          id: string;
+          title: string;
+          status: string;
+          exitCode?: number;
+          signal?: string;
+        }>;
       };
+      const content =
+        typeof message.content === "string" ? message.content : "";
+      if (details.results && details.results.length > 1) {
+        return renderTerminalBatchResult(
+          content,
+          expanded || loadSetupConfig().ui.bashToolDisplay === "full",
+          theme,
+          details.results,
+        );
+      }
       const failed = details.status === "failed";
       const killed = details.status === "killed";
       const timedOut = details.status === "timed_out";
@@ -611,8 +687,6 @@ export default function (pi: ExtensionAPI) {
         theme.fg("accent", theme.bold(`terminal ${details.id ?? "?"}`)) +
         theme.fg("muted", ` · ${details.title ?? ""} · ${how}`);
 
-      const content =
-        typeof message.content === "string" ? message.content : "";
       return renderTerminalResult(
         content,
         expanded || loadSetupConfig().ui.bashToolDisplay === "full",

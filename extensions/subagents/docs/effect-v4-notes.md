@@ -2,7 +2,7 @@
 
 > **Building a new pi extension on this stack?** Start with the migration-oriented
 > [`effect-v4-extension-guide.md`](./effect-v4-extension-guide.md) (toolchain setup, the
-> `ManagedRuntime` + `runTool` boundary, when *not* to use Effect, per-extension recipes).
+> `ManagedRuntime` + `runTool` boundary, when _not_ to use Effect, per-extension recipes).
 > This file is the deeper Effect API reference it points back to.
 
 > **Verified against:** `effect@4.0.0-beta.98` and `@effect/platform-node@4.0.0-beta.98`
@@ -26,7 +26,7 @@ Big structural facts:
   `4.0.0-beta.N`. `@effect/platform-node` must match `effect` exactly.
 - **`@effect/platform` is gone — merged into core `effect`.** `FileSystem`, `Path`,
   `PlatformError`, `Terminal`, `Stdio` are now top-level `effect` modules.
-  `@effect/platform-node` remains as the Node *implementation* package.
+  `@effect/platform-node` remains as the Node _implementation_ package.
 - **`effect/unstable/*` namespace.** Modules that may break in minor releases:
   `effect/unstable/process` (child processes — the one we need), `http`, `rpc`, `cli`,
   `ai`, `workers`, etc. Everything outside `unstable/` follows strict semver.
@@ -36,29 +36,29 @@ Big structural facts:
 
 ## Cheat sheet: v3 → v4 renames you will actually hit
 
-| v3 | v4 |
-| --- | --- |
-| `Context.Tag` / `Effect.Service` | `Context.Service` (`Effect.Service` is **gone**) |
-| `Effect.fork` | `Effect.forkChild` |
-| `Effect.forkDaemon` | `Effect.forkDetach` |
-| `Effect.async` | `Effect.callback` |
-| `Effect.catchAll` | `Effect.catch` |
-| `Effect.catchAllCause` / `catchAllDefect` | `Effect.catchCause` / `catchDefect` |
-| `Effect.zipRight` / `zipLeft` | `Effect.andThen` / `Effect.tap` |
-| `Effect.either` | `Effect.result` |
-| `Either` module | `Result` (`Result.succeed` / `Result.fail`) |
-| `Layer.scoped` | `Layer.effect` (all layers are scoped-capable now) |
-| `Mailbox` | `Queue` (Queue absorbed Mailbox: done/fail signalling built in) |
-| `FiberRef` | `Context.Reference` (module `effect/References`) |
-| `Scope.extend` | `Scope.provide` |
-| `Stream.async*` (all 4 variants) | `Stream.callback` |
-| `Stream.fromChunk(s)` | `Stream.fromArray` / `Stream.fromArrays` (Chunk de-emphasized; arrays used) |
-| `Schema.TaggedError` | `Schema.TaggedErrorClass` |
-| `@effect/platform/Command` | `effect/unstable/process` → `ChildProcess` |
-| `@effect/platform/CommandExecutor` | `effect/unstable/process` → `ChildProcessSpawner` |
-| `@effect/platform/FileSystem` | `effect/FileSystem` |
-| `Runtime.runPromise(runtime)(...)` | gone — use `ManagedRuntime` methods directly |
-| `UnknownException` (tryPromise default) | `Cause.UnknownError` |
+| v3                                        | v4                                                                          |
+| ----------------------------------------- | --------------------------------------------------------------------------- |
+| `Context.Tag` / `Effect.Service`          | `Context.Service` (`Effect.Service` is **gone**)                            |
+| `Effect.fork`                             | `Effect.forkChild`                                                          |
+| `Effect.forkDaemon`                       | `Effect.forkDetach`                                                         |
+| `Effect.async`                            | `Effect.callback`                                                           |
+| `Effect.catchAll`                         | `Effect.catch`                                                              |
+| `Effect.catchAllCause` / `catchAllDefect` | `Effect.catchCause` / `catchDefect`                                         |
+| `Effect.zipRight` / `zipLeft`             | `Effect.andThen` / `Effect.tap`                                             |
+| `Effect.either`                           | `Effect.result`                                                             |
+| `Either` module                           | `Result` (`Result.succeed` / `Result.fail`)                                 |
+| `Layer.scoped`                            | `Layer.effect` (all layers are scoped-capable now)                          |
+| `Mailbox`                                 | `Queue` (Queue absorbed Mailbox: done/fail signalling built in)             |
+| `FiberRef`                                | `Context.Reference` (module `effect/References`)                            |
+| `Scope.extend`                            | `Scope.provide`                                                             |
+| `Stream.async*` (all 4 variants)          | `Stream.callback`                                                           |
+| `Stream.fromChunk(s)`                     | `Stream.fromArray` / `Stream.fromArrays` (Chunk de-emphasized; arrays used) |
+| `Schema.TaggedError`                      | `Schema.TaggedErrorClass`                                                   |
+| `@effect/platform/Command`                | `effect/unstable/process` → `ChildProcess`                                  |
+| `@effect/platform/CommandExecutor`        | `effect/unstable/process` → `ChildProcessSpawner`                           |
+| `@effect/platform/FileSystem`             | `effect/FileSystem`                                                         |
+| `Runtime.runPromise(runtime)(...)`        | gone — use `ManagedRuntime` methods directly                                |
+| `UnknownException` (tryPromise default)   | `Cause.UnknownError`                                                        |
 
 Removed with no replacement: `Effect.forkAll`, `Effect.forkWithErrorHandler`.
 Early v4 betas renamed `Context` → `ServiceMap`; **that was reverted** — beta.98 uses
@@ -72,22 +72,22 @@ Unchanged in spirit from v3. `Effect<A, E, R>` = success `A`, typed error `E`,
 required services `R`.
 
 ```ts
-import { Effect, Exit } from "effect"
+import { Effect, Exit } from "effect";
 
-const double = (n: number) => Effect.succeed(n * 2)
+const double = (n: number) => Effect.succeed(n * 2);
 
 const program = Effect.gen(function* () {
-  const a = yield* Effect.succeed(1)
-  const b = yield* double(a)
-  yield* Effect.log(`result: ${b}`)
-  return b
-})
+  const a = yield* Effect.succeed(1);
+  const b = yield* double(a);
+  yield* Effect.log(`result: ${b}`);
+  return b;
+});
 
 // Entry-point conversion — only at the outermost layer (tool handlers):
-const p: Promise<number> = Effect.runPromise(program)          // rejects on failure/defect
-const pe: Promise<Exit.Exit<number, never>> = Effect.runPromiseExit(program) // never rejects
-const s: number = Effect.runSync(program)                       // throws if async
-const fiber = Effect.runFork(program)                           // fire-and-forget fiber
+const p: Promise<number> = Effect.runPromise(program); // rejects on failure/defect
+const pe: Promise<Exit.Exit<number, never>> = Effect.runPromiseExit(program); // never rejects
+const s: number = Effect.runSync(program); // throws if async
+const fiber = Effect.runFork(program); // fire-and-forget fiber
 ```
 
 `runPromise` only accepts `Effect<A, E, never>` — all services must be provided first
@@ -98,9 +98,9 @@ handlers when you want to convert failures to structured results instead of thro
 
 ```ts
 const spawnJob = Effect.fn("spawnJob")(function* (name: string) {
-  yield* Effect.log(`spawning ${name}`)
-  return name
-})
+  yield* Effect.log(`spawning ${name}`);
+  return name;
+});
 // spawnJob("x") : Effect<string>
 ```
 
@@ -110,62 +110,73 @@ const spawnJob = Effect.fn("spawnJob")(function* (name: string) {
 API is `Context.Service`, in two forms:
 
 ```ts
-import { Context, Effect, Layer } from "effect"
+import { Context, Effect, Layer } from "effect";
 
 // Class-style (recommended — class value doubles as the key):
-class Clock extends Context.Service<Clock, {
-  readonly now: Effect.Effect<number>
-}>()("app/Clock") {}
+class Clock extends Context.Service<
+  Clock,
+  {
+    readonly now: Effect.Effect<number>;
+  }
+>()("app/Clock") {}
 
 // Function-style key:
-const Random = Context.Service<{ next: Effect.Effect<number> }>("app/Random")
+const Random = Context.Service<{ next: Effect.Effect<number> }>("app/Random");
 
 // Yielding the key retrieves the service (keys are Effects):
 const use = Effect.gen(function* () {
-  const clock = yield* Clock
-  return yield* clock.now
-})
+  const clock = yield* Clock;
+  return yield* clock.now;
+});
 ```
 
 Layers work like v3 (`Layer.scoped` merged into `Layer.effect` — every `Layer.effect`
 build can use scoped resources):
 
 ```ts
-const ClockLive = Layer.succeed(Clock, { now: Effect.sync(() => Date.now()) })
+const ClockLive = Layer.succeed(Clock, { now: Effect.sync(() => Date.now()) });
 
 const RandomLive = Layer.effect(
   Random,
   Effect.gen(function* () {
-    yield* Effect.log("building Random")
-    return { next: Effect.sync(() => Math.random()) }
-  })
-)
+    yield* Effect.log("building Random");
+    return { next: Effect.sync(() => Math.random()) };
+  }),
+);
 
 // Dependencies between layers:
-class Ids extends Context.Service<Ids, { readonly nextId: Effect.Effect<string> }>()("app/Ids") {}
+class Ids extends Context.Service<
+  Ids,
+  { readonly nextId: Effect.Effect<string> }
+>()("app/Ids") {}
 
 const IdsLive = Layer.effect(
   Ids,
   Effect.gen(function* () {
-    const random = yield* Random
-    return Ids.of({ nextId: Effect.map(random.next, (n) => `id-${n}`) })
-  })
-)
+    const random = yield* Random;
+    return Ids.of({ nextId: Effect.map(random.next, (n) => `id-${n}`) });
+  }),
+);
 
-const AppLayer = Layer.mergeAll(ClockLive, IdsLive.pipe(Layer.provide(RandomLive)))
+const AppLayer = Layer.mergeAll(
+  ClockLive,
+  IdsLive.pipe(Layer.provide(RandomLive)),
+);
 
-const runnable = use.pipe(Effect.provide(AppLayer)) // R = never
+const runnable = use.pipe(Effect.provide(AppLayer)); // R = never
 
 // One-off service injection without a layer:
-const withTestClock = use.pipe(Effect.provideService(Clock, { now: Effect.succeed(0) }))
+const withTestClock = use.pipe(
+  Effect.provideService(Clock, { now: Effect.succeed(0) }),
+);
 ```
 
 Also useful:
 
 - `Context.Reference("key", { defaultValue: () => ... })` — a service **with a default**
   (this replaces `FiberRef`); no layer needed, override with `Effect.provideService`.
-- **Layer memoization changed:** layers are memoized *globally across separate
-  `Effect.provide` calls* by default in v4 (per-runtime MemoMap), so providing the same
+- **Layer memoization changed:** layers are memoized _globally across separate
+  `Effect.provide` calls_ by default in v4 (per-runtime MemoMap), so providing the same
   layer to two effects builds it once.
 
 ## 3. Error handling
@@ -174,36 +185,43 @@ Also useful:
 `Schema.TaggedErrorClass`. Errors are yieldable directly.
 
 ```ts
-import { Data, Effect, Schema } from "effect"
+import { Data, Effect, Schema } from "effect";
 
 class SpawnError extends Data.TaggedError("SpawnError")<{
-  readonly command: string
-  readonly cause: unknown
+  readonly command: string;
+  readonly cause: unknown;
 }> {}
 
-class TimeoutError extends Data.TaggedError("TimeoutError")<{ readonly ms: number }> {}
+class TimeoutError extends Data.TaggedError("TimeoutError")<{
+  readonly ms: number;
+}> {}
 
 // Schema-validated variant:
 class NotFound extends Schema.TaggedErrorClass<NotFound>()("NotFound", {
-  id: Schema.Number
+  id: Schema.Number,
 }) {}
 
-const risky: Effect.Effect<string, SpawnError | TimeoutError> = Effect.gen(function* () {
-  if (somethingBad) return yield* new SpawnError({ command: "codex", cause: "enoent" })
-  return "ok"
-})
+const risky: Effect.Effect<string, SpawnError | TimeoutError> = Effect.gen(
+  function* () {
+    if (somethingBad)
+      return yield* new SpawnError({ command: "codex", cause: "enoent" });
+    return "ok";
+  },
+);
 
 // catchTag narrows the error union:
 const handled: Effect.Effect<string, TimeoutError> = risky.pipe(
-  Effect.catchTag("SpawnError", (e) => Effect.succeed(`spawn failed: ${e.command}`))
-)
+  Effect.catchTag("SpawnError", (e) =>
+    Effect.succeed(`spawn failed: ${e.command}`),
+  ),
+);
 
 const handledAll: Effect.Effect<string> = risky.pipe(
   Effect.catchTags({
     SpawnError: (e) => Effect.succeed(`spawn: ${e.command}`),
-    TimeoutError: (e) => Effect.succeed(`timeout ${e.ms}ms`)
-  })
-)
+    TimeoutError: (e) => Effect.succeed(`timeout ${e.ms}ms`),
+  }),
+);
 ```
 
 Renames: `catchAll` → `Effect.catch`, `catchAllCause` → `catchCause`,
@@ -216,20 +234,20 @@ a cause is now a flat list of failures — simpler to render in job status outpu
 ## 4. Promise / async / callback interop
 
 ```ts
-import { Cause, Data, Effect } from "effect"
+import { Cause, Data, Effect } from "effect";
 
 // Promise that "can't" reject — rejection becomes a defect:
-const a = Effect.promise(() => Promise.resolve(42))
+const a = Effect.promise(() => Promise.resolve(42));
 
 // Promise that may reject — default error type is Cause.UnknownError (v3: UnknownException):
-const b = Effect.tryPromise((signal) => fetch("https://x", { signal }))
+const b = Effect.tryPromise((signal) => fetch("https://x", { signal }));
 
 // Typed error:
 class HttpError extends Data.TaggedError("HttpError")<{ cause: unknown }> {}
 const c = Effect.tryPromise({
   try: (signal) => fetch("https://x", { signal }),
-  catch: (cause) => new HttpError({ cause })
-})
+  catch: (cause) => new HttpError({ cause }),
+});
 ```
 
 Both forms receive an `AbortSignal` that fires on fiber interruption — pass it to SDKs
@@ -241,14 +259,14 @@ Callback APIs — `Effect.async` is now **`Effect.callback`**:
 // signature: Effect.callback<A, E, R>((resume, signal) => void | cleanupEffect)
 const waitForExit = (child: import("node:child_process").ChildProcess) =>
   Effect.callback<number>((resume) => {
-    child.once("exit", (code) => resume(Effect.succeed(code ?? -1)))
-  })
+    child.once("exit", (code) => resume(Effect.succeed(code ?? -1)));
+  });
 
 // cleanup on interruption via the AbortSignal:
 const sleepy = Effect.callback<number>((resume, signal) => {
-  const t = setTimeout(() => resume(Effect.succeed(1)), 1000)
-  signal.addEventListener("abort", () => clearTimeout(t))
-})
+  const t = setTimeout(() => resume(Effect.succeed(1)), 1000);
+  signal.addEventListener("abort", () => clearTimeout(t));
+});
 ```
 
 ## 5. Scopes & resource management
@@ -256,25 +274,29 @@ const sleepy = Effect.callback<number>((resume, signal) => {
 Same shape as v3. Relevant rename: `Scope.extend` → `Scope.provide`.
 
 ```ts
-import { Effect, Exit, Scope } from "effect"
+import { Effect, Exit, Scope } from "effect";
 
 const managedProc = Effect.acquireRelease(
-  acquireEffect,                            // acquire (uninterruptible)
-  (proc, exit) => Effect.sync(() => proc.kill()) // release, gets the Exit
-)
+  acquireEffect, // acquire (uninterruptible)
+  (proc, exit) => Effect.sync(() => proc.kill()), // release, gets the Exit
+);
 
 // Scoped region: release runs when the region ends
 const useIt = Effect.scoped(
   Effect.gen(function* () {
-    const proc = yield* managedProc
-    return proc.pid
-  })
-)
+    const proc = yield* managedProc;
+    return proc.pid;
+  }),
+);
 
 // addFinalizer:
-Effect.scoped(Effect.gen(function* () {
-  yield* Effect.addFinalizer((exit) => Effect.log(`closing, ok=${Exit.isSuccess(exit)}`))
-}))
+Effect.scoped(
+  Effect.gen(function* () {
+    yield* Effect.addFinalizer((exit) =>
+      Effect.log(`closing, ok=${Exit.isSuccess(exit)}`),
+    );
+  }),
+);
 ```
 
 **Key pattern for background subagents** — a manually-controlled scope so the process
@@ -282,12 +304,12 @@ outlives the spawning tool call, and killing the job = closing the scope:
 
 ```ts
 const startJob = Effect.gen(function* () {
-  const scope = yield* Scope.make()
-  const handle = yield* Scope.provide(managedProc, scope) // resource lives in `scope`
+  const scope = yield* Scope.make();
+  const handle = yield* Scope.provide(managedProc, scope); // resource lives in `scope`
   // store `scope` in your job registry; later, from any fiber:
   // yield* Scope.close(scope, Exit.void)   // runs finalizers -> kills process
-  return { handle, scope }
-})
+  return { handle, scope };
+});
 ```
 
 `Effect.acquireUseRelease(acquire, use, release)` for one-shot bracketing.
@@ -303,9 +325,9 @@ Import gotcha: `import { ChildProcessSpawner } from "effect/unstable/process"` g
 the **module namespace**, not the service class. Import the class from the submodule:
 
 ```ts
-import { ChildProcess } from "effect/unstable/process"
-import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner"
-import { NodeServices, NodeFileSystem } from "@effect/platform-node"
+import { ChildProcess } from "effect/unstable/process";
+import { ChildProcessSpawner } from "effect/unstable/process/ChildProcessSpawner";
+import { NodeServices, NodeFileSystem } from "@effect/platform-node";
 ```
 
 `NodeServices.layer` provides everything at once:
@@ -315,18 +337,18 @@ import { NodeServices, NodeFileSystem } from "@effect/platform-node"
 
 ```ts
 // Template literal form:
-const cmd1 = ChildProcess.make`echo hello`
+const cmd1 = ChildProcess.make`echo hello`;
 // Options + template:
-const cmd2 = ChildProcess.make({ cwd: "/tmp" })`ls -la`
+const cmd2 = ChildProcess.make({ cwd: "/tmp" })`ls -la`;
 // Array form (best for dynamic args — no shell parsing):
 const cmd = ChildProcess.make("codex", ["exec", "--json", prompt], {
   cwd: workDir,
-  env: { CODEX_API_KEY: key },   // merged over process.env when extendEnv: true
+  env: { CODEX_API_KEY: key }, // merged over process.env when extendEnv: true
   extendEnv: true,
-  stdin: "pipe",                 // "pipe" | "inherit" | "ignore" | a Stream<Uint8Array>
-  stdout: "pipe",                // "pipe" | "inherit" | "ignore" | a Sink
-  stderr: "pipe"
-})
+  stdin: "pipe", // "pipe" | "inherit" | "ignore" | a Stream<Uint8Array>
+  stdout: "pipe", // "pipe" | "inherit" | "ignore" | a Sink
+  stderr: "pipe",
+});
 // pipelines: cmdA.pipe(ChildProcess.pipeTo(cmdB, { from: "stderr" }))
 // modifiers: ChildProcess.setCwd, ChildProcess.setEnv, ChildProcess.prefix
 ```
@@ -340,12 +362,12 @@ group (good: killing it kills the group).
 
 ```ts
 const simple = Effect.gen(function* () {
-  const spawner = yield* ChildProcessSpawner
-  const text  = yield* spawner.string(cmd)                    // full stdout as string
-  const lines = yield* spawner.lines(cmd)                     // string[]
-  const code  = yield* spawner.exitCode(cmd)                  // ExitCode (branded number)
-  const lineStream = spawner.streamLines(cmd, { includeStderr: true }) // Stream<string>
-})
+  const spawner = yield* ChildProcessSpawner;
+  const text = yield* spawner.string(cmd); // full stdout as string
+  const lines = yield* spawner.lines(cmd); // string[]
+  const code = yield* spawner.exitCode(cmd); // ExitCode (branded number)
+  const lineStream = spawner.streamLines(cmd, { includeStderr: true }); // Stream<string>
+});
 ```
 
 **Style B — the Command IS an Effect.** Yielding a command spawns it and returns a
@@ -353,32 +375,32 @@ const simple = Effect.gen(function* () {
 (`Command extends Effect<ChildProcessHandle, PlatformError, ChildProcessSpawner | Scope>`):
 
 ```ts
-import { Effect, Stream } from "effect"
+import { Effect, Stream } from "effect";
 
 const streaming = Effect.scoped(
   Effect.gen(function* () {
-    const handle = yield* cmd                 // <-- spawns; killed when scope closes
-    handle.pid                                // ProcessId (branded number)
+    const handle = yield* cmd; // <-- spawns; killed when scope closes
+    handle.pid; // ProcessId (branded number)
 
     // stdout is Stream<Uint8Array, PlatformError>; decode + split lines:
     yield* handle.stdout.pipe(
       Stream.decodeText(),
       Stream.splitLines,
-      Stream.runForEach((line) => Effect.log(`out: ${line}`))
-    )
+      Stream.runForEach((line) => Effect.log(`out: ${line}`)),
+    );
 
     // stdin is a Sink<void, Uint8Array>; write by running a stream into it:
     yield* Stream.fromArray([new TextEncoder().encode("hello\n")]).pipe(
-      Stream.run(handle.stdin)
-    )
+      Stream.run(handle.stdin),
+    );
 
     // handle.stderr, handle.all (stdout+stderr interleaved) also available
-    const code = yield* handle.exitCode       // waits for exit
-    const running = yield* handle.isRunning
-    yield* handle.kill({ killSignal: "SIGTERM", forceKillAfter: "5 seconds" })
-    return code
-  })
-)
+    const code = yield* handle.exitCode; // waits for exit
+    const running = yield* handle.isRunning;
+    yield* handle.kill({ killSignal: "SIGTERM", forceKillAfter: "5 seconds" });
+    return code;
+  }),
+);
 ```
 
 Verified at runtime: interrupting a fiber that spawned a process inside its scope
@@ -391,14 +413,14 @@ There's also `handle.unref` for letting the parent exit independently, and
 ### FileSystem / Path (now core)
 
 ```ts
-import { Effect, FileSystem, Path } from "effect"
+import { Effect, FileSystem, Path } from "effect";
 
 const files = Effect.gen(function* () {
-  const fs = yield* FileSystem.FileSystem
-  const path = yield* Path.Path
-  const content = yield* fs.readFileString("/tmp/in.txt")
-  yield* fs.writeFileString(path.join("/tmp", "out.txt"), content)
-})
+  const fs = yield* FileSystem.FileSystem;
+  const path = yield* Path.Path;
+  const content = yield* fs.readFileString("/tmp/in.txt");
+  yield* fs.writeFileString(path.join("/tmp", "out.txt"), content);
+});
 // provide NodeFileSystem.layer, or NodeServices.layer for everything
 ```
 
@@ -408,28 +430,43 @@ All verified compiling + running:
 
 ```ts
 import {
-  Cause, Deferred, Effect, Fiber, FiberMap, PubSub, Queue, Ref, Stream, Exit
-} from "effect"
+  Cause,
+  Deferred,
+  Effect,
+  Fiber,
+  FiberMap,
+  PubSub,
+  Queue,
+  Ref,
+  Stream,
+  Exit,
+} from "effect";
 
 const forking = Effect.gen(function* () {
-  const f1 = yield* Effect.forkChild(work)   // v3 fork  — dies with parent
-  const f2 = yield* Effect.forkScoped(work)  // tied to ambient Scope
-  const f3 = yield* Effect.forkDetach(work)  // v3 forkDaemon — outlives parent ✅ for background jobs
+  const f1 = yield* Effect.forkChild(work); // v3 fork  — dies with parent
+  const f2 = yield* Effect.forkScoped(work); // tied to ambient Scope
+  const f3 = yield* Effect.forkDetach(work); // v3 forkDaemon — outlives parent ✅ for background jobs
   // all fork variants accept { startImmediately?: boolean, uninterruptible?: boolean | "inherit" }
 
-  const r: number = yield* Fiber.join(f1)                  // propagates failure
-  const exit: Exit.Exit<number> = yield* Fiber.await(f3)   // failure as data
-  yield* Fiber.interrupt(f2)
+  const r: number = yield* Fiber.join(f1); // propagates failure
+  const exit: Exit.Exit<number> = yield* Fiber.await(f3); // failure as data
+  yield* Fiber.interrupt(f2);
   // fiber.pollUnsafe() -> Exit | undefined for sync status checks
-})
+});
 ```
 
 **Deferred** — one-shot completion signal (job finished):
 
 ```ts
-const done = yield* Deferred.make<Result, JobError>()
-yield* Effect.forkDetach(job.pipe(Effect.exit, Effect.flatMap((e) => Deferred.done(done, e))))
-const result = yield* Deferred.await(done)   // keeps Node process alive in v4, no runMain needed
+const done = yield * Deferred.make<Result, JobError>();
+yield *
+  Effect.forkDetach(
+    job.pipe(
+      Effect.exit,
+      Effect.flatMap((e) => Deferred.done(done, e)),
+    ),
+  );
+const result = yield * Deferred.await(done); // keeps Node process alive in v4, no runMain needed
 ```
 
 **Ref** — shared job-table state: `Ref.make({})`, `Ref.update`, `Ref.get`, `Ref.set`.
@@ -439,21 +476,21 @@ const result = yield* Deferred.await(done)   // keeps Node process alive in v4, 
 To use `Queue.end`, the error type must include `Cause.Done`:
 
 ```ts
-const q = yield* Queue.make<string, Cause.Done>()   // capacity/strategy via options
-yield* Queue.offer(q, "line")
-yield* Queue.offerAll(q, ["a", "b"])
-yield* Queue.end(q)                                 // signal "no more items"
-const asStream = Stream.fromQueue(q)                // ends when queue ends
+const q = yield * Queue.make<string, Cause.Done>(); // capacity/strategy via options
+yield * Queue.offer(q, "line");
+yield * Queue.offerAll(q, ["a", "b"]);
+yield * Queue.end(q); // signal "no more items"
+const asStream = Stream.fromQueue(q); // ends when queue ends
 // Queue.take / takeAll / takeN / poll for direct consumption
 ```
 
 **PubSub** — broadcast (e.g. multiple watchers of one job's output):
 
 ```ts
-const ps = yield* PubSub.unbounded<string>()
-const sub = yield* PubSub.subscribe(ps)      // scoped acquisition
-yield* PubSub.publish(ps, "event")
-const msg = yield* PubSub.take(sub)          // function call, not sub.take
+const ps = yield * PubSub.unbounded<string>();
+const sub = yield * PubSub.subscribe(ps); // scoped acquisition
+yield * PubSub.publish(ps, "event");
+const msg = yield * PubSub.take(sub); // function call, not sub.take
 // Stream.fromPubSub(ps) for stream consumption
 ```
 
@@ -462,12 +499,14 @@ manager (auto-interrupts everything when its scope closes; adding under an exist
 interrupts the old fiber):
 
 ```ts
-const jobsDemo = Effect.scoped(Effect.gen(function* () {
-  const jobs = yield* FiberMap.make<string>()          // FiberMap<string> (keys)
-  yield* FiberMap.run(jobs, "job-1", work)             // fork into the map
-  const fiber = yield* FiberMap.get(jobs, "job-1")
-  yield* FiberMap.remove(jobs, "job-1")                // interrupts it
-}))
+const jobsDemo = Effect.scoped(
+  Effect.gen(function* () {
+    const jobs = yield* FiberMap.make<string>(); // FiberMap<string> (keys)
+    yield* FiberMap.run(jobs, "job-1", work); // fork into the map
+    const fiber = yield* FiberMap.get(jobs, "job-1");
+    yield* FiberMap.remove(jobs, "job-1"); // interrupts it
+  }),
+);
 ```
 
 **Stream** essentials for process output: `Stream.decodeText()`, `Stream.splitLines`,
@@ -487,37 +526,40 @@ v3's `Runtime.runPromise(runtime)(effect)` API is gone; `effect/Runtime` now onl
 points:
 
 ```ts
-import { Context, Effect, Layer, ManagedRuntime } from "effect"
-import { NodeServices } from "@effect/platform-node"
+import { Context, Effect, Layer, ManagedRuntime } from "effect";
+import { NodeServices } from "@effect/platform-node";
 
-class JobStore extends Context.Service<JobStore, {
-  readonly list: Effect.Effect<Array<string>>
-}>()("app/JobStore") {}
+class JobStore extends Context.Service<
+  JobStore,
+  {
+    readonly list: Effect.Effect<Array<string>>;
+  }
+>()("app/JobStore") {}
 
-const JobStoreLive = Layer.sync(JobStore, () => ({ list: Effect.succeed([]) }))
+const JobStoreLive = Layer.sync(JobStore, () => ({ list: Effect.succeed([]) }));
 
-const AppLayer = Layer.mergeAll(JobStoreLive, NodeServices.layer)
+const AppLayer = Layer.mergeAll(JobStoreLive, NodeServices.layer);
 
 // Build ONCE at extension activation. Layers are built lazily on first run.
-const runtime = ManagedRuntime.make(AppLayer)
+const runtime = ManagedRuntime.make(AppLayer);
 
 // pi tool handler — the only place we touch Promises:
 export async function handleToolCall() {
   return await runtime.runPromise(
     Effect.gen(function* () {
-      const store = yield* JobStore
-      return yield* store.list
-    })
-  )
+      const store = yield* JobStore;
+      return yield* store.list;
+    }),
+  );
 }
 
 // fire-and-forget background work from a sync/async context:
-const fiber = runtime.runFork(backgroundEffect)
+const fiber = runtime.runFork(backgroundEffect);
 
 // extension deactivation — closes the runtime scope, runs ALL finalizers
 // (i.e. kills any still-scoped child processes):
 export async function shutdown() {
-  await runtime.dispose()
+  await runtime.dispose();
 }
 ```
 
