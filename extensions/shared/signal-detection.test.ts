@@ -2,10 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   buildReminderText,
+  claimSignalInjection,
   detectSignals,
   extractCommand,
   injectReminder,
   lastUserMessageHasAuthorization,
+  resetSignalInjectionClaim,
 } from "./signal-detection.ts";
 
 test("detectSignals recognizes commit and verify commands", () => {
@@ -80,9 +82,23 @@ test("injectReminder appends to the last user message and clones input", () => {
   );
 });
 
-test("buildReminderText carries signal labels and context", () => {
-  assert.match(buildReminderText(["commit", "verify"]), /commit \+ 验证通过/);
-  assert.match(buildReminderText(["commit"], "commit-task-sync"), /git commit/);
+test("claimSignalInjection allows one injection per signature", () => {
+  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), true);
+  // Same signature again (the sibling extension) is refused.
+  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), false);
+  // A different signal set or context is a fresh claim.
+  assert.equal(claimSignalInjection(["verify"], "multi-signal-sync"), true);
+  assert.equal(claimSignalInjection(["commit"], "commit-task-sync"), true);
+  resetSignalInjectionClaim();
+  assert.equal(claimSignalInjection(["commit"], "multi-signal-sync"), true);
+});
+
+test("buildReminderText carries terse signal labels per context", () => {
+  assert.match(buildReminderText(["commit", "verify"]), /commit\+验证通过/);
+  assert.match(
+    buildReminderText(["commit"], "commit-task-sync"),
+    /完成信号（commit）/,
+  );
 });
 
 test("signal boundary cases: chains, amend, case sensitivity", () => {

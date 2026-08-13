@@ -706,6 +706,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
   pi.on("context", (event) => {
     if (!activeRun || !frozenProjection || problemMessage()) return;
     const messages = injectTaskProjection(event.messages, frozenProjection);
+    // The projection is advisory and frozen for the whole turn; pi fires a
+    // context event before EVERY provider request (transformContext), so
+    // re-injecting on each would duplicate ~270 tokens × LLM-call count per
+    // turn. Inject once, then drop it: task changes are visible through
+    // tasks_update results anyway.
+    frozenProjection = "";
     if (messages) return { messages: messages as typeof event.messages };
   });
 

@@ -113,24 +113,39 @@ export function lastUserMessageHasAuthorization(messages: unknown[]): boolean {
   return false;
 }
 
-/** Reminder body for the detected signals. */
+/** Reminder body for the detected signals (deliberately terse: every token
+ *  injected lands in the model context on the next turn). */
 export function buildReminderText(
   signals: readonly SignalKind[],
   context = "multi-signal-sync",
 ): string {
-  const labels = signals.map((s) => SIGNAL_LABEL[s]).join(" + ");
+  const labels = signals.map((s) => SIGNAL_LABEL[s]).join("+");
   if (context === "commit-task-sync") {
-    return `⚠️ 上轮检测到 git commit 成功。请检查 tasks 状态同步：
-- 如有完成项（commit/reviewer/授权后 done），**立即 tasks_update done** 带 commit SHA + reviewer 结论
-- 如有 blocked→done（业主授权/ADR 落地），同步 status
-- 这是 ${context} hook 自动提醒（防 tasks 残留，不靠 agent 记忆力）`;
+    return `⚠️ 完成信号（${labels}）：如有完成项 tasks_update done 带证据；blocked→done 则同步。`;
   }
-  return `⚠️ 上轮检测到完成信号（${labels}）。请检查 tasks 状态同步：
-- commit/验证通过 → 如有完成项，**立即 tasks_update done** 带 commit SHA + reviewer 结论
-- 业主授权 → 如有 blocked task 因授权解除阻塞，同步 status（blocked→done）
-- 无变更完成（分析/设计结论）→ 收口时 tasks_update（此类型无信号，靠收口审计纪律）
-- 这是 ${context} hook 自动提醒（MECE：commit/验证/授权 三信号，防 tasks 残留）
-注入后自动清除（仅提醒一次/信号）。`;
+  return `⚠️ 完成信号（${labels}）：完成项→tasks_update done 带证据；授权→解除 blocked；无变更→收口同步。`;
+}
+
+// ── Cross-extension injection dedupe ─────────────────────────────────────────
+// multi-signal-sync and commit-task-sync both detect the same commit event
+// and both inject a reminder on the next context hook. The reminder is
+// advisory; injecting it twice wastes model tokens. A single shared claim
+// gate lets whichever extension's handler runs first win the injection;
+// the other skips. Cleared on session boundaries by the extensions.
+let claimedSignature = "";
+
+export function claimSignalInjection(
+  signals: readonly SignalKind[],
+  context: string,
+): boolean {
+  const signature = `${[...signals].sort().join("+")}@${context}`;
+  if (signature === claimedSignature) return false;
+  claimedSignature = signature;
+  return true;
+}
+
+export function resetSignalInjectionClaim(): void {
+  claimedSignature = "";
 }
 
 /**

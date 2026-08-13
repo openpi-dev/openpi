@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import multiSignalSync from "./index.ts";
+import { resetSignalInjectionClaim } from "../shared/signal-detection.ts";
 
 /**
  * Wiring-layer test: the event → pure-function mapping chain. The detection
@@ -10,6 +11,7 @@ import multiSignalSync from "./index.ts";
  */
 
 function harness() {
+  resetSignalInjectionClaim();
   const handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
   let attachment: string | undefined;
   const pi = {

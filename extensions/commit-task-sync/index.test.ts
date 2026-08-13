@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import commitTaskSync from "./index.ts";
+import { resetSignalInjectionClaim } from "../shared/signal-detection.ts";
 
 function harness() {
+  resetSignalInjectionClaim();
   const handlers = new Map<string, Array<(event: any, ctx: any) => unknown>>();
   const notifications: string[] = [];
   const pi = {
