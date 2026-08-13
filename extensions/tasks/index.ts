@@ -107,6 +107,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetExpanded = false;
   let taskWidgetInstalled = false;
   let unsubSettled: (() => void) | undefined;
+  let taskWidgetPaused = false;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
 
@@ -153,7 +154,14 @@ export default function sessionTasks(pi: ExtensionAPI) {
       // Redraw cadence for the in-flight shimmer sweep: ~8 fps keeps the band
       // advancing about one cell per frame (omp uses 30fps for its loader; the
       // widget is text-only and 8 fps is plenty to read as flowing).
-      const timer = setInterval(() => tui.requestRender(), 120);
+      const timer = setInterval(() => {
+        // The /tasks screen replaces the editor container; the widget above
+        // it is invisible but its repaint timer would still redraw the whole
+        // viewport every 120ms (slow-screen flicker loop). Pause while the
+        // screen is open.
+        if (taskWidgetPaused) return;
+        tui.requestRender();
+      }, 120);
       timer.unref?.();
       return {
         render: (width) =>
@@ -500,7 +508,13 @@ export default function sessionTasks(pi: ExtensionAPI) {
         }
         return;
       }
-      await openTasksScreen(ctx, snapshot());
+      taskWidgetPaused = true;
+      try {
+        await openTasksScreen(ctx, snapshot());
+      } finally {
+        taskWidgetPaused = false;
+        updateTaskWidget(ctx);
+      }
     },
   });
 
