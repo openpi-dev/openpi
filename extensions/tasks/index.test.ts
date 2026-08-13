@@ -615,3 +615,27 @@ test("/tasks sync marks stale in-progress items done via callback", async () => 
   assert.equal(after.snapshot.items.find((i) => i.id === 2)?.status, "pending");
   void sync;
 });
+
+test("task snapshot results are compact status summaries, not full renders", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  const added = await h.tools.get("tasks_add").execute(
+    "compact",
+    {
+      items: [
+        {
+          subject: "Compact task",
+          detail: "a long detail that should not appear in the result",
+        },
+      ],
+    },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  const text = added.content[0]?.text ?? "";
+  assert.match(text, /Current task snapshot \(1 item\)/);
+  assert.match(text, /T1 \[pending\] Compact task/);
+  // Details are excluded from the result text (they live in the projection).
+  assert.doesNotMatch(text, /a long detail/);
+});

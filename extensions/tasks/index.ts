@@ -253,9 +253,26 @@ export default function sessionTasks(pi: ExtensionAPI) {
     return true;
   };
 
+  const singleLine = (value: string) => value.replace(/\s+/gu, " ").trim();
+
   const mutationResultText = (summary: string) => {
     const current = snapshot();
-    return `${summary}\nCurrent task snapshot (${current.items.length} ${current.items.length === 1 ? "item" : "items"}):\n${tasks.render()}`;
+    // Compact status summary, not the full render: details/notes already live
+    // in the session-tasks projection, so repeating them here would double
+    // the per-result tokens (~68% saving on long notes). The status line is
+    // what the model needs to reconcile.
+    const lines = current.items.map((item) => {
+      const waiting =
+        item.status === "blocked" && item.waitingOn
+          ? item.waitingOn === "owner"
+            ? " (等你决策)"
+            : item.waitingOn === "third_party"
+              ? " (等第三方)"
+              : " (缺信息)"
+          : "";
+      return `T${item.id} [${item.status}]${waiting} ${singleLine(item.subject)}`;
+    });
+    return `${summary}\nCurrent task snapshot (${current.items.length} ${current.items.length === 1 ? "item" : "items"}):\n${lines.join("\n")}`;
   };
 
   const toolDetails = (
