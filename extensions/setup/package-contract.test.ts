@@ -74,7 +74,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     url: "https://github.com/tt-a1i/openpi/issues",
   });
   assert.deepEqual(manifest.pi?.extensions, ["./extensions"]);
-  assert.deepEqual(manifest.pi?.skills, ["./skills"]);
+  assert.equal(manifest.pi?.skills, undefined);
   assert.deepEqual(manifest.pi?.themes, ["./themes"]);
   assert.equal(
     manifest.pi?.image,

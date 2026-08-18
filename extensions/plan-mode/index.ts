@@ -36,6 +36,10 @@ import {
   PLAN_MODE_CHANNEL,
   type PlanModeState,
 } from "../shared/plan-mode-state.ts";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { planBashDecision } from "./bash-policy.ts";
 
@@ -231,6 +235,12 @@ export function planToolCallDecision(
 export default function planMode(pi: ExtensionAPI) {
   let planning = false;
   let readyPlan: string | undefined;
+  const syncPlanTool = () =>
+    patchOwnedTools(pi, "plan", {
+      ...(planning && !readyPlan
+        ? { enable: OPENPI_TOOL_SURFACE.plan.deferred }
+        : { disable: OPENPI_TOOL_SURFACE.plan.deferred }),
+    });
 
   /**
    * Publish the stance and reflect it in the footer. Every place `planning`
@@ -242,6 +252,7 @@ export default function planMode(pi: ExtensionAPI) {
     hasUI: boolean;
     ui: { setStatus: (key: string, value?: string) => void };
   }) => {
+    syncPlanTool();
     pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);
     if (!ctx.hasUI) return;
     ctx.ui.setStatus(
@@ -532,6 +543,7 @@ export default function planMode(pi: ExtensionAPI) {
   pi.on("session_shutdown", () => {
     planning = false;
     readyPlan = undefined;
+    syncPlanTool();
     // Broadcast without a ctx: subagents keeps its own copy of the stance, and
     // leaving it armed would restrict children in whatever session comes next.
     pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);

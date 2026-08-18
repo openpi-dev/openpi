@@ -138,10 +138,19 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
     | undefined;
   let readyExecute: PlanReadyExecute | undefined;
   let editorText = "";
+  let activeTools = ["read", "third_party_tool"];
   const messages: Array<{ content: string }> = [];
   const pi = {
     registerTool(definition: { name: string; execute: PlanReadyExecute }) {
       if (definition.name === "plan_ready") readyExecute = definition.execute;
+      activeTools = [
+        ...activeTools.filter((name) => name !== definition.name),
+        definition.name,
+      ];
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
     },
     registerCommand(
       _name: string,
@@ -182,6 +191,7 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
   assert.ok(readyExecute);
 
   await commandHandler("", ctx);
+  assert.deepEqual(activeTools, ["read", "third_party_tool", "plan_ready"]);
   assert.deepEqual(toolHandler({ toolName: "tasks_add" }), {
     block: true,
     reason: BLOCK_REASON,
@@ -250,6 +260,7 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
   );
 
   await commandHandler("", ctx);
+  assert.deepEqual(activeTools, ["read", "third_party_tool"]);
   assert.equal(toolHandler({ toolName: "write" }), undefined);
   assert.equal(
     toolHandler({ toolName: "bash", input: { command: "npm publish" } }),
@@ -284,6 +295,8 @@ test("fresh implementation links a new session and prefills without submitting",
       commandHandler = command.handler;
     },
     on() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
     events: { emit() {} },
     appendEntry() {},
     sendMessage() {
@@ -445,6 +458,8 @@ test("session reload and tree navigation restore the branch-local write gate", (
   ];
   const pi = {
     registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
     registerCommand() {},
     appendEntry() {},
     sendMessage() {},
@@ -504,6 +519,8 @@ test("the stance is broadcast on every change, including shutdown", () => {
   let shutdown: (() => void) | undefined;
   const pi = {
     registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
     registerCommand(
       _name: string,
       command: { handler: typeof commandHandler },

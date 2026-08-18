@@ -115,10 +115,19 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
   const selections: (string | undefined)[] = [];
   const confirmations: boolean[] = [];
   const edits: (string | undefined)[] = [];
+  let activeTools = ["read", "third_party_tool"];
   let branch = options.branch ?? [];
   const pi = {
     registerTool(tool: CapturedTool) {
       tools.set(tool.name, tool);
+      activeTools = [
+        ...activeTools.filter((name) => name !== tool.name),
+        tool.name,
+      ];
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
     },
     registerCommand(name: string, command: CapturedCommand) {
       commands.set(name, command);
@@ -164,6 +173,7 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
     selections,
     confirmations,
     edits,
+    activeTools: () => [...activeTools],
     ctx,
     setBranch(value: unknown[]) {
       branch = value;
@@ -177,6 +187,41 @@ function extensionHarness(options: { branch?: unknown[] } = {}) {
     },
   };
 }
+
+test("goal lifecycle tools appear only after goal state exists", async () => {
+  const h = extensionHarness();
+  await h.emit("session_start", { reason: "startup" });
+  assert.deepEqual(h.activeTools(), [
+    "read",
+    "third_party_tool",
+    "create_goal",
+  ]);
+
+  await h.tools
+    .get("create_goal")
+    ?.execute(
+      "create",
+      { objective: "Ship the feature" },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+  assert.deepEqual(h.activeTools(), [
+    "read",
+    "third_party_tool",
+    "create_goal",
+    "get_goal",
+    "update_goal",
+  ]);
+
+  h.setBranch([]);
+  await h.emit("session_tree");
+  assert.deepEqual(h.activeTools(), [
+    "read",
+    "third_party_tool",
+    "create_goal",
+  ]);
+});
 
 test("update_goal requires a blocker description and returns structured rejected-audit feedback", async () => {
   const h = extensionHarness();
@@ -335,6 +380,11 @@ test("slash command creates directly, confirms unfinished replacement, edits, pa
   assert.match(h.notifications.at(-1) ?? "", /Goal active/);
   await command.handler("clear", h.ctx);
   assert.equal(h.notifications.at(-1), "Goal cleared");
+  assert.deepEqual(h.activeTools(), [
+    "read",
+    "third_party_tool",
+    "create_goal",
+  ]);
   await command.handler("clear", h.ctx);
   assert.match(h.notifications.at(-1) ?? "", /No goal to clear/);
 });

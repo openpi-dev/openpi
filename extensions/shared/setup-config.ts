@@ -63,6 +63,10 @@ export type FooterLines = readonly (readonly FooterLayoutItem[])[];
 export const DETAIL_DISPLAYS = ["full", "compact"] as const;
 export type DetailDisplay = (typeof DETAIL_DISPLAYS)[number];
 
+export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
+export type CapabilityDiscoveryMode =
+  (typeof CAPABILITY_DISCOVERY_MODES)[number];
+
 /** Canonical default layout: one-line Powerline dashboard with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
   [
@@ -123,6 +127,9 @@ export const POST_EDIT_COMMAND_MAX_CHARS = 500;
 export const SETUP_CONFIG_CHANGED_CHANNEL = "my-pi-setup:config-changed";
 
 export interface MyPiSetupConfig {
+  readonly capabilities: {
+    readonly discovery: CapabilityDiscoveryMode;
+  };
   readonly suggestions: {
     readonly enabled: boolean;
     readonly model?: SuggestionModelConfig;
@@ -157,6 +164,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
+  capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
   workflows: {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
@@ -204,6 +212,12 @@ const isFooterStyle = (value: unknown): value is FooterStyle =>
 
 const isFooterPreset = (value: unknown): value is FooterPreset =>
   typeof value === "string" && FOOTER_PRESETS.includes(value as FooterPreset);
+
+const isCapabilityDiscoveryMode = (
+  value: unknown,
+): value is CapabilityDiscoveryMode =>
+  typeof value === "string" &&
+  CAPABILITY_DISCOVERY_MODES.includes(value as CapabilityDiscoveryMode);
 
 export function flattenFooterItems(lines: FooterLines): readonly FooterItem[] {
   const items: FooterItem[] = [];
@@ -401,6 +415,8 @@ function boundedInteger(value: unknown, fallback: number, maximum: number) {
 export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   if (!isRecord(value)) return DEFAULT_SETUP_CONFIG;
 
+  const capabilities = isRecord(value.capabilities) ? value.capabilities : {};
+
   // `summaries` is the pre-suggestion config key. Read it once as a migration
   // source; every subsequent save writes only the canonical `suggestions` key.
   const suggestions = isRecord(value.suggestions)
@@ -430,6 +446,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
+    capabilities: {
+      discovery: isCapabilityDiscoveryMode(capabilities.discovery)
+        ? capabilities.discovery
+        : "explicit",
+    },
     suggestions: {
       enabled: requestedEnabled && Boolean(model),
       ...(model ? { model } : {}),
@@ -942,6 +963,7 @@ export function formatSetupConfig(
     ? `on · ${config.ui.footerStyle} · ${formatFooterLines(config.ui.footerLines)}`
     : "off";
   return [
+    `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,

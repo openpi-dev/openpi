@@ -7,6 +7,10 @@ import type {
 import { Key, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
+import {
   TASKS_ENTRY_TYPE,
   TASKS_LIMITS,
   TASK_STATUSES,
@@ -97,6 +101,14 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let taskWidgetExpanded = false;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
+  const hideLifecycleTools = () =>
+    patchOwnedTools(pi, "tasks", {
+      disable: OPENPI_TOOL_SURFACE.tasks.deferred,
+    });
+  const showLifecycleTools = () =>
+    patchOwnedTools(pi, "tasks", {
+      enable: OPENPI_TOOL_SURFACE.tasks.deferred,
+    });
 
   const snapshot = () => tasks.snapshot();
 
@@ -242,6 +254,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         assertAvailable();
         const mutation = applyTaskAdd(snapshot(), params.items);
         persistThenCommit(mutation.snapshot);
+        showLifecycleTools();
         return Promise.resolve({
           content: [
             {
@@ -312,6 +325,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
         );
         const mutation = applyTaskUpdate(before, params);
         const changed = persistThenCommit(mutation.snapshot);
+        if (changed && closesBatch) hideLifecycleTools();
         return Promise.resolve({
           content: [
             {
@@ -457,12 +471,16 @@ export default function sessionTasks(pi: ExtensionAPI) {
     taskWidgetVisible = true;
     taskWidgetExpanded = false;
     registerTools();
+    if (hasActionableTasks()) showLifecycleTools();
+    else hideLifecycleTools();
     notifyProblem(ctx);
     updateTaskWidget(ctx);
   });
 
   pi.on("session_tree", (_event, ctx) => {
     restore(ctx);
+    if (hasActionableTasks()) showLifecycleTools();
+    else hideLifecycleTools();
     taskWidgetExpanded = false;
     coldRun = true;
     activeRun = false;

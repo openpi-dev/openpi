@@ -22,6 +22,65 @@ import {
   ASK_USER_PROMPT_GUIDELINES,
   buildAskUserResultMessage,
 } from "./prompt.ts";
+import {
+  PLAN_MODE_CHANNEL,
+  type PlanModeState,
+} from "../shared/plan-mode-state.ts";
+import {
+  OPENPI_SETUP_EPISODE_CHANNEL,
+  type OpenPiSetupEpisodeState,
+} from "../shared/setup-episode-state.ts";
+
+test("interaction tools follow overlapping Plan and Setup modes", () => {
+  let active = ["read", "third_party_tool"];
+  const channelHandlers = new Map<string, (state: unknown) => void>();
+  let sessionStart: (() => void) | undefined;
+  const pi = {
+    registerTool(tool: { name: string }) {
+      active = [...active.filter((name) => name !== tool.name), tool.name];
+    },
+    getActiveTools: () => [...active],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+    events: {
+      on(channel: string, handler: (state: unknown) => void) {
+        channelHandlers.set(channel, handler);
+      },
+    },
+    on(event: string, handler: unknown) {
+      if (event === "session_start") sessionStart = handler as () => void;
+    },
+  } as unknown as ExtensionAPI;
+
+  askUser(pi);
+  assert.ok(sessionStart);
+  sessionStart();
+  assert.deepEqual(active, ["read", "third_party_tool"]);
+
+  channelHandlers.get(PLAN_MODE_CHANNEL)?.({
+    planning: true,
+  } satisfies PlanModeState);
+  assert.deepEqual(active, [
+    "read",
+    "third_party_tool",
+    "ask_user",
+    "human_handoff",
+  ]);
+
+  channelHandlers.get(OPENPI_SETUP_EPISODE_CHANNEL)?.({
+    active: true,
+  } satisfies OpenPiSetupEpisodeState);
+  channelHandlers.get(PLAN_MODE_CHANNEL)?.({
+    planning: false,
+  } satisfies PlanModeState);
+  assert.ok(active.includes("ask_user"));
+
+  channelHandlers.get(OPENPI_SETUP_EPISODE_CHANNEL)?.({
+    active: false,
+  } satisfies OpenPiSetupEpisodeState);
+  assert.deepEqual(active, ["read", "third_party_tool"]);
+});
 
 test("formats selected, noted, and custom answers", () => {
   const answers = [
@@ -165,10 +224,21 @@ async function runQuestionnaire(
   drive: (component: InteractiveComponent, doneCalls: () => number) => void,
 ) {
   let execute: AskUserExecute | undefined;
+  let active: string[] = [];
   const pi = {
     registerTool(definition: { name: string; execute: AskUserExecute }) {
       if (definition.name === "ask_user") execute = definition.execute;
+      active = [
+        ...active.filter((name) => name !== definition.name),
+        definition.name,
+      ];
     },
+    getActiveTools: () => [...active],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+    events: { on() {} },
+    on() {},
   } as unknown as ExtensionAPI;
   askUser(pi);
   assert.ok(execute);
@@ -520,10 +590,21 @@ interface CapturedInteractionTool {
 
 function captureInteractionTools() {
   const tools = new Map<string, CapturedInteractionTool>();
+  let active: string[] = [];
   const pi = {
     registerTool(definition: CapturedInteractionTool & { name: string }) {
       tools.set(definition.name, definition);
+      active = [
+        ...active.filter((name) => name !== definition.name),
+        definition.name,
+      ];
     },
+    getActiveTools: () => [...active],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+    events: { on() {} },
+    on() {},
   } as unknown as ExtensionAPI;
   askUser(pi);
   return tools;

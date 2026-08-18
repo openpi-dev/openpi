@@ -6,9 +6,14 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { SUBAGENT_ROLE_NAMES } from "../shared/subagent-roles.ts";
+import {
+  OPENPI_SETUP_EPISODE_CHANNEL,
+  type OpenPiSetupEpisodeState,
+} from "../shared/setup-episode-state.ts";
 import setupExtension, {
   applySubagentRoleModelUpdates,
   buildInteractiveSetupPrompt,
+  buildSetupSuccessText,
   CONFIGURE_MY_PI_SETUP_TOOL_NAME,
   shouldOfferPiIntercom,
   SUBAGENT_ROLE_MODELS_SCHEMA,
@@ -37,10 +42,17 @@ function visibilityHarness(
   ];
   const userMessages: Array<{ content: unknown; options: unknown }> = [];
   const setActiveCalls: string[][] = [];
+  const setupEpisodeStates: OpenPiSetupEpisodeState[] = [];
   let idle = options.idle ?? true;
 
   const pi = {
-    events: { emit() {} },
+    events: {
+      emit(channel: string, state: OpenPiSetupEpisodeState) {
+        if (channel === OPENPI_SETUP_EPISODE_CHANNEL) {
+          setupEpisodeStates.push(state);
+        }
+      },
+    },
     registerCommand(
       name: string,
       command: {
@@ -97,6 +109,7 @@ function visibilityHarness(
     commands,
     userMessages,
     setActiveCalls,
+    setupEpisodeStates,
     ctx,
     isActive() {
       return activeTools.includes(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
@@ -120,6 +133,19 @@ function visibilityHarness(
   };
 }
 
+test("setup broadcasts its episode demand for interaction tools", async () => {
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
+
+  await h.runCommand("openpi-setup", "调整 Footer");
+  assert.deepEqual(h.setupEpisodeStates.at(-1), { active: true });
+
+  await h.emit("agent_start");
+  await h.emit("agent_settled");
+  assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
+});
+
 test("registers the canonical setup command, legacy alias, and one constrained tool", () => {
   const h = visibilityHarness();
   assert.deepEqual([...h.commands.keys()].sort(), [
@@ -133,6 +159,7 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   };
   assert.equal("suggestions_enabled" in parameters.properties, true);
   assert.equal("suggestion_model" in parameters.properties, true);
+  assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal(
     Object.keys(parameters.properties).some((name) =>
       name.startsWith("summary"),
@@ -172,6 +199,22 @@ test("successful configure_my_pi_setup hides the tool", async () => {
     isError: false,
   });
   assert.equal(h.isActive(), false);
+});
+
+test("successful setup result closes the episode and names the only re-entry", () => {
+  const result = buildSetupSuccessText(
+    "Capability discovery: explicit.",
+    " Normalized or migrated stored values: ui.footerStyle.",
+  );
+
+  assert.match(result, /Updated OpenPI setup/);
+  assert.match(result, /Capability discovery: explicit/);
+  assert.match(result, /Normalized or migrated.*ui\.footerStyle/);
+  assert.match(result, /setup episode is complete/i);
+  assert.match(result, /configure_my_pi_setup.*hidden/i);
+  assert.match(result, /do not call it again/i);
+  assert.match(result, /do not edit.*configuration files/i);
+  assert.match(result, /\/openpi-setup <request>/);
 });
 
 test("keep-without-apply hides after the setup agent run settles", async () => {
@@ -394,6 +437,9 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /This is the first setup/);
   assert.match(message, /Use ask_user/);
   assert.match(message, /Current Pi model: seal\/gpt-5\.6-sol/);
+  assert.match(message, /Capability discovery/);
+  assert.match(message, /explicit.*adaptive/);
+  assert.match(message, /adaptive.*opt-in/);
   assert.match(message, /dim inline text on the first row/);
   assert.match(message, /reserved cells.*CJK IME preedit/);
   assert.match(message, /Right accepts it without submitting/);
@@ -467,7 +513,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Next-action suggestions, Workflow limits, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.doesNotMatch(message, /This is the first setup/);

@@ -45,13 +45,24 @@ function widgetHarness(
   const widgets: Array<unknown> = [];
   const notifications: string[] = [];
   const entries: Array<{ customType: string; data: any }> = [];
+  let activeTools = ["read", "third_party_tool"];
   let branch = initialBranch;
   let allTools = initialTools;
   let shortcutKey: string | undefined;
   let shortcut: ((ctx: ExtensionContext) => Promise<void>) | undefined;
   const pi = {
     getAllTools: () => allTools,
-    registerTool: (tool: any) => tools.set(tool.name, tool),
+    registerTool: (tool: any) => {
+      tools.set(tool.name, tool);
+      activeTools = [
+        ...activeTools.filter((name) => name !== tool.name),
+        tool.name,
+      ];
+    },
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
+    },
     registerCommand: (name: string, command: any) =>
       commands.set(name, command),
     registerShortcut: (key: string, options: { handler: typeof shortcut }) => {
@@ -80,6 +91,7 @@ function widgetHarness(
     widgets,
     notifications,
     entries,
+    activeTools: () => [...activeTools],
     ctx,
     shortcutKey: () => shortcutKey,
     shortcut: () => shortcut,
@@ -96,6 +108,29 @@ function widgetHarness(
     },
   };
 }
+
+test("task lifecycle tools appear only after task state exists", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  assert.deepEqual(h.activeTools(), ["read", "third_party_tool", "tasks_add"]);
+
+  await h.tools
+    .get("tasks_add")
+    .execute(
+      "add",
+      { items: [{ subject: "Implement the feature" }] },
+      undefined,
+      undefined,
+      h.ctx,
+    );
+  assert.deepEqual(h.activeTools(), [
+    "read",
+    "third_party_tool",
+    "tasks_add",
+    "tasks_update",
+    "tasks_list",
+  ]);
+});
 
 test("persistent task widget restores, updates, and expands all tasks", async () => {
   const h = widgetHarness([
@@ -132,6 +167,7 @@ test("persistent task widget restores, updates, and expands all tasks", async ()
   });
   assert.match(completed.content[0]?.text ?? "", /batch closed/);
   assert.equal((completed as any).details.batchClosed, true);
+  assert.deepEqual(h.activeTools(), ["read", "third_party_tool", "tasks_add"]);
 
   await h.tools.get("tasks_add").execute(
     "a1",
@@ -177,6 +213,7 @@ test("persistent task widget restores, updates, and expands all tasks", async ()
   ]);
   await h.emit("session_tree");
   assert.equal(h.widgets.at(-1), undefined);
+  assert.deepEqual(h.activeTools(), ["read", "third_party_tool", "tasks_add"]);
   await h.emit("session_shutdown");
   assert.equal(h.widgets.at(-1), undefined);
 });

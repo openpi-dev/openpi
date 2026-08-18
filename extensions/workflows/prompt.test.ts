@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
   buildBackgroundWorkflowFollowUp,
@@ -171,40 +172,36 @@ test("result message carries the script's narration and what it dropped", () => 
   assert.doesNotMatch(quiet, /^Log:$/m);
 });
 
-test("the tool description teaches log() and usage() as distinct from phase()", () => {
-  // The description is the only place the model learns these exist.
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /• log\(message\)/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /acceptance\?/);
-  assert.match(
-    WORKFLOW_TOOL_DESCRIPTION,
-    /Unlike phase\(\), it does not touch/,
-  );
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /• usage\(\)/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /agent_type\?/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /operator\?/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /inputs\?/);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /result ref/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /same workflow run/i);
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /not.*cross-restart/i);
-  assert.match(
-    WORKFLOW_TOOL_DESCRIPTION,
-    /same named preset and enforced capabilities as subagent_spawn/,
-  );
-  assert.match(
-    WORKFLOW_TOOL_DESCRIPTION,
-    /explicit model.*type-file model.*configured built-in role model.*parent model/,
-  );
-  assert.match(
-    WORKFLOW_TOOL_DESCRIPTION,
-    /explicit effort.*type default.*parent effort/,
-  );
+test("the resident workflow prompt stays compact while the Skill carries the full guide", async () => {
+  assert.ok(Buffer.byteLength(WORKFLOW_TOOL_DESCRIPTION, "utf8") < 3_000);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /workflows Skill/i);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /check.*\.ok/i);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /pipeline\(\)/);
+  assert.match(WORKFLOW_TOOL_DESCRIPTION, /isolation: ['"]worktree['"]/);
+  assert.doesNotMatch(WORKFLOW_TOOL_DESCRIPTION, /reliability-review/);
   assert.match(
     WORKFLOW_PROMPT_GUIDELINES.join("\n"),
     /select a matching agent_type.*do not hardcode that role's model/,
   );
-  // usage() reports; it does not enforce. Saying otherwise would invite a
-  // script to rely on a limit that does not exist.
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /reading, not a limit/);
-  // The worked example should actually use them, not just describe them.
-  assert.match(WORKFLOW_TOOL_DESCRIPTION, /^log\(`done — /m);
+
+  const skill = await readFile(
+    new URL("../../skills/workflows/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  const reference = await readFile(
+    new URL("../../skills/workflows/REFERENCE.md", import.meta.url),
+    "utf8",
+  );
+  const examples = await readFile(
+    new URL("../../skills/workflows/EXAMPLES.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(skill, /^---\nname: workflows\n/);
+  assert.match(skill, /Use when .*multi-phase/i);
+  assert.match(reference, /operator/);
+  assert.match(reference, /acceptance/);
+  assert.match(reference, /resume_from_run_id/);
+  assert.match(reference, /same workflow run/i);
+  assert.match(examples, /reliability-review/);
+  assert.match(examples, /usage\(\)/);
 });

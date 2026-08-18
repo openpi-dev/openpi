@@ -15,7 +15,7 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   background:
     "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
   resumeFromRunId:
-    'Optional run id of a previous workflow (e.g. "wf_1a2b3c4d5e6f", or a unique suffix) to replay cached read-only agent results. A call replays only when its prompt, resolved agent type/schema/model/provider/effort, canonical cwd, repository state, loaded resources, and trust context match. Unrestricted/no-type agents, writable or unknown tool lists, worktree-isolated agents, failed calls, and calls whose context cannot be fingerprinted always run for real. Matching remains content-based and order-independent. Old or unknown journals simply run everything fresh.',
+    "Optional prior run id or unique suffix for safe read-only replay. See the workflows Skill for matching rules.",
 };
 
 /** Describes stopping a running background workflow, mirroring subagent_cancel/bg_kill. */
@@ -41,55 +41,25 @@ export const WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS = {
 export const WORKFLOW_LIFECYCLE_PROMPT_SNIPPET =
   "Inspect (workflow_status) or cancel (workflow_stop) a background workflow by run id";
 
-/** Defines the workflow DSL, constraints, reliability guidance, and model-authored task examples. */
+/** Compact resident contract; the workflows Skill carries the complete guide. */
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Use the workflow tool when the user explicitly requests a workflow run or when the task clearly requires multi-phase dynamic orchestration.",
-  "Run a multi-agent workflow from a JavaScript orchestration script you write inline. Use this when a task benefits from fanning work out across several isolated subagents in ordered phases (research fan-out, per-file review, verify-then-synthesize pipelines).",
-  "The script runs as an async function body with these primitives:",
-  "• export const meta = { name, description, phases: [{ title, detail? }] } — metadata for the progress UI. Declare all phases up front.",
-  "• phase(title) — mark the current phase at runtime (use titles from meta.phases).",
-  "• log(message) — emit one progress line to the user and to your own final report. This is the run's narrator: use it for anything the reader needs while the run is still going, or that the return value would not capture — round counts, how many agents were dropped, why a branch was skipped. Unlike phase(), it does not touch the phase list. Lines are one row each (newlines are flattened); the most recent 100 are kept and any earlier ones are reported as dropped.",
-  "• usage() — read this run's cumulative token spend so far: { input, output, cacheRead, cacheWrite, total, cost, agents }. The reading refreshes as each agent settles, so evaluating it right after an `await` reflects that agent. `total` never decreases, but it is a LOWER BOUND rather than an exact figure: a child session that compacts drops the tokens of the messages it discarded. Use it to report or adapt cost — e.g. log a running total, or stop a discovery loop once the spend stops paying for itself — and expect a long run to have spent somewhat more than it says. It is a reading, not a limit: nothing is enforced for you.",
-  "• await agent(prompt, { agent_type?, label?, phase?, schema?, acceptance?, model?, provider?, effort?, isolation?, operator?, inputs? }) — run ONE subagent and wait for it. `agent_type` applies the same named preset and enforced capabilities as subagent_spawn: specialized system prompt, tool allowlist, model assignment, and default effort. Prefer a matching type when one exists. Model precedence is explicit model/provider > type-file model > configured built-in role model > parent model; effort precedence is explicit effort > type default > parent effort. Omit `agent_type` for a general-purpose child. Always resolves to { ok, output, structured?, ref?, acceptance?, error? }. Check `ok` before using the result. A successful call's opaque result ref can be passed through `inputs: [previous.ref]` to hydrate bounded same-run handoffs as untrusted data and record explicit lineage. When you pass a JSON `schema`, `structured` holds the validated object on success. Optional `acceptance: { criteria: [{ id, description, requiredEvidence? }] }` is explicit and adds no extra agent: the same structured result must include an evidence ledger; missing, malformed, or rejected criteria make `ok:false` while preserving output and ledger. Children receive normal built-ins and trust-appropriate extensions, settings, skills, and AGENTS.md context, but cannot recursively orchestrate or ask the user.",
-  "• operator: 'name' reuses one in-memory child Session for serialized follow-up activations inside the same workflow run. Its model, role/tool surface, effort, structured mode, and cwd are frozen by the first activation. Operator calls cannot use per-call worktrees or result replay, and operator continuity is not a cross-restart guarantee.",
-  "• inputs: [resultRef, ...] accepts only opaque refs issued by successful calls in this same workflow run. The host injects at most 16 KiB per conclusion and 48 KiB total, marks it as data rather than instructions, and derives a read-only graph from those explicit refs. The graph is observability, never scheduling authority.",
-  "• isolation: 'worktree' runs that one agent in its own git worktree on its own branch, instead of the shared working directory. Use it for any fan-out where agents WRITE — without it, concurrent agents share one checkout and one git index, so their edits and `git add`s silently overwrite each other. Tell such an agent to COMMIT its work: on completion the worktree directory is reclaimed and its branch is kept for you to merge (an empty branch is deleted; uncommitted changes keep the directory instead). The branch name comes back in the run artifacts. Costs a fresh checkout, needs a git repo, and starts without gitignored files, so leave it off for read-only agents.",
-  "• await parallel([() => agent(...), () => agent(...)], { concurrency? }) — run zero-argument agent thunks concurrently and return results in order. This is a BARRIER: nothing after it starts until every thunk settles. A thunk that throws settles to null (filter it out) rather than failing the whole batch, so one bad item never discards the others' results. The package default is 8 concurrent agents per workflow and can be changed with /openpi-setup (hard maximum 64).",
-  "• await pipeline(items, stage1, stage2, ...) — run each item through every stage independently, with NO barrier between stages: item A can be in stage 3 while item B is still in stage 1. Results come back in input order. Each stage receives (previousResult, originalItem, index), so a later stage can label its work without threading context through the earlier stage's return value. A stage that throws drops that item to null and skips its remaining stages, leaving siblings untouched.",
-  "PREFER pipeline() for multi-stage work. parallel() forces every item to wait for the slowest one in each stage, so wall-clock becomes the sum of per-stage worst cases (max stage1 + max stage2) instead of the slowest single chain. The gap is widest when different items are slow in different stages; when one item is slowest everywhere it is the critical path either way. Reach for a barrier only when a stage genuinely needs cross-item context from ALL of the previous one: deduping or merging the full result set, exiting early when the total count is zero, or a prompt that compares one finding against the others. Needing to flatten/map/filter in between is NOT a reason — do that inside a pipeline stage.",
-
-  "• args — the parsed value of the `args` tool parameter (or undefined).",
-  "Workflow JavaScript runs in a restricted, killable child with no imports, eval, timers, filesystem, network, or process APIs. The package default permits 128 agent calls per run and can be changed with /openpi-setup (hard maximum 1024); there is no overall deadline. Each agent must receive its first assistant response event within 45 seconds so silent provider requests fail clearly; after that, agent() has no wall-clock deadline. Each individual child tool call times out independently after 3 minutes, becomes an error tool result, and leaves the agent loop free to recover. Use map/filter/if/await/template strings to orchestrate, and `return` a JSON-serializable aggregate.",
-  "Pass a `schema` to agent() whenever a later step branches on the result, so you get typed fields instead of prose. Each call persists independent intent, admission, and execution state; interrupted nonterminal calls are reported as uncertain rather than guessed failed. Artifacts include a bounded graph projection for explicit result-ref dependencies. To re-run an edited workflow cheaply, pass `resume_from_run_id` with the previous run id: only provably read-only non-operator calls whose content and project/resource context are unchanged can replay; writable, unrestricted, unknown-tool, operator, and worktree calls always run for real.",
-  "Example — each file is verified as soon as ITS OWN scan lands, instead of waiting for every scan:",
-  "export const meta = { name: 'reliability-review', description: 'Review modules for reliability risks, then report', phases: [{ title: 'Scan' }, { title: 'Verify' }, { title: 'Report' }] }",
-  "const FINDINGS = { type: 'object', properties: { issues: { type: 'array', items: { type: 'string' } }, ok: { type: 'boolean' } }, required: ['issues', 'ok'] }",
-  "phase('Scan')",
-  "const checked = await pipeline(args.files,",
-  "  (f) => agent(`Trace ${f} for candidate reliability risks with file:line evidence.`, { agent_type: 'explorer', label: `scan:${f}`, phase: 'Scan', schema: FINDINGS }),",
-  "  (scan, f) => scan.ok ? agent(`Review the candidate issues in ${f}.`, { agent_type: 'reviewer', label: `verify:${f}`, phase: 'Verify', inputs: [scan.ref] }) : null)",
-  "const verified = checked.filter((r) => r && r.ok)",
-  "const dropped = checked.length - verified.length // agents that failed/dropped: surface, never silently swallow",
-  "if (dropped) log(`${dropped}/${checked.length} file(s) dropped before verification`)",
-  "phase('Report')",
-  "const report = await agent('Synthesize tradeoffs and recommendations from the verified findings.', { agent_type: 'advisor', label: 'report', phase: 'Report', inputs: verified.map((r) => r.ref) })",
-  "log(`done — ${verified.length} verified, ${usage().total} tokens`)",
-  "return { verified: verified.length, dropped, report: report.ok ? report.output : report.error }",
+  "Write an async JavaScript body using optional meta, phase(), log(), usage(), agent(), pipeline(), parallel(), args, and a JSON-serializable return.",
+  "agent() returns { ok, output, structured?, ref?, error? }; always check `.ok`, use a schema for branching, and surface failed or null results.",
+  "Prefer pipeline() for independent multi-stage items. Use parallel() only for a real barrier where the next step needs every prior result.",
+  "For concurrent writers use isolation: 'worktree' and tell each agent to commit. Read-only work should normally stay in the shared checkout.",
+  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, acceptance, result refs, replay, background lifecycle, limits, and examples.",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
 export const WORKFLOW_PROMPT_SNIPPET =
-  "Orchestrate isolated subagents from an inline JS script: phase()/agent()/pipeline()/parallel() with structured outputs, log() progress, usage() token readings, and optional background execution";
+  "Orchestrate subagents from an inline JS script; read the workflows Skill for the complete DSL";
 
 /** Guides the model on appropriate workflow fan-out and mandatory agent result checks. */
 export const WORKFLOW_PROMPT_GUIDELINES = [
   "Use workflow when a task needs several subagents with phase dependencies or dynamic fan-out; keep single small delegations in the main session.",
-  "For each workflow agent() call, select a matching agent_type when one exists (explorer, implementer, reviewer, advisor, or a loaded custom type) so its configured model, prompt, effort, and enforced tools apply; do not hardcode that role's model. Omit agent_type only for genuinely general-purpose work.",
-  "Default to pipeline() for multi-stage fan-out so each item advances as soon as its own previous stage lands; use parallel() only when a stage truly needs every prior result at once.",
-  "In workflow scripts, agent() never throws — check `.ok` before using `.output`/`.structured`; but parallel() and pipeline() settle a throwing thunk or stage to `null`, so guard those with `r && r.ok`.",
-  "A filtered-out or null result is a failed agent, not a clean pass: surface how many dropped (e.g. return a count) so a crashed or timed-out agent never reads as success.",
-  "log() anything the reader would want before the run ends — round counts, dropped agents, why a branch was skipped. A long run that narrates nothing is indistinguishable from a stalled one, and the return value only arrives at the end.",
-  "When several agents will edit files concurrently, give each one isolation: 'worktree' and tell it to commit; otherwise they share one checkout and one git index and overwrite each other. Read-only agents do not need it.",
+  "select a matching agent_type when available; use its configured model and do not hardcode that role's model.",
+  "Read the workflows Skill before a nontrivial script; check every agent result, surface dropped work, and use worktree isolation for concurrent writers.",
 ];
 
 /** Marks and forwards a workflow script's agent() task as an isolated child-model prompt. */

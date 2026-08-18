@@ -21,8 +21,10 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const {
   DEFAULT_SETUP_CONFIG,
+  formatSetupConfig,
   SETUP_CONFIG_PATH,
   loadSetupConfig,
+  parseSetupConfig,
   saveSetupConfig,
   updateSetupConfig,
 } = await import("./setup-config.ts");
@@ -38,6 +40,24 @@ const removeLockArtifacts = () => {
     }
   }
 };
+
+test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
+  assert.equal(
+    parseSetupConfig({ capabilities: { discovery: "adaptive" } }).capabilities
+      .discovery,
+    "adaptive",
+  );
+  assert.equal(
+    parseSetupConfig({ capabilities: { discovery: "unexpected" } }).capabilities
+      .discovery,
+    "explicit",
+  );
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG),
+    /Capability discovery: explicit/,
+  );
+});
 
 test("an unreadable config blocks the write and survives untouched", async () => {
   const corrupt = '{ "summaries": { "enabled": false }, oops\n';

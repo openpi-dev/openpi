@@ -1,11 +1,11 @@
 import * as path from "node:path";
 import {
+  type AgentSession,
   DefaultResourceLoader,
   getAgentDir,
   ProjectTrustStore,
-  SettingsManager,
-  type AgentSession,
   type SessionShutdownEvent,
+  SettingsManager,
 } from "@earendil-works/pi-coding-agent";
 
 export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
@@ -51,6 +51,8 @@ function isPiIntercomNpmResource(resource: {
  * drift test in child-session.test.ts).
  */
 export const CHILD_EXCLUDED_TOOL_NAMES = [
+  // capability discovery mutates the parent model-facing tool surface
+  "openpi_load_tools",
   // subagents — children cannot spawn/observe more agents
   "subagent_spawn",
   "subagent_wait",
@@ -185,7 +187,9 @@ export function resolveStandaloneChildProjectTrust(options: {
 
 interface ChildSessionStartup {
   bindExtensions(bindings: { mode: "print" }): Promise<void>;
-  getActiveToolNames(): string[];
+  getActiveToolNames?(): string[];
+  getAllTools?(): { name: string }[];
+  setActiveToolsByName?(toolNames: string[]): void;
 }
 
 function boundedToolNames(names: readonly string[]) {
@@ -208,9 +212,41 @@ export async function bindChildSessionExtensions(
 ) {
   await session.bindExtensions({ mode: "print" });
   const requested = effectiveChildToolAllowlist(requestedTools);
+  let active: Set<string> | undefined;
+  if (
+    session.getActiveToolNames &&
+    session.getAllTools &&
+    session.setActiveToolsByName
+  ) {
+    const requestedSet = requested ? new Set(requested) : undefined;
+    const available = new Set(session.getAllTools().map(({ name }) => name));
+    const activeNames = session.getActiveToolNames();
+    active = new Set(activeNames);
+    for (const name of CHILD_SAFE_PACKAGE_TOOL_NAMES) {
+      if (
+        available.has(name) &&
+        !active.has(name) &&
+        (requestedSet === undefined || requestedSet.has(name))
+      ) {
+        activeNames.push(name);
+        active.add(name);
+      }
+    }
+    if (activeNames.length !== session.getActiveToolNames().length) {
+      session.setActiveToolsByName(activeNames);
+    }
+  }
   if (!requested) return;
 
-  const active = new Set(session.getActiveToolNames());
+  if (!active && session.getActiveToolNames) {
+    active = new Set(session.getActiveToolNames());
+  }
+  if (!active) {
+    throw new Error(
+      "Child tool preflight failed: the bound child session does not expose active-tool introspection.",
+    );
+  }
+
   const missing = [...new Set(requested)].filter((name) => !active.has(name));
   if (missing.length === 0) return;
 

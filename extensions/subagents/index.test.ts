@@ -10,6 +10,54 @@ import type {
 import { PLAN_MODE_CHANNEL } from "../shared/plan-mode-state.ts";
 import subagents from "./index.ts";
 
+test("session start keeps only the subagent entry tool active", () => {
+  let active = ["read", "third_party_tool"];
+  const registered: string[] = [];
+  let sessionStart:
+    | ((event: unknown, ctx: ExtensionContext) => unknown)
+    | undefined;
+  const pi = {
+    on(event: string, handler: unknown) {
+      if (event === "session_start") {
+        sessionStart = handler as typeof sessionStart;
+      }
+    },
+    events: { on() {} },
+    registerTool(tool: { name: string }) {
+      registered.push(tool.name);
+      active = [...active.filter((name) => name !== tool.name), tool.name];
+    },
+    getActiveTools: () => [...active],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+    registerMessageRenderer() {},
+    registerEntryRenderer() {},
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+
+  subagents(pi);
+  assert.ok(sessionStart);
+  sessionStart({}, {
+    cwd: process.cwd(),
+    hasUI: false,
+    isProjectTrusted: () => false,
+  } as unknown as ExtensionContext);
+
+  assert.deepEqual(
+    [...new Set(registered)],
+    [
+      "subagent_spawn",
+      "subagent_wait",
+      "subagent_cancel",
+      "subagent_send",
+      "subagent_check",
+      "subagent_list",
+    ],
+  );
+  assert.deepEqual(active, ["read", "third_party_tool", "subagent_spawn"]);
+});
+
 async function withTempDir(run: (directory: string) => Promise<void>) {
   const directory = await mkdtemp(path.join(tmpdir(), "pi-subagent-roster-"));
   const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
@@ -76,6 +124,8 @@ test("session_start re-registers agent types for its cwd and live trust decision
           });
         }
       },
+      getActiveTools: () => [],
+      setActiveTools() {},
       registerMessageRenderer() {},
       registerEntryRenderer() {},
       registerCommand() {},

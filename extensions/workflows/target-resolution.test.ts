@@ -54,17 +54,32 @@ test("run target resolution prefers exact ids and bounds ambiguous or missing er
 
 test("an ambiguous short suffix cannot stop or inspect either active run", async () => {
   const tools = new Map<string, CapturedTool>();
-  const handlers = new Map<string, Array<() => unknown>>();
+  let activeTools: string[] = [];
+  const handlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
   const pi = {
     registerTool(tool: CapturedTool) {
       tools.set(tool.name, tool);
+      activeTools = [
+        ...activeTools.filter((name) => name !== tool.name),
+        tool.name,
+      ];
     },
     registerCommand() {},
     registerMessageRenderer() {},
-    on(event: string, handler: () => unknown) {
-      handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    on(event: string, handler: unknown) {
+      handlers.set(event, [
+        ...(handlers.get(event) ?? []),
+        handler as (event: unknown, ctx: ExtensionContext) => unknown,
+      ]);
     },
     getThinkingLevel: () => "off",
+    getActiveTools: () => [...activeTools],
+    setActiveTools(names: string[]) {
+      activeTools = [...names];
+    },
     sendMessage() {},
   } as unknown as ExtensionAPI;
   const ctx = {
@@ -84,6 +99,13 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
     },
   } as unknown as ExtensionContext;
   workflows(pi);
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({}, {
+      ...ctx,
+      hasUI: false,
+      mode: "print",
+    } as unknown as ExtensionContext);
+  }
 
   const workflow = tools.get("workflow");
   const stop = tools.get("workflow_stop");
@@ -108,6 +130,11 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
       const runId = result.details?.runId;
       assert.equal(typeof runId, "string");
       if (typeof runId === "string") runIds.push(runId);
+      assert.deepEqual(activeTools, [
+        "workflow",
+        "workflow_stop",
+        "workflow_status",
+      ]);
     }
 
     const bySuffix = new Map<string, string[]>();
@@ -143,7 +170,7 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
     }
   } finally {
     for (const handler of handlers.get("session_shutdown") ?? []) {
-      await handler();
+      await handler({}, ctx);
     }
     rmSync(agentDir, { recursive: true, force: true });
   }

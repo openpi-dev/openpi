@@ -13,3 +13,9 @@ The tool definitions are canonical for parameters, limits, model syntax, isolati
 - Prefer a matching agent type when one exists; its tool restriction is enforced. An explicit spawn model or reasoning effort wins, otherwise use the type default then inherit the parent. Types live in `~/.pi/agent/agents/*.md` and, for trusted projects, `.pi/agents/*.md`; see `extensions/subagents/docs/agent-types.md`.
 - Isolate concurrent writers in worktrees according to the `subagent_spawn` schema so they cannot overwrite one checkout or git index. While Plan Mode is active, use only read-only exploration types (or no type); worktree isolation and types narrowed by Plan Mode are rejected.
 - After spawning, continue useful parent work. Let automatic result delivery drive the next turn; block only when the immediate next step truly depends on that result.
+
+## Worktree isolation
+
+Concurrent writers without isolation share the same checkout and Git index, so edits and `git add` operations can overwrite each other. Set `isolation: "worktree"` and tell every writing child to commit.
+
+The worktree is branched from `HEAD`, requires a Git repository, and starts clean without gitignored files such as build output or `.env`. A successful committed child leaves a branch for the parent to merge. An empty branch can be deleted; dirty, untracked, ignored, detached, timed-out, or uninspectable work is preserved instead of being destroyed. Direct subagents retain their checkout for later `subagent_send` review and only reclaim it on Session retirement after a bounded empty-work proof.

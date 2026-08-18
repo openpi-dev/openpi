@@ -54,7 +54,7 @@ pi install npm:@tt-a1i/openpi
 OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 Pi Subagent，把多阶段依赖组织成 Workflow。状态会持续显示；完整运行可从 `/ps`、`/subagents` 和 `/workflows` 检查或终止。
 
 > [!IMPORTANT]
-> 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。OpenPI 自有偏好统一通过 `/openpi-setup` 显式配置。
+> 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 
 ```text
 /openpi-setup
@@ -143,6 +143,8 @@ bg_start({
 - 最多同时运行 8 个后台终端，Reload 或 Session Shutdown 时统一清理。
 
 后台进程没有 stdin。需要交互输入的命令应由用户直接运行，而不是放进后台。
+
+前台执行沿用 Pi 的 Bash 合同：`timeout` 可选且没有统一默认值，是否设置以及设置多长由模型或用户按命令语义决定。OpenPI 不再通过正则改写测试命令 timeout；确实需要有界执行时应显式传入 timeout，长期运行的 build、test、migration 或 server 可使用 Background Terminal 的生命周期能力。
 
 ### Pi-native Subagent：隔离 Context，不另起系统
 
@@ -333,7 +335,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 | 终端输出         | 控制字符、方向格式符与超长内容在 ingress / render 边界清洗、限长          |
 | Shutdown         | Terminal、Subagent、Workflow 都有有界取消、清理与唯一终态                 |
 | 用户配置         | 单一受限 typed tool 写入；不散落扩展私有配置入口                          |
-| 模型消费         | Suggestion 默认关闭；Subagent / Workflow 只在工具调用或用户 `/btw` 后运行 |
+| 模型消费         | Suggestion 默认关闭；adaptive 仅在显式开启后允许模型自主加载能力           |
 
 可选的 [pi-intercom](https://github.com/nicobailon/pi-intercom) 只在顶层 Pi Session 加载。它使用进程级身份，而 OpenPI Child 是同一进程内的并发 Session；Child Resource Loader 会移除 pi-intercom 扩展与 Skill，避免身份串线。Replay 也不会复用其调用。
 
@@ -352,6 +354,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
+/openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
 /openpi-setup Footer 两行：cwd flex model / context cost flex git
 /openpi-setup Bash 展开，Write/Edit 保持紧凑
@@ -361,11 +364,14 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离，升级不会覆盖。
 
+一次 `/openpi-setup` episode 最多成功写入一次；成功后配置工具立即隐藏。若随后还要修改另一项，请重新执行 `/openpi-setup <自然语言请求>`，不要让模型重调已隐藏工具，也不要绕过入口直接编辑配置文件。
+
 <details>
 <summary><strong>默认值</strong></summary>
 
 | 配置                         | 默认值                                         |
 | ---------------------------- | ---------------------------------------------- |
+| Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
 | 大型 Header                  | 关闭                                           |
@@ -425,18 +431,23 @@ pi install npm:pi-intercom
 <details>
 <summary><strong>模型工具速查</strong></summary>
 
-| 工具                                                                                                     | 用途                           |
-| -------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期               |
-| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                   |
-| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       |
-| `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                 |
-| `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                   |
-| `context_pivot`                                                                                          | Context 阶段切换               |
-| `ask_user`, `human_handoff`                                                                              | 经复核的用户决策与用户专属操作 |
-| `plan_ready`                                                                                             | 显式完成计划，不自动开始实施   |
-| `fd`, `rg`                                                                                               | 文件发现与内容搜索             |
-| `configure_my_pi_setup`                                                                                  | `/openpi-setup` 进行中才暴露的受限配置写入 |
+Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 OpenPI 模型工具，首轮保持 Pi 原生 `read`、`bash`、`edit`、`write`。用户明确要求结构化搜索、Subagent、Workflow、后台进程或 Session Goal/Tasks 时，OpenPI 在 `before_agent_start` 直接加载对应能力组；明确询问 OpenPI capabilities/tools/features 时显示 `openpi_load_tools`。可通过 `/openpi-setup` 显式选择 `adaptive`：此时只让小型 `openpi_load_tools` 网关常驻，模型可在判断任务确实受益时自主加载一个能力组。该选择也授权模型启动该组内的昂贵工作，因此不作为默认值。条件句（例如 “If you delegate…”）不会被当成显式委派意图。能力组在当前 Session 内单调保持，避免反复增删工具破坏缓存。组内管理工具仍只在资源成功创建或状态确实存在后出现。Mode / Setup / Context 工具独立跟随实时状态显示和隐藏。Background、Subagent 与 Workflow 的 Skill 文件仍随包发布，但只在对应能力触发后提示读取，不常驻普通系统 Prompt。
+
+普通产品默认采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不再额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。OpenPI 只保留独立的工作区安全边界：阻止未授权删除 pre-existing 路径，并从实际文件状态识别本轮通过原生写入、文字重定向或 literal `mkdir -p` 创建的 scratch，避免误拦其清理。旧执行策略仅保留为受 benchmark root 门控的实验 profile，不会进入普通 Session。
+
+| 工具                                                                                                     | 用途                           | 可见时机                         |
+| -------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
+| `openpi_load_tools`                                                                                      | 列出或加载可选工具组           | 明确询问；或启用 `adaptive`      |
+| `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期               | 明确意图或 adaptive；启动后展开  |
+| `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                   | 明确意图或 adaptive；创建后展开  |
+| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | 明确意图或 adaptive；运行后展开  |
+| `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                 | 明确意图或 adaptive；存在后展开  |
+| `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                   | 明确意图或 adaptive；存在后展开  |
+| `context_pivot`                                                                                          | Context 阶段切换               | Context 达到阈值时               |
+| `ask_user`, `human_handoff`                                                                              | 经复核的用户决策与用户专属操作 | Plan 或 Setup 进行中             |
+| `plan_ready`                                                                                             | 显式完成计划，不自动开始实施   | Plan 调研阶段                    |
+| `fd`, `rg`                                                                                               | 文件发现与内容搜索             | 明确意图或 adaptive 加载 search  |
+| `configure_my_pi_setup`                                                                                  | 受限配置写入                   | `/openpi-setup` 进行中           |
 
 </details>
 
@@ -451,7 +462,7 @@ pi install npm:pi-intercom
 <details>
 <summary><strong>安装后会自动调用额外模型吗？</strong></summary>
 
-不会。Suggestion 默认关闭；只有用户显式选择模型后，完整主 Agent Run 结束时才可能增加一次小型预测调用。Subagent 与 Workflow 也只在任务实际触发时运行。
+默认不会。Suggestion 默认关闭；Capability discovery 默认 `explicit`。如果用户显式开启 `adaptive`，网关本身不发模型请求，但主模型可以自主加载 Subagent 或 Workflow 并启动额外模型调用；并发和 Workflow 总调用上限仍然生效。
 
 </details>
 
@@ -497,6 +508,7 @@ Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件
 ```text
 extensions/
 ├── setup/                 # /openpi-setup 与受限配置工具
+├── capabilities/          # 最小能力发现入口与 Session 工具面加载
 ├── background-terminals/  # 长进程、日志、/ps
 ├── subagents/             # Pi-native Backend、角色、/subagents
 ├── workflows/             # DSL、Ledger、Graph、Replay、Artifacts
@@ -510,7 +522,7 @@ extensions/
 ├── ui-customization/      # Header、Footer、Terminal title
 └── shared/                # Child policy、配置、Worktree、终端清洗
 
-skills/                    # Background terminal 与 Subagent 指南
+skills/                    # Background terminal、Subagent 与 Workflow 指南
 themes/                    # github-dark-default
 ```
 

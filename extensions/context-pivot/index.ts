@@ -4,6 +4,10 @@ import type {
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 
 export const MIN_CONTEXT_PIVOT_TOKENS = 30_000;
 const STATUS_KEY = "context-pivot";
@@ -78,6 +82,22 @@ export default function contextPivot(pi: ExtensionAPI) {
   let generation = 0;
   let pending: PendingPivot | undefined;
   let compacting = false;
+  const setVisibleForContext = (ctx?: ExtensionContext) => {
+    const tokens = ctx ? estimateContextTokens(ctx.getContextUsage()) : null;
+    patchOwnedTools(pi, "context", {
+      ...(tokens !== null && tokens >= MIN_CONTEXT_PIVOT_TOKENS
+        ? { enable: OPENPI_TOOL_SURFACE.context.deferred }
+        : { disable: OPENPI_TOOL_SURFACE.context.deferred }),
+    });
+  };
+
+  pi.on("session_start", () => {
+    setVisibleForContext();
+  });
+
+  pi.on("agent_start", (_event, ctx) => {
+    setVisibleForContext(ctx);
+  });
 
   pi.on("session_before_compact", (event) => {
     const pivot = pending;
@@ -99,6 +119,7 @@ export default function contextPivot(pi: ExtensionAPI) {
     generation += 1;
     pending = undefined;
     compacting = false;
+    setVisibleForContext();
     if (ctx.hasUI) ctx.ui.setStatus(STATUS_KEY, undefined);
   });
 

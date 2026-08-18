@@ -6,6 +6,10 @@ import type {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 import { GOAL_CONTINUATION_TYPE, GoalController } from "./controller.ts";
 import {
   GOAL_LIMITS,
@@ -88,6 +92,14 @@ export function goalToolResponse(
 
 export default function sessionGoal(pi: ExtensionAPI) {
   const controller = new GoalController(pi);
+  const hideLifecycleTools = () =>
+    patchOwnedTools(pi, "goal", {
+      disable: OPENPI_TOOL_SURFACE.goal.deferred,
+    });
+  const showLifecycleTools = () =>
+    patchOwnedTools(pi, "goal", {
+      enable: OPENPI_TOOL_SURFACE.goal.deferred,
+    });
 
   const updateUi = (ctx: ExtensionContext) => {
     if (!ctx.hasUI) return;
@@ -130,6 +142,7 @@ export default function sessionGoal(pi: ExtensionAPI) {
       controller.createId(),
     );
     controller.replace(goal);
+    showLifecycleTools();
     const started = controller.kickoff(ctx);
     return { goal: controller.snapshot() ?? goal, started };
   };
@@ -325,9 +338,11 @@ export default function sessionGoal(pi: ExtensionAPI) {
           // contradicts.
           notify(ctx, goalUpdateMessage(controller.snapshot()!));
         } else if (parsed.action === "clear") {
+          const cleared = controller.clear();
+          if (cleared) hideLifecycleTools();
           notify(
             ctx,
-            controller.clear()
+            cleared
               ? "Goal cleared"
               : "No goal to clear\nThis thread does not currently have a goal.",
           );
@@ -387,6 +402,8 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   pi.on("session_start", async (event, ctx) => {
     controller.restore(ctx, event.reason === "fork");
+    if (controller.snapshot()) showLifecycleTools();
+    else hideLifecycleTools();
     if (controller.problem()) {
       notify(
         ctx,
@@ -419,6 +436,8 @@ export default function sessionGoal(pi: ExtensionAPI) {
 
   pi.on("session_tree", (_event, ctx) => {
     controller.restore(ctx, true);
+    if (controller.snapshot()) showLifecycleTools();
+    else hideLifecycleTools();
     updateUi(ctx);
   });
 

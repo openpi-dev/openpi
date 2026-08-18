@@ -25,6 +25,18 @@ import {
 import { Cause, Effect, Exit } from "effect";
 import { Type, type Static } from "typebox";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import {
+  PLAN_MODE_CHANNEL,
+  type PlanModeState,
+} from "../shared/plan-mode-state.ts";
+import {
+  OPENPI_SETUP_EPISODE_CHANNEL,
+  type OpenPiSetupEpisodeState,
+} from "../shared/setup-episode-state.ts";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 import { createHumanHandoffToolDefinition } from "./handoff.ts";
 import {
   BRACKETED_PASTE_END,
@@ -355,6 +367,38 @@ export async function showQuestionsWithDialogs(
 }
 
 export default function askUser(pi: ExtensionAPI) {
+  let planning = false;
+  let setupActive = false;
+  const syncInteractionTools = () =>
+    patchOwnedTools(pi, "interaction", {
+      ...(planning || setupActive
+        ? { enable: OPENPI_TOOL_SURFACE.interaction.deferred }
+        : { disable: OPENPI_TOOL_SURFACE.interaction.deferred }),
+    });
+
+  pi.events.on(PLAN_MODE_CHANNEL, (state: unknown) => {
+    planning =
+      typeof state === "object" &&
+      state !== null &&
+      (state as PlanModeState).planning === true;
+    syncInteractionTools();
+  });
+  pi.events.on(OPENPI_SETUP_EPISODE_CHANNEL, (state: unknown) => {
+    setupActive =
+      typeof state === "object" &&
+      state !== null &&
+      (state as OpenPiSetupEpisodeState).active === true;
+    syncInteractionTools();
+  });
+  pi.on("session_shutdown", () => {
+    planning = false;
+    setupActive = false;
+    syncInteractionTools();
+  });
+  pi.on("session_start", () => {
+    syncInteractionTools();
+  });
+
   pi.registerTool({
     name: "ask_user",
     label: "Ask User",

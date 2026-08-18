@@ -47,6 +47,10 @@ import { formatActivityStatus } from "../shared/activity-status.ts";
 import { waitBounded } from "../shared/child-session.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
+import {
   loadAgentTypes,
   resolveAgentModel,
   roleModelForAgentType,
@@ -421,6 +425,14 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
   const settledRuns = new Map<string, WorkflowDetails>();
+  const hideLifecycleTools = () =>
+    patchOwnedTools(pi, "workflows", {
+      disable: OPENPI_TOOL_SURFACE.workflows.deferred,
+    });
+  const showLifecycleTools = () =>
+    patchOwnedTools(pi, "workflows", {
+      enable: OPENPI_TOOL_SURFACE.workflows.deferred,
+    });
   const stripState = new WorkflowStripState();
   const widgetKey = "workflow-navigation";
 
@@ -577,6 +589,7 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
+    hideLifecycleTools();
     if (ctx.hasUI) lastContext = ctx;
     agentTypes = loadAgentTypes({
       agentDir: getAgentDir(),
@@ -1644,6 +1657,7 @@ export default function workflows(pi: ExtensionAPI) {
               // Session may be shutting down.
             }
           });
+        showLifecycleTools();
         return {
           content: [
             {

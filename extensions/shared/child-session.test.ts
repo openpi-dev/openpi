@@ -15,6 +15,7 @@ import {
   type SessionShutdownEvent,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
+import capabilities from "../capabilities/index.ts";
 import {
   bindChildSessionExtensions,
   CHILD_EXCLUDED_TOOL_NAMES,
@@ -122,6 +123,73 @@ test("explicit child tools are checked against the final bound registry", async 
     await bindChildSessionExtensions(excluded, ["read", "subagent_spawn"]);
     assert.deepEqual(excluded.getActiveToolNames(), ["read"]);
     await shutdownAndDisposeChildSession(excluded);
+  });
+});
+
+test("child binding restores only requested child-safe package tools after parent surface gating", async () => {
+  await withTempDir(async (directory) => {
+    const settingsManager = SettingsManager.inMemory(undefined, {
+      projectTrusted: false,
+    });
+    const loader = new DefaultResourceLoader({
+      cwd: directory,
+      agentDir: path.join(directory, "capability-agent"),
+      settingsManager,
+      extensionFactories: [
+        capabilities,
+        (pi) => {
+          for (const name of CHILD_SAFE_PACKAGE_TOOL_NAMES) {
+            pi.registerTool({
+              name,
+              label: name,
+              description: name,
+              parameters: Type.Object({}),
+              async execute() {
+                return {
+                  content: [{ type: "text" as const, text: "ok" }],
+                  details: {},
+                };
+              },
+            });
+          }
+        },
+      ],
+    });
+    await loader.reload();
+
+    const create = async (tools?: readonly string[]) => {
+      const { session } = await createAgentSession({
+        cwd: directory,
+        agentDir: path.join(directory, "capability-agent"),
+        resourceLoader: loader,
+        settingsManager,
+        sessionManager: SessionManager.inMemory(directory),
+        ...childToolPolicy(tools),
+      });
+      await bindChildSessionExtensions(session, tools);
+      return session;
+    };
+
+    const defaults = await create();
+    assert.deepEqual(
+      defaults
+        .getActiveToolNames()
+        .filter((name) =>
+          (CHILD_SAFE_PACKAGE_TOOL_NAMES as readonly string[]).includes(name),
+        )
+        .sort(),
+      [...CHILD_SAFE_PACKAGE_TOOL_NAMES].sort(),
+    );
+    assert.equal(
+      defaults.getActiveToolNames().includes("openpi_load_tools"),
+      false,
+    );
+    await shutdownAndDisposeChildSession(defaults);
+
+    const narrowed = await create(["read"]);
+    assert.equal(narrowed.getActiveToolNames().includes("fd"), false);
+    assert.equal(narrowed.getActiveToolNames().includes("rg"), false);
+    await shutdownAndDisposeChildSession(narrowed);
   });
 });
 

@@ -53,6 +53,10 @@ import {
   RG_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { discardCapturedOutput, executeSearchProcess } from "./src/process.ts";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 
 export function makeBinaryInitializers(
   binDir: string,
@@ -137,6 +141,9 @@ export default function fileSearchTools(pi: ExtensionAPI) {
   const initializers = makeBinaryInitializers(binDir, target, liveBinaryEnv);
 
   pi.on("session_start", async (_event, ctx) => {
+    patchOwnedTools(pi, "fileSearch", {
+      enable: OPENPI_TOOL_SURFACE.fileSearch.entry,
+    });
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const initialized = yield* Effect.all(

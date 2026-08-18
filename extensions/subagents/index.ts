@@ -65,6 +65,10 @@ import {
   hasActivity,
   unreadActivityCounts,
 } from "../shared/activity-status.ts";
+import {
+  OPENPI_TOOL_SURFACE,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
@@ -198,6 +202,14 @@ export default function (pi: ExtensionAPI) {
   let requestWidgetRender: (() => void) | undefined;
   let dashboardOpen = false;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+  const hideLifecycleTools = () =>
+    patchOwnedTools(pi, "subagents", {
+      disable: OPENPI_TOOL_SURFACE.subagents.deferred,
+    });
+  const showLifecycleTools = () =>
+    patchOwnedTools(pi, "subagents", {
+      enable: OPENPI_TOOL_SURFACE.subagents.deferred,
+    });
 
   const getRuntime = () => (runtime ??= createSubagentRuntime());
 
@@ -408,6 +420,7 @@ export default function (pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     refreshAgentTypes(ctx.cwd, ctx.isProjectTrusted());
+    hideLifecycleTools();
     sessionContext = ctx;
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
@@ -680,6 +693,8 @@ export default function (pi: ExtensionAPI) {
         if (worktree) await reclaimWorktree(cwd, worktree).catch(() => {});
         throw error;
       }
+
+      showLifecycleTools();
 
       return {
         content: [

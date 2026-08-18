@@ -25,6 +25,8 @@ my-pi-setup.json.*.tmp
 *.log
 *.tmp
 *.swp
+__pycache__/
+*.py[cod]
 .DS_Store
 
 # Local editor settings

@@ -1,6 +1,7 @@
 /** Model-facing strings that carry a behavioral contract, not just wording. */
 
 import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Value } from "typebox/value";
 import { MAX_RUNNING } from "./src/manager.ts";
@@ -63,16 +64,19 @@ test("the spawn description derives its concurrency cap from the manager", () =>
   );
 });
 
-test("the spawn description tells the model when isolation is needed and what it gets back", () => {
+test("the spawn schema keeps isolation compact while the Skill carries its tradeoffs", async () => {
   const description = SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.isolation;
-  // The model has to learn the hazard, not just the flag: without the "why",
-  // it has no basis for choosing isolation on a concurrent write fan-out.
-  assert.match(description, /same git index|git index/);
-  // Committing is what makes the work survive teardown.
-  assert.match(description, /COMMIT/);
-  // And the two costs it must weigh before turning it on.
-  assert.match(description, /git repository/);
-  assert.match(description, /gitignored/);
+  assert.ok(Buffer.byteLength(description, "utf8") < 300);
+  assert.match(description, /concurrent writers/i);
+  assert.match(description, /subagents Skill/i);
+
+  const skill = await readFile(
+    new URL("../../skills/subagents/SKILL.md", import.meta.url),
+    "utf8",
+  );
+  assert.match(skill, /same checkout and Git index/i);
+  assert.match(skill, /commit/i);
+  assert.match(skill, /gitignored/i);
 });
 
 test("a planning child reports its effective tools without an agent type", () => {
