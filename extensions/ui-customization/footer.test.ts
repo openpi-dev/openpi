@@ -58,11 +58,8 @@ test("default one-line layout keeps flex alignment", () => {
   assert.equal(lines.length, 1);
   assert.match(lines[0]!, /project/);
   assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
-  assert.match(lines[0]!, /high/);
   assert.match(lines[0]!, /25%\/1\.0m/);
-  assert.match(lines[0]!, /cache 82%/);
   assert.match(lines[0]!, /\$4\.03/);
-  assert.match(lines[0]!, /~41 tok\/s/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
   const gap =

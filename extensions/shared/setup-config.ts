@@ -67,23 +67,12 @@ export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
 export type CapabilityDiscoveryMode =
   (typeof CAPABILITY_DISCOVERY_MODES)[number];
 
-/** Canonical default layout: one-line Powerline dashboard with flex alignment. */
+/** Canonical default layout: one-line plain footer with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
-  [
-    "cwd",
-    "model",
-    "thinking",
-    "context",
-    "cache",
-    "cost",
-    "throughput",
-    "flex",
-    "git",
-    "pr",
-  ],
+  ["cwd", "git", "pr", "flex", "model", "context", "cost"],
 ];
 
-export const DEFAULT_FOOTER_STYLE: FooterStyle = "powerline";
+export const DEFAULT_FOOTER_STYLE: FooterStyle = "plain";
 
 export const DEFAULT_FOOTER_ITEMS: readonly FooterItem[] =
   flattenFooterItems(DEFAULT_FOOTER_LINES);

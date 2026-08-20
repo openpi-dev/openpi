@@ -17,7 +17,7 @@ import {
 const defaultUi = {
   showHeader: false,
   customFooter: true,
-  footerStyle: "powerline" as const,
+  footerStyle: "plain" as const,
   footerLines: DEFAULT_FOOTER_LINES,
   footerItems: DEFAULT_FOOTER_ITEMS,
   subagentResultDisplay: "full" as const,
@@ -29,7 +29,7 @@ test("setup defaults to disabled next-action suggestions", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
@@ -70,7 +70,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · powerline · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: folded preview (Ctrl+O expands all)\nWrite/Edit operations: folded preview (Ctrl+O expands all)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
@@ -132,14 +132,14 @@ test("workflow limits default safely and accept configured fan-out", () => {
   );
 });
 
-test("UI defaults to a compact header and one-line powerline footer", () => {
+test("UI defaults to a compact header and one-line plain footer", () => {
   assert.deepEqual(parseSetupConfig({}).ui, defaultUi);
   assert.deepEqual(
     parseSetupConfig({ ui: { showHeader: true, customFooter: false } }).ui,
     {
       showHeader: true,
       customFooter: false,
-      footerStyle: "powerline",
+      footerStyle: "plain",
       footerLines: DEFAULT_FOOTER_LINES,
       footerItems: DEFAULT_FOOTER_ITEMS,
       subagentResultDisplay: "full",
@@ -184,11 +184,9 @@ test("legacy footerItems migrates onto the default one-line skeleton", () => {
     },
   }).ui;
 
-  assert.deepEqual(ui.footerLines, [
-    ["model", "context", "cache", "flex", "git"],
-  ]);
-  assert.deepEqual(ui.footerItems, ["model", "context", "cache", "git"]);
-  assert.equal(ui.footerStyle, "powerline");
+  assert.deepEqual(ui.footerLines, [["git", "flex", "model", "context"]]);
+  assert.deepEqual(ui.footerItems, ["git", "model", "context"]);
+  assert.equal(ui.footerStyle, "plain");
 });
 
 test("empty legacy footerItems falls back to the default layout", () => {

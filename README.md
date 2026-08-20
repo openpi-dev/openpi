@@ -397,7 +397,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
 | 大型 Header                  | 关闭                                           |
-| Dashboard Footer             | 开启；单行 `powerline`                         |
+| Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `full` / `compact` / `compact`                 |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
