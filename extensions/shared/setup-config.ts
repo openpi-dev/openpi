@@ -956,7 +956,7 @@ export function formatSetupConfig(
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
     `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
-    `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact preview (expand for full output)"}`,
+    `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "folded preview (Ctrl+O expands all)"}`,
     `Post-edit command: ${config.postEdit.command ? config.postEdit.command : "off"}`,

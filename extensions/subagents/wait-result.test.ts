@@ -10,7 +10,7 @@ const theme = {
   bold: (text: string) => text,
 } as Theme;
 
-test("wait result preview has a global line budget and reports hidden lines", () => {
+test("wait result preview shows status only and keeps full output behind expand", () => {
   const content = [
     '## sa-1 "review" finished',
     "",
@@ -28,12 +28,13 @@ test("wait result preview has a global line budget and reports hidden lines", ()
   );
   const lines = preview.split("\n");
 
-  assert.ok(lines.length <= 12);
+  assert.ok(lines.length <= 4);
   assert.match(preview, /2 subagents settled · 1 failed/);
   assert.match(preview, /sa-1 · review · done/);
   assert.match(preview, /sa-2 · tests · error/);
-  assert.match(preview, /more lines/);
+  assert.match(preview, /Results passed to main agent/);
   assert.match(preview, /expand/);
+  assert.doesNotMatch(preview, /finding 1/);
   assert.doesNotMatch(preview, /finding 30/);
 });
 

@@ -6,17 +6,16 @@ import {
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { sanitizeText } from "./transcript.ts";
 
-const COLLAPSED_MAX_LINES = 12;
 const MAX_STATUS_ROWS = 4;
 
 export interface WaitResultItem {
-  id: string;
-  title?: string;
-  status?: string;
+  readonly id: string;
+  readonly title?: string;
+  readonly status?: string;
 }
 
 export interface WaitResultDetails {
-  results?: WaitResultItem[];
+  readonly results?: readonly WaitResultItem[];
 }
 
 export function buildWaitResultPreview(
@@ -46,23 +45,11 @@ export function buildWaitResultPreview(
     lines.push(theme.fg("dim", `  … ${results.length - MAX_STATUS_ROWS} more`));
   }
 
-  const cleanLines = sanitizeText(content)
-    .split("\n")
-    .map((line) => line.trimEnd())
-    .filter((line) => line.trim() && line.trim() !== "---");
-  const leadingHeader = cleanLines[0]?.startsWith("## ") ? 1 : 0;
-  const body = cleanLines.slice(leadingHeader);
-  const available = Math.max(1, COLLAPSED_MAX_LINES - lines.length - 1);
-  for (const line of body.slice(0, available)) {
-    lines.push(theme.fg("toolOutput", line));
-  }
-
-  const hidden = Math.max(0, body.length - available);
-  if (hidden > 0) {
+  if (content.trim()) {
     lines.push(
       theme.fg(
         "dim",
-        `… ${hidden} more line${hidden === 1 ? "" : "s"} · ${keyHint("app.tools.expand", "to expand")}`,
+        `Results passed to main agent · ${keyHint("app.tools.expand", "to expand")}`,
       ),
     );
   }

@@ -129,6 +129,7 @@ import {
 } from "./navigation.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
+  buildWaitResultPreview,
   renderWaitResult,
   type WaitResultDetails,
 } from "./src/ui/wait-result.ts";
@@ -261,6 +262,21 @@ function renderSubagentResult(
   expanded: boolean,
   theme: SubagentResultTheme,
 ) {
+  if (!expanded && loadSetupConfig().ui.subagentResultDisplay === "compact") {
+    const results = details.results?.length
+      ? details.results
+      : details.id
+        ? [
+            {
+              id: details.id,
+              title: details.title,
+              status: details.status,
+            },
+          ]
+        : [];
+    return new Text(buildWaitResultPreview(content, { results }, theme), 0, 0);
+  }
+
   const failed = details.status === "error";
   const icon = failed ? theme.fg("error", "x") : theme.fg("success", "■");
   const header =
@@ -274,28 +290,18 @@ function renderSubagentResult(
   // Remove only the summary line. The following Error line (when present)
   // is part of the actual result and must remain visible.
   const body = content.split("\n").slice(1).join("\n").trim();
-  if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
-    const md = new Markdown(body, 0, 0, getMarkdownTheme());
-    const container = new Text(header, 0, 0);
-    return {
-      render: (width: number) => [
-        ...container.render(width),
-        ...md.render(width),
-      ],
-      invalidate: () => {
-        container.invalidate();
-        md.invalidate();
-      },
-    };
-  }
-
-  const bodyLines = body.split("\n");
-  let text = header;
-  for (const line of bodyLines.slice(0, 8))
-    text += `\n${theme.fg("toolOutput", line)}`;
-  if (bodyLines.length > 8)
-    text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
-  return new Text(text, 0, 0);
+  const md = new Markdown(body, 0, 0, getMarkdownTheme());
+  const container = new Text(header, 0, 0);
+  return {
+    render: (width: number) => [
+      ...container.render(width),
+      ...md.render(width),
+    ],
+    invalidate: () => {
+      container.invalidate();
+      md.invalidate();
+    },
+  };
 }
 
 export default function (pi: ExtensionAPI) {

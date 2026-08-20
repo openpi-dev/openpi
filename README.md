@@ -332,7 +332,7 @@ cwd  model  thinking  context  cache  cost  throughput   git  PR
 - 支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
 - Subagent 与 Workflow 活动时自动出现，空闲时不占空间；
-- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；
+- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；Subagent 的 compact 模式只显示状态摘要，不暴露原始子 Agent 正文；
 - 折叠内容用 Pi 的 `app.tools.expand` 快捷键临时展开，默认 `Ctrl+O`；
 - Git 状态本地刷新；只有显式运行 `/pr` 才查询 GitHub PR。
 
