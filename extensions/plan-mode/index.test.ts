@@ -274,6 +274,157 @@ test("Plan Ready keeps the write gate closed until the user prepares an editable
   );
 });
 
+test("bare /plan offers to turn planning mode off", async () => {
+  let commandHandler:
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
+  let toolHandler:
+    | ((event: { toolName: string }) => { block?: boolean } | void)
+    | undefined;
+  const entries: unknown[] = [];
+  const pi = {
+    registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on(event: string, handler: unknown) {
+      if (event === "tool_call") toolHandler = handler as typeof toolHandler;
+    },
+    events: { emit() {} },
+    appendEntry(_type: string, state: unknown) {
+      entries.push(state);
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus() {},
+      notify() {},
+      select: async () => PLAN_READY_ACTIONS.off,
+    },
+  } as unknown as ExtensionCommandContext;
+
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(toolHandler);
+  await commandHandler("", ctx);
+  await commandHandler("", ctx);
+
+  assert.equal(toolHandler({ toolName: "write" }), undefined);
+  assert.deepEqual(entries.at(-1), { version: 1, status: "inactive" });
+});
+
+test("bare /plan offers to turn ready mode off", async () => {
+  let commandHandler:
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
+  let toolHandler:
+    | ((event: { toolName: string }) => { block?: boolean } | void)
+    | undefined;
+  let readyExecute: PlanReadyExecute | undefined;
+  const entries: unknown[] = [];
+  const pi = {
+    registerTool(definition: { name: string; execute: PlanReadyExecute }) {
+      if (definition.name === "plan_ready") readyExecute = definition.execute;
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on(event: string, handler: unknown) {
+      if (event === "tool_call") toolHandler = handler as typeof toolHandler;
+    },
+    events: { emit() {} },
+    appendEntry(_type: string, state: unknown) {
+      entries.push(state);
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: {
+      setStatus() {},
+      notify() {},
+      select: async () => PLAN_READY_ACTIONS.off,
+    },
+  } as unknown as ExtensionCommandContext;
+
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(readyExecute);
+  assert.ok(toolHandler);
+  await commandHandler("", ctx);
+  await readyExecute(
+    "ready-off",
+    { plan: "# Plan" },
+    new AbortController().signal,
+    undefined,
+    ctx,
+  );
+  await commandHandler("", ctx);
+
+  assert.equal(toolHandler({ toolName: "write" }), undefined);
+  assert.deepEqual(entries.at(-1), { version: 1, status: "inactive" });
+});
+
+test("/plan off clears plan mode", async () => {
+  let commandHandler:
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
+  let toolHandler:
+    | ((event: { toolName: string }) => { block?: boolean } | void)
+    | undefined;
+  const entries: unknown[] = [];
+  const pi = {
+    registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on(event: string, handler: unknown) {
+      if (event === "tool_call") toolHandler = handler as typeof toolHandler;
+    },
+    events: { emit() {} },
+    appendEntry(_type: string, state: unknown) {
+      entries.push(state);
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: { setStatus() {}, notify() {} },
+  } as unknown as ExtensionCommandContext;
+
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.ok(toolHandler);
+  await commandHandler("", ctx);
+  await commandHandler("off", ctx);
+
+  assert.equal(toolHandler({ toolName: "write" }), undefined);
+  assert.deepEqual(entries.at(-1), { version: 1, status: "inactive" });
+});
+
 test("fresh implementation links a new session and prefills without submitting", async () => {
   let commandHandler:
     | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
