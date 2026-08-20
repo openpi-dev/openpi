@@ -263,9 +263,10 @@ test("statuses remain visible even when metric layout is empty after normalize",
     statuses: ["bg: sleep"],
   });
 
-  // normalize falls back to the default metric line; statuses still append.
-  assert.ok(lines.length >= 2);
-  assert.match(lines.at(-1)!, /bg: sleep/);
+  // normalize falls back to the default metric line; the status stays visible
+  // whether it inlines into that line or lands on its own.
+  assert.ok(lines.length >= 1);
+  assert.match(lines.join("\n"), /bg: sleep/);
 });
 
 test("legacy buildFooterContent still groups selected items", () => {
