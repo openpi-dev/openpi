@@ -25,24 +25,22 @@
  */
 
 /**
- * Any of these means the text is more than one plain command — a pipeline, a
- * sequence, a redirect, a substitution, a glob, or a background job. Rather
- * than parse shell (where every parser bug is a bypass), refuse outright.
- *
- * `\` is here because a line continuation splices in the next line; `$` covers
- * both `$(...)` and a `$VAR` that expands into arguments never inspected here.
+ * This module does not parse shell or admit shell composition. Its small
+ * tokenizer only recognizes words and quoted literal spans. `$`, backticks
+ * and `\` are refused everywhere; shell metacharacters are refused outside
+ * quotes. Globs are also refused outside quotes because the shell would expand
+ * them before the allowlisted program sees them, while a quoted glob is a
+ * literal pattern interpreted by that read-only program itself.
  */
-const SHELL_METACHARACTERS = /[;&|<>$`\\!*?{}()[\]\n\r#]/;
+const UNQUOTED_SHELL_METACHARACTERS = /[;&|<>(){}\n\r#]/;
+const EXPANSION_CHARACTERS = /[$`\\]/;
+const UNQUOTED_GLOB_CHARACTERS = new Set(["*", "?", "[", "]"]);
 
 /**
- * Tilde expansion, but only where a shell would actually expand it: at the
- * start of a word. `HEAD~3` is ordinary revision syntax and must survive,
- * while `~/notes` and `~user/x` resolve to a path this module never sees.
+ * Tilde expansion is refused only at the start of an unquoted word. `HEAD~3`
+ * is ordinary revision syntax and must survive, while `~/notes` and
+ * `~user/x` resolve to a path this module never sees.
  */
-const TILDE_EXPANSION = /(^|\s)~/;
-
-/** Quotes hide word boundaries from the tokenizer below, so they are refused too. */
-const QUOTES = /["']/;
 
 /**
  * Read-only git subcommands. Absent on purpose: `config`, `stash`, `tag`,
@@ -194,6 +192,94 @@ const GH_FLAGS = new Set([
   "--comments",
 ]);
 
+const RG_FLAGS = new Set([
+  "-n",
+  "--line-number",
+  "-i",
+  "--ignore-case",
+  "-l",
+  "--files-with-matches",
+  "-c",
+  "--count",
+  "-w",
+  "-F",
+  "--fixed-strings",
+  "-e",
+  "--regexp",
+  "-g",
+  "--glob",
+  "-t",
+  "--type",
+  "--files",
+  "--hidden",
+  "--no-ignore",
+  "-A",
+  "-B",
+  "-C",
+  "--after-context",
+  "--before-context",
+  "--context",
+  "-m",
+  "--max-count",
+  "-o",
+  "--only-matching",
+  "--sort",
+  "--json",
+  "--color",
+  "-H",
+  "-N",
+  "--no-filename",
+  "-v",
+  "--invert-match",
+  "-u",
+  "-uu",
+]);
+
+const FD_FLAGS = new Set([
+  "-e",
+  "--extension",
+  "-t",
+  "--type",
+  "-d",
+  "--max-depth",
+  "--min-depth",
+  "-H",
+  "--hidden",
+  "-I",
+  "--no-ignore",
+  "-g",
+  "--glob",
+  "-F",
+  "--fixed-strings",
+  "-p",
+  "--full-path",
+  "-a",
+  "--absolute-path",
+  "-l",
+  "--list-details",
+  "--color",
+  "-0",
+  "-S",
+  "--size",
+]);
+
+const LS_FLAGS = new Set([
+  "-l",
+  "-a",
+  "-A",
+  "-h",
+  "-t",
+  "-r",
+  "-R",
+  "-d",
+  "-1",
+  "-S",
+  "-F",
+  "--color",
+]);
+const WC_FLAGS = new Set(["-l", "-w", "-c", "-m"]);
+const HEAD_TAIL_FLAGS = new Set(["-n", "-c", "--lines", "--bytes"]);
+
 /** `-5`, `-20`: git's count shorthand, which is a number rather than a flag. */
 const NUMERIC_SHORTHAND = /^-\d+$/;
 
@@ -207,6 +293,83 @@ const refuse = (reason: string): BashPlanDecision => ({
   allowed: false,
   reason,
 });
+
+/**
+ * Tokenize words without pretending to be a shell parser. Quoted spans are
+ * removed and become literal text; no expansion or command composition is
+ * supported. The validation happens while tokenizing so an unquoted glob can
+ * never be mistaken for a literal program argument.
+ */
+function tokenize(command: string) {
+  const words: string[] = [];
+  let word = "";
+  let inWord = false;
+  let quote: "'" | '"' | undefined;
+  let wordStartsUnquoted = false;
+
+  for (const character of command) {
+    if (quote) {
+      if (character === quote) {
+        quote = undefined;
+      } else if (EXPANSION_CHARACTERS.test(character)) {
+        return refuse(
+          `plan mode rejected expansion character ${JSON.stringify(character)} — remove expansion syntax and pass literal arguments instead`,
+        );
+      } else {
+        word += character;
+      }
+      inWord = true;
+      continue;
+    }
+
+    if (EXPANSION_CHARACTERS.test(character)) {
+      return refuse(
+        `plan mode rejected expansion character ${JSON.stringify(character)} — remove expansion syntax and pass literal arguments instead`,
+      );
+    }
+    if (UNQUOTED_SHELL_METACHARACTERS.test(character)) {
+      return refuse(
+        `plan mode rejected unquoted shell metacharacter ${JSON.stringify(character)} — run a single plain command without shell composition`,
+      );
+    }
+    if (UNQUOTED_GLOB_CHARACTERS.has(character)) {
+      return refuse(
+        "plan mode will not run an unquoted glob because the shell would expand it — quote it instead, e.g. --glob '*.ts'",
+      );
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      inWord = true;
+      if (!word) wordStartsUnquoted = false;
+      continue;
+    }
+    if (/\s/.test(character)) {
+      if (inWord) {
+        words.push(word);
+        word = "";
+        inWord = false;
+        wordStartsUnquoted = false;
+      }
+      continue;
+    }
+    if (!inWord) wordStartsUnquoted = true;
+    if (wordStartsUnquoted && word.length === 0 && character === "~") {
+      return refuse(
+        "plan mode does not run tilde-expanded paths — use a path relative to the project instead",
+      );
+    }
+    word += character;
+    inWord = true;
+  }
+
+  if (quote) {
+    return refuse(
+      `plan mode rejected an unterminated ${quote === "'" ? "single" : "double"} quote — close the quote or pass a literal argument instead`,
+    );
+  }
+  if (inWord) words.push(word);
+  return { allowed: true as const, words };
+}
 
 /** Split `--flag=value` into the flag part the allowlists are keyed on. */
 function flagName(word: string) {
@@ -227,11 +390,43 @@ function scanArguments(
   for (const word of words) {
     if (word === "--") break;
     if (!word.startsWith("-")) continue;
-    if (NUMERIC_SHORTHAND.test(word)) continue;
+    if ((program === "git" || program === "gh") && NUMERIC_SHORTHAND.test(word))
+      continue;
     if (!allowed.has(flagName(word))) {
+      const isShortCluster =
+        word.startsWith("-") &&
+        !word.startsWith("--") &&
+        [...word.slice(1)].every((character) => allowed.has(`-${character}`));
+      if (isShortCluster) continue;
       return refuse(
-        `plan mode does not recognize "${word}" as a read-only ${program} option, so it will not run this command`,
+        `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
       );
+    }
+  }
+  return { allowed: true };
+}
+
+function scanShortFlagClusters(
+  words: readonly string[],
+  allowed: ReadonlySet<string>,
+  program: string,
+): BashPlanDecision {
+  for (const word of words) {
+    if (word === "--") break;
+    if (!word.startsWith("-") || word.startsWith("--")) continue;
+    if (allowed.has(word)) continue;
+    const shortFlags = word.slice(1);
+    if (new Set(shortFlags).size !== shortFlags.length) {
+      return refuse(
+        `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
+      );
+    }
+    for (const flag of shortFlags) {
+      if (!allowed.has(`-${flag}`)) {
+        return refuse(
+          `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
+        );
+      }
     }
   }
   return { allowed: true };
@@ -249,21 +444,10 @@ export function planBashDecision(command: unknown): BashPlanDecision {
   const text = command.trim();
   if (!text) return refuse("plan mode received an empty command");
 
-  if (SHELL_METACHARACTERS.test(text)) {
-    return refuse(
-      "plan mode only runs a single plain command — no pipes, redirects, substitutions, globs, or chained commands",
-    );
-  }
-  if (QUOTES.test(text)) {
-    return refuse("plan mode only runs unquoted commands while planning");
-  }
-  if (TILDE_EXPANSION.test(text)) {
-    return refuse(
-      "plan mode does not run commands with `~` paths — give a path relative to the project instead",
-    );
-  }
-
-  const [program, ...rest] = text.split(/\s+/);
+  const tokenized = tokenize(text);
+  if (!("words" in tokenized)) return tokenized;
+  const [program, ...rest] = tokenized.words;
+  if (!program) return refuse("plan mode received an empty command");
 
   /*
    * The subcommand must be the FIRST word, never "the first word that is not a
@@ -300,14 +484,38 @@ export function planBashDecision(command: unknown): BashPlanDecision {
     return scanArguments(args, GH_FLAGS, "gh");
   }
 
-  /*
-   * Nothing else is admitted. `ls`, `cat`, `head`, `tail` and `wc` were on an
-   * earlier version of this list and are gone: plan mode already grants the
-   * `ls`, `read`, `grep` and `fd`/`rg` TOOLS, so those shell forms added no
-   * capability while each contributed its own flag grammar to get wrong
-   * (`file --compile` and `tree -ao` both write files).
-   */
+  const readOnlyPrograms = new Map([
+    ["rg", RG_FLAGS],
+    ["fd", FD_FLAGS],
+    ["ls", LS_FLAGS],
+    ["wc", WC_FLAGS],
+    ["head", HEAD_TAIL_FLAGS],
+    ["tail", HEAD_TAIL_FLAGS],
+  ]);
+  const flags = readOnlyPrograms.get(program);
+  if (flags) {
+    if (
+      program === "tail" &&
+      rest.some((word) => word === "-f" || word === "--follow")
+    ) {
+      return refuse(
+        'plan mode refuses "tail -f/--follow" because it can block forever — use a finite tail command instead',
+      );
+    }
+    const decision = scanArguments(rest, flags, program);
+    if (!decision.allowed) return decision;
+    if (
+      program === "rg" ||
+      program === "fd" ||
+      program === "ls" ||
+      program === "wc"
+    ) {
+      return scanShortFlagClusters(rest, flags, program);
+    }
+    return { allowed: true };
+  }
+
   return refuse(
-    `plan mode runs only read-only git and gh investigation commands while planning, not "${program}" — use the read, ls, grep or fd tools for files`,
+    `plan mode does not allow "${program}" — use read-only git and gh investigation commands; available commands are git, gh, rg, fd, ls, wc, head or tail, plus the read/grep/fd tools`,
   );
 }

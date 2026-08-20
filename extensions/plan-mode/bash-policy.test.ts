@@ -104,10 +104,21 @@ test("an unrecognized flag is refused rather than assumed harmless", () => {
   );
 });
 
-test("anything that is more than one plain command is refused", () => {
-  // The policy does not parse shell. Every one of these would need a parser to
-  // judge, and every parser bug would be a bypass, so the shape itself is the
-  // rejection criterion.
+test("quoted arguments and read-only search tools are allowed", () => {
+  for (const command of [
+    'rg -n "foo bar" src',
+    "rg -l --glob '*.ts' pattern",
+    'rg -e "^export" -t ts .',
+    "fd -e ts src",
+    "ls -la",
+    "wc -l file.txt",
+    "head -n 20 file.txt",
+  ]) {
+    assert.equal(allowed(command), true, `${command} should be allowed`);
+  }
+});
+
+test("shell composition, expansion, and unsafe input syntax are refused", () => {
   for (const command of [
     "git log; rm -rf /tmp/x",
     "git log && npm publish",
@@ -118,37 +129,45 @@ test("anything that is more than one plain command is refused", () => {
     "git log `rm -rf x`",
     "git log &",
     "git log \\\n--oneline",
+    "rg foo > out.txt",
+    "rg foo | head",
+    "rg $(whoami)",
+    'rg "$HOME"',
+    "rg `whoami`",
+    "rg foo \\",
+    'rg "foo',
+    "rg --glob *.ts foo",
     "git show *.ts",
+    "git log ~/notes",
   ]) {
     assert.equal(allowed(command), false, `${command} must be refused`);
   }
+  assert.match(
+    planBashDecision("rg --glob *.ts foo").reason ?? "",
+    /quote it instead/,
+  );
 });
 
-test("quoted commands are refused because quoting hides word boundaries", () => {
-  // `git log --pretty='%h; rm x'` tokenizes differently than it executes, so
-  // the tokenizer is only trustworthy on unquoted input.
-  assert.equal(allowed(`git log --pretty="%h %s"`), false);
-  assert.equal(allowed("git log --author='someone'"), false);
-});
-
-test("only git and gh are admitted at all", () => {
-  // ls/cat/head/tail/wc/file/stat/du/tree/date were dropped: plan mode already
-  // grants the read, ls, grep and fd tools, so each added no capability while
-  // contributing a flag grammar to get wrong. `file --compile` wrote a file
-  // and `tree -ao` slipped past an anchored -o check.
-  for (const command of [
-    "file --compile -m /tmp/evilmagic",
-    "tree -ao /tmp/out.txt",
-    "date -s 12:00",
-    "cat /etc/passwd",
-    "ls -la",
-    "head -100 README.md",
-    "npm install",
-    "rm -rf node_modules",
-    "git-receive-pack .",
-  ]) {
+test("search and inspection flags remain effect allowlisted", () => {
+  for (const [command, reason] of [
+    ["rg --pre cat foo", /does not recognize/],
+    ["rg --pre-glob '*.js' foo", /does not recognize/],
+    ["rg --hostname-bin cat foo", /does not recognize/],
+    ["rg -z foo", /does not recognize/],
+    ["rg --search-zip foo", /does not recognize/],
+    ["fd -x rm", /does not recognize/],
+    ["fd -X rm", /does not recognize/],
+    ["tail -f log", /block forever/],
+  ] as const) {
     assert.equal(allowed(command), false, `${command} must be refused`);
+    assert.match(planBashDecision(command).reason ?? "", reason);
   }
+});
+
+test("unknown programs explain the available read-only commands", () => {
+  const decision = planBashDecision("curl example.com");
+  assert.equal(decision.allowed, false);
+  assert.match(decision.reason ?? "", /git, gh, rg, fd, ls, wc, head or tail/);
 });
 
 test("write subcommands stay refused now that they cannot be reached sideways", () => {
@@ -156,6 +175,7 @@ test("write subcommands stay refused now that they cannot be reached sideways", 
     "git commit -m wip",
     "git push",
     "git checkout main",
+    "git checkout .",
     "git reset --hard",
     "git clean -fd",
     "git stash",
@@ -183,6 +203,7 @@ test("pathspecs after -- are not mistaken for flags", () => {
 test("tilde is refused where a shell expands it, not inside a revision", () => {
   // `HEAD~3` is ordinary git syntax and must survive; `~/x` is a path this
   // module never gets to inspect.
+  assert.equal(allowed("git diff HEAD~3"), true);
   assert.equal(allowed("git diff HEAD~3..HEAD"), true);
   assert.equal(allowed("git log ~/notes"), false);
   assert.equal(allowed("git log ~user/notes"), false);
