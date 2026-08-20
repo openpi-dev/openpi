@@ -5,7 +5,7 @@ import type {
   ExtensionContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component } from "@earendil-works/pi-tui";
+import type { Component, TUI } from "@earendil-works/pi-tui";
 import sessionTasks, {
   findTaskConflict,
   injectTaskProjection,
@@ -25,13 +25,12 @@ const plainTheme = {
   strikethrough: (text: string) => text,
 } as unknown as Theme;
 
-function widgetLines(widget: unknown) {
-  if (typeof widget !== "function") return [];
-  const component = (widget as (tui: unknown, theme: Theme) => Component)(
-    undefined,
+function widgetComponent(widget: unknown, tui?: TUI) {
+  if (typeof widget !== "function") return undefined;
+  return (widget as (tui: TUI, theme: Theme) => Component)(
+    tui as TUI,
     plainTheme,
   );
-  return component.render(120);
 }
 
 function widgetHarness(
@@ -218,6 +217,42 @@ test("persistent task widget restores, updates, and expands all tasks", async ()
   assert.equal(h.widgets.at(-1), undefined);
 });
 
+test("mounted task widget renders live task state without another UI write", async () => {
+  const h = widgetHarness();
+  await h.emit("session_start");
+  const add = h.tools.get("tasks_add");
+
+  await add.execute(
+    "first",
+    { items: [{ subject: "First task" }] },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+  const mounted = h.widgets.at(-1);
+  let renderRequests = 0;
+  const component = widgetComponent(mounted, {
+    requestRender() {
+      renderRequests += 1;
+    },
+  } as unknown as TUI);
+  assert.ok(component);
+  assert.match(component.render(120).join("\n"), /First task/);
+
+  const widgetWrites = h.widgets.length;
+  await add.execute(
+    "second",
+    { items: [{ subject: "Second task" }] },
+    undefined,
+    undefined,
+    h.ctx,
+  );
+
+  assert.equal(h.widgets.length, widgetWrites);
+  assert.equal(renderRequests, 1);
+  assert.match(component.render(120).join("\n"), /Second task/);
+});
+
 test("four tracked tasks refresh after every explicit progress transition", async () => {
   const h = widgetHarness();
   await h.emit("session_start");
@@ -240,9 +275,17 @@ test("four tracked tasks refresh after every explicit progress transition", asyn
     /Current task snapshot \(4 items\)/,
   );
   assert.equal(added.details.items.length, 4);
+  let renderRequests = 0;
+  const mounted = widgetComponent(h.widgets.at(-1), {
+    requestRender() {
+      renderRequests += 1;
+    },
+  } as unknown as TUI);
+  assert.ok(mounted);
 
   for (let id = 1; id <= 4; id++) {
     const widgetWritesBeforeStart = h.widgets.length;
+    const renderRequestsBeforeStart = renderRequests;
     const started = await update.execute(
       `start-${id}`,
       { id, status: "in_progress" },
@@ -250,17 +293,19 @@ test("four tracked tasks refresh after every explicit progress transition", asyn
       undefined,
       h.ctx,
     );
-    assert.equal(h.widgets.length, widgetWritesBeforeStart + 1);
+    assert.equal(h.widgets.length, widgetWritesBeforeStart);
+    assert.equal(renderRequests, renderRequestsBeforeStart + 1);
     assert.match(
       started.content[0]?.text ?? "",
       new RegExp(`T${id} \\[in_progress\\] Task ${id}`),
     );
     assert.match(
-      widgetLines(h.widgets.at(-1)).join("\n"),
+      mounted.render(120).join("\n"),
       new RegExp(`T${id} Task ${id}`),
     );
 
     const widgetWritesBeforeDone = h.widgets.length;
+    const renderRequestsBeforeDone = renderRequests;
     const completed = await update.execute(
       `done-${id}`,
       { id, status: "done", note: `evidence-${id}` },
@@ -268,18 +313,18 @@ test("four tracked tasks refresh after every explicit progress transition", asyn
       undefined,
       h.ctx,
     );
-    assert.equal(h.widgets.length, widgetWritesBeforeDone + 1);
     if (id < 4) {
+      assert.equal(h.widgets.length, widgetWritesBeforeDone);
+      assert.equal(renderRequests, renderRequestsBeforeDone + 1);
       assert.match(
         completed.content[0]?.text ?? "",
         new RegExp(`T${id} \\[done\\] Task ${id}`),
       );
       assert.equal(completed.details.items.length, 4);
-      assert.match(
-        widgetLines(h.widgets.at(-1))[0] ?? "",
-        new RegExp(`${id} done`),
-      );
+      assert.match(mounted.render(120)[0] ?? "", new RegExp(`${id} done`));
     } else {
+      assert.equal(h.widgets.length, widgetWritesBeforeDone + 1);
+      assert.equal(renderRequests, renderRequestsBeforeDone);
       assert.match(completed.content[0]?.text ?? "", /Task batch closed/);
       assert.equal(h.widgets.at(-1), undefined);
     }

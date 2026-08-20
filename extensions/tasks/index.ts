@@ -99,6 +99,8 @@ export default function sessionTasks(pi: ExtensionAPI) {
   let notifiedProblem: string | undefined;
   let taskWidgetVisible = true;
   let taskWidgetExpanded = false;
+  let taskWidgetMounted = false;
+  let requestTaskWidgetRender: (() => void) | undefined;
   let ui: ExtensionContext["ui"] | undefined;
   let uiMode: ExtensionContext["mode"] | undefined;
   const hideLifecycleTools = () =>
@@ -124,22 +126,36 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   const updateTaskWidget = (ctx?: ExtensionContext) => {
     if (ctx?.hasUI) {
+      if (ui !== ctx.ui) {
+        taskWidgetMounted = false;
+        requestTaskWidgetRender = undefined;
+      }
       ui = ctx.ui;
       uiMode = ctx.mode;
     }
     if (!ui || uiMode !== "tui") return false;
-    const current = snapshot();
     const shown =
       taskWidgetVisible && !problemMessage() && hasActionableTasks();
     if (!shown) {
+      if (!taskWidgetMounted) return false;
       ui.setWidget(TASK_WIDGET_KEY, undefined);
+      taskWidgetMounted = false;
+      requestTaskWidgetRender = undefined;
       return false;
     }
-    ui.setWidget(TASK_WIDGET_KEY, (_tui, theme) => ({
-      render: (width) =>
-        renderTaskWidget(current, theme, width, taskWidgetExpanded),
-      invalidate() {},
-    }));
+    if (taskWidgetMounted) {
+      requestTaskWidgetRender?.();
+      return true;
+    }
+    ui.setWidget(TASK_WIDGET_KEY, (tui, theme) => {
+      requestTaskWidgetRender = () => tui.requestRender();
+      return {
+        render: (width) =>
+          renderTaskWidget(snapshot(), theme, width, taskWidgetExpanded),
+        invalidate() {},
+      };
+    });
+    taskWidgetMounted = true;
     return true;
   };
 
@@ -515,10 +531,12 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     try {
-      ui?.setWidget(TASK_WIDGET_KEY, undefined);
+      if (taskWidgetMounted) ui?.setWidget(TASK_WIDGET_KEY, undefined);
     } catch {
       // The interactive UI may already be disposed.
     }
+    taskWidgetMounted = false;
+    requestTaskWidgetRender = undefined;
     ui = undefined;
     uiMode = undefined;
   });

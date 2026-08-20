@@ -1,8 +1,11 @@
-import {
-  CustomEditor,
-  type ExtensionAPI,
-  type ExtensionContext,
+import type {
+  ExtensionAPI,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  registerEditorLayer,
+  removeEditorLayer,
+} from "../shared/editor-layers.ts";
 import {
   loadSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
@@ -51,6 +54,7 @@ export default function (pi: ExtensionAPI) {
   let sessionActive = false;
   let statusContext: ExtensionContext | undefined;
   let requestEditorRender: (() => void) | undefined;
+  let editorLayerRegistered = false;
 
   const updateStatus = () => {
     statusContext?.ui.setStatus(
@@ -72,21 +76,22 @@ export default function (pi: ExtensionAPI) {
 
   const installSuggestionEditor = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
-    const previous = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const base =
-        previous?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings);
-      requestEditorRender = () => tui.requestRender();
-      return new NextActionSuggestionEditor(
-        base,
-        keybindings,
-        suggestionState,
-        cancelPrediction,
-        requestEditorRender,
-        (text) => ctx.ui.theme.fg("dim", text),
-      );
+    registerEditorLayer(pi, ctx, {
+      id: "suggestions",
+      order: 200,
+      wrap: (base, tui, _theme, keybindings) => {
+        requestEditorRender = () => tui.requestRender();
+        return new NextActionSuggestionEditor(
+          base,
+          keybindings,
+          suggestionState,
+          cancelPrediction,
+          requestEditorRender,
+          (text) => ctx.ui.theme.fg("dim", text),
+        );
+      },
     });
+    editorLayerRegistered = true;
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -160,6 +165,10 @@ export default function (pi: ExtensionAPI) {
   pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, cancelPrediction);
 
   pi.on("session_shutdown", async () => {
+    if (editorLayerRegistered) {
+      removeEditorLayer(pi, "suggestions");
+      editorLayerRegistered = false;
+    }
     sessionActive = false;
     runBoundary.reset();
     const task = activePrediction?.task;

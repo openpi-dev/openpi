@@ -33,7 +33,6 @@ import { randomBytes } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import {
-  CustomEditor,
   getAgentDir,
   getMarkdownTheme,
   keyHint,
@@ -45,6 +44,10 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { Type, type Static } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { waitBounded } from "../shared/child-session.ts";
+import {
+  registerEditorLayer,
+  removeEditorLayer,
+} from "../shared/editor-layers.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
@@ -445,6 +448,7 @@ export default function workflows(pi: ExtensionAPI) {
   let failedRuns = 0;
   let widgetVisible = false;
   let requestWidgetRender: (() => void) | undefined;
+  let navigationLayerRegistered = false;
   let dashboardOpen = false;
   /**
    * Start of the current request. The dashboard reports the work belonging to
@@ -566,26 +570,26 @@ export default function workflows(pi: ExtensionAPI) {
 
   const installWorkflowNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
-    const previous = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const base =
-        previous?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings);
-      return new WorkflowNavigationEditor(
-        base,
-        keybindings,
-        stripState,
-        () => Boolean(stripEntry()),
-        () => {
-          const entry = stripEntry();
-          if (entry) void openDashboard(ctx, entry.runId);
-        },
-        () => {
-          requestWidgetRender?.();
-          tui.requestRender();
-        },
-      );
+    registerEditorLayer(pi, ctx, {
+      id: "workflows",
+      order: 300,
+      wrap: (base, tui, _theme, keybindings) =>
+        new WorkflowNavigationEditor(
+          base,
+          keybindings,
+          stripState,
+          () => Boolean(stripEntry()),
+          () => {
+            const entry = stripEntry();
+            if (entry) void openDashboard(ctx, entry.runId);
+          },
+          () => {
+            requestWidgetRender?.();
+            tui.requestRender();
+          },
+        ),
     });
+    navigationLayerRegistered = true;
   };
 
   pi.on("session_start", (_event, ctx) => {
@@ -612,6 +616,10 @@ export default function workflows(pi: ExtensionAPI) {
   });
 
   pi.on("session_shutdown", async () => {
+    if (navigationLayerRegistered) {
+      removeEditorLayer(pi, "workflows");
+      navigationLayerRegistered = false;
+    }
     await shutdownActiveWorkflowRuns([...activeRuns.values()]);
     try {
       lastContext?.ui.setStatus("workflows", undefined);

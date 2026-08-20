@@ -33,7 +33,6 @@ import type {
   ExtensionUIContext,
 } from "@earendil-works/pi-coding-agent";
 import {
-  CustomEditor,
   DEFAULT_MAX_BYTES,
   DEFAULT_MAX_LINES,
   defineTool,
@@ -69,6 +68,10 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import {
+  registerEditorLayer,
+  removeEditorLayer,
+} from "../shared/editor-layers.ts";
 import { formatContextUtilization } from "./src/format.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
@@ -200,6 +203,7 @@ export default function (pi: ExtensionAPI) {
   let navigationManager: SubagentManagerShape | undefined;
   let widgetVisible = false;
   let requestWidgetRender: (() => void) | undefined;
+  let navigationLayerRegistered = false;
   let dashboardOpen = false;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
   const hideLifecycleTools = () =>
@@ -292,26 +296,26 @@ export default function (pi: ExtensionAPI) {
 
   const installSubagentNavigation = (ctx: ExtensionContext) => {
     if (ctx.mode !== "tui") return;
-    const previous = ctx.ui.getEditorComponent();
-    ctx.ui.setEditorComponent((tui, theme, keybindings) => {
-      const base =
-        previous?.(tui, theme, keybindings) ??
-        new CustomEditor(tui, theme, keybindings);
-      return new BelowEditorNavigationEditor(
-        base,
-        keybindings,
-        stripState,
-        () => Boolean(stripEntry()),
-        () => {
-          const entry = stripEntry();
-          if (entry) void openDashboard(ctx, entry.snapshot.id);
-        },
-        () => {
-          requestWidgetRender?.();
-          tui.requestRender();
-        },
-      );
+    registerEditorLayer(pi, ctx, {
+      id: "subagents",
+      order: 100,
+      wrap: (base, tui, _theme, keybindings) =>
+        new BelowEditorNavigationEditor(
+          base,
+          keybindings,
+          stripState,
+          () => Boolean(stripEntry()),
+          () => {
+            const entry = stripEntry();
+            if (entry) void openDashboard(ctx, entry.snapshot.id);
+          },
+          () => {
+            requestWidgetRender?.();
+            tui.requestRender();
+          },
+        ),
     });
+    navigationLayerRegistered = true;
   };
 
   /**
@@ -447,6 +451,10 @@ export default function (pi: ExtensionAPI) {
   pi.on("agent_settled", () => flushResults(false));
 
   pi.on("session_shutdown", async () => {
+    if (navigationLayerRegistered) {
+      removeEditorLayer(pi, "subagents");
+      navigationLayerRegistered = false;
+    }
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
