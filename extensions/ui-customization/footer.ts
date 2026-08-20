@@ -450,27 +450,76 @@ export function renderFooter(options: FooterRenderOptions) {
     formatPullRequest,
   );
   const lines: string[] = [];
+  const statusLines = options.statuses
+    ? Array.from(options.statuses).flatMap((status) => status.split("\n"))
+    : [];
+  const singleStatus = statusLines.length === 1 ? statusLines[0] : undefined;
+  const separator = options.theme.fg("dim", " · ");
+  const styledStatus =
+    singleStatus === undefined
+      ? undefined
+      : options.theme.fg("dim", singleStatus);
+  const statusWidth =
+    styledStatus === undefined
+      ? 0
+      : visibleWidth(separator) + visibleWidth(styledStatus);
+  let inlinedStatus = false;
 
   for (const layout of options.lines) {
+    const resolved = resolveLineSegments(
+      layout,
+      catalog,
+      options.style,
+      options.modelInfo.contextPercent,
+    );
+    const fitted = fitSegmentsToWidth(
+      resolved.left,
+      resolved.right,
+      options.width,
+      options.style,
+      options.theme,
+    );
+    const canInlineStatus =
+      lines.length === 0 &&
+      styledStatus !== undefined &&
+      naturalLineWidth(
+        fitted.left,
+        fitted.right,
+        options.style,
+        options.theme,
+      ) +
+        statusWidth <=
+        options.width;
     const line = renderFooterLine(
       layout,
       catalog,
       options.style,
-      options.width,
+      canInlineStatus ? options.width - statusWidth : options.width,
       options.theme,
       options.modelInfo.contextPercent,
     );
-    if (line) lines.push(line);
+    if (!line) continue;
+    lines.push(
+      canInlineStatus
+        ? truncateToWidth(
+            `${line}${separator}${styledStatus}`,
+            options.width,
+            options.theme.fg("dim", "..."),
+          )
+        : line,
+    );
+    inlinedStatus ||= canInlineStatus;
   }
 
-  if (options.statuses) {
-    for (const statusLine of options.statuses) {
-      for (const part of statusLine.split("\n")) {
-        lines.push(
-          truncateToWidth(part, options.width, options.theme.fg("dim", "...")),
-        );
-      }
-    }
+  if (inlinedStatus) return lines;
+  for (const statusLine of statusLines) {
+    lines.push(
+      truncateToWidth(
+        statusLine,
+        options.width,
+        options.theme.fg("dim", "..."),
+      ),
+    );
   }
 
   return lines;
