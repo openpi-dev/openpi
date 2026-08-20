@@ -9,8 +9,10 @@ import {
   buildAgentTypeParameterDescription,
   buildSubagentSpawnResult,
   createAgentTypeParameterSchema,
+  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
+  SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
 import { BUILT_IN_AGENT_TYPES, type AgentType } from "./src/agent-types.ts";
 
@@ -137,4 +139,36 @@ test("a spawned isolated child reports the branch its work will land on", () => 
     cwd: "/repo",
   });
   assert.doesNotMatch(plain, /worktree|branch/);
+});
+
+test("interactive spawn guidance releases the turn instead of waiting on dependent work", () => {
+  const guidance = SUBAGENT_SPAWN_PROMPT_GUIDELINES.join("\n");
+  assert.match(guidance, /end (?:this|your) turn/i);
+  assert.match(
+    guidance,
+    /do not (?:call )?subagent_wait merely because .*next step.*depend/i,
+  );
+
+  const result = buildSubagentSpawnResult({
+    id: "sa-1",
+    title: "review",
+    harness: "pi",
+    modelLabel: "m",
+    cwd: "/repo",
+  });
+  assert.match(result, /end (?:this|your) turn/i);
+  assert.match(result, /automatically.*re-invoked/i);
+  assert.doesNotMatch(result, /next step truly cannot proceed/i);
+});
+
+test("blocking wait is reserved for an explicit synchronous contract", () => {
+  assert.match(
+    SUBAGENT_WAIT_TOOL_DESCRIPTION,
+    /user explicitly (?:asks|asked).*current (?:response|turn)/i,
+  );
+  assert.match(SUBAGENT_WAIT_TOOL_DESCRIPTION, /non-interactive|automation/i);
+  assert.doesNotMatch(
+    SUBAGENT_WAIT_TOOL_DESCRIPTION,
+    /synthesize several children.*nothing else to do/i,
+  );
 });

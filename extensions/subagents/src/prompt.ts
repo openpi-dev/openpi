@@ -8,7 +8,7 @@ import { MAX_RUNNING } from "./manager.ts";
 
 /** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id. The subagent's final output is queued back to you as a message when it settles, or collect it explicitly with subagent_wait. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. " +
+  "Spawn a background subagent: a fully autonomous, headless pi session with its own context window, this environment's tools and config, and normal host permissions. Fire-and-forget: this returns immediately with an id, and the subagent's final output is automatically queued back to you as a message when it settles. In an interactive session, keep working or end your turn so the user remains able to interact; do not block merely because a later step depends on the result. Children cannot orchestrate more agents/workflows or ask the user, and cannot see this conversation, so the prompt must be self-contained. Only use trusted working directories. " +
   `Max ${MAX_RUNNING} subagents can be running at once.`;
 
 /**
@@ -62,7 +62,7 @@ export const SUBAGENT_SPAWN_PROMPT_SNIPPET =
 /** Guides the parent model to delegate standalone tasks and avoid unnecessary blocking waits. */
 export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
   "Reserve subagent_spawn for substantial, self-contained work; give it a complete, standalone prompt. For a single lookup or edit you can do inline, just do it — each subagent spends a fresh context window and cannot see this conversation.",
-  "After subagent_spawn, keep working on other things; results arrive automatically and you are re-invoked when a subagent settles. Do not poll with subagent_check and do not subagent_wait just to sit idle — wait only when your next step genuinely cannot proceed without the result, and never answer from a guessed result before it arrives.",
+  "After subagent_spawn, keep working on independent work. If none remains in an interactive session, briefly tell the user the subagent is running in the background and end your turn; its result arrives automatically and you are re-invoked when it settles. Do not poll with subagent_check. Do not call subagent_wait merely because your next step depends on the result or because you have nothing else to do. Block only when the user explicitly asks you to keep the current response open for these results, or when a non-interactive automation must return them in the same invocation. Never answer from a guessed result before it arrives.",
 ];
 
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
@@ -113,14 +113,14 @@ export function buildSubagentSpawnResult(options: {
     : "";
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}\n` +
-    `It runs in the background — keep working on other things; its result is delivered to you automatically when it finishes, so do not poll or wait for it. ` +
-    `Only if your next step truly cannot proceed without it, subagent_wait(ids: ["${options.id}"]) blocks for it; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
+    `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
+    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );
 }
 
 /** Describes explicit blocking collection of one or more subagent results. */
 export const SUBAGENT_WAIT_TOOL_DESCRIPTION =
-  "Block until all listed subagents have settled, then return their final outputs. This is the EXCEPTION, not the default: after spawning, keep doing other useful work — each subagent's result is delivered to you automatically when it settles, and you'll be re-invoked then. Call subagent_wait only when your very next step cannot proceed without the result (e.g. you must synthesize several children's outputs and have nothing else to do first). Never poll for completion and never answer from a guessed result before it arrives.";
+  "Block until all listed subagents have settled, then return their final outputs. This is an explicit synchronous barrier, not the default. In an interactive session, call it only when the user explicitly asks you to keep the current response open for these results. A dependent next step or having nothing else to do is not sufficient: end your turn and let automatic result delivery re-invoke you while the user remains free to interact. In a non-interactive automation, use it only when the same invocation must return the completed results. Never poll for completion and never answer from a guessed result before it arrives.";
 
 /** Model-facing schema description for the subagent ids to await. */
 export const SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS = {
@@ -154,7 +154,7 @@ export function buildSubagentSendResult(options: {
 }) {
   return options.wasRunning
     ? `Steered ${options.id} "${options.title}". It is queued into the active run; the result is delivered when it settles.`
-    : `Restarted ${options.id} "${options.title}" for another turn on its existing transcript. The result is delivered when it settles, or use subagent_wait(ids: ["${options.id}"]) to block for it.`;
+    : `Restarted ${options.id} "${options.title}" for another turn on its existing transcript. The result is delivered automatically when it settles.`;
 }
 
 /** Describes nonblocking inspection of a subagent without consuming its result. */

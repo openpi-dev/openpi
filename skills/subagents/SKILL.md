@@ -12,7 +12,7 @@ The tool definitions are canonical for parameters, limits, model syntax, isolati
 - Inherit the parent model and thinking level by default. Override them only for an explicit user request or concrete task requirement.
 - Prefer a matching agent type when one exists; its tool restriction is enforced. An explicit spawn model or reasoning effort wins, otherwise use the type default then inherit the parent. Types live in `~/.pi/agent/agents/*.md` and, for trusted projects, `.pi/agents/*.md`; see `extensions/subagents/docs/agent-types.md`.
 - Isolate concurrent writers in worktrees according to the `subagent_spawn` schema so they cannot overwrite one checkout or git index. While Plan Mode is active, use only read-only exploration types (or no type); worktree isolation and types narrowed by Plan Mode are rejected.
-- After spawning, continue useful parent work. Let automatic result delivery drive the next turn; block only when the immediate next step truly depends on that result.
+- After spawning, continue useful parent work. In an interactive session, if none remains, tell the user the child is still running and end the turn; automatic result delivery will re-invoke the parent when it settles. Do not block merely because the next step depends on the result or because there is nothing else to do. Use `subagent_wait` only when the user explicitly asks to keep the current response open for the result, or when non-interactive automation must return it in the same invocation.
 
 ## Worktree isolation
 

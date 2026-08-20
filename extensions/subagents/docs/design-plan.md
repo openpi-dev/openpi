@@ -38,9 +38,12 @@ Source: `extensions/subagents/` (`index.ts`, `manager.ts`, `prompt.ts`,
 | `subagent_list` | — | One `describeSubagent()` line per agent: `id [status] "title" (provider/model, ctx%, elapsed, cwd)`. |
 
 Prompt metadata (all strings live in `prompt.ts`): `subagent_spawn` has a
-`promptSnippet` and two `promptGuidelines` (delegate self-contained tasks; don't block on
-`subagent_wait` unless necessary). Tool descriptions explain fire-and-forget semantics,
-the concurrency cap, and that children can't orchestrate/see the parent conversation.
+`promptSnippet` and two `promptGuidelines` (delegate self-contained tasks; release an
+interactive turn instead of blocking merely because later work depends on a child).
+Tool descriptions explain fire-and-forget semantics, reserve `subagent_wait` for an
+explicit user-requested synchronous response or same-invocation non-interactive
+automation, state the concurrency cap, and note that children can't orchestrate or see
+the parent conversation.
 
 ### 1.2 State tracking (v1 `SubagentManager`)
 

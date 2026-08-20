@@ -491,7 +491,7 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 <details>
 <summary><strong>Subagent 会阻塞主 Agent 吗？</strong></summary>
 
-`subagent_spawn` 立即返回，结束后自动回传。只有显式调用 `subagent_wait` 才会等待；它只适合下一步确实依赖结果的场景。
+`subagent_spawn` 立即返回，结束后自动回传并重新唤醒主 Agent。交互会话没有其他工作时，主 Agent 应结束当前轮、让用户继续交互；“下一步依赖结果”本身不是阻塞理由。只有用户明确要求当前回复等完，或非交互自动化必须在同一次调用中返回完整结果时，才应调用 `subagent_wait`。
 
 </details>
 
