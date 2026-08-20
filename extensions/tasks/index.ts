@@ -531,7 +531,7 @@ export default function sessionTasks(pi: ExtensionAPI) {
 
   pi.on("session_shutdown", () => {
     try {
-      if (taskWidgetMounted) ui?.setWidget(TASK_WIDGET_KEY, undefined);
+      ui?.setWidget(TASK_WIDGET_KEY, undefined);
     } catch {
       // The interactive UI may already be disposed.
     }

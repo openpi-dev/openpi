@@ -391,6 +391,9 @@ test("task panel commands report actual visibility and conflicts block the short
     rpc.notifications.at(-1),
     "Task panel is available only in interactive TUI mode.",
   );
+  await rpc.emit("session_shutdown");
+  assert.equal(rpc.widgets.length, 1);
+  assert.equal(rpc.widgets.at(-1), undefined);
 });
 
 test("detects foreign Todo/plan tools and reports their source", () => {
