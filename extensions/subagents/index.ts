@@ -31,6 +31,7 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
   ExtensionUIContext,
+  MessageRenderer,
 } from "@earendil-works/pi-coding-agent";
 import {
   DEFAULT_MAX_BYTES,
@@ -151,6 +152,23 @@ interface SubagentFinishedData {
   readonly elapsed: string;
 }
 
+interface SubagentResultDetails {
+  readonly id?: string;
+  readonly title?: string;
+  readonly status?: SubagentSnapshot["status"];
+  readonly count?: number;
+  readonly results?: ReadonlyArray<{
+    readonly id: string;
+    readonly title: string;
+    readonly status: SubagentSnapshot["status"];
+  }>;
+}
+
+interface SubagentResultEntryData {
+  readonly content: string;
+  readonly details: SubagentResultDetails;
+}
+
 interface BtwResultData {
   readonly id: string;
   readonly title: string;
@@ -187,6 +205,99 @@ function truncatedOutput(
   return text;
 }
 
+export function createSubagentResultDispatcher(
+  pi: ExtensionAPI,
+  outputFor: (snap: SubagentSnapshot) => string = truncatedOutput,
+) {
+  return (snaps: readonly SubagentSnapshot[], wake: boolean) => {
+    if (snaps.length === 0) return;
+    const content = snaps
+      .map((snap) =>
+        buildSubagentResultMessage({
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          errorText: snap.errorText,
+          output: outputFor(snap),
+        }),
+      )
+      .join("\n\n");
+    const details: SubagentResultDetails =
+      snaps.length === 1
+        ? {
+            id: snaps[0]!.id,
+            title: snaps[0]!.title,
+            status: snaps[0]!.status,
+          }
+        : {
+            count: snaps.length,
+            results: snaps.map((snap) => ({
+              id: snap.id,
+              title: snap.title,
+              status: snap.status,
+            })),
+          };
+    pi.appendEntry<SubagentResultEntryData>("subagent-result", {
+      content,
+      details,
+    });
+    pi.sendMessage(
+      {
+        customType: "subagent-result",
+        content,
+        display: false,
+        details,
+      },
+      resultDeliveryOptions(wake),
+    );
+  };
+}
+
+type SubagentResultTheme = Parameters<MessageRenderer>[2];
+
+function renderSubagentResult(
+  content: string,
+  details: SubagentResultDetails,
+  expanded: boolean,
+  theme: SubagentResultTheme,
+) {
+  const failed = details.status === "error";
+  const icon = failed ? theme.fg("error", "x") : theme.fg("success", "■");
+  const header =
+    `${icon} ` +
+    theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
+    theme.fg(
+      "muted",
+      ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`,
+    );
+
+  // Remove only the summary line. The following Error line (when present)
+  // is part of the actual result and must remain visible.
+  const body = content.split("\n").slice(1).join("\n").trim();
+  if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
+    const md = new Markdown(body, 0, 0, getMarkdownTheme());
+    const container = new Text(header, 0, 0);
+    return {
+      render: (width: number) => [
+        ...container.render(width),
+        ...md.render(width),
+      ],
+      invalidate: () => {
+        container.invalidate();
+        md.invalidate();
+      },
+    };
+  }
+
+  const bodyLines = body.split("\n");
+  let text = header;
+  for (const line of bodyLines.slice(0, 8))
+    text += `\n${theme.fg("toolOutput", line)}`;
+  if (bodyLines.length > 8)
+    text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
+  return new Text(text, 0, 0);
+}
+
 export default function (pi: ExtensionAPI) {
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
@@ -206,6 +317,7 @@ export default function (pi: ExtensionAPI) {
   let navigationLayerRegistered = false;
   let dashboardOpen = false;
   const resultDelivery = createDeferredResultDelivery<SubagentSnapshot>();
+  const dispatchResults = createSubagentResultDispatcher(pi);
   const hideLifecycleTools = () =>
     patchOwnedTools(pi, "subagents", {
       disable: OPENPI_TOOL_SURFACE.subagents.deferred,
@@ -330,41 +442,7 @@ export default function (pi: ExtensionAPI) {
     snaps: readonly SubagentSnapshot[],
     wake: boolean,
   ) => {
-    if (snaps.length === 0) return;
-    pi.sendMessage(
-      {
-        customType: "subagent-result",
-        // One message per flush, not per subagent.
-        content: snaps
-          .map((snap) =>
-            buildSubagentResultMessage({
-              id: snap.id,
-              title: snap.title,
-              status: snap.status,
-              errorText: snap.errorText,
-              output: truncatedOutput(snap),
-            }),
-          )
-          .join("\n\n"),
-        display: true,
-        details:
-          snaps.length === 1
-            ? {
-                id: snaps[0]!.id,
-                title: snaps[0]!.title,
-                status: snaps[0]!.status,
-              }
-            : {
-                count: snaps.length,
-                results: snaps.map((snap) => ({
-                  id: snap.id,
-                  title: snap.title,
-                  status: snap.status,
-                })),
-              },
-      },
-      resultDeliveryOptions(wake),
-    );
+    dispatchResults(snaps, wake);
   };
 
   const flushResults = (wake: boolean) => {
@@ -1059,50 +1137,26 @@ export default function (pi: ExtensionAPI) {
   pi.registerMessageRenderer(
     "subagent-result",
     (message, { expanded }, theme) => {
-      const details = (message.details ?? {}) as {
-        id?: string;
-        title?: string;
-        status?: string;
-      };
-      const failed = details.status === "error";
-      const icon = failed ? theme.fg("error", "x") : theme.fg("success", "■");
-      const header =
-        `${icon} ` +
-        theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
-        theme.fg(
-          "muted",
-          ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`,
-        );
-
       const content =
         typeof message.content === "string" ? message.content : "";
-      // Remove only the summary line. The following Error line (when present)
-      // is part of the actual result and must remain visible.
-      const body = content.split("\n").slice(1).join("\n").trim();
-
-      if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
-        const md = new Markdown(`${body}`, 0, 0, getMarkdownTheme());
-        const container = new Text(header, 0, 0);
-        return {
-          render: (width: number) => [
-            ...container.render(width),
-            ...md.render(width),
-          ],
-          invalidate: () => {
-            container.invalidate();
-            md.invalidate();
-          },
-        };
-      }
-
-      const previewLines = body.split("\n").slice(0, 8);
-      let text = header;
-      for (const line of previewLines)
-        text += `\n${theme.fg("toolOutput", line)}`;
-      if (body.split("\n").length > 8)
-        text += `\n${theme.fg("dim", `... (${keyHint("app.tools.expand", "to expand")})`)}`;
-      return new Text(text, 0, 0);
+      return renderSubagentResult(
+        content,
+        (message.details ?? {}) as SubagentResultDetails,
+        expanded,
+        theme,
+      );
     },
+  );
+
+  pi.registerEntryRenderer<SubagentResultEntryData>(
+    "subagent-result",
+    (entry, { expanded }, theme) =>
+      renderSubagentResult(
+        entry.data?.content ?? "",
+        entry.data?.details ?? {},
+        expanded,
+        theme,
+      ),
   );
 
   pi.registerEntryRenderer<SubagentFinishedData>(

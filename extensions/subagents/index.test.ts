@@ -4,11 +4,136 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import type {
+  EntryRenderer,
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { PLAN_MODE_CHANNEL } from "../shared/plan-mode-state.ts";
-import subagents from "./index.ts";
+import subagents, { createSubagentResultDispatcher } from "./index.ts";
+
+test("deferred subagent results render before a hidden next-turn injection", () => {
+  const events: unknown[] = [];
+  const pi = {
+    appendEntry(customType: string, data: unknown) {
+      events.push({ kind: "entry", customType, data });
+    },
+    sendMessage(message: unknown, options: unknown) {
+      events.push({ kind: "message", message, options });
+    },
+  } as unknown as ExtensionAPI;
+  const dispatch = createSubagentResultDispatcher(pi, () => "report");
+
+  dispatch(
+    [
+      {
+        id: "sa-3",
+        origin: "model",
+        backend: "pi",
+        title: "investigate plan mode",
+        prompt: "inspect",
+        cwd: process.cwd(),
+        status: "done",
+        createdAt: 0,
+        settledAt: 1_000,
+        meta: { backend: "pi" },
+        usage: {},
+        transcript: [],
+        liveTools: [],
+        queued: [],
+        finalText: "report",
+        turns: 1,
+      },
+    ],
+    false,
+  );
+
+  assert.deepEqual(events, [
+    {
+      kind: "entry",
+      customType: "subagent-result",
+      data: {
+        content:
+          'Subagent sa-3 "investigate plan mode" finished.\n\nreport\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)',
+        details: {
+          id: "sa-3",
+          title: "investigate plan mode",
+          status: "done",
+        },
+      },
+    },
+    {
+      kind: "message",
+      message: {
+        customType: "subagent-result",
+        content:
+          'Subagent sa-3 "investigate plan mode" finished.\n\nreport\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)',
+        display: false,
+        details: {
+          id: "sa-3",
+          title: "investigate plan mode",
+          status: "done",
+        },
+      },
+      options: { deliverAs: "nextTurn" },
+    },
+  ]);
+});
+
+test("the visible subagent result entry renders the completed report", () => {
+  const renderers = new Map<string, EntryRenderer>();
+  const pi = {
+    on() {},
+    events: { on() {} },
+    registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerMessageRenderer() {},
+    registerEntryRenderer(customType: string, renderer: EntryRenderer) {
+      renderers.set(customType, renderer);
+    },
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+  subagents(pi);
+
+  const renderer = renderers.get("subagent-result");
+  assert.ok(renderer);
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+    italic: (text: string) => text,
+    underline: (text: string) => text,
+    strikethrough: (text: string) => text,
+    inverse: (text: string) => text,
+  } as unknown as Parameters<EntryRenderer>[2];
+  const component = renderer(
+    {
+      type: "custom",
+      id: "entry-1",
+      parentId: null,
+      timestamp: new Date().toISOString(),
+      customType: "subagent-result",
+      data: {
+        content:
+          'Subagent sa-3 "investigate plan mode" finished.\n\nPlan Mode investigation report',
+        details: {
+          id: "sa-3",
+          title: "investigate plan mode",
+          status: "done",
+        },
+      },
+    },
+    { expanded: true },
+    theme,
+  );
+
+  assert.ok(component);
+  assert.match(component.render(120).join("\n"), /subagent sa-3/);
+  assert.match(
+    component.render(120).join("\n"),
+    /Plan Mode investigation report/,
+  );
+});
 
 test("session start keeps only the subagent entry tool active", () => {
   let active = ["read", "third_party_tool"];
