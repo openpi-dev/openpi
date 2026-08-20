@@ -386,48 +386,27 @@ function scanArguments(
   words: readonly string[],
   allowed: ReadonlySet<string>,
   program: string,
+  /**
+   * Whether `-la` may stand for `-l -a`. Only the file-inspection programs opt
+   * in: git and gh keep their historical one-flag-per-word rule, so widening
+   * the tokenizer cannot quietly widen their surface too.
+   */
+  allowShortClusters = false,
 ): BashPlanDecision {
   for (const word of words) {
     if (word === "--") break;
     if (!word.startsWith("-")) continue;
-    if ((program === "git" || program === "gh") && NUMERIC_SHORTHAND.test(word))
-      continue;
-    if (!allowed.has(flagName(word))) {
-      const isShortCluster =
-        word.startsWith("-") &&
-        !word.startsWith("--") &&
-        [...word.slice(1)].every((character) => allowed.has(`-${character}`));
-      if (isShortCluster) continue;
-      return refuse(
-        `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
-      );
-    }
-  }
-  return { allowed: true };
-}
-
-function scanShortFlagClusters(
-  words: readonly string[],
-  allowed: ReadonlySet<string>,
-  program: string,
-): BashPlanDecision {
-  for (const word of words) {
-    if (word === "--") break;
-    if (!word.startsWith("-") || word.startsWith("--")) continue;
-    if (allowed.has(word)) continue;
-    const shortFlags = word.slice(1);
-    if (new Set(shortFlags).size !== shortFlags.length) {
-      return refuse(
-        `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
-      );
-    }
-    for (const flag of shortFlags) {
-      if (!allowed.has(`-${flag}`)) {
-        return refuse(
-          `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
-        );
-      }
-    }
+    if (NUMERIC_SHORTHAND.test(word)) continue;
+    if (allowed.has(flagName(word))) continue;
+    const isAllowedCluster =
+      allowShortClusters &&
+      !word.startsWith("--") &&
+      word.length > 2 &&
+      [...word.slice(1)].every((character) => allowed.has(`-${character}`));
+    if (isAllowedCluster) continue;
+    return refuse(
+      `plan mode does not recognize "${word}" as a read-only ${program} option — use only the allowlisted ${program} flags`,
+    );
   }
   return { allowed: true };
 }
@@ -502,17 +481,7 @@ export function planBashDecision(command: unknown): BashPlanDecision {
         'plan mode refuses "tail -f/--follow" because it can block forever — use a finite tail command instead',
       );
     }
-    const decision = scanArguments(rest, flags, program);
-    if (!decision.allowed) return decision;
-    if (
-      program === "rg" ||
-      program === "fd" ||
-      program === "ls" ||
-      program === "wc"
-    ) {
-      return scanShortFlagClusters(rest, flags, program);
-    }
-    return { allowed: true };
+    return scanArguments(rest, flags, program, true);
   }
 
   return refuse(

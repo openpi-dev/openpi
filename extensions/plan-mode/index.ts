@@ -145,6 +145,9 @@ export const PLAN_READY_ACTIONS = {
   off: "Turn plan mode off",
 } as const;
 
+/** Menu label for the same effect as `/plan done`. */
+const FINALIZE_NOW = "Finalize now";
+
 export function buildPlanImplementationPrompt(plan: string) {
   return [
     "Implement the approved plan below. Re-check the repository state before editing, follow the project instructions, and verify the finished change.",
@@ -494,14 +497,14 @@ export default function planMode(pi: ExtensionAPI) {
         }
         const choice = await ctx.ui.select(
           "Plan Mode — choose what happens next",
-          ["Continue planning", "Finalize now", PLAN_READY_ACTIONS.off],
+          [PLAN_READY_ACTIONS.continue, FINALIZE_NOW, PLAN_READY_ACTIONS.off],
         );
-        if (choice === "Continue planning") {
+        if (choice === PLAN_READY_ACTIONS.continue) {
           ctx.ui.notify(
             "Plan mode is already active. `/plan done` requests completion; `/plan off` cancels.",
             "info",
           );
-        } else if (choice === "Finalize now") {
+        } else if (choice === FINALIZE_NOW) {
           requestPlanFinalization();
         } else if (choice === PLAN_READY_ACTIONS.off) {
           clearPlan(ctx);
