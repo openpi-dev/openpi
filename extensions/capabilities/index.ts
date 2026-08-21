@@ -17,7 +17,10 @@ import {
   resetOpenPiToolSurface,
 } from "../shared/tool-surface.ts";
 
-const CapabilitySchema = Type.Enum(OPENPI_CAPABILITY_NAMES);
+const CapabilitySchema = Type.Unsafe<OpenPiCapability>({
+  type: "string",
+  enum: OPENPI_CAPABILITY_NAMES,
+});
 
 const OpenPiLoadToolsParameters = Type.Object({
   groups: Type.Optional(

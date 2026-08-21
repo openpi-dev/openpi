@@ -148,6 +148,15 @@ test("the gateway does not add an ineffective resident adoption guideline", () =
   assert.equal(h.tool().promptGuidelines, undefined);
 });
 
+test("the gateway exposes a provider-portable string enum for capability groups", () => {
+  const parameters = JSON.parse(JSON.stringify(harness().tool().parameters));
+
+  assert.deepEqual(parameters.properties.groups.items, {
+    type: "string",
+    enum: ["search", "delegate", "workflow", "background", "session"],
+  });
+});
+
 test("the gateway stays within its compact provider-surface budget", () => {
   const tool = harness().tool();
   const serialized = JSON.stringify({
