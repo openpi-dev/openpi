@@ -209,7 +209,7 @@ export function createSubagentResultDispatcher(
   pi: ExtensionAPI,
   outputFor: (snap: SubagentSnapshot) => string = truncatedOutput,
 ) {
-  return (snaps: readonly SubagentSnapshot[], wake = true) => {
+  return (snaps: readonly SubagentSnapshot[]) => {
     if (snaps.length === 0) return;
     const content = snaps
       .map((snap) =>
@@ -248,34 +248,8 @@ export function createSubagentResultDispatcher(
         display: false,
         details,
       },
-      wake
-        ? { deliverAs: "followUp", triggerTurn: true }
-        : { deliverAs: "nextTurn" },
+      { deliverAs: "followUp", triggerTurn: true },
     );
-  };
-}
-
-export function registerSubagentResultDeliveryLifecycle(
-  pi: ExtensionAPI,
-  delivery: { parentSettled(aborted?: boolean): void },
-) {
-  let parentRunAborted = false;
-
-  pi.on("agent_start", () => {
-    parentRunAborted = false;
-  });
-  pi.on("agent_end", (event) => {
-    for (let index = event.messages.length - 1; index >= 0; index--) {
-      const message = event.messages[index];
-      if (message?.role !== "assistant") continue;
-      parentRunAborted = message.stopReason === "aborted";
-      break;
-    }
-  });
-  pi.on("agent_settled", () => delivery.parentSettled(parentRunAborted));
-
-  return () => {
-    parentRunAborted = false;
   };
 }
 
@@ -354,10 +328,7 @@ export default function (pi: ExtensionAPI) {
     // delivery coordinator batches results that settled while it was busy.
     deliver: dispatchResults,
   });
-  const resetResultDeliveryLifecycle = registerSubagentResultDeliveryLifecycle(
-    pi,
-    resultDelivery,
-  );
+  pi.on("agent_settled", () => resultDelivery.parentSettled());
   const hideLifecycleTools = () =>
     patchOwnedTools(pi, "subagents", {
       disable: OPENPI_TOOL_SURFACE.subagents.deferred,
@@ -566,7 +537,6 @@ export default function (pi: ExtensionAPI) {
     requestWidgetRender = undefined;
     stripState.focused = false;
     dashboardOpen = false;
-    resetResultDeliveryLifecycle();
     const closing = runtime;
     runtime = undefined;
     managerPromise = undefined;

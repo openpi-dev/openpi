@@ -4,7 +4,6 @@ import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 
 interface DeliveredBatch {
   results: readonly { id: string; output?: string }[];
-  wake: boolean;
 }
 
 function harness(initialIdle: boolean) {
@@ -15,7 +14,7 @@ function harness(initialIdle: boolean) {
     output?: string;
   }>({
     isIdle: () => idle,
-    deliver: (results, wake) => deliveries.push({ results, wake }),
+    deliver: (results) => deliveries.push({ results }),
   });
   return {
     delivery,
@@ -41,7 +40,7 @@ test("an idle child settlement wakes the parent immediately", () => {
 
   delivery.defer({ id: "sa-1" });
 
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }] }]);
 });
 
 test("a busy child settlement wakes when the parent settles", () => {
@@ -53,7 +52,7 @@ test("a busy child settlement wakes when the parent settles", () => {
   setIdle(true);
   delivery.parentSettled();
 
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }] }]);
 });
 
 test("the parent boundary still delivers if another extension started a run", () => {
@@ -64,7 +63,7 @@ test("the parent boundary still delivers if another extension started a run", ()
   // handler started another run before this extension's handler executes.
   delivery.parentSettled();
 
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }] }]);
 });
 
 test("busy results batch in settlement order into one parent wake-up", () => {
@@ -76,7 +75,7 @@ test("busy results batch in settlement order into one parent wake-up", () => {
   delivery.defer(second);
   delivery.parentSettled();
 
-  assert.deepEqual(deliveries, [{ results: [first, second], wake: true }]);
+  assert.deepEqual(deliveries, [{ results: [first, second] }]);
 });
 
 test("the child-settled and parent-settled edges cannot double deliver", () => {
@@ -87,16 +86,7 @@ test("the child-settled and parent-settled edges cannot double deliver", () => {
   delivery.parentSettled();
   delivery.parentSettled();
 
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
-});
-
-test("an aborted parent queues the batch without resurrecting a turn", () => {
-  const { delivery, deliveries } = harness(false);
-
-  delivery.defer({ id: "sa-1" });
-  delivery.parentSettled(true);
-
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: false }]);
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }] }]);
 });
 
 test("a child settling during the wake turn waits for its boundary", () => {
@@ -105,12 +95,12 @@ test("a child settling during the wake turn waits for its boundary", () => {
   delivery.defer({ id: "sa-1" });
   setIdle(false);
   delivery.defer({ id: "sa-2" });
-  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }] }]);
 
   delivery.parentSettled();
   assert.deepEqual(deliveries, [
-    { results: [{ id: "sa-1" }], wake: true },
-    { results: [{ id: "sa-2" }], wake: true },
+    { results: [{ id: "sa-1" }] },
+    { results: [{ id: "sa-2" }] },
   ]);
 });
 

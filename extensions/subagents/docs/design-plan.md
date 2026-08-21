@@ -76,8 +76,6 @@ the parent conversation.
   otherwise on the parent's authoritative `agent_settled` event. Busy-period results
   are batched into one automatic wake-up so none can be stranded until the user's next
   prompt. A later `subagent_wait` can still consume a deferred result before flush.
-  If the parent run was aborted, delivery uses `nextTurn` rather than resurrecting
-  work the user explicitly stopped.
 - Normal delivery = `pi.sendMessage({ customType: "subagent-result", content,
   display: false, details: { id, title, status } },
   { deliverAs: "followUp", triggerTurn: true })`; a separate session entry renders the
