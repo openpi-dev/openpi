@@ -71,13 +71,17 @@ the parent conversation.
 ### 1.3 Result delivery back to the parent
 
 - When a child settles **unconsumed**, `onSettled` defers it into a tiny
-  `createDeferredResultDelivery` buffer (defer/consume/drain/clear keyed by id).
+  `createSubagentResultDelivery` buffer (defer/consume/clear keyed by id).
 - Flush happens when the parent goes idle: immediately if `sessionContext.isIdle()`,
-  otherwise on the parent's `agent_settled` event. A later `subagent_wait` can still
-  consume a deferred result before flush (that's why it is a buffer, not an immediate
-  send).
-- Delivery = `pi.sendMessage({ customType: "subagent-result", content, display: true,
-  details: { id, title, status } }, { deliverAs: "followUp", triggerTurn: true })`.
+  otherwise on the parent's authoritative `agent_settled` event. Busy-period results
+  are batched into one automatic wake-up so none can be stranded until the user's next
+  prompt. A later `subagent_wait` can still consume a deferred result before flush.
+  If the parent run was aborted, delivery uses `nextTurn` rather than resurrecting
+  work the user explicitly stopped.
+- Normal delivery = `pi.sendMessage({ customType: "subagent-result", content,
+  display: false, details: { id, title, status } },
+  { deliverAs: "followUp", triggerTurn: true })`; a separate session entry renders the
+  report at its actual completion point.
   Content is built by `buildSubagentResultMessage` (`Subagent sa-N "title"
   finished/failed.` + optional `Error:` line + output truncated to 24KB/600 lines with a
   pointer to the child session file for the full transcript).

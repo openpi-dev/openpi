@@ -1,27 +1,136 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDeferredResultDelivery } from "./src/result-delivery.ts";
+import { createSubagentResultDelivery } from "./src/result-delivery.ts";
+
+interface DeliveredBatch {
+  results: readonly { id: string; output?: string }[];
+  wake: boolean;
+}
+
+function harness(initialIdle: boolean) {
+  let idle = initialIdle;
+  const deliveries: DeliveredBatch[] = [];
+  const delivery = createSubagentResultDelivery<{
+    id: string;
+    output?: string;
+  }>({
+    isIdle: () => idle,
+    deliver: (results, wake) => deliveries.push({ results, wake }),
+  });
+  return {
+    delivery,
+    deliveries,
+    setIdle(value: boolean) {
+      idle = value;
+    },
+  };
+}
 
 test("a result consumed by a later wait is not delivered", () => {
-  const delivery = createDeferredResultDelivery<{
-    id: string;
-    output: string;
-  }>();
+  const { delivery, deliveries } = harness(false);
 
   delivery.defer({ id: "sa-1", output: "done" });
   delivery.consume(["sa-1"]);
+  delivery.parentSettled();
 
-  assert.deepEqual(delivery.drain(), []);
+  assert.deepEqual(deliveries, []);
 });
 
-test("unconsumed results are delivered once in settlement order", () => {
-  const delivery = createDeferredResultDelivery<{ id: string }>();
+test("an idle child settlement wakes the parent immediately", () => {
+  const { delivery, deliveries } = harness(true);
+
+  delivery.defer({ id: "sa-1" });
+
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+});
+
+test("a busy child settlement wakes when the parent settles", () => {
+  const { delivery, deliveries, setIdle } = harness(false);
+
+  delivery.defer({ id: "sa-1" });
+  assert.deepEqual(deliveries, []);
+
+  setIdle(true);
+  delivery.parentSettled();
+
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+});
+
+test("the parent boundary still delivers if another extension started a run", () => {
+  const { delivery, deliveries } = harness(false);
+
+  delivery.defer({ id: "sa-1" });
+  // Pi has already emitted parent agent_settled, but an earlier extension
+  // handler started another run before this extension's handler executes.
+  delivery.parentSettled();
+
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+});
+
+test("busy results batch in settlement order into one parent wake-up", () => {
+  const { delivery, deliveries } = harness(false);
   const first = { id: "sa-1" };
   const second = { id: "sa-2" };
 
   delivery.defer(first);
   delivery.defer(second);
+  delivery.parentSettled();
 
-  assert.deepEqual(delivery.drain(), [first, second]);
-  assert.deepEqual(delivery.drain(), []);
+  assert.deepEqual(deliveries, [{ results: [first, second], wake: true }]);
+});
+
+test("the child-settled and parent-settled edges cannot double deliver", () => {
+  const { delivery, deliveries, setIdle } = harness(false);
+
+  delivery.defer({ id: "sa-1" });
+  setIdle(true);
+  delivery.parentSettled();
+  delivery.parentSettled();
+
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+});
+
+test("an aborted parent queues the batch without resurrecting a turn", () => {
+  const { delivery, deliveries } = harness(false);
+
+  delivery.defer({ id: "sa-1" });
+  delivery.parentSettled(true);
+
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: false }]);
+});
+
+test("a child settling during the wake turn waits for its boundary", () => {
+  const { delivery, deliveries, setIdle } = harness(true);
+
+  delivery.defer({ id: "sa-1" });
+  setIdle(false);
+  delivery.defer({ id: "sa-2" });
+  assert.deepEqual(deliveries, [{ results: [{ id: "sa-1" }], wake: true }]);
+
+  delivery.parentSettled();
+  assert.deepEqual(deliveries, [
+    { results: [{ id: "sa-1" }], wake: true },
+    { results: [{ id: "sa-2" }], wake: true },
+  ]);
+});
+
+test("a synchronous delivery failure restores the batch in order", () => {
+  let attempts = 0;
+  const delivered: string[][] = [];
+  const delivery = createSubagentResultDelivery<{ id: string }>({
+    isIdle: () => false,
+    deliver(results) {
+      attempts++;
+      if (attempts === 1) throw new Error("session switching");
+      delivered.push(results.map(({ id }) => id));
+    },
+  });
+
+  delivery.defer({ id: "sa-1" });
+  delivery.defer({ id: "sa-2" });
+  assert.throws(() => delivery.parentSettled(), /session switching/);
+  delivery.defer({ id: "sa-3" });
+  delivery.parentSettled();
+
+  assert.deepEqual(delivered, [["sa-1", "sa-2", "sa-3"]]);
 });

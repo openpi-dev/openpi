@@ -9,9 +9,12 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { PLAN_MODE_CHANNEL } from "../shared/plan-mode-state.ts";
-import subagents, { createSubagentResultDispatcher } from "./index.ts";
+import subagents, {
+  createSubagentResultDispatcher,
+  registerSubagentResultDeliveryLifecycle,
+} from "./index.ts";
 
-test("deferred subagent results render before a hidden next-turn injection", () => {
+test("subagent results render before the hidden wake-up message", () => {
   const events: unknown[] = [];
   const pi = {
     appendEntry(customType: string, data: unknown) {
@@ -23,29 +26,26 @@ test("deferred subagent results render before a hidden next-turn injection", () 
   } as unknown as ExtensionAPI;
   const dispatch = createSubagentResultDispatcher(pi, () => "report");
 
-  dispatch(
-    [
-      {
-        id: "sa-3",
-        origin: "model",
-        backend: "pi",
-        title: "investigate plan mode",
-        prompt: "inspect",
-        cwd: process.cwd(),
-        status: "done",
-        createdAt: 0,
-        settledAt: 1_000,
-        meta: { backend: "pi" },
-        usage: {},
-        transcript: [],
-        liveTools: [],
-        queued: [],
-        finalText: "report",
-        turns: 1,
-      },
-    ],
-    false,
-  );
+  dispatch([
+    {
+      id: "sa-3",
+      origin: "model",
+      backend: "pi",
+      title: "investigate plan mode",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "report",
+      turns: 1,
+    },
+  ]);
 
   assert.deepEqual(events, [
     {
@@ -74,9 +74,70 @@ test("deferred subagent results render before a hidden next-turn injection", () 
           status: "done",
         },
       },
-      options: { deliverAs: "nextTurn" },
+      options: { deliverAs: "followUp", triggerTurn: true },
     },
   ]);
+
+  events.length = 0;
+  dispatch(
+    [
+      {
+        id: "sa-4",
+        origin: "model",
+        backend: "pi",
+        title: "aborted parent",
+        prompt: "inspect",
+        cwd: process.cwd(),
+        status: "done",
+        createdAt: 0,
+        settledAt: 1_000,
+        meta: { backend: "pi" },
+        usage: {},
+        transcript: [],
+        liveTools: [],
+        queued: [],
+        finalText: "report",
+        turns: 1,
+      },
+    ],
+    false,
+  );
+  assert.deepEqual((events.at(-1) as { options: unknown }).options, {
+    deliverAs: "nextTurn",
+  });
+});
+
+test("the parent lifecycle wakes deferred results unless the run was aborted", () => {
+  const handlers = new Map<string, (event: never) => void>();
+  const pi = {
+    on(event: string, handler: (event: never) => void) {
+      handlers.set(event, handler);
+    },
+  } as unknown as ExtensionAPI;
+  const settled: Array<boolean | undefined> = [];
+  registerSubagentResultDeliveryLifecycle(pi, {
+    parentSettled: (aborted) => settled.push(aborted),
+  });
+
+  handlers.get("agent_start")?.({ type: "agent_start" } as never);
+  handlers.get("agent_end")?.({
+    type: "agent_end",
+    messages: [{ role: "assistant", stopReason: "stop" }],
+  } as never);
+  handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
+
+  handlers.get("agent_start")?.({ type: "agent_start" } as never);
+  handlers.get("agent_end")?.({
+    type: "agent_end",
+    messages: [
+      { role: "assistant", stopReason: "stop" },
+      { role: "toolResult" },
+      { role: "assistant", stopReason: "aborted" },
+    ],
+  } as never);
+  handlers.get("agent_settled")?.({ type: "agent_settled" } as never);
+
+  assert.deepEqual(settled, [false, true]);
 });
 
 test("the visible subagent result entry renders the completed report", () => {
