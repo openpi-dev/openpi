@@ -118,12 +118,12 @@ import {
   refreshWorkflowGraph,
   resolveWorkflowRunTarget,
   resultJson,
-  SQUARE,
   sanitizeLine,
   sanitizeWorkflowDisplayLine,
   sanitizeWorkflowDisplayText,
-  stateSquare,
+  stateGlyph,
   statusColor,
+  statusGlyph,
   statusWord,
   type WorkflowDetails,
 } from "./model.ts";
@@ -1725,7 +1725,7 @@ export default function workflows(pi: ExtensionAPI) {
       const description = (meta as WorkflowMeta).description;
       if (description) text += `\n  ${theme.fg("dim", description)}`;
       for (const phase of meta.phases.slice(0, 8)) {
-        text += `\n  ${theme.fg("dim", SQUARE)} ${theme.fg("accent", phase.title)}${
+        text += `\n  ${theme.fg("dim", "○")} ${theme.fg("accent", phase.title)}${
           phase.detail ? theme.fg("dim", ` — ${phase.detail}`) : ""
         }`;
       }
@@ -1746,17 +1746,24 @@ export default function workflows(pi: ExtensionAPI) {
       const { done, failed } = countStates(details);
       const settled = done + failed;
       const elapsed = formatElapsed(details.startedAt, details.finishedAt);
+      const now = Date.now();
+      // The glyph already carries the run state, so the status word only
+      // stays for terminal states; a running run names its phase instead.
       let header =
-        `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
+        `${statusGlyph(details.status, theme, now)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
         `${theme.fg(
           "accent",
           sanitizeWorkflowDisplayLine(details.name ?? details.runId),
         )} ` +
         theme.fg(
           "dim",
-          `${settled}/${details.agents.length} agents · ${elapsed} · `,
-        ) +
-        theme.fg(statusColor(details.status), statusWord(details.status));
+          `${settled}/${details.agents.length} agents · ${elapsed}`,
+        );
+      if (details.status !== "running") {
+        header +=
+          theme.fg("dim", " · ") +
+          theme.fg(statusColor(details.status), statusWord(details.status));
+      }
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
       if (details.background) header += theme.fg("dim", " (background)");
       if (details.status === "running" && details.currentPhase) {
@@ -1771,17 +1778,10 @@ export default function workflows(pi: ExtensionAPI) {
         let text = header;
         for (const agent of details.agents) {
           const context = agentContext(agent);
-          text += `\n  ${stateSquare(agent.state, theme)} ${theme.fg(
+          text += `\n  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
             "accent",
             sanitizeWorkflowDisplayLine(agent.label),
-          )}${
-            agent.phase
-              ? theme.fg(
-                  "dim",
-                  ` (${sanitizeWorkflowDisplayLine(agent.phase)})`,
-                )
-              : ""
-          }${theme.fg(
+          )}${theme.fg(
             "dim",
             `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
           )}`;
@@ -1831,7 +1831,7 @@ export default function workflows(pi: ExtensionAPI) {
         for (const agent of group.agents) {
           const usage = formatUsage(agent.usage, agent.model);
           const context = agentContext(agent);
-          let line = `${stateSquare(agent.state, theme)} ${theme.fg(
+          let line = `${stateGlyph(agent.state, theme, now)} ${theme.fg(
             "accent",
             sanitizeWorkflowDisplayLine(agent.label),
           )} ${theme.fg(
@@ -2067,7 +2067,7 @@ export default function workflows(pi: ExtensionAPI) {
       const { done, failed } = countStates(details);
       const settled = done + failed;
       let header =
-        `${theme.fg(statusColor(details.status), SQUARE)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
+        `${statusGlyph(details.status, theme, Date.now())} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
         `${theme.fg(
           "accent",
           sanitizeWorkflowDisplayLine(details.name ?? details.runId),

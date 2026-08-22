@@ -5,8 +5,8 @@
  *   name                                             5/5 agents · 31m18s · done
  *   description
  *   ╭ Phases ────────────╮ ╭ Gather · 3 agents ──────────────────────────────╮
- *   │ ❯ ■ Gather     3/3 │ │ ■ CodeRabbit feedback   gpt-5 · 7%/372k  5m37s│
- *   │   ■ Verify     1/1 │ │ ■ Other bot feedback    gpt-5 · 9%/372k  4m43s│
+ *   │ ❯ ✓ Gather     3/3 │ │ ✓ CodeRabbit feedback   gpt-5 · 7%/372k  5m37s│
+ *   │   ⠿ Verify     1/1 │ │ ⠿ Other bot feedback    gpt-5 · 9%/372k  4m43s│
  *   ╰────────────────────╯ ╰─────────────────────────────────────────────────╯
  *   up/down select · right enter · left back · s save report
  */
@@ -32,6 +32,7 @@ import {
   screenTitleLine,
   hintLine as sharedHintLine,
 } from "../shared/screen-chrome.ts";
+import { spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
@@ -53,11 +54,11 @@ import {
   phaseGroups,
   resolveWorkflowRunTarget,
   resultJson,
-  SQUARE,
   sanitizeLine,
   shortenHome,
-  stateSquare,
+  stateGlyph,
   statusColor,
+  statusGlyph,
   statusWord,
   type Theme,
   type TranscriptEntry,
@@ -1002,7 +1003,7 @@ export class WorkflowDashboard {
         ) +
         theme.fg(statusColor(d.status), statusWord(d.status)) +
         " ";
-      const left = ` ${marker} ${statusSquareFor(d, theme)} ${label} ${theme.fg("dim", d.runId)}`;
+      const left = ` ${marker} ${statusGlyph(d.status, theme, Date.now())} ${label} ${theme.fg("dim", d.runId)}`;
       return this.split(left, right, width - 2);
     });
     lines.push(...this.panel("Runs", rows, width, panelHeight));
@@ -1089,7 +1090,7 @@ export class WorkflowDashboard {
       const groupDone = group.agents.filter(
         (a) => a.state !== "running",
       ).length;
-      const square = groupSquare(group, theme);
+      const square = groupGlyph(group, theme);
       const title =
         selected && this.detailFocus === "phases"
           ? theme.fg("accent", group.title)
@@ -1135,7 +1136,7 @@ export class WorkflowDashboard {
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", agent.label.padEnd(Math.min(maxLabel, 40)))
             : theme.fg("text", agent.label.padEnd(Math.min(maxLabel, 40)));
-        const left = ` ${marker} ${stateSquare(agent.state, theme)} ${label}  ${theme.fg("dim", stats)}`;
+        const left = ` ${marker} ${stateGlyph(agent.state, theme, Date.now())} ${label}  ${theme.fg("dim", stats)}`;
         const right = theme.fg(
           "dim",
           `${formatElapsed(agent.startedAt, agent.finishedAt)} `,
@@ -1240,7 +1241,7 @@ export class WorkflowDashboard {
       const label = transcriptLabel(entry);
       const color = transcriptColor(entry);
       rows.push(
-        ` ${theme.fg(color, SQUARE)} ${theme.bold(theme.fg(color, label))}`,
+        ` ${theme.fg(color, "●")} ${theme.bold(theme.fg(color, label))}`,
       );
       const contentWidth = Math.max(8, width - 4);
       const styled = theme.fg(
@@ -1276,7 +1277,7 @@ export class WorkflowDashboard {
     );
     lines.push(
       this.split(
-        ` ${stateSquare(agent.state, theme)} ${theme.bold(theme.fg("accent", agent.label))}`,
+        ` ${stateGlyph(agent.state, theme, Date.now())} ${theme.bold(theme.fg("accent", agent.label))}`,
         right,
         width,
       ),
@@ -1340,17 +1341,13 @@ function transcriptColor(
   return "muted";
 }
 
-function statusSquareFor(details: WorkflowDetails, theme: Theme): string {
-  return theme.fg(statusColor(details.status), SQUARE);
-}
-
-function groupSquare(group: PhaseGroup, theme: Theme): string {
-  if (group.agents.length === 0) return theme.fg("dim", SQUARE);
+function groupGlyph(group: PhaseGroup, theme: Theme): string {
+  if (group.agents.length === 0) return theme.fg("dim", "○");
   if (group.agents.some((a) => a.state === "running"))
-    return theme.fg("warning", SQUARE);
+    return theme.fg("warning", spinnerFrame(Date.now()));
   if (group.agents.some((a) => a.state === "error"))
-    return theme.fg("error", SQUARE);
-  return theme.fg("success", SQUARE);
+    return theme.fg("error", "✗");
+  return theme.fg("success", "✓");
 }
 
 /** Open the dashboard as a full-screen overlay. */
