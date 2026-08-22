@@ -26,6 +26,7 @@ import {
   visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   panelFrame,
   type ScreenHint,
@@ -1034,22 +1035,31 @@ export class WorkflowDashboard {
 
     const { done, failed } = countStates(d);
     const settled = done + failed;
+    // Same language as the transcript card: the glyph carries the state, the
+    // status word only shows for terminal states.
     const right =
       theme.fg(
         "dim",
-        `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)} · `,
+        `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)}`,
       ) +
-      theme.fg(statusColor(d.status), statusWord(d.status)) +
-      " ";
+      (d.status === "running"
+        ? " "
+        : theme.fg("dim", " · ") +
+          theme.fg(statusColor(d.status), statusWord(d.status)) +
+          " ");
     lines.push(
       this.split(
-        " " + theme.bold(theme.fg("accent", d.name ?? d.runId)),
+        ` ${statusGlyph(d.status, theme, Date.now())} ${theme.bold(theme.fg("accent", d.name ?? d.runId))}`,
         right,
         width,
       ),
     );
     const totals = formatUsage(aggregateUsage(d.agents));
-    const graphSummary = d.graph ? workflowGraphSummary(d.graph) : undefined;
+    // A graph with no edges is a flat swarm — "N nodes · 0 edges" is noise.
+    const graphSummary =
+      d.graph && d.graph.edges.length > 0
+        ? workflowGraphSummary(d.graph)
+        : undefined;
     const subRight = [graphSummary, totals].filter(Boolean).join(" · ");
     const subLeft = " " + theme.fg("muted", d.description ?? d.runId);
     lines.push(
@@ -1111,6 +1121,10 @@ export class WorkflowDashboard {
         0,
         ...selectedGroup.agents.map((a) => a.label.length),
       );
+      const models = new Set(
+        selectedGroup.agents.map((a) => a.model).filter(Boolean),
+      );
+      const mixedModels = models.size > 1;
       const agentWindow = this.windowed(
         selectedGroup.agents,
         this.agentIndex,
@@ -1123,9 +1137,18 @@ export class WorkflowDashboard {
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", "❯")
             : " ";
+        // The model repeats on every row when the run is homogeneous; only
+        // mixed fleets earn a per-row model. Context occupancy matters while
+        // an agent runs; once settled, its cost is the elapsed on the right.
+        const percent = contextPercent({
+          tokens: agent.usage.contextTokens,
+          contextWindow: agent.contextWindow,
+        });
         const stats = [
-          agent.model,
-          agentContext(agent),
+          mixedModels ? agent.model : undefined,
+          agent.state === "running" && percent !== undefined
+            ? `${percent}%`
+            : undefined,
           agent.acceptance
             ? `acceptance:${agent.acceptance.status}`
             : undefined,
@@ -1136,7 +1159,7 @@ export class WorkflowDashboard {
           selected && this.detailFocus === "agents"
             ? theme.fg("accent", agent.label.padEnd(Math.min(maxLabel, 40)))
             : theme.fg("text", agent.label.padEnd(Math.min(maxLabel, 40)));
-        const left = ` ${marker} ${stateGlyph(agent.state, theme, Date.now())} ${label}  ${theme.fg("dim", stats)}`;
+        const left = ` ${marker} ${stateGlyph(agent.state, theme, Date.now())} ${label}${stats ? `  ${theme.fg("dim", stats)}` : ""}`;
         const right = theme.fg(
           "dim",
           `${formatElapsed(agent.startedAt, agent.finishedAt)} `,
@@ -1145,7 +1168,7 @@ export class WorkflowDashboard {
         if (agent.error) {
           agentRows.push(
             truncateToWidth(
-              `       ${theme.fg("error", sanitizeLine(agent.error, 2_000))}`,
+              `       ${theme.fg("error", displayError(agent.error))}`,
               agentsInner,
               "…",
             ),
@@ -1319,6 +1342,18 @@ export class WorkflowDashboard {
     );
     return lines;
   }
+}
+
+/**
+ * Agent errors often arrive as an HTTP status plus a JSON body
+ * (`429: {"message":"user rate limit exceeded …"}`); the panel row keeps the
+ * status code and the message, dropping the braces and quotes.
+ */
+function displayError(error: string): string {
+  const clean = sanitizeLine(error, 2_000);
+  const match = clean.match(/^(\d{3})[:\s]*\{\s*"message"\s*:\s*"([^"]+)"/);
+  if (match) return `${match[1]}: ${match[2]}`;
+  return clean;
 }
 
 function transcriptLabel(entry: TranscriptEntry): string {
