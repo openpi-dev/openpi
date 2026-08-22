@@ -18,28 +18,14 @@ import type { SubagentSnapshot, TranscriptItem } from "../domain.ts";
 
 const MAX_CACHED_WIDTHS_PER_ITEM = 2;
 
-export const SPINNER_FRAMES = [
-  "⠋",
-  "⠙",
-  "⠹",
-  "⠸",
-  "⠼",
-  "⠴",
-  "⠦",
-  "⠧",
-  "⠇",
-  "⠏",
-] as const;
-
-/** Frame cadence, shared with the dashboard and takeover headers. */
-export const SPINNER_INTERVAL_MS = 120;
-
-export function spinnerFrame(now: number) {
-  const frame = Math.floor(now / SPINNER_INTERVAL_MS) % SPINNER_FRAMES.length;
-  return SPINNER_FRAMES[
-    (frame + SPINNER_FRAMES.length) % SPINNER_FRAMES.length
-  ];
-}
+// The spinner lives in shared/ so strips outside this extension animate in
+// step; the re-export keeps this module's historical import surface intact.
+import { spinnerFrame } from "../../../shared/spinner.ts";
+export {
+  SPINNER_FRAMES,
+  SPINNER_INTERVAL_MS,
+  spinnerFrame,
+} from "../../../shared/spinner.ts";
 
 /**
  * Strip raw ANSI codes, expand tabs, and drop control chars. Terminal-expanded

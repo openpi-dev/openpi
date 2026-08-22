@@ -810,8 +810,10 @@ export default function (pi: ExtensionAPI) {
       const meta = [details.harness, details.model]
         .filter(Boolean)
         .join(" \u00b7 ");
+      // A spawn is a beginning, not a success: keep the marker quiet and let
+      // the strip's spinner carry the running state from here on.
       return new Text(
-        `${theme.fg("success", "\u25cf")} ${theme.bold(details.title ?? details.id)} ${theme.fg("dim", meta)}`,
+        `${theme.fg("dim", "\u25cf")} ${theme.bold(details.title ?? details.id)} ${theme.fg("dim", meta)}`,
         0,
         0,
       );

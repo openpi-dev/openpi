@@ -6,6 +6,7 @@ import {
   fitNavigationSides,
   renderNavigationMetrics,
 } from "../shared/below-editor-navigation.ts";
+import { spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   aggregateUsage,
@@ -34,10 +35,13 @@ function cleanLine(value: string) {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
 
-/** One status glyph per run state; doubles as the focus marker when selected. */
-function statusGlyph(status: WorkflowStatus, theme: Theme) {
+/**
+ * One status indicator per run state; doubles as the focus marker when
+ * selected. Running spins, in step with the dashboard and takeover headers.
+ */
+function statusGlyph(status: WorkflowStatus, theme: Theme, now: number) {
   if (status === "completed") return theme.fg("success", "✓");
-  if (status === "running") return theme.fg("warning", "●");
+  if (status === "running") return theme.fg("warning", spinnerFrame(now));
   return theme.fg("error", "x");
 }
 
@@ -79,7 +83,7 @@ export class WorkflowStripWidget {
     const tokenCount = usage.input + usage.output;
     const glyph = this.strip.focused
       ? this.theme.fg("accent", "❯")
-      : statusGlyph(details.status, this.theme);
+      : statusGlyph(details.status, this.theme, Date.now());
     const displayName = cleanLine(details.name ?? entry.runId) || entry.runId;
     const name = this.strip.focused
       ? this.theme.bold(this.theme.fg("accent", displayName))
