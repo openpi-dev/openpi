@@ -44,6 +44,7 @@ import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { waitBounded } from "../shared/child-session.ts";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -1783,16 +1784,24 @@ export default function workflows(pi: ExtensionAPI) {
         let text = header;
         // A swarm can run dozens of agents; the collapsed card shows the
         // first few and summarizes the rest instead of flooding the chat.
+        // Each row carries one number only: context occupancy says a running
+        // agent is alive, elapsed says what a settled one cost.
         const collapsedAgents = details.agents.slice(0, 8);
         for (const agent of collapsedAgents) {
-          const context = agentContext(agent);
+          const percent = contextPercent({
+            tokens: agent.usage.contextTokens,
+            contextWindow: agent.contextWindow,
+          });
+          const stat =
+            agent.state === "running"
+              ? percent === undefined
+                ? undefined
+                : `${percent}%`
+              : formatElapsed(agent.startedAt, agent.finishedAt);
           text += `\n  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
             "accent",
             sanitizeWorkflowDisplayLine(agent.label),
-          )}${theme.fg(
-            "dim",
-            `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
-          )}`;
+          )}${theme.fg("dim", stat ? ` · ${stat}` : "")}`;
         }
         const hiddenAgents = details.agents.length - collapsedAgents.length;
         if (hiddenAgents > 0) {
