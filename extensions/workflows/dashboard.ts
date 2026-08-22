@@ -1261,14 +1261,30 @@ export class WorkflowDashboard {
     }
 
     for (const entry of agent.transcript) {
+      // Tool calls are one-liners: the arrow shows direction, the accent name
+      // says what ran, and the arguments collapse to a single compact line
+      // instead of a vertical JSON block.
+      if (entry.role === "tool") {
+        const name = entry.name ? sanitizeLine(entry.name, 160) : "unknown";
+        const args = compactInlineJson(entry.text);
+        rows.push(
+          ` ${theme.fg("muted", "→")} ${theme.fg("accent", name)}${args ? theme.fg("dim", ` ${args}`) : ""}`,
+        );
+        continue;
+      }
       const label = transcriptLabel(entry);
       const color = transcriptColor(entry);
+      const marker = entry.role === "toolResult" ? "←" : "●";
       rows.push(
-        ` ${theme.fg(color, "●")} ${theme.bold(theme.fg(color, label))}`,
+        ` ${theme.fg(color, marker)} ${theme.bold(theme.fg(color, label))}`,
       );
       const contentWidth = Math.max(8, width - 4);
       const styled = theme.fg(
-        entry.role === "thinking" ? "dim" : entry.isError ? "error" : "text",
+        entry.role === "thinking" || entry.role === "toolResult"
+          ? "dim"
+          : entry.isError
+            ? "error"
+            : "text",
         sanitizeTerminalText(entry.text),
       );
       for (const line of wrapTextWithAnsi(styled, contentWidth)) {
@@ -1357,12 +1373,25 @@ function displayError(error: string): string {
 }
 
 function transcriptLabel(entry: TranscriptEntry): string {
-  if (entry.role === "user") return "USER";
-  if (entry.role === "assistant") return "ASSISTANT";
-  if (entry.role === "thinking") return "THINKING";
+  if (entry.role === "user") return "user";
+  if (entry.role === "assistant") return "assistant";
+  if (entry.role === "thinking") return "thinking";
   const name = entry.name ? sanitizeLine(entry.name, 160) : "unknown";
-  if (entry.role === "tool") return `TOOL ${name}`;
-  return `RESULT ${name}`;
+  return name;
+}
+
+/**
+ * Tool arguments arrive pretty-printed over many lines; the transcript shows
+ * them inline. Non-JSON text passes through flattened.
+ */
+function compactInlineJson(text: string): string {
+  const flat = text.trim();
+  if (!flat) return "";
+  try {
+    return JSON.stringify(JSON.parse(flat));
+  } catch {
+    return flat.replace(/\s+/g, " ");
+  }
 }
 
 function transcriptColor(
