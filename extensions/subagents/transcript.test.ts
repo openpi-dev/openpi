@@ -145,7 +145,68 @@ test("tool calls summarize known bounded JSON arguments and safely fall back", (
   assert.equal(summarizeToolArgs("bash", '{"command":'), '{"command":');
 });
 
-test("bash tool calls use shell prompts while other tools keep arrow form", () => {
+test("tool argument summaries relativize paths inside the child cwd", () => {
+  const cwd = "/repo";
+  assert.equal(
+    summarizeToolArgs("read", '{"path":"/repo/src/a.ts"}', cwd),
+    "src/a.ts",
+  );
+  assert.equal(
+    summarizeToolArgs("rg", '{"pattern":"foo","path":"/repo/ext"}', cwd),
+    "foo · ext",
+  );
+  assert.equal(summarizeToolArgs("read", '{"path":"/repo"}', cwd), ".");
+  // Paths outside the checkout stay absolute.
+  assert.equal(
+    summarizeToolArgs("read", '{"path":"/elsewhere/a.ts"}', cwd),
+    "/elsewhere/a.ts",
+  );
+  // A shared prefix that is not a path boundary does not relativize.
+  assert.equal(
+    summarizeToolArgs("read", '{"path":"/repo-other/a.ts"}', cwd),
+    "/repo-other/a.ts",
+  );
+});
+
+test("tool call and output lines drop the child cwd prefix", () => {
+  const cwd = process.cwd();
+  const lines = buildTranscriptLines(
+    snapshot({
+      transcript: [
+        {
+          kind: "assistant",
+          parts: [
+            {
+              type: "toolCall",
+              toolId: "fd-1",
+              name: "fd",
+              argsPreview: JSON.stringify({
+                pattern: "*.mjs",
+                path: `${cwd}/scripts`,
+              }),
+            },
+          ],
+        },
+        {
+          kind: "toolResult",
+          toolId: "fd-1",
+          name: "fd",
+          isError: false,
+          outputPreview: `${cwd}/scripts/benchmark-arm-selection.mjs`,
+        },
+      ],
+    }),
+    80,
+    theme,
+  );
+
+  assert.deepEqual(lines, [
+    "✓ fd *.mjs · scripts",
+    "    scripts/benchmark-arm-selection.mjs",
+  ]);
+});
+
+test("bash tool calls use shell prompts while other tools go bare", () => {
   const rendered = plain(
     buildTranscriptLines(
       snapshot({
@@ -175,7 +236,7 @@ test("bash tool calls use shell prompts while other tools keep arrow form", () =
   );
 
   assert.match(rendered, /^· \$ git status --porcelain/m);
-  assert.match(rendered, /· → read src\/index\.ts/);
+  assert.match(rendered, /· read src\/index\.ts/);
 });
 
 test("adjacent tool results form one block with a success glyph", () => {
@@ -237,9 +298,9 @@ test("tool errors and empty results use status glyphs", () => {
   );
 
   // Orphan results (no call above them) keep a glyph of their own.
-  assert.match(rendered, /✗ → bash/);
+  assert.match(rendered, /✗ bash/);
   assert.match(rendered, /command failed/);
-  assert.match(rendered, /✓ → bash/);
+  assert.match(rendered, /✓ bash/);
 });
 
 test("a running tool becomes settled without reflowing", () => {
