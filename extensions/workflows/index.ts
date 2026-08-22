@@ -1747,25 +1747,30 @@ export default function workflows(pi: ExtensionAPI) {
       const settled = done + failed;
       const elapsed = formatElapsed(details.startedAt, details.finishedAt);
       const now = Date.now();
+      // A just-launched run has no agents and a 0s clock; both are noise on a
+      // card that only updates on events, so the metrics join in once real.
+      const counts =
+        details.agents.length > 0
+          ? `${settled}/${details.agents.length} agents`
+          : undefined;
+      const metrics = [counts, counts || elapsed !== "0s" ? elapsed : undefined]
+        .filter(Boolean)
+        .join(" · ");
       // The glyph already carries the run state, so the status word only
       // stays for terminal states; a running run names its phase instead.
       let header =
         `${statusGlyph(details.status, theme, now)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        `${theme.fg(
+        theme.fg(
           "accent",
           sanitizeWorkflowDisplayLine(details.name ?? details.runId),
-        )} ` +
-        theme.fg(
-          "dim",
-          `${settled}/${details.agents.length} agents · ${elapsed}`,
         );
+      if (metrics) header += theme.fg("dim", ` ${metrics}`);
       if (details.status !== "running") {
         header +=
           theme.fg("dim", " · ") +
           theme.fg(statusColor(details.status), statusWord(details.status));
       }
       if (failed) header += theme.fg("error", ` · ${failed} failed`);
-      if (details.background) header += theme.fg("dim", " (background)");
       if (details.status === "running" && details.currentPhase) {
         header += theme.fg(
           "muted",
@@ -1776,7 +1781,10 @@ export default function workflows(pi: ExtensionAPI) {
 
       if (!expanded) {
         let text = header;
-        for (const agent of details.agents) {
+        // A swarm can run dozens of agents; the collapsed card shows the
+        // first few and summarizes the rest instead of flooding the chat.
+        const collapsedAgents = details.agents.slice(0, 8);
+        for (const agent of collapsedAgents) {
           const context = agentContext(agent);
           text += `\n  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
             "accent",
@@ -1785,6 +1793,10 @@ export default function workflows(pi: ExtensionAPI) {
             "dim",
             `${context ? ` · ${context}` : ""} · ${formatElapsed(agent.startedAt, agent.finishedAt)}`,
           )}`;
+        }
+        const hiddenAgents = details.agents.length - collapsedAgents.length;
+        if (hiddenAgents > 0) {
+          text += `\n  ${theme.fg("dim", `… ${hiddenAgents} more`)}`;
         }
         // Only the tail collapsed: the newest lines are the ones that say
         // where the run is now.
@@ -1800,7 +1812,16 @@ export default function workflows(pi: ExtensionAPI) {
             "error",
             `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
           )}`;
-        text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
+        // Expanding only earns its hint when there is more to see.
+        if (
+          details.agents.length > 0 ||
+          (details.logs ?? []).length > 0 ||
+          details.description ||
+          details.result !== undefined ||
+          details.error
+        ) {
+          text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
+        }
         return new Text(text, 0, 0);
       }
 
