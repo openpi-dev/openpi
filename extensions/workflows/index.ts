@@ -40,7 +40,14 @@ import {
   keyHint,
   type SessionManager,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Markdown, Spacer, Text } from "@earendil-works/pi-tui";
+import {
+  Container,
+  Markdown,
+  Spacer,
+  Text,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
 import { waitBounded } from "../shared/child-session.ts";
@@ -174,6 +181,144 @@ import {
 
 const PREVIEW_LENGTH = 200;
 const EMIT_INTERVAL_MS = 120;
+
+/** Header of a workflow card: identity and phase on the left, metrics right. */
+function runHeader(
+  details: WorkflowDetails,
+  theme: Parameters<typeof statusGlyph>[1],
+  now: number,
+) {
+  const { done, failed } = countStates(details);
+  const settled = done + failed;
+  const elapsed = formatElapsed(details.startedAt, details.finishedAt);
+  // A just-launched run has no agents and a 0s clock; the metrics join in
+  // once there is something real to report.
+  const counts =
+    details.agents.length > 0
+      ? `${settled}/${details.agents.length} agents`
+      : undefined;
+  const metrics = [counts, counts || elapsed !== "0s" ? elapsed : undefined]
+    .filter(Boolean)
+    .join(" · ");
+  let left =
+    `${statusGlyph(details.status, theme, now)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
+    theme.fg(
+      "accent",
+      sanitizeWorkflowDisplayLine(details.name ?? details.runId),
+    );
+  if (details.status === "running" && details.currentPhase) {
+    left += theme.fg(
+      "muted",
+      ` · ${sanitizeWorkflowDisplayLine(details.currentPhase)}`,
+    );
+  }
+  // The glyph already carries the run state, so the status word only stays
+  // for terminal states.
+  let right = theme.fg("dim", metrics);
+  if (details.status !== "running") {
+    right +=
+      theme.fg("dim", `${metrics ? " · " : ""}`) +
+      theme.fg(statusColor(details.status), statusWord(details.status));
+  }
+  if (failed) right += theme.fg("error", ` · ${failed} failed`);
+  return { left, right };
+}
+
+/** Compose `left ... right` within `width`, truncating left when needed. */
+function splitRow(left: string, right: string, width: number): string {
+  if (!right) return truncateToWidth(left, width, "…");
+  const rightWidth = visibleWidth(right);
+  let text = left;
+  if (visibleWidth(text) + rightWidth + 1 > width) {
+    text = truncateToWidth(text, Math.max(0, width - rightWidth - 2), "…");
+  }
+  const pad = Math.max(1, width - visibleWidth(text) - rightWidth);
+  return text + " ".repeat(pad) + right;
+}
+
+/**
+ * Collapsed workflow card, rebuilt per repaint. Metrics right-align like the
+ * below-editor strip, and each agent row carries one number only: context
+ * occupancy says a running agent is alive, elapsed says what a settled one
+ * cost. A swarm shows the first few agents and summarizes the rest instead
+ * of flooding the chat.
+ */
+function buildCollapsedRows(
+  details: WorkflowDetails,
+  theme: Parameters<typeof statusGlyph>[1],
+  width: number,
+  now: number,
+  totals: string,
+): string[] {
+  const header = runHeader(details, theme, now);
+  const rows = [splitRow(header.left, header.right, width)];
+  const collapsedAgents = details.agents.slice(0, 8);
+  for (const agent of collapsedAgents) {
+    const percent = contextPercent({
+      tokens: agent.usage.contextTokens,
+      contextWindow: agent.contextWindow,
+    });
+    const stat =
+      agent.state === "running"
+        ? percent === undefined
+          ? undefined
+          : `${percent}%`
+        : formatElapsed(agent.startedAt, agent.finishedAt);
+    const left = `  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
+      "accent",
+      sanitizeWorkflowDisplayLine(agent.label),
+    )}`;
+    rows.push(
+      stat
+        ? splitRow(left, theme.fg("dim", stat), width)
+        : truncateToWidth(left, width, "…"),
+    );
+  }
+  const hiddenAgents = details.agents.length - collapsedAgents.length;
+  if (hiddenAgents > 0) {
+    rows.push(`  ${theme.fg("dim", `… ${hiddenAgents} more`)}`);
+  }
+  // Only the tail collapsed: the newest lines are the ones that say where
+  // the run is now.
+  for (const entry of (details.logs ?? []).slice(-3)) {
+    rows.push(
+      truncateToWidth(
+        `  ${theme.fg("muted", "›")} ${theme.fg(
+          "dim",
+          sanitizeWorkflowDisplayLine(entry.text),
+        )}`,
+        width,
+        "…",
+      ),
+    );
+  }
+  if (totals) rows.push(`  ${theme.fg("dim", `Total: ${totals}`)}`);
+  if (details.error) {
+    rows.push(
+      truncateToWidth(
+        `  ${theme.fg(
+          "error",
+          `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
+        )}`,
+        width,
+        "…",
+      ),
+    );
+  }
+  // Expanding only earns its hint when there is more to see.
+  if (
+    details.agents.length > 0 ||
+    (details.logs ?? []).length > 0 ||
+    details.description ||
+    details.result !== undefined ||
+    details.error
+  ) {
+    rows.push(
+      theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`),
+    );
+  }
+  return rows;
+}
 
 /**
  * Test-only injection seam for execute-level tests: production never sets it.
@@ -1744,95 +1889,23 @@ export default function workflows(pi: ExtensionAPI) {
         );
       }
 
-      const { done, failed } = countStates(details);
-      const settled = done + failed;
-      const elapsed = formatElapsed(details.startedAt, details.finishedAt);
-      const now = Date.now();
-      // A just-launched run has no agents and a 0s clock; both are noise on a
-      // card that only updates on events, so the metrics join in once real.
-      const counts =
-        details.agents.length > 0
-          ? `${settled}/${details.agents.length} agents`
-          : undefined;
-      const metrics = [counts, counts || elapsed !== "0s" ? elapsed : undefined]
-        .filter(Boolean)
-        .join(" · ");
-      // The glyph already carries the run state, so the status word only
-      // stays for terminal states; a running run names its phase instead.
-      let header =
-        `${statusGlyph(details.status, theme, now)} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        theme.fg(
-          "accent",
-          sanitizeWorkflowDisplayLine(details.name ?? details.runId),
-        );
-      if (metrics) header += theme.fg("dim", ` ${metrics}`);
-      if (details.status !== "running") {
-        header +=
-          theme.fg("dim", " · ") +
-          theme.fg(statusColor(details.status), statusWord(details.status));
-      }
-      if (failed) header += theme.fg("error", ` · ${failed} failed`);
-      if (details.status === "running" && details.currentPhase) {
-        header += theme.fg(
-          "muted",
-          ` · ${sanitizeWorkflowDisplayLine(details.currentPhase)}`,
-        );
-      }
       const totals = formatUsage(aggregateUsage(details.agents));
 
       if (!expanded) {
-        let text = header;
-        // A swarm can run dozens of agents; the collapsed card shows the
-        // first few and summarizes the rest instead of flooding the chat.
-        // Each row carries one number only: context occupancy says a running
-        // agent is alive, elapsed says what a settled one cost.
-        const collapsedAgents = details.agents.slice(0, 8);
-        for (const agent of collapsedAgents) {
-          const percent = contextPercent({
-            tokens: agent.usage.contextTokens,
-            contextWindow: agent.contextWindow,
-          });
-          const stat =
-            agent.state === "running"
-              ? percent === undefined
-                ? undefined
-                : `${percent}%`
-              : formatElapsed(agent.startedAt, agent.finishedAt);
-          text += `\n  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
-            "accent",
-            sanitizeWorkflowDisplayLine(agent.label),
-          )}${theme.fg("dim", stat ? ` · ${stat}` : "")}`;
-        }
-        const hiddenAgents = details.agents.length - collapsedAgents.length;
-        if (hiddenAgents > 0) {
-          text += `\n  ${theme.fg("dim", `… ${hiddenAgents} more`)}`;
-        }
-        // Only the tail collapsed: the newest lines are the ones that say
-        // where the run is now.
-        for (const entry of (details.logs ?? []).slice(-3)) {
-          text += `\n  ${theme.fg("muted", "›")} ${theme.fg(
-            "dim",
-            sanitizeWorkflowDisplayLine(entry.text),
-          )}`;
-        }
-        if (totals) text += `\n  ${theme.fg("dim", `Total: ${totals}`)}`;
-        if (details.error)
-          text += `\n  ${theme.fg(
-            "error",
-            `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
-          )}`;
-        // Expanding only earns its hint when there is more to see.
-        if (
-          details.agents.length > 0 ||
-          (details.logs ?? []).length > 0 ||
-          details.description ||
-          details.result !== undefined ||
-          details.error
-        ) {
-          text += `\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`;
-        }
-        return new Text(text, 0, 0);
+        // Rebuilt on every repaint: the spinner frame and the clocks advance
+        // with the host's render cadence instead of freezing between events.
+        return {
+          render: (width: number) =>
+            buildCollapsedRows(details, theme, width, Date.now(), totals),
+          invalidate() {},
+        };
       }
+
+      const headerParts = runHeader(details, theme, Date.now());
+      const now = Date.now();
+      const header = headerParts.right
+        ? `${headerParts.left} ${headerParts.right}`
+        : headerParts.left;
 
       const container = new Container();
       container.addChild(new Text(header, 0, 0));
