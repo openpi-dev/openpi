@@ -65,37 +65,6 @@ function statusGlyph(
   }
 }
 
-/**
- * Tool names come from the child's own tool-call events, so they are as
- * untrusted as their arguments and must be sanitized before reaching the
- * terminal: `truncateToWidth` only ignores escape sequences while measuring.
- */
-function runningActivity(snap: SubagentSnapshot) {
-  if (snap.status !== "running") return "";
-  const liveTool = snap.liveTools.at(-1);
-  if (liveTool) {
-    const name = sanitizeSubagentDisplayLine(liveTool.name);
-    const args = truncateToWidth(
-      sanitizeSubagentDisplayLine(liveTool.argsPreview ?? ""),
-      48,
-    );
-    return args ? `${name} · ${args}` : name;
-  }
-  for (const item of [...snap.transcript].reverse()) {
-    if (item.kind === "toolResult") {
-      return sanitizeSubagentDisplayLine(item.name);
-    }
-    if (item.kind !== "assistant") continue;
-    const tool = [...item.parts]
-      .reverse()
-      .find((part) => part.type === "toolCall");
-    if (tool?.type === "toolCall") {
-      return sanitizeSubagentDisplayLine(tool.name);
-    }
-  }
-  return "";
-}
-
 // --- Entry points --------------------------------------------------------------
 
 export interface TakeoverOptions {
@@ -361,13 +330,14 @@ export class SubagentDashboard implements Component {
       const isSelected = index === this.selection.index;
 
       // One glyph column: a selected row tints its status glyph with the
-      // accent tone instead of stacking a second marker.
+      // accent tone instead of stacking a second marker. The live tool name
+      // is deliberately absent: it flickers with every tool call and says
+      // nothing the user acts on.
       const glyph = statusGlyph(snap, theme, now, isSelected);
       const safeTitle = sanitizeSubagentDisplayLine(snap.title) || snap.id;
       const title = isSelected
         ? theme.fg("accent", safeTitle)
         : theme.fg("text", safeTitle);
-      const activity = runningActivity(snap);
       const prefix = ` ${glyph} `;
 
       const utilization = formatContextUtilization(snap.usage);
@@ -392,20 +362,9 @@ export class SubagentDashboard implements Component {
       const right = metadata.join(dot);
       const rightWidth = visibleWidth(right);
       const leftMax = Math.max(0, width - rightWidth - (right ? 2 : 0));
-      const activityLabel = activity ? theme.fg("muted", ` · ${activity}`) : "";
       const left =
         prefix +
-        truncateToWidth(
-          title,
-          Math.max(
-            0,
-            leftMax - visibleWidth(prefix) - visibleWidth(activityLabel),
-          ),
-        ) +
-        truncateToWidth(
-          activityLabel,
-          Math.max(0, leftMax - visibleWidth(prefix)),
-        );
+        truncateToWidth(title, Math.max(0, leftMax - visibleWidth(prefix)));
       const gap = right
         ? Math.max(1, width - visibleWidth(left) - rightWidth)
         : 0;

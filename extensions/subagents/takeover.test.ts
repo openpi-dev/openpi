@@ -151,7 +151,7 @@ test("dashboard reserves a more row and shows each visible subagent", () => {
   }
 });
 
-test("dashboard uses one status glyph and reports live activity", () => {
+test("dashboard uses one status glyph and no flickering live tool", () => {
   const view = dashboard([
     snap("run", "running", {
       liveTools: [{ toolId: "1", name: "Bash", argsPreview: "git status" }],
@@ -161,7 +161,8 @@ test("dashboard uses one status glyph and reports live activity", () => {
   ]);
   try {
     const output = view.render(100).join("\n");
-    assert.match(output, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] agent run · Bash · git status/);
+    assert.match(output, /[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] agent run/);
+    assert.doesNotMatch(output, /Bash · git status/);
     assert.doesNotMatch(output, /agent run.*running/);
     assert.match(output, /✓ agent done/);
     assert.match(output, /✗ agent bad/);
