@@ -5,6 +5,7 @@ import type {
   ExtensionContext,
   ExtensionFactory,
 } from "@earendil-works/pi-coding-agent";
+import { createCapabilitiesExtension } from "../capabilities/index.ts";
 import subagents from "../subagents/index.ts";
 import suggestions from "../suggestions/index.ts";
 import workflows from "../workflows/index.ts";
@@ -69,6 +70,11 @@ function editorLifecycleHarness() {
   };
 
   load(subagents);
+  load(
+    createCapabilitiesExtension({
+      loadConfig: () => ({ capabilities: { discovery: "explicit" } }),
+    }),
+  );
   load(suggestions);
   load(workflows);
 

@@ -2,6 +2,14 @@ import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
 import {
+  capabilitiesRequestedByPrompt,
+  requestsCapabilityGateway,
+} from "../shared/capability-intent.ts";
+import {
+  registerEditorLayer,
+  removeEditorLayer,
+} from "../shared/editor-layers.ts";
+import {
   loadSetupConfig,
   type MyPiSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
@@ -16,6 +24,11 @@ import {
   patchOwnedTools,
   resetOpenPiToolSurface,
 } from "../shared/tool-surface.ts";
+import {
+  CapabilityIntentHighlightEditor,
+  colorCapabilityKeyword,
+  isLightNamedTheme,
+} from "./src/ui.ts";
 
 const CapabilitySchema = Type.Unsafe<OpenPiCapability>({
   type: "string",
@@ -35,25 +48,6 @@ const OpenPiLoadToolsParameters = Type.Object({
 
 type OpenPiLoadToolsInput = Static<typeof OpenPiLoadToolsParameters>;
 
-const CAPABILITY_INTENT = {
-  search:
-    /\b(?:use|run)\s+(?:fd|rg)\b|\buse\s+(?:structured\s+)?(?:(?:file|code|content)\s+)?search\b|\b(?:structured|fast)\s+(?:file|code|content)\s+search\b|(?:使用|用|运行).{0,8}(?:fd|rg|git\s+(?:show|diff|log))|结构化(?:文件|代码|内容)搜索/iu,
-  delegate:
-    /\b(?:use|spawn|run)\s+(?:an?\s+|multiple\s+|several\s+|two\s+)?(?:pi\s+)?subagents?\b|(?:^|[.!?]\s+)(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\bparallel\s+agents?\b|(?:使用|用|启动|调用|来|开).{0,8}子代理|(?:多个?|多路)子代理|并行.{0,8}(?:代理|agent)|委派.{0,6}(?:任务|给|出去)/iu,
-  workflow:
-    /\b(?:use|run|create|build)\s+(?:(?:an?|the)\s+)?(?:openpi\s+)?workflow\b|(?:使用|用|运行|创建|构建).{0,8}工作流|用.{0,4}workflow/iu,
-  background:
-    /\b(?:run|start|keep)\b.{0,40}\b(?:in the background|background\s+(?:process|terminal|job))\b|后台.{0,8}(?:运行|启动|进程|终端|任务)/iu,
-  session:
-    /\b(?:create|set|update|track)\s+(?:an?\s+)?(?:session\s+)?(?:goal|task list|tasks)\b|(?:设置|创建|更新|跟踪|追踪).{0,8}(?:目标|任务)/iu,
-} as const satisfies Record<OpenPiCapability, RegExp>;
-
-const CAPABILITY_GATEWAY_INTENT =
-  /\bopenpi\s+(?:capabilit(?:y|ies)|tools?|features?)\b|openpi.{0,8}(?:能力|工具|功能)/iu;
-
-const CONDITIONAL_OR_NEGATED_INTENT =
-  /^(?:\s*(?:only\s+)?(?:if|when|unless|before|in case)\b)|\b(?:do not|don't|cannot|can't|not|no|never|avoid)\b|\b(?:if|unless)\b|\bwhen\s+(?:needed|required|necessary)\b|(?:如果|若|假如|除非|仅当|需要时|不要|不能|不用|不必|无需|避免|请勿|禁止)/iu;
-
 const CAPABILITY_SKILLS: Partial<Record<OpenPiCapability, string>> = {
   delegate: fileURLToPath(
     new URL("../../skills/subagents/SKILL.md", import.meta.url),
@@ -65,27 +59,6 @@ const CAPABILITY_SKILLS: Partial<Record<OpenPiCapability, string>> = {
     new URL("../../skills/background-terminals/SKILL.md", import.meta.url),
   ),
 };
-
-function capabilitiesRequestedByPrompt(prompt: string) {
-  const clauses = prompt.split(/[\n.!?。！？;；]+/u);
-  return OPENPI_CAPABILITY_NAMES.filter((capability) =>
-    clauses.some(
-      (clause) =>
-        !CONDITIONAL_OR_NEGATED_INTENT.test(clause) &&
-        CAPABILITY_INTENT[capability].test(clause),
-    ),
-  );
-}
-
-function requestsCapabilityGateway(prompt: string) {
-  return prompt
-    .split(/[\n.!?。！？;；]+/u)
-    .some(
-      (clause) =>
-        !CONDITIONAL_OR_NEGATED_INTENT.test(clause) &&
-        CAPABILITY_GATEWAY_INTENT.test(clause),
-    );
-}
 
 function capabilitySkillPaths(capabilities: readonly OpenPiCapability[]) {
   return capabilities.flatMap((capability) => {
@@ -124,7 +97,7 @@ export function createCapabilitiesExtension(
 
     pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, reconcileDiscoveryGateway);
 
-    pi.on("session_start", () => {
+    pi.on("session_start", (_event, ctx) => {
       resetOpenPiToolSurface(
         pi,
         dependencies.sourcePath
@@ -132,6 +105,21 @@ export function createCapabilitiesExtension(
           : undefined,
       );
       reconcileDiscoveryGateway();
+      registerEditorLayer(pi, ctx, {
+        id: "capability-intent-highlight",
+        order: 150,
+        wrap: (base, _tui, _theme, keybindings) =>
+          new CapabilityIntentHighlightEditor(base, keybindings, (text) =>
+            colorCapabilityKeyword(text, {
+              colorMode: ctx.ui.theme.getColorMode(),
+              light: isLightNamedTheme(ctx.ui.theme.name),
+            }),
+          ),
+      });
+    });
+
+    pi.on("session_shutdown", () => {
+      removeEditorLayer(pi, "capability-intent-highlight");
     });
 
     pi.on("before_agent_start", (event) => {

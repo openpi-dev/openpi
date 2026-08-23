@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { SETUP_CONFIG_CHANGED_CHANNEL } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
@@ -56,7 +59,7 @@ function harness(options: { discovery?: "explicit" | "adaptive" } = {}) {
   ];
   let active = [...available];
   const tools = new Map<string, CapturedTool>();
-  const starts: (() => void)[] = [];
+  const starts: Array<(event: unknown, ctx: ExtensionContext) => void> = [];
   const beforeStarts: ((event: { prompt: string }) => unknown)[] = [];
   const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
   const pi = {
@@ -75,7 +78,9 @@ function harness(options: { discovery?: "explicit" | "adaptive" } = {}) {
       event: string,
       handler: (() => void) | ((event: { prompt: string }) => unknown),
     ) {
-      if (event === "session_start") starts.push(handler as () => void);
+      if (event === "session_start") {
+        starts.push(handler as (event: unknown, ctx: ExtensionContext) => void);
+      }
       if (event === "before_agent_start") {
         beforeStarts.push(handler as (event: { prompt: string }) => unknown);
       }
@@ -116,7 +121,8 @@ function harness(options: { discovery?: "explicit" | "adaptive" } = {}) {
   return {
     active: () => [...active],
     start: () => {
-      for (const handler of starts) handler();
+      const ctx = { mode: "json" } as ExtensionContext;
+      for (const handler of starts) handler({}, ctx);
     },
     before: (prompt: string) => {
       return beforeStarts.map((handler) => handler({ prompt }));
@@ -235,8 +241,22 @@ test("an explicit subagent request loads delegation directly", () => {
   assert.match(JSON.stringify(results), /skills\/subagents\/SKILL\.md/);
 });
 
+test("reserved capability words load their groups without action verbs", () => {
+  const h = harness();
+  h.start();
+
+  h.before("subagent, workflow");
+
+  assert.ok(h.active().includes("subagent_spawn"));
+  assert.ok(h.active().includes("workflow"));
+});
+
 test("common Chinese and multi-agent delegation requests are explicit intent", () => {
-  for (const prompt of ["来多子代理一起讨论", "Use multiple subagents."]) {
+  for (const prompt of [
+    "来多子代理一起讨论",
+    "Use multiple subagents.",
+    "用 Subagent 检查这个实现",
+  ]) {
     const h = harness();
     h.start();
 
