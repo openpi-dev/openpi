@@ -114,7 +114,7 @@ const fixtures: Array<{
         patch: "@@ -1 +1,2 @@\n-old\n+new\n+second",
       },
     },
-    success: /Edited\s+README\.md\s+\+2\s+−1/,
+    success: /Edited\s+README\.md\s+\+2 -1/,
   },
   {
     name: "grep",
@@ -236,7 +236,11 @@ test("all activity tools render pending and failure as one explicit row", () => 
     const definition = withActivityRenderer(fixture.definition);
     const pending = renderCollapsed(definition, fixture.args);
     assert.equal(pending.length, 1, `${fixture.name} pending`);
-    assert.match(pending[0] ?? "", /^ {2}◌ /, `${fixture.name} pending`);
+    assert.match(
+      pending[0] ?? "",
+      /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] /,
+      `${fixture.name} pending`,
+    );
     assert.ok(pending[0]?.endsWith("  "), `${fixture.name} pending`);
 
     const failed = renderCollapsed(
@@ -274,7 +278,7 @@ test("long activity rows stay one line and fit narrow terminals", () => {
   );
   assert.equal(lines.length, 1);
   assert.ok(visibleWidth(lines[0]!) <= 24);
-  assert.match(lines[0] ?? "", /^ {2}◌ Running\s+bun/);
+  assert.match(lines[0] ?? "", /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running\s+bun/);
   assert.ok(lines[0]?.endsWith("  "));
 });
 

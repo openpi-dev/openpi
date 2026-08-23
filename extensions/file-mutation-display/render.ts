@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
+import { spinnerFrame } from "../shared/spinner.ts";
 
 type ActivityStatus = "pending" | "success" | "error";
 
@@ -91,13 +92,14 @@ function plural(count: number, singular: string) {
 
 function editStats(details: unknown) {
   const diff = string(record(details).diff);
+  if (!diff) return undefined;
   let additions = 0;
   let removals = 0;
   for (const line of diff.split(/\r?\n/)) {
     if (line.startsWith("+") && !line.startsWith("+++")) additions += 1;
     if (line.startsWith("-") && !line.startsWith("---")) removals += 1;
   }
-  return `+${additions} −${removals}`;
+  return { additions, removals };
 }
 
 function range(args: Record<string, unknown>) {
@@ -140,11 +142,7 @@ function activityRow(
       return { verb: "Wrote", target: path, detail: plural(lines, "line") };
     }
     case "edit":
-      return {
-        verb: "Edited",
-        target: path,
-        detail: editStats(result?.details),
-      };
+      return { verb: "Edited", target: path };
     case "grep":
       return {
         verb: "Searched",
@@ -242,17 +240,41 @@ function activityText(
 ) {
   const row = activityRow(name, args, state.result, cwd);
   const elapsed = duration(state);
+  const verbText = (
+    state.status === "pending"
+      ? pendingVerb(name)
+      : state.status === "error"
+        ? "Failed"
+        : row.verb
+  ).padEnd(8);
+  const verb = theme.fg(
+    state.status === "error" ? "error" : "toolTitle",
+    verbText,
+  );
   if (state.status === "pending") {
     const detail = elapsed ? ` · ${elapsed}` : "";
-    return `${theme.fg("warning", "◌")} ${theme.fg("toolTitle", pendingVerb(name))}  ${row.target}${theme.fg("dim", detail)}`;
+    return `${theme.fg("warning", spinnerFrame(Date.now()))} ${verb} ${row.target}${theme.fg("dim", detail)}`;
   }
   if (state.status === "error") {
     const summary = errorSummary(state.result);
     const detail = [elapsed, summary].filter(Boolean).join(" · ");
-    return `${theme.fg("error", "✕")} ${theme.fg("error", "Failed")}   ${row.target}${detail ? theme.fg("dim", ` · ${detail}`) : ""}`;
+    return `${theme.fg("error", "✕")} ${verb} ${row.target}${detail ? theme.fg("dim", ` · ${detail}`) : ""}`;
   }
-  const detail = [row.detail, elapsed].filter(Boolean).join(" · ");
-  return `${theme.fg("dim", activityIcon(name))} ${theme.fg("toolTitle", row.verb.padEnd(8))} ${row.target}${detail ? theme.fg("dim", `  ${detail}`) : ""}`;
+  const parts: string[] = [];
+  if (name === "edit") {
+    // Kimi-style diff stats: additions green, removals red.
+    const stats = editStats(state.result?.details);
+    if (stats) {
+      parts.push(
+        `${theme.fg("success", `+${stats.additions}`)} ${theme.fg("error", `-${stats.removals}`)}`,
+      );
+    }
+  } else if (row.detail) {
+    parts.push(theme.fg("dim", row.detail));
+  }
+  if (elapsed) parts.push(theme.fg("dim", elapsed));
+  const detail = parts.join(theme.fg("dim", " · "));
+  return `${theme.fg("dim", activityIcon(name))} ${verb} ${row.target}${detail ? `  ${detail}` : ""}`;
 }
 
 function activityComponent(
