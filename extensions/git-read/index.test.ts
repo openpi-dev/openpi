@@ -9,21 +9,39 @@ import { expandedResultPreview } from "./index.ts";
 import { buildDiffArgs, buildLogArgs, buildShowArgs } from "./src/args.ts";
 import { runGit } from "./src/process.ts";
 
+function git(repoPath: string, args: string[]) {
+  return execFileSync("git", args, {
+    cwd: repoPath,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function markerCommand(repoPath: string, name: string) {
+  const marker = join(repoPath, `${name}-ran`);
+  const helper = join(repoPath, `${name}-helper.cjs`);
+  writeFileSync(
+    helper,
+    'require("node:fs").writeFileSync(process.argv[2], "ran");\n',
+  );
+  const command = [process.execPath, helper, marker]
+    .map((value) => JSON.stringify(value.replaceAll("\\", "/")))
+    .join(" ");
+  return { command, helper, marker };
+}
+
 /** Create a small real repository with two commits and a dirty worktree. */
 function makeRepo(): string {
   const dir = mkdtempSync(join(tmpdir(), "pi-git-read-"));
-  const git = (args: string[]) =>
-    execFileSync("git", args, { cwd: dir, stdio: ["ignore", "pipe", "pipe"] });
-  git(["init", "--quiet"]);
-  git(["config", "user.email", "t@example.com"]);
-  git(["config", "user.name", "T"]);
+  git(dir, ["init", "--quiet"]);
+  git(dir, ["config", "user.email", "t@example.com"]);
+  git(dir, ["config", "user.name", "T"]);
   writeFileSync(join(dir, "a.txt"), "one\n");
-  git(["add", "."]);
-  git(["commit", "--quiet", "-m", "first"]);
+  git(dir, ["add", "."]);
+  git(dir, ["commit", "--quiet", "-m", "first"]);
   writeFileSync(join(dir, "a.txt"), "one\ntwo\n");
   writeFileSync(join(dir, "b.txt"), "new\n");
-  git(["add", "."]);
-  git(["commit", "--quiet", "-m", "second"]);
+  git(dir, ["add", "."]);
+  git(dir, ["commit", "--quiet", "-m", "second"]);
   writeFileSync(join(dir, "a.txt"), "one\ntwo\nthree\n");
   return dir;
 }
@@ -83,23 +101,51 @@ test("git show with path limits the commit patch to that path", async () => {
   }
 });
 
-test("git diff never invokes repository-configured textconv commands", async () => {
-  const marker = join(repo, "textconv-ran");
-  const git = (args: string[]) =>
-    execFileSync("git", args, {
-      cwd: repo,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+test("structured git diff and show never invoke diff.external", async () => {
+  const { command, helper, marker } = markerCommand(repo, "external-diff");
+  try {
+    git(repo, ["config", "diff.external", command]);
+    git(repo, ["diff"]);
+    assert.equal(existsSync(marker), true, "the hostile control must execute");
+    rmSync(marker, { force: true });
+
+    for (const args of [
+      buildDiffArgs({}),
+      buildShowArgs({ revision: "HEAD" }),
+    ]) {
+      const exit = await Effect.runPromiseExit(runGit(args, repo));
+      assert.ok(Exit.isSuccess(exit));
+      assert.equal(existsSync(marker), false);
+    }
+  } finally {
+    git(repo, ["config", "--unset", "diff.external"]);
+    rmSync(helper, { force: true });
+    rmSync(marker, { force: true });
+  }
+});
+
+test("structured git diff and show never invoke textconv commands", async () => {
+  const { command, helper, marker } = markerCommand(repo, "textconv");
   const attributes = join(repo, ".gitattributes");
   try {
     writeFileSync(attributes, "a.txt diff=evil\n");
-    git(["config", "diff.evil.textconv", `/usr/bin/touch ${marker}`]);
-    const exit = await Effect.runPromiseExit(runGit(buildDiffArgs({}), repo));
-    assert.ok(Exit.isSuccess(exit));
-    assert.equal(existsSync(marker), false);
+    git(repo, ["config", "diff.evil.textconv", command]);
+    git(repo, ["diff"]);
+    assert.equal(existsSync(marker), true, "the hostile control must execute");
+    rmSync(marker, { force: true });
+
+    for (const args of [
+      buildDiffArgs({}),
+      buildShowArgs({ revision: "HEAD" }),
+    ]) {
+      const exit = await Effect.runPromiseExit(runGit(args, repo));
+      assert.ok(Exit.isSuccess(exit));
+      assert.equal(existsSync(marker), false);
+    }
   } finally {
-    git(["config", "--unset", "diff.evil.textconv"]);
+    git(repo, ["config", "--unset", "diff.evil.textconv"]);
     rmSync(attributes, { force: true });
+    rmSync(helper, { force: true });
     rmSync(marker, { force: true });
   }
 });
@@ -113,15 +159,36 @@ test("runGit applies its own bounded timeout", async () => {
     const error = Cause.squash(exit.cause) as { message?: string };
     assert.match(error.message ?? "", /timed out/i);
   }
+  // Git for Windows leaves the shell process behind until `sleep` exits; that
+  // process holds the fixture as its cwd and would make suite cleanup fail.
+  if (process.platform === "win32") {
+    await new Promise((resolve) => setTimeout(resolve, 2_100));
+  }
 });
 
-test("git diff of the dirty worktree shows unstaged changes", async () => {
-  const exit = await Effect.runPromiseExit(
-    runGit(["diff", "--no-color"], repo),
+test("structured git diff preserves worktree, staged, revision, and path forms", async () => {
+  const worktree = await Effect.runPromiseExit(runGit(buildDiffArgs({}), repo));
+  assert.ok(Exit.isSuccess(worktree));
+  if (Exit.isSuccess(worktree)) {
+    assert.match(worktree.value.output.preview, /\+three/);
+  }
+
+  git(repo, ["add", "a.txt"]);
+  const staged = await Effect.runPromiseExit(
+    runGit(buildDiffArgs({ staged: true }), repo),
   );
-  assert.ok(Exit.isSuccess(exit));
-  if (Exit.isSuccess(exit)) {
-    assert.match(exit.value.output.preview, /\+three/);
+  assert.ok(Exit.isSuccess(staged));
+  if (Exit.isSuccess(staged)) {
+    assert.match(staged.value.output.preview, /\+three/);
+  }
+
+  const revisionPath = await Effect.runPromiseExit(
+    runGit(buildDiffArgs({ from: "HEAD~1", to: "HEAD", path: "b.txt" }), repo),
+  );
+  assert.ok(Exit.isSuccess(revisionPath));
+  if (Exit.isSuccess(revisionPath)) {
+    assert.match(revisionPath.value.output.preview, /\+new/);
+    assert.doesNotMatch(revisionPath.value.output.preview, /a\.txt/);
   }
 });
 

@@ -9,13 +9,9 @@ test("the investigation commands a plan is actually built on are allowed", () =>
   // which meant planning without history.
   for (const command of [
     "git log --oneline -20",
-    "git log -p --follow extensions/plan-mode/index.ts",
+    "git log --no-patch --follow extensions/plan-mode/index.ts",
     "git log --since 2026-01-01 --author someone",
-    "git diff",
-    "git diff --cached --stat",
-    "git diff HEAD~3..HEAD -- extensions/",
     "git status --short --branch",
-    "git show --stat 9012f26",
     "git blame -L 20,40 src/index.ts",
     "git rev-parse --abbrev-ref HEAD",
     "git ls-files extensions/plan-mode",
@@ -29,6 +25,44 @@ test("the investigation commands a plan is actually built on are allowed", () =>
     "gh search code needle",
   ]) {
     assert.equal(allowed(command), true, `${command} should be allowed`);
+  }
+});
+
+test("raw git commands that render diffs are refused", () => {
+  for (const command of [
+    "git diff",
+    "git diff --cached --stat",
+    "git diff HEAD~3..HEAD -- extensions/",
+    "git show HEAD",
+    "git show --stat 9012f26",
+    "git whatchanged -5",
+  ]) {
+    const decision = planBashDecision(command);
+    assert.equal(decision.allowed, false, `${command} must be refused`);
+    assert.match(decision.reason ?? "", /git_diff|git_show/);
+  }
+});
+
+test("git log stays available only when it does not render a diff", () => {
+  for (const command of [
+    "git log -p",
+    "git log --patch",
+    "git log --stat",
+    "git log --shortstat",
+    "git log --numstat",
+    "git log --summary",
+    "git log --raw",
+    "git log --name-only",
+    "git log --name-status",
+    "git log --word-diff=plain",
+    "git log -U=3",
+    "git log --unified=3",
+    "git log -L=20,40:src/index.ts",
+  ]) {
+    const decision = planBashDecision(command);
+    assert.equal(decision.allowed, false, `${command} must be refused`);
+    assert.match(decision.reason ?? "", /git_log/);
+    assert.match(decision.reason ?? "", /git_diff|git_show/);
   }
 });
 
@@ -197,14 +231,14 @@ test("pathspecs after -- are not mistaken for flags", () => {
   // Everything after `--` is a path by definition, including one that looks
   // like an option.
   assert.equal(allowed("git log -- --weird-filename.ts"), true);
-  assert.equal(allowed("git diff -- extensions/plan-mode"), true);
+  assert.equal(allowed("git status -- --weird-filename.ts"), true);
 });
 
 test("tilde is refused where a shell expands it, not inside a revision", () => {
   // `HEAD~3` is ordinary git syntax and must survive; `~/x` is a path this
   // module never gets to inspect.
-  assert.equal(allowed("git diff HEAD~3"), true);
-  assert.equal(allowed("git diff HEAD~3..HEAD"), true);
+  assert.equal(allowed("git log HEAD~3"), true);
+  assert.equal(allowed("git rev-list HEAD~3..HEAD"), true);
   assert.equal(allowed("git log ~/notes"), false);
   assert.equal(allowed("git log ~user/notes"), false);
 });

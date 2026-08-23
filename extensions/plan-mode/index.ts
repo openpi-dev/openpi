@@ -37,6 +37,7 @@ import {
   type PlanModeState,
 } from "../shared/plan-mode-state.ts";
 import {
+  loadOpenPiCapabilities,
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
@@ -173,6 +174,9 @@ export const PLAN_SAFE_TOOLS = new Set([
   "ls",
   "fd",
   "rg",
+  "git_show",
+  "git_diff",
+  "git_log",
   // Web research without write actions.
   "web_search",
   "source_check",
@@ -208,7 +212,7 @@ export const PLAN_SAFE_TOOLS = new Set([
 ]);
 
 export const BLOCK_REASON =
-  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, web search, read-only bash like git log/diff/status, and subagent_spawn for parallel exploration — planning children get read-only tools). When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
+  "Plan mode is active: no changes yet. Keep investigating with read-only tools (read, fd, rg, git_log/git_diff/git_show, web search, read-only bash like git log/status, and subagent_spawn for parallel exploration — planning children get read-only tools). Raw git diff/show and diff-generating git log forms are blocked; use the structured Git tools instead. When the plan is decision-complete, call plan_ready alone with the complete Markdown plan; the user then chooses the next action with `/plan`, or cancels with `/plan off`.";
 
 export function planToolCallDecision(
   toolName: string,
@@ -256,6 +260,7 @@ export default function planMode(pi: ExtensionAPI) {
     hasUI: boolean;
     ui: { setStatus: (key: string, value?: string) => void };
   }) => {
+    if (planning) loadOpenPiCapabilities(pi, ["search"]);
     syncPlanTool();
     pi.events.emit(PLAN_MODE_CHANNEL, { planning } satisfies PlanModeState);
     if (!ctx.hasUI) return;
@@ -519,7 +524,7 @@ export default function planMode(pi: ExtensionAPI) {
         {
           customType: "plan-mode-armed",
           content:
-            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user explicitly chooses an implementation action. For files use the read, ls, grep and fd tools; bash is limited to read-only git and gh history commands such as \`git log\`, \`git diff\`, \`git status\`, \`git show\`, \`git blame\` and \`gh pr view\` — one plain command, no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
+            `Plan mode is on: investigate and propose a plan, but do not change anything yet. Edits and writes are blocked until the user explicitly chooses an implementation action. For files use the read, ls, grep, fd and rg tools. Use \`git_log\`, \`git_diff\` and \`git_show\` for history and changes; they disable repository external diff and textconv programs. Bash is limited to read-only git and gh commands such as \`git log\`, \`git status\`, \`git blame\` and \`gh pr view\` — raw Git commands that render diffs are blocked, and every Bash call must be one plain command with no pipes or redirects. You can still delegate with \`subagent_spawn\` to explore several parts of the codebase at once: children spawned while planning receive read-only tools, so use them for investigation rather than for work to be done later.${objective ? `\n\nPlan for: ${objective}` : ""}` +
             "\n\nUse read-only tools to ground the plan. When it is decision-complete, call `plan_ready` alone with the complete Markdown plan. That records the plan but does not start implementation; the user chooses the next action with `/plan`.",
           display: true,
           details: {},

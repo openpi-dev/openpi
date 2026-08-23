@@ -11,11 +11,13 @@
  *
  * THREAT MODEL. The adversary is a model that would start changing things
  * before the user approved a plan — including one steered by injected text it
- * read while investigating. It is NOT a hostile repository: `git diff` honors
- * `diff.external` from the repo's own config, so a checkout whose `.git/config`
- * is attacker-controlled can run a program through a command this module
- * allows. Nothing here can prevent that, and nothing above it tries to: pi
- * already runs the project's own tooling under the user's trust decision.
+ * read while investigating. Repository-configured diff drivers are also in
+ * scope for commands that render patches: raw `git diff`, `git show`,
+ * `git whatchanged`, and diff-generating `git log` forms are refused here. Plan
+ * Mode exposes the structured git-read tools instead; they force
+ * `--no-ext-diff --no-textconv --no-color` in argv. This is not a claim that
+ * every hostile Git configuration is inert: the remaining Git investigation
+ * commands still run under Pi's existing project trust boundary.
  *
  * EVERY LIST BELOW IS AN ALLOWLIST, deliberately. An earlier version scanned
  * for known-dangerous flags instead, and review found four separate escapes in
@@ -50,9 +52,7 @@ const UNQUOTED_GLOB_CHARACTERS = new Set(["*", "?", "[", "]"]);
  */
 const GIT_SUBCOMMANDS = new Set([
   "log",
-  "diff",
   "status",
-  "show",
   "blame",
   "shortlog",
   "describe",
@@ -63,9 +63,10 @@ const GIT_SUBCOMMANDS = new Set([
   "cat-file",
   "merge-base",
   "name-rev",
-  "whatchanged",
   "grep",
 ]);
+
+const GIT_DIFF_SUBCOMMANDS = new Set(["diff", "show", "whatchanged"]);
 
 /**
  * Flags accepted after a git subcommand. The admission rule for this list is
@@ -157,6 +158,27 @@ const GIT_FLAGS = new Set([
   "-r",
   "--long",
   "--count",
+]);
+
+/**
+ * Options that make `git log` enter the diff machinery. Git enables textconv
+ * by default for porcelain log/diff output, so these must use the structured
+ * git tools even though plain history browsing remains safe and useful.
+ */
+const GIT_LOG_DIFF_FLAGS = new Set([
+  "-p",
+  "--patch",
+  "--stat",
+  "--shortstat",
+  "--numstat",
+  "--summary",
+  "--raw",
+  "--name-only",
+  "--name-status",
+  "--word-diff",
+  "-U",
+  "--unified",
+  "-L",
 ]);
 
 /** gh subcommands paired with the verbs under each that only read. */
@@ -377,6 +399,16 @@ function flagName(word: string) {
   return eq === -1 ? word : word.slice(0, eq);
 }
 
+function firstMatchedFlag(
+  words: readonly string[],
+  flags: ReadonlySet<string>,
+) {
+  for (const word of words) {
+    if (word === "--") break;
+    if (flags.has(flagName(word))) return word;
+  }
+}
+
 /**
  * Check the argument tail. Words after `--` are pathspecs by definition and
  * need no check; before it, a word either is an allowlisted flag or is not a
@@ -439,10 +471,23 @@ export function planBashDecision(command: unknown): BashPlanDecision {
    */
   if (program === "git") {
     const [subcommand, ...args] = rest;
+    if (subcommand && GIT_DIFF_SUBCOMMANDS.has(subcommand)) {
+      return refuse(
+        `plan mode does not run raw "git ${subcommand}" because repository diff drivers may execute external programs — use git_diff or git_show instead (and git_log to find commits)`,
+      );
+    }
     if (!subcommand || !GIT_SUBCOMMANDS.has(subcommand)) {
       return refuse(
-        `plan mode allows only a read-only git subcommand immediately after "git" (log, diff, status, show, blame, …), not "${subcommand ?? "(none)"}"`,
+        `plan mode allows only a read-only git subcommand immediately after "git" (log, status, blame, …), not "${subcommand ?? "(none)"}"`,
       );
+    }
+    if (subcommand === "log") {
+      const diffFlag = firstMatchedFlag(args, GIT_LOG_DIFF_FLAGS);
+      if (diffFlag) {
+        return refuse(
+          `plan mode does not run raw "git log ${diffFlag}" because diff-generating log options may execute repository diff drivers — use git_log to find commits, then git_show or git_diff to inspect changes`,
+        );
+      }
     }
     return scanArguments(args, GIT_FLAGS, "git");
   }

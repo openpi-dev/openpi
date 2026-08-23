@@ -11,6 +11,7 @@ import {
   planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../shared/plan-mode-state.ts";
+import { getLoadedOpenPiCapabilities } from "../shared/tool-surface.ts";
 import planMode, {
   BLOCK_REASON,
   buildPlanImplementationPrompt,
@@ -47,11 +48,54 @@ test("plan mode allows only explicit observational tools", () => {
     "tasks_list",
     "get_goal",
     "ask_user",
+    "git_show",
+    "git_diff",
+    "git_log",
     "plan_ready",
   ]) {
     assert.ok(PLAN_SAFE_TOOLS.has(tool), `${tool} must stay available`);
     assert.equal(planToolCallDecision(tool), undefined);
   }
+});
+
+test("entering Plan Mode loads the structured search capability", async () => {
+  let commandHandler:
+    | ((args: string, ctx: ExtensionCommandContext) => Promise<void>)
+    | undefined;
+  const pi = {
+    registerTool() {},
+    getActiveTools: () => [],
+    setActiveTools() {},
+    registerCommand(
+      _name: string,
+      command: {
+        handler: (args: string, ctx: ExtensionCommandContext) => Promise<void>;
+      },
+    ) {
+      commandHandler = command.handler;
+    },
+    on() {},
+    events: {
+      on() {
+        return () => {};
+      },
+      emit() {},
+    },
+    appendEntry() {},
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    hasUI: true,
+    ui: { setStatus() {}, notify() {} },
+  } as unknown as ExtensionCommandContext;
+
+  planMode(pi);
+  assert.ok(commandHandler);
+  assert.deepEqual(getLoadedOpenPiCapabilities(pi), []);
+
+  await commandHandler("inspect history", ctx);
+
+  assert.deepEqual(getLoadedOpenPiCapabilities(pi), ["search"]);
 });
 
 test("plan mode fail-closes known mutations and future unknown tools", () => {
@@ -614,7 +658,12 @@ test("session reload and tree navigation restore the branch-local write gate", (
     registerCommand() {},
     appendEntry() {},
     sendMessage() {},
-    events: { emit() {} },
+    events: {
+      on() {
+        return () => {};
+      },
+      emit() {},
+    },
     on(event: string, handler: unknown) {
       if (event === "session_start") {
         sessionStart = handler as typeof sessionStart;
@@ -642,8 +691,10 @@ test("session reload and tree navigation restore the branch-local write gate", (
   assert.ok(sessionStart);
   assert.ok(sessionTree);
   assert.ok(toolHandler);
+  assert.deepEqual(getLoadedOpenPiCapabilities(pi), []);
   sessionStart({}, ctx);
 
+  assert.deepEqual(getLoadedOpenPiCapabilities(pi), ["search"]);
   assert.equal(toolHandler({ toolName: "write" })?.block, true);
   assert.match(status, /ready/);
 

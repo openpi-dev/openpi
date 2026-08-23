@@ -79,6 +79,7 @@ OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 
 > Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。英文 `subagent` 与 `workflow` 是保留授权词，单独输入也会加载对应能力。
 > 例如 `subagent, workflow` → 同时加载两组；「在后台运行 dev server」→ 后台终端；「用/使用子代理检查」→ Subagent；「用工作流编排」→ Workflow；「用 fd/rg 搜索」或「用 git diff 比较分支」→ 搜索与只读 Git 工具。
 > 关键是把意图说清楚（说「用子代理」「后台运行」这类带动作的短语），不需要记住任何工具名。
+> `/plan` 是一个运行时安全例外：进入或恢复 Plan Mode 时会为当前 Session 自动加载 `search` 组，让只读调研直接使用结构化 Git 工具。
 > 在交互输入框中，保留词 `Subagent` / `Workflow`，以及已被识别的中文能力请求，会使用 Claude Code 风格的薰衣草紫显示；浅色终端自动使用更深的紫色以维持可读性。变色表示提交后会加载对应能力。因为英文名称本身就是授权词，讨论中写出它们也会开闸；条件句和否定句仍保持普通显示，Suggestion 幽灵文字也要在用户接受进输入框后才参与识别。
 
 > [!IMPORTANT]
@@ -318,7 +319,7 @@ Workflow 在清理隔离 checkout 前原子保存有界 Handoff Manifest：track
 | ------------- | --------------------------------------- | ------------------------------------------------------------------- |
 | Tasks         | `tasks_add` / `tasks_update` / `/tasks` | 逐项同步当前批次工作意图并刷新完整快照；不推断完成、不执行工作      |
 | Goal          | `/goal <目标>`                          | 驱动一个持续到终态的自主目标；完成前要求证据审计                    |
-| Plan Mode     | `/plan [目标]`                          | 只读调研；`plan_ready` 后才准备可编辑的实施 Prompt，不自动执行      |
+| Plan Mode     | `/plan [目标]`                          | 自动加载结构化搜索/Git 做只读调研；`plan_ready` 后才准备实施 Prompt |
 | Context Pivot | `/context-pivot <下一阶段>`             | Context 超过约 30K Tokens 且任务换阶段时，用自包含 Brief 替换旧噪音 |
 | Sessions      | `/sessions`                             | 搜索、预览并通过 Pi 安全生命周期切换 Session                        |
 | Human Input   | `ask_user` / `human_handoff`            | 收集经复核的决策，或等待只有用户能完成的外部操作                    |
@@ -567,7 +568,11 @@ Subagent 是一项可继续对话的自包含委派；Workflow 是多阶段编�
 <details>
 <summary><strong>Plan Mode 为什么允许 git log，却拒绝 npm install？</strong></summary>
 
-Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件组成的命令。窄白名单内的 Git / GitHub 查询可以通过；Shell 元字符、未知 flag、安装、写入和无法证明的形式全部拒绝。
+Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件组成的命令。不会生成 diff 的窄白名单 Git / GitHub 查询（例如原始 `git log`、`git status`、`git blame`）可以通过；Shell 元字符、未知 flag、安装、写入和无法证明的形式全部拒绝。
+
+进入或恢复 Plan Mode 时，OpenPI 会为当前 Session 加载 `search` 组。差异检查使用结构化 `git_diff` / `git_show`，历史浏览使用 `git_log`；前两者固定传入 `--no-ext-diff --no-textconv --no-color`。原始 Bash `git diff`、`git show`、`git whatchanged`，以及 `git log -p`、`--stat`、`--name-only`、`-L` 等会生成 diff 的形式会被拒绝，避免仓库的 `diff.external` 或 textconv driver 执行外部程序。
+
+这项保证精确覆盖 Git diff driver 边界，并不宣称任意 hostile Git 配置都无副作用；其余允许的 Git 调研命令仍位于 Pi 已有的项目 Trust 边界内。
 
 </details>
 
