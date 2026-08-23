@@ -457,14 +457,16 @@ function syncWorkflowSpinner(
     return;
   }
   if (state.spinnerTimer) return;
-  state.spinnerTimer = setInterval(() => {
-    if (!isRunning() && state.spinnerTimer) {
-      clearInterval(state.spinnerTimer);
+  const spinnerTimer = setInterval(() => {
+    if (state.spinnerTimer !== spinnerTimer) return;
+    if (!isRunning()) {
+      clearInterval(spinnerTimer);
       state.spinnerTimer = undefined;
     }
     invalidate();
   }, SPINNER_INTERVAL_MS);
-  state.spinnerTimer.unref?.();
+  state.spinnerTimer = spinnerTimer;
+  spinnerTimer.unref?.();
 }
 
 /**
