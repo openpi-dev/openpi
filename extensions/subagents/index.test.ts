@@ -11,6 +11,8 @@ import type {
 import { PLAN_MODE_CHANNEL } from "../shared/plan-mode-state.ts";
 import subagents, { createSubagentResultDispatcher } from "./index.ts";
 
+const emptySessionManager = { getBranch: () => [] };
+
 test("subagent results render before the hidden wake-up message", () => {
   const events: unknown[] = [];
   const pi = {
@@ -164,6 +166,7 @@ test("session start preserves the complete registered subagent family", () => {
     cwd: process.cwd(),
     hasUI: false,
     isProjectTrusted: () => false,
+    sessionManager: emptySessionManager,
   } as unknown as ExtensionContext);
 
   assert.deepEqual(
@@ -217,6 +220,7 @@ test("the complete subagent family fails closed before the first spawn", async (
     hasUI: false,
     isIdle: () => true,
     isProjectTrusted: () => false,
+    sessionManager: emptySessionManager,
   } as unknown as ExtensionContext;
 
   subagents(pi);
@@ -337,6 +341,7 @@ test("session_start re-registers agent types for its cwd and live trust decision
       cwd,
       hasUI: false,
       isProjectTrusted: () => true,
+      sessionManager: emptySessionManager,
     } as unknown as ExtensionContext);
     assert.ok(spawnTools.length > 1, "session_start re-registers spawn");
     assert.ok(
@@ -357,6 +362,7 @@ test("session_start re-registers agent types for its cwd and live trust decision
       cwd: alternateCwd,
       hasUI: false,
       isProjectTrusted: () => true,
+      sessionManager: emptySessionManager,
     } as unknown as ExtensionContext);
     assert.ok(
       spawnTools
@@ -374,6 +380,7 @@ test("session_start re-registers agent types for its cwd and live trust decision
       cwd,
       hasUI: false,
       isProjectTrusted: () => false,
+      sessionManager: emptySessionManager,
     } as unknown as ExtensionContext);
     assert.equal(
       spawnTools
@@ -431,6 +438,7 @@ test("session_start re-registers agent types for its cwd and live trust decision
       cwd,
       hasUI: false,
       isProjectTrusted: () => true,
+      sessionManager: emptySessionManager,
     } as unknown as ExtensionContext);
     const trustedSpawn = spawnTools.at(-1)?.execute;
     assert.ok(trustedSpawn);

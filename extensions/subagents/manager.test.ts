@@ -166,6 +166,25 @@ test("spawn origin propagates to ids, snapshots, and settlement", async () => {
   });
 });
 
+test("restored session counters continue both id sequences without reuse", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const model = await runTool(
+        runtime,
+        manager.spawn("pi", task("model task")),
+      );
+      const btw = await runTool(
+        runtime,
+        manager.spawn("pi", { ...task("side question"), origin: "btw" }),
+      );
+
+      assert.equal(model.id, "sa-42");
+      assert.equal(btw.id, "btw-8");
+    },
+    { initialModelCounter: 41, initialBtwCounter: 7 },
+  );
+});
+
 test("by-the-way sessions run in their own pool, separate from the model pool", async () => {
   await withManager(async (manager, runtime) => {
     // Fill the entire btw pool.

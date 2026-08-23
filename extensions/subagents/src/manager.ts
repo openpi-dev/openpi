@@ -218,8 +218,8 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     let changeWaiters: Array<() => void> = [];
     const idListeners = new Map<string, Set<() => void>>();
     const cleanups = new Set<Fiber.Fiber<unknown>>();
-    let modelCounter = 0;
-    let btwCounter = 0;
+    let modelCounter = config.initialModelCounter ?? 0;
+    let btwCounter = config.initialBtwCounter ?? 0;
     // Reservations are tracked per pool so the model and user "by the way" asides
     // never contend for the same slots.
     let reservedModel = 0;
@@ -843,6 +843,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
 export interface SubagentManagerConfig {
   /** Test-only override for the first-response watchdog timeout. */
   firstResponseTimeoutMs?: number;
+  /** Session-branch high-water marks restored by the extension host. */
+  initialModelCounter?: number;
+  initialBtwCounter?: number;
 }
 
 export const makeSubagentManagerLayer = (config: SubagentManagerConfig = {}) =>
