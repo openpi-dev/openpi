@@ -810,10 +810,10 @@ export default function (pi: ExtensionAPI) {
       const meta = [details.harness, details.model]
         .filter(Boolean)
         .join(" \u00b7 ");
-      // A spawn launches an agent into the pool: a quiet launch marker, then
-      // the strip's spinner carries the running state from here on.
+      // A spawn launches an agent out of the parent: a quiet outbound arrow,
+      // then the strip's spinner carries the running state from here on.
       return new Text(
-        `${theme.fg("dim", "▸")} ${theme.bold(details.title ?? details.id)} ${theme.fg("dim", meta)}`,
+        `${theme.fg("dim", "↗")} ${theme.bold(details.title ?? details.id)} ${theme.fg("dim", meta)}`,
         0,
         0,
       );
