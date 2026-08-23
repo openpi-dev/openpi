@@ -48,8 +48,31 @@ export function emptyUsage(): AgentUsage {
   };
 }
 
-export type AgentState = "running" | "done" | "error";
-export type WorkflowStatus = "running" | "completed" | "failed" | "aborted";
+export type AgentState = "running" | "done" | "error" | "uncertain";
+export type WorkflowStatus =
+  | "running"
+  | "completed"
+  | "failed"
+  | "aborted"
+  | "uncertain";
+
+export type WorkflowDeliveryState =
+  | "none"
+  | "held-for-inline"
+  | "pending"
+  | "delivered"
+  | "consumed-inline";
+
+/** Durable completion-delivery plane, independent from execution status. */
+export interface WorkflowDelivery {
+  /** Stable per-run idempotency identity, never a transport-batch id. */
+  id: string;
+  state: WorkflowDeliveryState;
+  attempts: number;
+  updatedAt: number;
+  deliveredAt?: number;
+  lastError?: string;
+}
 
 export type TranscriptRole =
   | "user"
@@ -85,6 +108,8 @@ export interface AgentRecord {
   inputCallIds?: string[];
   /** Opaque same-run reference returned to the workflow script. */
   resultRef?: string;
+  /** Run-directory-relative authoritative result captured before projection. */
+  resultArtifact?: string;
   label: string;
   phase?: string;
   state: AgentState;
@@ -125,6 +150,8 @@ export interface WorkflowDetails {
   name?: string;
   description?: string;
   background: boolean;
+  /** Whether this run's terminal result is pending, delivered, or inline. */
+  delivery?: WorkflowDelivery;
   status: WorkflowStatus;
   startedAt: number;
   finishedAt?: number;
@@ -347,6 +374,7 @@ export function stateGlyph(
 ): string {
   if (state === "done") return theme.fg("success", "✓");
   if (state === "error") return theme.fg("error", "✗");
+  if (state === "uncertain") return theme.fg("warning", "?");
   return theme.fg("warning", spinnerFrame(now));
 }
 
@@ -357,6 +385,7 @@ export function statusGlyph(
 ): string {
   if (status === "completed") return theme.fg("success", "✓");
   if (status === "running") return theme.fg("warning", spinnerFrame(now));
+  if (status === "uncertain") return theme.fg("warning", "?");
   return theme.fg("error", "✗");
 }
 
@@ -368,7 +397,7 @@ export function statusColor(
   status: WorkflowStatus,
 ): "success" | "warning" | "error" {
   if (status === "completed") return "success";
-  if (status === "running") return "warning";
+  if (status === "running" || status === "uncertain") return "warning";
   return "error";
 }
 
@@ -431,13 +460,15 @@ export function aggregateUsage(agents: AgentRecord[]): AgentUsage {
 export function countStates(details: WorkflowDetails) {
   let done = 0;
   let failed = 0;
+  let uncertain = 0;
   let running = 0;
   for (const agent of details.agents) {
     if (agent.state === "done") done++;
     else if (agent.state === "error") failed++;
+    else if (agent.state === "uncertain") uncertain++;
     else running++;
   }
-  return { done, failed, running };
+  return { done, failed, uncertain, running };
 }
 
 export interface PhaseGroup {

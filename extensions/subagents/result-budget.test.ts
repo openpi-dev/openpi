@@ -3,7 +3,7 @@ import test from "node:test";
 import {
   allocateResultBudgets,
   type ResultBudgetPolicy,
-} from "./src/result-budget.ts";
+} from "../shared/result-budget.ts";
 
 const policy: ResultBudgetPolicy = {
   maxBatchBytes: 48 * 1024,

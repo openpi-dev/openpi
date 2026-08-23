@@ -165,6 +165,7 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
         status: "running",
         done: 0,
         failed: 0,
+        uncertain: 0,
         total: 0,
       });
     }

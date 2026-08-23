@@ -42,6 +42,7 @@ function cleanLine(value: string) {
 function statusGlyph(status: WorkflowStatus, theme: Theme, now: number) {
   if (status === "completed") return theme.fg("success", "✓");
   if (status === "running") return theme.fg("warning", spinnerFrame(now));
+  if (status === "uncertain") return theme.fg("warning", "?");
   return theme.fg("error", "✗");
 }
 
@@ -80,7 +81,7 @@ export class WorkflowStripWidget {
     const entry = this.getEntry();
     if (!entry || width <= 0) return [];
     const details = entry.details;
-    const { done, failed } = countStates(details);
+    const { done, failed, uncertain } = countStates(details);
     const settled = done + failed;
     const usage = aggregateUsage(details.agents);
     const tokenCount = usage.input + usage.output;
@@ -98,7 +99,7 @@ export class WorkflowStripWidget {
       this.theme,
       [
         details.agents.length > 0
-          ? `${settled}/${details.agents.length} agents`
+          ? `${settled}/${details.agents.length} agents${uncertain ? ` · ${uncertain} uncertain` : ""}`
           : undefined,
         formatElapsed(details.startedAt, details.finishedAt),
         tokenCount > 0 ? `${formatTokens(tokenCount)} tokens` : undefined,

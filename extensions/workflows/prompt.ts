@@ -1,5 +1,10 @@
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
+  allocateResultBudgets,
+  type ParentContextUsage,
+} from "../shared/result-budget.ts";
+import { projectText } from "../shared/text-projection.ts";
+import {
   countStates,
   formatElapsed,
   resultJson,
@@ -7,13 +12,14 @@ import {
   type WorkflowDetails,
 } from "./model.ts";
 
-/** Model-facing schema descriptions for workflow source, arguments, and background mode. */
+/** Model-facing schema descriptions for workflow source and launch policy. */
 export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   script:
     "JavaScript workflow script. May start with `export const meta = {...}`, then use phase(), agent(), parallel(), args, and a final `return`.",
   args: "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
   background:
-    "Run in the background: the tool returns a run id immediately and you receive a follow-up message when the workflow finishes. Defaults to false (blocking with live progress).",
+    "Deprecated compatibility alias: true means wait=false; false means wait=true. Do not provide both background and wait.",
+  wait: "Wait for the final result in this tool call. Interactive sessions default to false and deliver completion later; print/automation defaults to true. Interrupting the wait does not cancel the workflow.",
   resumeFromRunId:
     "Optional prior run id or unique suffix for safe read-only replay. See the workflows Skill for matching rules.",
 };
@@ -29,7 +35,7 @@ export const WORKFLOW_STOP_PARAMETER_DESCRIPTIONS = {
 
 /** Describes nonblocking inspection of workflow runs, mirroring subagent_check/subagent_list. */
 export const WORKFLOW_STATUS_TOOL_DESCRIPTION =
-  "Peek at background workflow runs without blocking. With a run id, returns that run's phases, per-agent status, and result if finished; without one, lists this session's active and recently finished runs. Does not wait — use background:false when you need the result inline.";
+  "Peek at workflow runs without blocking. With a run id, returns a bounded status and coverage summary plus the artifact location; without one, lists this session's active and recently finished runs. Does not wait, consume a completion, or repeat the full final result.";
 
 /** Model-facing schema description for the optional workflow run id to inspect. */
 export const WORKFLOW_STATUS_PARAMETER_DESCRIPTIONS = {
@@ -44,9 +50,11 @@ export const WORKFLOW_LIFECYCLE_PROMPT_SNIPPET =
 /** Compact resident contract; the workflows Skill carries the complete guide. */
 export const WORKFLOW_TOOL_DESCRIPTION = [
   "Use the workflow tool when the user explicitly requests a workflow run or when the task clearly requires multi-phase dynamic orchestration.",
-  "Write an async JavaScript body using optional meta, phase(), log(), usage(), agent(), pipeline(), parallel(), args, and a JSON-serializable return.",
+  "Write an async JavaScript body using optional meta, phase(), log(), usage(), agent(), pipeline(), parallel(), args, and a JSON-serializable return. usage().limits reports the resolved concurrency and remaining call capacity.",
   "agent() returns { ok, output, structured?, ref?, error? }; always check `.ok`, use a schema for branching, and surface failed or null results.",
   "Prefer pipeline() for independent multi-stage items. Use parallel() only for a real barrier where the next step needs every prior result.",
+  "Interactive sessions launch in the background by default and deliver completion later. Set wait: true only when this tool call must return the final result inline.",
+  "Derive fan-out from independent verifiable work items and task difficulty. Concurrency is a runtime ceiling, not a target or the total-call limit; user cost, count, model, and effort constraints take precedence.",
   "For concurrent writers use isolation: 'worktree' and tell each agent to commit. Read-only work should normally stay in the shared checkout.",
   "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, acceptance, result refs, replay, background lifecycle, limits, and examples.",
 ].join("\n");
@@ -80,11 +88,11 @@ export function buildWorkflowResultMessage(
   details: WorkflowDetails,
   runDir: string,
 ) {
-  const { done, failed } = countStates(details);
+  const { done, failed, uncertain } = countStates(details);
   const elapsed = formatElapsed(details.startedAt, details.finishedAt);
   const lines = [
     `Workflow ${details.name ? `"${details.name}"` : details.runId} ${details.status} — ` +
-      `${done}/${details.agents.length} agents ok${failed ? `, ${failed} failed` : ""} ` +
+      `${done}/${details.agents.length} agents ok${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""} ` +
       `across ${details.phases.length} phase(s) in ${elapsed}.`,
     `Run dir: ${shortenHome(runDir)}`,
   ];
@@ -144,7 +152,9 @@ export function buildWorkflowResultMessage(
             : "ok"
           : agent.state === "error"
             ? "FAILED"
-            : "running";
+            : agent.state === "uncertain"
+              ? "UNCERTAIN"
+              : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
           (agent.acceptance ? ` · acceptance ${agent.acceptance.status}` : "") +
@@ -155,6 +165,31 @@ export function buildWorkflowResultMessage(
   if (details.result !== undefined)
     lines.push("", "Result:", resultJson(details.result));
   return sanitizeTerminalText(lines.join("\n"));
+}
+
+/** One bounded model projection; exact run/agent results remain in artifacts. */
+export function buildProjectedWorkflowResultMessage(
+  details: WorkflowDetails,
+  runDir: string,
+  usage?: ParentContextUsage | null,
+) {
+  const full = buildWorkflowResultMessage(details, runDir);
+  const allocation = allocateResultBudgets(
+    [Buffer.byteLength(full, "utf8")],
+    usage,
+    {
+      maxBatchBytes: 48 * 1024,
+      maxResultBytes: 48 * 1024,
+      minResultBytes: 8 * 1024,
+      headroomShare: 0.25,
+      estimatedBytesPerToken: 4,
+    },
+  );
+  return projectText(full, {
+    maxBytes: allocation.budgets[0] ?? 8 * 1024,
+    maxLines: 400,
+    recovery: `Full workflow evidence is available in ${shortenHome(runDir)}.`,
+  });
 }
 
 /** Builds the follow-up message that delivers a settled background workflow to the parent model. */
@@ -170,6 +205,46 @@ export function buildBackgroundWorkflowFollowUp(options: {
   return `Background workflow ${label} (${options.runId}) ${verb}.\n\n${options.result}\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)`;
 }
 
+/** Fairly project one transport batch against the parent's current headroom. */
+export function buildProjectedWorkflowCompletionBatch(
+  entries: readonly {
+    deliveryId: string;
+    details: WorkflowDetails;
+    runDir: string;
+  }[],
+  usage?: ParentContextUsage | null,
+) {
+  const full = entries.map(({ deliveryId, details, runDir }) =>
+    buildBackgroundWorkflowFollowUp({
+      runId: details.runId,
+      name: details.name,
+      status: details.status,
+      result: `${buildWorkflowResultMessage(details, runDir)}\n\nDelivery id: ${deliveryId}`,
+    }),
+  );
+  const separatorBytes = Math.max(0, entries.length - 1) * 2;
+  const allocation = allocateResultBudgets(
+    full.map((message) => Buffer.byteLength(message, "utf8")),
+    usage,
+    {
+      maxBatchBytes: 48 * 1024 - separatorBytes,
+      maxResultBytes: 48 * 1024,
+      minResultBytes: 1024,
+      headroomShare: 0.25,
+      estimatedBytesPerToken: 4,
+    },
+  );
+  return full
+    .map((message, index) =>
+      projectText(message, {
+        maxBytes: allocation.budgets[index] ?? 1024,
+        maxLines: 400,
+        recovery: `Full workflow evidence is available in ${shortenHome(entries[index]!.runDir)}; duplicate deliveries carry the same delivery id.`,
+      }),
+    )
+    .join("\n\n");
+}
+
 /** Builds the background-launch result and tells the parent model how to inspect or stop the run. */
 export function buildBackgroundWorkflowLaunchResult(options: {
   runId: string;
@@ -181,4 +256,25 @@ export function buildBackgroundWorkflowLaunchResult(options: {
     `Artifacts: ${shortenHome(options.runDir)}`,
     `Its result will be delivered to you when it finishes, or use workflow_status(runId: "${options.runId}") to peek and workflow_stop(runId: "${options.runId}") to cancel; /workflows shows progress.`,
   ].join("\n");
+}
+
+/** Pure observation: bounded status/coverage without replaying final output. */
+export function buildWorkflowStatusSummary(
+  details: WorkflowDetails,
+  runDir: string,
+) {
+  const { done, failed, uncertain } = countStates(details);
+  const settled = done + failed;
+  return [
+    `Workflow ${details.name ? `"${details.name}"` : details.runId} ${details.status}.`,
+    details.status === "uncertain"
+      ? "Recovery warning: the prior owner disappeared without terminal evidence; some external effects may have occurred."
+      : undefined,
+    `Coverage: ${settled}/${details.agents.length} agents settled (${done} ok, ${failed} failed)${uncertain ? `; ${uncertain} uncertain` : ""}.`,
+    details.currentPhase ? `Current phase: ${details.currentPhase}` : undefined,
+    details.delivery ? `Delivery: ${details.delivery.state}.` : undefined,
+    `Artifacts: ${shortenHome(runDir)}`,
+  ]
+    .filter(Boolean)
+    .join("\n");
 }

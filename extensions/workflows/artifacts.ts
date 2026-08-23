@@ -11,6 +11,7 @@ import {
 } from "./journal.ts";
 import {
   safeStringify,
+  toSerializable,
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
@@ -98,6 +99,40 @@ export function boundedArtifactTranscript(
 
 function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
+}
+
+/** Persist one successful child result before any handoff/context projection. */
+export function persistWorkflowAgentResult(
+  runDir: string,
+  index: number,
+  result: { output: string; structured?: unknown },
+) {
+  const artifact = path.join(
+    "agent-results",
+    `agent-${String(index).padStart(4, "0")}.json`,
+  );
+  writeRunFile(
+    runDir,
+    artifact,
+    JSON.stringify(
+      toSerializable(
+        {
+          output: result.output,
+          ...(result.structured !== undefined
+            ? { structured: result.structured }
+            : {}),
+        },
+        {
+          maxDepth: 32,
+          maxNodes: 100_000,
+          maxStringBytes: 2 * 1024 * 1024,
+        },
+      ),
+      null,
+      2,
+    ),
+  );
+  return artifact;
 }
 
 export function persistWorkflowJson(

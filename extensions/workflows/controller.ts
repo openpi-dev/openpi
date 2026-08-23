@@ -83,6 +83,7 @@ export class RunController {
   private readonly abortController = new AbortController();
   private readonly semaphore: Semaphore;
   private readonly maxAgentCalls: number;
+  private readonly concurrency: number;
   private readonly tasks = new Set<Promise<unknown>>();
   private callCount = 0;
   private sealed = false;
@@ -95,9 +96,11 @@ export class RunController {
     concurrency = DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls = DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   ) {
-    this.semaphore = new Semaphore(
-      Math.max(1, Math.min(MAX_WORKFLOW_CONCURRENCY, Math.floor(concurrency))),
+    this.concurrency = Math.max(
+      1,
+      Math.min(MAX_WORKFLOW_CONCURRENCY, Math.floor(concurrency)),
     );
+    this.semaphore = new Semaphore(this.concurrency);
     this.maxAgentCalls = Math.max(
       1,
       Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(maxAgentCalls)),
@@ -119,6 +122,15 @@ export class RunController {
 
   get calls() {
     return this.callCount;
+  }
+
+  capacity() {
+    return {
+      concurrency: this.concurrency,
+      maxAgentCalls: this.maxAgentCalls,
+      callsUsed: this.callCount,
+      callsRemaining: Math.max(0, this.maxAgentCalls - this.callCount),
+    };
   }
 
   schedule<T>(

@@ -33,8 +33,8 @@ export const OPENPI_TOOL_SURFACE = {
     deferred: [],
   },
   workflows: {
-    entry: ["workflow"],
-    deferred: ["workflow_stop", "workflow_status"],
+    entry: ["workflow", "workflow_stop", "workflow_status"],
+    deferred: [],
   },
   background: {
     entry: ["bg_start"],

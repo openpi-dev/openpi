@@ -261,7 +261,7 @@ return agent("Synthesize the verified findings", {
 | ------------ | -------------------------------------------------------------------------- |
 | `phase()`    | 标记当前阶段                                                               |
 | `log()`      | 向实时界面与最终报告追加一行进度                                           |
-| `usage()`    | 读取累计 Token、缓存与成本的单调 lower bound；不是预算器                   |
+| `usage()`    | 读取累计 Token、缓存、成本及本轮并发/调用余量；Token 是 lower bound，不是预算器 |
 | `agent()`    | 启动 Pi Agent；支持 role、schema、acceptance、inputs、operator 与 worktree |
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
@@ -524,7 +524,7 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 | `openpi_load_tools`                                                                                      | 列出或加载可选工具组           | 明确询问；或启用 `adaptive`      |
 | `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期               | 明确意图或 adaptive；启动后展开  |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                   | 明确意图或 adaptive；整组稳定加载 |
-| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | 明确意图或 adaptive；运行后展开  |
+| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | 明确意图或 adaptive；能力组一次稳定展开 |
 | `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                 | 明确意图或 adaptive；存在后展开  |
 | `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                   | 明确意图或 adaptive；存在后展开  |
 | `context_pivot`                                                                                          | Context 阶段切换               | Context 达到阈值时               |

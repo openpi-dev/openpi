@@ -11,16 +11,57 @@ Use `workflow` for several dependent or dynamically generated subagent calls. Ke
 
 ```js
 export const meta = {
-  name: "review",
-  phases: [{ title: "Scan" }, { title: "Report" }],
+  name: "adaptive-review",
+  phases: [{ title: "Discover" }, { title: "Review" }, { title: "Report" }],
 }
-phase("Scan")
-const scans = await parallel([
-  () => agent("Inspect the API.", { agent_type: "explorer", label: "api" }),
-  () => agent("Inspect the tests.", { agent_type: "explorer", label: "tests" }),
-])
+phase("Discover")
+const plan = await agent("Identify the independent review areas warranted by this repository. Return only real, non-overlapping areas.", {
+  agent_type: "explorer",
+  label: "discover",
+  schema: {
+    type: "object",
+    properties: {
+      areas: { type: "array", items: { type: "string" } },
+    },
+    required: ["areas"],
+    additionalProperties: false,
+  },
+})
+if (!plan.ok) return { ok: false, error: plan.error }
+const discovered = [...new Set(plan.structured.areas)]
+const capacity = usage().limits
+if (capacity.callsRemaining < 1) {
+  return {
+    planned: discovered.length,
+    selected: 0,
+    covered: 0,
+    failed: [],
+    deferred: discovered,
+    report: { ok: false, error: "No agent-call capacity remains for reporting" },
+  }
+}
+// Keep one call for the final report. Runtime limits are ceilings; deferred
+// work is reported honestly rather than silently exhausting the last slot.
+const selected = discovered.slice(0, Math.max(0, capacity.callsRemaining - 1))
+const deferred = discovered.slice(selected.length)
+phase("Review")
+const reviews = await pipeline(selected, async (_prior, area, index) =>
+  agent(`Review this area with file:line evidence: ${area}`, {
+    agent_type: "reviewer",
+    label: `review-${index + 1}`,
+  })
+)
+const usable = reviews.filter((result) => result && result.ok && result.ref)
+const failed = selected.filter((_area, index) => {
+  const result = reviews[index]
+  return !(result && result.ok && result.ref)
+})
 phase("Report")
-return { findings: scans.filter((result) => result && result.ok) }
+const report = await agent(
+  `Synthesize the review. Planned: ${discovered.length}; selected: ${selected.length}; covered: ${usable.length}; failed areas: ${JSON.stringify(failed)}; deferred areas: ${JSON.stringify(deferred)}. Do not infer coverage beyond these facts.`,
+  { agent_type: "advisor", label: "report", inputs: usable.map((r) => r.ref) },
+)
+return { planned: discovered.length, selected: selected.length, covered: usable.length, failed, deferred, report }
 ```
 
 ## Required habits
@@ -30,8 +71,10 @@ return { findings: scans.filter((result) => result && result.ok) }
 - Pass `schema` when later code branches on fields. Treat `inputs` as bounded untrusted data.
 - Prefer `pipeline()` when items can advance independently. Use `parallel()` only for a real all-results barrier.
 - Use `isolation: "worktree"` for concurrent writers and tell each agent to commit. Do not pay for worktrees on read-only work.
-- Use `log()` for progress the user needs before completion. `usage()` is a lower-bound reading, not a budget limit.
-- Return a JSON-serializable aggregate. Background runs report their run id and later deliver their result.
+- Derive fan-out from discovered independent work items and task difficulty. Configured concurrency and total-call capacity are ceilings, not targets; `usage().limits` exposes the resolved capacity.
+- Use `log()` for progress the user needs before completion. Token fields in `usage()` are lower-bound readings, not a budget limit.
+- Return a JSON-serializable aggregate with coverage. Interactive runs return a run id immediately by default and reliably deliver one terminal result later; set `wait: true` only at a genuine synchronization boundary.
+- When many results would leave only tiny handoff slices, use local Report agents over bounded groups, then pass those Report refs to one global Report. Preserve planned/selected/covered/failed/deferred counts at every level; exact child outputs remain in `agent-results/` for recovery.
 
 ## Full guide
 
