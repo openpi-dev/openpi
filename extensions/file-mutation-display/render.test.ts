@@ -162,6 +162,7 @@ function renderCollapsed(
   result?: AgentToolResult<any>,
   isError = false,
   width = 120,
+  renderTheme = theme,
 ) {
   const state = {};
   const context = {
@@ -178,14 +179,14 @@ function renderCollapsed(
     showImages: false,
     isError,
   };
-  const call = definition.renderCall?.(args, theme, context);
+  const call = definition.renderCall?.(args, renderTheme, context);
   assert.ok(call);
   let resultComponent: Component | undefined;
   if (result) {
     resultComponent = definition.renderResult?.(
       result,
       { expanded: false, isPartial: false },
-      theme,
+      renderTheme,
       { ...context, isPartial: false, isError },
     );
   }
@@ -193,6 +194,21 @@ function renderCollapsed(
     ...call.render(width),
     ...(resultComponent?.render(width) ?? []),
   ].filter((line) => line.trim().length > 0);
+}
+
+function recordingTheme(calls: Array<[string, string]>) {
+  return new Proxy(
+    {},
+    {
+      get: (_target, property) =>
+        property === "fg" || property === "bg"
+          ? (color: string, text: string) => {
+              calls.push([color, text]);
+              return text;
+            }
+          : (text: string) => text,
+    },
+  ) as Theme;
 }
 
 test("all activity tools render one semantic success row", () => {
@@ -204,6 +220,58 @@ test("all activity tools render one semantic success row", () => {
     assert.ok(lines[0]?.startsWith("  "), fixture.name);
     assert.ok(lines[0]?.endsWith("  "), fixture.name);
     assert.match(lines[0] ?? "", fixture.success, fixture.name);
+  }
+});
+
+test("completed targets are muted without weakening pending or failed targets", () => {
+  const definition = withActivityRenderer(createBashToolDefinition(cwd));
+  const args = { command: "bun run check" };
+
+  const successColors: Array<[string, string]> = [];
+  renderCollapsed(
+    definition,
+    args,
+    { content: [{ type: "text", text: "ok" }], details: undefined },
+    false,
+    120,
+    recordingTheme(successColors),
+  );
+  assert.ok(
+    successColors.some(
+      ([color, text]) => color === "muted" && text === args.command,
+    ),
+  );
+
+  const cases: Array<{
+    label: string;
+    result?: AgentToolResult<any>;
+    isError: boolean;
+  }> = [
+    { label: "pending", isError: false },
+    {
+      label: "failed",
+      result: {
+        content: [{ type: "text", text: "failed" }],
+        details: undefined,
+      },
+      isError: true,
+    },
+  ];
+  for (const { label, result, isError } of cases) {
+    const calls: Array<[string, string]> = [];
+    renderCollapsed(
+      definition,
+      args,
+      result,
+      isError,
+      120,
+      recordingTheme(calls),
+    );
+    assert.equal(
+      calls.some(([color, text]) => color === "muted" && text === args.command),
+      false,
+      label,
+    );
   }
 });
 

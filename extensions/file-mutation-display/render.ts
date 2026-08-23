@@ -248,7 +248,11 @@ function activityText(
         : row.verb
   ).padEnd(8);
   const verb = theme.fg(
-    state.status === "error" ? "error" : "toolTitle",
+    state.status === "error"
+      ? "error"
+      : state.status === "success"
+        ? "muted"
+        : "toolTitle",
     verbText,
   );
   if (state.status === "pending") {
@@ -274,7 +278,7 @@ function activityText(
   }
   if (elapsed) parts.push(theme.fg("dim", elapsed));
   const detail = parts.join(theme.fg("dim", " · "));
-  return `${theme.fg("dim", activityIcon(name))} ${verb} ${row.target}${detail ? `  ${detail}` : ""}`;
+  return `${theme.fg("dim", activityIcon(name))} ${verb} ${theme.fg("muted", row.target)}${detail ? `  ${detail}` : ""}`;
 }
 
 function activityComponent(
