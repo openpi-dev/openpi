@@ -46,7 +46,6 @@ import {
   Spacer,
   Text,
   truncateToWidth,
-  visibleWidth,
 } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
@@ -56,7 +55,9 @@ import {
   registerEditorLayer,
   removeEditorLayer,
 } from "../shared/editor-layers.ts";
+import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
+import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -224,18 +225,6 @@ function runHeader(
   return { left, right };
 }
 
-/** Compose `left ... right` within `width`, truncating left when needed. */
-function splitRow(left: string, right: string, width: number): string {
-  if (!right) return truncateToWidth(left, width, "…");
-  const rightWidth = visibleWidth(right);
-  let text = left;
-  if (visibleWidth(text) + rightWidth + 1 > width) {
-    text = truncateToWidth(text, Math.max(0, width - rightWidth - 2), "…");
-  }
-  const pad = Math.max(1, width - visibleWidth(text) - rightWidth);
-  return text + " ".repeat(pad) + right;
-}
-
 /**
  * Collapsed workflow card, rebuilt per repaint. Metrics right-align like the
  * below-editor strip, and each agent row carries one number only: context
@@ -249,9 +238,9 @@ function buildCollapsedRows(
   width: number,
   now: number,
   totals: string,
-): string[] {
+) {
   const header = runHeader(details, theme, now);
-  const rows = [splitRow(header.left, header.right, width)];
+  const rows = [fitNavigationSides(header.left, header.right, width)];
   const collapsedAgents = details.agents.slice(0, 8);
   for (const agent of collapsedAgents) {
     const percent = contextPercent({
@@ -270,7 +259,7 @@ function buildCollapsedRows(
     )}`;
     rows.push(
       stat
-        ? splitRow(left, theme.fg("dim", stat), width)
+        ? fitNavigationSides(left, theme.fg("dim", stat), width)
         : truncateToWidth(left, width, "…"),
     );
   }
@@ -318,6 +307,164 @@ function buildCollapsedRows(
     );
   }
   return rows;
+}
+
+function buildExpandedWorkflow(
+  details: WorkflowDetails,
+  theme: Parameters<typeof statusGlyph>[1],
+  now: number,
+  totals: string,
+) {
+  const header = runHeader(details, theme, now);
+  const container = new Container();
+  container.addChild(
+    new Text(
+      header.right ? `${header.left} ${header.right}` : header.left,
+      0,
+      0,
+    ),
+  );
+  if (details.description) {
+    container.addChild(
+      new Text(
+        theme.fg("dim", sanitizeWorkflowDisplayLine(details.description)),
+        0,
+        0,
+      ),
+    );
+  }
+
+  for (const group of phaseGroups(details)) {
+    container.addChild(new Spacer(1));
+    container.addChild(
+      new Text(
+        theme.fg(
+          "muted",
+          `─── ${sanitizeWorkflowDisplayLine(group.title)} ───`,
+        ),
+        0,
+        0,
+      ),
+    );
+    for (const agent of group.agents) {
+      const usage = formatUsage(agent.usage, agent.model);
+      const context = agentContext(agent);
+      let line = `${stateGlyph(agent.state, theme, now)} ${theme.fg(
+        "accent",
+        sanitizeWorkflowDisplayLine(agent.label),
+      )} ${theme.fg(
+        "dim",
+        [context, formatElapsed(agent.startedAt, agent.finishedAt)]
+          .filter(Boolean)
+          .join(" · "),
+      )}`;
+      if (usage)
+        line += ` ${theme.fg("dim", sanitizeWorkflowDisplayLine(usage))}`;
+      container.addChild(new Text(line, 0, 0));
+      if (agent.error) {
+        container.addChild(
+          new Text(
+            `  ${theme.fg("error", sanitizeWorkflowDisplayLine(agent.error))}`,
+            0,
+            0,
+          ),
+        );
+      } else if (agent.preview) {
+        const preview = sanitizeWorkflowDisplayText(
+          agent.preview,
+          PREVIEW_LENGTH,
+        )
+          .split("\n")
+          .slice(0, 2)
+          .join(" ");
+        container.addChild(new Text(`  ${theme.fg("dim", preview)}`, 0, 0));
+      }
+    }
+  }
+
+  if (details.logs && details.logs.length > 0) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "─── log ───"), 0, 0));
+    if (details.logsDropped) {
+      container.addChild(
+        new Text(
+          theme.fg("dim", `(${details.logsDropped} earlier line(s) dropped)`),
+          0,
+          0,
+        ),
+      );
+    }
+    for (const entry of details.logs) {
+      container.addChild(
+        new Text(
+          `${theme.fg("muted", "›")} ${theme.fg(
+            "dim",
+            sanitizeWorkflowDisplayLine(entry.text),
+          )}`,
+          0,
+          0,
+        ),
+      );
+    }
+  }
+
+  if (details.error) {
+    container.addChild(new Spacer(1));
+    container.addChild(
+      new Text(
+        theme.fg(
+          "error",
+          `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
+        ),
+        0,
+        0,
+      ),
+    );
+  }
+
+  if (details.result !== undefined) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("muted", "─── result ───"), 0, 0));
+    container.addChild(
+      new Markdown(
+        `\`\`\`json\n${resultJson(details.result)}\n\`\`\``,
+        0,
+        0,
+        getMarkdownTheme(),
+      ),
+    );
+  }
+
+  if (totals) {
+    container.addChild(new Spacer(1));
+    container.addChild(new Text(theme.fg("dim", `Total: ${totals}`), 0, 0));
+  }
+  return container;
+}
+
+interface WorkflowRenderState {
+  spinnerTimer?: ReturnType<typeof setInterval>;
+}
+
+function syncWorkflowSpinner(
+  state: WorkflowRenderState,
+  isRunning: () => boolean,
+  invalidate: () => void,
+) {
+  if (!isRunning()) {
+    if (state.spinnerTimer) clearInterval(state.spinnerTimer);
+    state.spinnerTimer = undefined;
+    return;
+  }
+  if (state.spinnerTimer) return;
+  state.spinnerTimer = setInterval(() => {
+    if (!isRunning() && state.spinnerTimer) {
+      clearInterval(state.spinnerTimer);
+      state.spinnerTimer = undefined;
+    }
+    invalidate();
+  }, SPINNER_INTERVAL_MS);
+  state.spinnerTimer.unref?.();
 }
 
 /**
@@ -1878,7 +2025,7 @@ export default function workflows(pi: ExtensionAPI) {
       return new Text(text, 0, 0);
     },
 
-    renderResult(result, { expanded }, theme) {
+    renderResult(result, { expanded, isPartial }, theme, context) {
       const details = result.details as WorkflowDetails | undefined;
       if (!details) {
         const first = result.content[0];
@@ -1888,146 +2035,40 @@ export default function workflows(pi: ExtensionAPI) {
           0,
         );
       }
+      const currentDetails = () =>
+        activeRuns.get(details.runId)?.details ??
+        settledRuns.get(details.runId) ??
+        details;
+      syncWorkflowSpinner(
+        context.state as WorkflowRenderState,
+        () =>
+          currentDetails().status === "running" &&
+          (isPartial || activeRuns.has(details.runId)),
+        context.invalidate,
+      );
 
-      const totals = formatUsage(aggregateUsage(details.agents));
-
-      if (!expanded) {
-        // Rebuilt on every repaint: the spinner frame and the clocks advance
-        // with the host's render cadence instead of freezing between events.
-        return {
-          render: (width: number) =>
-            buildCollapsedRows(details, theme, width, Date.now(), totals),
-          invalidate() {},
-        };
-      }
-
-      const headerParts = runHeader(details, theme, Date.now());
-      const now = Date.now();
-      const header = headerParts.right
-        ? `${headerParts.left} ${headerParts.right}`
-        : headerParts.left;
-
-      const container = new Container();
-      container.addChild(new Text(header, 0, 0));
-      if (details.description) {
-        container.addChild(
-          new Text(
-            theme.fg("dim", sanitizeWorkflowDisplayLine(details.description)),
-            0,
-            0,
-          ),
-        );
-      }
-
-      for (const group of phaseGroups(details)) {
-        container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(
-            theme.fg(
-              "muted",
-              `─── ${sanitizeWorkflowDisplayLine(group.title)} ───`,
-            ),
-            0,
-            0,
-          ),
-        );
-        for (const agent of group.agents) {
-          const usage = formatUsage(agent.usage, agent.model);
-          const context = agentContext(agent);
-          let line = `${stateGlyph(agent.state, theme, now)} ${theme.fg(
-            "accent",
-            sanitizeWorkflowDisplayLine(agent.label),
-          )} ${theme.fg(
-            "dim",
-            [context, formatElapsed(agent.startedAt, agent.finishedAt)]
-              .filter(Boolean)
-              .join(" · "),
-          )}`;
-          if (usage)
-            line += ` ${theme.fg("dim", sanitizeWorkflowDisplayLine(usage))}`;
-          container.addChild(new Text(line, 0, 0));
-          if (agent.error) {
-            container.addChild(
-              new Text(
-                `  ${theme.fg("error", sanitizeWorkflowDisplayLine(agent.error))}`,
-                0,
-                0,
-              ),
+      return {
+        render(width: number) {
+          const current = currentDetails();
+          const totals = formatUsage(aggregateUsage(current.agents));
+          if (!expanded) {
+            return buildCollapsedRows(
+              current,
+              theme,
+              width,
+              Date.now(),
+              totals,
             );
-          } else if (agent.preview) {
-            const preview = sanitizeWorkflowDisplayText(
-              agent.preview,
-              PREVIEW_LENGTH,
-            )
-              .split("\n")
-              .slice(0, 2)
-              .join(" ");
-            container.addChild(new Text(`  ${theme.fg("dim", preview)}`, 0, 0));
           }
-        }
-      }
-
-      if (details.logs && details.logs.length > 0) {
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("muted", "─── log ───"), 0, 0));
-        if (details.logsDropped) {
-          container.addChild(
-            new Text(
-              theme.fg(
-                "dim",
-                `(${details.logsDropped} earlier line(s) dropped)`,
-              ),
-              0,
-              0,
-            ),
-          );
-        }
-        for (const entry of details.logs) {
-          container.addChild(
-            new Text(
-              `${theme.fg("muted", "›")} ${theme.fg(
-                "dim",
-                sanitizeWorkflowDisplayLine(entry.text),
-              )}`,
-              0,
-              0,
-            ),
-          );
-        }
-      }
-
-      if (details.error) {
-        container.addChild(new Spacer(1));
-        container.addChild(
-          new Text(
-            theme.fg(
-              "error",
-              `Error: ${sanitizeWorkflowDisplayLine(details.error)}`,
-            ),
-            0,
-            0,
-          ),
-        );
-      }
-
-      if (details.result !== undefined) {
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("muted", "─── result ───"), 0, 0));
-        container.addChild(
-          new Markdown(
-            `\`\`\`json\n${resultJson(details.result)}\n\`\`\``,
-            0,
-            0,
-            getMarkdownTheme(),
-          ),
-        );
-      }
-
-      if (totals) {
-        container.addChild(new Spacer(1));
-        container.addChild(new Text(theme.fg("dim", `Total: ${totals}`), 0, 0));
-      }
-      return container;
+          return buildExpandedWorkflow(
+            current,
+            theme,
+            Date.now(),
+            totals,
+          ).render(width);
+        },
+        invalidate() {},
+      };
     },
   });
 
@@ -2167,17 +2208,10 @@ export default function workflows(pi: ExtensionAPI) {
               .join("") ?? "");
       const safeBody = sanitizeWorkflowDisplayText(body);
       if (!details) return new Text(safeBody, 0, 0);
-      const { done, failed } = countStates(details);
-      const settled = done + failed;
-      let header =
-        `${statusGlyph(details.status, theme, Date.now())} ${theme.fg("toolTitle", theme.bold("workflow "))}` +
-        `${theme.fg(
-          "accent",
-          sanitizeWorkflowDisplayLine(details.name ?? details.runId),
-        )} ` +
-        theme.fg("dim", `${settled}/${details.agents.length} agents · `) +
-        theme.fg(statusColor(details.status), statusWord(details.status));
-      if (failed) header += theme.fg("error", ` · ${failed} failed`);
+      const headerParts = runHeader(details, theme, Date.now());
+      const header = headerParts.right
+        ? `${headerParts.left} ${headerParts.right}`
+        : headerParts.left;
       if (expanded) return new Text(`${header}\n\n${safeBody}`, 0, 0);
       const preview = safeBody.split("\n").slice(0, 8).join("\n");
       return new Text(

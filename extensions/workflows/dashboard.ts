@@ -23,17 +23,17 @@ import {
   matchesKey,
   type TUI,
   truncateToWidth,
-  visibleWidth,
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { contextPercent } from "../shared/context-utilization.ts";
+import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import {
   panelFrame,
   type ScreenHint,
   screenTitleLine,
   hintLine as sharedHintLine,
 } from "../shared/screen-chrome.ts";
-import { spinnerFrame } from "../shared/spinner.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
@@ -672,7 +672,7 @@ export class WorkflowDashboard {
         this.refresh();
         this.tui.requestRender();
       }
-    }, 500);
+    }, SPINNER_INTERVAL_MS);
   }
 
   dispose() {
@@ -908,17 +908,6 @@ export class WorkflowDashboard {
     return lines.map((line) => truncateToWidth(line, width, ""));
   }
 
-  /** Compose `left ... right` within `width`, truncating left when needed. */
-  private split(left: string, right: string, width: number): string {
-    const rightWidth = visibleWidth(right);
-    let text = left;
-    if (visibleWidth(text) + rightWidth + 1 > width) {
-      text = truncateToWidth(text, Math.max(0, width - rightWidth - 2), "…");
-    }
-    const pad = Math.max(1, width - visibleWidth(text) - rightWidth);
-    return text + " ".repeat(pad) + right;
-  }
-
   /** Bordered panel with a title in the top border, padded to exact height. */
   private panel(
     title: string,
@@ -1005,7 +994,7 @@ export class WorkflowDashboard {
         theme.fg(statusColor(d.status), statusWord(d.status)) +
         " ";
       const left = ` ${marker} ${statusGlyph(d.status, theme, Date.now())} ${label} ${theme.fg("dim", d.runId)}`;
-      return this.split(left, right, width - 2);
+      return fitNavigationSides(left, right, width - 2);
     });
     lines.push(...this.panel("Runs", rows, width, panelHeight));
     lines.push(
@@ -1048,7 +1037,7 @@ export class WorkflowDashboard {
           theme.fg(statusColor(d.status), statusWord(d.status)) +
           " ");
     lines.push(
-      this.split(
+      fitNavigationSides(
         ` ${statusGlyph(d.status, theme, Date.now())} ${theme.bold(theme.fg("accent", d.name ?? d.runId))}`,
         right,
         width,
@@ -1063,7 +1052,7 @@ export class WorkflowDashboard {
     const subRight = [graphSummary, totals].filter(Boolean).join(" · ");
     const subLeft = " " + theme.fg("muted", d.description ?? d.runId);
     lines.push(
-      this.split(
+      fitNavigationSides(
         subLeft,
         subRight ? theme.fg("dim", `${subRight} `) : " ",
         width,
@@ -1109,7 +1098,11 @@ export class WorkflowDashboard {
         group.agents.length > 0
           ? theme.fg("dim", `${groupDone}/${group.agents.length} `)
           : theme.fg("dim", "- ");
-      return this.split(` ${marker} ${square} ${title}`, counts, sidebarInner);
+      return fitNavigationSides(
+        ` ${marker} ${square} ${title}`,
+        counts,
+        sidebarInner,
+      );
     });
 
     // Right: agents in the selected phase.
@@ -1164,7 +1157,7 @@ export class WorkflowDashboard {
           "dim",
           `${formatElapsed(agent.startedAt, agent.finishedAt)} `,
         );
-        agentRows.push(this.split(left, right, agentsInner));
+        agentRows.push(fitNavigationSides(left, right, agentsInner));
         if (agent.error) {
           agentRows.push(
             truncateToWidth(
@@ -1315,14 +1308,14 @@ export class WorkflowDashboard {
         .join(" · ") + " ",
     );
     lines.push(
-      this.split(
+      fitNavigationSides(
         ` ${stateGlyph(agent.state, theme, Date.now())} ${theme.bold(theme.fg("accent", agent.label))}`,
         right,
         width,
       ),
     );
     lines.push(
-      this.split(
+      fitNavigationSides(
         ` ${theme.fg("muted", `${details.name ?? details.runId} · ${agent.phase ?? "unphased"}`)}`,
         theme.fg("dim", `${agent.transcript.length} entries `),
         width,
@@ -1365,7 +1358,7 @@ export class WorkflowDashboard {
  * (`429: {"message":"user rate limit exceeded …"}`); the panel row keeps the
  * status code and the message, dropping the braces and quotes.
  */
-function displayError(error: string): string {
+function displayError(error: string) {
   const clean = sanitizeLine(error, 2_000);
   const match = clean.match(/^(\d{3})[:\s]*\{\s*"message"\s*:\s*"([^"]+)"/);
   if (match) return `${match[1]}: ${match[2]}`;
@@ -1384,8 +1377,8 @@ function transcriptLabel(entry: TranscriptEntry): string {
  * Tool arguments arrive pretty-printed over many lines; the transcript shows
  * them inline. Non-JSON text passes through flattened.
  */
-function compactInlineJson(text: string): string {
-  const flat = text.trim();
+function compactInlineJson(text: string) {
+  const flat = sanitizeTerminalText(text).trim();
   if (!flat) return "";
   try {
     return JSON.stringify(JSON.parse(flat));
@@ -1405,7 +1398,7 @@ function transcriptColor(
   return "muted";
 }
 
-function groupGlyph(group: PhaseGroup, theme: Theme): string {
+function groupGlyph(group: PhaseGroup, theme: Theme) {
   if (group.agents.length === 0) return theme.fg("dim", "○");
   if (group.agents.some((a) => a.state === "running"))
     return theme.fg("warning", spinnerFrame(Date.now()));
@@ -1421,10 +1414,10 @@ export async function showWorkflowDashboard(
   initialRunId?: string,
   startedSince = 0,
   onAbort?: (runId: string) => boolean,
-): Promise<void> {
+) {
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
-      const dashboard: WorkflowDashboard = new WorkflowDashboard(
+      const dashboard = new WorkflowDashboard(
         tui,
         theme,
         keybindings,

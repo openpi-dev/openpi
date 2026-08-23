@@ -13,6 +13,7 @@ import test from "node:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Theme, WorkflowDetails } from "./model.ts";
+import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
 
 // runsDir() resolves against getAgentDir(), which reads this env var.
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-workflows-"));
@@ -305,7 +306,14 @@ test("direct workflow navigation drills right and returns left through every lev
           cost: 0,
           turns: 1,
         },
-        transcript: [{ role: "user", text: "Write the draft" }],
+        transcript: [
+          { role: "user", text: "Write the draft" },
+          {
+            role: "tool",
+            name: "bash",
+            text: '{"command":"git status\u001b]52;c;clipboard\u0007"}',
+          },
+        ],
       },
     ],
   };
@@ -348,7 +356,10 @@ test("direct workflow navigation drills right and returns left through every lev
     assert.match(dashboard.render(120).at(-1) ?? "", /select agent/);
 
     dashboard.handleInput("right");
-    assert.match(dashboard.render(120).join("\n"), /Transcript/);
+    const transcript = dashboard.render(120).join("\n");
+    assert.match(transcript, /Transcript/);
+    assert.match(transcript, /git status/);
+    assert.doesNotMatch(transcript, /clipboard|\u001b/);
 
     dashboard.handleInput("left");
     assert.match(dashboard.render(120).at(-1) ?? "", /select agent/);
@@ -358,6 +369,51 @@ test("direct workflow navigation drills right and returns left through every lev
 
     dashboard.handleInput("left");
     assert.equal(closed, 1);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
+test("live workflow dashboard repaints on the shared spinner cadence", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  writeRun("wf_123abc", Date.now());
+  const details: WorkflowDetails = {
+    runId: "wf_123abc",
+    sessionId: SESSION,
+    name: "spinner",
+    status: "running",
+    background: false,
+    startedAt: Date.now(),
+    phases: [],
+    agents: [],
+  };
+  let renders = 0;
+  const dashboard = new WorkflowDashboard(
+    {
+      terminal: { rows: 30 },
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches: () => false,
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => new Map([[details.runId, details]]),
+    SESSION,
+    new Set(),
+    0,
+    () => {},
+  );
+  try {
+    t.mock.timers.tick(SPINNER_INTERVAL_MS - 1);
+    assert.equal(renders, 0);
+    t.mock.timers.tick(1);
+    assert.equal(renders, 1);
   } finally {
     dashboard.dispose();
   }
