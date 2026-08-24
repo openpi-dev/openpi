@@ -86,6 +86,11 @@ test("highlights capability names only when shared intent authorizes them", () =
     "用 <accent>Subagent</accent> 检查，再用 <accent>Workflow</accent> 汇总",
   ]);
 
+  const leadingChinese = editor("子代理了解下项目");
+  assert.deepEqual(leadingChinese.highlighted.render(120), [
+    "<accent>子代理</accent>了解下项目",
+  ]);
+
   const named = editor("Subagent 和 Workflow 有什么区别？");
   assert.deepEqual(named.highlighted.render(120), [
     "<accent>Subagent</accent> 和 <accent>Workflow</accent> 有什么区别？",
@@ -95,6 +100,9 @@ test("highlights capability names only when shared intent authorizes them", () =
   assert.deepEqual(negated.highlighted.render(120), [
     "不要用 Subagent，也不要用 Workflow",
   ]);
+
+  const discussion = editor("子代理是什么？");
+  assert.deepEqual(discussion.highlighted.render(120), ["子代理是什么？"]);
 });
 
 test("supports English plurals and Chinese capability names", () => {

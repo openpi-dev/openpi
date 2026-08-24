@@ -7,7 +7,7 @@ const CAPABILITY_INTENT = {
   search:
     /\b(?:use|run)\s+(?:fd|rg)\b|\buse\s+(?:structured\s+)?(?:(?:file|code|content)\s+)?search\b|\b(?:structured|fast)\s+(?:file|code|content)\s+search\b|(?:使用|用|运行).{0,8}(?:fd|rg|git\s+(?:show|diff|log))|结构化(?:文件|代码|内容)搜索/iu,
   delegate:
-    /\bsubagents?\b|(?:^|[.!?]\s+)(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\bparallel\s+agents?\b|(?:使用|用|启动|调用|来|开).{0,8}子代理|(?:多个?|多路)子代理|并行.{0,8}(?:代理|agent)|委派.{0,6}(?:任务|给|出去)/iu,
+    /\bsubagents?\b|(?:^|[.!?]\s+)(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\b(?:can|could|would)\s+you\s+(?:please\s+)?(?:delegate|parallelize)\s+(?:this|the)\s+(?:task|work)\b|\bparallel\s+agents?\b|^\s*子代理\s*[,，:：]?\s*(?:(?:来|去|请|帮(?:我|忙)?|负责|给我)\s*)?(?:(?:先|全面|系统(?:性地)?|深入|快速|仔细)\s*)?(?:了解|查看|检查|审查|分析|研究|调研|梳理|探索|实现|修复|处理|执行|完成|阅读|总结)|(?:使用|用|启动|调用|来|开).{0,8}子代理|(?:多个?|多路)子代理|并行.{0,8}(?:代理|agent)|委派.{0,6}(?:任务|给|出去)/iu,
   workflow: /\bworkflows?\b|(?:使用|用|运行|创建|构建).{0,8}工作流/iu,
   background:
     /\b(?:run|start|keep)\b.{0,40}\b(?:in the background|background\s+(?:process|terminal|job))\b|后台.{0,8}(?:运行|启动|进程|终端|任务)/iu,

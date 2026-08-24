@@ -254,6 +254,7 @@ test("reserved capability words load their groups without action verbs", () => {
 test("common Chinese and multi-agent delegation requests are explicit intent", () => {
   for (const prompt of [
     "来多子代理一起讨论",
+    "子代理了解下项目",
     "Use multiple subagents.",
     "用 Subagent 检查这个实现",
   ]) {
@@ -280,6 +281,7 @@ test("the README quick-start example and its advertised phrases load capabilitie
   // Every phrase the README TIP advertises as a trigger must actually match.
   const advertised: Array<[string, string]> = [
     ["在后台运行 dev server", "bg_start"],
+    ["子代理了解下项目", "subagent_spawn"],
     ["用子代理检查", "subagent_spawn"],
     ["使用子代理检查", "subagent_spawn"],
     ["用工作流编排", "workflow"],
@@ -325,6 +327,8 @@ test("conditional or negated capability boilerplate does not widen the tool surf
     "如果需要，请使用子代理。",
     "不要使用子代理。",
     "不能使用子代理。",
+    "子代理是什么？",
+    "子代理的设计有哪些取舍？",
     "Do not use OpenPI tools.",
   ]) {
     const h = harness();
