@@ -120,8 +120,8 @@ test("renders only selected footer items", () => {
 
   assert.deepEqual(content, {
     showCwd: false,
-    model: "✦ seal/gpt-5.6-sol",
-    usage: "◑ 25%/1.0m · cache 82%",
+    model: "\uec10 seal/gpt-5.6-sol",
+    usage: "\uebe4 25%/1.0m · cache 82%",
     git: "",
   });
 });

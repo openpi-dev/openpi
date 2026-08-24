@@ -28,6 +28,9 @@ const ESCAPE_PATTERN = /\u001b(?:[()][0-2A-Z]|[ -/]*[@-~])/g;
 
 const RESET = "\x1b[0m";
 const POWERLINE_ARROW = "\ue0b0"; //  — decorative; text remains readable without Nerd Font
+const MODEL_ICON = "\uec10"; // Codicon: sparkle
+const CONTEXT_ICON = "\uebe4"; // Codicon: pie-chart
+const DIRECTORY_ICON = "\uea83"; // Codicon: folder
 
 /** Higher = keep longer when the line is too narrow. */
 const PRIORITY: Record<FooterItem, number> = {
@@ -150,18 +153,6 @@ function defaultPullRequest(number: number, url: string) {
 }
 
 /**
- * Small Unicode icons for footer metrics — no Nerd Font required, and every
- * glyph stays a single cell wide (📁 is the one emoji, measured at width 2).
- */
-function contextGauge(percent: number | null) {
-  if (percent === null) return "○";
-  if (percent < 25) return "◔";
-  if (percent < 50) return "◑";
-  if (percent < 75) return "◕";
-  return "●";
-}
-
-/**
  * Build the value catalog for every FooterItem. Empty text means "not available
  * right now" and the segment is omitted from the line.
  */
@@ -189,13 +180,11 @@ export function buildSegmentCatalog(
     : modelInfo.modelId;
 
   return {
-    cwd: { text: `📁 ${formatDirectory(cwd)}`, tone: "text" },
-    model: { text: `✦ ${modelText}`, tone: "muted" },
+    cwd: { text: `${DIRECTORY_ICON} ${formatDirectory(cwd)}`, tone: "text" },
+    model: { text: `${MODEL_ICON} ${modelText}`, tone: "muted" },
     thinking: { text: modelInfo.thinking, tone: "muted" },
     context: {
-      text: contextText
-        ? `${contextGauge(modelInfo.contextPercent)} ${contextText}`
-        : "",
+      text: contextText ? `${CONTEXT_ICON} ${contextText}` : "",
       tone: contextTone(modelInfo.contextPercent),
     },
     cache: {

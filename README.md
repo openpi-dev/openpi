@@ -334,10 +334,10 @@ Next-action Suggestion 是可选的：完整主 Agent Run 结束后，在空编�
 默认 Footer 把真实运行状态压进一行，指标自带小图标（无需 Nerd Font):
 
 ```text
-✦ model  ◔ context                ⎇ git  PR  📁 cwd
+ model   context                ⎇ git  PR   cwd
 ```
 
-`📁` 目录、`⎇` 分支、`✦` 模型；context 的圆环随占用率填充（`◔◑◕●`)。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。
+Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 目录；`⎇` 表示分支。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。未安装包含 Codicons 的 Nerd Font 时，图标可能显示为空框，但后面的文字指标仍然完整可读。
 
 - 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；

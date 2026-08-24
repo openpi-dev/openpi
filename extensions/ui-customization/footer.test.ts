@@ -208,6 +208,14 @@ test("context uses warning and error tones at thresholds", () => {
   assert.equal(ok.tone, "muted");
 });
 
+test("uses one Codicon family for model, context, and directory", () => {
+  const catalog = buildSegmentCatalog("/tmp/project", modelInfo, gitInfo);
+
+  assert.match(catalog.model.text, /^\uec10 /);
+  assert.match(catalog.context.text, /^\uebe4 /);
+  assert.match(catalog.cwd.text, /^\uea83 /);
+});
+
 test("a single status inlines into the first footer line when it fits", () => {
   const lines = renderFooter({
     cwd: "/tmp/project",
@@ -284,8 +292,8 @@ test("legacy buildFooterContent still groups selected items", () => {
   ]);
   assert.deepEqual(content, {
     showCwd: false,
-    model: "✦ seal/gpt-5.6-sol",
-    usage: "◑ 25%/1.0m · cache 82%",
+    model: "\uec10 seal/gpt-5.6-sol",
+    usage: "\uebe4 25%/1.0m · cache 82%",
     git: "",
   });
 });
