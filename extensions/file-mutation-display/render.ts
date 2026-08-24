@@ -292,11 +292,13 @@ function activityComponent(
     render(width) {
       const contentWidth = width - HORIZONTAL_PADDING.length * 2;
       if (contentWidth <= 0) return [];
+      const ellipsis =
+        state.status === "success" ? theme.fg("muted", "…") : "…";
       return [
         `${HORIZONTAL_PADDING}${truncateToWidth(
           activityText(name, args, state, theme, cwd),
           contentWidth,
-          "…",
+          ellipsis,
         )}${HORIZONTAL_PADDING}`,
       ];
     },

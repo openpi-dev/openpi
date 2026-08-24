@@ -211,6 +211,20 @@ function recordingTheme(calls: Array<[string, string]>) {
   ) as Theme;
 }
 
+const ANSI_MUTED = "\x1b[38;5;244m";
+const ANSI_FG_RESET = "\x1b[39m";
+
+const ansiTheme = new Proxy(
+  {},
+  {
+    get: (_target, property) =>
+      property === "fg" || property === "bg"
+        ? (color: string, text: string) =>
+            color === "muted" ? `${ANSI_MUTED}${text}${ANSI_FG_RESET}` : text
+        : (text: string) => text,
+  },
+) as Theme;
+
 test("all activity tools render one semantic success row", () => {
   for (const fixture of fixtures) {
     const definition = withActivityRenderer(fixture.definition);
@@ -348,6 +362,42 @@ test("long activity rows stay one line and fit narrow terminals", () => {
   assert.ok(visibleWidth(lines[0]!) <= 24);
   assert.match(lines[0] ?? "", /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running\s+bun/);
   assert.ok(lines[0]?.endsWith("  "));
+});
+
+test("successful truncation ellipses use the target's muted foreground", () => {
+  for (const fixture of fixtures) {
+    const definition = withActivityRenderer(fixture.definition);
+    const lines = renderCollapsed(
+      definition,
+      fixture.args,
+      fixture.result,
+      false,
+      18,
+      ansiTheme,
+    );
+    assert.equal(lines.length, 1, fixture.name);
+    assert.ok(visibleWidth(lines[0]!) <= 18, fixture.name);
+    assert.ok(
+      lines[0]?.includes(`${ANSI_MUTED}…${ANSI_FG_RESET}`),
+      fixture.name,
+    );
+  }
+
+  const bash = withActivityRenderer(createBashToolDefinition(cwd));
+  const args = {
+    command: "bun run test --filter a-very-long-suite-name",
+  };
+  const pending = renderCollapsed(bash, args, undefined, false, 18, ansiTheme);
+  const failed = renderCollapsed(
+    bash,
+    args,
+    { content: [{ type: "text", text: "failed" }], details: undefined },
+    true,
+    18,
+    ansiTheme,
+  );
+  assert.equal(pending[0]?.includes(`${ANSI_MUTED}…${ANSI_FG_RESET}`), false);
+  assert.equal(failed[0]?.includes(`${ANSI_MUTED}…${ANSI_FG_RESET}`), false);
 });
 
 test("expanded mode delegates call and result to Pi native renderers", () => {
