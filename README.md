@@ -8,6 +8,16 @@
 </p>
 
 <p align="center">
+  <strong>Small Harness.</strong> 不替换 Pi 的 Agent loop，普通回合不常驻 OpenPI 模型工具。<br />
+  <strong>Clean Context.</strong> 能力按需加载，Subagent 使用独立 Context，不把所有工作塞进主会话。<br />
+  <strong>Deep Extensions.</strong> 后台执行、Subagent、Workflow 与持续任务在 Pi 原生生命周期内统一运行和观察。
+</p>
+
+<p align="center">
+  <strong>不是把一组插件摆在一起，而是让它们共享同一套配置、权限、状态与清理边界。</strong>
+</p>
+
+<p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
   <a href="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
@@ -24,12 +34,6 @@ pi install npm:@tt-a1i/openpi
   <a href="#默认轻按需强">为什么默认更轻</a> ·
   <a href="#运行模型">看看它怎么工作</a> ·
   <a href="https://github.com/tt-a1i/openpi/issues/22">查看 Benchmark</a>
-</p>
-
-<p align="center">
-  <strong>一套安装</strong>，不再拼一组互不协调的插件　·　
-  <strong>一套生命周期</strong>，状态、停止、恢复与清理都有边界　·　
-  <strong>一套上下文策略</strong>，不用的能力不常驻
 </p>
 
 <p align="center">
