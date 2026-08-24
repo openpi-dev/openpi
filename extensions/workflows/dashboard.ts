@@ -268,6 +268,35 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
   return transcript;
 }
 
+function normalizeAgentState(value: unknown): AgentRecord["state"] {
+  switch (value) {
+    case "done":
+    case "completed":
+      return "done";
+    case "error":
+    case "failed":
+      return "error";
+    case "running":
+    case "uncertain":
+      return value;
+    default:
+      return "uncertain";
+  }
+}
+
+function normalizeWorkflowStatus(value: unknown): WorkflowDetails["status"] {
+  switch (value) {
+    case "running":
+    case "completed":
+    case "failed":
+    case "aborted":
+    case "uncertain":
+      return value;
+    default:
+      return "uncertain";
+  }
+}
+
 /** Leniently normalize a workflow.json (including runs from older tooling). */
 export function normalizePersistedWorkflowDetails(
   runId: string,
@@ -283,14 +312,7 @@ export function normalizePersistedWorkflowDetails(
   for (const item of rawAgents) {
     if (!item || typeof item !== "object") continue;
     const a = item as Record<string, unknown>;
-    const state =
-      a.state === "error" || a.state === "failed"
-        ? "error"
-        : a.state === "uncertain"
-          ? "uncertain"
-          : a.state === "running"
-            ? "running"
-            : "done";
+    const state = normalizeAgentState(a.state);
     const index = typeof a.index === "number" ? a.index : agents.length + 1;
     const decodedInvocation = decodeInvocationRecord(a.invocation);
     const invocation =
@@ -409,13 +431,17 @@ export function normalizePersistedWorkflowDetails(
     });
   }
 
-  const status =
-    record.status === "running" ||
-    record.status === "failed" ||
-    record.status === "aborted" ||
-    record.status === "uncertain"
-      ? record.status
-      : "completed";
+  let status = normalizeWorkflowStatus(record.status);
+  if (status !== "running") {
+    for (const agent of agents) {
+      if (agent.state !== "running" && agent.state !== "uncertain") continue;
+      status = "uncertain";
+      agent.state = "uncertain";
+      agent.error =
+        agent.error ??
+        "Persisted terminal workflow contained an agent without terminal evidence";
+    }
+  }
 
   return {
     runId,

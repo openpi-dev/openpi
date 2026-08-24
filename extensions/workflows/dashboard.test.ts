@@ -18,6 +18,7 @@ import {
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Theme, WorkflowDetails } from "./model.ts";
 import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
+import { safeStringify } from "./serialization.ts";
 
 // runsDir() resolves against getAgentDir(), which reads this env var.
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-workflows-"));
@@ -83,6 +84,70 @@ test("persisted nonterminal invocation facts are projected as uncertain", () => 
 
   assert.equal(restored?.agents[0]?.invocation?.executionState, "uncertain");
   assert.equal(restored?.agents[0]?.invocation?.outcome, "uncertain");
+});
+
+test("unknown or missing persisted states fail closed without breaking known aliases", () => {
+  for (const state of [undefined, "future-state"]) {
+    const restored = normalizePersistedWorkflowDetails("wf_unknown", {
+      ...(state === undefined ? {} : { status: state }),
+      agents: [
+        {
+          index: 1,
+          label: "unknown",
+          ...(state === undefined ? {} : { state }),
+        },
+      ],
+      phases: [],
+    });
+    assert.equal(restored?.status, "uncertain");
+    assert.equal(restored?.agents[0]?.state, "uncertain");
+  }
+
+  const legacy = normalizePersistedWorkflowDetails("wf_legacy_aliases", {
+    status: "completed",
+    agents: [
+      { index: 1, label: "done", state: "completed" },
+      { index: 2, label: "failed", state: "failed" },
+    ],
+    phases: [],
+  });
+  assert.equal(legacy?.status, "completed");
+  assert.deepEqual(
+    legacy?.agents.map((agent) => agent.state),
+    ["done", "error"],
+  );
+
+  const unknownAgent = normalizePersistedWorkflowDetails("wf_unknown_agent", {
+    status: "completed",
+    agents: [{ index: 1, label: "unknown" }],
+    phases: [],
+  });
+  assert.equal(unknownAgent?.status, "uncertain");
+  assert.equal(unknownAgent?.agents[0]?.state, "uncertain");
+});
+
+test("an oversized workflow truncation stub cannot become completed", () => {
+  const stub = JSON.parse(
+    safeStringify(
+      { status: "completed", payload: "x".repeat(2_000) },
+      { maxBytes: 256 },
+    ),
+  );
+  assert.equal(stub.truncated, true);
+  assert.equal(
+    normalizePersistedWorkflowDetails("wf_truncated", stub)?.status,
+    "uncertain",
+  );
+});
+
+test("a terminal persisted run cannot retain running agents", () => {
+  const restored = normalizePersistedWorkflowDetails("wf_contradictory", {
+    status: "completed",
+    agents: [{ index: 1, label: "still running", state: "running" }],
+    phases: [],
+  });
+  assert.equal(restored?.status, "uncertain");
+  assert.equal(restored?.agents[0]?.state, "uncertain");
 });
 
 test("persisted transcripts retain exact tool call identities", () => {
