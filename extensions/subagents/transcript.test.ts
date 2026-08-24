@@ -90,6 +90,33 @@ test("takeover transcript renders finalized and live assistant Markdown within i
   assert.ok(lines.every((line) => visibleWidth(line) <= 24));
 });
 
+test("shared transcript renders fenced code and CJK deterministically at narrow widths", () => {
+  const value = snapshot({
+    transcript: [
+      { kind: "user", text: "请检查这个非常长的中文文件名是否正确" },
+      {
+        kind: "assistant",
+        parts: [
+          {
+            type: "text",
+            text: '结果：\n\n```ts\nconst 状态 = "完成";\n```',
+          },
+        ],
+      },
+    ],
+  });
+
+  const first = buildTranscriptLines(value, 12, theme);
+  const second = buildTranscriptLines(value, 12, theme);
+  const rendered = plain(first);
+
+  assert.deepEqual(second, first);
+  assert.match(rendered, /请检查|中文|结果|const|状态|完成/);
+  assert.match(rendered, /```ts/);
+  assert.ok(first.length > 4);
+  assert.ok(first.every((line) => visibleWidth(line) <= 12));
+});
+
 test("thinking renders Markdown but preserves redaction", () => {
   const rendered = plain(
     buildTranscriptLines(
@@ -200,13 +227,10 @@ test("tool call and output lines drop the child cwd prefix", () => {
     theme,
   );
 
-  assert.deepEqual(lines, [
-    "✓ fd *.mjs · scripts",
-    "    scripts/benchmark-arm-selection.mjs",
-  ]);
+  assert.deepEqual(lines, [" Searched *.mjs  in scripts  1 result"]);
 });
 
-test("bash tool calls use shell prompts while other tools go bare", () => {
+test("pending tool calls use the parent activity verbs", () => {
   const rendered = plain(
     buildTranscriptLines(
       snapshot({
@@ -235,11 +259,11 @@ test("bash tool calls use shell prompts while other tools go bare", () => {
     ),
   );
 
-  assert.match(rendered, /^· \$ git status --porcelain/m);
-  assert.match(rendered, /· read src\/index\.ts/);
+  assert.match(rendered, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running {2}git status --porcelain/m);
+  assert.match(rendered, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Reading {2}src\/index\.ts/m);
 });
 
-test("adjacent tool results form one block with a success glyph", () => {
+test("settled tools use one semantic activity row", () => {
   const lines = buildTranscriptLines(
     snapshot({
       transcript: [
@@ -267,9 +291,51 @@ test("adjacent tool results form one block with a success glyph", () => {
     theme,
   );
 
-  // One glyph per execution, on the command line; the output sits under it.
-  assert.deepEqual(lines, ["✓ $ printf ok", "    ok"]);
-  assert.ok(!lines.slice(0, -1).some((line) => line === ""));
+  assert.deepEqual(lines, [" Ran      printf ok"]);
+});
+
+test("parallel tool results reuse their earlier command lines", () => {
+  const lines = buildTranscriptLines(
+    snapshot({
+      transcript: [
+        {
+          kind: "assistant",
+          parts: [
+            {
+              type: "toolCall",
+              toolId: "read-a",
+              name: "read",
+              argsPreview: '{"path":"a.ts"}',
+            },
+            {
+              type: "toolCall",
+              toolId: "read-b",
+              name: "read",
+              argsPreview: '{"path":"b.ts"}',
+            },
+          ],
+        },
+        {
+          kind: "toolResult",
+          toolId: "read-a",
+          name: "read",
+          isError: false,
+          outputPreview: "alpha",
+        },
+        {
+          kind: "toolResult",
+          toolId: "read-b",
+          name: "read",
+          isError: false,
+          outputPreview: "beta",
+        },
+      ],
+    }),
+    80,
+    theme,
+  );
+
+  assert.deepEqual(lines, [" Read     a.ts", " Read     b.ts"]);
 });
 
 test("tool errors and empty results use status glyphs", () => {
@@ -298,9 +364,9 @@ test("tool errors and empty results use status glyphs", () => {
   );
 
   // Orphan results (no call above them) keep a glyph of their own.
-  assert.match(rendered, /✗ bash/);
+  assert.match(rendered, /✕ Failed\s+bash/);
   assert.match(rendered, /command failed/);
-  assert.match(rendered, /✓ bash/);
+  assert.match(rendered, / Ran\s+bash/);
 });
 
 test("a running tool becomes settled without reflowing", () => {
@@ -353,12 +419,13 @@ test("a running tool becomes settled without reflowing", () => {
     { now: 0 },
   );
 
-  // The command appears exactly once while running, and only the glyph changes
-  // when the tool settles: same line count, same columns.
-  assert.deepEqual(running, ["⠋ $ git status", "    clean"]);
-  assert.deepEqual(settled, ["✓ $ git status", "    clean"]);
-  assert.equal(running[0]?.slice(1), settled[0]?.slice(1));
-  assert.equal(running[1], settled[1]);
+  // The command appears exactly once and keeps the same target column.
+  assert.deepEqual(running, ["⠋ Running  git status"]);
+  assert.deepEqual(settled, [" Ran      git status"]);
+  assert.equal(
+    running[0]?.indexOf("git status"),
+    settled[0]?.indexOf("git status"),
+  );
 });
 
 test("the spinner advances between frames instead of freezing in the cache", () => {
@@ -427,8 +494,8 @@ test("cached items are keyed by width and by tool phase", () => {
     theme,
     { now: 0 },
   );
-  assert.match(wide[0]!, /^·/);
-  assert.match(settled[0]!, /^✓/);
+  assert.match(wide[0]!, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  assert.match(settled[0]!, /^/);
 });
 
 test("spinnerFrame is deterministic and advances every 120ms", () => {
@@ -505,15 +572,15 @@ test("cached finalized transcript output is rebuilt after invalidation", () => {
 
   assert.match(
     plain(buildTranscriptLines(cached, 80, taggedTheme("first"), renderer)),
-    /\[first:dim\]\$ npm test/,
+    /\[first:toolTitle\]Running\s+npm test/,
   );
   assert.match(
     plain(buildTranscriptLines(cached, 80, taggedTheme("second"), renderer)),
-    /\[first:dim\]\$ npm test/,
+    /\[first:toolTitle\]Running\s+npm test/,
   );
   renderer.invalidate();
   assert.match(
     plain(buildTranscriptLines(cached, 80, taggedTheme("second"), renderer)),
-    /\[second:dim\]\$ npm test/,
+    /\[second:toolTitle\]Running\s+npm test/,
   );
 });

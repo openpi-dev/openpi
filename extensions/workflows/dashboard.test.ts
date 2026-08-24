@@ -80,6 +80,53 @@ test("persisted nonterminal invocation facts are projected as uncertain", () => 
   assert.equal(restored?.agents[0]?.invocation?.outcome, "uncertain");
 });
 
+test("persisted transcripts retain exact tool call identities", () => {
+  const details = normalizePersistedWorkflowDetails("wf_tools", {
+    status: "completed",
+    startedAt: 10,
+    finishedAt: 20,
+    phases: [],
+    agents: [
+      {
+        index: 0,
+        label: "worker",
+        state: "completed",
+        transcript: [
+          {
+            role: "tool",
+            name: "read",
+            toolCallId: "call-a",
+            text: "a.ts",
+          },
+          {
+            role: "tool",
+            name: "read",
+            toolCallId: "call-b",
+            text: "b.ts",
+          },
+          {
+            role: "toolResult",
+            name: "read",
+            toolCallId: "call-b",
+            text: "beta",
+          },
+          {
+            role: "toolResult",
+            name: "read",
+            toolCallId: "call-a",
+            text: "alpha",
+          },
+        ],
+      },
+    ],
+  });
+
+  assert.deepEqual(
+    details?.agents[0]?.transcript.map((entry) => entry.toolCallId),
+    ["call-a", "call-b", "call-b", "call-a"],
+  );
+});
+
 test("stale recovery reconciles the run and every active agent", () => {
   const details = normalizePersistedWorkflowDetails("wf_stale", {
     status: "running",
@@ -405,6 +452,98 @@ test("direct workflow navigation drills right and returns left through every lev
   }
 });
 
+test("Workflow transcript follows, pauses on its top row, and resumes", () => {
+  const transcript = Array.from({ length: 40 }, (_, index) => ({
+    role: "assistant" as const,
+    text: `line ${index}`,
+  }));
+  const details: WorkflowDetails = {
+    runId: "wf_1234567890ab",
+    sessionId: SESSION,
+    name: "follow",
+    background: false,
+    status: "running",
+    startedAt: Date.now() - 1_000,
+    phases: [{ title: "Work" }],
+    currentPhase: "Work",
+    agents: [
+      {
+        index: 1,
+        label: "worker",
+        phase: "Work",
+        state: "running",
+        startedAt: Date.now() - 900,
+        preview: "",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript,
+      },
+    ],
+  };
+  writeRun(details.runId, details.startedAt);
+  const dashboard = new WorkflowDashboard(
+    {
+      terminal: { rows: 20 },
+      requestRender() {},
+    } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+      italic: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches(data: string, binding: string) {
+        return data === binding.replace("tui.editor.cursor", "").toLowerCase();
+      },
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => new Map([[details.runId, details]]),
+    SESSION,
+    new Set(),
+    0,
+    () => {},
+    details.runId,
+  );
+
+  try {
+    dashboard.handleInput("right");
+    dashboard.handleInput("right");
+    const pinned = dashboard.render(80).join("\n");
+    assert.match(pinned, /line 39/);
+    assert.doesNotMatch(pinned, /line 0\b/);
+
+    dashboard.handleInput("k");
+    const paused = dashboard.render(80);
+    const anchor = paused.find((line) => /line \d+/.test(line));
+    assert.ok(anchor);
+    assert.match(paused.join("\n"), /↓ \d+/);
+
+    transcript.push(
+      ...Array.from({ length: 5 }, (_, index) => ({
+        role: "assistant" as const,
+        text: `line ${40 + index}`,
+      })),
+    );
+    assert.equal(
+      dashboard.render(80).find((line) => /line \d+/.test(line)),
+      anchor,
+    );
+
+    dashboard.handleInput("G");
+    const resumed = dashboard.render(80).join("\n");
+    assert.match(resumed, /line 44/);
+    assert.doesNotMatch(resumed, /↓ \d+/);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
 test("live workflow dashboard repaints on the shared spinner cadence", (t) => {
   t.mock.timers.enable({ apis: ["setInterval"] });
   writeRun("wf_123abc", Date.now());
@@ -445,6 +584,92 @@ test("live workflow dashboard repaints on the shared spinner cadence", (t) => {
     assert.equal(renders, 0);
     t.mock.timers.tick(1);
     assert.equal(renders, 1);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
+test("settled child transcript does not repaint for another live run", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const settledId = "wf_aa1050";
+  const liveId = "wf_bb1050";
+  writeRun(settledId, Date.now() - 2_000, Date.now() - 1_000);
+  writeRun(liveId, Date.now() - 500);
+  const settled: WorkflowDetails = {
+    runId: settledId,
+    sessionId: SESSION,
+    name: "settled",
+    background: false,
+    status: "completed",
+    startedAt: Date.now() - 2_000,
+    finishedAt: Date.now() - 1_000,
+    phases: [{ title: "Work" }],
+    agents: [
+      {
+        index: 1,
+        label: "done",
+        phase: "Work",
+        state: "done",
+        startedAt: Date.now() - 2_000,
+        finishedAt: Date.now() - 1_000,
+        preview: "complete",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [{ role: "assistant", text: "complete" }],
+      },
+    ],
+  };
+  const live: WorkflowDetails = {
+    runId: liveId,
+    sessionId: SESSION,
+    name: "live",
+    background: false,
+    status: "running",
+    startedAt: Date.now() - 500,
+    phases: [],
+    agents: [],
+  };
+  let renders = 0;
+  const dashboard = new WorkflowDashboard(
+    {
+      terminal: { rows: 20 },
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches(data: string, binding: string) {
+        return data === binding.replace("tui.editor.cursor", "").toLowerCase();
+      },
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () =>
+      new Map([
+        [settledId, settled],
+        [liveId, live],
+      ]),
+    SESSION,
+    new Set(),
+    0,
+    () => {},
+    settledId,
+  );
+  try {
+    dashboard.handleInput("right");
+    dashboard.handleInput("right");
+    renders = 0;
+    t.mock.timers.tick(SPINNER_INTERVAL_MS * 2);
+    assert.equal(renders, 0);
   } finally {
     dashboard.dispose();
   }

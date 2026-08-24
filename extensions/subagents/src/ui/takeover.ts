@@ -12,7 +12,13 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
-import { Input, truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  Input,
+  Key,
+  matchesKey,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import {
   hintLine,
   panelFrame,
@@ -21,6 +27,7 @@ import {
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../../../shared/context-utilization.ts";
+import { TranscriptViewport } from "../../../shared/transcript-viewport.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import {
   buildTranscriptLines,
@@ -400,8 +407,9 @@ export class TakeoverView implements Component, Focusable {
 
   private input = new Input();
   private transcriptRenderer = new TranscriptRenderer();
-  /** Scroll offset in lines from the bottom of the transcript. 0 = pinned to bottom. */
-  private scrollOffset = 0;
+  private transcriptViewport = new TranscriptViewport();
+  private transcriptRowCount = 0;
+  private transcriptViewportSize = 1;
   private unsubscribe: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private ticker?: ReturnType<typeof setInterval>;
@@ -442,7 +450,10 @@ export class TakeoverView implements Component, Focusable {
       if (!text) return;
       this.input.setValue("");
       this.view.requestSend(this.id, text);
-      this.scrollOffset = 0;
+      this.transcriptViewport.scrollToEnd(
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
+      );
       this.tui.requestRender();
     };
   }
@@ -452,10 +463,14 @@ export class TakeoverView implements Component, Focusable {
   }
 
   private refreshTicker() {
-    const interval =
-      this.snap()?.status === "running" ? SPINNER_INTERVAL_MS : 1000;
     if (this.ticker) clearInterval(this.ticker);
-    this.ticker = setInterval(() => this.tui.requestRender(), interval);
+    this.ticker = undefined;
+    if (this.snap()?.status === "running") {
+      this.ticker = setInterval(
+        () => this.tui.requestRender(),
+        SPINNER_INTERVAL_MS,
+      );
+    }
   }
 
   private scheduleRender() {
@@ -500,27 +515,54 @@ export class TakeoverView implements Component, Focusable {
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorUp")) {
-      this.scrollOffset += TRANSCRIPT_SCROLL_STEP;
+      this.transcriptViewport.scrollBy(
+        -TRANSCRIPT_SCROLL_STEP,
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
+      );
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.cursorDown")) {
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - TRANSCRIPT_SCROLL_STEP,
+      this.transcriptViewport.scrollBy(
+        TRANSCRIPT_SCROLL_STEP,
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
       );
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageUp")) {
-      this.scrollOffset += this.viewportHeight();
+      this.transcriptViewport.scrollBy(
+        -this.transcriptViewportSize,
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
+      );
       this.tui.requestRender();
       return;
     }
     if (this.keybindings.matches(data, "tui.editor.pageDown")) {
-      this.scrollOffset = Math.max(
-        0,
-        this.scrollOffset - this.viewportHeight(),
+      this.transcriptViewport.scrollBy(
+        this.transcriptViewportSize,
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
+      );
+      this.tui.requestRender();
+      return;
+    }
+    const transcriptNavigation = this.input.getValue().length === 0;
+    if (transcriptNavigation && (matchesKey(data, Key.home) || data === "g")) {
+      this.transcriptViewport.scrollToTop(
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
+      );
+      this.tui.requestRender();
+      return;
+    }
+    if (transcriptNavigation && (matchesKey(data, Key.end) || data === "G")) {
+      this.transcriptViewport.scrollToEnd(
+        this.transcriptRowCount,
+        this.transcriptViewportSize,
       );
       this.tui.requestRender();
       return;
@@ -620,8 +662,9 @@ export class TakeoverView implements Component, Focusable {
     const viewport = this.viewportHeight();
     const errorRows = snap.errorText ? 1 : 0;
     const transcriptCapacity = Math.max(1, viewport - errorRows);
-    const maxOffset = Math.max(0, transcript.length - transcriptCapacity);
-    if (this.scrollOffset > maxOffset) this.scrollOffset = maxOffset;
+    this.transcriptRowCount = transcript.length;
+    this.transcriptViewportSize = transcriptCapacity;
+    this.transcriptViewport.reconcile(transcript.length, transcriptCapacity);
 
     const body: string[] = [];
     if (snap.errorText) {
@@ -635,10 +678,9 @@ export class TakeoverView implements Component, Focusable {
         ),
       );
     }
-    const end = transcript.length - this.scrollOffset;
     const visible = transcript.slice(
-      Math.max(0, end - Math.max(1, viewport - body.length)),
-      end,
+      this.transcriptViewport.scrollTop,
+      this.transcriptViewport.scrollTop + transcriptCapacity,
     );
     if (visible.length === 0) body.push(theme.fg("dim", "waiting for output…"));
     else body.push(...visible);
@@ -649,7 +691,12 @@ export class TakeoverView implements Component, Focusable {
       this.rule(
         width,
         theme.fg("borderAccent", "─"),
-        this.scrollOffset > 0 ? theme.fg("dim", `↓ ${this.scrollOffset}`) : "",
+        this.transcriptViewport.followingEnd
+          ? ""
+          : theme.fg(
+              "dim",
+              `↓ ${this.transcriptViewport.linesBelow(transcript.length, transcriptCapacity)}`,
+            ),
       ),
     );
     lines.push(...this.input.render(width));

@@ -1,0 +1,142 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import type { SubagentSnapshot } from "../subagents/src/domain.ts";
+import {
+  buildTranscriptLines,
+  subagentTranscriptDocument,
+} from "../subagents/src/ui/transcript.ts";
+import type { TranscriptEntry } from "./model.ts";
+import {
+  WorkflowTranscriptRenderer,
+  workflowTranscriptDocument,
+} from "./transcript.ts";
+
+initTheme("dark", false);
+
+const theme = {
+  fg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+  italic: (text: string) => text,
+} as Theme;
+
+function directSnapshot(): SubagentSnapshot {
+  return {
+    id: "sa-1",
+    origin: "model",
+    backend: "pi",
+    title: "shared fixture",
+    prompt: "shared fixture",
+    cwd: "/repo",
+    status: "done",
+    createdAt: 0,
+    settledAt: 1,
+    meta: { backend: "pi" },
+    usage: {},
+    transcript: [
+      { kind: "user", text: "请检查 **状态**" },
+      {
+        kind: "assistant",
+        parts: [
+          { type: "text", text: "先列出：\n\n- one\n- two" },
+          { type: "thinking", text: "核对 `git status`" },
+          {
+            type: "toolCall",
+            toolId: "call-1",
+            name: "bash",
+            argsPreview: '{"command":"git status"}',
+          },
+        ],
+      },
+      {
+        kind: "toolResult",
+        toolId: "call-1",
+        name: "bash",
+        isError: false,
+        outputPreview: "clean",
+      },
+    ],
+    liveTools: [],
+    queued: [],
+    finalText: "先列出",
+    turns: 1,
+  };
+}
+
+function workflowEntries(): TranscriptEntry[] {
+  return [
+    { role: "user", text: "请检查 **状态**" },
+    { role: "assistant", text: "先列出：\n\n- one\n- two" },
+    { role: "thinking", text: "核对 `git status`" },
+    {
+      role: "tool",
+      name: "bash",
+      toolCallId: "call-1",
+      text: '{"command":"git status"}',
+    },
+    {
+      role: "toolResult",
+      name: "bash",
+      toolCallId: "call-1",
+      text: "clean",
+    },
+  ];
+}
+
+test("Direct and Workflow adapters render one equivalent conversation body", () => {
+  const direct = directSnapshot();
+  const workflow = workflowEntries();
+
+  assert.deepEqual(
+    subagentTranscriptDocument(direct),
+    workflowTranscriptDocument(workflow, direct.cwd),
+  );
+  assert.deepEqual(
+    buildTranscriptLines(direct, 36, theme, undefined, { now: 0 }),
+    new WorkflowTranscriptRenderer().render(workflow, direct.cwd, 36, theme, {
+      now: 0,
+    }),
+  );
+});
+
+test("old Workflow transcript entries without call ids remain renderable", () => {
+  const lines = new WorkflowTranscriptRenderer().render(
+    [
+      { role: "tool", name: "read", text: '{"path":"/repo/a.ts"}' },
+      { role: "toolResult", name: "read", text: "contents" },
+    ],
+    "/repo",
+    40,
+    theme,
+    { now: 0 },
+  );
+
+  assert.deepEqual(lines, [" Read     a.ts"]);
+});
+
+test("explicit results consume pending calls before legacy id fallback", () => {
+  const lines = new WorkflowTranscriptRenderer().render(
+    [
+      {
+        role: "tool",
+        name: "read",
+        toolCallId: "explicit",
+        text: '{"path":"a.ts"}',
+      },
+      {
+        role: "toolResult",
+        name: "read",
+        toolCallId: "explicit",
+        text: "alpha",
+      },
+      { role: "tool", name: "read", text: '{"path":"b.ts"}' },
+      { role: "toolResult", name: "read", text: "beta" },
+    ],
+    undefined,
+    80,
+    theme,
+    { now: 0 },
+  );
+
+  assert.deepEqual(lines, [" Read     a.ts", "", " Read     b.ts"]);
+});

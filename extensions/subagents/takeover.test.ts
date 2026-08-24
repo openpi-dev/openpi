@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { stripVTControlCharacters } from "node:util";
 import type {
   KeybindingsManager,
   Theme,
@@ -224,6 +225,77 @@ test("takeover scroll indicator lives in its rule without changing overlay heigh
     assert.equal(scrolled.length, pinned.length);
     assert.match(scrolled.join("\n"), /↓ \d+/);
     assert.doesNotMatch(scrolled.join("\n"), /lines below/);
+  } finally {
+    view.dispose();
+  }
+});
+
+test("takeover pauses on an absolute reading anchor and resumes at the end", () => {
+  const transcript = Array.from({ length: 40 }, (_, index) => ({
+    kind: "assistant" as const,
+    parts: [{ type: "text" as const, text: `output ${index}` }],
+  }));
+  const running = snap("run", "running", { transcript });
+  const view = new TakeoverView(
+    tui(20),
+    theme,
+    keys,
+    "run",
+    model([running]),
+    () => {},
+  );
+  try {
+    view.render(80);
+    view.handleInput("tui.editor.pageUp");
+    const paused = view.render(80);
+    const anchor = paused.find((line) => /output \d+/.test(line));
+    assert.ok(anchor);
+
+    transcript.push(
+      ...Array.from({ length: 5 }, (_, index) => ({
+        kind: "assistant" as const,
+        parts: [{ type: "text" as const, text: `output ${40 + index}` }],
+      })),
+    );
+    const appended = view.render(80);
+    assert.equal(
+      appended.find((line) => /output \d+/.test(line)),
+      anchor,
+    );
+    assert.match(appended.join("\n"), /↓ \d+/);
+
+    view.handleInput("G");
+    assert.match(view.render(80).join("\n"), /output 44/);
+    assert.doesNotMatch(view.render(80).join("\n"), /↓ \d+/);
+
+    transcript.push({
+      kind: "assistant",
+      parts: [{ type: "text", text: "output 45" }],
+    });
+    assert.match(view.render(80).join("\n"), /output 45/);
+  } finally {
+    view.dispose();
+  }
+});
+
+test("Home and End edit non-empty input instead of moving the transcript", () => {
+  const view = new TakeoverView(
+    tui(20),
+    theme,
+    keys,
+    "run",
+    model([snap("run")]),
+    () => {},
+  );
+  try {
+    view.handleInput("abc");
+    view.handleInput("\u001b[H");
+    view.handleInput("X");
+    assert.match(stripVTControlCharacters(view.render(80).join("\n")), /Xabc/);
+
+    view.handleInput("\u001b[F");
+    view.handleInput("Y");
+    assert.match(stripVTControlCharacters(view.render(80).join("\n")), /XabcY/);
   } finally {
     view.dispose();
   }

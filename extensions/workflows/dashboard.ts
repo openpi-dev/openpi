@@ -23,7 +23,6 @@ import {
   matchesKey,
   type TUI,
   truncateToWidth,
-  wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { contextPercent } from "../shared/context-utilization.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
@@ -35,6 +34,7 @@ import {
 } from "../shared/screen-chrome.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
+import { TranscriptViewport } from "../shared/transcript-viewport.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
 import {
@@ -68,6 +68,7 @@ import {
   workflowGraphRecords,
 } from "./model.ts";
 import { writeFileAtomic } from "./serialization.ts";
+import { WorkflowTranscriptRenderer } from "./transcript.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
@@ -260,6 +261,10 @@ function normalizeTranscript(value: unknown): TranscriptEntry[] {
       name:
         typeof entry.name === "string"
           ? sanitizeLine(entry.name, 160) || undefined
+          : undefined,
+      toolCallId:
+        typeof entry.toolCallId === "string"
+          ? sanitizeLine(entry.toolCallId, 1_024) || undefined
           : undefined,
       isError: entry.isError === true,
       timestamp:
@@ -677,15 +682,16 @@ export class WorkflowDashboard {
   private phaseIndex = 0;
   private agentIndex = 0;
   private detailFocus: DetailFocus = "phases";
-  private transcriptScroll = 0;
+  private transcriptViewport = new TranscriptViewport();
   private transcriptRowCount = 0;
   private transcriptViewportSize = 1;
+  private transcriptRenderer = new WorkflowTranscriptRenderer();
   private current?: RunEntry;
   private openedDirectly = false;
   private notice?: string;
   private noticeAt = 0;
   private disposed = false;
-  private timer: ReturnType<typeof setInterval>;
+  private timer?: ReturnType<typeof setInterval>;
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
@@ -736,25 +742,43 @@ export class WorkflowDashboard {
         this.noticeAt = Date.now();
       }
     }
+    this.refreshTimer();
+  }
+
+  private refreshTimer() {
+    const active = Boolean(
+      this.notice ||
+        (this.view === "list"
+          ? this.entries.some(
+              (entry) => entry.live && entry.details.status === "running",
+            )
+          : this.view === "detail"
+            ? this.current?.live && this.current.details.status === "running"
+            : this.current?.live && this.selectedAgent()?.state === "running"),
+    );
+    if (!active) {
+      if (this.timer) clearInterval(this.timer);
+      this.timer = undefined;
+      return;
+    }
+    if (this.timer) return;
     this.timer = setInterval(() => {
-      if (
-        this.entries.some((e) => e.live) ||
-        this.current?.live ||
-        this.notice
-      ) {
-        this.refresh();
-        this.tui.requestRender();
-      }
+      this.refresh();
+      this.tui.requestRender();
+      this.refreshTimer();
     }, SPINNER_INTERVAL_MS);
   }
 
   dispose() {
     if (this.disposed) return;
     this.disposed = true;
-    clearInterval(this.timer);
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
-  invalidate() {}
+  invalidate() {
+    this.transcriptRenderer.invalidate();
+  }
 
   private refresh() {
     const selected = this.entries[this.listIndex]?.runId;
@@ -819,11 +843,12 @@ export class WorkflowDashboard {
     const target = path.join(runsDir(), entry.runId, "report.md");
     try {
       writeFileAtomic(target, buildWorkflowReport(entry.details));
-      this.notice = `saved ${shortenHome(target)}`;
+      this.setNotice(`saved ${shortenHome(target)}`);
     } catch (error) {
-      this.notice = `save failed: ${error instanceof Error ? error.message : String(error)}`;
+      this.setNotice(
+        `save failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
     }
-    this.noticeAt = Date.now();
   }
 
   /** Request cancellation of a run by id, surfacing the outcome as a notice. */
@@ -842,6 +867,7 @@ export class WorkflowDashboard {
   private setNotice(text: string) {
     this.notice = text;
     this.noticeAt = Date.now();
+    this.refreshTimer();
   }
 
   handleInput(data: string) {
@@ -923,43 +949,56 @@ export class WorkflowDashboard {
         } else if (left || cancel) {
           this.detailFocus = "phases";
         } else if ((right || confirm) && this.selectedAgent()) {
-          this.transcriptScroll = 0;
+          this.transcriptViewport = new TranscriptViewport();
           this.view = "transcript";
         }
       }
       if (data === "s") this.saveReport();
       if (data === "x") this.abortRun(this.current);
     } else {
-      const maxScroll = Math.max(
-        0,
-        this.transcriptRowCount - this.transcriptViewportSize,
-      );
       const scrollStep =
         data === "j" || data === "k" ? TRANSCRIPT_SCROLL_STEP : 1;
       const pageStep = Math.max(1, this.transcriptViewportSize - 2);
       if (up) {
-        this.transcriptScroll = Math.max(0, this.transcriptScroll - scrollStep);
+        this.transcriptViewport.scrollBy(
+          -scrollStep,
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
+        );
       } else if (down) {
-        this.transcriptScroll = Math.min(
-          maxScroll,
-          this.transcriptScroll + scrollStep,
+        this.transcriptViewport.scrollBy(
+          scrollStep,
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
         );
       } else if (matchesKey(data, Key.ctrl("u"))) {
-        this.transcriptScroll = Math.max(0, this.transcriptScroll - pageStep);
-      } else if (matchesKey(data, Key.ctrl("d"))) {
-        this.transcriptScroll = Math.min(
-          maxScroll,
-          this.transcriptScroll + pageStep,
+        this.transcriptViewport.scrollBy(
+          -pageStep,
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
         );
-      } else if (data === "g") {
-        this.transcriptScroll = 0;
-      } else if (data === "G") {
-        this.transcriptScroll = maxScroll;
+      } else if (matchesKey(data, Key.ctrl("d"))) {
+        this.transcriptViewport.scrollBy(
+          pageStep,
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
+        );
+      } else if (data === "g" || matchesKey(data, Key.home)) {
+        this.transcriptViewport.scrollToTop(
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
+        );
+      } else if (data === "G" || matchesKey(data, Key.end)) {
+        this.transcriptViewport.scrollToEnd(
+          this.transcriptRowCount,
+          this.transcriptViewportSize,
+        );
       } else if (cancel || left) {
         this.view = "detail";
         this.detailFocus = "agents";
       }
     }
+    this.refreshTimer();
     this.tui.requestRender();
   }
 
@@ -1314,53 +1353,6 @@ export class WorkflowDashboard {
     return lines;
   }
 
-  private transcriptRows(agent: AgentRecord, width: number): string[] {
-    const theme = this.theme;
-    const rows: string[] = [];
-    if (agent.transcript.length === 0) {
-      return [
-        theme.fg(
-          "dim",
-          " transcript unavailable (this run predates transcript capture)",
-        ),
-      ];
-    }
-
-    for (const entry of agent.transcript) {
-      // Tool calls are one-liners: the arrow shows direction, the accent name
-      // says what ran, and the arguments collapse to a single compact line
-      // instead of a vertical JSON block.
-      if (entry.role === "tool") {
-        const name = entry.name ? sanitizeLine(entry.name, 160) : "unknown";
-        const args = compactInlineJson(entry.text);
-        rows.push(
-          ` ${theme.fg("muted", "→")} ${theme.fg("accent", name)}${args ? theme.fg("dim", ` ${args}`) : ""}`,
-        );
-        continue;
-      }
-      const label = transcriptLabel(entry);
-      const color = transcriptColor(entry);
-      const marker = entry.role === "toolResult" ? "←" : "●";
-      rows.push(
-        ` ${theme.fg(color, marker)} ${theme.bold(theme.fg(color, label))}`,
-      );
-      const contentWidth = Math.max(8, width - 4);
-      const styled = theme.fg(
-        entry.role === "thinking" || entry.role === "toolResult"
-          ? "dim"
-          : entry.isError
-            ? "error"
-            : "text",
-        sanitizeTerminalText(entry.text),
-      );
-      for (const line of wrapTextWithAnsi(styled, contentWidth)) {
-        rows.push(`   ${line}`);
-      }
-      rows.push("");
-    }
-    return rows;
-  }
-
   private renderTranscript(
     details: WorkflowDetails,
     agent: AgentRecord,
@@ -1397,18 +1389,35 @@ export class WorkflowDashboard {
 
     const panelHeight = height - 3;
     const bodyHeight = Math.max(1, panelHeight - 2);
-    const rows = this.transcriptRows(agent, width - 2);
+    const rows =
+      agent.transcript.length === 0
+        ? [
+            theme.fg(
+              "dim",
+              " transcript unavailable (this run predates transcript capture)",
+            ),
+          ]
+        : this.transcriptRenderer.render(
+            agent.transcript,
+            agent.worktreePath,
+            width - 2,
+            theme,
+            { now: Date.now() },
+          );
     this.transcriptRowCount = rows.length;
     this.transcriptViewportSize = bodyHeight;
-    const maxScroll = Math.max(0, rows.length - bodyHeight);
-    this.transcriptScroll = Math.min(this.transcriptScroll, maxScroll);
+    this.transcriptViewport.reconcile(rows.length, bodyHeight);
     const visible = rows.slice(
-      this.transcriptScroll,
-      this.transcriptScroll + bodyHeight,
+      this.transcriptViewport.scrollTop,
+      this.transcriptViewport.scrollTop + bodyHeight,
+    );
+    const linesBelow = this.transcriptViewport.linesBelow(
+      rows.length,
+      bodyHeight,
     );
     const position =
       rows.length > bodyHeight
-        ? `Transcript · ${this.transcriptScroll + 1}-${Math.min(rows.length, this.transcriptScroll + bodyHeight)}/${rows.length}`
+        ? `Transcript · ${this.transcriptViewport.scrollTop + 1}-${Math.min(rows.length, this.transcriptViewport.scrollTop + bodyHeight)}/${rows.length}${this.transcriptViewport.followingEnd ? "" : ` · ↓ ${linesBelow}`}`
         : "Transcript";
     lines.push(...this.panel(position, visible, width, panelHeight));
     lines.push(
@@ -1436,39 +1445,6 @@ function displayError(error: string) {
   const match = clean.match(/^(\d{3})[:\s]*\{\s*"message"\s*:\s*"([^"]+)"/);
   if (match) return `${match[1]}: ${match[2]}`;
   return clean;
-}
-
-function transcriptLabel(entry: TranscriptEntry): string {
-  if (entry.role === "user") return "user";
-  if (entry.role === "assistant") return "assistant";
-  if (entry.role === "thinking") return "thinking";
-  const name = entry.name ? sanitizeLine(entry.name, 160) : "unknown";
-  return name;
-}
-
-/**
- * Tool arguments arrive pretty-printed over many lines; the transcript shows
- * them inline. Non-JSON text passes through flattened.
- */
-function compactInlineJson(text: string) {
-  const flat = sanitizeTerminalText(text).trim();
-  if (!flat) return "";
-  try {
-    return JSON.stringify(JSON.parse(flat));
-  } catch {
-    return flat.replace(/\s+/g, " ");
-  }
-}
-
-function transcriptColor(
-  entry: TranscriptEntry,
-): "accent" | "success" | "dim" | "warning" | "error" | "muted" {
-  if (entry.isError) return "error";
-  if (entry.role === "user") return "accent";
-  if (entry.role === "assistant") return "success";
-  if (entry.role === "thinking") return "dim";
-  if (entry.role === "tool") return "warning";
-  return "muted";
 }
 
 function groupGlyph(group: PhaseGroup, theme: Theme) {
