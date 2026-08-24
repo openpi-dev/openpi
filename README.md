@@ -334,12 +334,12 @@ Next-action Suggestion 是可选的：完整主 Agent Run 结束后，在空编�
 默认 Footer 把真实运行状态压进一行，指标自带小图标（无需 Nerd Font):
 
 ```text
-📁 cwd  ⎇ git  PR                ✦ model  ◔ context
+✦ model  ◔ context                ⎇ git  PR  📁 cwd
 ```
 
 `📁` 目录、`⎇` 分支、`✦` 模型；context 的圆环随占用率填充（`◔◑◕●`)。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。
 
-- 支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
+- 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
 - Subagent 与 Workflow 活动时自动出现，空闲时不占空间；
 - Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；

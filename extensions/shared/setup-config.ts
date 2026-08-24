@@ -69,7 +69,7 @@ export type CapabilityDiscoveryMode =
 
 /** Canonical default layout: one-line plain footer with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
-  ["cwd", "git", "pr", "flex", "model", "context"],
+  ["model", "context", "flex", "git", "pr", "cwd"],
 ];
 
 export const DEFAULT_FOOTER_STYLE: FooterStyle = "plain";

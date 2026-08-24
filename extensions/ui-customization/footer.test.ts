@@ -43,7 +43,7 @@ const gitInfo: GitInfoState = {
   pullRequest: { number: 42, url: "https://example.com/pr/42", isDraft: false },
 };
 
-test("default one-line layout keeps flex alignment", () => {
+test("default one-line layout leads with model context and ends with cwd", () => {
   const lines = renderFooter({
     cwd: "/Users/me/project",
     modelInfo,
@@ -63,10 +63,16 @@ test("default one-line layout keeps flex alignment", () => {
   assert.doesNotMatch(lines[0]!, /\$/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
-  const gap =
-    lines[0]!.indexOf("seal/gpt-5.6-sol") -
-    lines[0]!.indexOf("PR #42") -
-    "PR #42".length;
+  const modelIndex = lines[0]!.indexOf("seal/gpt-5.6-sol");
+  const contextIndex = lines[0]!.indexOf("25%/1.0m");
+  const branchIndex = lines[0]!.indexOf("main");
+  const prIndex = lines[0]!.indexOf("PR #42");
+  const cwdIndex = lines[0]!.indexOf("project");
+  assert.ok(modelIndex < contextIndex);
+  assert.ok(contextIndex < branchIndex);
+  assert.ok(branchIndex < prIndex);
+  assert.ok(prIndex < cwdIndex);
+  const gap = branchIndex - contextIndex - "25%/1.0m".length;
   assert.ok(gap > 1);
 });
 
