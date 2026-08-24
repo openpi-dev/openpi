@@ -6,6 +6,7 @@ import {
   type AgentTranscriptPart,
 } from "../shared/agent-transcript.ts";
 import type { TranscriptEntry } from "./model.ts";
+import { workflowToolRenderer } from "./tool-renderer.ts";
 
 /** Project the bounded Workflow artifact into the shared operator document. */
 function buildWorkflowTranscriptDocument(
@@ -75,22 +76,30 @@ function buildWorkflowTranscriptDocument(
     });
   }
 
-  return { items, cwd };
+  const toolRenderer = workflowToolRenderer(transcript);
+  return {
+    items,
+    cwd,
+    ...(toolRenderer ? { toolRenderer } : {}),
+  };
 }
 
 /** Preserve the shared renderer's identity cache between Workflow repaint ticks. */
 export class WorkflowTranscriptAdapter {
   private previousEntries?: ReadonlyArray<TranscriptEntry>;
   private previousCwd?: string;
+  private previousToolRenderer?: AgentTranscriptDocument["toolRenderer"];
   private previousDocument?: AgentTranscriptDocument;
 
   document(
     transcript: ReadonlyArray<TranscriptEntry>,
     cwd?: string,
   ): AgentTranscriptDocument {
+    const toolRenderer = workflowToolRenderer(transcript);
     if (
       this.previousDocument &&
       this.previousCwd === cwd &&
+      this.previousToolRenderer === toolRenderer &&
       this.previousEntries?.length === transcript.length &&
       this.previousEntries.every((entry, index) => entry === transcript[index])
     ) {
@@ -100,6 +109,7 @@ export class WorkflowTranscriptAdapter {
     const document = buildWorkflowTranscriptDocument(transcript, cwd);
     this.previousEntries = [...transcript];
     this.previousCwd = cwd;
+    this.previousToolRenderer = toolRenderer;
     this.previousDocument = document;
     return document;
   }

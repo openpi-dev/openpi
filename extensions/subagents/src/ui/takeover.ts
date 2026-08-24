@@ -418,7 +418,10 @@ export class TakeoverView implements Component, Focusable {
           id: snap.id,
           title: snap.title,
           status: snap.status,
-          document: subagentTranscriptDocument(snap),
+          document: subagentTranscriptDocument(
+            snap,
+            view.getToolRenderer?.(id),
+          ),
           metadata: [
             options?.badge,
             snap.meta.modelLabel,

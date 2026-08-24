@@ -10,6 +10,7 @@
 
 import type { Effect, Scope, Stream } from "effect";
 import { Context } from "effect";
+import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
 import type {
   BackendName,
   SendError,
@@ -42,6 +43,8 @@ export interface SubagentSession {
    * this with a timeout and fall back to closing the session scope.
    */
   readonly interrupt: Effect.Effect<void>;
+  /** Ephemeral Pi-native tool projection for the operator-facing child page. */
+  readonly toolRenderer?: AgentToolRenderer;
 }
 
 export interface SubagentBackend {

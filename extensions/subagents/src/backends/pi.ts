@@ -41,6 +41,7 @@ import {
   shutdownAndDisposeChildSession,
 } from "../../../shared/child-session.ts";
 import { reclaimWorktree } from "../../../shared/worktree.ts";
+import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
 
 const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
 
@@ -231,6 +232,7 @@ const makePiSession = (
 
     const toolTimeout = createToolCallTimeoutGuard();
     toolTimeout.apply(session);
+    const toolRenderer = new AgentToolRenderLedger();
 
     const activeModel = (): Model<any> | undefined => {
       const sessionModel = session.model;
@@ -346,6 +348,12 @@ const makePiSession = (
           break;
         }
         case "tool_execution_start":
+          toolRenderer.start(
+            event.toolCallId,
+            event.toolName,
+            event.args,
+            session.getToolDefinition(event.toolName),
+          );
           emit({
             _tag: "ToolStart",
             toolId: event.toolCallId,
@@ -354,6 +362,12 @@ const makePiSession = (
           });
           break;
         case "tool_execution_update":
+          toolRenderer.update(
+            event.toolCallId,
+            event.toolName,
+            event.args,
+            event.partialResult,
+          );
           emit({
             _tag: "ToolUpdate",
             toolId: event.toolCallId,
@@ -361,6 +375,12 @@ const makePiSession = (
           });
           break;
         case "tool_execution_end":
+          toolRenderer.end(
+            event.toolCallId,
+            event.toolName,
+            event.result,
+            event.isError,
+          );
           emit({
             _tag: "ToolEnd",
             toolId: event.toolCallId,
@@ -444,6 +464,7 @@ const makePiSession = (
     startRun(task.prompt);
 
     return {
+      toolRenderer,
       meta: Effect.sync(currentMeta),
       events: Stream.fromQueue(events),
       send: (text) =>

@@ -27,6 +27,7 @@ import {
   Stream,
 } from "effect";
 import type { SubagentBackend, SubagentSession } from "./backend.ts";
+import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
@@ -137,6 +138,8 @@ interface Entry {
 export interface SubagentReadModel {
   list(): ReadonlyArray<SubagentSnapshot>;
   get(id: string): SubagentSnapshot | undefined;
+  /** Native tool projection retained by the live child session, when present. */
+  getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
   /** Any-change notification (footer status, dashboard). */
   subscribe(listener: () => void): () => void;
@@ -792,6 +795,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const view: SubagentReadModel = {
       list: () => [...entries.values()].map((entry) => entry.snapshot),
       get: (id) => entries.get(id)?.snapshot,
+      getToolRenderer: (id) => entries.get(id)?.session.toolRenderer,
       size: () => entries.size,
       subscribe: (listener) => {
         listeners.add(listener);

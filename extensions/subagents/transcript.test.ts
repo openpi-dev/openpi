@@ -1,8 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  initTheme,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
 import { stripVTControlCharacters } from "node:util";
-import { visibleWidth } from "@earendil-works/pi-tui";
+import { Text, visibleWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import type { SubagentSnapshot } from "./src/domain.ts";
 import {
   SPINNER_INTERVAL_MS,
@@ -51,6 +57,76 @@ test("transcript sanitization strips terminal control sequences before rendering
     sanitizeText("\u001b]52;c;Y2xpcGJvYXJk\u0007**safe**\u001b[31m"),
     "**safe**",
   );
+});
+
+test("extension tool calls use their Pi-native renderer instead of raw JSON", () => {
+  const definition = defineTool({
+    name: "git_log",
+    label: "Git Log",
+    description: "test renderer",
+    parameters: Type.Object({
+      revision: Type.String(),
+      limit: Type.Number(),
+      oneline: Type.Boolean(),
+    }),
+    execute: async () => ({
+      content: [{ type: "text", text: "unused" }],
+      details: undefined,
+    }),
+    renderCall: (args, nativeTheme) =>
+      new Text(
+        nativeTheme.fg(
+          "toolTitle",
+          `git log ${args.revision} ${args.oneline ? "--oneline " : ""}-n ${args.limit}`,
+        ),
+        0,
+        0,
+      ),
+  });
+  const toolRenderer = new AgentToolRenderLedger();
+  const args = { revision: "main", limit: 3, oneline: true };
+  toolRenderer.start("git-log-1", "git_log", args, definition);
+  toolRenderer.end(
+    "git-log-1",
+    "git_log",
+    { content: [{ type: "text", text: "abc first\ndef second\nghi third" }] },
+    false,
+  );
+  const rendered = plain(
+    buildTranscriptLines(
+      snapshot({
+        status: "done",
+        transcript: [
+          {
+            kind: "assistant",
+            parts: [
+              {
+                type: "toolCall",
+                toolId: "git-log-1",
+                name: "git_log",
+                argsPreview: '{"revision":"main","limit":3,"oneline":true}',
+              },
+            ],
+          },
+          {
+            kind: "toolResult",
+            toolId: "git-log-1",
+            name: "git_log",
+            isError: false,
+            outputPreview: "abc first\ndef second\nghi third",
+          },
+        ],
+      }),
+      80,
+      theme,
+      undefined,
+      { now: 0 },
+      toolRenderer,
+    ),
+  );
+
+  assert.match(rendered, /git log main --oneline -n 3/);
+  assert.doesNotMatch(rendered, /\{"revision":"main"/);
 });
 
 test("takeover transcript renders finalized and live assistant Markdown within its width", () => {

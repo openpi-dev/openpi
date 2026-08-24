@@ -42,6 +42,8 @@ import {
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
+import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
+import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
 export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
@@ -571,6 +573,7 @@ export async function runAgent(
   }
 
   const childSession = session;
+  const toolRenderer = new AgentToolRenderLedger();
   let usage = emptyUsage();
   let modelId = childSession.model?.id ?? options.model?.id;
   let contextWindow = childSession.model?.contextWindow;
@@ -578,7 +581,33 @@ export async function runAgent(
   let promptErrorMessage: string | undefined;
   const toolTimings = new Map<string, ToolExecutionTiming>();
 
+  const captureToolRenderData = () => {
+    for (const message of childSession.messages) {
+      if (message.role === "assistant") {
+        for (const part of message.content) {
+          if (part.type !== "toolCall") continue;
+          toolRenderer.start(
+            part.id,
+            part.name,
+            part.arguments,
+            childSession.getToolDefinition(part.name),
+          );
+        }
+      } else if (message.role === "toolResult") {
+        toolRenderer.end(
+          message.toolCallId,
+          message.toolName,
+          message,
+          message.isError,
+        );
+      }
+    }
+  };
+
   const sync = () => {
+    // Operator reuse can restore earlier messages before this activation's
+    // event subscription starts. Rehydrate their native UI projection here.
+    captureToolRenderData();
     const messages = childSession.messages;
     usage = computeUsage(messages);
 
@@ -627,6 +656,28 @@ export async function runAgent(
   let cancelFirstResponseWatchdog = () => {};
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
+    if (event.type === "tool_execution_start") {
+      toolRenderer.start(
+        event.toolCallId,
+        event.toolName,
+        event.args,
+        childSession.getToolDefinition(event.toolName),
+      );
+    } else if (event.type === "tool_execution_update") {
+      toolRenderer.update(
+        event.toolCallId,
+        event.toolName,
+        event.args,
+        event.partialResult,
+      );
+    } else if (event.type === "tool_execution_end") {
+      toolRenderer.end(
+        event.toolCallId,
+        event.toolName,
+        event.result,
+        event.isError,
+      );
+    }
     if (isAssistantResponseEvent(event)) markFirstResponse();
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
@@ -646,12 +697,16 @@ export async function runAgent(
       return;
     }
     sync();
+    const progressTranscript = bindWorkflowToolRenderer(
+      transcriptFromMessages(childSession.messages, toolTimings),
+      toolRenderer,
+    );
     options.onProgress?.({
       preview: finalOutput(childSession.messages),
       usage,
       model: modelId,
       contextWindow,
-      transcript: transcriptFromMessages(childSession.messages, toolTimings),
+      transcript: progressTranscript,
     });
   });
 
@@ -720,7 +775,10 @@ export async function runAgent(
       finalOutput(childSession.messages),
       AGENT_OUTPUT_MAX_BYTES,
     );
-    transcript = transcriptFromMessages(childSession.messages, toolTimings);
+    transcript = bindWorkflowToolRenderer(
+      transcriptFromMessages(childSession.messages, toolTimings),
+      toolRenderer,
+    );
     const cleanup = await shutdownAndDisposeChildSession(childSession, {
       abort: aborted || promptErrorMessage !== undefined,
       abortOperation,

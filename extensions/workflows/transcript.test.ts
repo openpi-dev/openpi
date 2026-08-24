@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { initTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import {
+  defineTool,
+  initTheme,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
+import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import type { SubagentSnapshot } from "../subagents/src/domain.ts";
 import {
   buildTranscriptLines,
@@ -11,6 +18,7 @@ import {
   WorkflowTranscriptRenderer,
   workflowTranscriptDocument,
 } from "./transcript.ts";
+import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 initTheme("dark", false);
 
@@ -97,6 +105,88 @@ test("Direct and Workflow adapters render one equivalent conversation body", () 
       now: 0,
     }),
   );
+});
+
+test("Workflow children use the same native renderer as Direct children", () => {
+  const definition = defineTool({
+    name: "future_tool",
+    label: "Future Tool",
+    description: "synthetic future extension tool",
+    parameters: Type.Object({ value: Type.String() }),
+    execute: async () => ({
+      content: [{ type: "text", text: "unused" }],
+      details: undefined,
+    }),
+    renderCall: (args) => new Text(`native future ${args.value}`, 0, 0),
+    renderResult: () => new Text("native result", 0, 0),
+  });
+  const renderer = new AgentToolRenderLedger();
+  renderer.start("future-1", "future_tool", { value: "works" }, definition);
+  renderer.end(
+    "future-1",
+    "future_tool",
+    { content: [{ type: "text", text: "done" }] },
+    false,
+  );
+  const workflow = bindWorkflowToolRenderer(
+    [
+      {
+        role: "tool" as const,
+        name: "future_tool",
+        toolCallId: "future-1",
+        text: '{"value":"works"}',
+      },
+      {
+        role: "toolResult" as const,
+        name: "future_tool",
+        toolCallId: "future-1",
+        text: "done",
+      },
+    ],
+    renderer,
+  );
+  const direct: SubagentSnapshot = {
+    ...directSnapshot(),
+    transcript: [
+      {
+        kind: "assistant",
+        parts: [
+          {
+            type: "toolCall",
+            toolId: "future-1",
+            name: "future_tool",
+            argsPreview: '{"value":"works"}',
+          },
+        ],
+      },
+      {
+        kind: "toolResult",
+        toolId: "future-1",
+        name: "future_tool",
+        isError: false,
+        outputPreview: "done",
+      },
+    ],
+  };
+
+  const directLines = buildTranscriptLines(
+    direct,
+    80,
+    theme,
+    undefined,
+    { now: 0 },
+    renderer,
+  );
+  const workflowLines = new WorkflowTranscriptRenderer().render(
+    workflow,
+    direct.cwd,
+    80,
+    theme,
+    { now: 0 },
+  );
+  assert.deepEqual(workflowLines, directLines);
+  assert.match(workflowLines.join("\n"), /native future works/);
+  assert.match(workflowLines.join("\n"), /native result/);
 });
 
 test("old Workflow transcript entries without call ids remain renderable", () => {

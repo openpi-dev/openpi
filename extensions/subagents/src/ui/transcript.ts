@@ -1,4 +1,5 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
+import type { AgentToolRenderer } from "../../../shared/agent-tool-renderer.ts";
 import {
   AgentTranscriptRenderer,
   type AgentTranscriptDocument,
@@ -17,10 +18,12 @@ export type { ToolPhase } from "../../../shared/agent-transcript.ts";
 /** Thin projection from Direct Subagent state to the shared UI document. */
 export function subagentTranscriptDocument(
   snap: SubagentSnapshot,
+  toolRenderer?: AgentToolRenderer,
 ): AgentTranscriptDocument {
   return {
     items: snap.transcript,
     cwd: snap.cwd,
+    ...(toolRenderer ? { toolRenderer } : {}),
     ...(snap.liveAssistant ? { liveAssistant: snap.liveAssistant } : {}),
     ...(snap.liveTools.length > 0 ? { liveTools: snap.liveTools } : {}),
     ...(snap.queued.length > 0 ? { queued: snap.queued } : {}),
@@ -36,9 +39,10 @@ export class TranscriptRenderer {
     width: number,
     theme: Theme,
     options?: { readonly now?: number },
+    toolRenderer?: AgentToolRenderer,
   ) {
     return this.renderer.render(
-      subagentTranscriptDocument(snap),
+      subagentTranscriptDocument(snap, toolRenderer),
       width,
       theme,
       options,
@@ -56,11 +60,13 @@ export function buildTranscriptLines(
   theme: Theme,
   renderer?: TranscriptRenderer,
   options?: { readonly now?: number },
+  toolRenderer?: AgentToolRenderer,
 ) {
   return (renderer ?? new TranscriptRenderer()).render(
     snap,
     width,
     theme,
     options,
+    toolRenderer,
   );
 }

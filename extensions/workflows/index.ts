@@ -765,6 +765,9 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
   const settledRuns = new Map<string, WorkflowDetails>();
+  /** Keep current-session settled records live for their ephemeral UI renderer. */
+  const dashboardDetails = () =>
+    new Map<string, WorkflowDetails>([...settledRuns, ...activeDetails()]);
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "workflows", {
       enable: OPENPI_TOOL_SURFACE.workflows.entry,
@@ -935,7 +938,7 @@ export default function workflows(pi: ExtensionAPI) {
     try {
       await showWorkflowDashboard(
         ctx,
-        activeDetails,
+        dashboardDetails,
         initialRunId,
         startedSince,
         stopRun,

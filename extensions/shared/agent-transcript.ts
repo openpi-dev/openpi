@@ -8,6 +8,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { TruncatedText } from "@earendil-works/pi-tui";
+import type { AgentToolRenderer } from "./agent-tool-renderer.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import {
   parseToolArgsPreview,
@@ -46,6 +47,8 @@ export type AgentTranscriptItem =
 export interface AgentTranscriptDocument {
   readonly items: ReadonlyArray<AgentTranscriptItem>;
   readonly cwd?: string;
+  /** Ephemeral native renderer for the live child; never persisted. */
+  readonly toolRenderer?: AgentToolRenderer;
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
   readonly liveTools?: ReadonlyArray<{
     readonly toolId: string;
@@ -148,30 +151,37 @@ function activityStatus(phase: ToolPhase): ToolActivityStatus {
   return "pending";
 }
 
-function renderToolLine(
+function renderToolBlock(
   theme: Theme,
   phase: ToolPhase,
+  toolId: string,
   name: string,
   argsPreview: string | undefined,
   outputPreview: string | undefined,
   width: number,
   now: number,
   cwd?: string,
+  toolRenderer?: AgentToolRenderer,
 ) {
+  const native = toolRenderer?.renderTool({ toolId, name, cwd }, width);
+  if (native) return native;
   const { args, fallback } = parseToolArgsPreview(argsPreview);
-  return renderPaddedToolActivityLine(
-    {
-      name,
-      args,
-      argsFallback: fallback,
-      output: outputPreview,
-      status: activityStatus(phase),
-      cwd,
-    },
-    theme,
-    width,
-    now,
-  );
+  return [
+    "",
+    renderPaddedToolActivityLine(
+      {
+        name,
+        args,
+        argsFallback: fallback,
+        output: outputPreview,
+        status: activityStatus(phase),
+        cwd,
+      },
+      theme,
+      width,
+      now,
+    ),
+  ];
 }
 
 function renderAssistantItem(
@@ -181,6 +191,7 @@ function renderAssistantItem(
   tools: ReadonlyMap<string, ToolRenderState>,
   now: number,
   cwd?: string,
+  toolRenderer?: AgentToolRenderer,
 ) {
   const out = renderAssistantParts(item.parts, width);
   for (const part of item.parts) {
@@ -190,17 +201,18 @@ function renderAssistantItem(
       // the streaming output; rendering the call here too would show the same
       // command twice and make the block reflow when the tool settles.
       if (state.phase === "live") continue;
-      out.push("");
       out.push(
-        renderToolLine(
+        ...renderToolBlock(
           theme,
           state.phase,
+          part.toolId,
           part.name,
           part.argsPreview,
           state.result?.outputPreview,
           width,
           now,
           cwd,
+          toolRenderer,
         ),
       );
     }
@@ -215,21 +227,21 @@ function renderToolResultItem(
   paired: boolean,
   now: number,
   cwd?: string,
+  toolRenderer?: AgentToolRenderer,
 ) {
   if (paired) return [];
-  return [
-    "",
-    renderToolLine(
-      theme,
-      item.isError ? "error" : "ok",
-      item.name,
-      undefined,
-      item.outputPreview,
-      width,
-      now,
-      cwd,
-    ),
-  ];
+  return renderToolBlock(
+    theme,
+    item.isError ? "error" : "ok",
+    item.toolId,
+    item.name,
+    undefined,
+    item.outputPreview,
+    width,
+    now,
+    cwd,
+    toolRenderer,
+  );
 }
 
 function hasEarlierToolCall(
@@ -258,12 +270,37 @@ function renderTranscriptItem(
   context: ItemContext,
   now: number,
   cwd?: string,
+  toolRenderer?: AgentToolRenderer,
 ) {
   if (item.kind === "user") return renderUserText(item.text, width);
   if (item.kind === "assistant") {
-    return renderAssistantItem(theme, item, width, context.tools, now, cwd);
+    return renderAssistantItem(
+      theme,
+      item,
+      width,
+      context.tools,
+      now,
+      cwd,
+      toolRenderer,
+    );
   }
-  return renderToolResultItem(theme, item, width, context.paired, now, cwd);
+  return renderToolResultItem(
+    theme,
+    item,
+    width,
+    context.paired,
+    now,
+    cwd,
+    toolRenderer,
+  );
+}
+
+function itemHasTool(item: AgentTranscriptItem) {
+  return (
+    item.kind === "toolResult" ||
+    (item.kind === "assistant" &&
+      item.parts.some((part) => part.type === "toolCall"))
+  );
 }
 
 interface ItemContext {
@@ -340,6 +377,7 @@ function findResult(
  */
 export class AgentTranscriptRenderer {
   private itemCache = new WeakMap<AgentTranscriptItem, Map<string, string[]>>();
+  private toolRenderers = new Set<AgentToolRenderer>();
 
   render(
     document: AgentTranscriptDocument,
@@ -350,17 +388,27 @@ export class AgentTranscriptRenderer {
     const out: string[] = [];
     const now = options?.now ?? Date.now();
     const liveTools = document.liveTools ?? [];
+    if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
     const liveIds = new Set(liveTools.map((tool) => tool.toolId));
 
     for (let index = 0; index < document.items.length; index++) {
       const item = document.items[index];
       const context = itemContext(document.items, index, liveIds);
       const key = `${width}|${context.token}`;
-      const cached = this.itemCache.get(item)?.get(key);
+      const cacheable = !document.toolRenderer || !itemHasTool(item);
+      const cached = cacheable ? this.itemCache.get(item)?.get(key) : undefined;
       const lines =
         cached ??
-        renderTranscriptItem(theme, item, width, context, now, document.cwd);
-      if (!cached) {
+        renderTranscriptItem(
+          theme,
+          item,
+          width,
+          context,
+          now,
+          document.cwd,
+          document.toolRenderer,
+        );
+      if (!cached && cacheable) {
         const widths = this.itemCache.get(item) ?? new Map<string, string[]>();
         if (widths.size >= MAX_CACHED_WIDTHS_PER_ITEM) {
           const oldestWidth = widths.keys().next().value;
@@ -388,22 +436,23 @@ export class AgentTranscriptRenderer {
     // lands, and the transcript's call line then takes over with the settled
     // glyph in the same column, so the block never reflows.
     for (const tool of liveTools) {
-      out.push("");
       const phase: ToolPhase = tool.done
         ? tool.isError
           ? "error"
           : "ok"
         : "live";
       out.push(
-        renderToolLine(
+        ...renderToolBlock(
           theme,
           phase,
+          tool.toolId,
           tool.name,
           tool.argsPreview,
           tool.outputPreview,
           width,
           now,
           document.cwd,
+          document.toolRenderer,
         ),
       );
     }
@@ -427,5 +476,7 @@ export class AgentTranscriptRenderer {
 
   invalidate() {
     this.itemCache = new WeakMap();
+    for (const renderer of this.toolRenderers) renderer.invalidate?.();
+    this.toolRenderers.clear();
   }
 }
