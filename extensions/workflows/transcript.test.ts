@@ -111,7 +111,7 @@ test("old Workflow transcript entries without call ids remain renderable", () =>
     { now: 0 },
   );
 
-  assert.deepEqual(lines, [" Read     a.ts"]);
+  assert.deepEqual(lines, ["", "   Read     a.ts  "]);
 });
 
 test("explicit results consume pending calls before legacy id fallback", () => {
@@ -138,5 +138,10 @@ test("explicit results consume pending calls before legacy id fallback", () => {
     { now: 0 },
   );
 
-  assert.deepEqual(lines, [" Read     a.ts", "", " Read     b.ts"]);
+  assert.deepEqual(lines, [
+    "",
+    "   Read     a.ts  ",
+    "",
+    "   Read     b.ts  ",
+  ]);
 });

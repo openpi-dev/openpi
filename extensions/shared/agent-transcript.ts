@@ -1,18 +1,17 @@
-/** Shared operator-facing agent transcript rendering. */
+/** Shared Pi-native operator-facing agent transcript rendering. */
 
-import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import type { AssistantMessage } from "@earendil-works/pi-ai";
 import {
-  Markdown,
-  truncateToWidth,
-  visibleWidth,
-  wrapTextWithAnsi,
-  type DefaultTextStyle,
-  type MarkdownOptions,
-} from "@earendil-works/pi-tui";
+  AssistantMessageComponent,
+  getMarkdownTheme,
+  UserMessageComponent,
+  type Theme,
+} from "@earendil-works/pi-coding-agent";
+import { TruncatedText } from "@earendil-works/pi-tui";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 import {
   parseToolArgsPreview,
-  renderToolActivityLine,
+  renderPaddedToolActivityLine,
   type ToolActivityStatus,
 } from "./tool-activity.ts";
 
@@ -73,71 +72,72 @@ export function sanitizeText(text: string): string {
   return sanitizeTerminalText(text);
 }
 
-function transcriptMarkdownTheme() {
-  const theme = getMarkdownTheme();
+const emptyUsage: AssistantMessage["usage"] = {
+  input: 0,
+  output: 0,
+  cacheRead: 0,
+  cacheWrite: 0,
+  totalTokens: 0,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+};
+
+function assistantMessage(
+  parts: ReadonlyArray<AgentTranscriptPart>,
+): AssistantMessage {
   return {
-    ...theme,
-    // Markdown normalizes unordered lists to "- "; use a display bullet so
-    // transcript list syntax is never confused with unrendered source.
-    listBullet: (text: string) =>
-      theme.listBullet(text.replace(/^(?:[-+*]) /, "• ")),
+    role: "assistant",
+    content: parts.map((part) => {
+      if (part.type === "text")
+        return { type: "text", text: sanitizeText(part.text) };
+      if (part.type === "thinking") {
+        return {
+          type: "thinking",
+          thinking: part.redacted
+            ? "[redacted reasoning]"
+            : sanitizeText(part.text),
+          ...(part.redacted ? { redacted: true } : {}),
+        };
+      }
+      const { args } = parseToolArgsPreview(part.argsPreview);
+      return {
+        type: "toolCall",
+        id: part.toolId,
+        name: part.name,
+        arguments:
+          args !== null && typeof args === "object" && !Array.isArray(args)
+            ? args
+            : {},
+      };
+    }),
+    api: "openai-responses",
+    provider: "openai",
+    model: "child-transcript",
+    usage: emptyUsage,
+    stopReason: parts.some((part) => part.type === "toolCall")
+      ? "toolUse"
+      : "stop",
+    timestamp: 0,
   };
 }
 
-function renderMarkdown(
-  text: string,
-  width: number,
-  defaultTextStyle?: DefaultTextStyle,
-  options?: MarkdownOptions,
-) {
+function renderUserText(text: string, width: number) {
   const clean = sanitizeText(text).trim();
   if (!clean) return [];
-  const markdown = new Markdown(
-    clean,
-    0,
-    0,
-    transcriptMarkdownTheme(),
-    defaultTextStyle,
-    options,
-  );
-  return markdown
-    .render(Math.max(1, width))
-    .map((line) => truncateToWidth(line, width));
+  return new UserMessageComponent(clean, getMarkdownTheme()).render(width);
 }
 
-function renderUserText(theme: Theme, text: string, width: number) {
-  const lines = renderMarkdown(
-    text,
-    Math.max(1, width - 2),
-    { color: (content: string) => theme.fg("userMessageText", content) },
-    { preserveOrderedListMarkers: true, preserveBackslashEscapes: true },
+function renderAssistantParts(
+  parts: ReadonlyArray<AgentTranscriptPart>,
+  width: number,
+  streaming = false,
+) {
+  const component = new AssistantMessageComponent(
+    assistantMessage(parts),
+    false,
+    getMarkdownTheme(),
   );
-  return lines.map((line, index) =>
-    truncateToWidth(
-      (index === 0 ? theme.fg("accent", "> ") : "  ") + line,
-      width,
-    ),
-  );
-}
-
-function renderThinking(theme: Theme, text: string, width: number) {
-  const reasoning = sanitizeText(text).trim();
-  if (!reasoning) return [];
-  const out: string[] = [];
-  const prefix = theme.fg("dim", "~ ");
-  const defaultTextStyle = {
-    color: (content: string) => theme.fg("muted", content),
-    italic: true,
-  } satisfies DefaultTextStyle;
-  const lines = renderMarkdown(
-    reasoning,
-    Math.max(1, width - 2),
-    defaultTextStyle,
-  );
-  for (let i = 0; i < lines.length; i++) {
-    out.push(truncateToWidth((i === 0 ? prefix : "  ") + lines[i], width));
-  }
-  return out;
+  if (streaming) component.updateContent(assistantMessage(parts), true);
+  return component.render(width);
 }
 
 export type ToolPhase = "live" | "ok" | "error" | "pending";
@@ -159,7 +159,7 @@ function renderToolLine(
   cwd?: string,
 ) {
   const { args, fallback } = parseToolArgsPreview(argsPreview);
-  return renderToolActivityLine(
+  return renderPaddedToolActivityLine(
     {
       name,
       args,
@@ -182,24 +182,15 @@ function renderAssistantItem(
   now: number,
   cwd?: string,
 ) {
-  const out: string[] = [];
+  const out = renderAssistantParts(item.parts, width);
   for (const part of item.parts) {
-    if (part.type === "text") {
-      out.push(...renderMarkdown(part.text, width));
-    } else if (part.type === "thinking") {
-      out.push(
-        ...renderThinking(
-          theme,
-          part.redacted ? "[redacted reasoning]" : part.text,
-          width,
-        ),
-      );
-    } else if (part.type === "toolCall") {
+    if (part.type === "toolCall") {
       const state = tools.get(part.toolId) ?? { phase: "pending" };
       // A live tool is rendered by the live block, which owns the spinner and
       // the streaming output; rendering the call here too would show the same
       // command twice and make the block reflow when the tool settles.
       if (state.phase === "live") continue;
+      out.push("");
       out.push(
         renderToolLine(
           theme,
@@ -227,6 +218,7 @@ function renderToolResultItem(
 ) {
   if (paired) return [];
   return [
+    "",
     renderToolLine(
       theme,
       item.isError ? "error" : "ok",
@@ -267,7 +259,7 @@ function renderTranscriptItem(
   now: number,
   cwd?: string,
 ) {
-  if (item.kind === "user") return renderUserText(theme, item.text, width);
+  if (item.kind === "user") return renderUserText(item.text, width);
   if (item.kind === "assistant") {
     return renderAssistantItem(theme, item, width, context.tools, now, cwd);
   }
@@ -378,7 +370,6 @@ export class AgentTranscriptRenderer {
         this.itemCache.set(item, widths);
       }
       if (lines.length > 0) {
-        if (out.length > 0 && !context.paired) out.push("");
         out.push(...lines);
       }
     }
@@ -387,18 +378,17 @@ export class AgentTranscriptRenderer {
     // Live streaming assistant buffers (cleared when the finalized message lands).
     if (document.liveAssistant) {
       const { thinking, text } = document.liveAssistant;
-      const before = out.length;
-      if (out.length > 0) out.push("");
-      if (thinking.trim()) out.push(...renderThinking(theme, thinking, width));
-      if (text.trim()) out.push(...renderMarkdown(text, width));
-      if (out.length === before + 1) out.pop();
+      const parts: AgentTranscriptPart[] = [];
+      if (thinking.trim()) parts.push({ type: "thinking", text: thinking });
+      if (text.trim()) parts.push({ type: "text", text });
+      out.push(...renderAssistantParts(parts, width, true));
     }
 
     // Live tool executions. The manager drops a live entry when its ToolEnd
     // lands, and the transcript's call line then takes over with the settled
     // glyph in the same column, so the block never reflows.
     for (const tool of liveTools) {
-      if (out.length > 0) out.push("");
+      out.push("");
       const phase: ToolPhase = tool.done
         ? tool.isError
           ? "error"
@@ -418,24 +408,18 @@ export class AgentTranscriptRenderer {
       );
     }
 
-    // Queued steering/follow-up messages: show them immediately so Enter
-    // visibly acknowledges the user's input instead of appearing to do nothing.
+    // Match Pi's pending-message projection. The dequeue hint is intentionally
+    // omitted because the child page does not expose Pi's queue editor.
+    if ((document.queued?.length ?? 0) > 0) out.push("");
     for (const message of document.queued ?? []) {
-      if (out.length > 0) out.push("");
-      const prefix = theme.fg("warning", `> [queued ${message.kind}] `);
-      const wrapped = wrapTextWithAnsi(
-        sanitizeText(message.text),
-        Math.max(1, width - visibleWidth(prefix)),
+      const label = message.kind === "steer" ? "Steering" : "Follow-up";
+      out.push(
+        ...new TruncatedText(
+          theme.fg("dim", `${label}: ${sanitizeText(message.text)}`),
+          1,
+          0,
+        ).render(width),
       );
-      for (let i = 0; i < wrapped.length; i++) {
-        out.push(
-          truncateToWidth(
-            (i === 0 ? prefix : " ".repeat(visibleWidth(prefix))) +
-              theme.fg("muted", wrapped[i]),
-            width,
-          ),
-        );
-      }
     }
 
     return out;

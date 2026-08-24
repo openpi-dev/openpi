@@ -314,6 +314,24 @@ export function renderToolActivityLine(
   );
 }
 
+/**
+ * Match the horizontal shell used by Pi's collapsed tool component. Keeping
+ * this here lets persisted child transcripts and live parent tools share the
+ * exact same operator-facing row without pretending bounded previews contain
+ * the full native tool result.
+ */
+export function renderPaddedToolActivityLine(
+  activity: ToolActivity,
+  theme: Theme,
+  width: number,
+  now = Date.now(),
+) {
+  const padding = "  ";
+  const contentWidth = width - padding.length * 2;
+  if (contentWidth <= 0) return "";
+  return `${padding}${renderToolActivityLine(activity, theme, contentWidth, now)}${padding}`;
+}
+
 /** Historical Direct helper retained without owning a second formatter. */
 export function summarizeToolArgs(
   name: string,

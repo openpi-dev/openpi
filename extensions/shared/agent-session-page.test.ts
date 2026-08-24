@@ -63,7 +63,7 @@ test("writable and read-only children use one full-terminal page", () => {
   for (const lines of [directLines, workflowLines]) {
     assert.equal(lines.length, 18);
     assert.ok(lines.every((line) => visibleWidth(line) <= 60));
-    assert.match(lines.join("\n"), /> Inspect the page/);
+    assert.match(lines.join("\n"), /Inspect the page/);
     assert.match(lines.join("\n"), /Result/);
     assert.doesNotMatch(lines.join("\n"), /╭|╮|Transcript/);
   }

@@ -82,10 +82,11 @@ test("takeover transcript renders finalized and live assistant Markdown within i
   );
   const rendered = plain(lines);
 
-  assert.doesNotMatch(rendered, /\*\*|`|- first item|- active item/);
+  assert.doesNotMatch(rendered, /\*\*|`/);
+  assert.doesNotMatch(rendered, /(?:^|\n)> Request:/);
   assert.match(
     rendered,
-    /Request:|takeover\.ts|Counts:|npm test|• first item|Live:|Markdown|Plan:/,
+    /Request:|takeover\.ts|Counts:|npm test|- first item|Live:|Markdown|Plan:/,
   );
   assert.ok(lines.every((line) => visibleWidth(line) <= 24));
 });
@@ -227,7 +228,7 @@ test("tool call and output lines drop the child cwd prefix", () => {
     theme,
   );
 
-  assert.deepEqual(lines, [" Searched *.mjs  in scripts  1 result"]);
+  assert.deepEqual(lines, ["", "   Searched *.mjs  in scripts  1 result  "]);
 });
 
 test("pending tool calls use the parent activity verbs", () => {
@@ -259,8 +260,11 @@ test("pending tool calls use the parent activity verbs", () => {
     ),
   );
 
-  assert.match(rendered, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running {2}git status --porcelain/m);
-  assert.match(rendered, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Reading {2}src\/index\.ts/m);
+  assert.match(
+    rendered,
+    /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Running {2}git status --porcelain {2}$/m,
+  );
+  assert.match(rendered, /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏] Reading {2}src\/index\.ts {2}$/m);
 });
 
 test("settled tools use one semantic activity row", () => {
@@ -291,7 +295,7 @@ test("settled tools use one semantic activity row", () => {
     theme,
   );
 
-  assert.deepEqual(lines, [" Ran      printf ok"]);
+  assert.deepEqual(lines, ["", "   Ran      printf ok  "]);
 });
 
 test("parallel tool results reuse their earlier command lines", () => {
@@ -335,7 +339,12 @@ test("parallel tool results reuse their earlier command lines", () => {
     theme,
   );
 
-  assert.deepEqual(lines, [" Read     a.ts", " Read     b.ts"]);
+  assert.deepEqual(lines, [
+    "",
+    "   Read     a.ts  ",
+    "",
+    "   Read     b.ts  ",
+  ]);
 });
 
 test("tool errors and empty results use status glyphs", () => {
@@ -420,11 +429,11 @@ test("a running tool becomes settled without reflowing", () => {
   );
 
   // The command appears exactly once and keeps the same target column.
-  assert.deepEqual(running, ["⠋ Running  git status"]);
-  assert.deepEqual(settled, [" Ran      git status"]);
+  assert.deepEqual(running, ["", "  ⠋ Running  git status  "]);
+  assert.deepEqual(settled, ["", "   Ran      git status  "]);
   assert.equal(
-    running[0]?.indexOf("git status"),
-    settled[0]?.indexOf("git status"),
+    running[1]?.indexOf("git status"),
+    settled[1]?.indexOf("git status"),
   );
 });
 
@@ -451,8 +460,38 @@ test("the spinner advances between frames instead of freezing in the cache", () 
 
   const first = renderer.render(snap, 80, theme, { now: 0 });
   const later = renderer.render(snap, 80, theme, { now: SPINNER_INTERVAL_MS });
-  assert.notEqual(first[0], later[0]);
-  assert.equal(first[0]?.slice(1), later[0]?.slice(1));
+  assert.notEqual(first[1], later[1]);
+  assert.equal(first[1]?.slice(3), later[1]?.slice(3));
+});
+
+test("empty live assistant buffers do not hide live tools or Pi-style queued messages", () => {
+  const rendered = plain(
+    buildTranscriptLines(
+      snapshot({
+        liveAssistant: { text: "", thinking: "" },
+        liveTools: [
+          {
+            toolId: "read-1",
+            name: "read",
+            argsPreview: '{"path":"src/index.ts"}',
+          },
+        ],
+        queued: [
+          { kind: "steer", text: "check tests" },
+          { kind: "follow-up", text: "summarize" },
+        ],
+      }),
+      80,
+      theme,
+      undefined,
+      { now: 0 },
+    ),
+  );
+
+  assert.match(rendered, /Reading {2}src\/index\.ts/);
+  assert.match(rendered, /Steering: check tests/);
+  assert.match(rendered, /Follow-up: summarize/);
+  assert.doesNotMatch(rendered, /\[queued/);
 });
 
 test("cached items are keyed by width and by tool phase", () => {
@@ -494,8 +533,8 @@ test("cached items are keyed by width and by tool phase", () => {
     theme,
     { now: 0 },
   );
-  assert.match(wide[0]!, /^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
-  assert.match(settled[0]!, /^/);
+  assert.match(wide[1]!, /^ {2}[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  assert.match(settled[1]!, /^ {2}/);
 });
 
 test("spinnerFrame is deterministic and advances every 120ms", () => {

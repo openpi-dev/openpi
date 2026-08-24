@@ -10,7 +10,11 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
+import { stripVTControlCharacters } from "node:util";
+import {
+  initTheme,
+  type KeybindingsManager,
+} from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import type { Theme, WorkflowDetails } from "./model.ts";
 import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
@@ -18,6 +22,7 @@ import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
 // runsDir() resolves against getAgentDir(), which reads this env var.
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-workflows-"));
 process.env.PI_CODING_AGENT_DIR = agentDir;
+initTheme("dark", false);
 
 const {
   buildWorkflowReport,
@@ -439,7 +444,7 @@ test("direct workflow navigation drills right and returns left through every lev
     assert.match(transcript, /writer/);
     assert.match(transcript, /git status/);
     assert.doesNotMatch(transcript, /╭|╮|Transcript/);
-    assert.doesNotMatch(transcript, /clipboard|\u001b/);
+    assert.doesNotMatch(stripVTControlCharacters(transcript), /clipboard/);
 
     dashboard.handleInput("left");
     assert.match(dashboard.render(120).at(-1) ?? "", /select agent/);

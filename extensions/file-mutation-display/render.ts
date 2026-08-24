@@ -3,9 +3,9 @@ import type {
   Theme,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
+import type { Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { toolActivityText } from "../shared/tool-activity.ts";
+import { renderPaddedToolActivityLine } from "../shared/tool-activity.ts";
 
 type ActivityStatus = "pending" | "success" | "error";
 
@@ -20,8 +20,6 @@ type ActivityRenderState<TDetails> = {
     nativeResultComponent?: Component;
   };
 };
-
-const HORIZONTAL_PADDING = "  ";
 
 const emptyComponent: Component = {
   render: () => [],
@@ -46,29 +44,21 @@ function activityComponent(
 ): Component {
   return {
     render(width) {
-      const contentWidth = width - HORIZONTAL_PADDING.length * 2;
-      if (contentWidth <= 0) return [];
-      const ellipsis =
-        state.status === "success" ? theme.fg("muted", "…") : "…";
-      return [
-        `${HORIZONTAL_PADDING}${truncateToWidth(
-          toolActivityText(
-            {
-              name,
-              args,
-              output: textOutput(state.result),
-              details: state.result?.details,
-              status: state.status,
-              cwd,
-              startedAt: state.startedAt,
-              endedAt: state.endedAt,
-            },
-            theme,
-          ),
-          contentWidth,
-          ellipsis,
-        )}${HORIZONTAL_PADDING}`,
-      ];
+      const line = renderPaddedToolActivityLine(
+        {
+          name,
+          args,
+          output: textOutput(state.result),
+          details: state.result?.details,
+          status: state.status,
+          cwd,
+          startedAt: state.startedAt,
+          endedAt: state.endedAt,
+        },
+        theme,
+        width,
+      );
+      return line ? [line] : [];
     },
     invalidate() {},
   };
