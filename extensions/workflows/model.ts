@@ -432,10 +432,14 @@ export function agentContext(agent: AgentRecord): string {
   });
 }
 
-export function formatElapsed(startedAt: number, finishedAt?: number): string {
+export function formatElapsed(
+  startedAt: number,
+  finishedAt?: number,
+  now = Date.now(),
+): string {
   const totalSeconds = Math.max(
     0,
-    Math.round(((finishedAt ?? Date.now()) - startedAt) / 1000),
+    Math.round(((finishedAt ?? now) - startedAt) / 1000),
   );
   const minutes = Math.floor(totalSeconds / 60);
   const seconds = totalSeconds % 60;

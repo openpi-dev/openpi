@@ -203,7 +203,7 @@ function runHeader(
 ) {
   const { done, failed, uncertain } = countStates(details);
   const settled = done + failed;
-  const elapsed = formatElapsed(details.startedAt, details.finishedAt);
+  const elapsed = formatElapsed(details.startedAt, details.finishedAt, now);
   // A just-launched run has no agents and a 0s clock; the metrics join in
   // once there is something real to report.
   const counts =
@@ -264,7 +264,7 @@ function buildCollapsedRows(
         ? percent === undefined
           ? undefined
           : `${percent}%`
-        : formatElapsed(agent.startedAt, agent.finishedAt);
+        : formatElapsed(agent.startedAt, agent.finishedAt, now);
     const left = `  ${stateGlyph(agent.state, theme, now)} ${theme.fg(
       "accent",
       sanitizeWorkflowDisplayLine(agent.label),
@@ -366,7 +366,7 @@ function buildExpandedWorkflow(
         sanitizeWorkflowDisplayLine(agent.label),
       )} ${theme.fg(
         "dim",
-        [context, formatElapsed(agent.startedAt, agent.finishedAt)]
+        [context, formatElapsed(agent.startedAt, agent.finishedAt, now)]
           .filter(Boolean)
           .join(" · "),
       )}`;
@@ -2177,15 +2177,18 @@ export default function workflows(pi: ExtensionAPI) {
           0,
         );
       }
+      // A settled Pi tool result is committed transcript history. Keep its
+      // launch snapshot stable; live run state belongs to the strip/dashboard.
+      const settledAt = Date.now();
       const currentDetails = () =>
-        activeRuns.get(details.runId)?.details ??
-        settledRuns.get(details.runId) ??
-        details;
+        isPartial
+          ? (activeRuns.get(details.runId)?.details ??
+            settledRuns.get(details.runId) ??
+            details)
+          : details;
       syncWorkflowSpinner(
         context.state as WorkflowRenderState,
-        () =>
-          currentDetails().status === "running" &&
-          (isPartial || activeRuns.has(details.runId)),
+        () => isPartial && currentDetails().status === "running",
         context.invalidate,
       );
 
@@ -2193,21 +2196,13 @@ export default function workflows(pi: ExtensionAPI) {
         render(width: number) {
           const current = currentDetails();
           const totals = formatUsage(aggregateUsage(current.agents));
+          const now = isPartial ? Date.now() : settledAt;
           if (!expanded) {
-            return buildCollapsedRows(
-              current,
-              theme,
-              width,
-              Date.now(),
-              totals,
-            );
+            return buildCollapsedRows(current, theme, width, now, totals);
           }
-          return buildExpandedWorkflow(
-            current,
-            theme,
-            Date.now(),
-            totals,
-          ).render(width);
+          return buildExpandedWorkflow(current, theme, now, totals).render(
+            width,
+          );
         },
         invalidate() {},
       };

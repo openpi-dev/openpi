@@ -19,11 +19,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type {
+  AgentToolResult,
   AgentSession,
   AgentSessionEventListener,
   ExtensionAPI,
   ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
+import type { WorkflowDetails } from "./model.ts";
 import type { WorkflowAgentSessionFactory } from "./runner.ts";
 
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-wf-e2e-"));
@@ -51,6 +55,7 @@ const { default: workflows, __setWorkflowTestAgentSessionFactory } =
 
 type CapturedTool = {
   name: string;
+  renderResult?: ToolDefinition["renderResult"];
   execute: (
     id: string,
     params: Record<string, unknown>,
@@ -121,7 +126,10 @@ const ctx = {
   model: undefined,
   modelRegistry: { find: () => undefined },
   ui: {
-    theme: { fg: (_color: string, text: string) => text },
+    theme: {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    },
     setStatus() {},
     setWidget() {},
   },
@@ -211,7 +219,7 @@ async function waitFor(
 }
 
 /** A minimal AgentSession stand-in for one successful child agent call. */
-function fakeAgentSession(output: string) {
+function fakeAgentSession(output: string, promptGate?: Promise<void>) {
   const listeners = new Set<AgentSessionEventListener>();
   // The reviewer agent type requests the read-only tool surface; the child
   // preflight in bindChildSessionExtensions requires all of them active.
@@ -259,7 +267,9 @@ function fakeAgentSession(output: string) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async prompt() {},
+    async prompt() {
+      await promptGate;
+    },
     async abort() {},
     dispose() {},
     getContextUsage: () => undefined,
@@ -385,6 +395,81 @@ test("background runs deliver a follow-up that triggers a turn only when idle", 
     deliverAs: "followUp",
     triggerTurn: true,
   });
+});
+
+test("a settled launch card does not repaint while its detached run stays active", async () => {
+  modelIdle = true;
+  sentMessages.length = 0;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  __setWorkflowTestAgentSessionFactory(async () => ({
+    session: fakeAgentSession("detached output", promptGate),
+  }));
+
+  let runId: unknown;
+  try {
+    const launch = (await workflow.execute(
+      "e2e-detached-render",
+      {
+        script:
+          'export const meta = { name: "detached-render" };\n' +
+          'return await agent("wait for release", { agent_type: "reviewer" });',
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as AgentToolResult<WorkflowDetails>;
+    runId = launch.details.runId;
+    assert.equal(launch.details.status, "running");
+
+    const renderResult = workflow.renderResult;
+    assert.ok(renderResult);
+    let invalidations = 0;
+    const component = renderResult(
+      launch,
+      { expanded: false, isPartial: false },
+      ctx.ui.theme,
+      {
+        args: {},
+        toolCallId: "call-detached-render",
+        invalidate: () => {
+          invalidations += 1;
+        },
+        lastComponent: undefined,
+        state: {},
+        cwd: repoDir,
+        executionStarted: true,
+        argsComplete: true,
+        isPartial: false,
+        expanded: false,
+        showImages: false,
+        isError: false,
+      },
+    );
+    const first = component.render(100);
+
+    await new Promise((resolve) =>
+      setTimeout(resolve, SPINNER_INTERVAL_MS * 3),
+    );
+    assert.equal(invalidations, 0);
+    assert.deepEqual(component.render(100), first);
+  } finally {
+    releasePrompt();
+    if (runId !== undefined) {
+      await waitFor(
+        () => readWorkflowJson(runId).status === "completed",
+        "detached render workflow settlement",
+      );
+      await waitFor(
+        () =>
+          sentMessages.some((sent) => sent.message.details?.runId === runId),
+        "detached render workflow delivery",
+      );
+    }
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
 });
 
 test("failed completion delivery remains durable and retries once with the same id", async () => {
