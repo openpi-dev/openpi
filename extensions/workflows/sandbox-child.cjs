@@ -207,6 +207,11 @@ const BOOTSTRAP = String.raw`
       const value = raw && typeof raw === "object" ? raw[key] : undefined;
       return typeof value === "number" && Number.isFinite(value) ? value : 0;
     };
+    const readLimit = (key) => {
+      const limits = raw && typeof raw === "object" ? raw.limits : undefined;
+      const value = limits && typeof limits === "object" ? limits[key] : undefined;
+      return typeof value === "number" && Number.isFinite(value) ? value : 0;
+    };
     // Every field is coerced, so a missing or malformed snapshot reads as zero
     // rather than undefined: a script doing arithmetic on it gets 0, not NaN.
     return deepFreeze({
@@ -217,6 +222,12 @@ const BOOTSTRAP = String.raw`
       total: read("total"),
       cost: read("cost"),
       agents: read("agents"),
+      limits: {
+        concurrency: readLimit("concurrency"),
+        maxAgentCalls: readLimit("maxAgentCalls"),
+        callsUsed: readLimit("callsUsed"),
+        callsRemaining: readLimit("callsRemaining"),
+      },
     });
   }
 

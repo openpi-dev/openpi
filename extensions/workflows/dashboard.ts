@@ -199,6 +199,45 @@ function normalizeUsage(value: unknown): AgentUsage {
   };
 }
 
+function normalizeDelivery(value: unknown): WorkflowDetails["delivery"] {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const state = record.state;
+  if (
+    state !== "none" &&
+    state !== "held-for-inline" &&
+    state !== "pending" &&
+    state !== "delivered" &&
+    state !== "consumed-inline"
+  ) {
+    return undefined;
+  }
+  if (typeof record.id !== "string" || record.id.length === 0) return undefined;
+  const attempts =
+    typeof record.attempts === "number" &&
+    Number.isSafeInteger(record.attempts) &&
+    record.attempts >= 0
+      ? record.attempts
+      : 0;
+  const updatedAt =
+    typeof record.updatedAt === "number" && Number.isFinite(record.updatedAt)
+      ? record.updatedAt
+      : 0;
+  return {
+    id: sanitizeLine(record.id, 256),
+    state,
+    attempts,
+    updatedAt,
+    ...(typeof record.deliveredAt === "number" &&
+    Number.isFinite(record.deliveredAt)
+      ? { deliveredAt: record.deliveredAt }
+      : {}),
+    ...(typeof record.lastError === "string"
+      ? { lastError: sanitizeLine(record.lastError, 2_000) }
+      : {}),
+  };
+}
+
 function normalizeTranscript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
   const transcript: TranscriptEntry[] = [];
@@ -248,9 +287,11 @@ export function normalizePersistedWorkflowDetails(
     const state =
       a.state === "error" || a.state === "failed"
         ? "error"
-        : a.state === "running"
-          ? "running"
-          : "done";
+        : a.state === "uncertain"
+          ? "uncertain"
+          : a.state === "running"
+            ? "running"
+            : "done";
     const index = typeof a.index === "number" ? a.index : agents.length + 1;
     const decodedInvocation = decodeInvocationRecord(a.invocation);
     const invocation =
@@ -286,6 +327,11 @@ export function normalizePersistedWorkflowDetails(
         : {}),
       ...(typeof a.resultRef === "string" && a.resultRef
         ? { resultRef: sanitizeLine(a.resultRef, 256) }
+        : {}),
+      ...(typeof a.resultArtifact === "string" &&
+      a.resultArtifact.startsWith("agent-results/") &&
+      !a.resultArtifact.includes("..")
+        ? { resultArtifact: sanitizeLine(a.resultArtifact, 256) }
         : {}),
       label:
         typeof a.label === "string"
@@ -367,7 +413,8 @@ export function normalizePersistedWorkflowDetails(
   const status =
     record.status === "running" ||
     record.status === "failed" ||
-    record.status === "aborted"
+    record.status === "aborted" ||
+    record.status === "uncertain"
       ? record.status
       : "completed";
 
@@ -388,6 +435,7 @@ export function normalizePersistedWorkflowDetails(
           ? sanitizeLine(meta.description, 2_000) || undefined
           : undefined,
     background: record.background === true,
+    delivery: normalizeDelivery(record.delivery),
     status,
     startedAt,
     finishedAt:
@@ -433,13 +481,36 @@ export function recoverStaleWorkflowDetails(
   recoveredAt = Date.now(),
 ): WorkflowDetails {
   if (details.status !== "running") return details;
-  details.status = "aborted";
+  details.status = "uncertain";
   details.finishedAt = details.finishedAt ?? recoveredAt;
-  details.error = details.error ?? "Recovered stale run that was not active";
+  details.error =
+    details.error ??
+    "Workflow owner was lost; completion and external side effects are uncertain";
+  if (!details.delivery) {
+    details.delivery = {
+      id: `workflow:${details.runId}`,
+      state: "pending",
+      attempts: 0,
+      updatedAt: recoveredAt,
+      lastError: "Migrated a pre-delivery run after its owner disappeared",
+    };
+  } else if (
+    details.delivery.state !== "delivered" &&
+    details.delivery.state !== "consumed-inline"
+  ) {
+    details.delivery = {
+      ...details.delivery,
+      state: "pending",
+      updatedAt: recoveredAt,
+      lastError: "Recovered after the workflow owner process ended",
+    };
+  }
   for (const agent of details.agents) {
     if (agent.state !== "running") continue;
-    agent.state = "error";
-    agent.error = agent.error ?? "Run ended before this agent settled";
+    agent.state = "uncertain";
+    agent.error =
+      agent.error ??
+      "Workflow owner was lost before this agent produced terminal evidence";
     agent.finishedAt = details.finishedAt;
   }
   details.graph = projectWorkflowGraph(workflowGraphRecords(details.agents));
@@ -511,13 +582,13 @@ export function workflowGraphSummary(
 }
 
 export function buildWorkflowReport(details: WorkflowDetails): string {
-  const { done, failed } = countStates(details);
+  const { done, failed, uncertain } = countStates(details);
   const lines: string[] = [
     `# Workflow ${details.name ?? details.runId}`,
     "",
     `- Run: ${details.runId}`,
     `- Status: ${statusWord(details.status)}`,
-    `- Agents: ${done}/${details.agents.length} ok${failed ? `, ${failed} failed` : ""}`,
+    `- Agents: ${done}/${details.agents.length} ok${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""}`,
     `- Elapsed: ${formatElapsed(details.startedAt, details.finishedAt)}`,
   ];
   const totals = formatUsage(aggregateUsage(details.agents));
@@ -537,7 +608,9 @@ export function buildWorkflowReport(details: WorkflowDetails): string {
           ? "ok"
           : agent.state === "error"
             ? "FAILED"
-            : "running";
+            : agent.state === "uncertain"
+              ? "UNCERTAIN"
+              : "running";
       const stats = [
         agent.model,
         agentContext(agent),
@@ -984,12 +1057,12 @@ export class WorkflowDashboard {
       const label = selected
         ? theme.fg("accent", name)
         : theme.fg("text", name);
-      const { done, failed } = countStates(d);
+      const { done, failed, uncertain } = countStates(d);
       const settled = done + failed;
       const right =
         theme.fg(
           "dim",
-          `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)} · `,
+          `${settled}/${d.agents.length} agents${uncertain ? ` · ${uncertain} uncertain` : ""} · ${formatElapsed(d.startedAt, d.finishedAt)} · `,
         ) +
         theme.fg(statusColor(d.status), statusWord(d.status)) +
         " ";
@@ -1022,14 +1095,14 @@ export class WorkflowDashboard {
     const theme = this.theme;
     const lines: string[] = [];
 
-    const { done, failed } = countStates(d);
+    const { done, failed, uncertain } = countStates(d);
     const settled = done + failed;
     // Same language as the transcript card: the glyph carries the state, the
     // status word only shows for terminal states.
     const right =
       theme.fg(
         "dim",
-        `${settled}/${d.agents.length} agents · ${formatElapsed(d.startedAt, d.finishedAt)}`,
+        `${settled}/${d.agents.length} agents${uncertain ? ` · ${uncertain} uncertain` : ""} · ${formatElapsed(d.startedAt, d.finishedAt)}`,
       ) +
       (d.status === "running"
         ? " "
@@ -1402,6 +1475,8 @@ function groupGlyph(group: PhaseGroup, theme: Theme) {
   if (group.agents.length === 0) return theme.fg("dim", "○");
   if (group.agents.some((a) => a.state === "running"))
     return theme.fg("warning", spinnerFrame(Date.now()));
+  if (group.agents.some((a) => a.state === "uncertain"))
+    return theme.fg("warning", "?");
   if (group.agents.some((a) => a.state === "error"))
     return theme.fg("error", "✗");
   return theme.fg("success", "✓");

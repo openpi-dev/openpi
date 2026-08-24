@@ -203,6 +203,38 @@ test("usage() advances as agents settle, so a post-await read sees them", async 
   assert.deepEqual(readings, { before: 0, afterOne: 1000, afterTwo: 2000 });
 });
 
+test("usage() exposes the host's resolved call capacity", async () => {
+  const result = await runSandbox(
+    `
+      const capacity = usage().limits;
+      try { capacity.callsRemaining = 999; } catch { /* frozen */ }
+      return {
+        concurrency: capacity.concurrency,
+        maxAgentCalls: capacity.maxAgentCalls,
+        callsUsed: capacity.callsUsed,
+        callsRemaining: capacity.callsRemaining,
+      };
+    `,
+    {
+      usageSnapshot: () => ({
+        total: 1_000,
+        limits: {
+          concurrency: 8,
+          maxAgentCalls: 128,
+          callsUsed: 1,
+          callsRemaining: 127,
+        },
+      }),
+    },
+  );
+  assert.deepEqual(result, {
+    concurrency: 8,
+    maxAgentCalls: 128,
+    callsUsed: 1,
+    callsRemaining: 127,
+  });
+});
+
 test("usage() degrades to a zero reading rather than failing the run", async () => {
   const result = await runSandbox(`return usage().total;`, {
     usageSnapshot: () => {

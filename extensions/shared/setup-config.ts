@@ -69,6 +69,11 @@ export type CapabilityDiscoveryMode =
 
 /** Canonical default layout: one-line plain footer with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
+  ["model", "context", "flex", "git", "pr", "cwd"],
+];
+
+/** The persisted canonical default before model/context moved to the left. */
+const LEGACY_DEFAULT_FOOTER_LINES: FooterLines = [
   ["cwd", "git", "pr", "flex", "model", "context"],
 ];
 
@@ -88,7 +93,7 @@ export const FOOTER_PRESET_DEFINITIONS: Record<
 > = {
   compact: {
     style: "plain",
-    lines: [["cwd", "model", "thinking", "context", "flex", "git", "pr"]],
+    lines: DEFAULT_FOOTER_LINES,
   },
   powerline: {
     style: "powerline",
@@ -340,6 +345,17 @@ function parseFooterItems(value: unknown): readonly FooterItem[] {
   return items.length > 0 ? items : DEFAULT_FOOTER_ITEMS;
 }
 
+function sameFooterLines(left: FooterLines, right: FooterLines) {
+  return (
+    left.length === right.length &&
+    left.every(
+      (line, lineIndex) =>
+        line.length === right[lineIndex]?.length &&
+        line.every((item, itemIndex) => item === right[lineIndex]?.[itemIndex]),
+    )
+  );
+}
+
 function parseUiFooter(
   ui: Record<string, unknown>,
 ): Pick<MyPiSetupConfig["ui"], "footerStyle" | "footerLines" | "footerItems"> {
@@ -348,7 +364,10 @@ function parseUiFooter(
     : DEFAULT_FOOTER_STYLE;
 
   if (ui.footerLines !== undefined) {
-    const lines = normalizeFooterLines(ui.footerLines);
+    const normalized = normalizeFooterLines(ui.footerLines);
+    const lines = sameFooterLines(normalized, LEGACY_DEFAULT_FOOTER_LINES)
+      ? DEFAULT_FOOTER_LINES
+      : normalized;
     return {
       footerStyle: style,
       footerLines: lines,

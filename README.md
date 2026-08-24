@@ -262,7 +262,7 @@ return agent("Synthesize the verified findings", {
 | ------------ | -------------------------------------------------------------------------- |
 | `phase()`    | 标记当前阶段                                                               |
 | `log()`      | 向实时界面与最终报告追加一行进度                                           |
-| `usage()`    | 读取累计 Token、缓存与成本的单调 lower bound；不是预算器                   |
+| `usage()`    | 读取累计 Token、缓存、成本及本轮并发/调用余量；Token 是 lower bound，不是预算器 |
 | `agent()`    | 启动 Pi Agent；支持 role、schema、acceptance、inputs、operator 与 worktree |
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
@@ -335,12 +335,12 @@ Next-action Suggestion 是可选的：完整主 Agent Run 结束后，在空编�
 默认 Footer 把真实运行状态压进一行，指标自带小图标（无需 Nerd Font):
 
 ```text
-📁 cwd  ⎇ git  PR                ✦ model  ◔ context
+ model   context                ⎇ git  PR   cwd
 ```
 
-`📁` 目录、`⎇` 分支、`✦` 模型；context 的圆环随占用率填充（`◔◑◕●`)。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。
+Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 目录；`⎇` 表示分支。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。未安装包含 Codicons 的 Nerd Font 时，图标可能显示为空框，但后面的文字指标仍然完整可读。
 
-- 支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
+- 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
 - Subagent 与 Workflow 活动时自动出现，空闲时不占空间；
 - Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；
@@ -525,7 +525,7 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 | `openpi_load_tools`                                                                                      | 列出或加载可选工具组           | 明确询问；或启用 `adaptive`      |
 | `bg_start`, `bg_status`, `bg_list`, `bg_watch`, `bg_kill`                                                | 后台进程生命周期               | 明确意图或 adaptive；启动后展开  |
 | `subagent_spawn`, `subagent_check`, `subagent_list`, `subagent_wait`, `subagent_send`, `subagent_cancel` | 独立子 Agent                   | 明确意图或 adaptive；整组稳定加载 |
-| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | 明确意图或 adaptive；运行后展开  |
+| `workflow`, `workflow_status`, `workflow_stop`                                                           | 动态多阶段编排与运行管理       | 明确意图或 adaptive；能力组一次稳定展开 |
 | `tasks_add`, `tasks_update`, `tasks_list`                                                                | Session 工作项                 | 明确意图或 adaptive；存在后展开  |
 | `get_goal`, `create_goal`, `update_goal`                                                                 | Session Goal                   | 明确意图或 adaptive；存在后展开  |
 | `context_pivot`                                                                                          | Context 阶段切换               | Context 达到阈值时               |

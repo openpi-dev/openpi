@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import {
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -75,6 +76,7 @@ const handlers = new Map<
 >();
 const sentMessages: SentMessage[] = [];
 let modelIdle = true;
+let sendFailures = 0;
 
 const pi = {
   registerTool(tool: CapturedTool) {
@@ -98,6 +100,10 @@ const pi = {
     activeTools = [...names];
   },
   sendMessage(message: SentMessage["message"], options: unknown) {
+    if (sendFailures > 0) {
+      sendFailures--;
+      throw new Error("injected completion transport failure");
+    }
     sentMessages.push({ message, options });
   },
 } as unknown as ExtensionAPI;
@@ -121,14 +127,60 @@ const ctx = {
   },
 } as unknown as ExtensionContext;
 
+for (const [runId, status] of [
+  ["wf_1e9acd0e", "completed"],
+  ["wf_1e9acbad", "running"],
+] as const) {
+  const runDir = join(agentDir, "workflows", runId);
+  mkdirSync(runDir, { recursive: true });
+  writeFileSync(
+    join(runDir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: "wf-e2e-session",
+      status,
+      background: true,
+      startedAt: 1,
+      ...(status === "completed" ? { finishedAt: 2, result: "old" } : {}),
+      phases: [],
+      agents: [],
+    }),
+  );
+}
+
 workflows(pi);
 for (const handler of handlers.get("session_start") ?? []) {
   await handler({}, {
     ...ctx,
-    hasUI: false,
     mode: "print",
+    hasUI: true,
   } as unknown as ExtensionContext);
 }
+
+const restoredLegacyDone = JSON.parse(
+  readFileSync(
+    join(agentDir, "workflows", "wf_1e9acd0e", "workflow.json"),
+    "utf8",
+  ),
+) as Record<string, unknown>;
+const restoredLegacyStale = JSON.parse(
+  readFileSync(
+    join(agentDir, "workflows", "wf_1e9acbad", "workflow.json"),
+    "utf8",
+  ),
+) as Record<string, unknown>;
+assert.equal(restoredLegacyDone.delivery, undefined);
+assert.equal(restoredLegacyStale.status, "uncertain");
+assert.equal(
+  (restoredLegacyStale.delivery as Record<string, unknown>).id,
+  "workflow:wf_1e9acbad",
+);
+await waitFor(
+  () => sentMessages.length === 1,
+  "legacy stale recovery delivery",
+);
+assert.match(String(sentMessages[0]?.message.content), /wf_1e9acbad/);
+sentMessages.length = 0;
 
 const workflow = tools.get("workflow")!;
 const status = tools.get("workflow_status")!;
@@ -224,6 +276,7 @@ test("foreground run without agents returns the result and persists artifacts", 
     {
       script:
         'export const meta = { name: "plain-run", description: "no agents" };\nlog("hi");\nreturn { x: 1 };',
+      wait: true,
     },
     undefined,
     undefined,
@@ -267,7 +320,6 @@ test("background runs deliver a follow-up that triggers a turn only when idle", 
     "e2e-bg-idle",
     {
       script: 'export const meta = { name: "bg-idle" };\nlog("bg");\nreturn 7;',
-      background: true,
     },
     undefined,
     undefined,
@@ -307,17 +359,84 @@ test("background runs deliver a follow-up that triggers a turn only when idle", 
   assert.equal(typeof busyRun.details.runId, "string");
 
   await waitFor(
+    () => readWorkflowJson(busyRun.details.runId).status === "completed",
+    "busy workflow settlement",
+  );
+  assert.equal(
+    sentMessages.some(
+      (sent) => sent.message.details?.runId === busyRun.details.runId,
+    ),
+    false,
+  );
+  for (const handler of handlers.get("agent_settled") ?? []) {
+    await handler({}, ctx);
+  }
+  await waitFor(
     () =>
       sentMessages.some(
         (sent) => sent.message.details?.runId === busyRun.details.runId,
       ),
-    "busy background follow-up",
+    "busy background follow-up after parent settled",
   );
   const busyFollowUp = sentMessages.find(
     (sent) => sent.message.details?.runId === busyRun.details.runId,
   )!;
-  // A busy model is not woken: the result rides along with the next turn.
-  assert.deepEqual(busyFollowUp.options, { deliverAs: "nextTurn" });
+  assert.deepEqual(busyFollowUp.options, {
+    deliverAs: "followUp",
+    triggerTurn: true,
+  });
+});
+
+test("failed completion delivery remains durable and retries once with the same id", async () => {
+  sentMessages.length = 0;
+  modelIdle = true;
+  sendFailures = 1;
+  const run = (await workflow.execute(
+    "e2e-delivery-retry",
+    {
+      script:
+        'export const meta = { name: "delivery-retry" };\nreturn { durable: true };',
+    },
+    undefined,
+    undefined,
+    ctx,
+  )) as { details: { runId?: unknown } };
+
+  await waitFor(() => {
+    const persisted = readWorkflowJson(run.details.runId);
+    const delivery = persisted.delivery as
+      | { state?: unknown; attempts?: unknown; id?: unknown }
+      | undefined;
+    return delivery?.state === "pending" && delivery.attempts === 1;
+  }, "pending durable delivery after transport failure");
+  const before = readWorkflowJson(run.details.runId).delivery as {
+    id: string;
+  };
+
+  for (const handler of handlers.get("agent_settled") ?? []) {
+    await handler({}, ctx);
+  }
+  await waitFor(
+    () =>
+      sentMessages.some(
+        (sent) => sent.message.details?.runId === run.details.runId,
+      ),
+    "retried workflow completion",
+  );
+  const after = readWorkflowJson(run.details.runId).delivery as {
+    id: string;
+    state: string;
+    attempts: number;
+  };
+  assert.equal(after.id, before.id);
+  assert.equal(after.state, "delivered");
+  assert.equal(after.attempts, 2);
+  assert.equal(
+    sentMessages.filter(
+      (sent) => sent.message.details?.runId === run.details.runId,
+    ).length,
+    1,
+  );
 });
 
 test("a failing script reports the error and records the run as failed", async () => {
@@ -328,6 +447,7 @@ test("a failing script reports the error and records the run as failed", async (
         {
           script:
             'export const meta = { name: "boom-run" };\nthrow new Error("kaboom");',
+          wait: true,
         },
         undefined,
         undefined,
@@ -367,7 +487,7 @@ test("agent calls run through the injected session factory and resume replays th
   try {
     const first = (await workflow.execute(
       "e2e-agent-first",
-      { script: agentScript },
+      { script: agentScript, wait: true },
       undefined,
       undefined,
       ctx,
@@ -392,7 +512,11 @@ test("agent calls run through the injected session factory and resume replays th
     // new child session is created.
     const resumed = (await workflow.execute(
       "e2e-agent-resume",
-      { script: agentScript, resume_from_run_id: String(firstRunId) },
+      {
+        script: agentScript,
+        resume_from_run_id: String(firstRunId),
+        wait: true,
+      },
       undefined,
       undefined,
       ctx,
@@ -409,10 +533,24 @@ test("agent calls run through the injected session factory and resume replays th
     const agents = persisted.agents as Array<{
       state: unknown;
       replayed?: unknown;
+      resultArtifact?: unknown;
     }>;
     assert.equal(agents.length, 1);
     assert.equal(agents[0]!.state, "done");
     assert.equal(agents[0]!.replayed, true);
+    assert.equal(agents[0]!.resultArtifact, "agent-results/agent-0001.json");
+    assert.deepEqual(
+      JSON.parse(
+        readFileSync(
+          join(
+            runDirFor(resumed.details.runId),
+            String(agents[0]!.resultArtifact),
+          ),
+          "utf8",
+        ),
+      ),
+      { output: "injected agent output" },
+    );
   } finally {
     __setWorkflowTestAgentSessionFactory(undefined);
   }

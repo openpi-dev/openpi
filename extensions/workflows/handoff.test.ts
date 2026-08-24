@@ -217,11 +217,11 @@ test("each text conclusion is capped at 16 KiB without splitting UTF-8", () => {
 
   const [conclusion] = registry.resolve([ref]);
   assert.ok(Buffer.byteLength(conclusion, "utf8") <= 16 * 1024);
-  assert.match(conclusion, /per-conclusion limit reached/);
+  assert.match(conclusion, /Projection bounded/);
   assert.doesNotMatch(conclusion, /�/);
 });
 
-test("the rendered handoff is capped at 48 KiB without splitting UTF-8", () => {
+test("the rendered handoff fairly projects every result inside 48 KiB", () => {
   let generated = 0;
   const registry = createWorkflowHandoffRegistry({
     tokenGenerator: () => `opaque-large-${++generated}`,
@@ -236,6 +236,32 @@ test("the rendered handoff is capped at 48 KiB without splitting UTF-8", () => {
 
   const handoff = registry.renderHandoff(refs);
   assert.ok(Buffer.byteLength(handoff, "utf8") <= 48 * 1024);
-  assert.match(handoff, /total handoff limit reached/);
+  for (let index = 1; index <= 4; index++) {
+    assert.match(handoff, new RegExp(`Upstream result ${index} \\(partial\\)`));
+    assert.match(handoff, new RegExp(`result-${index}:`));
+  }
   assert.doesNotMatch(handoff, /�/);
+});
+
+test("large fan-out never starves later results by input order", () => {
+  let generated = 0;
+  const registry = createWorkflowHandoffRegistry({
+    tokenGenerator: () => `opaque-many-${++generated}`,
+  });
+  const refs = Array.from({ length: 64 }, (_, index) =>
+    registry.register({
+      settled: true,
+      ok: true,
+      output: `identity-${index + 1}: ${"x".repeat(4_000)} :verdict-${index + 1}`,
+      resultArtifact: `agent-results/agent-${index + 1}.json`,
+    }),
+  ) as string[];
+
+  const handoff = registry.renderHandoff(refs);
+  assert.ok(Buffer.byteLength(handoff, "utf8") <= 48 * 1024);
+  for (let index = 1; index <= 64; index++) {
+    assert.match(handoff, new RegExp(`identity-${index}:`));
+    assert.match(handoff, new RegExp(`verdict-${index}`));
+    assert.match(handoff, new RegExp(`agent-results/agent-${index}\\.json`));
+  }
 });

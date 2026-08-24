@@ -6,7 +6,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import workflows from "./index.ts";
 
-test("session start keeps only the workflow entry tool active", () => {
+test("session start keeps the complete workflow capability group stable", () => {
   let active = ["read", "third_party_tool"];
   const registered: string[] = [];
   let sessionStart:
@@ -35,7 +35,16 @@ test("session start keeps only the workflow entry tool active", () => {
   sessionStart({}, {
     cwd: process.cwd(),
     hasUI: false,
+    mode: "print",
     isProjectTrusted: () => false,
+    sessionManager: {
+      getSessionId: () => "tool-surface-session",
+      getEntries: () => [],
+    },
+    ui: {
+      setStatus() {},
+      setWidget() {},
+    },
   } as unknown as ExtensionContext);
 
   assert.deepEqual(registered, [
@@ -43,5 +52,11 @@ test("session start keeps only the workflow entry tool active", () => {
     "workflow_stop",
     "workflow_status",
   ]);
-  assert.deepEqual(active, ["read", "third_party_tool", "workflow"]);
+  assert.deepEqual(active, [
+    "read",
+    "third_party_tool",
+    "workflow",
+    "workflow_stop",
+    "workflow_status",
+  ]);
 });

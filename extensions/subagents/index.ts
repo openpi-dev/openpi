@@ -124,7 +124,7 @@ import { persistResultArtifact, projectResult } from "./src/result-artifact.ts";
 import {
   allocateResultBudgets,
   type ParentContextUsage,
-} from "./src/result-budget.ts";
+} from "../shared/result-budget.ts";
 import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,

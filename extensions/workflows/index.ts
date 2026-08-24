@@ -17,9 +17,9 @@
  * `agent()` always resolves to `{ ok, output, structured?, error? }` — it
  * never throws into the script. Scripts branch on `ok` explicitly.
  *
- * Runs are blocking by default (live progress in the tool block). Pass
- * `background: true` to return immediately and get a follow-up message when
- * the run finishes. Run artifacts (script, args, statuses, result) are saved
+ * Interactive runs detach by default and deliver a completion turn later.
+ * Pass `wait: true` when the current tool call must return the final result.
+ * Run artifacts (script, args, statuses, result) are saved
  * under `~/.pi/agent/workflows/<runId>/` for inspection; result and bounded
  * transcripts use separate artifacts.
  *
@@ -84,9 +84,14 @@ import {
 import {
   createWorkflowPersistence,
   loadJournal,
+  persistWorkflowAgentResult,
   persistWorkflowJson,
 } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
+import {
+  resolveWorkflowLaunchPolicy,
+  waitForWorkflowCompletion,
+} from "./coordinator.ts";
 import {
   listPersistedRunIds,
   readPersistedWorkflowDetails,
@@ -149,8 +154,11 @@ import {
 import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
+  buildProjectedWorkflowCompletionBatch,
+  buildProjectedWorkflowResultMessage,
   buildWorkflowAgentPrompt,
   buildWorkflowResultMessage,
+  buildWorkflowStatusSummary,
   WORKFLOW_LIFECYCLE_PROMPT_SNIPPET,
   WORKFLOW_PARAMETER_DESCRIPTIONS,
   WORKFLOW_PROMPT_GUIDELINES,
@@ -161,6 +169,10 @@ import {
   WORKFLOW_STOP_TOOL_DESCRIPTION,
   WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import {
+  createWorkflowResultDelivery,
+  type WorkflowCompletionEnvelope,
+} from "./result-delivery.ts";
 import {
   beginProcessReplayWorkspaceLease,
   createReplayIdentity,
@@ -189,14 +201,14 @@ function runHeader(
   theme: Parameters<typeof statusGlyph>[1],
   now: number,
 ) {
-  const { done, failed } = countStates(details);
+  const { done, failed, uncertain } = countStates(details);
   const settled = done + failed;
   const elapsed = formatElapsed(details.startedAt, details.finishedAt);
   // A just-launched run has no agents and a 0s clock; the metrics join in
   // once there is something real to report.
   const counts =
     details.agents.length > 0
-      ? `${settled}/${details.agents.length} agents`
+      ? `${settled}/${details.agents.length} agents${uncertain ? ` · ${uncertain} uncertain` : ""}`
       : undefined;
   const metrics = [counts, counts || elapsed !== "0s" ? elapsed : undefined]
     .filter(Boolean)
@@ -534,6 +546,11 @@ const WorkflowParams = Type.Object({
       description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
     }),
   ),
+  wait: Type.Optional(
+    Type.Boolean({
+      description: WORKFLOW_PARAMETER_DESCRIPTIONS.wait,
+    }),
+  ),
   resume_from_run_id: Type.Optional(
     Type.String({
       description: WORKFLOW_PARAMETER_DESCRIPTIONS.resumeFromRunId,
@@ -578,12 +595,12 @@ function errorText(error: unknown): string {
 }
 
 function summaryLine(details: WorkflowDetails): string {
-  const { done, failed } = countStates(details);
+  const { done, failed, uncertain } = countStates(details);
   const settled = done + failed;
   // The newest narrator line beats the phase title when there is one: the
   // script wrote it precisely because it says more than the phase does.
   const latest = details.logs?.[details.logs.length - 1]?.text;
-  return `workflow ${details.name ?? details.runId}: ${settled}/${details.agents.length} agents${
+  return `workflow ${details.name ?? details.runId}: ${settled}/${details.agents.length} agents${uncertain ? ` · ${uncertain} uncertain` : ""}${
     latest
       ? ` · ${latest}`
       : details.currentPhase
@@ -729,13 +746,9 @@ export default function workflows(pi: ExtensionAPI) {
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
   const settledRuns = new Map<string, WorkflowDetails>();
-  const hideLifecycleTools = () =>
+  const registerStableToolFamily = () =>
     patchOwnedTools(pi, "workflows", {
-      disable: OPENPI_TOOL_SURFACE.workflows.deferred,
-    });
-  const showLifecycleTools = () =>
-    patchOwnedTools(pi, "workflows", {
-      enable: OPENPI_TOOL_SURFACE.workflows.deferred,
+      enable: OPENPI_TOOL_SURFACE.workflows.entry,
     });
   const stripState = new WorkflowStripState();
   const widgetKey = "workflow-navigation";
@@ -745,6 +758,52 @@ export default function workflows(pi: ExtensionAPI) {
    * next explicit request acknowledges them.
    */
   let lastContext: ExtensionContext | undefined;
+  const completionEnvelope = (
+    details: WorkflowDetails,
+  ): WorkflowCompletionEnvelope => {
+    const deliveryId = details.delivery?.id;
+    if (!deliveryId) throw new Error("Workflow delivery identity is missing");
+    return {
+      deliveryId,
+      runId: details.runId,
+      details,
+    };
+  };
+  const resultDelivery = createWorkflowResultDelivery({
+    isIdle: () => lastContext?.isIdle() ?? false,
+    persist: (details) =>
+      persistWorkflowJson(
+        path.join(getAgentDir(), "workflows", details.runId),
+        details,
+      ),
+    deliver: async (envelopes, wake) => {
+      const content = buildProjectedWorkflowCompletionBatch(
+        envelopes.map((envelope) => ({
+          deliveryId: envelope.deliveryId,
+          details: envelope.details,
+          runDir: path.join(getAgentDir(), "workflows", envelope.runId),
+        })),
+        lastContext?.getContextUsage?.(),
+      );
+      pi.sendMessage(
+        {
+          customType: "workflow-result",
+          content,
+          display: true,
+          ...(envelopes.length === 1
+            ? { details: compactToolDetails(envelopes[0]!.details) }
+            : {}),
+        },
+        wake
+          ? { deliverAs: "followUp", triggerTurn: true }
+          : { deliverAs: "nextTurn" },
+      );
+      return envelopes.map((envelope) => ({
+        deliveryId: envelope.deliveryId,
+        delivered: true,
+      }));
+    },
+  });
   let completedRuns = 0;
   let failedRuns = 0;
   let widgetVisible = false;
@@ -894,7 +953,7 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   pi.on("session_start", (_event, ctx) => {
-    hideLifecycleTools();
+    registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;
     agentTypes = loadAgentTypes({
       agentDir: getAgentDir(),
@@ -907,6 +966,35 @@ export default function workflows(pi: ExtensionAPI) {
     settledRuns.clear();
     installWorkflowNavigation(ctx);
     updateIndicator();
+
+    const sessionId = ctx.sessionManager.getSessionId();
+    for (const runId of listPersistedRunIds()) {
+      const details = readPersistedWorkflowDetails(runId, {
+        hydrateArtifacts: true,
+      });
+      if (!details || details.sessionId !== sessionId) {
+        continue;
+      }
+      const wasRunning = details.status === "running";
+      if (wasRunning) {
+        recoverStaleWorkflowDetails(details);
+        persistWorkflowJson(
+          path.join(getAgentDir(), "workflows", details.runId),
+          details,
+        );
+      }
+      // Pre-V2 terminal runs have no delivery receipt. They may already have
+      // been shown, so replaying them on upgrade would be a surprising
+      // duplicate. Only migrate owner-lost runs, whose uncertainty matters.
+      if (details.delivery) {
+        resultDelivery.restore(completionEnvelope(details));
+      }
+    }
+    void resultDelivery.flushIfIdle();
+  });
+
+  pi.on("agent_settled", () => {
+    void resultDelivery.parentSettled();
   });
 
   pi.on("input", (event) => {
@@ -932,6 +1020,7 @@ export default function workflows(pi: ExtensionAPI) {
     widgetVisible = false;
     requestWidgetRender = undefined;
     stripState.focused = false;
+    resultDelivery.clear();
   });
 
   pi.registerCommand("workflows", {
@@ -1037,7 +1126,13 @@ export default function workflows(pi: ExtensionAPI) {
       const meta = prepared.meta;
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
-      const background = (params.background ?? false) && ctx.hasUI;
+      const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
+      const launchPolicy = resolveWorkflowLaunchPolicy(
+        { wait: params.wait, background: params.background },
+        canDeliverLater,
+      );
+      const background = launchPolicy.detached;
+      const now = Date.now();
 
       const details: WorkflowDetails = {
         runId,
@@ -1046,9 +1141,15 @@ export default function workflows(pi: ExtensionAPI) {
         description: meta.description,
         background,
         status: "running",
-        startedAt: Date.now(),
+        startedAt: now,
         phases: [...meta.phases],
         agents: [],
+        delivery: {
+          id: `workflow:${runId}:terminal`,
+          state: launchPolicy.wait ? "held-for-inline" : "none",
+          attempts: 0,
+          updatedAt: now,
+        },
       };
 
       // Resume: replay cached results for calls whose content is unchanged.
@@ -1077,13 +1178,13 @@ export default function workflows(pi: ExtensionAPI) {
         journal: () => journalEntries,
       });
 
-      // Background runs survive Esc on the parent turn, but all runs are
-      // aborted and settled during session shutdown.
+      // A caller wait never owns the run. All runs survive an interrupted
+      // launch turn and are aborted only by workflow_stop/session shutdown.
       const workflowConfig = loadSetupConfig().workflows;
       const projectTrusted = ctx.isProjectTrusted();
       const runAgentTypes = agentTypes;
       const controller = new RunController(
-        background ? undefined : signal,
+        undefined,
         workflowConfig.concurrency,
         workflowConfig.maxAgentCalls,
       );
@@ -1171,6 +1272,13 @@ export default function workflows(pi: ExtensionAPI) {
         }
         details.status = status;
         details.finishedAt = Date.now();
+        if (details.delivery && background) {
+          details.delivery = {
+            ...details.delivery,
+            state: "pending",
+            updatedAt: details.finishedAt,
+          };
+        }
         refreshWorkflowGraph(details);
         if (error) details.error = sanitizeWorkflowDisplayLine(error);
         return true;
@@ -1206,7 +1314,11 @@ export default function workflows(pi: ExtensionAPI) {
 
       // One reader per run: it carries a high-water mark, because per-agent
       // usage is recomputed from a message list that compaction shrinks.
-      const readUsage = createUsageReader(details.agents);
+      const readBaseUsage = createUsageReader(details.agents);
+      const readUsage = () => ({
+        ...readBaseUsage(),
+        limits: controller.capacity(),
+      });
 
       let agentCounter = 0;
       const agentFn = async (
@@ -1540,11 +1652,18 @@ export default function workflows(pi: ExtensionAPI) {
               cached.structured,
             );
           }
+          record.resultArtifact = persistWorkflowAgentResult(runDir, index, {
+            output: cached.output,
+            ...(cached.structured !== undefined
+              ? { structured: cached.structured }
+              : {}),
+          });
           const ref = handoffs.register({
             callId,
             settled: true,
             ok: true,
             output: cached.output,
+            resultArtifact: record.resultArtifact,
             ...(cached.structured !== undefined
               ? { structured: cached.structured }
               : {}),
@@ -1745,11 +1864,26 @@ export default function workflows(pi: ExtensionAPI) {
                 record.error = judged.error
                   ? sanitizeWorkflowDisplayLine(judged.error)
                   : undefined;
+              if (outcomeOk) {
+                record.resultArtifact = persistWorkflowAgentResult(
+                  runDir,
+                  index,
+                  {
+                    output: outcome.output,
+                    ...(outcome.structured !== undefined
+                      ? { structured: outcome.structured }
+                      : {}),
+                  },
+                );
+              }
               const ref = handoffs.register({
                 callId,
                 settled: true,
                 ok: outcomeOk,
                 output: outcome.output,
+                ...(record.resultArtifact
+                  ? { resultArtifact: record.resultArtifact }
+                  : {}),
                 ...(outcome.structured !== undefined
                   ? { structured: outcome.structured }
                   : {}),
@@ -1928,48 +2062,29 @@ export default function workflows(pi: ExtensionAPI) {
       if (ctx.hasUI) lastContext = ctx;
       updateIndicator();
 
+      const recordTerminalRun = () => {
+        activeRuns.delete(runId);
+        recordSettledRun(details);
+        updateIndicator();
+      };
+
+      const settleForLaterDelivery = async (inlineReleased: boolean) => {
+        try {
+          await completion;
+        } catch (error) {
+          details.status = "failed";
+          details.finishedAt = Date.now();
+          details.error = details.error ?? errorText(error);
+        } finally {
+          recordTerminalRun();
+          const envelope = completionEnvelope(details);
+          if (inlineReleased) resultDelivery.releaseInline(envelope);
+          else resultDelivery.defer(envelope);
+        }
+      };
+
       if (background) {
-        void completion
-          .catch((error) => {
-            details.status = "failed";
-            details.finishedAt = Date.now();
-            details.error = details.error ?? errorText(error);
-          })
-          .finally(() => {
-            activeRuns.delete(runId);
-            recordSettledRun(details);
-            updateIndicator();
-            try {
-              // Deliver like the subagent/terminal families: a custom-typed
-              // session message with a dedicated renderer, not a plain
-              // user-provenance turn.
-              //
-              // Wake the model only if it is idle and therefore plausibly
-              // waiting on this run. If it is busy with something else, the
-              // result still enters context with the user's next message
-              // (nextTurn) instead of forcing a turn it can only acknowledge.
-              const wake = ctx.isIdle();
-              pi.sendMessage(
-                {
-                  customType: "workflow-result",
-                  content: buildBackgroundWorkflowFollowUp({
-                    runId,
-                    name: details.name,
-                    status: details.status,
-                    result: buildWorkflowResultMessage(details, runDir),
-                  }),
-                  display: true,
-                  details: compactToolDetails(details),
-                },
-                wake
-                  ? { deliverAs: "followUp", triggerTurn: true }
-                  : { deliverAs: "nextTurn" },
-              );
-            } catch {
-              // Session may be shutting down.
-            }
-          });
-        showLifecycleTools();
+        void settleForLaterDelivery(false);
         return {
           content: [
             {
@@ -1985,13 +2100,15 @@ export default function workflows(pi: ExtensionAPI) {
         };
       }
 
-      try {
-        await completion;
-      } finally {
-        activeRuns.delete(runId);
-        recordSettledRun(details);
-        updateIndicator();
+      const waitOutcome = await waitForWorkflowCompletion(completion, signal);
+      if (waitOutcome === "aborted") {
+        void settleForLaterDelivery(true);
+        throw new Error(
+          `Workflow wait interrupted; run ${runId} continues in the background.`,
+        );
       }
+      recordTerminalRun();
+      resultDelivery.consumeInline(details);
       if (details.status !== "completed") {
         // Pi marks tool failures only when execute throws; returning isError is
         // ignored by the extension API.
@@ -2001,7 +2118,11 @@ export default function workflows(pi: ExtensionAPI) {
         content: [
           {
             type: "text",
-            text: buildWorkflowResultMessage(details, runDir),
+            text: buildProjectedWorkflowResultMessage(
+              details,
+              runDir,
+              ctx.getContextUsage?.(),
+            ),
           },
         ],
         details: compactToolDetails(details),
@@ -2117,23 +2238,29 @@ export default function workflows(pi: ExtensionAPI) {
       }),
     }),
     execute(_toolCallId, params) {
-      const running = [...activeRuns].filter(
-        ([, run]) => run.details.status === "running",
-      );
-      const resolution = resolveWorkflowRunTarget(
-        params.runId,
-        running.map(([runId]) => runId),
-      );
+      const resolution = resolveRunDetails(params.runId);
       if (!resolution.ok) throw new Error(resolution.error);
-      stopRun(resolution.runId);
+      const details = resolution.details;
+      if (details.status !== "running") {
+        return Promise.resolve({
+          content: [
+            {
+              type: "text",
+              text: `Workflow ${details.runId} is already ${details.status}.`,
+            },
+          ],
+          details: { runId: details.runId, status: details.status },
+        });
+      }
+      stopRun(details.runId);
       return Promise.resolve({
         content: [
           {
             type: "text",
-            text: `Stopping workflow ${resolution.runId}.`,
+            text: `Stopping workflow ${details.runId}.`,
           },
         ],
-        details: { runId: resolution.runId, status: "aborting" },
+        details: { runId: details.runId, status: "aborting" },
       });
     },
   });
@@ -2153,13 +2280,14 @@ export default function workflows(pi: ExtensionAPI) {
       // Details are a uniform run-summary array (one entry for a single-id peek)
       // so the tool has a single result shape; the text carries the detail.
       const summarize = (d: WorkflowDetails) => {
-        const { done, failed } = countStates(d);
+        const { done, failed, uncertain } = countStates(d);
         return {
           runId: d.runId,
           name: d.name,
           status: d.status,
           done,
           failed,
+          uncertain,
           total: d.agents.length,
         };
       };
@@ -2170,7 +2298,7 @@ export default function workflows(pi: ExtensionAPI) {
         const runDir = path.join(getAgentDir(), "workflows", details.runId);
         return Promise.resolve({
           content: [
-            { type: "text", text: buildWorkflowResultMessage(details, runDir) },
+            { type: "text", text: buildWorkflowStatusSummary(details, runDir) },
           ],
           details: { runs: [summarize(details)] },
         });
@@ -2188,8 +2316,8 @@ export default function workflows(pi: ExtensionAPI) {
         });
       }
       const lines = runs.map((d) => {
-        const { done, failed } = countStates(d);
-        return `${d.runId}${d.name ? ` "${d.name}"` : ""} — ${statusWord(d.status)} · ${done + failed}/${d.agents.length} agents${failed ? `, ${failed} failed` : ""}`;
+        const { done, failed, uncertain } = countStates(d);
+        return `${d.runId}${d.name ? ` "${d.name}"` : ""} — ${statusWord(d.status)} · ${done + failed}/${d.agents.length} agents${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""}`;
       });
       return Promise.resolve({
         content: [{ type: "text", text: lines.join("\n") }],

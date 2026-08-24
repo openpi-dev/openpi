@@ -43,7 +43,7 @@ const gitInfo: GitInfoState = {
   pullRequest: { number: 42, url: "https://example.com/pr/42", isDraft: false },
 };
 
-test("default one-line layout keeps flex alignment", () => {
+test("default one-line layout leads with model context and ends with cwd", () => {
   const lines = renderFooter({
     cwd: "/Users/me/project",
     modelInfo,
@@ -63,10 +63,16 @@ test("default one-line layout keeps flex alignment", () => {
   assert.doesNotMatch(lines[0]!, /\$/);
   assert.match(lines[0]!, /main/);
   assert.match(lines[0]!, /PR #42/);
-  const gap =
-    lines[0]!.indexOf("seal/gpt-5.6-sol") -
-    lines[0]!.indexOf("PR #42") -
-    "PR #42".length;
+  const modelIndex = lines[0]!.indexOf("seal/gpt-5.6-sol");
+  const contextIndex = lines[0]!.indexOf("25%/1.0m");
+  const branchIndex = lines[0]!.indexOf("main");
+  const prIndex = lines[0]!.indexOf("PR #42");
+  const cwdIndex = lines[0]!.indexOf("project");
+  assert.ok(modelIndex < contextIndex);
+  assert.ok(contextIndex < branchIndex);
+  assert.ok(branchIndex < prIndex);
+  assert.ok(prIndex < cwdIndex);
+  const gap = branchIndex - contextIndex - "25%/1.0m".length;
   assert.ok(gap > 1);
 });
 
@@ -202,6 +208,14 @@ test("context uses warning and error tones at thresholds", () => {
   assert.equal(ok.tone, "muted");
 });
 
+test("uses one Codicon family for model, context, and directory", () => {
+  const catalog = buildSegmentCatalog("/tmp/project", modelInfo, gitInfo);
+
+  assert.match(catalog.model.text, /^\uec10 /);
+  assert.match(catalog.context.text, /^\uebe4 /);
+  assert.match(catalog.cwd.text, /^\uea83 /);
+});
+
 test("a single status inlines into the first footer line when it fits", () => {
   const lines = renderFooter({
     cwd: "/tmp/project",
@@ -278,8 +292,8 @@ test("legacy buildFooterContent still groups selected items", () => {
   ]);
   assert.deepEqual(content, {
     showCwd: false,
-    model: "✦ seal/gpt-5.6-sol",
-    usage: "◑ 25%/1.0m · cache 82%",
+    model: "\uec10 seal/gpt-5.6-sol",
+    usage: "\uebe4 25%/1.0m · cache 82%",
     git: "",
   });
 });

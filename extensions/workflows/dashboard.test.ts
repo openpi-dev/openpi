@@ -84,6 +84,12 @@ test("stale recovery reconciles the run and every active agent", () => {
   const details = normalizePersistedWorkflowDetails("wf_stale", {
     status: "running",
     startedAt: 10,
+    delivery: {
+      id: "workflow:wf_stale:terminal",
+      state: "held-for-inline",
+      attempts: 0,
+      updatedAt: 10,
+    },
     agents: [
       {
         index: 1,
@@ -105,12 +111,37 @@ test("stale recovery reconciles the run and every active agent", () => {
 
   recoverStaleWorkflowDetails(details, 100);
 
-  assert.equal(details.status, "aborted");
+  assert.equal(details.status, "uncertain");
   assert.equal(details.finishedAt, 100);
-  assert.equal(details.agents[0]?.state, "error");
+  assert.equal(details.delivery?.state, "pending");
+  assert.match(details.delivery?.lastError ?? "", /owner process ended/);
+  assert.equal(details.agents[0]?.state, "uncertain");
   assert.equal(details.agents[0]?.finishedAt, 100);
   assert.equal(details.agents[1]?.state, "done");
-  assert.equal(details.graph?.nodes[0]?.state, "error");
+  assert.equal(details.graph?.nodes[0]?.state, "uncertain");
+});
+
+test("stale pre-V2 runs gain a stable delivery identity while terminal legacy runs do not replay", () => {
+  const stale = normalizePersistedWorkflowDetails("wf_legacy", {
+    status: "running",
+    startedAt: 10,
+    agents: [],
+    phases: [],
+  })!;
+  recoverStaleWorkflowDetails(stale, 100);
+  assert.equal(stale.status, "uncertain");
+  assert.equal(stale.delivery?.id, "workflow:wf_legacy");
+  assert.equal(stale.delivery?.state, "pending");
+
+  const terminal = normalizePersistedWorkflowDetails("wf_old_done", {
+    status: "completed",
+    startedAt: 10,
+    finishedAt: 20,
+    agents: [],
+    phases: [],
+  })!;
+  recoverStaleWorkflowDetails(terminal, 100);
+  assert.equal(terminal.delivery, undefined);
 });
 
 test("persisted usage is normalized to finite nonnegative numbers", () => {

@@ -7,7 +7,7 @@ The `workflow` script is an async JavaScript function body executed in a restric
 - `export const meta = { name?, description?, phases: [{ title, detail? }] }` declares progress metadata. Declare phases up front.
 - `phase(title)` selects a declared phase.
 - `log(message)` emits one terminal-safe progress line. The latest 100 lines are retained and dropped-line counts are reported.
-- `usage()` returns cumulative `{ input, output, cacheRead, cacheWrite, total, cost, agents }`. It refreshes after agents settle. Compaction can make it a lower bound; it is a reading, not a limit.
+- `usage()` returns cumulative `{ input, output, cacheRead, cacheWrite, total, cost, agents, limits }`. `limits` contains `{ concurrency, maxAgentCalls, callsUsed, callsRemaining }` resolved for this run. Token fields refresh after agents settle and compaction can make them a lower bound; capacity fields are runtime facts, not target fan-out.
 - `args` is the parsed `args` tool parameter, or the original string when it is not valid JSON.
 
 ## Agent calls
@@ -20,7 +20,8 @@ Useful options include `agent_type`, `label`, `phase`, `schema`, `acceptance`, `
 - `schema` validates structured output. Use it whenever later workflow logic branches on fields.
 - `acceptance: { criteria: [{ id, description, requiredEvidence? }] }` requires the same child to return an evidence ledger. Missing, malformed, or rejected criteria make `ok:false` while preserving output and evidence.
 - `operator: "name"` reuses one in-memory child Session for serialized follow-ups inside the same run. Its model, role/tools, effort, structured mode, and cwd are frozen by the first activation. Operators cannot use per-call worktrees or replay, and do not survive restarts.
-- `inputs: [ref, ...]` accepts successful opaque refs from the same workflow run only. Each conclusion is bounded to 16 KiB and total injected input to 48 KiB. Inputs are marked as untrusted data; the resulting graph is observability, not scheduling authority.
+- `inputs: [ref, ...]` accepts successful opaque refs from the same workflow run only. Each conclusion is bounded to 16 KiB and total injected input to 48 KiB. The total budget is fairly distributed, so a large fan-out cannot starve later results merely because of order; partial projections are labeled. Full successful child results remain in the run's `agent-results/` artifacts. Inputs are marked as untrusted data; the resulting graph is observability, not scheduling authority.
+- Fair projection preserves the head and tail of every partial result and names its run-relative `agent-results/agent-N.json` audit artifact. That path is provenance for the parent/operator, not a child-readable handle. Fair presence is not proof of full evidence coverage: for large fan-out, group source refs into local Report agents, then pass only their refs to a global Report. The workflow script—not Runtime—must state planned, selected, covered, failed, and deferred counts.
 - `isolation: "worktree"` gives a writing child its own branch and checkout. Concurrent writers without isolation share one checkout and Git index and can overwrite each other. Tell isolated writers to commit. Empty worktrees are reclaimed; commits keep the branch; dirty work may keep the directory.
 
 ## Fan-out
@@ -37,8 +38,10 @@ Workflow concurrency defaults to the configured package value and has a hard max
 
 Each call persists intent, admission, and execution state. Interrupted nonterminal calls become `uncertain`, never guessed failed. Artifacts contain results, bounded transcripts, and a read-only graph projection for explicit result refs.
 
-## Background and replay
+## Lifecycle and replay
 
-`background: true` returns a run id immediately. The Session later receives a completion message; `workflow_status` inspects and `workflow_stop` cancels. Lifecycle tools become visible after a background run starts.
+Interactive TUI runs return an accepted run id immediately by default, release the parent turn, and later deliver a terminal completion with a stable delivery id. Delivery is at least once: normal retries do not duplicate a run, but a process loss after Pi accepts the message and before the receipt is persisted can replay the same id. `wait: true` explicitly waits inline; interrupting that wait releases only the waiter and the run continues. Print/automation defaults to waiting because it has no later delivery channel. The deprecated `background` parameter remains an inverse compatibility alias and cannot be combined with `wait`.
+
+Loading the Workflow capability exposes `workflow`, `workflow_status`, and `workflow_stop` as one stable group; starting or settling a run does not mutate the model tool Schema. `workflow_status` returns a bounded state/coverage summary and artifact path without consuming or repeating the full completion. `workflow_stop` is idempotent and preserves partial artifacts. A failed completion send remains pending with the same per-run delivery identity and is retried when the parent settles or the Session is restored.
 
 `resume_from_run_id` accepts a previous run id or unique suffix. Replay is content-based and order-independent. It requires an unchanged prompt, resolved role/schema/model/provider/effort, canonical cwd, repository state, resources, and trust context. Only provably read-only non-operator calls replay. Failed, unrestricted, unknown-tool, writable, worktree, operator, or un-fingerprintable calls run for real. Missing or old journals safely degrade to a full run.

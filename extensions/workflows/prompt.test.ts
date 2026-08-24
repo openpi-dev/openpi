@@ -4,7 +4,10 @@ import test from "node:test";
 import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
+  buildProjectedWorkflowCompletionBatch,
+  buildProjectedWorkflowResultMessage,
   buildWorkflowResultMessage,
+  buildWorkflowStatusSummary,
   WORKFLOW_PROMPT_GUIDELINES,
   WORKFLOW_STATUS_TOOL_DESCRIPTION,
   WORKFLOW_STOP_TOOL_DESCRIPTION,
@@ -34,6 +37,68 @@ test("background follow-up uses a sentence lead-in, not the old bracket form", (
     result: "boom",
   });
   assert.match(failed, /^Background workflow wf_def456 \(wf_def456\) failed\./);
+});
+
+test("completion batches share one bounded fair projection budget", () => {
+  const entries = Array.from({ length: 64 }, (_, index) => {
+    const details: WorkflowDetails = {
+      runId: `wf_${index.toString(16).padStart(4, "0")}`,
+      status: "completed",
+      background: true,
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+      result: {
+        identity: `run-${index}`,
+        evidence: "x".repeat(8_000),
+        verdict: `tail-${index}`,
+      },
+    };
+    return {
+      deliveryId: `delivery-${index}`,
+      details,
+      runDir: `/tmp/${details.runId}`,
+    };
+  });
+  const projected = buildProjectedWorkflowCompletionBatch(entries, {
+    tokens: 10_000,
+    contextWindow: 100_000,
+  });
+  assert.ok(Buffer.byteLength(projected, "utf8") <= 48 * 1024);
+  for (let index = 0; index < entries.length; index++) {
+    assert.match(
+      projected,
+      new RegExp(`wf_${index.toString(16).padStart(4, "0")}`),
+    );
+  }
+});
+
+test("uncertain agents are never described as settled failures", () => {
+  const details: WorkflowDetails = {
+    runId: "wf_uncertain",
+    status: "uncertain",
+    background: true,
+    startedAt: 1,
+    finishedAt: 2,
+    phases: [],
+    agents: [
+      {
+        index: 1,
+        label: "owner-lost",
+        state: "uncertain",
+        startedAt: 1,
+        finishedAt: 2,
+        preview: "",
+        usage: emptyUsage(),
+        transcript: [],
+      },
+    ],
+  };
+  const summary = buildWorkflowStatusSummary(details, "/tmp/wf_uncertain");
+  assert.match(summary, /0\/1 agents settled/);
+  assert.match(summary, /1 uncertain/);
+  assert.doesNotMatch(summary, /1 failed/);
 });
 
 test("launch result advertises the model-facing lifecycle tools", () => {
@@ -172,6 +237,29 @@ test("result message carries the script's narration and what it dropped", () => 
   assert.doesNotMatch(quiet, /^Log:$/m);
 });
 
+test("model projection follows parent headroom and preserves head, tail, and recovery", () => {
+  const large = details(
+    Array.from({ length: 64 }, (_, index) =>
+      agentRecord({ index: index + 1, label: `agent-${index + 1}` }),
+    ),
+  );
+  large.logs = Array.from({ length: 100 }, (_, index) => ({
+    at: index,
+    text: `log-${index + 1}: ${"x".repeat(1_500)}`,
+  }));
+  large.result = { verdict: "tail-verdict", evidence: "y".repeat(30_000) };
+
+  const projected = buildProjectedWorkflowResultMessage(
+    large,
+    "/tmp/wf_abc123",
+    { tokens: 99_900, contextWindow: 100_000 },
+  );
+  assert.ok(Buffer.byteLength(projected, "utf8") <= 8 * 1024);
+  assert.match(projected, /^Workflow/);
+  assert.match(projected, /tail-verdict|bounded result artifact/);
+  assert.match(projected, /Full workflow evidence is available/);
+});
+
 test("the resident workflow prompt stays compact while the Skill carries the full guide", async () => {
   assert.ok(Buffer.byteLength(WORKFLOW_TOOL_DESCRIPTION, "utf8") < 3_000);
   assert.match(WORKFLOW_TOOL_DESCRIPTION, /workflows Skill/i);
@@ -188,6 +276,9 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
     new URL("../../skills/workflows/SKILL.md", import.meta.url),
     "utf8",
   );
+  assert.doesNotMatch(skill, /maxItems:\s*32/);
+  assert.match(skill, /capacity\.callsRemaining < 1/);
+  assert.match(skill, /capacity\.callsRemaining - 1/);
   const reference = await readFile(
     new URL("../../skills/workflows/REFERENCE.md", import.meta.url),
     "utf8",

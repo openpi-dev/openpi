@@ -184,8 +184,8 @@ test("legacy footerItems migrates onto the default one-line skeleton", () => {
     },
   }).ui;
 
-  assert.deepEqual(ui.footerLines, [["git", "flex", "model", "context"]]);
-  assert.deepEqual(ui.footerItems, ["git", "model", "context"]);
+  assert.deepEqual(ui.footerLines, [["model", "context", "flex", "git"]]);
+  assert.deepEqual(ui.footerItems, ["model", "context", "git"]);
   assert.equal(ui.footerStyle, "plain");
 });
 

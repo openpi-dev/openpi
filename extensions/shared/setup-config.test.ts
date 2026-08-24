@@ -21,6 +21,7 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 
 const {
   DEFAULT_SETUP_CONFIG,
+  FOOTER_PRESET_DEFINITIONS,
   formatSetupConfig,
   SETUP_CONFIG_PATH,
   loadSetupConfig,
@@ -57,6 +58,34 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
     formatSetupConfig(DEFAULT_SETUP_CONFIG),
     /Capability discovery: explicit/,
   );
+});
+
+test("every one-line footer preset keeps model context left and cwd right", () => {
+  for (const preset of Object.values(FOOTER_PRESET_DEFINITIONS)) {
+    assert.deepEqual(preset.lines, [
+      ["model", "context", "flex", "git", "pr", "cwd"],
+    ]);
+  }
+});
+
+test("the previous canonical footer default migrates without rewriting custom layouts", () => {
+  const migrated = parseSetupConfig({
+    ui: {
+      footerLines: [["cwd", "git", "pr", "flex", "model", "context"]],
+    },
+  });
+  assert.deepEqual(migrated.ui.footerLines, [
+    ["model", "context", "flex", "git", "pr", "cwd"],
+  ]);
+
+  const custom = parseSetupConfig({
+    ui: {
+      footerLines: [["cwd", "flex", "model", "context", "git", "pr"]],
+    },
+  });
+  assert.deepEqual(custom.ui.footerLines, [
+    ["cwd", "flex", "model", "context", "git", "pr"],
+  ]);
 });
 
 test("an unreadable config blocks the write and survives untouched", async () => {
