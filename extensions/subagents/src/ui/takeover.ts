@@ -12,13 +12,8 @@ import type {
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
-import {
-  Input,
-  Key,
-  matchesKey,
-  truncateToWidth,
-  visibleWidth,
-} from "@earendil-works/pi-tui";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
+import { AgentSessionPage } from "../../../shared/agent-session-page.ts";
 import {
   hintLine,
   panelFrame,
@@ -27,13 +22,11 @@ import {
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../../../shared/context-utilization.ts";
-import { TranscriptViewport } from "../../../shared/transcript-viewport.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import {
-  buildTranscriptLines,
   SPINNER_INTERVAL_MS,
   spinnerFrame,
-  TranscriptRenderer,
+  subagentTranscriptDocument,
 } from "./transcript.ts";
 
 export function sanitizeSubagentDisplayLine(value: string) {
@@ -90,7 +83,7 @@ export async function openSubagentTakeover(
       new TakeoverView(tui, theme, keybindings, id, view, done, options),
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+      overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
     },
   );
 }
@@ -394,34 +387,18 @@ export class SubagentDashboard implements Component {
 
 // --- Takeover view ------------------------------------------------------------
 
-const TRANSCRIPT_SCROLL_STEP = 6;
-
 export class TakeoverView implements Component, Focusable {
-  private tui: TUI;
-  private theme: Theme;
-  private keybindings: KeybindingsManager;
-  private id: string;
-  private view: SubagentReadModel;
-  private done: (value: null) => void;
-  private options?: TakeoverOptions;
-
-  private input = new Input();
-  private transcriptRenderer = new TranscriptRenderer();
-  private transcriptViewport = new TranscriptViewport();
-  private transcriptRowCount = 0;
-  private transcriptViewportSize = 1;
+  private page: AgentSessionPage;
   private unsubscribe: () => void;
   private renderTimer?: ReturnType<typeof setTimeout>;
   private ticker?: ReturnType<typeof setInterval>;
   private closed = false;
 
-  private _focused = false;
-  get focused(): boolean {
-    return this._focused;
+  get focused() {
+    return this.page.focused;
   }
   set focused(value: boolean) {
-    this._focused = value;
-    this.input.focused = value;
+    this.page.focused = value;
   }
 
   constructor(
@@ -433,53 +410,50 @@ export class TakeoverView implements Component, Focusable {
     done: (value: null) => void,
     options?: TakeoverOptions,
   ) {
-    this.tui = tui;
-    this.theme = theme;
-    this.keybindings = keybindings;
-    this.id = id;
-    this.view = view;
-    this.done = done;
-    this.options = options;
-    this.unsubscribe = view.subscribeTo(id, () => {
-      this.refreshTicker();
-      this.scheduleRender();
+    this.page = new AgentSessionPage(tui, theme, keybindings, {
+      getState: () => {
+        const snap = view.get(id);
+        if (!snap) return undefined;
+        return {
+          id: snap.id,
+          title: snap.title,
+          status: snap.status,
+          document: subagentTranscriptDocument(snap),
+          metadata: [
+            options?.badge,
+            snap.meta.modelLabel,
+            formatContextUtilization(snap.usage),
+            formatElapsed(snap),
+          ],
+          errorText: snap.errorText,
+        };
+      },
+      close: () => this.close(done),
+      send: (text) => view.requestSend(id, text),
+      abort: () => view.requestAbort(id),
     });
-    this.refreshTicker();
-    this.input.onSubmit = (value: string) => {
-      const text = value.trim();
-      if (!text) return;
-      this.input.setValue("");
-      this.view.requestSend(this.id, text);
-      this.transcriptViewport.scrollToEnd(
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-    };
+    this.unsubscribe = view.subscribeTo(id, () => {
+      this.refreshTicker(view.get(id), tui);
+      this.scheduleRender(tui);
+    });
+    this.refreshTicker(view.get(id), tui);
   }
 
-  private snap(): SubagentSnapshot | undefined {
-    return this.view.get(this.id);
-  }
-
-  private refreshTicker() {
+  private refreshTicker(snap: SubagentSnapshot | undefined, tui: TUI) {
     if (this.ticker) clearInterval(this.ticker);
     this.ticker = undefined;
-    if (this.snap()?.status === "running") {
-      this.ticker = setInterval(
-        () => this.tui.requestRender(),
-        SPINNER_INTERVAL_MS,
-      );
+    if (snap?.status === "running") {
+      this.ticker = setInterval(() => tui.requestRender(), SPINNER_INTERVAL_MS);
     }
   }
 
-  private scheduleRender() {
+  private scheduleRender(tui: TUI) {
     if (this.renderTimer) return;
     // Streaming can emit an event per token. Limit terminal repaints so this
     // view cannot starve input handling or make the child look frozen.
     this.renderTimer = setTimeout(() => {
       this.renderTimer = undefined;
-      if (!this.closed) this.tui.requestRender();
+      if (!this.closed) tui.requestRender();
     }, 50);
   }
 
@@ -493,8 +467,8 @@ export class TakeoverView implements Component, Focusable {
     return true;
   }
 
-  private close() {
-    if (this.cleanup()) this.done(null);
+  private close(done: (value: null) => void) {
+    if (this.cleanup()) done(null);
   }
 
   dispose(): void {
@@ -502,234 +476,14 @@ export class TakeoverView implements Component, Focusable {
   }
 
   handleInput(data: string): void {
-    if (this.keybindings.matches(data, "app.clear")) {
-      const snap = this.snap();
-      if (snap?.status === "running") this.view.requestAbort(this.id);
-      return;
-    }
-    if (
-      this.keybindings.matches(data, "app.interrupt") ||
-      this.keybindings.matches(data, "tui.select.cancel")
-    ) {
-      this.close();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.cursorUp")) {
-      this.transcriptViewport.scrollBy(
-        -TRANSCRIPT_SCROLL_STEP,
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.cursorDown")) {
-      this.transcriptViewport.scrollBy(
-        TRANSCRIPT_SCROLL_STEP,
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.pageUp")) {
-      this.transcriptViewport.scrollBy(
-        -this.transcriptViewportSize,
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    if (this.keybindings.matches(data, "tui.editor.pageDown")) {
-      this.transcriptViewport.scrollBy(
-        this.transcriptViewportSize,
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    const transcriptNavigation = this.input.getValue().length === 0;
-    if (transcriptNavigation && (matchesKey(data, Key.home) || data === "g")) {
-      this.transcriptViewport.scrollToTop(
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    if (transcriptNavigation && (matchesKey(data, Key.end) || data === "G")) {
-      this.transcriptViewport.scrollToEnd(
-        this.transcriptRowCount,
-        this.transcriptViewportSize,
-      );
-      this.tui.requestRender();
-      return;
-    }
-    this.input.handleInput(data);
-    this.tui.requestRender();
-  }
-
-  private viewportHeight(): number {
-    const rows = this.tui.terminal.rows || 30;
-    // Top rule, transcript rule, input, key hints, and bottom rule are five
-    // chrome rows. The overlay leaves Pi's final footer row visible.
-    return Math.max(1, rows - 6);
-  }
-
-  private rule(width: number, left = "", right = "") {
-    const fill = "─";
-    const available = Math.max(1, width);
-    const leftWidth = visibleWidth(left);
-    const rightWidth = visibleWidth(right);
-    if (!right || leftWidth + rightWidth + 2 > available) {
-      return truncateToWidth(
-        left + fill.repeat(Math.max(0, available - leftWidth)),
-        available,
-      );
-    }
-    return (
-      left +
-      fill.repeat(Math.max(1, available - leftWidth - rightWidth)) +
-      right
-    );
+    this.page.handleInput(data);
   }
 
   render(width: number): string[] {
-    const theme = this.theme;
-    const now = Date.now();
-    const lines: string[] = [];
-    const snap = this.snap();
-
-    if (!snap) {
-      const border = theme.fg("borderAccent", "─".repeat(Math.max(1, width)));
-      lines.push(
-        border,
-        theme.fg("dim", `${this.id} is no longer tracked`),
-        border,
-      );
-      return lines;
-    }
-
-    const title = sanitizeSubagentDisplayLine(snap.title) || snap.id;
-    const headerLeft =
-      theme.fg("borderAccent", "─ ") +
-      statusGlyph(snap, theme, now) +
-      " " +
-      theme.fg("accent", theme.bold(title)) +
-      theme.fg("borderAccent", " ");
-    const utilization = formatContextUtilization(snap.usage);
-    const metadata = [
-      ...(this.options?.badge
-        ? [theme.fg("muted", sanitizeSubagentDisplayLine(this.options.badge))]
-        : []),
-      theme.fg(
-        "muted",
-        sanitizeSubagentDisplayLine(snap.meta.modelLabel ?? "?") || "?",
-      ),
-      ...(utilization ? [theme.fg("muted", utilization)] : []),
-      theme.fg("muted", formatElapsed(snap)),
-    ];
-    const dot = theme.fg("dim", " · ");
-    while (
-      metadata.length > 1 &&
-      visibleWidth(headerLeft) + visibleWidth(metadata.join(dot)) + 2 > width
-    ) {
-      metadata.shift();
-    }
-    lines.push(
-      this.rule(
-        width,
-        truncateToWidth(
-          headerLeft,
-          Math.max(1, width - visibleWidth(metadata.join(dot)) - 2),
-        ),
-        metadata.join(dot),
-      ),
-    );
-
-    // Fixed-height transcript viewport. Errors consume a row, but scroll state
-    // is represented by the following rule so its height never changes.
-    // `now` is shared with the header glyph so both spinners show one frame.
-    const transcript = buildTranscriptLines(
-      snap,
-      width,
-      theme,
-      this.transcriptRenderer,
-      { now },
-    );
-    const viewport = this.viewportHeight();
-    const errorRows = snap.errorText ? 1 : 0;
-    const transcriptCapacity = Math.max(1, viewport - errorRows);
-    this.transcriptRowCount = transcript.length;
-    this.transcriptViewportSize = transcriptCapacity;
-    this.transcriptViewport.reconcile(transcript.length, transcriptCapacity);
-
-    const body: string[] = [];
-    if (snap.errorText) {
-      body.push(
-        truncateToWidth(
-          theme.fg(
-            "error",
-            `error: ${sanitizeSubagentDisplayLine(snap.errorText)}`,
-          ),
-          width,
-        ),
-      );
-    }
-    const visible = transcript.slice(
-      this.transcriptViewport.scrollTop,
-      this.transcriptViewport.scrollTop + transcriptCapacity,
-    );
-    if (visible.length === 0) body.push(theme.fg("dim", "waiting for output…"));
-    else body.push(...visible);
-    while (body.length < viewport) body.push("");
-    lines.push(...body.slice(0, viewport));
-
-    lines.push(
-      this.rule(
-        width,
-        theme.fg("borderAccent", "─"),
-        this.transcriptViewport.followingEnd
-          ? ""
-          : theme.fg(
-              "dim",
-              `↓ ${this.transcriptViewport.linesBelow(transcript.length, transcriptCapacity)}`,
-            ),
-      ),
-    );
-    lines.push(...this.input.render(width));
-    const keys = (binding: Parameters<KeybindingsManager["getKeys"]>[0]) =>
-      configuredKeys(this.keybindings, binding);
-    const editing: ScreenHint[] = [
-      [keys("tui.input.submit"), "send"],
-      [keys("app.interrupt"), "back"],
-      [keys("app.clear"), "abort run"],
-      [
-        `${keys("tui.editor.cursorUp")}/${keys("tui.editor.cursorDown")}`,
-        "scroll",
-      ],
-    ];
-    // Same drop-the-page-hint fallback as before, measured on the styled line
-    // so the keys-brighter-than-labels styling cannot change what fits.
-    const full = hintLine(
-      theme,
-      [
-        ...editing,
-        [`${keys("tui.editor.pageUp")}/${keys("tui.editor.pageDown")}`, "page"],
-      ],
-      width,
-    );
-    lines.push(
-      visibleWidth(full) <= width ? full : hintLine(theme, editing, width),
-    );
-    lines.push(this.rule(width, theme.fg("borderAccent", "─")));
-    return lines;
+    return this.page.render(width);
   }
 
   invalidate(): void {
-    this.input.invalidate();
-    this.transcriptRenderer.invalidate();
+    this.page.invalidate();
   }
 }

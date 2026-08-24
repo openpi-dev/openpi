@@ -18,12 +18,8 @@ import {
   getAgentDir,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import {
-  Key,
-  matchesKey,
-  type TUI,
-  truncateToWidth,
-} from "@earendil-works/pi-tui";
+import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import { AgentSessionPage } from "../shared/agent-session-page.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import {
@@ -34,7 +30,6 @@ import {
 } from "../shared/screen-chrome.ts";
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
-import { TranscriptViewport } from "../shared/transcript-viewport.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
 import {
@@ -68,11 +63,10 @@ import {
   workflowGraphRecords,
 } from "./model.ts";
 import { writeFileAtomic } from "./serialization.ts";
-import { WorkflowTranscriptRenderer } from "./transcript.ts";
+import { WorkflowTranscriptAdapter } from "./transcript.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
-const TRANSCRIPT_SCROLL_STEP = 20;
 
 function wrapSelection(index: number, delta: number, length: number): number {
   if (length === 0) return 0;
@@ -682,10 +676,7 @@ export class WorkflowDashboard {
   private phaseIndex = 0;
   private agentIndex = 0;
   private detailFocus: DetailFocus = "phases";
-  private transcriptViewport = new TranscriptViewport();
-  private transcriptRowCount = 0;
-  private transcriptViewportSize = 1;
-  private transcriptRenderer = new WorkflowTranscriptRenderer();
+  private transcriptPage?: AgentSessionPage;
   private current?: RunEntry;
   private openedDirectly = false;
   private notice?: string;
@@ -774,10 +765,11 @@ export class WorkflowDashboard {
     this.disposed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.transcriptPage = undefined;
   }
 
   invalidate() {
-    this.transcriptRenderer.invalidate();
+    this.transcriptPage?.invalidate();
   }
 
   private refresh() {
@@ -949,75 +941,78 @@ export class WorkflowDashboard {
         } else if (left || cancel) {
           this.detailFocus = "phases";
         } else if ((right || confirm) && this.selectedAgent()) {
-          this.transcriptViewport = new TranscriptViewport();
-          this.view = "transcript";
+          this.openTranscriptPage();
         }
       }
       if (data === "s") this.saveReport();
       if (data === "x") this.abortRun(this.current);
     } else {
-      const scrollStep =
-        data === "j" || data === "k" ? TRANSCRIPT_SCROLL_STEP : 1;
-      const pageStep = Math.max(1, this.transcriptViewportSize - 2);
-      if (up) {
-        this.transcriptViewport.scrollBy(
-          -scrollStep,
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (down) {
-        this.transcriptViewport.scrollBy(
-          scrollStep,
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (matchesKey(data, Key.ctrl("u"))) {
-        this.transcriptViewport.scrollBy(
-          -pageStep,
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (matchesKey(data, Key.ctrl("d"))) {
-        this.transcriptViewport.scrollBy(
-          pageStep,
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (data === "g" || matchesKey(data, Key.home)) {
-        this.transcriptViewport.scrollToTop(
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (data === "G" || matchesKey(data, Key.end)) {
-        this.transcriptViewport.scrollToEnd(
-          this.transcriptRowCount,
-          this.transcriptViewportSize,
-        );
-      } else if (cancel || left) {
-        this.view = "detail";
-        this.detailFocus = "agents";
-      }
+      this.transcriptPage?.handleInput(data);
+      this.refreshTimer();
+      return;
     }
     this.refreshTimer();
     this.tui.requestRender();
   }
 
   render(width: number): string[] {
+    if (this.view === "transcript" && this.transcriptPage) {
+      return this.transcriptPage.render(width);
+    }
     const height = Math.max(MIN_HEIGHT, this.tui.terminal.rows - 1);
     let lines: string[];
-    if (this.view === "transcript" && this.current && this.selectedAgent()) {
-      lines = this.renderTranscript(
-        this.current.details,
-        this.selectedAgent()!,
-        width,
-        height,
-      );
-    } else if (this.view === "detail" && this.current) {
+    if (this.view === "detail" && this.current) {
       lines = this.renderDetail(this.current.details, width, height);
     } else {
       lines = this.renderList(width, height);
     }
     return lines.map((line) => truncateToWidth(line, width, ""));
+  }
+
+  private openTranscriptPage() {
+    const transcriptAdapter = new WorkflowTranscriptAdapter();
+    this.view = "transcript";
+    this.transcriptPage = new AgentSessionPage(
+      this.tui,
+      this.theme,
+      this.keybindings,
+      {
+        getState: () => {
+          const details = this.current?.details;
+          const agent = this.selectedAgent();
+          if (!details || !agent) return undefined;
+          return {
+            id: agent.callId ?? `agent-${agent.index}`,
+            title: agent.label,
+            status: agent.state,
+            document: transcriptAdapter.document(
+              agent.transcript,
+              agent.worktreePath,
+            ),
+            metadata: [
+              `${details.name ?? details.runId} · ${agent.phase ?? "unphased"}`,
+              agent.model,
+              agentContext(agent),
+              agent.acceptance
+                ? `acceptance:${agent.acceptance.status}`
+                : undefined,
+              formatElapsed(agent.startedAt, agent.finishedAt),
+            ],
+            errorText: agent.error,
+            emptyText:
+              "transcript unavailable (this run predates transcript capture)",
+          };
+        },
+        close: () => {
+          this.transcriptPage = undefined;
+          this.view = "detail";
+          this.detailFocus = "agents";
+          this.refreshTimer();
+          this.tui.requestRender();
+        },
+      },
+    );
+    this.tui.requestRender();
   }
 
   /** Bordered panel with a title in the top border, padded to exact height. */
@@ -1352,87 +1347,6 @@ export class WorkflowDashboard {
     lines.push(this.hintLine(hints, width));
     return lines;
   }
-
-  private renderTranscript(
-    details: WorkflowDetails,
-    agent: AgentRecord,
-    width: number,
-    height: number,
-  ): string[] {
-    const theme = this.theme;
-    const lines: string[] = [];
-    const right = theme.fg(
-      "dim",
-      [
-        agent.model,
-        agentContext(agent),
-        agent.acceptance ? `acceptance:${agent.acceptance.status}` : undefined,
-        formatElapsed(agent.startedAt, agent.finishedAt),
-      ]
-        .filter(Boolean)
-        .join(" · ") + " ",
-    );
-    lines.push(
-      fitNavigationSides(
-        ` ${stateGlyph(agent.state, theme, Date.now())} ${theme.bold(theme.fg("accent", agent.label))}`,
-        right,
-        width,
-      ),
-    );
-    lines.push(
-      fitNavigationSides(
-        ` ${theme.fg("muted", `${details.name ?? details.runId} · ${agent.phase ?? "unphased"}`)}`,
-        theme.fg("dim", `${agent.transcript.length} entries `),
-        width,
-      ),
-    );
-
-    const panelHeight = height - 3;
-    const bodyHeight = Math.max(1, panelHeight - 2);
-    const rows =
-      agent.transcript.length === 0
-        ? [
-            theme.fg(
-              "dim",
-              " transcript unavailable (this run predates transcript capture)",
-            ),
-          ]
-        : this.transcriptRenderer.render(
-            agent.transcript,
-            agent.worktreePath,
-            width - 2,
-            theme,
-            { now: Date.now() },
-          );
-    this.transcriptRowCount = rows.length;
-    this.transcriptViewportSize = bodyHeight;
-    this.transcriptViewport.reconcile(rows.length, bodyHeight);
-    const visible = rows.slice(
-      this.transcriptViewport.scrollTop,
-      this.transcriptViewport.scrollTop + bodyHeight,
-    );
-    const linesBelow = this.transcriptViewport.linesBelow(
-      rows.length,
-      bodyHeight,
-    );
-    const position =
-      rows.length > bodyHeight
-        ? `Transcript · ${this.transcriptViewport.scrollTop + 1}-${Math.min(rows.length, this.transcriptViewport.scrollTop + bodyHeight)}/${rows.length}${this.transcriptViewport.followingEnd ? "" : ` · ↓ ${linesBelow}`}`
-        : "Transcript";
-    lines.push(...this.panel(position, visible, width, panelHeight));
-    lines.push(
-      this.hintLine(
-        [
-          ["j/k", "scroll"],
-          ["ctrl-u/d", "page"],
-          ["g/G", "top/bottom"],
-          ["h/left/esc", "back"],
-        ],
-        width,
-      ),
-    );
-    return lines;
-  }
 }
 
 /**
@@ -1487,7 +1401,7 @@ export async function showWorkflowDashboard(
     },
     {
       overlay: true,
-      overlayOptions: { anchor: "center", width: "100%", maxHeight: "100%" },
+      overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
     },
   );
 }

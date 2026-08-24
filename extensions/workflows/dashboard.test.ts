@@ -435,8 +435,10 @@ test("direct workflow navigation drills right and returns left through every lev
 
     dashboard.handleInput("right");
     const transcript = dashboard.render(120).join("\n");
-    assert.match(transcript, /Transcript/);
+    assert.equal(transcript.split("\n").length, 30);
+    assert.match(transcript, /writer/);
     assert.match(transcript, /git status/);
+    assert.doesNotMatch(transcript, /╭|╮|Transcript/);
     assert.doesNotMatch(transcript, /clipboard|\u001b/);
 
     dashboard.handleInput("left");

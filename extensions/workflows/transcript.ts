@@ -79,7 +79,7 @@ function buildWorkflowTranscriptDocument(
 }
 
 /** Preserve the shared renderer's identity cache between Workflow repaint ticks. */
-class WorkflowTranscriptAdapter {
+export class WorkflowTranscriptAdapter {
   private previousEntries?: ReadonlyArray<TranscriptEntry>;
   private previousCwd?: string;
   private previousDocument?: AgentTranscriptDocument;

@@ -217,7 +217,7 @@ test("takeover scroll indicator lives in its rule without changing overlay heigh
   );
   try {
     const pinned = view.render(80);
-    assert.equal(pinned.length, 19);
+    assert.equal(pinned.length, 20);
     assert.doesNotMatch(pinned.join("\n"), /↓ \d+/);
 
     view.handleInput("tui.editor.pageUp");
