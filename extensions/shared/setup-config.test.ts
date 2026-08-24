@@ -68,6 +68,26 @@ test("every one-line footer preset keeps model context left and cwd right", () =
   }
 });
 
+test("the previous canonical footer default migrates without rewriting custom layouts", () => {
+  const migrated = parseSetupConfig({
+    ui: {
+      footerLines: [["cwd", "git", "pr", "flex", "model", "context"]],
+    },
+  });
+  assert.deepEqual(migrated.ui.footerLines, [
+    ["model", "context", "flex", "git", "pr", "cwd"],
+  ]);
+
+  const custom = parseSetupConfig({
+    ui: {
+      footerLines: [["cwd", "flex", "model", "context", "git", "pr"]],
+    },
+  });
+  assert.deepEqual(custom.ui.footerLines, [
+    ["cwd", "flex", "model", "context", "git", "pr"],
+  ]);
+});
+
 test("an unreadable config blocks the write and survives untouched", async () => {
   const corrupt = '{ "summaries": { "enabled": false }, oops\n';
   writeFileSync(SETUP_CONFIG_PATH, corrupt);
