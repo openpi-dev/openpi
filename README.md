@@ -1,16 +1,10 @@
 <p align="center">
-  <img src="assets/openpi-package.png" alt="OpenPI logo" width="240" />
-</p>
-
-<h1 align="center">OpenPI</h1>
-
-<p align="center">
-  <strong>Pi at the core. Power on demand.</strong>
+  <img src="assets/openpi-launch-card-v1.webp" alt="OpenPI — Pi at the core, power on demand. Small Harness. Clean Context. Deep Extensions." width="100%" />
 </p>
 
 <p align="center">
-  默认像 <a href="https://pi.dev">Pi</a> 一样轻；任务需要时，一句话展开后台执行、隔离 Subagent、可恢复 Workflow 与持续任务。<br />
-  不替换 Pi，不重写 Agent loop，不让高级能力长期占据每一次对话。
+  把后台 Terminal、Pi-native Subagent、可恢复 Workflow 与持续任务装进同一套 <a href="https://pi.dev">Pi</a> 工作台。<br />
+  普通回合零常驻 OpenPI 模型工具；明确需要时，才展开对应能力。
 </p>
 
 <p align="center">
@@ -21,16 +15,21 @@
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
 
+```bash
+pi install npm:@tt-a1i/openpi
+```
+
 <p align="center">
-  <a href="#30-秒开始"><strong>30 秒开始</strong></a> ·
-  <a href="#默认轻按需强">设计</a> ·
-  <a href="#openpi-解决什么">解决什么</a> ·
-  <a href="#能力地图">能力地图</a> ·
-  <a href="#运行模型">运行模型</a> ·
-  <a href="#三条执行路径">执行路径</a> ·
-  <a href="#workflow-不只是并行">Workflow</a> ·
-  <a href="#安全边界">安全边界</a> ·
-  <a href="#配置与参考">配置与参考</a>
+  <a href="#30-秒开始"><strong>立即开始</strong></a> ·
+  <a href="#默认轻按需强">为什么默认更轻</a> ·
+  <a href="#运行模型">看看它怎么工作</a> ·
+  <a href="https://github.com/tt-a1i/openpi/issues/22">查看 Benchmark</a>
+</p>
+
+<p align="center">
+  <strong>一套安装</strong>，不再拼一组互不协调的插件　·　
+  <strong>一套生命周期</strong>，状态、停止、恢复与清理都有边界　·　
+  <strong>一套上下文策略</strong>，不用的能力不常驻
 </p>
 
 <p align="center">
