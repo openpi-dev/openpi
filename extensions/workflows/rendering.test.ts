@@ -61,6 +61,46 @@ function captureRenderers() {
   return { workflow, message };
 }
 
+test("workflow tool errors with malformed details fall back to plain text", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
+  const { workflow } = captureRenderers();
+  const renderResult = workflow.renderResult!;
+  const errorText = "Workflow script failed to parse: Unexpected token (1:7)";
+  let invalidations = 0;
+  const context = {
+    args: {},
+    toolCallId: "call-parse-error",
+    invalidate: () => {
+      invalidations += 1;
+    },
+    lastComponent: undefined,
+    state: {},
+    cwd: process.cwd(),
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: true,
+  } as Parameters<typeof renderResult>[3];
+
+  for (const details of [{}, { runId: "wf_incomplete", agents: [] }]) {
+    const component = renderResult(
+      {
+        content: [{ type: "text", text: errorText }],
+        details,
+      } as unknown as AgentToolResult<WorkflowDetails>,
+      { expanded: false, isPartial: false },
+      theme,
+      context,
+    );
+
+    assert.equal(component.render(100).join("\n").trimEnd(), errorText);
+  }
+  t.mock.timers.tick(SPINNER_INTERVAL_MS);
+  assert.equal(invalidations, 0);
+});
+
 test("running workflow cards request and render each shared spinner frame", (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });
   const { workflow } = captureRenderers();

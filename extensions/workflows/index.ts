@@ -594,6 +594,25 @@ function errorText(error: unknown): string {
   );
 }
 
+function isWorkflowRenderDetails(value: unknown): value is WorkflowDetails {
+  if (!value || typeof value !== "object") return false;
+  const details = value as Partial<WorkflowDetails>;
+  return (
+    typeof details.runId === "string" &&
+    details.runId.length > 0 &&
+    typeof details.background === "boolean" &&
+    (details.status === "running" ||
+      details.status === "completed" ||
+      details.status === "failed" ||
+      details.status === "aborted" ||
+      details.status === "uncertain") &&
+    typeof details.startedAt === "number" &&
+    Number.isFinite(details.startedAt) &&
+    Array.isArray(details.phases) &&
+    Array.isArray(details.agents)
+  );
+}
+
 function summaryLine(details: WorkflowDetails): string {
   const { done, failed, uncertain } = countStates(details);
   const settled = done + failed;
@@ -2149,8 +2168,8 @@ export default function workflows(pi: ExtensionAPI) {
     },
 
     renderResult(result, { expanded, isPartial }, theme, context) {
-      const details = result.details as WorkflowDetails | undefined;
-      if (!details) {
+      const details = result.details;
+      if (!isWorkflowRenderDetails(details)) {
         const first = result.content[0];
         return new Text(
           first?.type === "text" ? first.text : "(no output)",
