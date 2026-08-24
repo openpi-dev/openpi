@@ -47,11 +47,10 @@ function state(): AgentSessionPageState {
   };
 }
 
-test("writable and read-only children use one full-terminal page", () => {
+test("Direct and Workflow children use one read-only full-terminal page", () => {
   const direct = new AgentSessionPage(tui(18), theme, keybindings, {
     getState: state,
     close() {},
-    send() {},
   });
   const workflow = new AgentSessionPage(tui(18), theme, keybindings, {
     getState: state,

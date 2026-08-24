@@ -4,7 +4,6 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import {
-  Input,
   Key,
   matchesKey,
   truncateToWidth,
@@ -36,7 +35,6 @@ export interface AgentSessionPageState {
 export interface AgentSessionPageSource {
   getState(): AgentSessionPageState | undefined;
   close(): void;
-  send?(text: string): void;
   abort?(): void;
 }
 
@@ -67,14 +65,13 @@ function stateGlyph(state: AgentSessionPageState, theme: Theme, now: number) {
 /**
  * One full-screen child-session page shared by Direct and Workflow adapters.
  * The source owns lifecycle facts; this module owns only page rendering,
- * reading position, optional input, and navigation back to the parent view.
+ * reading position, and navigation back to the parent view.
  */
 export class AgentSessionPage implements Component, Focusable {
   private tui: TUI;
   private theme: Theme;
   private keybindings: KeybindingsManager;
   private source: AgentSessionPageSource;
-  private input = new Input();
   private renderer = new AgentTranscriptRenderer();
   private viewport = new TranscriptViewport();
   private rowCount = 0;
@@ -86,7 +83,6 @@ export class AgentSessionPage implements Component, Focusable {
   }
   set focused(value: boolean) {
     this._focused = value;
-    this.input.focused = value;
   }
 
   constructor(
@@ -99,14 +95,6 @@ export class AgentSessionPage implements Component, Focusable {
     this.theme = theme;
     this.keybindings = keybindings;
     this.source = source;
-    this.input.onSubmit = (value: string) => {
-      const text = value.trim();
-      if (!text || !this.source.send) return;
-      this.input.setValue("");
-      this.source.send(text);
-      this.viewport.scrollToEnd(this.rowCount, this.viewportSize);
-      this.tui.requestRender();
-    };
   }
 
   handleInput(data: string) {
@@ -127,27 +115,21 @@ export class AgentSessionPage implements Component, Focusable {
       return;
     }
 
-    const writable = Boolean(this.source.send);
-    const inputEmpty = !writable || this.input.getValue().length === 0;
     if (
-      inputEmpty &&
-      (this.keybindings.matches(data, "tui.editor.cursorLeft") ||
-        (!writable && data === "h"))
+      this.keybindings.matches(data, "tui.editor.cursorLeft") ||
+      data === "h"
     ) {
       this.source.close();
       return;
     }
-    if (
-      this.keybindings.matches(data, "tui.editor.cursorUp") ||
-      (!writable && data === "k")
-    ) {
+    if (this.keybindings.matches(data, "tui.editor.cursorUp") || data === "k") {
       this.viewport.scrollBy(-SCROLL_STEP, this.rowCount, this.viewportSize);
       this.tui.requestRender();
       return;
     }
     if (
       this.keybindings.matches(data, "tui.editor.cursorDown") ||
-      (!writable && data === "j")
+      data === "j"
     ) {
       this.viewport.scrollBy(SCROLL_STEP, this.rowCount, this.viewportSize);
       this.tui.requestRender();
@@ -177,19 +159,15 @@ export class AgentSessionPage implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
-    if (inputEmpty && (matchesKey(data, Key.home) || data === "g")) {
+    if (matchesKey(data, Key.home) || data === "g") {
       this.viewport.scrollToTop(this.rowCount, this.viewportSize);
       this.tui.requestRender();
       return;
     }
-    if (inputEmpty && (matchesKey(data, Key.end) || data === "G")) {
+    if (matchesKey(data, Key.end) || data === "G") {
       this.viewport.scrollToEnd(this.rowCount, this.viewportSize);
       this.tui.requestRender();
       return;
-    }
-    if (writable) {
-      this.input.handleInput(data);
-      this.tui.requestRender();
     }
   }
 
@@ -245,8 +223,7 @@ export class AgentSessionPage implements Component, Focusable {
       metadata.shift();
     }
 
-    const writable = Boolean(this.source.send);
-    const chromeRows = writable ? 5 : 4;
+    const chromeRows = 4;
     const errorRows = state.errorText ? 1 : 0;
     const bodyHeight = Math.max(1, height - chromeRows);
     const transcriptCapacity = Math.max(1, bodyHeight - errorRows);
@@ -300,12 +277,9 @@ export class AgentSessionPage implements Component, Focusable {
             ),
       ),
     );
-    if (writable) lines.push(...this.input.render(width));
-
     const keys = (binding: Parameters<KeybindingsManager["getKeys"]>[0]) =>
       configuredKeys(this.keybindings, binding);
     const hints: ScreenHint[] = [];
-    if (writable) hints.push([keys("tui.input.submit"), "send"]);
     hints.push([keys("app.interrupt"), "back"]);
     if (this.source.abort) hints.push([keys("app.clear"), "abort run"]);
     hints.push(
@@ -322,7 +296,6 @@ export class AgentSessionPage implements Component, Focusable {
   }
 
   invalidate() {
-    this.input.invalidate();
     this.renderer.invalidate();
   }
 }

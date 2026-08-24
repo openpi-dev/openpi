@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { stripVTControlCharacters } from "node:util";
 import type {
   KeybindingsManager,
   Theme,
@@ -201,6 +200,28 @@ test("chrome rows stay width-bounded and takeover uses three rules", () => {
   }
 });
 
+test("takeover is a read-only child page without a message editor", () => {
+  const running = snap("run");
+  let sends = 0;
+  const list: SubagentReadModel = {
+    ...model([running]),
+    requestSend() {
+      sends += 1;
+    },
+  };
+  const view = new TakeoverView(tui(20), theme, keys, "run", list, () => {});
+  try {
+    assert.doesNotMatch(view.render(80).join("\n"), /\bsend\b/);
+    view.handleInput("1");
+    view.handleInput("2");
+    view.handleInput("3");
+    view.handleInput("\r");
+    assert.equal(sends, 0);
+  } finally {
+    view.dispose();
+  }
+});
+
 test("takeover scroll indicator lives in its rule without changing overlay height", () => {
   const transcript = Array.from({ length: 40 }, (_, index) => ({
     kind: "assistant" as const,
@@ -273,29 +294,6 @@ test("takeover pauses on an absolute reading anchor and resumes at the end", () 
       parts: [{ type: "text", text: "output 45" }],
     });
     assert.match(view.render(80).join("\n"), /output 45/);
-  } finally {
-    view.dispose();
-  }
-});
-
-test("Home and End edit non-empty input instead of moving the transcript", () => {
-  const view = new TakeoverView(
-    tui(20),
-    theme,
-    keys,
-    "run",
-    model([snap("run")]),
-    () => {},
-  );
-  try {
-    view.handleInput("abc");
-    view.handleInput("\u001b[H");
-    view.handleInput("X");
-    assert.match(stripVTControlCharacters(view.render(80).join("\n")), /Xabc/);
-
-    view.handleInput("\u001b[F");
-    view.handleInput("Y");
-    assert.match(stripVTControlCharacters(view.render(80).join("\n")), /XabcY/);
   } finally {
     view.dispose();
   }

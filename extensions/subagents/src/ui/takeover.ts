@@ -2,8 +2,8 @@
  * Takeover UI for subagents (ported from v1, rendering from the synchronous
  * SubagentReadModel instead of live pi sessions):
  * - SubagentDashboard: compact picker docked above the input, listing all subagents.
- * - TakeoverView: full interactive view of one subagent with an input line
- *   to steer/continue it.
+ * - TakeoverView: full read-only view of one subagent; steering remains owned
+ *   by the parent model through the subagent tools.
  */
 
 import type {
@@ -432,7 +432,6 @@ export class TakeoverView implements Component, Focusable {
         };
       },
       close: () => this.close(done),
-      send: (text) => view.requestSend(id, text),
       abort: () => view.requestAbort(id),
     });
     this.unsubscribe = view.subscribeTo(id, () => {
