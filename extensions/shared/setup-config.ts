@@ -88,7 +88,7 @@ export const FOOTER_PRESET_DEFINITIONS: Record<
 > = {
   compact: {
     style: "plain",
-    lines: [["cwd", "model", "thinking", "context", "flex", "git", "pr"]],
+    lines: DEFAULT_FOOTER_LINES,
   },
   powerline: {
     style: "powerline",
