@@ -36,10 +36,22 @@ function byteLength(value: string) {
 }
 
 function boundedPath(parent: string, child: string) {
-  const path = `${parent}.${child}`;
+  const childPreview =
+    child.length <= 128 ? child : `${child.slice(0, 128)}...[key truncated]`;
+  const path = `${parent}.${childPreview}`;
   return byteLength(path) <= 256
     ? path
     : `${truncateUtf8(path, 240)}...[path truncated]`;
+}
+
+function configuredBudget(name: string, value: number, minimum: number) {
+  if (!Number.isSafeInteger(value) || !Number.isFinite(value)) {
+    throw new RangeError(`${name} must be a finite integer`);
+  }
+  if (value < minimum) {
+    throw new RangeError(`${name} must be at least ${minimum}`);
+  }
+  return value;
 }
 
 /**
@@ -51,10 +63,14 @@ export function encodeCompleteJson(
   value: unknown,
   options: Required<SerializationOptions>,
 ): CompleteJsonEncoding {
-  const maxBytes = Math.max(1, Math.floor(options.maxBytes));
-  const maxDepth = Math.max(0, Math.floor(options.maxDepth));
-  const maxNodes = Math.max(1, Math.floor(options.maxNodes));
-  const maxStringBytes = Math.max(0, Math.floor(options.maxStringBytes));
+  const maxBytes = configuredBudget("maxBytes", options.maxBytes, 1);
+  const maxDepth = configuredBudget("maxDepth", options.maxDepth, 0);
+  const maxNodes = configuredBudget("maxNodes", options.maxNodes, 1);
+  const maxStringBytes = configuredBudget(
+    "maxStringBytes",
+    options.maxStringBytes,
+    0,
+  );
   const chunks: string[] = [];
   const seen = new WeakMap<object, string>();
   let bytes = 0;
@@ -194,8 +210,18 @@ export function encodeCompleteJson(
     }
 
     if (Array.isArray(current)) {
+      let length: number;
+      try {
+        length = current.length;
+      } catch (error) {
+        return visit(
+          `[unreadable array: ${safeErrorText(error)}]`,
+          depth + 1,
+          path,
+        );
+      }
       if (!append("[", path)) return false;
-      for (let index = 0; index < current.length; index++) {
+      for (let index = 0; index < length; index++) {
         if (nodes >= maxNodes) {
           return stop(
             "nodes",
@@ -206,6 +232,7 @@ export function encodeCompleteJson(
         }
         if (index > 0 && !append(",", path)) return false;
         if (!(index in current)) {
+          nodes++;
           if (!append("null", boundedPath(path, String(index)))) return false;
           continue;
         }
@@ -227,14 +254,20 @@ export function encodeCompleteJson(
     if (!append("{", path)) return false;
     let count = 0;
     try {
+      // JavaScript has no interruptible own-key iterator: a Proxy's ownKeys
+      // trap may allocate before iteration begins. Once keys are available,
+      // the budgets below stop before reading any further property values.
       for (const key in current) {
         if (!Object.prototype.hasOwnProperty.call(current, key)) continue;
         if (nodes >= maxNodes) {
           return stop("nodes", boundedPath(path, key), maxNodes, nodes + 1);
         }
+        const keyBytes = byteLength(key);
         const childPath = boundedPath(path, key);
-        const keyJson = encodedString(key, childPath);
-        if (keyJson === undefined) return false;
+        if (keyBytes > maxStringBytes) {
+          return stop("string", childPath, maxStringBytes, keyBytes);
+        }
+        const keyJson = JSON.stringify(key);
         if (count > 0 && !append(",", path)) return false;
         if (!append(keyJson, childPath) || !append(":", childPath)) {
           return false;
@@ -321,12 +354,14 @@ export function toSerializable(
 
     if (Array.isArray(current)) {
       const result: unknown[] = [];
-      for (let index = 0; index < current.length; index++) {
+      const length = current.length;
+      for (let index = 0; index < length; index++) {
         if (nodes >= maxNodes) {
           result.push("[truncated: node limit]");
           break;
         }
         if (!(index in current)) {
+          nodes++;
           result.length++;
           continue;
         }

@@ -132,6 +132,73 @@ test("complete JSON encoding contains object enumeration failures", () => {
   assert.doesNotThrow(() => JSON.parse(encoded.json));
 });
 
+test("complete JSON encoding charges sparse array slots to the node budget", () => {
+  let lengthReads = 0;
+  let hasChecks = 0;
+  const values = new Proxy(new Array(10_000), {
+    get(target, property, receiver) {
+      if (property === "length") lengthReads++;
+      return Reflect.get(target, property, receiver);
+    },
+    has(target, property) {
+      hasChecks++;
+      return Reflect.has(target, property);
+    },
+  });
+
+  const encoded = encodeCompleteJson(values, {
+    maxBytes: 1024 * 1024,
+    maxDepth: 8,
+    maxNodes: 5,
+    maxStringBytes: 128,
+  });
+
+  assert.equal(encoded.ok, false);
+  assert.equal(encoded.ok ? undefined : encoded.limit, "nodes");
+  assert.equal(lengthReads, 1);
+  assert.ok(hasChecks <= 4, `checked ${hasChecks} slots after the node budget`);
+});
+
+test("complete JSON encoding rejects non-finite budget configuration", () => {
+  for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY]) {
+    assert.throws(
+      () =>
+        encodeCompleteJson("value", {
+          maxBytes: invalid,
+          maxDepth: 8,
+          maxNodes: 10,
+          maxStringBytes: 128,
+        }),
+      /maxBytes must be a finite integer/i,
+    );
+  }
+});
+
+test("oversized object keys fail before their values are read", () => {
+  let valueRead = false;
+  const key = "k".repeat(1024 * 1024);
+  const value = Object.defineProperty({}, key, {
+    enumerable: true,
+    get() {
+      valueRead = true;
+      return "unreachable";
+    },
+  });
+
+  const encoded = encodeCompleteJson(value, {
+    maxBytes: 2 * 1024 * 1024,
+    maxDepth: 8,
+    maxNodes: 10,
+    maxStringBytes: 128,
+  });
+
+  assert.equal(encoded.ok, false);
+  if (encoded.ok) return;
+  assert.equal(encoded.limit, "string");
+  assert.equal(valueRead, false);
+  assert.ok(Buffer.byteLength(encoded.path, "utf8") <= 256);
+});
+
 test("safeStringify handles cycles, bigint, depth, and size", () => {
   const value: Record<string, unknown> = {
     bigint: 42n,
