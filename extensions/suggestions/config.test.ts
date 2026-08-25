@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   applyFooterConfig,
-  DEFAULT_FOOTER_ITEMS,
   DEFAULT_FOOTER_LINES,
   DEFAULT_SETUP_CONFIG,
   flattenFooterItems,
@@ -19,7 +18,6 @@ const defaultUi = {
   customFooter: true,
   footerStyle: "plain" as const,
   footerLines: DEFAULT_FOOTER_LINES,
-  footerItems: DEFAULT_FOOTER_ITEMS,
   subagentResultDisplay: "full" as const,
   bashToolDisplay: "compact" as const,
   fileMutationDisplay: "compact" as const,
@@ -141,7 +139,6 @@ test("UI defaults to a compact header and one-line plain footer", () => {
       customFooter: false,
       footerStyle: "plain",
       footerLines: DEFAULT_FOOTER_LINES,
-      footerItems: DEFAULT_FOOTER_ITEMS,
       subagentResultDisplay: "full",
       bashToolDisplay: "compact",
       fileMutationDisplay: "compact",
@@ -184,8 +181,10 @@ test("legacy footerItems migrates onto the default one-line skeleton", () => {
     },
   }).ui;
 
-  assert.deepEqual(ui.footerLines, [["model", "context", "flex", "git"]]);
-  assert.deepEqual(ui.footerItems, ["model", "context", "git"]);
+  assert.deepEqual(ui.footerLines, [
+    ["model", "context", "cache", "flex", "git"],
+  ]);
+  assert.equal("footerItems" in ui, false);
   assert.equal(ui.footerStyle, "plain");
 });
 
@@ -193,6 +192,13 @@ test("empty legacy footerItems falls back to the default layout", () => {
   assert.deepEqual(
     parseSetupConfig({ ui: { footerItems: [] } }).ui.footerLines,
     DEFAULT_FOOTER_LINES,
+  );
+});
+
+test("optional-only legacy footerItems remains visible after migration", () => {
+  assert.deepEqual(
+    parseSetupConfig({ ui: { footerItems: ["cache"] } }).ui.footerLines,
+    [["cache", "flex"]],
   );
 });
 
@@ -224,7 +230,7 @@ test("footerLines is the source of truth when both legacy fields exist", () => {
   }).ui;
   assert.equal(ui.footerStyle, "powerline");
   assert.deepEqual(ui.footerLines, [["cwd", "flex", "git"]]);
-  assert.deepEqual(ui.footerItems, ["cwd", "git"]);
+  assert.equal("footerItems" in ui, false);
 });
 
 test("presets map to style and lines", () => {

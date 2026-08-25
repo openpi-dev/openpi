@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -222,6 +222,27 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
 
   await apply({ post_edit_command: "" });
   assert.equal(loadSetupConfig().postEdit.command, "");
+});
+
+test("legacy ui_footer_items stays an input adapter and persists only footerLines", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
+  assert.ok(tool);
+
+  await tool.execute(
+    "setup-footer-call",
+    { ui_footer_items: ["model", "cache", "git"] },
+    new AbortController().signal,
+    () => {},
+    h.ctx,
+  );
+
+  assert.deepEqual(loadSetupConfig().ui.footerLines, [
+    ["model", "cache", "flex", "git"],
+  ]);
+  const stored = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal("footerItems" in stored.ui, false);
 });
 
 test("session_start hides configure_my_pi_setup after registration refresh", async () => {

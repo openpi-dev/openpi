@@ -4,6 +4,7 @@ import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   DEFAULT_FOOTER_LINES,
   normalizeFooterLines,
+  parseSetupConfig,
 } from "../shared/setup-config.ts";
 import {
   buildFooterContent,
@@ -74,6 +75,37 @@ test("default one-line layout leads with model context and ends with cwd", () =>
   assert.ok(prIndex < cwdIndex);
   const gap = branchIndex - contextIndex - "25%/1.0m".length;
   assert.ok(gap > 1);
+});
+
+test("legacy footerItems migration preserves the rendered footer", () => {
+  const migrated = parseSetupConfig({
+    ui: { footerItems: ["model", "cache", "git"] },
+  });
+  const canonical = parseSetupConfig({
+    ui: { footerLines: [["model", "cache", "flex", "git"]] },
+  });
+  const render = (lines: typeof migrated.ui.footerLines) =>
+    renderFooter({
+      cwd: "/Users/me/project",
+      modelInfo,
+      gitInfo,
+      style: "plain",
+      lines,
+      width: 140,
+      theme,
+      formatPullRequest: (n) => `PR #${n}`,
+    });
+
+  const migratedLines = render(migrated.ui.footerLines);
+  assert.deepEqual(migratedLines, render(canonical.ui.footerLines));
+  assert.match(migratedLines[0]!, /cache 82%/);
+
+  const optionalOnly = parseSetupConfig({
+    ui: { footerItems: ["cache"] },
+  });
+  const optionalLines = render(optionalOnly.ui.footerLines);
+  assert.match(optionalLines[0]!, /cache 82%/);
+  assert.doesNotMatch(optionalLines[0]!, /seal\/gpt-5\.6-sol|main/);
 });
 
 test("powerline emits ANSI256 seams and stays within width", () => {

@@ -72,6 +72,22 @@ export const DEFAULT_FOOTER_LINES: FooterLines = [
   ["model", "context", "flex", "git", "pr", "cwd"],
 ];
 
+/** Stable skeleton for the legacy flat-selection adapter. */
+const FLAT_FOOTER_ITEM_LINES: FooterLines = [
+  [
+    "model",
+    "thinking",
+    "context",
+    "cache",
+    "cost",
+    "throughput",
+    "flex",
+    "git",
+    "pr",
+    "cwd",
+  ],
+];
+
 /** The persisted canonical default before model/context moved to the left. */
 const LEGACY_DEFAULT_FOOTER_LINES: FooterLines = [
   ["cwd", "git", "pr", "flex", "model", "context"],
@@ -136,9 +152,7 @@ export interface MyPiSetupConfig {
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerStyle: FooterStyle;
-    /** Canonical footer layout. `footerItems` is always derived from this. */
     readonly footerLines: FooterLines;
-    readonly footerItems: readonly FooterItem[];
     readonly subagentResultDisplay: DetailDisplay;
     readonly bashToolDisplay: DetailDisplay;
     readonly fileMutationDisplay: DetailDisplay;
@@ -169,7 +183,6 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
     footerLines: DEFAULT_FOOTER_LINES,
-    footerItems: DEFAULT_FOOTER_ITEMS,
     subagentResultDisplay: "full",
     bashToolDisplay: "compact",
     fileMutationDisplay: "compact",
@@ -261,13 +274,13 @@ export function normalizeFooterLines(value: unknown): FooterLines {
   return lines.length > 0 ? lines : DEFAULT_FOOTER_LINES;
 }
 
-/** Map a flat item list onto the default one-line skeleton (legacy compat). */
+/** Map a flat item list onto the stable one-line skeleton (legacy compat). */
 export function footerLinesFromItems(
   items: readonly FooterItem[],
 ): FooterLines {
   const selected = new Set(items);
   return normalizeFooterLines(
-    DEFAULT_FOOTER_LINES.map((line) =>
+    FLAT_FOOTER_ITEM_LINES.map((line) =>
       line.filter((item) => item === "flex" || selected.has(item)),
     ),
   );
@@ -335,7 +348,6 @@ export function applyFooterConfig(
   return {
     footerStyle: style,
     footerLines: normalized,
-    footerItems: flattenFooterItems(normalized),
   };
 }
 
@@ -358,7 +370,7 @@ function sameFooterLines(left: FooterLines, right: FooterLines) {
 
 function parseUiFooter(
   ui: Record<string, unknown>,
-): Pick<MyPiSetupConfig["ui"], "footerStyle" | "footerLines" | "footerItems"> {
+): Pick<MyPiSetupConfig["ui"], "footerStyle" | "footerLines"> {
   const style = isFooterStyle(ui.footerStyle)
     ? ui.footerStyle
     : DEFAULT_FOOTER_STYLE;
@@ -371,7 +383,6 @@ function parseUiFooter(
     return {
       footerStyle: style,
       footerLines: lines,
-      footerItems: flattenFooterItems(lines),
     };
   }
 
@@ -382,14 +393,12 @@ function parseUiFooter(
     return {
       footerStyle: style,
       footerLines: lines,
-      footerItems: flattenFooterItems(lines),
     };
   }
 
   return {
     footerStyle: style,
     footerLines: DEFAULT_FOOTER_LINES,
-    footerItems: DEFAULT_FOOTER_ITEMS,
   };
 }
 
@@ -560,6 +569,17 @@ function replacedFields(
     "suggestions" in normalized
   ) {
     paths.push("summaries → suggestions");
+  }
+  if (
+    path === "ui" &&
+    "footerItems" in raw &&
+    "footerLines" in normalized &&
+    JSON.stringify(raw.footerItems) !==
+      JSON.stringify(
+        flattenFooterItems(normalizeFooterLines(normalized.footerLines)),
+      )
+  ) {
+    paths.push("ui.footerItems");
   }
   for (const [key, value] of Object.entries(normalized)) {
     if (!(key in raw)) continue;
@@ -938,13 +958,15 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
 }
 
 async function writeSetupConfig(config: MyPiSetupConfig) {
+  const canonical = parseSetupConfig(config);
   const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tempPath, `${JSON.stringify(config, null, 2)}\n`, {
+    await writeFile(tempPath, `${JSON.stringify(canonical, null, 2)}\n`, {
       encoding: "utf8",
       mode: 0o600,
     });
     await rename(tempPath, SETUP_CONFIG_PATH);
+    return canonical;
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);
     throw error;
@@ -998,8 +1020,7 @@ export async function updateSetupConfig(
   return withSetupConfigLock(async () => {
     const raw = readDocumentForWrite();
     const current = parseSetupConfig(raw);
-    const config = mutate(current);
-    await writeSetupConfig(config);
+    const config = await writeSetupConfig(mutate(current));
     return { config, replaced: replacedFields(raw, current) };
   });
 }

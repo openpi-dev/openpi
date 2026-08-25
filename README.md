@@ -400,6 +400,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离，升级不会覆盖。
 
+Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems` 会在读取时迁移，但迁移后的配置不保证能被旧版 OpenPI 正确解释，因此不承诺配置文件的降级兼容性。
+
 一次 `/openpi-setup` episode 最多成功写入一次；成功后配置工具立即隐藏。若随后还要修改另一项，请重新执行 `/openpi-setup <自然语言请求>`，不要让模型重调已隐藏工具，也不要绕过入口直接编辑配置文件。
 
 <details>
