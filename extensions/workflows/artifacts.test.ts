@@ -1,14 +1,16 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
   boundedArtifactTranscript,
   createWorkflowPersistence,
+  loadJournal,
   persistWorkflowAgentResult,
   persistWorkflowJson,
 } from "./artifacts.ts";
+import { JOURNAL_MAX_BYTES } from "./journal.ts";
 import {
   emptyUsage,
   type TranscriptEntry,
@@ -146,6 +148,20 @@ test("agent result artifacts are complete or fail without leaving a file", () =>
       () => readFileSync(join(directory, "agent-results/agent-0002.json")),
       /ENOENT/,
     );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("oversized replay journals fail closed before parsing", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-journal-read-"));
+  try {
+    writeFileSync(
+      join(directory, "journal.json"),
+      Buffer.alloc(JOURNAL_MAX_BYTES + 1, 0x20),
+    );
+
+    assert.equal(loadJournal(directory), undefined);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

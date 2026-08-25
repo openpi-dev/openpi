@@ -1,22 +1,23 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+  boundedJournal,
+  JOURNAL_MAX_BYTES,
+  type JournalEntry,
+  parseJournal,
+  type WorkflowJournal,
+} from "./journal.ts";
 import {
   refreshWorkflowGraph,
   type TranscriptEntry,
   type WorkflowDetails,
 } from "./model.ts";
 import {
-  boundedJournal,
-  parseJournal,
-  type JournalEntry,
-  type WorkflowJournal,
-} from "./journal.ts";
-import {
   encodeCompleteJson,
   safeStringify,
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
-import * as fs from "node:fs";
-import * as path from "node:path";
 
 export const JOURNAL_FILE = "journal.json";
 
@@ -256,10 +257,42 @@ export function createWorkflowPersistence(
  * turn into a new way for a run to fail.
  */
 export function loadJournal(runDir: string): WorkflowJournal | undefined {
+  let descriptor: number | undefined;
   try {
-    const raw = fs.readFileSync(path.join(runDir, JOURNAL_FILE), "utf8");
+    descriptor = fs.openSync(path.join(runDir, JOURNAL_FILE), "r");
+    const initialSize = fs.fstatSync(descriptor).size;
+    if (initialSize > JOURNAL_MAX_BYTES) return undefined;
+
+    // Read at most one byte beyond the cap. The descriptor pins the inspected
+    // file, while the extra byte catches growth after fstat without ever
+    // allocating or parsing an unbounded journal.
+    const bytes = Buffer.allocUnsafe(initialSize + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const read = fs.readSync(
+        descriptor,
+        bytes,
+        length,
+        bytes.length - length,
+        null,
+      );
+      if (read === 0) break;
+      length += read;
+    }
+    // Filling the extra byte means the file changed after inspection. Reject
+    // that race even when the new size would still fit the ordinary cap.
+    if (length === bytes.length) return undefined;
+    const raw = bytes.toString("utf8", 0, length);
     return parseJournal(JSON.parse(raw));
   } catch {
     return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        // Loading a replay cache is optional and always fails open to a miss.
+      }
+    }
   }
 }
