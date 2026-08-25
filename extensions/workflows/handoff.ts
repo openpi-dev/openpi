@@ -9,6 +9,9 @@ export const DEFAULT_MAX_HANDOFF_TOTAL_BYTES = 48 * 1024;
 
 const HANDOFF_RESULT_ARTIFACT_PREFIX = "agent-results/agent-";
 const HANDOFF_RESULT_ARTIFACT_SUFFIX = ".json";
+// Result artifacts are protocol-relative identifiers, not arbitrary model text.
+// Keep the same 256-byte identifier boundary used by the dashboard projection;
+// renderHandoff still charges the actual header against the shared total budget.
 const HANDOFF_MAX_RESULT_ARTIFACT_BYTES = 256;
 const HANDOFF_PREFIX = [
   "## Upstream workflow handoff",
