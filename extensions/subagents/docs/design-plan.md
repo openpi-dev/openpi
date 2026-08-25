@@ -7,7 +7,7 @@ unified behind a single Effect v4 service interface.
 
 > **Status: historical.** This document describes the original three-backend plan.
 > The Claude Code and Codex backends were removed in `ce8b04f`; pi is the only
-> backend, and `src/backends/stub.ts` remains for the manager test registry.
+> backend, and `test-support/stub.ts` now serves the manager test registry.
 > Read this for the reasoning behind the manager and event model, not for the
 > current backend surface.
 

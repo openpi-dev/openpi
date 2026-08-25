@@ -85,6 +85,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     "!extensions/**/*.test.ts",
     "!extensions/**/*.spec.ts",
     "!extensions/**/tsconfig.json",
+    "!extensions/**/test-support/**",
     "!extensions/*/docs",
     "skills",
     "themes",

@@ -22,12 +22,9 @@ import {
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../../../shared/context-utilization.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "../../../shared/spinner.ts";
 import type { SubagentReadModel } from "../manager.ts";
-import {
-  SPINNER_INTERVAL_MS,
-  spinnerFrame,
-  subagentTranscriptDocument,
-} from "./transcript.ts";
+import { subagentTranscriptDocument } from "./transcript.ts";
 
 export function sanitizeSubagentDisplayLine(value: string) {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();

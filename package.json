@@ -25,6 +25,7 @@
     "!extensions/**/*.test.ts",
     "!extensions/**/*.spec.ts",
     "!extensions/**/tsconfig.json",
+    "!extensions/**/test-support/**",
     "!extensions/*/docs",
     "skills",
     "themes",

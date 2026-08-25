@@ -5,7 +5,6 @@
  * on it rather than on the pi session directly.
  *
  * - pi (./backends/pi.ts): in-process `createAgentSession()` via the pi SDK.
- * - stub (./backends/stub.ts): scripted sessions, test-only.
  */
 
 import type { Effect, Scope, Stream } from "effect";
