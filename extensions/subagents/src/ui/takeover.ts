@@ -40,7 +40,7 @@ function configuredKeys(
 /**
  * One spinner definition for the whole subagent UI: the dashboard glyph, the
  * takeover header, and the transcript's live tools must animate in step, so the
- * frames and their cadence live in `transcript.ts` and are imported here.
+ * frames and their cadence live in `shared/spinner.ts` and are imported here.
  */
 function statusGlyph(
   snap: SubagentSnapshot,
