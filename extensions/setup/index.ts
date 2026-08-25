@@ -9,18 +9,11 @@ import {
   type SubagentRoleModel,
   type SubagentRoleModels,
 } from "../shared/subagent-roles.ts";
-import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   OPENPI_SETUP_EPISODE_CHANNEL,
   type OpenPiSetupEpisodeState,
 } from "../shared/setup-episode-state.ts";
 import { patchOwnedTools } from "../shared/tool-surface.ts";
-import {
-  formatPiIntercomStatus,
-  inspectPiIntercom,
-  installPiIntercom,
-  type PiIntercomStatus,
-} from "./intercom.ts";
 import {
   applyFooterConfig,
   CAPABILITY_DISCOVERY_MODES,
@@ -137,7 +130,6 @@ export function buildInteractiveSetupPrompt(options: {
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Bash and Write/Edit default to compact. Recommend compact for users who scan activity first and inspect evidence on demand.",
     "- Agent role models: built-in explorer, implementer, reviewer, and advisor roles are shared by subagent_spawn and workflow agent_type, and inherit the parent model by default. Assign only an available registry model to an individual role when needed; clearing that role returns it to inheritance. Custom agent-type files still override a built-in role's complete definition.",
-    "- Intercom: optional cross-session messaging is installed only after a native setup confirmation. It stays parent-only; Direct/Workflow children and Replay cannot use it. The status above is informational for this model-guided step—do not install packages or edit its config yourself.",
     "",
     "Natural-language configuration examples the user might ask for:",
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
@@ -155,12 +147,6 @@ export function buildInteractiveSetupPrompt(options: {
   ];
 }
 
-const safeSetupNotice = (value: unknown, maximum = 500) =>
-  sanitizeTerminalText(value instanceof Error ? value.message : String(value))
-    .replace(/\s+/gu, " ")
-    .trim()
-    .slice(0, maximum);
-
 export function buildSetupSuccessText(
   currentConfiguration: string,
   normalizationNote = "",
@@ -169,86 +155,6 @@ export function buildSetupSuccessText(
     `Updated OpenPI setup. ${currentConfiguration}${normalizationNote}`,
     "This setup episode is complete; configure_my_pi_setup is now hidden. Do not call it again. Do not edit configuration files directly. If the user requests another configuration change, tell them to run /openpi-setup <request> to start a new setup episode.",
   ].join(" ");
-}
-
-export function shouldOfferPiIntercom(options: {
-  readonly request: string;
-  readonly status: PiIntercomStatus;
-  readonly mode: ExtensionCommandContext["mode"];
-  readonly idle: boolean;
-}) {
-  return (
-    !options.request &&
-    !options.status.active &&
-    !options.status.installed &&
-    !options.status.diagnostic &&
-    options.mode === "tui" &&
-    options.idle
-  );
-}
-
-async function maybeOfferPiIntercom(
-  ctx: ExtensionCommandContext,
-  status: PiIntercomStatus,
-  request: string,
-) {
-  if (
-    !shouldOfferPiIntercom({
-      request,
-      status,
-      mode: ctx.mode,
-      idle: ctx.isIdle(),
-    })
-  ) {
-    return status;
-  }
-
-  const accepted = await ctx.ui.confirm(
-    status.configured
-      ? "Repair optional pi-intercom integration?"
-      : "Install optional pi-intercom integration?",
-    [
-      "pi-intercom enables cross-session messaging through a local IPC broker.",
-      "Like every Pi package, it runs with full system access.",
-      "OpenPI will install npm:pi-intercom globally. A new private config gets safe defaults; an existing preference file is never rewritten and must already define both fields:",
-      "• confirmSend: true",
-      '• inboundTrigger: "replies"',
-      "It remains parent-only and activates after /reload.",
-    ].join("\n"),
-  );
-  if (!accepted) return status;
-
-  ctx.ui.setWorkingMessage("Installing optional pi-intercom integration...");
-  try {
-    await installPiIntercom({
-      cwd: ctx.cwd,
-      onProgress: (event) =>
-        ctx.ui.setWorkingMessage(
-          safeSetupNotice(
-            event.message ?? "Installing optional pi-intercom integration...",
-            200,
-          ),
-        ),
-    });
-    const installed = inspectPiIntercom({
-      cwd: ctx.cwd,
-      active: false,
-    });
-    const next = { ...installed, reloadRequired: true };
-    ctx.ui.notify(
-      "pi-intercom installed with existing preferences preserved or a new safe config created. Run /reload after setup to activate it.",
-      "info",
-    );
-    return next;
-  } catch (error) {
-    ctx.ui.notify(
-      `pi-intercom was not enabled: ${safeSetupNotice(error)}`,
-      "error",
-    );
-    return inspectPiIntercom({ cwd: ctx.cwd, active: false });
-  } finally {
-    ctx.ui.setWorkingMessage();
-  }
 }
 
 export const CONFIGURE_MY_PI_SETUP_TOOL_NAME = "configure_my_pi_setup";
@@ -550,15 +456,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
 
   const setupHandler = async (args: string, ctx: ExtensionCommandContext) => {
     const request = args.trim();
-    let intercomStatus = inspectPiIntercom({
-      cwd: ctx.cwd,
-      active: pi.getAllTools().some(({ name }) => name === "intercom"),
-    });
-    intercomStatus = await maybeOfferPiIntercom(ctx, intercomStatus, request);
-
-    const currentConfiguration = formatSetupConfig(loadSetupConfig(), [
-      formatPiIntercomStatus(intercomStatus),
-    ]);
+    const currentConfiguration = formatSetupConfig(loadSetupConfig());
     const savedConfigExists = hasSavedSetupConfig();
     const currentModel = ctx.model
       ? `${ctx.model.provider}/${ctx.model.id}`
@@ -573,7 +471,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "Current configuration:",
           currentConfiguration,
           "",
-          "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session. Intercom installation is handled only by the native setup confirmation; do not install packages or edit its config yourself.",
+          "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
           "Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
         ]
