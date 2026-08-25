@@ -5,6 +5,8 @@
 > 状态：已在 `codex/workflow-v2` 实施；最终验证与真实模型 smoke 见文末实施记录。
 >
 > 依据：当前 OpenPI 源码、Issues #71/#74/#75/#90、Claude Code `2.1.241` 运行时合同访谈，以及三份相互独立的 interface 设计评审。
+>
+> 后续变更：Issue #132 已将调用侧策略收敛为 `wait`；下文的当前合同已同步为 wait-only，明确标注的改造前记录仍保留历史原貌。
 
 ## 结论
 
@@ -33,14 +35,14 @@ workflow_stop
 
 本轮没有把整个 2200 行 Workflow extension 塞进一个新的大类，而是按不变量拆成三个深 seam：
 
-- `coordinator.ts`：宿主默认值、`wait/background` 兼容解析，以及 wait/terminal 仲裁；
+- `coordinator.ts`：宿主默认值、wait policy 解析，以及 wait/terminal 仲裁；
 - `result-delivery.ts`：逐 run delivery identity、pending/receipt/retry/restore；
 - `shared/result-budget.ts` 与 `shared/text-projection.ts`：Subagent/Workflow 共用的公平预算与 head/tail 投影。
 
 已经落地：
 
 - TUI 默认 detached，print/无可靠投递宿主默认 wait；
-- `wait:true` 是唯一正向同步选择，`background` 仅为 deprecated inverse alias；
+- `wait:true` 是唯一显式同步选择，调用 schema 不再接受 `background`；
 - 中断 wait 不取消 run，stop/shutdown 才拥有取消权；
 - terminal execution state 与 delivery state 正交持久化；
 - send failure 以同一 per-run id 重试，成功 sibling 不重发；
@@ -53,11 +55,11 @@ workflow_stop
 
 明确没有增加：`workflow_wait`、size planner、budget planner、通用 Execution Fabric、daemon、全局 scheduler、递归 Workflow 或第二 provider stack。
 
-## 1. 当前问题
+## 1. 改造前问题
 
 ### 1.1 默认阻塞
 
-当前 `workflow` 使用：
+改造前 `workflow` 使用：
 
 ```ts
 const background = (params.background ?? false) && ctx.hasUI
@@ -116,12 +118,7 @@ workflow({
   script: string,
   args?: string,
   resume_from_run_id?: string,
-
-  // 新的正向语义
   wait?: boolean,
-
-  // 旧兼容参数，逐步 deprecated
-  background?: boolean,
 })
 ```
 
@@ -131,15 +128,12 @@ workflow({
 显式 wait
   -> 严格服从
 
-只有 background
-  -> wait = !background
-
-两者同时出现且语义冲突
-  -> fail closed
-
-两者都省略
+省略 wait
   -> adapter.canDeliverLater = true：wait = false
   -> adapter.canDeliverLater = false：wait = true
+
+未知字段（包括旧 background alias）
+  -> schema validation fail closed
 ```
 
 为什么推荐 `wait`：
@@ -149,7 +143,7 @@ workflow({
 - `wait` 被中断只结束等待，不能隐式取消 run；
 - 只有 `workflow_stop` 取消运行。
 
-兼容期保留 `background`，避免旧模型调用和历史脚本立即失效。
+Issue #132 以 breaking change 删除了调用侧 `background` alias。Persisted artifact 和 tool details 中记录实际 detached 状态的 `background` 仍是运行时事实，并继续兼容读取。
 
 ### 3.2 `workflow_status`
 
@@ -463,7 +457,7 @@ Runtime 不自动插入 Report Agent。当前已提供：
 
 ### Phase 0：固定基线
 
-- 当前 blocking/background 行为；
+- 改造前 blocking/background 行为；
 - tool schema hash；
 - sendMessage、final write、busy/idle、quick-completion 故障注入；
 - 3/16/40 ref handoff 覆盖基线。
@@ -491,7 +485,7 @@ Runtime 不自动插入 Report Agent。当前已提供：
 ### Phase 4：`wait` 与宿主默认值
 
 - 新增 `wait`；
-- `background` 兼容映射并 deprecated；
+- `background` 曾在迁移期兼容映射并 deprecated，随后由 Issue #132 从调用 schema 与 coordinator input 删除；
 - interactive/Web/RPC adapter 有可靠 completion channel 时默认 `wait=false`；
 - print/automation 默认 `wait=true`；
 - wait interrupt 不取消 run；
@@ -643,11 +637,11 @@ bun run test
   Vitest: 30/30 pass
 ```
 
-专项覆盖包括：interactive/print 默认值、legacy alias 冲突、wait 中断、terminal/abort 仲裁、busy/idle delivery、首次 transport failure、逐 run receipt、legacy restore、`uncertain` 独立统计、稳定工具组、64-ref 公平 head/tail handoff、64-run completion 批次预算、动态父上下文投影和逐 Agent artifact。
+专项覆盖包括：interactive/print 默认值、wait-only schema validation、wait 中断、terminal/abort 仲裁、busy/idle delivery、首次 transport failure、逐 run receipt、legacy artifact restore、`uncertain` 独立统计、稳定工具组、64-ref 公平 head/tail handoff、64-run completion 批次预算、动态父上下文投影和逐 Agent artifact。
 
 ### 14.2 真实模型 smoke
 
-运行资产与 npm 安装隔离，直接从本 checkout 显式加载 `extensions/workflows/index.ts`、`extensions/capabilities/index.ts` 和 Workflow Skill。父模型为 `seal/deepseek-v4-flash-0731-baidu`；三个 Workflow children 按本地角色配置使用 `gpt-5.6-luna`。print 宿主省略 `wait/background`，因此按合同 inline 等待。
+运行资产与 npm 安装隔离，直接从本 checkout 显式加载 `extensions/workflows/index.ts`、`extensions/capabilities/index.ts` 和 Workflow Skill。父模型为 `seal/deepseek-v4-flash-0731-baidu`；三个 Workflow children 按本地角色配置使用 `gpt-5.6-luna`。print 宿主省略 `wait`，因此按合同 inline 等待。
 
 真实 run `wf_6664b8e3427d`：
 

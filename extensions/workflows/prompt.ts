@@ -17,8 +17,6 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
   script:
     "JavaScript workflow script. May start with `export const meta = {...}`, then use phase(), agent(), parallel(), args, and a final `return`.",
   args: "Optional JSON string exposed to the script as `args` (parsed when valid JSON, otherwise passed through as the raw string).",
-  background:
-    "Deprecated compatibility alias: true means wait=false; false means wait=true. Do not provide both background and wait.",
   wait: "Wait for the final result in this tool call. Interactive sessions default to false and deliver completion later; print/automation defaults to true. Interrupting the wait does not cancel the workflow.",
   resumeFromRunId:
     "Optional prior run id or unique suffix for safe read-only replay. See the workflows Skill for matching rules.",

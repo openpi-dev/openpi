@@ -16,26 +16,18 @@ test("interactive launch defaults detached while non-delivery hosts wait", () =>
   });
 });
 
-test("wait is authoritative and legacy background maps to its inverse", () => {
+test("explicit wait selects inline or detached launch policy", () => {
   assert.deepEqual(resolveWorkflowLaunchPolicy({ wait: true }, true), {
     wait: true,
     detached: false,
   });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ background: true }, true), {
+  assert.deepEqual(resolveWorkflowLaunchPolicy({ wait: false }, true), {
     wait: false,
     detached: true,
   });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ background: false }, true), {
-    wait: true,
-    detached: false,
-  });
 });
 
-test("conflicting aliases and unsupported detached delivery fail closed", () => {
-  assert.throws(
-    () => resolveWorkflowLaunchPolicy({ wait: true, background: true }, true),
-    /conflict/,
-  );
+test("unsupported detached delivery fails closed", () => {
   assert.throws(
     () => resolveWorkflowLaunchPolicy({ wait: false }, false),
     /cannot deliver/,

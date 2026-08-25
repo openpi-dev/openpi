@@ -1,6 +1,5 @@
 export interface WorkflowLaunchPolicyInput {
   wait?: boolean;
-  background?: boolean;
 }
 
 export interface WorkflowLaunchPolicy {
@@ -8,23 +7,12 @@ export interface WorkflowLaunchPolicy {
   detached: boolean;
 }
 
-/** Resolve legacy/background and host capability without silently changing semantics. */
+/** Resolve the caller's wait preference against the host delivery capability. */
 export function resolveWorkflowLaunchPolicy(
   input: WorkflowLaunchPolicyInput,
   canDeliverLater: boolean,
 ): WorkflowLaunchPolicy {
-  if (
-    input.wait !== undefined &&
-    input.background !== undefined &&
-    input.wait === input.background
-  ) {
-    throw new Error(
-      "wait and background conflict: background is the deprecated inverse of wait",
-    );
-  }
-  const wait =
-    input.wait ??
-    (input.background !== undefined ? !input.background : !canDeliverLater);
+  const wait = input.wait ?? !canDeliverLater;
   if (!wait && !canDeliverLater) {
     throw new Error(
       "This host cannot deliver a workflow result later; use wait: true",

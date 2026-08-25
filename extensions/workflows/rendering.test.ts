@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { validateToolArguments } from "@earendil-works/pi-ai";
 import {
   initTheme,
   type AgentToolResult,
@@ -60,6 +61,66 @@ function captureRenderers() {
   assert.ok(message);
   return { workflow, message };
 }
+
+test("workflow launch schema accepts only the positive wait policy", () => {
+  const { workflow } = captureRenderers();
+  const parameters = workflow.parameters as unknown as {
+    properties?: Record<string, unknown>;
+    additionalProperties?: boolean;
+  };
+
+  assert.ok(parameters.properties?.wait);
+  assert.equal(parameters.properties?.background, undefined);
+  assert.equal(parameters.additionalProperties, false);
+
+  const toolCall = (args: Record<string, unknown>) => ({
+    type: "toolCall" as const,
+    id: "call-schema",
+    name: "workflow",
+    arguments: args,
+  });
+  const script = "return 1;";
+
+  assert.deepEqual(
+    validateToolArguments(workflow, toolCall({ script, wait: false })),
+    { script, wait: false },
+  );
+  assert.throws(
+    () =>
+      validateToolArguments(workflow, toolCall({ script, background: true })),
+    /Validation failed.*background/s,
+  );
+  assert.throws(
+    () => validateToolArguments(workflow, toolCall({ script, detached: true })),
+    /Validation failed.*detached/s,
+  );
+});
+
+test("workflow call rendering labels an explicit inline wait", () => {
+  const { workflow } = captureRenderers();
+  assert.ok(workflow.renderCall);
+  const args = {
+    script: 'export const meta = { name: "inline" }; return 1;',
+    wait: true,
+  };
+
+  const component = workflow.renderCall(args, theme, {
+    args,
+    toolCallId: "call-inline-wait",
+    invalidate() {},
+    lastComponent: undefined,
+    state: {},
+    cwd: process.cwd(),
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: false,
+  });
+
+  assert.match(component.render(100).join("\n"), /workflow inline \(wait\)/);
+});
 
 test("workflow tool errors with malformed details fall back to plain text", (t) => {
   t.mock.timers.enable({ apis: ["setInterval", "Date"], now: 0 });

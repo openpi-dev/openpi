@@ -532,31 +532,29 @@ interface AgentCallOptions {
   inputs?: unknown;
 }
 
-const WorkflowParams = Type.Object({
-  script: Type.String({
-    description: WORKFLOW_PARAMETER_DESCRIPTIONS.script,
-  }),
-  args: Type.Optional(
-    Type.String({
-      description: WORKFLOW_PARAMETER_DESCRIPTIONS.args,
+const WorkflowParams = Type.Object(
+  {
+    script: Type.String({
+      description: WORKFLOW_PARAMETER_DESCRIPTIONS.script,
     }),
-  ),
-  background: Type.Optional(
-    Type.Boolean({
-      description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
-    }),
-  ),
-  wait: Type.Optional(
-    Type.Boolean({
-      description: WORKFLOW_PARAMETER_DESCRIPTIONS.wait,
-    }),
-  ),
-  resume_from_run_id: Type.Optional(
-    Type.String({
-      description: WORKFLOW_PARAMETER_DESCRIPTIONS.resumeFromRunId,
-    }),
-  ),
-});
+    args: Type.Optional(
+      Type.String({
+        description: WORKFLOW_PARAMETER_DESCRIPTIONS.args,
+      }),
+    ),
+    wait: Type.Optional(
+      Type.Boolean({
+        description: WORKFLOW_PARAMETER_DESCRIPTIONS.wait,
+      }),
+    ),
+    resume_from_run_id: Type.Optional(
+      Type.String({
+        description: WORKFLOW_PARAMETER_DESCRIPTIONS.resumeFromRunId,
+      }),
+    ),
+  },
+  { additionalProperties: false },
+);
 
 type WorkflowInput = Static<typeof WorkflowParams>;
 
@@ -1150,7 +1148,7 @@ export default function workflows(pi: ExtensionAPI) {
       const runDir = path.join(getAgentDir(), "workflows", runId);
       const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
       const launchPolicy = resolveWorkflowLaunchPolicy(
-        { wait: params.wait, background: params.background },
+        { wait: params.wait },
         canDeliverLater,
       );
       const background = launchPolicy.detached;
@@ -2193,7 +2191,7 @@ export default function workflows(pi: ExtensionAPI) {
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("accent", (meta as WorkflowMeta).name ?? "(script)");
-      if (args.background) text += theme.fg("dim", " (background)");
+      if (args.wait === true) text += theme.fg("dim", " (wait)");
       const description = (meta as WorkflowMeta).description;
       if (description) text += `\n  ${theme.fg("dim", description)}`;
       for (const phase of meta.phases.slice(0, 8)) {

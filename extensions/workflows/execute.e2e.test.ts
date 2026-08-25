@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -346,7 +347,7 @@ test("oversized workflow args fail before child sessions or journals are created
     for (const rawArgs of args) {
       const launch = (await workflow.execute(
         "e2e-oversized-workflow-args",
-        { script, args: rawArgs, background: true },
+        { script, args: rawArgs, wait: false },
         undefined,
         undefined,
         ctx,
@@ -372,6 +373,49 @@ test("oversized workflow args fail before child sessions or journals are created
   }
 
   assert.equal(sessionCreations, 0);
+});
+
+test("print hosts wait by default and reject detached delivery", async () => {
+  const printCtx = {
+    ...ctx,
+    mode: "print",
+    hasUI: false,
+  } as unknown as ExtensionContext;
+  const inline = (await workflow.execute(
+    "e2e-print-default",
+    {
+      script:
+        'export const meta = { name: "print-default" };\nreturn { inline: true };',
+    },
+    undefined,
+    undefined,
+    printCtx,
+  )) as AgentToolResult<WorkflowDetails>;
+
+  assert.equal(inline.details.status, "completed");
+  assert.equal(inline.details.background, false);
+  assert.equal(inline.details.delivery?.state, "consumed-inline");
+
+  const workflowsDir = join(agentDir, "workflows");
+  const runDirsBefore = readdirSync(workflowsDir).sort();
+  const messagesBefore = sentMessages.length;
+  await assert.rejects(
+    Promise.resolve().then(() =>
+      workflow.execute(
+        "e2e-print-detached",
+        {
+          script: "return { detached: true };",
+          wait: false,
+        },
+        undefined,
+        undefined,
+        printCtx,
+      ),
+    ),
+    /cannot deliver.*wait: true/i,
+  );
+  assert.deepEqual(readdirSync(workflowsDir).sort(), runDirsBefore);
+  assert.equal(sentMessages.length, messagesBefore);
 });
 
 test("background runs deliver a follow-up that triggers a turn only when idle", async () => {
@@ -412,7 +456,7 @@ test("background runs deliver a follow-up that triggers a turn only when idle", 
     "e2e-bg-busy",
     {
       script: 'export const meta = { name: "bg-busy" };\nreturn 8;',
-      background: true,
+      wait: false,
     },
     undefined,
     undefined,
