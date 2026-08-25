@@ -7,29 +7,153 @@
  */
 
 import assert from "node:assert/strict";
+import type { ChildProcess } from "node:child_process";
+import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { Effect } from "effect";
+<<<<<<< HEAD:tests/extensions/background-terminals/manager.test.ts
+import { Effect, ManagedRuntime } from "effect";
 import type { TerminalSnapshot } from "../../../extensions/background-terminals/src/domain.ts";
 import {
   MAX_RUNNING,
   MAX_TRACKED,
+  makeTerminalManagerLive,
+  signalWindowsProcessTree,
   TerminalManager,
   type TerminalManagerShape,
+<<<<<<< HEAD:tests/extensions/background-terminals/manager.test.ts
+  waitForWindowsTaskkill,
 } from "../../../extensions/background-terminals/src/manager.ts";
-import {
-  createTerminalRuntime,
-  runTool,
-} from "../../../extensions/background-terminals/src/runtime.ts";
+import { createTerminalRuntime, runTool } from "../../../extensions/background-terminals/src/runtime.ts";
 
 const cwd = process.cwd();
 
-/** Quote a `node -e` script for sh -c. */
+/** Base64 keeps node snippets portable across sh and cmd.exe quoting. */
 function nodeCmd(script: string) {
-  return `node -e '${script}'`;
+  const encoded = Buffer.from(script, "utf8").toString("base64");
+  return `node -e "eval(Buffer.from('${encoded}','base64').toString())"`;
 }
+
+function fakeTaskkill(
+  exitCode: number | null,
+  signal: NodeJS.Signals | null,
+  onLaunch?: (pid: number, force: boolean) => void,
+) {
+  return (pid: number, force: boolean) => {
+    onLaunch?.(pid, force);
+    const child = new EventEmitter() as ChildProcess;
+    queueMicrotask(() => child.emit("close", exitCode, signal));
+    return child;
+  };
+}
+
+test("Windows taskkill is awaited and reports a confirmed tree signal", async () => {
+  const launches: Array<{ pid: number; force: boolean }> = [];
+  const child = {
+    pid: 42,
+    kill() {
+      assert.fail("direct-child fallback must not run after taskkill succeeds");
+    },
+  };
+
+  const resultPromise = signalWindowsProcessTree(
+    child,
+    "SIGKILL",
+    () => false,
+    fakeTaskkill(0, null, (pid, force) => launches.push({ pid, force })),
+  );
+  let resolved = false;
+  void resultPromise.then(() => {
+    resolved = true;
+  });
+
+  assert.equal(resolved, false, "result waits for taskkill close");
+  assert.deepEqual(await resultPromise, { outcome: "sent" });
+  assert.deepEqual(launches, [{ pid: 42, force: true }]);
+});
+
+test("Windows taskkill non-zero exit falls back without claiming tree termination", async () => {
+  const signals: Array<NodeJS.Signals | number | undefined> = [];
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 43,
+      kill(signal) {
+        signals.push(signal);
+        return true;
+      },
+    },
+    "SIGTERM",
+    () => false,
+    fakeTaskkill(5, null),
+  );
+
+  assert.equal(result.outcome, "fallback_sent");
+  assert.match(result.detail, /taskkill exited 5/);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("Windows taskkill launch failure is explicit and uses the direct fallback", async () => {
+  const signals: Array<NodeJS.Signals | number | undefined> = [];
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 44,
+      kill(signal) {
+        signals.push(signal);
+        return true;
+      },
+    },
+    "SIGTERM",
+    () => false,
+    () => {
+      throw new Error("taskkill unavailable");
+    },
+  );
+
+  assert.equal(result.outcome, "fallback_sent");
+  assert.match(result.detail, /failed to launch: taskkill unavailable/);
+  assert.deepEqual(signals, ["SIGTERM"]);
+});
+
+test("Windows taskkill treats an already-exited target as a natural race", async () => {
+  let launched = false;
+  let directSignal = false;
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 45,
+      kill() {
+        directSignal = true;
+        return true;
+      },
+    },
+    "SIGTERM",
+    () => true,
+    () => {
+      launched = true;
+      return new EventEmitter() as ChildProcess;
+    },
+  );
+
+  assert.equal(result.outcome, "already_exited");
+  assert.match(result.detail, /before taskkill started/);
+  assert.equal(launched, false);
+  assert.equal(directSignal, false);
+});
+
+test("Windows taskkill wait is bounded and stops a wedged helper", async () => {
+  let helperKilled = false;
+  const killer = new EventEmitter() as ChildProcess;
+  killer.kill = () => {
+    helperKilled = true;
+    return true;
+  };
+
+  const result = await waitForWindowsTaskkill(46, false, () => killer, 1);
+
+  assert.deepEqual(result, { outcome: "timed_out", timeoutMs: 1 });
+  assert.equal(helperKilled, true);
+});
 
 async function withManager(
   run: (
@@ -92,19 +216,20 @@ test("happy path: stdout and stderr captured separately, settles done, hook fire
       settled.push({ id: snap.id, status: snap.status, consumed }),
     );
 
+    const command = nodeCmd(
+      'process.stdout.write("out-line\\n"); process.stderr.write("err-line\\n");',
+    );
     const snap = await runTool(
       runtime,
       manager.start({
-        command: nodeCmd(
-          'process.stdout.write("out-line\\n"); process.stderr.write("err-line\\n");',
-        ),
+        command,
         title: "happy",
         cwd,
       }),
     );
     assert.equal(snap.status, "running");
     assert.ok(snap.pid);
-    assert.equal(snap.command.includes("out-line"), true);
+    assert.equal(snap.command, command);
 
     const { snap: done } = await settlement(manager, snap.id);
     assert.equal(done.status, "done");
@@ -168,10 +293,12 @@ test("optional deadline terminates the process tree and settles timed_out", asyn
       }),
     );
     assert.ok(snap.timeoutAt);
+    assert.ok(snap.pid);
 
     const { snap: timedOut } = await settlement(manager, snap.id);
     assert.equal(timedOut.status, "timed_out");
-    assert.ok(timedOut.signal);
+    if (process.platform !== "win32") assert.ok(timedOut.signal);
+    assert.ok(await pollUntil(() => processGone(snap.pid!)));
     assert.ok(timedOut.settledAt);
   });
 });
@@ -195,10 +322,10 @@ test("kill settles a never-exiting process as killed and resolves after settle; 
     assert.equal(report[0].status, "killed");
     assert.equal(report[0].killed, true);
     assert.equal(report[0].wasRunning, true);
-    assert.match(report[0].exit, /^SIG/);
+    if (process.platform !== "win32") assert.match(report[0].exit, /^SIG/);
     const after = manager.view.get(snap.id);
     assert.equal(after?.status, "killed");
-    assert.ok(after?.signal);
+    if (process.platform !== "win32") assert.ok(after?.signal);
 
     const second = await runTool(runtime, manager.kill([snap.id]));
     assert.equal(second[0].killed, false);
@@ -346,6 +473,48 @@ test("kill terminates the whole process tree (grandchildren die)", {
   });
 });
 
+test("taskkill terminates a Windows descendant process tree", {
+  skip: process.platform !== "win32",
+}, async () => {
+  await withManager(async (manager, runtime) => {
+    const parentScript = [
+      'const { spawn } = require("node:child_process");',
+      'const child = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], { stdio: "ignore" });',
+      "process.stdout.write(`child:${child.pid}\\n`);",
+      "setInterval(() => {}, 1000);",
+    ].join(" ");
+    const snap = await runTool(
+      runtime,
+      manager.start({
+        command: nodeCmd(parentScript),
+        title: "windows-tree",
+        cwd,
+      }),
+    );
+
+    assert.ok(
+      await pollUntil(() =>
+        (manager.view.get(snap.id)?.stdout.text ?? "").includes("child:"),
+      ),
+      "descendant pid was printed",
+    );
+    const match = /child:(\d+)/.exec(
+      manager.view.get(snap.id)?.stdout.text ?? "",
+    );
+    assert.ok(match);
+    const descendant = Number(match[1]);
+    assert.equal(processGone(descendant), false);
+
+    const [result] = await runTool(runtime, manager.kill([snap.id]));
+    assert.equal(result.killed, true);
+    assert.equal(result.terminationFailed, false);
+    assert.ok(
+      await pollUntil(() => processGone(descendant)),
+      "taskkill /T removed the descendant",
+    );
+  });
+});
+
 test("a shell exit with inherited pipes open settles naturally and reaps descendants", {
   skip: process.platform === "win32",
 }, async () => {
@@ -441,7 +610,10 @@ test("concurrency cap rejects an extra start; a failed spawn releases its slot",
     );
     assert.equal(spawns.length, MAX_RUNNING);
     await assert.rejects(
-      runTool(runtime, manager.start({ command: "true", title: "extra", cwd })),
+      runTool(
+        runtime,
+        manager.start({ command: nodeCmd(""), title: "extra", cwd }),
+      ),
       new RegExp(`Max ${MAX_RUNNING} background terminals`),
     );
 
@@ -538,7 +710,10 @@ test("runtime.dispose kills running processes; no settle hook fires after dispos
   // start after dispose is rejected (by the runtime itself, or by the
   // manager's disposed guard if the effect still runs).
   await assert.rejects(
-    runTool(runtime, manager.start({ command: "true", title: "late", cwd })),
+    runTool(
+      runtime,
+      manager.start({ command: nodeCmd(""), title: "late", cwd }),
+    ),
     /shutting down|disposed/,
   );
 });
@@ -558,7 +733,7 @@ test("pruning drops the oldest settled entries past MAX_TRACKED, never running o
     for (let i = 0; i < MAX_TRACKED + 4; i++) {
       const snap = await runTool(
         runtime,
-        manager.start({ command: "true", title: `quick-${i}`, cwd }),
+        manager.start({ command: nodeCmd(""), title: `quick-${i}`, cwd }),
       );
       settledIds.push(snap.id);
       await settlement(manager, snap.id);
@@ -623,7 +798,7 @@ test("a process 'error' event settles failed with errorText and no bogus exit co
     const snap = await runTool(
       runtime,
       manager.start({
-        command: "true",
+        command: nodeCmd(""),
         title: "bad-cwd",
         cwd: "/definitely/not/a/real/dir-12345",
       }),
@@ -686,6 +861,90 @@ test("the spill file holds the complete capture when the settle hook fires, beyo
   });
 });
 
+test("the session spill budget fails closed across terminals", async () => {
+  const budget = 8;
+  const runtime = ManagedRuntime.make(makeTerminalManagerLive(budget));
+  try {
+    const manager = await runtime.runPromise(TerminalManager);
+    const first = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("12345678")'),
+        title: "fills-budget",
+        cwd,
+      }),
+    );
+    const { snap: firstDone } = await settlement(manager, first.id);
+    assert.ok(firstDone.stdout.spillPath);
+    assert.equal(fs.statSync(firstDone.stdout.spillPath).size, budget);
+
+    const second = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("abcdefgh")'),
+        title: "over-budget",
+        cwd,
+      }),
+    );
+    const { snap: secondDone } = await settlement(manager, second.id);
+    assert.equal(secondDone.status, "done");
+    assert.equal(secondDone.stdout.text, "abcdefgh");
+    assert.equal(secondDone.stdout.spillPath, undefined);
+    assert.match(
+      secondDone.errorText ?? "",
+      /session spill budget of 8 bytes would be exceeded/,
+    );
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("pruning removes spill files and releases their session budget", async () => {
+  const runtime = ManagedRuntime.make(makeTerminalManagerLive(4));
+  try {
+    const manager = await runtime.runPromise(TerminalManager);
+    const oldest = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("seed")'),
+        title: "oldest-spill",
+        cwd,
+      }),
+    );
+    const { snap: oldestDone } = await settlement(manager, oldest.id);
+    assert.ok(oldestDone.stdout.spillPath);
+    const oldestSpill = oldestDone.stdout.spillPath;
+
+    for (let index = 0; index < MAX_TRACKED; index++) {
+      const terminal = await runtime.runPromise(
+        manager.start({
+          command: nodeCmd(""),
+          title: `prune-filler-${index}`,
+          cwd,
+        }),
+      );
+      await settlement(manager, terminal.id);
+    }
+
+    assert.equal(manager.view.get(oldest.id), undefined);
+    assert.ok(
+      await pollUntil(() => !fs.existsSync(oldestSpill)),
+      "pruned spill file was removed",
+    );
+
+    const replacement = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("next")'),
+        title: "reuses-budget",
+        cwd,
+      }),
+    );
+    const { snap: replacementDone } = await settlement(manager, replacement.id);
+    assert.ok(replacementDone.stdout.spillPath);
+    assert.equal(fs.statSync(replacementDone.stdout.spillPath).size, 4);
+    assert.doesNotMatch(replacementDone.errorText ?? "", /spill budget/);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("aborting the kill wait does not cancel the termination", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
@@ -733,7 +992,7 @@ test("status returns the snapshot and rejects unknown ids with the known list", 
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
-      manager.start({ command: "true", title: "status", cwd }),
+      manager.start({ command: nodeCmd(""), title: "status", cwd }),
     );
     const seen = await runTool(runtime, manager.status(snap.id));
     assert.equal(seen.id, snap.id);

@@ -25,8 +25,8 @@ they run, check on them, and stop them. It can **never** write to a running proc
 processes are launched with `stdin: "ignore"`; there is no send/steer surface at all (this is
 the key simplification vs. subagents' `send()`).
 
-- Full stdout and stderr are captured **separately and completely** in private spill files;
-  bounded in-memory tails keep `/ps` responsive (§7.4).
+- Stdout and stderr are captured separately in bounded private spill files while the session
+  budget remains available; bounded in-memory tails keep `/ps` responsive (§7.4).
 - Tool responses to the model are **always truncated** with the pi truncation utilities.
 - When processes exit, every settlement reaches the model **exactly once** — no polling —
   using the same deferred-delivery/consumed dance as subagents (§9). Idle settlements share
@@ -402,17 +402,21 @@ reason). Resolution:
 
 - **In-memory retained cap: 2 MiB per stream per process** (so ≤ 8 procs × 2 streams × 2 MiB =
   32 MiB worst case). The newest output is always retained; the head is dropped.
-- **Spill-to-disk for the full capture** (this is what makes "full stdout/stderr" true even
-  past the cap): create the shared/session directories with owner-only `0700` permissions,
+- **Spill-to-disk for a budgeted full capture:** create the shared/session directories with
+  owner-only `0700` permissions,
   then open two `0600` append-mode `WriteStream`s under
   ``path.join(os.tmpdir(), "pi-background-terminals", sessionId, `${id}.stdout.log`)`` (and
   `.stderr.log`). A `WriteStream` serializes writes per stream; settlement ends and awaits
-  both streams behind a bounded flush barrier before publishing the result. A stream error or
-  flush timeout clears the affected full-log pointer and surfaces a bounded `errorText` note.
+  both streams behind a bounded flush barrier before publishing the result. Each stream may
+  reserve at most 256 MiB and the session may reserve at most 512 MiB across all terminals.
+  Crossing either limit fails closed: the affected full-log pointer is cleared and a bounded
+  `errorText` says that complete evidence is unavailable. A stream error or flush timeout does
+  the same. Pruning a settled entry removes its spill files and releases their reservations.
   The `/ps` detail view shows the in-memory tail and, when `truncatedBytes > 0`, a header line
   "first N KiB dropped from view — full log: <spillPath>"; model-facing results reference the
-  same path. `disposeAll` removes the private session spill directory after all entry scopes
-  and spill flushes complete, so secret-bearing logs do not outlive the owning pi session.
+  same path when a complete spill remains available. `disposeAll` removes the private session
+  spill directory after all entry scopes and spill flushes complete, so secret-bearing logs do
+  not outlive the owning pi session.
 - Precedent for "truncate + point at the full file": docs/extensions.md "Output Truncation"
   section recommends exactly this shape for tool results.
 
@@ -776,6 +780,8 @@ const STATUS_STDERR_MAX = 8 * 1024;    // bg_status stderr tail
 const RESULT_STDOUT_MAX = 16 * 1024;   // completion follow-up stdout tail
 const RESULT_STDERR_MAX = 8 * 1024;
 const RETAINED_PER_STREAM = 2 * 1024 * 1024;  // in-memory cap per stream (spill keeps the rest)
+const MAX_SPILL_BYTES_PER_STREAM = 256 * 1024 * 1024;
+const MAX_SPILL_BYTES_PER_SESSION = 512 * 1024 * 1024;
 ```
 
 All clamped by `Math.min(..., DEFAULT_MAX_BYTES)` and `DEFAULT_MAX_LINES` (imports from
@@ -881,10 +887,11 @@ tricks; they exist on any machine running pi)
 - [ ] Manager, output, result-delivery, and ps-selection tests pass through the root suite.
 - [ ] Tools registered: `bg_start`, `bg_status`, `bg_list`, `bg_kill`; descriptions document
       no-stdin, session-scoped lifetime, and truncation limits; no stdin/steer surface exists.
-- [ ] stdout and stderr captured separately and completely (in-memory tail + spill file);
-      `/ps` detail can inspect both, read-only, scrollable, ANSI-sanitized, live-tailing.
-- [ ] Every model-visible output path truncated (`truncateTail` + clamps) with pointers to the
-      full log.
+- [ ] stdout and stderr captured separately (in-memory tail + budgeted spill file); `/ps`
+      detail can inspect both, read-only, scrollable, ANSI-sanitized, live-tailing. Spill-limit
+      failures are explicit, and prune/dispose remove files owned by the session.
+- [ ] Every model-visible output path is sanitized before tail truncation (`truncateTail` +
+      clamps), with pointers to the full log only when complete evidence remains available.
 - [ ] Exactly-once async completion notification via `sendMessage followUp + triggerTurn`,
       deferred-delivery map, consumed-set for kill, `agent_settled` flush, `isIdle()` fast
       path, `disposed` guard. No polling anywhere.

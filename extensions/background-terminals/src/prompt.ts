@@ -6,6 +6,7 @@ import {
   formatSize,
   truncateTail,
 } from "@earendil-works/pi-coding-agent";
+import { sanitizeTerminalText } from "../../shared/terminal-text.ts";
 import {
   formatDuration,
   formatElapsed,
@@ -139,7 +140,8 @@ function outputSection(
   maxLines: number,
 ) {
   if (view.totalBytes === 0) return `${label}: (empty)`;
-  const truncation = truncateTail(view.text, {
+  const sanitized = sanitizeTerminalText(view.text);
+  const truncation = truncateTail(sanitized, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(maxLines, DEFAULT_MAX_LINES),
   });
@@ -186,12 +188,15 @@ export function buildTerminalBatchResultMessage(
   messages: readonly string[],
   omitted = 0,
 ) {
-  if (messages.length === 1 && omitted === 0) return messages[0]!;
-  const summaries = messages.map(
+  const sanitizedMessages = messages.map(sanitizeTerminalText);
+  if (sanitizedMessages.length === 1 && omitted === 0) {
+    return sanitizedMessages[0]!;
+  }
+  const summaries = sanitizedMessages.map(
     (message) => message.split("\n", 1)[0] || "Background terminal result",
   );
   const header = [
-    `${messages.length} background terminal result${messages.length === 1 ? "" : "s"}:`,
+    `${sanitizedMessages.length} background terminal result${sanitizedMessages.length === 1 ? "" : "s"}:`,
     ...summaries.map((summary) => `- ${summary}`),
     omitted > 0
       ? `- ${omitted} older result${omitted === 1 ? "" : "s"} omitted from this bounded batch; use bg_list/bg_status for retained details.`
@@ -206,7 +211,7 @@ export function buildTerminalBatchResultMessage(
     `${header}${logsHeader}${truncationMarker}`,
     "utf8",
   );
-  const logs = truncateTail(messages.join("\n\n"), {
+  const logs = truncateTail(sanitizedMessages.join("\n\n"), {
     maxBytes: Math.max(1, RESULT_BATCH_MAX - fixedBytes),
     maxLines: DEFAULT_MAX_LINES,
   });
@@ -219,6 +224,10 @@ export function buildKillReport(results: ReadonlyArray<KillResult>) {
     .map((entry) => {
       if (entry.killed) {
         return `Killed ${entry.id} "${entry.title}" (${entry.exit}).`;
+      }
+      if (entry.terminationFailed) {
+        const detail = entry.errorText ? ` ${entry.errorText}.` : "";
+        return `Could not confirm process-tree termination for ${entry.id} "${entry.title}" (${entry.exit}).${detail}`;
       }
       if (entry.wasRunning) {
         // The natural exit won the race with the kill signal.
