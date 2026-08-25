@@ -19,9 +19,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import type {
-  AgentToolResult,
   AgentSession,
   AgentSessionEventListener,
+  AgentToolResult,
   ExtensionAPI,
   ExtensionContext,
   ToolDefinition,
@@ -239,6 +239,7 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
     {
       role: "assistant",
       content: [{ type: "text", text: output }],
+      api: "openai-responses",
       provider: "fixture",
       model: "fixture",
       usage: {
@@ -246,6 +247,7 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
         output: 5,
         cacheRead: 0,
         cacheWrite: 0,
+        totalTokens: 8,
         cost: {
           input: 0,
           output: 0,
@@ -257,7 +259,7 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
       stopReason: "stop",
       timestamp: 2,
     },
-  ];
+  ] satisfies AgentSession["messages"];
   return {
     messages,
     model: undefined,
@@ -269,6 +271,13 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
     },
     async prompt() {
       await promptGate;
+      const assistant = messages.find(
+        (message) => message.role === "assistant",
+      );
+      assert.ok(assistant);
+      for (const listener of listeners) {
+        listener({ type: "message_end", message: assistant });
+      }
     },
     async abort() {},
     dispose() {},

@@ -4,12 +4,12 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { test } from "node:test";
 import {
-  DefaultResourceLoader,
-  SessionManager,
-  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionEventListener,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -20,10 +20,10 @@ import {
   observeAssistantSettlement,
   recordToolExecutionTiming,
   runAgent,
-  transcriptFromMessages,
-  workflowChildTools,
   type ToolExecutionTiming,
+  transcriptFromMessages,
   type WorkflowAgentSessionFactory,
+  workflowChildTools,
 } from "./runner.ts";
 
 async function withTempDir(run: (directory: string) => Promise<void>) {
@@ -121,6 +121,19 @@ const zeroUsage = {
     total: 0,
   },
 };
+
+function assistantTextMessage(text: string) {
+  return {
+    role: "assistant",
+    content: [{ type: "text" as const, text }],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: zeroUsage,
+    stopReason: "stop" as const,
+    timestamp: 1_000,
+  } satisfies AgentSession["messages"][number];
+}
 
 function parallelToolMessages(): AgentSession["messages"] {
   return [
@@ -347,6 +360,37 @@ test("assistant settlement survives failed compaction and clears after recovery"
     "prompt rejected",
     "a thrown prompt error must remain independent from assistant recovery",
   );
+});
+
+test("schema-less agents fail when prompt resolves without an assistant response", async () => {
+  const harness = runnerHarness({});
+
+  const outcome = await runHarnessAgent(harness);
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, false);
+  assert.equal(outcome.output, "");
+  assert.equal(outcome.error, "Agent finished without an assistant response.");
+  assert.equal(harness.aborts(), 0);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("schema-less agents accept an empty assistant message_end", async () => {
+  let respond = () => {};
+  const harness = runnerHarness({ prompt: async () => respond() });
+  respond = () => {
+    const message = assistantTextMessage("");
+    harness.messages.push(message);
+    harness.emit({ type: "message_end", message });
+  };
+
+  const outcome = await runHarnessAgent(harness);
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.aborted, false);
+  assert.equal(outcome.output, "");
+  assert.equal(outcome.error, undefined);
+  assert.equal(harness.disposals(), 1);
 });
 
 test("cancel during prompt owns the session and returns after bounded disposal", async () => {

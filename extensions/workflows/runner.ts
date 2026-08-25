@@ -11,19 +11,20 @@
  */
 
 import {
-  createAgentSession,
-  DefaultResourceLoader,
-  defineTool,
-  SessionManager,
-  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionEventListener,
+  createAgentSession,
+  DefaultResourceLoader,
+  defineTool,
   type ExtensionAPI,
   type ExtensionContext,
+  SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
+import { type TSchema, Type } from "typebox";
+import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
@@ -31,18 +32,17 @@ import {
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
 import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
-import { emptyUsage, type AgentUsage, type TranscriptEntry } from "./model.ts";
-import {
-  createReplayFilesystemBoundary,
-  type ReplayFilesystemBoundaryOptions,
-} from "./replay-safety.ts";
+import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import {
   buildWorkflowAgentPrompt,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import {
+  createReplayFilesystemBoundary,
+  type ReplayFilesystemBoundaryOptions,
+} from "./replay-safety.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
-import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
@@ -831,6 +831,20 @@ export async function runAgent(
       output,
       error:
         "Agent finished without calling structured_output; no structured result matching the schema was produced.",
+      aborted: false,
+      usage,
+      model: modelId,
+      contextWindow,
+      transcript,
+    };
+  }
+
+  if (options.schema === undefined && assistantSettlement === undefined) {
+    return {
+      ok: false,
+      output,
+      structured,
+      error: "Agent finished without an assistant response.",
       aborted: false,
       usage,
       model: modelId,
