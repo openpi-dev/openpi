@@ -189,9 +189,10 @@ export class WorkflowHandoffRegistry {
     }
     if (
       result.resultArtifact !== undefined &&
-      (!/^agent-results\/agent-[0-9]+\.json$/u.test(result.resultArtifact) ||
-        Buffer.byteLength(result.resultArtifact, "utf8") >
-          HANDOFF_MAX_RESULT_ARTIFACT_BYTES)
+      // The accepted grammar is ASCII-only, so code-unit length is the exact
+      // byte length and rejects oversized input before the regex scans it.
+      (result.resultArtifact.length > HANDOFF_MAX_RESULT_ARTIFACT_BYTES ||
+        !/^agent-results\/agent-[0-9]+\.json$/u.test(result.resultArtifact))
     ) {
       throw new Error("Workflow handoff result artifact is invalid");
     }

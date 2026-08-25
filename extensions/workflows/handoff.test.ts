@@ -109,6 +109,16 @@ test("handoff rejects result artifacts that cannot fit its bounded headers", () 
         settled: true,
         ok: true,
         output: "result",
+        resultArtifact: `${artifact}${"1".repeat(1024 * 1024)}`,
+      }),
+    /result artifact is invalid/,
+  );
+  assert.throws(
+    () =>
+      registry.register({
+        settled: true,
+        ok: true,
+        output: "result",
         resultArtifact: `${artifact}0`,
       }),
     /result artifact is invalid/,
