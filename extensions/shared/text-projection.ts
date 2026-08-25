@@ -31,6 +31,8 @@ export function projectText(
   content: string,
   options: { maxBytes: number; maxLines: number; recovery: string },
 ) {
+  if (options.maxBytes <= 0) return "";
+
   const probe = truncateHead(content, {
     maxBytes: options.maxBytes,
     maxLines: options.maxLines,
@@ -52,5 +54,7 @@ export function projectText(
     if (overflow <= 0 || bodyBudget <= overflow + 2) break;
     bodyBudget -= overflow;
   }
-  return projected;
+  return Buffer.byteLength(projected, "utf8") <= options.maxBytes
+    ? projected
+    : utf8Prefix(content, options.maxBytes);
 }
