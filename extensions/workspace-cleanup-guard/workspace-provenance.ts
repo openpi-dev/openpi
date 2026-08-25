@@ -12,14 +12,11 @@ interface PendingEffects {
   removals: string[];
 }
 
-interface Options {
-  confirmDelete: (paths: readonly string[]) => Promise<boolean>;
-}
-
 interface BashAttempt {
   id: string;
   command: string;
   cwd: string;
+  confirmDelete: (paths: readonly string[]) => Promise<boolean>;
 }
 
 interface WriteAttempt {
@@ -238,7 +235,7 @@ async function exists(candidate: string) {
   }
 }
 
-export function createWorkspaceCleanupGuard(options: Options) {
+export function createWorkspaceCleanupGuard() {
   const origins = new Map<string, Origin>();
   const pending = new Map<string, PendingEffects>();
 
@@ -289,7 +286,7 @@ export function createWorkspaceCleanupGuard(options: Options) {
 
       if (
         protectedPaths.length > 0 &&
-        !(await options.confirmDelete(protectedPaths))
+        !(await attempt.confirmDelete(protectedPaths))
       ) {
         return {
           kind: "block" as const,
