@@ -568,26 +568,28 @@ function* makeManager(maxSpillBytesPerSession: number) {
   const closeEntryScope = (entry: Entry) =>
     Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
 
-  const removeEntrySpills = (entry: Entry) =>
-    Effect.sync(() => {
-      for (const spill of entry.spillFiles) {
-        try {
-          fs.rmSync(spill.path, { force: true });
-        } catch {
-          // Retain the reservation when deletion fails. The session budget
-          // remains fail-closed and disposeAll still removes the private dir.
-        }
-        if (!fs.existsSync(spill.path)) {
-          sessionSpillBytes = Math.max(
-            0,
-            sessionSpillBytes - spill.reservedBytes,
-          );
-          spill.reservedBytes = 0;
-        }
+  const removeEntrySpillsNow = (entry: Entry) => {
+    for (const spill of entry.spillFiles) {
+      try {
+        fs.rmSync(spill.path, { force: true });
+      } catch {
+        // Retain the reservation when deletion fails. The session budget
+        // remains fail-closed and disposeAll still removes the private dir.
       }
-      entry.stdoutBuf.spillPath = undefined;
-      entry.stderrBuf.spillPath = undefined;
-    });
+      if (!fs.existsSync(spill.path)) {
+        sessionSpillBytes = Math.max(
+          0,
+          sessionSpillBytes - spill.reservedBytes,
+        );
+        spill.reservedBytes = 0;
+      }
+    }
+    entry.stdoutBuf.spillPath = undefined;
+    entry.stderrBuf.spillPath = undefined;
+  };
+
+  const removeEntrySpills = (entry: Entry) =>
+    Effect.sync(() => removeEntrySpillsNow(entry));
 
   const pruneSettled = () => {
     if (entries.size <= MAX_TRACKED) return;
@@ -604,8 +606,36 @@ function* makeManager(maxSpillBytesPerSession: number) {
     for (const entry of candidates) {
       if (entries.size <= MAX_TRACKED) break;
       entries.delete(entry.snapshot.id);
+      removeEntrySpillsNow(entry);
       runCleanup(
         closeEntryScope(entry).pipe(Effect.andThen(removeEntrySpills(entry))),
+      );
+    }
+  };
+
+  /** Reclaim settled entries before a new child can emit its first chunk. */
+  const prepareForStart = () => {
+    while (entries.size >= MAX_TRACKED) {
+      const candidate = [...entries.values()]
+        .filter(
+          (e) =>
+            e.snapshot.status !== "running" && !killInterest.has(e.snapshot.id),
+        )
+        .sort(
+          (a, b) =>
+            (a.snapshot.settledAt ?? a.snapshot.createdAt) -
+            (b.snapshot.settledAt ?? b.snapshot.createdAt),
+        )[0];
+      if (!candidate) break;
+
+      // Release the spill reservation synchronously. The scope close is still
+      // detached, but no new terminal can observe the old budget as occupied.
+      entries.delete(candidate.snapshot.id);
+      removeEntrySpillsNow(candidate);
+      runCleanup(
+        closeEntryScope(candidate).pipe(
+          Effect.andThen(removeEntrySpills(candidate)),
+        ),
       );
     }
   };
@@ -840,6 +870,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
       );
 
       const doStart = Effect.gen(function* () {
+        yield* Effect.sync(prepareForStart);
         const { shell, args, windowsVerbatimArguments } = shellInvocation(
           options.command,
         );

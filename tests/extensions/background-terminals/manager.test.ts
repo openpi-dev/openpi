@@ -928,6 +928,54 @@ test("the session spill budget fails closed across terminals", async () => {
   }
 });
 
+test("a full budget is reclaimed before a replacement terminal starts", async () => {
+  const runtime = ManagedRuntime.make(makeTerminalManagerLive(4));
+  try {
+    const manager = await runtime.runPromise(TerminalManager);
+    const oldest = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("seed")'),
+        title: "seed",
+        cwd,
+      }),
+    );
+    const { snap: oldestDone } = await settlement(manager, oldest.id);
+    assert.ok(oldestDone.stdout.spillPath);
+    const oldestSpill = oldestDone.stdout.spillPath;
+
+    // Leave exactly MAX_TRACKED settled entries, with the budget still held by
+    // the oldest one. The next start must reclaim it before its first chunk.
+    for (let index = 0; index < MAX_TRACKED - 1; index++) {
+      const filler = await runtime.runPromise(
+        manager.start({
+          command: nodeCmd(""),
+          title: `budget-filler-${index}`,
+          cwd,
+        }),
+      );
+      await settlement(manager, filler.id);
+    }
+    assert.equal(manager.view.size(), MAX_TRACKED);
+
+    const replacement = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("next")'),
+        title: "replacement",
+        cwd,
+      }),
+    );
+    const { snap: replacementDone } = await settlement(manager, replacement.id);
+
+    assert.equal(replacementDone.stdout.spillPath !== undefined, true);
+    assert.equal(fs.statSync(replacementDone.stdout.spillPath!).size, 4);
+    assert.doesNotMatch(replacementDone.errorText ?? "", /spill budget/);
+    assert.equal(manager.view.get(oldest.id), undefined);
+    assert.equal(fs.existsSync(oldestSpill), false);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("pruning removes spill files and releases their session budget", async () => {
   const runtime = ManagedRuntime.make(makeTerminalManagerLive(4));
   try {
