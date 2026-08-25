@@ -6,7 +6,7 @@
 >
 > 依据：当前 OpenPI 源码、Issues #71/#74/#75/#90、Claude Code `2.1.241` 运行时合同访谈，以及三份相互独立的 interface 设计评审。
 >
-> 后续变更：Issue #132 已将调用侧策略收敛为 `wait`；下文的当前合同已同步为 wait-only，明确标注的改造前记录仍保留历史原貌。
+> 后续变更：Issue #132 已将新调用收敛为 `wait`。当前 deprecation window 仍接受旧 `background` alias，并对每次旧调用返回可操作的迁移警告；下一 breaking release 才从 schema 与 coordinator input 删除 alias。明确标注的改造前记录仍保留历史原貌。
 
 ## 结论
 
@@ -35,14 +35,14 @@ workflow_stop
 
 本轮没有把整个 2200 行 Workflow extension 塞进一个新的大类，而是按不变量拆成三个深 seam：
 
-- `coordinator.ts`：宿主默认值、wait policy 解析，以及 wait/terminal 仲裁；
+- `coordinator.ts`：宿主默认值、wait policy、deprecated alias 警告，以及 wait/terminal 仲裁；
 - `result-delivery.ts`：逐 run delivery identity、pending/receipt/retry/restore；
 - `shared/result-budget.ts` 与 `shared/text-projection.ts`：Subagent/Workflow 共用的公平预算与 head/tail 投影。
 
 已经落地：
 
 - TUI 默认 detached，print/无可靠投递宿主默认 wait；
-- `wait:true` 是唯一显式同步选择，调用 schema 不再接受 `background`；
+- `wait:true` 是唯一推荐的显式同步选择；旧 `background` alias 仅在兼容期接受，并返回 `true → wait:false`、`false → wait:true` 的迁移警告；
 - 中断 wait 不取消 run，stop/shutdown 才拥有取消权；
 - terminal execution state 与 delivery state 正交持久化；
 - send failure 以同一 per-run id 重试，成功 sibling 不重发；
@@ -119,6 +119,9 @@ workflow({
   args?: string,
   resume_from_run_id?: string,
   wait?: boolean,
+
+  // Deprecated compatibility alias; removed in the next breaking release.
+  background?: boolean,
 })
 ```
 
@@ -128,11 +131,21 @@ workflow({
 显式 wait
   -> 严格服从
 
-省略 wait
+只有 background
+  -> wait = !background
+  -> 返回模型可见的精确迁移警告
+
+两者同时出现且语义一致
+  -> 严格服从 wait，并警告删除 background
+
+两者同时出现且语义冲突
+  -> fail closed，错误包含迁移映射
+
+两者都省略
   -> adapter.canDeliverLater = true：wait = false
   -> adapter.canDeliverLater = false：wait = true
 
-未知字段（包括旧 background alias）
+其他未知字段
   -> schema validation fail closed
 ```
 
@@ -143,7 +156,7 @@ workflow({
 - `wait` 被中断只结束等待，不能隐式取消 run；
 - 只有 `workflow_stop` 取消运行。
 
-Issue #132 以 breaking change 删除了调用侧 `background` alias。Persisted artifact 和 tool details 中记录实际 detached 状态的 `background` 仍是运行时事实，并继续兼容读取。
+Issue #132 的当前阶段只保留有警告的调用兼容，不允许新文档、Skill、fixture 或示例继续推荐 alias。警告属于调用级迁移信息，不写入 artifact/details。下一 breaking release 删除调用侧 alias 时，persisted artifact 和 tool details 中记录实际 detached 状态的 `background` 仍是运行时事实，并继续兼容读取。
 
 ### 3.2 `workflow_status`
 
@@ -485,7 +498,7 @@ Runtime 不自动插入 Report Agent。当前已提供：
 ### Phase 4：`wait` 与宿主默认值
 
 - 新增 `wait`；
-- `background` 曾在迁移期兼容映射并 deprecated，随后由 Issue #132 从调用 schema 与 coordinator input 删除；
+- `background` 在迁移期兼容映射并对每次旧调用返回 actionable warning；下一 breaking release 由 Issue #132 从调用 schema 与 coordinator input 删除；
 - interactive/Web/RPC adapter 有可靠 completion channel 时默认 `wait=false`；
 - print/automation 默认 `wait=true`；
 - wait interrupt 不取消 run；
@@ -637,11 +650,11 @@ bun run test
   Vitest: 30/30 pass
 ```
 
-专项覆盖包括：interactive/print 默认值、wait-only schema validation、wait 中断、terminal/abort 仲裁、busy/idle delivery、首次 transport failure、逐 run receipt、legacy artifact restore、`uncertain` 独立统计、稳定工具组、64-ref 公平 head/tail handoff、64-run completion 批次预算、动态父上下文投影和逐 Agent artifact。
+专项覆盖包括：interactive/print 默认值、deprecated alias 迁移警告、unknown-field schema validation、wait 中断、terminal/abort 仲裁、busy/idle delivery、首次 transport failure、逐 run receipt、legacy artifact restore、`uncertain` 独立统计、稳定工具组、64-ref 公平 head/tail handoff、64-run completion 批次预算、动态父上下文投影和逐 Agent artifact。
 
 ### 14.2 真实模型 smoke
 
-运行资产与 npm 安装隔离，直接从本 checkout 显式加载 `extensions/workflows/index.ts`、`extensions/capabilities/index.ts` 和 Workflow Skill。父模型为 `seal/deepseek-v4-flash-0731-baidu`；三个 Workflow children 按本地角色配置使用 `gpt-5.6-luna`。print 宿主省略 `wait`，因此按合同 inline 等待。
+运行资产与 npm 安装隔离，直接从本 checkout 显式加载 `extensions/workflows/index.ts`、`extensions/capabilities/index.ts` 和 Workflow Skill。父模型为 `seal/deepseek-v4-flash-0731-baidu`；三个 Workflow children 按本地角色配置使用 `gpt-5.6-luna`。print 宿主省略 launch-policy 字段，因此按合同 inline 等待。
 
 真实 run `wf_6664b8e3427d`：
 
