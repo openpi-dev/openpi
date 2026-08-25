@@ -209,12 +209,26 @@ export class TerminalManager extends Context.Service<
 
 // --- Process helpers ------------------------------------------------------------
 
-function shellInvocation(command: string) {
-  if (process.platform === "win32") {
-    const shell = process.env.ComSpec ?? "cmd.exe";
-    return { shell, args: ["/d", "/s", "/c", command] };
+export function shellInvocation(
+  command: string,
+  platform: NodeJS.Platform = process.platform,
+  windowsShell = process.env.ComSpec ?? "cmd.exe",
+) {
+  if (platform === "win32") {
+    // Match Node's `{ shell: true }` cmd.exe invocation. Without the outer
+    // quotes and verbatim arguments, libuv escapes embedded quotes using CRT
+    // rules, which cmd.exe does not understand.
+    return {
+      shell: windowsShell,
+      args: ["/d", "/s", "/c", `"${command}"`],
+      windowsVerbatimArguments: true,
+    };
   }
-  return { shell: "/bin/sh", args: ["-c", command] };
+  return {
+    shell: "/bin/sh",
+    args: ["-c", command],
+    windowsVerbatimArguments: false,
+  };
 }
 
 type ProcessSignalTarget = Pick<ChildProcess, "pid" | "kill">;
@@ -816,7 +830,9 @@ function* makeManager(maxSpillBytesPerSession: number) {
       );
 
       const doStart = Effect.gen(function* () {
-        const { shell, args } = shellInvocation(options.command);
+        const { shell, args, windowsVerbatimArguments } = shellInvocation(
+          options.command,
+        );
         const child = yield* Effect.try({
           try: () =>
             spawn(shell, args, {
@@ -827,6 +843,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
               stdio: ["ignore", "pipe", "pipe"],
               // Own process group on POSIX → group kill takes the whole tree.
               detached: process.platform !== "win32",
+              windowsVerbatimArguments,
             }),
           catch: (error) => new SpawnError({ message: boundedError(error) }),
         });

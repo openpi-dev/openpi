@@ -20,6 +20,7 @@ import {
   MAX_RUNNING,
   MAX_TRACKED,
   makeTerminalManagerLive,
+  shellInvocation,
   signalWindowsProcessTree,
   TerminalManager,
   type TerminalManagerShape,
@@ -48,6 +49,16 @@ function fakeTaskkill(
     return child;
   };
 }
+
+test("Windows shell invocation preserves cmd.exe command quoting", () => {
+  const command = "node -e \"process.stdout.write('ok')\"";
+
+  assert.deepEqual(shellInvocation(command, "win32", "cmd.exe"), {
+    shell: "cmd.exe",
+    args: ["/d", "/s", "/c", `"${command}"`],
+    windowsVerbatimArguments: true,
+  });
+});
 
 test("Windows taskkill is awaited and reports a confirmed tree signal", async () => {
   const launches: Array<{ pid: number; force: boolean }> = [];
