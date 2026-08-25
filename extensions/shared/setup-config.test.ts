@@ -489,13 +489,12 @@ test("a stored value that had to be normalized is reported, not hidden", async (
   assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
 });
 
-test("legacy footerItems normalization remains visible in update reports", async () => {
+test("legacy footerItems migration remains visible in update reports", async () => {
   writeFileSync(
     SETUP_CONFIG_PATH,
     JSON.stringify({
       ui: {
-        footerLines: [["model", "flex", "git"]],
-        footerItems: ["cache", "cache", "bogus"],
+        footerItems: ["model", "context", "cache", "git"],
       },
     }),
   );

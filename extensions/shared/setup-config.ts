@@ -570,15 +570,7 @@ function replacedFields(
   ) {
     paths.push("summaries → suggestions");
   }
-  if (
-    path === "ui" &&
-    "footerItems" in raw &&
-    "footerLines" in normalized &&
-    JSON.stringify(raw.footerItems) !==
-      JSON.stringify(
-        flattenFooterItems(normalizeFooterLines(normalized.footerLines)),
-      )
-  ) {
+  if (path === "ui" && "footerItems" in raw && "footerLines" in normalized) {
     paths.push("ui.footerItems");
   }
   for (const [key, value] of Object.entries(normalized)) {
