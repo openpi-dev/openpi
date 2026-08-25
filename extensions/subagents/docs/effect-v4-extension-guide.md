@@ -51,7 +51,7 @@ project scope:
 ```jsonc
 {
   "extends": "../../tsconfig.json",
-  "include": ["index.ts", "src/**/*.ts", "*.test.ts"],
+  "include": ["index.ts", "src/**/*.ts"],
 }
 ```
 
