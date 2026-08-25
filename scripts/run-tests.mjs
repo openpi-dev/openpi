@@ -21,8 +21,15 @@ if (nodeResult.status !== 0) {
   process.exit(nodeResult.status ?? 1);
 }
 
-const vitest = resolve("node_modules/.bin/vitest");
-const vitestResult = spawnSync(vitest, ["run", ...vitestTests], {
-  stdio: "inherit",
-});
+// Invoke the CLI module through Node instead of the package-manager shim.
+// Windows installs expose the shim as `vitest.cmd`, which cannot be launched
+// reliably by spawnSync without a shell.
+const vitestCli = resolve("node_modules/vitest/vitest.mjs");
+const vitestResult = spawnSync(
+  process.execPath,
+  [vitestCli, "run", ...vitestTests],
+  {
+    stdio: "inherit",
+  },
+);
 process.exit(vitestResult.status ?? 1);
