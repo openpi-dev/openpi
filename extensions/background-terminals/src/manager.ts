@@ -359,6 +359,16 @@ export async function signalWindowsProcessTree(
       : attempt.outcome === "timed_out"
         ? `taskkill timed out after ${attempt.timeoutMs}ms`
         : `taskkill exited ${attempt.exitCode ?? "without a code"}${attempt.signal ? ` (${attempt.signal})` : ""}`;
+  // A failed graceful taskkill must leave the shell PID alive for the
+  // serialized `/T /F` phase. Killing only the shell here would orphan its
+  // descendants and make the original process-tree handle unusable.
+  if (
+    signal === "SIGTERM" &&
+    attempt.outcome !== "launch_failed" &&
+    !targetExited()
+  ) {
+    return { outcome: "failed", detail };
+  }
   return directSignal(child, signal, targetExited, detail);
 }
 

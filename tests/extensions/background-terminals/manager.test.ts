@@ -85,7 +85,7 @@ test("Windows taskkill is awaited and reports a confirmed tree signal", async ()
   assert.deepEqual(launches, [{ pid: 42, force: true }]);
 });
 
-test("Windows taskkill non-zero exit falls back without claiming tree termination", async () => {
+test("Windows graceful taskkill failure preserves the PID for force escalation", async () => {
   const signals: Array<NodeJS.Signals | number | undefined> = [];
   const result = await signalWindowsProcessTree(
     {
@@ -100,9 +100,29 @@ test("Windows taskkill non-zero exit falls back without claiming tree terminatio
     fakeTaskkill(5, null),
   );
 
+  assert.equal(result.outcome, "failed");
+  assert.match(result.detail, /taskkill exited 5/);
+  assert.deepEqual(signals, []);
+});
+
+test("Windows force taskkill failure falls back without claiming tree termination", async () => {
+  const signals: Array<NodeJS.Signals | number | undefined> = [];
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 43,
+      kill(signal) {
+        signals.push(signal);
+        return true;
+      },
+    },
+    "SIGKILL",
+    () => false,
+    fakeTaskkill(5, null),
+  );
+
   assert.equal(result.outcome, "fallback_sent");
   assert.match(result.detail, /taskkill exited 5/);
-  assert.deepEqual(signals, ["SIGTERM"]);
+  assert.deepEqual(signals, ["SIGKILL"]);
 });
 
 test("Windows taskkill launch failure is explicit and uses the direct fallback", async () => {
