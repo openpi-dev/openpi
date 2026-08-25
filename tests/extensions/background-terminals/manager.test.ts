@@ -1024,6 +1024,66 @@ test("pruning removes spill files and releases their session budget", async () =
   }
 });
 
+test("pending completion retains its spill until delivery releases it", async () => {
+  const runtime = ManagedRuntime.make(makeTerminalManagerLive(4));
+  try {
+    const manager = await runtime.runPromise(TerminalManager);
+    const oldest = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("seed")'),
+        title: "pending-completion",
+        cwd,
+      }),
+    );
+    const { snap: oldestDone } = await settlement(manager, oldest.id);
+    assert.ok(oldestDone.stdout.spillPath);
+    const oldestSpill = oldestDone.stdout.spillPath;
+
+    // This models the extension's copied completion waiting in its deferred
+    // delivery map. The manager must not reclaim evidence still referenced by
+    // that pending notification.
+    manager.view.retainResult(oldest.id);
+
+    for (let index = 0; index < MAX_TRACKED - 1; index++) {
+      const filler = await runtime.runPromise(
+        manager.start({
+          command: nodeCmd(""),
+          title: `pending-filler-${index}`,
+          cwd,
+        }),
+      );
+      await settlement(manager, filler.id);
+    }
+    assert.equal(manager.view.size(), MAX_TRACKED);
+
+    const replacement = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd('process.stdout.write("next")'),
+        title: "pending-replacement",
+        cwd,
+      }),
+    );
+    await settlement(manager, replacement.id);
+
+    assert.equal(fs.existsSync(oldestSpill), true);
+    assert.ok(manager.view.get(oldest.id));
+
+    manager.view.releaseResult(oldest.id);
+    const afterDelivery = await runtime.runPromise(
+      manager.start({
+        command: nodeCmd(""),
+        title: "after-delivery",
+        cwd,
+      }),
+    );
+    await settlement(manager, afterDelivery.id);
+    assert.equal(manager.view.get(oldest.id), undefined);
+    assert.equal(fs.existsSync(oldestSpill), false);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("aborting the kill wait does not cancel the termination", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

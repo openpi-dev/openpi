@@ -736,6 +736,8 @@ export interface TerminalReadModel {
   subscribe(listener: () => void): () => void;
   subscribeTo(id: string, listener: () => void): () => void;
   requestKill(id: string): void;   // fire-and-forget via the scoped FiberSet runtime
+  retainResult(id: string): void;  // keep spill evidence for a pending completion
+  releaseResult(id: string): void; // release evidence after delivery/consumption
   setOnSettled(hook?: (snap: TerminalSnapshot, consumed: boolean) => void): void;
 }
 ```

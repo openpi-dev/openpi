@@ -179,6 +179,11 @@ export interface TerminalReadModel {
   /** Fire-and-forget kill (dashboard/detail `x`). Not marked consumed: the
    * settle still flows back to the model as a follow-up message. */
   requestKill(id: string): void;
+  /** Keep a settled entry alive while its completion snapshot is pending
+   * delivery outside the manager. */
+  retainResult(id: string): void;
+  /** Release a previously retained completion snapshot and retry pruning. */
+  releaseResult(id: string): void;
   /**
    * Register the settle hook. `consumed` is true when an active bg_kill is
    * collecting the result (so it must not also be delivered as a follow-up).
@@ -496,6 +501,8 @@ function* makeManager(maxSpillBytesPerSession: number) {
   >();
   /** ids with an in-flight kill() collecting the result (settle → consumed). */
   const killInterest = new Map<string, number>();
+  /** Settled entries whose copied completion snapshot is still pending delivery. */
+  const resultInterest = new Set<string>();
   const listeners = new Set<() => void>();
   const idListeners = new Map<string, Set<() => void>>();
   /** bg_watch chunk listeners, keyed by terminal id. */
@@ -596,7 +603,9 @@ function* makeManager(maxSpillBytesPerSession: number) {
     const candidates = [...entries.values()]
       .filter(
         (e) =>
-          e.snapshot.status !== "running" && !killInterest.has(e.snapshot.id),
+          e.snapshot.status !== "running" &&
+          !killInterest.has(e.snapshot.id) &&
+          !resultInterest.has(e.snapshot.id),
       )
       .sort(
         (a, b) =>
@@ -619,7 +628,9 @@ function* makeManager(maxSpillBytesPerSession: number) {
       const candidate = [...entries.values()]
         .filter(
           (e) =>
-            e.snapshot.status !== "running" && !killInterest.has(e.snapshot.id),
+            e.snapshot.status !== "running" &&
+            !killInterest.has(e.snapshot.id) &&
+            !resultInterest.has(e.snapshot.id),
         )
         .sort(
           (a, b) =>
@@ -1214,6 +1225,7 @@ function* makeManager(maxSpillBytesPerSession: number) {
     disposed = true;
     const all = [...entries.values()];
     entries.clear();
+    resultInterest.clear();
     yield* Effect.forEach(
       all,
       (entry) =>
@@ -1277,6 +1289,13 @@ function* makeManager(maxSpillBytesPerSession: number) {
       // UI-initiated kills are not "consumed": the killed result still flows
       // back to the model as a follow-up message (subagents precedent).
       runCleanup(killEntry(entry).pipe(Effect.ignore));
+    },
+    retainResult: (id) => {
+      if (entries.has(id)) resultInterest.add(id);
+    },
+    releaseResult: (id) => {
+      if (!resultInterest.delete(id)) return;
+      pruneSettled();
     },
     setOnSettled: (hook) => {
       onSettled = hook;

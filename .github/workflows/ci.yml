@@ -76,4 +76,10 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - name: Test Windows process lifecycle
-        run: node --test --experimental-strip-types extensions/background-terminals/manager.test.ts
+        run: |
+          $testPath = if (Test-Path "tests/extensions/background-terminals/manager.test.ts") {
+            "tests/extensions/background-terminals/manager.test.ts"
+          } else {
+            "extensions/background-terminals/manager.test.ts"
+          }
+          node --test --experimental-strip-types $testPath
