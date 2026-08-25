@@ -10,8 +10,8 @@ import {
   type WorkflowJournal,
 } from "./journal.ts";
 import {
+  encodeCompleteJson,
   safeStringify,
-  toSerializable,
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
@@ -22,6 +22,7 @@ export const JOURNAL_FILE = "journal.json";
 
 const ARTIFACT_TRANSCRIPT_MAX_BYTES = 32 * 1024;
 const ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES = 8 * 1024;
+const AGENT_RESULT_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 export const WORKFLOW_CHECKPOINT_INTERVAL_MS = 500;
 const ENTRY_TRUNCATION_MARKER = "\n[entry truncated]";
 const TRANSCRIPT_TRUNCATION_MARKER =
@@ -111,27 +112,26 @@ export function persistWorkflowAgentResult(
     "agent-results",
     `agent-${String(index).padStart(4, "0")}.json`,
   );
-  writeRunFile(
-    runDir,
-    artifact,
-    JSON.stringify(
-      toSerializable(
-        {
-          output: result.output,
-          ...(result.structured !== undefined
-            ? { structured: result.structured }
-            : {}),
-        },
-        {
-          maxDepth: 32,
-          maxNodes: 100_000,
-          maxStringBytes: 2 * 1024 * 1024,
-        },
-      ),
-      null,
-      2,
-    ),
+  const encoded = encodeCompleteJson(
+    {
+      output: result.output,
+      ...(result.structured !== undefined
+        ? { structured: result.structured }
+        : {}),
+    },
+    {
+      maxBytes: AGENT_RESULT_ARTIFACT_MAX_BYTES,
+      maxDepth: 32,
+      maxNodes: 100_000,
+      maxStringBytes: AGENT_RESULT_ARTIFACT_MAX_BYTES,
+    },
   );
+  if (!encoded.ok) {
+    throw new Error(
+      `Agent result artifact exceeded the ${AGENT_RESULT_ARTIFACT_MAX_BYTES}-byte budget (${encoded.limit} limit at ${encoded.path})`,
+    );
+  }
+  writeRunFile(runDir, artifact, encoded.json);
   return artifact;
 }
 

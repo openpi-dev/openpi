@@ -641,6 +641,90 @@ test("agent calls run through the injected session factory and resume replays th
   }
 });
 
+test("oversized authoritative agent results fail without a success record", async () => {
+  const factory: WorkflowAgentSessionFactory = async (options) => {
+    const structuredTool = options?.customTools?.find(
+      (tool) => tool.name === "structured_output",
+    );
+    assert.ok(structuredTool);
+    const session = fakeAgentSession("");
+    const existingTools = session.getAllTools();
+    session.getAllTools = () => [
+      ...existingTools,
+      {
+        name: structuredTool.name,
+        description: structuredTool.description,
+        parameters: structuredTool.parameters,
+        promptGuidelines: structuredTool.promptGuidelines,
+        sourceInfo: {
+          path: "<custom:structured_output>",
+          source: "custom",
+          scope: "temporary",
+          origin: "top-level",
+        },
+      },
+    ];
+    session.getActiveToolNames = () => [
+      ...existingTools.map((tool) => tool.name),
+      structuredTool.name,
+    ];
+    session.getToolDefinition = (name) =>
+      name === structuredTool.name ? structuredTool : undefined;
+    session.prompt = async () => {
+      await structuredTool.execute(
+        "oversized-structured-output",
+        { blob: "x".repeat(3 * 1024 * 1024) },
+        new AbortController().signal,
+        () => {},
+        ctx,
+      );
+    };
+    return { session };
+  };
+  __setWorkflowTestAgentSessionFactory(factory);
+
+  try {
+    const result = (await workflow.execute(
+      "e2e-agent-result-budget",
+      {
+        script:
+          'export const meta = { name: "oversized-agent-result" };\n' +
+          'const r = await agent("return a large fixture", { agent_type: "reviewer", schema: { type: "object", properties: { blob: { type: "string" } }, required: ["blob"] } });\n' +
+          "return { ok: r.ok, error: r.error };",
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+
+    const persisted = readWorkflowJson(result.details.runId);
+    const agents = persisted.agents as Array<{
+      state: unknown;
+      error?: unknown;
+      resultArtifact?: unknown;
+      resultRef?: unknown;
+    }>;
+    assert.equal(agents.length, 1);
+    assert.equal(agents[0]?.state, "error");
+    assert.match(String(agents[0]?.error), /agent result artifact exceeded/i);
+    assert.equal(agents[0]?.resultArtifact, undefined);
+    assert.equal(agents[0]?.resultRef, undefined);
+    assert.equal(
+      existsSync(
+        join(runDirFor(result.details.runId), "agent-results/agent-0001.json"),
+      ),
+      false,
+    );
+    assert.equal(
+      existsSync(join(runDirFor(result.details.runId), "journal.json")),
+      false,
+    );
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+});
+
 test.after(() => {
   for (const handler of handlers.get("session_shutdown") ?? []) {
     void handler({}, ctx);

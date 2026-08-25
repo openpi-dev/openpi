@@ -6,6 +6,7 @@ import { test } from "node:test";
 import {
   boundedArtifactTranscript,
   createWorkflowPersistence,
+  persistWorkflowAgentResult,
   persistWorkflowJson,
 } from "./artifacts.ts";
 import {
@@ -112,6 +113,38 @@ test("live artifact persistence includes current agents and transcripts", () => 
         finishedAt: 25,
         durationMs: 15,
       },
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("agent result artifacts are complete or fail without leaving a file", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-agent-result-"));
+  try {
+    const artifact = persistWorkflowAgentResult(directory, 1, {
+      output: "complete",
+      structured: { verdict: "accepted", emoji: "你好🙂" },
+    });
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(directory, artifact), "utf8")),
+      {
+        output: "complete",
+        structured: { verdict: "accepted", emoji: "你好🙂" },
+      },
+    );
+
+    assert.throws(
+      () =>
+        persistWorkflowAgentResult(directory, 2, {
+          output: "too large",
+          structured: "x".repeat(3 * 1024 * 1024),
+        }),
+      /agent result artifact exceeded the .* budget/i,
+    );
+    assert.throws(
+      () => readFileSync(join(directory, "agent-results/agent-0002.json")),
+      /ENOENT/,
     );
   } finally {
     rmSync(directory, { recursive: true, force: true });

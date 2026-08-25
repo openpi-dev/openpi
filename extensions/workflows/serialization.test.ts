@@ -3,7 +3,134 @@ import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
-import { safeStringify, writeFileAtomic } from "./serialization.ts";
+import {
+  encodeCompleteJson,
+  safeStringify,
+  writeFileAtomic,
+} from "./serialization.ts";
+
+test("complete JSON encoding stops reading arrays at the first hard limit", () => {
+  let reads = 0;
+  const values = new Proxy(new Array(1_000_000).fill("value"), {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) reads++;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  const encoded = encodeCompleteJson(values, {
+    maxBytes: 1_024,
+    maxDepth: 8,
+    maxNodes: 5,
+    maxStringBytes: 128,
+  });
+
+  assert.deepEqual(encoded.ok ? undefined : encoded.limit, "nodes");
+  assert.ok(reads <= 4, `read ${reads} array elements after the node budget`);
+});
+
+test("complete JSON encoding charges escaped UTF-8 bytes before reading values", () => {
+  let lateValueRead = false;
+  const value = Object.defineProperties(
+    {},
+    {
+      ['"\n'.repeat(40)]: {
+        enumerable: true,
+        get: () => "first",
+      },
+      late: {
+        enumerable: true,
+        get: () => {
+          lateValueRead = true;
+          throw new Error("late value must not be read");
+        },
+      },
+    },
+  );
+
+  const encoded = encodeCompleteJson(value, {
+    maxBytes: 96,
+    maxDepth: 8,
+    maxNodes: 20,
+    maxStringBytes: 1_024,
+  });
+
+  assert.equal(encoded.ok, false);
+  assert.equal(encoded.ok ? undefined : encoded.limit, "bytes");
+  assert.equal(lateValueRead, false);
+});
+
+test("complete JSON encoding preserves supported values within its exact cap", () => {
+  const value: Record<string, unknown> = {
+    emoji: "你好🙂",
+    quote: '"\\\n',
+    bigint: 42n,
+    number: Number.NaN,
+  };
+  value.self = value;
+
+  const encoded = encodeCompleteJson(value, {
+    maxBytes: 512,
+    maxDepth: 8,
+    maxNodes: 20,
+    maxStringBytes: 128,
+  });
+
+  assert.equal(encoded.ok, true);
+  if (!encoded.ok) return;
+  assert.equal(encoded.bytes, Buffer.byteLength(encoded.json, "utf8"));
+  assert.ok(encoded.bytes <= 512);
+  const parsed = JSON.parse(encoded.json) as Record<string, unknown>;
+  assert.equal(parsed.emoji, "你好🙂");
+  assert.equal(parsed.quote, '"\\\n');
+  assert.equal(parsed.bigint, "42n");
+  assert.equal(parsed.number, "[number: NaN]");
+  assert.equal(parsed.self, "[circular: $root]");
+});
+
+test("lossy serialization also stops collection reads at the node limit", () => {
+  let reads = 0;
+  const values = new Proxy(new Array(1_000_000).fill("value"), {
+    get(target, property, receiver) {
+      if (typeof property === "string" && /^\d+$/.test(property)) reads++;
+      return Reflect.get(target, property, receiver);
+    },
+  });
+
+  const text = safeStringify(values, {
+    maxBytes: 1_024,
+    maxDepth: 8,
+    maxNodes: 5,
+    maxStringBytes: 128,
+  });
+
+  assert.doesNotThrow(() => JSON.parse(text));
+  assert.match(text, /truncated/);
+  assert.ok(reads <= 4, `read ${reads} array elements after the node budget`);
+});
+
+test("complete JSON encoding contains object enumeration failures", () => {
+  const value = new Proxy(
+    {},
+    {
+      ownKeys() {
+        throw new Error("fixture ownKeys failure");
+      },
+    },
+  );
+
+  const encoded = encodeCompleteJson(value, {
+    maxBytes: 512,
+    maxDepth: 8,
+    maxNodes: 20,
+    maxStringBytes: 128,
+  });
+
+  assert.equal(encoded.ok, true);
+  if (!encoded.ok) return;
+  assert.match(encoded.json, /unreadable object.*fixture ownKeys failure/);
+  assert.doesNotThrow(() => JSON.parse(encoded.json));
+});
 
 test("safeStringify handles cycles, bigint, depth, and size", () => {
   const value: Record<string, unknown> = {

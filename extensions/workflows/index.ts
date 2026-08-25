@@ -1874,7 +1874,24 @@ export default function workflows(pi: ExtensionAPI) {
               });
               const acceptance = judged.ledger;
               if (acceptance) record.acceptance = acceptance;
-              const outcomeOk = judged.ok;
+              let artifactError: string | undefined;
+              if (judged.ok) {
+                try {
+                  record.resultArtifact = persistWorkflowAgentResult(
+                    runDir,
+                    index,
+                    {
+                      output: outcome.output,
+                      ...(outcome.structured !== undefined
+                        ? { structured: outcome.structured }
+                        : {}),
+                    },
+                  );
+                } catch (error) {
+                  artifactError = errorText(error);
+                }
+              }
+              const outcomeOk = judged.ok && artifactError === undefined;
               record.invocation = transitionInvocation(record.invocation!, {
                 status: "settled",
                 outcome: outcomeOk ? "success" : "error",
@@ -1882,21 +1899,11 @@ export default function workflows(pi: ExtensionAPI) {
               });
               record.state = outcomeOk ? "done" : "error";
               if (outcomeOk) delete record.error;
-              else
-                record.error = judged.error
-                  ? sanitizeWorkflowDisplayLine(judged.error)
+              else {
+                const failureError = artifactError ?? judged.error;
+                record.error = failureError
+                  ? sanitizeWorkflowDisplayLine(failureError)
                   : undefined;
-              if (outcomeOk) {
-                record.resultArtifact = persistWorkflowAgentResult(
-                  runDir,
-                  index,
-                  {
-                    output: outcome.output,
-                    ...(outcome.structured !== undefined
-                      ? { structured: outcome.structured }
-                      : {}),
-                  },
-                );
               }
               const ref = handoffs.register({
                 callId,
