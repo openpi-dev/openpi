@@ -22,9 +22,9 @@ export const WORKFLOW_PARAMETER_DESCRIPTIONS = {
     "Optional prior run id or unique suffix for safe read-only replay. See the workflows Skill for matching rules.",
 };
 
-/** Describes stopping a running background workflow, mirroring subagent_cancel/bg_kill. */
+/** Describes stopping a running workflow, mirroring subagent_cancel/bg_kill. */
 export const WORKFLOW_STOP_TOOL_DESCRIPTION =
-  "Cancel a running background workflow by its run id (from the workflow launch result). This aborts its remaining agents and settles the run; partial results and artifacts are preserved. Only background runs need this — a blocking workflow is already cancelled by interrupting the turn.";
+  "Cancel a running workflow by its run id (from the workflow launch result). This aborts its remaining agents and settles the run; partial results and artifacts are preserved.";
 
 /** Model-facing schema description for the workflow run id to stop. */
 export const WORKFLOW_STOP_PARAMETER_DESCRIPTIONS = {

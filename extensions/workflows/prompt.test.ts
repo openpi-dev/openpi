@@ -112,14 +112,8 @@ test("launch result advertises the model-facing lifecycle tools", () => {
 });
 
 test("lifecycle tool descriptions state their scope and non-blocking nature", () => {
-  assert.match(
-    WORKFLOW_STOP_TOOL_DESCRIPTION,
-    /Cancel a running background workflow/,
-  );
-  assert.match(
-    WORKFLOW_STOP_TOOL_DESCRIPTION,
-    /Only background runs need this/,
-  );
+  assert.match(WORKFLOW_STOP_TOOL_DESCRIPTION, /Cancel a running workflow/);
+  assert.doesNotMatch(WORKFLOW_STOP_TOOL_DESCRIPTION, /interrupting the turn/);
   assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /without blocking/);
   assert.match(WORKFLOW_STATUS_TOOL_DESCRIPTION, /Does not wait/);
 });

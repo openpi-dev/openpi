@@ -89,7 +89,7 @@ import {
 } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import {
-  resolveWorkflowLaunchPolicy,
+  resolveWorkflowLaunchMode,
   waitForWorkflowCompletion,
 } from "./coordinator.ts";
 import {
@@ -1147,11 +1147,11 @@ export default function workflows(pi: ExtensionAPI) {
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
       const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
-      const launchPolicy = resolveWorkflowLaunchPolicy(
-        { wait: params.wait },
+      const launchMode = resolveWorkflowLaunchMode(
+        params.wait,
         canDeliverLater,
       );
-      const background = launchPolicy.detached;
+      const background = launchMode === "detached";
       const now = Date.now();
 
       const details: WorkflowDetails = {
@@ -1166,7 +1166,7 @@ export default function workflows(pi: ExtensionAPI) {
         agents: [],
         delivery: {
           id: `workflow:${runId}:terminal`,
-          state: launchPolicy.wait ? "held-for-inline" : "none",
+          state: launchMode === "inline" ? "held-for-inline" : "none",
           attempts: 0,
           updatedAt: now,
         },

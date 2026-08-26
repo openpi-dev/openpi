@@ -1,35 +1,23 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  resolveWorkflowLaunchPolicy,
+  resolveWorkflowLaunchMode,
   waitForWorkflowCompletion,
 } from "./coordinator.ts";
 
 test("interactive launch defaults detached while non-delivery hosts wait", () => {
-  assert.deepEqual(resolveWorkflowLaunchPolicy({}, true), {
-    wait: false,
-    detached: true,
-  });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({}, false), {
-    wait: true,
-    detached: false,
-  });
+  assert.equal(resolveWorkflowLaunchMode(undefined, true), "detached");
+  assert.equal(resolveWorkflowLaunchMode(undefined, false), "inline");
 });
 
 test("explicit wait selects inline or detached launch policy", () => {
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ wait: true }, true), {
-    wait: true,
-    detached: false,
-  });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ wait: false }, true), {
-    wait: false,
-    detached: true,
-  });
+  assert.equal(resolveWorkflowLaunchMode(true, true), "inline");
+  assert.equal(resolveWorkflowLaunchMode(false, true), "detached");
 });
 
 test("unsupported detached delivery fails closed", () => {
   assert.throws(
-    () => resolveWorkflowLaunchPolicy({ wait: false }, false),
+    () => resolveWorkflowLaunchMode(false, false),
     /cannot deliver/,
   );
 });

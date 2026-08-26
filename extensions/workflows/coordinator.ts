@@ -1,24 +1,15 @@
-export interface WorkflowLaunchPolicyInput {
-  wait?: boolean;
-}
-
-export interface WorkflowLaunchPolicy {
-  wait: boolean;
-  detached: boolean;
-}
-
 /** Resolve the caller's wait preference against the host delivery capability. */
-export function resolveWorkflowLaunchPolicy(
-  input: WorkflowLaunchPolicyInput,
+export function resolveWorkflowLaunchMode(
+  requestedWait: boolean | undefined,
   canDeliverLater: boolean,
-): WorkflowLaunchPolicy {
-  const wait = input.wait ?? !canDeliverLater;
+) {
+  const wait = requestedWait ?? !canDeliverLater;
   if (!wait && !canDeliverLater) {
     throw new Error(
       "This host cannot deliver a workflow result later; use wait: true",
     );
   }
-  return { wait, detached: !wait };
+  return wait ? "inline" : "detached";
 }
 
 /**
