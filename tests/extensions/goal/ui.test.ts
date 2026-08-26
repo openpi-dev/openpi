@@ -1,0 +1,147 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import {
+  acknowledgeGoalCompletion,
+  createGoalSnapshot,
+  transitionGoal,
+} from "../../../extensions/goal/state.ts";
+import {
+  formatGoalElapsedSeconds,
+  formatTokensCompact,
+  goalContinuationLabel,
+  goalFooterText,
+  renderGoalTool,
+} from "../../../extensions/goal/ui.ts";
+
+const goal = {
+  ...createGoalSnapshot(
+    { objective: "全面检查并改进插件", tokenBudget: 50_000 },
+    0,
+    1,
+    "goal_ui_test",
+  ),
+  tokensUsed: 12_500,
+  timeUsedSeconds: 90,
+};
+
+test("token and elapsed-time formatting matches current Codex Goal UI", () => {
+  assert.equal(formatTokensCompact(0), "0");
+  assert.equal(formatTokensCompact(999), "999");
+  assert.equal(formatTokensCompact(1_000), "1K");
+  assert.equal(formatTokensCompact(12_500), "12.5K");
+  assert.equal(formatTokensCompact(63_876), "63.9K");
+  assert.equal(formatTokensCompact(100_000), "100K");
+  assert.equal(formatGoalElapsedSeconds(59), "59s");
+  assert.equal(formatGoalElapsedSeconds(60), "1m");
+  assert.equal(formatGoalElapsedSeconds(90 * 60), "1h 30m");
+  assert.equal(formatGoalElapsedSeconds(24 * 60 * 60), "1d 0h 0m");
+});
+
+test("footer never exposes the objective or legacy turn counters", () => {
+  assert.equal(goalFooterText(goal), "Pursuing goal (12.5K / 50K)");
+  assert.equal(
+    goalFooterText({ ...goal, tokenBudget: undefined }),
+    "Pursuing goal (1m)",
+  );
+  assert.equal(
+    goalFooterText(transitionGoal(goal, "paused", 2, "pause")),
+    "Goal paused (/goal resume)",
+  );
+  assert.equal(
+    goalFooterText(transitionGoal(goal, "blocked", 2, "block")),
+    "Goal blocked (/goal resume)",
+  );
+  assert.equal(
+    goalFooterText(transitionGoal(goal, "budget_limited", 2, "budget")),
+    "Goal unmet (12.5K / 50K tokens)",
+  );
+  const complete = transitionGoal(goal, "complete", 2, "done");
+  assert.equal(goalFooterText(complete), "Goal achieved (12.5K tokens)");
+  assert.equal(goalFooterText(acknowledgeGoalCompletion(complete, 3)), "");
+  assert.equal(
+    goalFooterText(
+      transitionGoal(
+        createGoalSnapshot({ objective: "done" }, 0, 1, "goal_ui_done"),
+        "complete",
+        2,
+        "done",
+      ),
+    ),
+    "Goal achieved (0s)",
+  );
+  assert.equal(goalFooterText(goal).includes(goal.objective), false);
+  assert.equal(goalFooterText(goal).includes("turn"), false);
+});
+
+test("goal tool result paints every row through the supplied status background", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const rendered = renderGoalTool(
+    { goal, message: "created" },
+    false,
+    theme,
+    (text) => `<green>${text}</green>`,
+  ).render(80);
+
+  assert.equal(rendered.length, 3);
+  assert.ok(rendered.every((line) => line.startsWith("<green>")));
+  assert.ok(rendered.every((line) => line.endsWith("</green>")));
+});
+
+test("goal rendering sanitizes replayed objective, reason, status, and messages", () => {
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const replayed = {
+    ...goal,
+    objective: "safe\u001b[31m red\u001b[0m\u202e spoof\u202c",
+    reason: "because\u001b]52;c;payload\u0007 now",
+    status: "active\u202e" as typeof goal.status,
+  };
+  const rendered = renderGoalTool(
+    { goal: replayed, message: "ignored" },
+    true,
+    theme,
+  )
+    .render(80)
+    .map((line) => line.trimEnd());
+
+  assert.deepEqual(rendered, [
+    "Goal active",
+    "safe red spoof",
+    "12.5K / 50K tokens",
+    "Reason: because now",
+  ]);
+  assert.deepEqual(
+    renderGoalTool(
+      { message: "failed\u001bPsecret\u001b\\ safely\u2066x\u2069" },
+      false,
+      theme,
+    )
+      .render(80)
+      .map((line) => line.trimEnd()),
+    ["failed safelyx"],
+  );
+});
+
+test("continuation rows are one-line labels and never reveal prompt bodies", () => {
+  assert.equal(
+    goalContinuationLabel({
+      kind: "continuation",
+      content: "secret".repeat(100),
+    }),
+    "↻ Goal continuation",
+  );
+  assert.equal(
+    goalContinuationLabel({ kind: "objective_updated" }),
+    "↻ Goal objective updated",
+  );
+  assert.equal(
+    goalContinuationLabel({ kind: "budget_limit" }),
+    "↻ Goal budget reached",
+  );
+});

@@ -58,14 +58,12 @@ extensions/background-terminals/
 │   └── ui/
 │       ├── ps.ts             # /ps picker + detail view components
 │       └── output-view.ts    # stdout/stderr → wrapped display lines
-├── manager.test.ts           # node:test end-to-end through a real ManagedRuntime
-├── output.test.ts            # OutputBuffer truncation/decoding unit tests
-├── result-delivery.test.ts   # (copied semantics, tiny)
-└── ps.test.ts                # selection-reconciliation tests (like takeover.test.ts)
+└── (production source only; tests mirror this module under `tests/extensions/`)
 ```
 
-Tests live at the extension root and the repository's root `package.json` runs them with
-`node --test --experimental-strip-types extensions/*/*.test.ts`.
+Tests live under the top-level `tests/extensions/` mirror. The repository's root
+`package.json` discovers all nested `*.test.ts` and `*.spec.ts` files through
+`scripts/run-tests.mjs`, so new tests cannot be silently skipped because of their depth.
 
 ## 3. Current repository toolchain
 

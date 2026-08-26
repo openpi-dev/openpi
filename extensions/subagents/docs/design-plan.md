@@ -7,7 +7,7 @@ unified behind a single Effect v4 service interface.
 
 > **Status: historical.** This document describes the original three-backend plan.
 > The Claude Code and Codex backends were removed in `ce8b04f`; pi is the only
-> backend, and `test-support/stub.ts` now serves the manager test registry.
+> backend, and `tests/support/subagents-stub.ts` remains for the manager test registry.
 > Read this for the reasoning behind the manager and event model, not for the
 > current backend surface.
 
@@ -449,7 +449,8 @@ Layer graph:
 
 ### 3.8 What the stubs do (v1 of this extension)
 
-All three backends share a `createStubSession(profile)` helper (`src/backends/stub.ts`)
+All three backends share a `createStubSession(profile)` helper
+(`tests/support/subagents-stub.ts`)
 that fakes a plausible session so the manager, tools, result delivery, and both TUI
 views are exercised end to end:
 
@@ -494,7 +495,6 @@ extensions/subagents/
     ├── backend.ts             # SubagentBackend + SubagentSession interfaces, BackendRegistry
     │                          # key + registry layer
     ├── backends/
-    │   ├── stub.ts            # shared scripted fake-session machinery
     │   ├── pi.ts              # PiBackend layer (v1: stub profile; later: real pi SDK sessions)
     │   ├── claude.ts          # ClaudeBackend layer (v1: stub; later: @anthropic-ai/claude-agent-sdk)
     │   └── codex.ts           # CodexBackend layer (v1: stub; later: codex app-server JSON-RPC)
@@ -503,7 +503,6 @@ extensions/subagents/
     ├── read-model.ts          # sync SubagentReadModel bridge for the TUI
     ├── runtime.ts             # AppLayer composition + ManagedRuntime create/dispose helpers
     ├── result-delivery.ts     # deferred delivery buffer (copied from v1, unchanged)
-    ├── result-delivery.test.ts
     ├── prompt.ts              # all model-facing strings (v1 copy + `agent` param description)
     ├── format.ts              # elapsed/context-utilization/activity-status formatting
     │                          # (merged copies of ../shared/{context-utilization,activity-status}.ts)
@@ -511,6 +510,9 @@ extensions/subagents/
         ├── transcript.ts      # sanitize + buildTranscriptLines over SubagentSnapshot
         └── takeover.ts        # SubagentDashboard + TakeoverView + openSubagentPicker (ported)
 ```
+
+Test-only scripted backends live at `tests/support/subagents-stub.ts`; tests themselves
+are mirrored under `tests/extensions/subagents/` rather than inside the extension.
 
 Notes:
 - This historical plan originally gave the extension its own package. The repository now

@@ -45,8 +45,8 @@ The repository now has one npm package and one dependency tree. Declare `effect`
 do not recreate extension-local manifests, lockfiles, or `node_modules`.
 
 The root `tsconfig.json` owns the Effect language-service plugin, the shared strict
-compiler options, and the project scope for every extension. Its `extensions/**/*.ts`
-include covers extension entry points, sources, and tests, so do not add extension-local
+compiler options, and the project scope. Its `extensions/**/*.ts` and `tests/**/*.ts`
+includes cover production sources and tests respectively, so do not add extension-local
 `tsconfig.json` files. Run typechecking through the root `bun run check` command.
 
 Keep local `.ts` imports written **with the `.ts` extension** (`./src/manager.ts`), matching

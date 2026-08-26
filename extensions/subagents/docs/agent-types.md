@@ -185,5 +185,5 @@ and are not treated as missing, so the child denylist stays authoritative.
 - `../../shared/child-session.ts` — `childToolPolicy(tools?)`, where the allowlist
   and denylist compose.
 
-Covered by `../agent-types.test.ts`, including the trust gate and the
+Covered by `../../../tests/extensions/subagents/agent-types.test.ts`, including the trust gate and the
 narrowing-only property.

@@ -27,6 +27,7 @@
     "!extensions/**/tsconfig.json",
     "!extensions/**/test-support/**",
     "!extensions/*/docs",
+    "!tests/**",
     "skills",
     "themes",
     "assets",
@@ -82,7 +83,7 @@
     "format:check": "biome format .",
     "lint": "biome lint . --error-on-warnings",
     "typecheck": "tsc --noEmit",
-    "test": "node --test --experimental-strip-types extensions/*/*.test.ts && vitest run extensions/file-search/index.spec.ts"
+    "test": "node scripts/run-tests.mjs"
   },
   "packageManager": "bun@1.3.14"
 }
