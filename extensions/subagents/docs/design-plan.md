@@ -514,8 +514,8 @@ extensions/subagents/
 
 Notes:
 - This historical plan originally gave the extension its own package. The repository now
-  declares `effect` once in the root `package.json`; extension-level TypeScript scope remains
-  in `tsconfig.json`.
+  declares dependencies once in the root `package.json`, and the root `tsconfig.json` owns
+  the TypeScript project scope for every extension.
 - v1's `child-session.ts` trust/tool-policy helpers are **not** copied in v1 of v2 (the
   stubs don't need them); the real pi backend will bring the needed subset into
   `backends/pi.ts` when implemented. The `resolveStandaloneChildProjectTrust` logic *is*

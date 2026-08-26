@@ -623,6 +623,8 @@ themes/                    # github-dark-default
 
 开发工具链使用 Bun `1.3.14` 管理依赖和脚本，Biome 负责 TypeScript / JavaScript / JSON 格式与基础 lint；产品运行时仍是 Node，测试仍由 `node:test` 与 Vitest 执行：
 
+根目录的 `tsconfig.json` 是所有 extension 的唯一 TypeScript 项目配置；不要在 extension 目录中添加局部 `tsconfig.json`。单独类型检查使用根目录的 `bun run typecheck`，完整校验执行：
+
 ```bash
 bun install --frozen-lockfile
 bun run check
