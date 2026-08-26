@@ -31,7 +31,111 @@ interface ShellInspection {
   opaqueDestructiveCommand: boolean;
 }
 
-const DYNAMIC_PATH = /[*?[$`]/u;
+interface ShellToken {
+  value: string;
+  dynamicPath: boolean;
+}
+
+interface Heredoc {
+  delimiter: string;
+  stripTabs: boolean;
+}
+
+const DYNAMIC_UNQUOTED_PATH_CHARACTER = /[*?[$`{}]/u;
+
+function heredocsInLine(line: string) {
+  const heredocs: Heredoc[] = [];
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let wordStarted = false;
+  for (let index = 0; index < line.length; index += 1) {
+    const char = line[index] ?? "";
+    const next = line[index + 1] ?? "";
+    if (escaped) {
+      escaped = false;
+      wordStarted = true;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      wordStarted = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      wordStarted = true;
+      continue;
+    }
+    if (char === "#" && !wordStarted) break;
+    if (/\s/u.test(char) || /[;&|<>]/u.test(char)) wordStarted = false;
+    else wordStarted = true;
+    if (char !== "<" || next !== "<" || line[index + 2] === "<") {
+      continue;
+    }
+
+    index += 2;
+    let stripTabs = false;
+    if (line[index] === "-") {
+      stripTabs = true;
+      index += 1;
+    }
+    while (/\s/u.test(line[index] ?? "")) index += 1;
+
+    let delimiter = "";
+    let delimiterQuote: "'" | '"' | undefined;
+    let delimiterEscaped = false;
+    for (; index < line.length; index += 1) {
+      const delimiterChar = line[index] ?? "";
+      if (delimiterEscaped) {
+        delimiter += delimiterChar;
+        delimiterEscaped = false;
+        continue;
+      }
+      if (delimiterChar === "\\" && delimiterQuote !== "'") {
+        delimiterEscaped = true;
+        continue;
+      }
+      if (delimiterQuote) {
+        if (delimiterChar === delimiterQuote) delimiterQuote = undefined;
+        else delimiter += delimiterChar;
+        continue;
+      }
+      if (delimiterChar === "'" || delimiterChar === '"') {
+        delimiterQuote = delimiterChar;
+        continue;
+      }
+      if (/\s/u.test(delimiterChar) || /[;&|<>]/u.test(delimiterChar)) {
+        index -= 1;
+        break;
+      }
+      delimiter += delimiterChar;
+    }
+    if (delimiter) heredocs.push({ delimiter, stripTabs });
+  }
+  return heredocs;
+}
+
+function withoutHeredocBodies(command: string) {
+  const kept: string[] = [];
+  const pending: Heredoc[] = [];
+  for (const line of command.split("\n")) {
+    const heredoc = pending[0];
+    if (heredoc) {
+      const comparable = (
+        heredoc.stripTabs ? line.replace(/^\t+/u, "") : line
+      ).replace(/\r$/u, "");
+      if (comparable === heredoc.delimiter) pending.shift();
+      continue;
+    }
+    kept.push(line);
+    pending.push(...heredocsInLine(line));
+  }
+  return kept.join("\n");
+}
 
 function splitShellSegments(command: string) {
   const segments: string[] = [];
@@ -79,66 +183,104 @@ function splitShellSegments(command: string) {
 }
 
 function shellTokens(segment: string) {
-  const tokens: string[] = [];
+  const tokens: ShellToken[] = [];
   let current = "";
   let quote: "'" | '"' | undefined;
   let escaped = false;
+  let escapeStartedInDoubleQuote = false;
+  let tokenStarted = false;
+  let dynamicPath = false;
   const push = () => {
-    if (!current) return;
-    tokens.push(current);
+    if (!tokenStarted) return;
+    tokens.push({ value: current, dynamicPath });
     current = "";
+    tokenStarted = false;
+    dynamicPath = false;
   };
   for (const char of segment) {
     if (escaped) {
+      if (char === "\n") {
+        escaped = false;
+        escapeStartedInDoubleQuote = false;
+        continue;
+      }
+      if (
+        escapeStartedInDoubleQuote &&
+        char !== "$" &&
+        char !== "`" &&
+        char !== '"' &&
+        char !== "\\"
+      ) {
+        current += "\\";
+      }
       current += char;
       escaped = false;
+      escapeStartedInDoubleQuote = false;
+      tokenStarted = true;
       continue;
     }
     if (char === "\\" && quote !== "'") {
       escaped = true;
+      escapeStartedInDoubleQuote = quote === '"';
+      tokenStarted = true;
       continue;
     }
     if (quote) {
       if (char === quote) quote = undefined;
-      else current += char;
+      else {
+        current += char;
+        if (quote === '"' && (char === "$" || char === "`")) {
+          dynamicPath = true;
+        }
+      }
       continue;
     }
     if (char === "'" || char === '"') {
       quote = char;
+      tokenStarted = true;
       continue;
     }
     if (/\s/u.test(char)) {
       push();
       continue;
     }
+    if (char === "#" && !tokenStarted) break;
     if (char === ">") {
       push();
-      tokens.push(">");
+      tokens.push({ value: ">", dynamicPath: false });
       continue;
     }
+    if (
+      DYNAMIC_UNQUOTED_PATH_CHARACTER.test(char) ||
+      (char === "~" && !tokenStarted)
+    ) {
+      dynamicPath = true;
+    }
     current += char;
+    tokenStarted = true;
   }
   push();
   return tokens;
 }
 
-function literalPath(value: string | undefined) {
-  if (!value || value === "--" || DYNAMIC_PATH.test(value)) return undefined;
-  return value;
+function literalPath(token: ShellToken | undefined) {
+  if (!token || token.value === "--" || token.dynamicPath) return undefined;
+  return token.value;
 }
 
 function inspectShell(command: string): ShellInspection {
   const creations = new Set<string>();
   const removals = new Set<string>();
   let opaqueDestructiveCommand = false;
-  for (const segment of splitShellSegments(command)) {
+  for (const segment of splitShellSegments(withoutHeredocBodies(command))) {
     const tokens = shellTokens(segment);
     const nestedBash = tokens.findIndex(
       (token, index) =>
-        token.split("/").at(-1) === "bash" && tokens[index + 1] === "-c",
+        token.value.split("/").at(-1) === "bash" &&
+        tokens[index + 1]?.value === "-c",
     );
     if (nestedBash >= 0) {
-      const nestedCommand = tokens[nestedBash + 2];
+      const nestedCommand = tokens[nestedBash + 2]?.value;
       if (nestedCommand) {
         const nested: ShellInspection = inspectShell(nestedCommand);
         for (const target of nested.creations) creations.add(target);
@@ -148,25 +290,28 @@ function inspectShell(command: string): ShellInspection {
       continue;
     }
     for (let index = 0; index < tokens.length; index += 1) {
-      if (tokens[index] !== ">") continue;
+      if (tokens[index]?.value !== ">") continue;
       const target = literalPath(tokens[index + 1]);
       if (target) creations.add(target);
     }
 
-    const executable = tokens[0]?.split("/").at(-1);
+    const executable = tokens[0]?.value.split("/").at(-1);
     if (executable === "mkdir") {
       const targets: string[] = [];
       let afterOptions = false;
       let supported = true;
       for (const token of tokens.slice(1)) {
-        if (!afterOptions && token === "--") {
+        if (!afterOptions && token.value === "--") {
           afterOptions = true;
           continue;
         }
-        if (!afterOptions && (token === "-p" || token === "--parents")) {
+        if (
+          !afterOptions &&
+          (token.value === "-p" || token.value === "--parents")
+        ) {
           continue;
         }
-        if (!afterOptions && token.startsWith("-")) {
+        if (!afterOptions && token.value.startsWith("-")) {
           supported = false;
           break;
         }
@@ -185,11 +330,11 @@ function inspectShell(command: string): ShellInspection {
     let sawLiteral = false;
     let afterOptions = false;
     for (const token of tokens.slice(1)) {
-      if (!afterOptions && token === "--") {
+      if (!afterOptions && token.value === "--") {
         afterOptions = true;
         continue;
       }
-      if (!afterOptions && token.startsWith("-")) continue;
+      if (!afterOptions && token.value.startsWith("-")) continue;
       const target = literalPath(token);
       if (!target) {
         opaqueDestructiveCommand = true;
@@ -199,9 +344,6 @@ function inspectShell(command: string): ShellInspection {
       removals.add(target);
     }
     if (!sawLiteral) opaqueDestructiveCommand = true;
-  }
-  if (/\brm\b/u.test(command) && removals.size === 0) {
-    opaqueDestructiveCommand = true;
   }
   return {
     creations: [...creations],
@@ -264,6 +406,16 @@ export function createWorkspaceCleanupGuard() {
 
     async before(attempt: BashAttempt) {
       const inspected = inspectShell(attempt.command);
+      if (inspected.opaqueDestructiveCommand) {
+        return {
+          kind: "block" as const,
+          protectedPaths: [],
+          reason:
+            "Blocked cleanup: the rm command uses a dynamic or otherwise unverified target. Use literal workspace-relative paths so OpenPI can prove whether each target is session-created scratch or a pre-existing path requiring confirmation.",
+          opaqueDestructiveCommand: true,
+        };
+      }
+
       const creations: PendingEffects["creations"] = [];
       for (const candidate of inspected.creations) {
         const creation = await prepareCreation(attempt.cwd, candidate, true);

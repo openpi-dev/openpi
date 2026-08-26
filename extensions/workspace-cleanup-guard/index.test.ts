@@ -140,6 +140,29 @@ test("refused deletion of a pre-existing file is blocked", async () => {
   });
 });
 
+test("an opaque rm target is blocked without opening confirmation", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const h = harness({
+      cwd: workspace,
+      confirm: async () => {
+        confirmations += 1;
+        return true;
+      },
+    });
+
+    const result = (await h.emit(
+      "tool_call",
+      bashCall("remove", 'target="keep.txt"; rm "$target"'),
+    )) as { block?: boolean; reason?: string } | undefined;
+
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /literal workspace-relative paths/u);
+    assert.equal(confirmations, 0);
+  });
+});
+
 test("cancelling the active turn dismisses confirmation and blocks deletion", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");

@@ -192,19 +192,131 @@ test("confirmed deletion of a pre-existing file is allowed", async () => {
   });
 });
 
-test("ambiguous shell deletion is not misrepresented as protected", async () => {
+test("dynamic rm targets fail closed without prompting for unknown paths", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    const commands = [
+      'target="keep.txt"; rm "$target"',
+      "rm *.txt",
+      'rm "$(printf keep.txt)"',
+      "rm keep{.txt,.bak}",
+      "rm ~/keep.txt",
+      `bash -c 'target="keep.txt"; rm "$target"'`,
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `ambiguous-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, true, command);
+      if (decision.kind === "block") {
+        assert.deepEqual(decision.protectedPaths, [], command);
+        assert.match(decision.reason, /literal workspace-relative paths/u);
+      }
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
+  });
+});
+
+test("quoted and escaped metacharacters remain literal rm targets", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep*.txt"), "keep");
+    await writeFile(path.join(workspace, "scratch$1.txt"), "keep");
+    await writeFile(path.join(workspace, "keep\\*.txt"), "keep");
+    const confirmations: string[][] = [];
+    const guard = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    });
+
+    for (const [index, command] of [
+      "rm 'keep*.txt'",
+      'rm "keep*.txt"',
+      "rm keep\\*.txt",
+      "rm 'scratch$1.txt'",
+      'rm "keep\\*.txt"',
+    ].entries()) {
+      const decision = await guard.before({
+        id: `literal-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, false, command);
+    }
+    assert.deepEqual(confirmations, [
+      ["keep*.txt"],
+      ["keep*.txt"],
+      ["keep*.txt"],
+      ["scratch$1.txt"],
+      ["keep\\*.txt"],
+    ]);
+  });
+});
+
+test("rm text outside command position does not trigger deletion protection", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return false;
+    });
+
+    for (const [index, command] of [
+      "echo rm",
+      "printf ok # rm keep.txt",
+      "cat <<'EOF'\nrm keep.txt\nEOF",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `non-command-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "allow", command);
+      assert.equal(decision.opaqueDestructiveCommand, false, command);
+    }
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("blocked opaque cleanup cannot grant pending scratch ownership", async () => {
+  await withWorkspace(async (workspace) => {
+    const scratch = path.join(workspace, "scratch.txt");
     const guard = guardFor(async () => false);
 
-    const decision = await guard.before({
-      id: "ambiguous",
-      command: 'target="keep.txt"; rm "$target"',
+    const blocked = await guard.before({
+      id: "blocked-create-and-cleanup",
+      command: 'printf x > scratch.txt; target="keep.txt"; rm "$target"',
+      cwd: workspace,
+    });
+    assert.equal(blocked.kind, "block");
+
+    await writeFile(scratch, "external");
+    await guard.after({ id: "blocked-create-and-cleanup", isError: false });
+    const cleanup = await guard.before({
+      id: "remove-external",
+      command: "rm scratch.txt",
       cwd: workspace,
     });
 
-    assert.equal(decision.kind, "allow");
-    assert.equal(decision.opaqueDestructiveCommand, true);
+    assert.equal(cleanup.kind, "block");
+    assert.equal(cleanup.opaqueDestructiveCommand, false);
   });
 });
 
