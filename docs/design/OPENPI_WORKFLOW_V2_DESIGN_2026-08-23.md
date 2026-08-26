@@ -670,9 +670,9 @@ Lifecycle、delivery、Schema stability、dynamic capacity、fair projection 和
 
 Issue #132 / PR #139 按维护者最终决定直接删除模型输入侧的 `background` alias：tool schema 与 coordinator input 只保留正向 `wait`，未知字段继续 fail closed。`WorkflowDetails.background` 与 persisted artifact 中的同名字段仍记录实际 detached 状态，并保留历史读取兼容。
 
-该后续变更 rebase 至 `upstream/main@dd82010` 后通过：
+该后续变更同步至 `upstream/main@813f58e` 后通过：
 
 - Workflow 专项测试：34/34；
 - `bun run check`；
-- `bun run test`：Node 876/876，Vitest 30/30；
+- `bun run test`：Node 878/878，Vitest 30/30；
 - GitHub CI：Node 22.19.0 与 Node 24。
