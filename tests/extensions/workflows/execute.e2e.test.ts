@@ -331,6 +331,49 @@ test("foreground run without agents returns the result and persists artifacts", 
   assert.equal(mine[0]!.status, "completed");
 });
 
+test("oversized workflow args fail before child sessions or journals are created", async () => {
+  let sessionCreations = 0;
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreations++;
+    return { session: fakeAgentSession("unexpected child session") };
+  });
+
+  const script =
+    'export const meta = { name: "oversized-workflow-args" };\nreturn 1;';
+  const args = [JSON.stringify("x".repeat(300_000)), "x".repeat(300_000)];
+
+  try {
+    for (const rawArgs of args) {
+      const launch = (await workflow.execute(
+        "e2e-oversized-workflow-args",
+        { script, args: rawArgs, background: true },
+        undefined,
+        undefined,
+        ctx,
+      )) as { details: { runId?: unknown } };
+      const runId = launch.details.runId;
+      await waitFor(
+        () => readWorkflowJson(runId).status === "failed",
+        "oversized workflow args failure",
+      );
+
+      const runDir = runDirFor(runId);
+      const persisted = readWorkflowJson(runId);
+      assert.match(
+        String(persisted.error),
+        /Workflow args exceed the .* IPC limit/,
+      );
+      assert.deepEqual(persisted.agents, []);
+      assert.equal(existsSync(join(runDir, "journal.json")), false);
+      assert.equal(readFileSync(join(runDir, "args.json"), "utf8"), rawArgs);
+    }
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+
+  assert.equal(sessionCreations, 0);
+});
+
 test("background runs deliver a follow-up that triggers a turn only when idle", async () => {
   sentMessages.length = 0;
 
