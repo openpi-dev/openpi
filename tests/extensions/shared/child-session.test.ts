@@ -294,49 +294,169 @@ test("child denylist keeps extension and workflow structured tools available", a
   });
 });
 
-test("resource loading gates project resources and keeps only the pi-intercom package parent-only", async () => {
+test("child resources exclude pi-intercom npm, Git, and local packages without matching ordinary project paths", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
     const agentDir = path.join(directory, "agent");
-    const intercomPackageDir = path.join(
+    const npmPackageDir = path.join(
       agentDir,
       "npm",
       "node_modules",
       "pi-intercom",
     );
-    await mkdir(path.join(cwd, ".pi", "extensions"), { recursive: true });
+    const gitPackageDir = path.join(
+      agentDir,
+      "git",
+      "github.com",
+      "nicobailon",
+      "pi-intercom",
+    );
+    const localPackageDir = path.join(directory, "local-package-checkout");
+    const singleFilePackageDir = path.join(directory, "single-file-checkout");
+    const singleFileSource = path.join(
+      singleFilePackageDir,
+      "extensions",
+      "intercom.ts",
+    );
+    const manifestlessLocalPackageDir = path.join(
+      directory,
+      "manifestless",
+      "ordinary-package",
+    );
+    const projectIntercomDir = path.join(
+      cwd,
+      ".pi",
+      "extensions",
+      "pi-intercom",
+    );
+    await mkdir(projectIntercomDir, { recursive: true });
     await mkdir(path.join(agentDir, "extensions"), { recursive: true });
     await mkdir(path.join(agentDir, "skills", "global-fixture"), {
       recursive: true,
     });
-    await mkdir(path.join(intercomPackageDir, "skills", "pi-intercom"), {
+    await mkdir(path.join(cwd, ".pi", "skills", "pi-intercom"), {
       recursive: true,
     });
-    const extensionSource = (names: string[]) => `
-      export default function (pi) {
-        for (const name of ${JSON.stringify(names)}) pi.registerTool({
-          name, label: name, description: "fixture",
-          parameters: { type: "object", properties: {} },
-          async execute() { return { content: [{ type: "text", text: "ok" }] }; }
-        });
-      }
-    `;
+    const extensionSource = (names: string[], executionMarker?: string) => {
+      const executionSideEffect = executionMarker
+        ? `writeFileSync(${JSON.stringify(executionMarker)}, "executed");`
+        : "";
+      return `
+        import { writeFileSync } from "node:fs";
+        export default function (pi) {
+          ${executionSideEffect}
+          for (const name of ${JSON.stringify(names)}) pi.registerTool({
+            name, label: name, description: "fixture",
+            parameters: { type: "object", properties: {} },
+            async execute() { return { content: [{ type: "text", text: "ok" }] }; }
+          });
+        }
+      `;
+    };
+    const writeIntercomPackage = async (packageDir: string, suffix: string) => {
+      const executionMarker = path.join(directory, `${suffix}-executed`);
+      await mkdir(path.join(packageDir, "skills", suffix), { recursive: true });
+      await writeFile(
+        path.join(packageDir, "index.ts"),
+        extensionSource([`intercom_${suffix}`], executionMarker),
+      );
+      await writeFile(
+        path.join(packageDir, "package.json"),
+        JSON.stringify({
+          name: "pi-intercom",
+          version: "0.10.0",
+          pi: {
+            extensions: ["./index.ts"],
+            skills: ["./skills"],
+          },
+        }),
+      );
+      await writeFile(
+        path.join(packageDir, "skills", suffix, "SKILL.md"),
+        `---\nname: intercom-${suffix}\ndescription: fixture\n---\n`,
+      );
+      return executionMarker;
+    };
+    const writeManifestlessOrdinaryPackage = async () => {
+      const executionMarker = path.join(directory, "manifestless-executed");
+      await Promise.all([
+        mkdir(path.join(manifestlessLocalPackageDir, "extensions"), {
+          recursive: true,
+        }),
+        mkdir(
+          path.join(manifestlessLocalPackageDir, "skills", "manifestless"),
+          {
+            recursive: true,
+          },
+        ),
+      ]);
+      await writeFile(
+        path.join(manifestlessLocalPackageDir, "extensions", "index.ts"),
+        extensionSource(["ordinary_manifestless"], executionMarker),
+      );
+      await writeFile(
+        path.join(
+          manifestlessLocalPackageDir,
+          "skills",
+          "manifestless",
+          "SKILL.md",
+        ),
+        "---\nname: ordinary-manifestless\ndescription: fixture\n---\n",
+      );
+      return executionMarker;
+    };
+    const writeSingleFileIntercomPackage = async () => {
+      const executionMarker = path.join(directory, "single-file-executed");
+      await mkdir(path.dirname(singleFileSource), { recursive: true });
+      await writeFile(
+        singleFileSource,
+        extensionSource(["intercom_single_file"], executionMarker),
+      );
+      await writeFile(
+        path.join(singleFilePackageDir, "package.json"),
+        JSON.stringify({ name: "pi-intercom", version: "0.10.0" }),
+      );
+      return executionMarker;
+    };
     await writeFile(
       path.join(agentDir, "extensions", "global.ts"),
       extensionSource(["global_fixture", "intercom"]),
     );
     await writeFile(
-      path.join(cwd, ".pi", "extensions", "project.ts"),
-      extensionSource(["project_fixture"]),
+      path.join(projectIntercomDir, "index.ts"),
+      extensionSource(["project_intercom_path_fixture"]),
     );
     await writeFile(
-      path.join(intercomPackageDir, "index.ts"),
-      extensionSource(["intercom"]),
+      path.join(agentDir, "skills", "global-fixture", "SKILL.md"),
+      "---\nname: global-fixture\ndescription: fixture\n---\n",
     );
     await writeFile(
-      path.join(intercomPackageDir, "package.json"),
+      path.join(cwd, ".pi", "skills", "pi-intercom", "SKILL.md"),
+      "---\nname: project-intercom-path-fixture\ndescription: fixture\n---\n",
+    );
+    const [
+      npmMarker,
+      gitMarker,
+      localMarker,
+      ordinaryMarker,
+      singleFileMarker,
+    ] = await Promise.all([
+      writeIntercomPackage(npmPackageDir, "npm"),
+      writeIntercomPackage(gitPackageDir, "git"),
+      writeIntercomPackage(localPackageDir, "local"),
+      writeManifestlessOrdinaryPackage(),
+      writeSingleFileIntercomPackage(),
+    ]);
+    const executionMarkers = [
+      npmMarker,
+      gitMarker,
+      localMarker,
+      singleFileMarker,
+    ];
+    await writeFile(
+      path.join(gitPackageDir, "package.json"),
       JSON.stringify({
-        name: "pi-intercom",
+        name: "renamed-package",
         version: "0.10.0",
         pi: {
           extensions: ["./index.ts"],
@@ -345,17 +465,35 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
       }),
     );
     await writeFile(
-      path.join(intercomPackageDir, "skills", "pi-intercom", "SKILL.md"),
-      "---\nname: pi-intercom\ndescription: fixture\n---\n",
-    );
-    await writeFile(
-      path.join(agentDir, "skills", "global-fixture", "SKILL.md"),
-      "---\nname: global-fixture\ndescription: fixture\n---\n",
-    );
-    await writeFile(
       path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: ["npm:pi-intercom@0.10.0"] }),
+      JSON.stringify({
+        packages: [
+          "npm:pi-intercom@0.10.0",
+          "git:github.com/nicobailon/pi-intercom@v0.10.0",
+          localPackageDir,
+          manifestlessLocalPackageDir,
+          singleFileSource,
+        ],
+      }),
     );
+
+    const packageSources = [
+      "npm:pi-intercom@0.10.0",
+      "git:github.com/nicobailon/pi-intercom@v0.10.0",
+      localPackageDir,
+      singleFileSource,
+    ];
+    const packageToolNames = [
+      "intercom_npm",
+      "intercom_git",
+      "intercom_local",
+      "intercom_single_file",
+    ];
+    const packageSkillNames = [
+      "intercom-npm",
+      "intercom-git",
+      "intercom-local",
+    ];
 
     const untrusted = await createChildResources({
       cwd,
@@ -368,16 +506,36 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     ]);
     assert.equal(untrustedTools.includes("global_fixture"), true);
     assert.equal(untrustedTools.includes("intercom"), true);
-    assert.equal(untrustedTools.includes("project_fixture"), false);
+    assert.equal(untrustedTools.includes("ordinary_manifestless"), true);
     assert.equal(
-      untrustedExtensions.some(
-        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.10.0",
-      ),
+      untrustedTools.includes("project_intercom_path_fixture"),
       false,
-      JSON.stringify(
-        untrustedExtensions.map((extension) => extension.sourceInfo),
-      ),
     );
+    for (const name of packageToolNames) {
+      assert.equal(
+        untrustedTools.includes(name),
+        false,
+        `${name} must be excluded`,
+      );
+    }
+    for (const source of packageSources) {
+      assert.equal(
+        untrustedExtensions.some(
+          (extension) => extension.sourceInfo.source === source,
+        ),
+        false,
+        JSON.stringify(
+          untrustedExtensions.map((extension) => extension.sourceInfo),
+        ),
+      );
+    }
+    for (const marker of executionMarkers) {
+      await assert.rejects(
+        readFile(marker),
+        `${path.basename(marker)} proves a child imported pi-intercom`,
+      );
+    }
+    assert.equal(await readFile(ordinaryMarker, "utf8"), "executed");
 
     const trusted = await createChildResources({
       cwd,
@@ -390,13 +548,37 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     ]);
     assert.equal(trustedTools.includes("global_fixture"), true);
     assert.equal(trustedTools.includes("intercom"), true);
-    assert.equal(trustedTools.includes("project_fixture"), true);
-    assert.equal(
-      trustedExtensions.some(
-        (extension) => extension.sourceInfo.source === "npm:pi-intercom@0.10.0",
-      ),
-      false,
+    assert.equal(trustedTools.includes("ordinary_manifestless"), true);
+    const ordinaryExtension = trustedExtensions.find((extension) =>
+      extension.tools.has("ordinary_manifestless"),
     );
+    assert.equal(ordinaryExtension?.sourceInfo.origin, "package");
+    assert.equal(
+      ordinaryExtension?.sourceInfo.source,
+      manifestlessLocalPackageDir,
+    );
+    assert.equal(trustedTools.includes("project_intercom_path_fixture"), true);
+    for (const name of packageToolNames) {
+      assert.equal(
+        trustedTools.includes(name),
+        false,
+        `${name} must be excluded`,
+      );
+    }
+    for (const source of packageSources) {
+      assert.equal(
+        trustedExtensions.some(
+          (extension) => extension.sourceInfo.source === source,
+        ),
+        false,
+      );
+    }
+    for (const marker of executionMarkers) {
+      await assert.rejects(
+        readFile(marker),
+        `${path.basename(marker)} proves a child imported pi-intercom`,
+      );
+    }
 
     const childSkills = trusted.loader.getSkills().skills;
     assert.equal(
@@ -405,11 +587,156 @@ test("resource loading gates project resources and keeps only the pi-intercom pa
     );
     assert.equal(
       childSkills.some(
-        (skill) => skill.sourceInfo.source === "npm:pi-intercom@0.10.0",
+        (skill) => skill.name === "project-intercom-path-fixture",
       ),
-      false,
+      true,
     );
+    assert.equal(
+      childSkills.some((skill) => skill.name === "ordinary-manifestless"),
+      true,
+    );
+    const ordinarySkill = childSkills.find(
+      (skill) => skill.name === "ordinary-manifestless",
+    );
+    assert.equal(ordinarySkill?.sourceInfo.origin, "package");
+    assert.equal(ordinarySkill?.sourceInfo.source, manifestlessLocalPackageDir);
+    for (const name of packageSkillNames) {
+      assert.equal(
+        childSkills.some((skill) => skill.name === name),
+        false,
+        `${name} must be excluded`,
+      );
+    }
+    for (const source of packageSources) {
+      assert.equal(
+        childSkills.some((skill) => skill.sourceInfo.source === source),
+        false,
+      );
+    }
+
+    const topLevelSettings = SettingsManager.create(cwd, agentDir, {
+      projectTrusted: true,
+    });
+    const topLevelLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: topLevelSettings,
+    });
+    await topLevelLoader.reload();
+    const topLevelTools = topLevelLoader
+      .getExtensions()
+      .extensions.flatMap((extension) => [...extension.tools.keys()]);
+    const topLevelSkills = topLevelLoader.getSkills().skills;
+    assert.equal(topLevelTools.includes("ordinary_manifestless"), true);
+    assert.equal(
+      topLevelSkills.some((skill) => skill.name === "ordinary-manifestless"),
+      true,
+    );
+    for (const name of packageToolNames) {
+      assert.equal(
+        topLevelTools.includes(name),
+        true,
+        `${name} must stay top-level`,
+      );
+    }
+    for (const name of packageSkillNames) {
+      assert.equal(
+        topLevelSkills.some((skill) => skill.name === name),
+        true,
+        `${name} must stay top-level`,
+      );
+    }
+    for (const marker of executionMarkers) {
+      assert.equal(await readFile(marker, "utf8"), "executed");
+    }
   });
+});
+
+test("child package snapshot cannot install an unresolved historical Git source", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const intercomSources = [
+      "git:github:nicobailon/pi-intercom@feature/test",
+      "git:github.com/nicobailon/pi-intercom@feature/test",
+      "git:git@github.com:nicobailon/pi-intercom@feature/test",
+    ];
+    const ordinarySource = "npm:ordinary-missing-package@1.0.0";
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [...intercomSources, ordinarySource] }),
+    );
+
+    const previousOffline = process.env.PI_OFFLINE;
+    process.env.PI_OFFLINE = "1";
+    let child: Awaited<ReturnType<typeof createChildResources>>;
+    try {
+      child = await createChildResources({
+        cwd,
+        agentDir,
+        projectTrusted: true,
+      });
+    } finally {
+      if (previousOffline === undefined) delete process.env.PI_OFFLINE;
+      else process.env.PI_OFFLINE = previousOffline;
+    }
+
+    assert.deepEqual(child.settingsManager.getGlobalSettings().packages, [
+      ordinarySource,
+    ]);
+    for (const source of intercomSources) {
+      assert.equal(
+        child.loader
+          .getExtensions()
+          .extensions.some(
+            (extension) => extension.sourceInfo.source === source,
+          ),
+        false,
+      );
+    }
+  });
+});
+
+test("unverifiable local package identities fail closed before factory execution", async () => {
+  for (const fixture of [
+    { directoryName: "local-package-checkout", manifest: "{ invalid json" },
+    { directoryName: "pi-intercom", manifest: undefined },
+  ]) {
+    await withTempDir(async (directory) => {
+      const cwd = path.join(directory, "project");
+      const agentDir = path.join(directory, "agent");
+      const packageDir = path.join(directory, fixture.directoryName);
+      const executionMarker = path.join(directory, "factory-executed");
+      await mkdir(cwd, { recursive: true });
+      await mkdir(path.join(packageDir, "extensions"), { recursive: true });
+      await mkdir(agentDir, { recursive: true });
+      if (fixture.manifest !== undefined) {
+        await writeFile(
+          path.join(packageDir, "package.json"),
+          fixture.manifest,
+        );
+      }
+      await writeFile(
+        path.join(packageDir, "extensions", "index.ts"),
+        `import { writeFileSync } from "node:fs";
+         export default function () {
+           writeFileSync(${JSON.stringify(executionMarker)}, "executed");
+         }`,
+      );
+      await writeFile(
+        path.join(agentDir, "settings.json"),
+        JSON.stringify({ packages: [packageDir] }),
+      );
+
+      await assert.rejects(
+        createChildResources({ cwd, agentDir, projectTrusted: true }),
+        /Cannot verify child package identity/,
+      );
+      await assert.rejects(readFile(executionMarker));
+    });
+  }
 });
 
 test("alternate standalone cwd only uses explicit saved trust", async () => {
