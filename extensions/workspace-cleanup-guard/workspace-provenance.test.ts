@@ -203,6 +203,9 @@ test("unproven or non-standalone rm input fails closed", async () => {
       `bash -c 'target="keep.txt"; rm "$target"'`,
       'target="keep.txt"; printf x | rm "$target"',
       'target="keep.txt"; command rm "$target"',
+      "command r''m keep.txt",
+      "env r\\m keep.txt",
+      "command r\\\nm keep.txt",
       'target="keep.txt"; (rm "$target")',
       'target="keep.txt"; if true; then rm "$target"; fi',
       'target="keep.txt"; { rm "$target"; }',
@@ -272,7 +275,6 @@ test("unproven or non-standalone rm input fails closed", async () => {
       'target=keep.txt; mapfile < <(rm "$target")',
       `${"(".repeat(40)}rm keep.txt${")".repeat(40)}`,
       "/usr/bin/sandbox-exec -p '(version 1)' /bin/bash -c 'rm keep.txt'",
-      'rm "keep\\*.txt"',
     ];
 
     for (const [index, command] of commands.entries()) {
@@ -295,7 +297,13 @@ test("unproven or non-standalone rm input fails closed", async () => {
 
 test("quoted or escaped literals remain directly verifiable", async () => {
   await withWorkspace(async (workspace) => {
-    for (const target of ["keep*.txt", "scratch$1.txt", "file name.txt"]) {
+    for (const target of [
+      "keep*.txt",
+      "keep\\*.txt",
+      "keep.txt",
+      "scratch$1.txt",
+      "file name.txt",
+    ]) {
       await writeFile(path.join(workspace, target), "keep");
     }
     const confirmations: string[][] = [];
@@ -309,6 +317,8 @@ test("quoted or escaped literals remain directly verifiable", async () => {
       "rm keep\\*.txt",
       "rm 'scratch$1.txt'",
       'rm "file name.txt"',
+      'rm "keep\\*.txt"',
+      'rm "keep\\\n.txt"',
     ].entries()) {
       assert.equal(
         (
@@ -327,7 +337,34 @@ test("quoted or escaped literals remain directly verifiable", async () => {
       ["keep*.txt"],
       ["scratch$1.txt"],
       ["file name.txt"],
+      ["keep\\*.txt"],
+      ["keep.txt"],
     ]);
+  });
+});
+
+test("ordinary Bash and identifiers without an rm executable stay native", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => false);
+
+    for (const [index, command] of [
+      "sh -c 'printf ok'",
+      "eval 'printf ok'",
+      "bash -n script.sh",
+      "source ./env.sh",
+      "trap 'printf ok' EXIT",
+      "hash -r",
+      "alias ll='ls -l'",
+      "printf '%s' firmware rm-notes.txt terms",
+      "printf '%s' \"r\\m\"",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `ordinary-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "allow", command);
+    }
   });
 });
 
@@ -379,6 +416,29 @@ test("direct rm targets must resolve from workspace-relative paths", async () =>
     }
     assert.equal(confirmations, 0);
     assert.equal(await readFile(target, "utf8"), "keep");
+  });
+});
+
+test("Bash literal whitespace and dot-prefixed names remain protected", async () => {
+  await withWorkspace(async (workspace) => {
+    const nonBreakingSpace = "keep\u00a0.txt";
+    await writeFile(path.join(workspace, nonBreakingSpace), "keep");
+    await writeFile(path.join(workspace, "..foo"), "keep");
+    const confirmations: string[][] = [];
+    const guard = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    });
+
+    for (const [index, target] of [nonBreakingSpace, "..foo"].entries()) {
+      const decision = await guard.before({
+        id: `literal-edge-${index}`,
+        command: `rm ${target}`,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "block", target);
+    }
+    assert.deepEqual(confirmations, [[nonBreakingSpace], ["..foo"]]);
   });
 });
 

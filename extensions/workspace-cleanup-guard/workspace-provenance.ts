@@ -32,7 +32,6 @@ interface ShellInspection {
 }
 
 const DYNAMIC_PATH = /[*?[$`]/u;
-const RM_REFERENCE = /\brm\b/u;
 const STANDALONE_CONTROL_CHARACTERS = ";&|<>(){}$`*?[]#";
 
 function splitShellSegments(command: string) {
@@ -130,7 +129,7 @@ function literalPath(value: string | undefined) {
 }
 
 function standaloneShellTokens(command: string) {
-  const source = command.trim();
+  const source = command.replace(/^[ \t]+|[ \t]+$/gu, "");
   const tokens: string[] = [];
   let current = "";
   let quote: "'" | '"' | undefined;
@@ -150,9 +149,16 @@ function standaloneShellTokens(command: string) {
       continue;
     }
     if (quote === '"') {
-      if (character === '"') {
+      if (escaped) {
+        if (character !== "\n") {
+          current += '$`"\\'.includes(character) ? character : `\\${character}`;
+        }
+        escaped = false;
+      } else if (character === '"') {
         quote = undefined;
-      } else if (character === "\\" || character === "$" || character === "`") {
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "$" || character === "`") {
         return undefined;
       } else {
         current += character;
@@ -176,7 +182,7 @@ function standaloneShellTokens(command: string) {
       continue;
     }
     if (character === "\n" || character === "\r") return undefined;
-    if (/\s/u.test(character)) {
+    if (character === " " || character === "\t") {
       push();
       continue;
     }
@@ -249,6 +255,33 @@ function inspectCreations(command: string) {
   return [...creations];
 }
 
+function containsRmReference(command: string) {
+  let decoded = "";
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? "";
+    if (character === "\\" && quote !== "'") {
+      const next = command[index + 1] ?? "";
+      if (next !== "\n") {
+        decoded +=
+          quote === '"' && !'$`"\\'.includes(next) ? `\\${next}` : next;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      if (!quote) quote = character;
+      else if (quote === character) quote = undefined;
+      else decoded += character;
+      continue;
+    }
+    decoded += character;
+  }
+  return /(^|[^A-Za-z0-9_.-])(?:\/[A-Za-z0-9_.-]+)*\/?rm(?=$|[^A-Za-z0-9_.-])/u.test(
+    decoded,
+  );
+}
+
 function inspectShell(command: string): ShellInspection {
   const removals = directRmTargets(command);
   if (removals) {
@@ -258,7 +291,7 @@ function inspectShell(command: string): ShellInspection {
       opaqueDestructiveCommand: false,
     };
   }
-  if (!RM_REFERENCE.test(command)) {
+  if (!containsRmReference(command)) {
     return {
       creations: inspectCreations(command),
       removals: [],
@@ -277,7 +310,8 @@ function containedPath(cwd: string, candidate: string) {
   const relative = path.relative(cwd, absolute);
   if (
     relative === "" ||
-    relative.startsWith("..") ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
     return undefined;
