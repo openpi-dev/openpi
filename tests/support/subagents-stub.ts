@@ -21,15 +21,21 @@ import * as os from "node:os";
 import * as path from "node:path";
 import type { Cause, Scope } from "effect";
 import { Duration, Effect, Fiber, Queue, Ref, Stream } from "effect";
-import type { SubagentBackend, SubagentSession } from "../src/backend.ts";
+import type {
+  SubagentBackend,
+  SubagentSession,
+} from "../../extensions/subagents/src/backend.ts";
 import type {
   BackendName,
   QueuedMessage,
   SpawnTask,
   SubagentEvent,
   SubagentMeta,
-} from "../src/domain.ts";
-import { SendError, SpawnError } from "../src/domain.ts";
+} from "../../extensions/subagents/src/domain.ts";
+import {
+  SendError,
+  SpawnError,
+} from "../../extensions/subagents/src/domain.ts";
 
 export interface StubProfile {
   readonly backend: BackendName;

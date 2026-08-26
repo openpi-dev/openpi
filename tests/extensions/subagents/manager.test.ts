@@ -12,7 +12,7 @@ import {
   BackendRegistry,
   type SubagentBackend,
 } from "../../../extensions/subagents/src/backend.ts";
-import { makeStubBackend } from "../../../extensions/subagents/test-support/stub.ts";
+import { makeStubBackend } from "../../support/subagents-stub.ts";
 import type {
   BackendName,
   ParentContext,
