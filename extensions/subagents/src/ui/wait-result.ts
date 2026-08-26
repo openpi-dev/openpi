@@ -4,7 +4,7 @@ import {
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import { Markdown, Text } from "@earendil-works/pi-tui";
-import { sanitizeText } from "./transcript.ts";
+import { sanitizeText } from "../../../shared/agent-transcript.ts";
 
 const MAX_STATUS_ROWS = 4;
 

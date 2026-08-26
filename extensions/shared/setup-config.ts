@@ -972,10 +972,7 @@ export async function saveSetupConfig(config: MyPiSetupConfig) {
   });
 }
 
-export function formatSetupConfig(
-  config = loadSetupConfig(),
-  integrationLines: readonly string[] = [],
-) {
+export function formatSetupConfig(config = loadSetupConfig()) {
   const suggestionModel = config.suggestions.model;
   const suggestions =
     !config.suggestions.enabled || !suggestionModel
@@ -994,7 +991,6 @@ export function formatSetupConfig(
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Post-edit command: ${config.postEdit.command ? config.postEdit.command : "off"}`,
     `Agent role models (Subagents + Workflows): ${SUBAGENT_ROLE_NAMES.map((role) => `${role} ${config.subagents.roleModels[role] ? `${config.subagents.roleModels[role].provider}/${config.subagents.roleModels[role].model}` : "inherit"}`).join(" · ")}`,
-    ...integrationLines,
   ].join("\n");
 }
 

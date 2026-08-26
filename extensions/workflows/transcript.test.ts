@@ -8,11 +8,9 @@ import {
 import { Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
+import { AgentTranscriptRenderer } from "../shared/agent-transcript.ts";
 import type { SubagentSnapshot } from "../subagents/src/domain.ts";
-import {
-  buildTranscriptLines,
-  subagentTranscriptDocument,
-} from "../subagents/src/ui/transcript.ts";
+import { subagentTranscriptDocument } from "../subagents/src/ui/transcript.ts";
 import type { TranscriptEntry } from "./model.ts";
 import {
   WorkflowTranscriptRenderer,
@@ -100,7 +98,12 @@ test("Direct and Workflow adapters render one equivalent conversation body", () 
     workflowTranscriptDocument(workflow, direct.cwd),
   );
   assert.deepEqual(
-    buildTranscriptLines(direct, 36, theme, undefined, { now: 0 }),
+    new AgentTranscriptRenderer().render(
+      subagentTranscriptDocument(direct),
+      36,
+      theme,
+      { now: 0 },
+    ),
     new WorkflowTranscriptRenderer().render(workflow, direct.cwd, 36, theme, {
       now: 0,
     }),
@@ -169,13 +172,11 @@ test("Workflow children use the same native renderer as Direct children", () => 
     ],
   };
 
-  const directLines = buildTranscriptLines(
-    direct,
+  const directLines = new AgentTranscriptRenderer().render(
+    subagentTranscriptDocument(direct, renderer),
     80,
     theme,
-    undefined,
     { now: 0 },
-    renderer,
   );
   const workflowLines = new WorkflowTranscriptRenderer().render(
     workflow,

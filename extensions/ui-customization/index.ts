@@ -26,8 +26,6 @@ import {
 } from "../shared/dashboard-state.ts";
 import { formatDirectory, renderFooter } from "./footer.ts";
 
-export { buildFooterContent, formatDirectory, renderFooter } from "./footer.ts";
-
 type Rgb = [number, number, number];
 
 const RESET = "\x1b[0m";

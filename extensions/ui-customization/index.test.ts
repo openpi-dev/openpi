@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import uiCustomization, { buildFooterContent } from "./index.ts";
+import uiCustomization from "./index.ts";
 import {
   GIT_INFO_CHANNEL,
   MODEL_INFO_CHANNEL,
@@ -92,38 +92,6 @@ test("marks context occupancy unknown instead of guessing a percentage", () => {
 
   const footer = harness.render().join("\n");
   assert.match(footer, /\?%\/1\.0m/);
-});
-
-test("renders only selected footer items", () => {
-  const content = buildFooterContent(
-    {
-      provider: "seal",
-      modelId: "gpt-5.6-sol",
-      modelName: "GPT-5.6 Sol",
-      thinking: "high",
-      contextTokens: 250_000,
-      contextWindow: 1_000_000,
-      contextPercent: 25,
-      cachePercent: 82.4,
-      cost: 4.03,
-      tokensPerSecond: 41,
-      generating: false,
-    },
-    {
-      isRepository: true,
-      branch: "main",
-      changedFiles: 7,
-      pullRequest: null,
-    },
-    ["model", "context", "cache"],
-  );
-
-  assert.deepEqual(content, {
-    showCwd: false,
-    model: "\uec10 seal/gpt-5.6-sol",
-    usage: "\uebe4 25%/1.0m · cache 82%",
-    git: "",
-  });
 });
 
 test("always renders operational activity while custom footer is enabled", () => {

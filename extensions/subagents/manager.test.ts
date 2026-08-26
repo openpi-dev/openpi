@@ -9,7 +9,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import { BackendRegistry, type SubagentBackend } from "./src/backend.ts";
-import { makeStubBackend } from "./src/backends/stub.ts";
+import { makeStubBackend } from "./test-support/stub.ts";
 import type { BackendName, ParentContext, SpawnTask } from "./src/domain.ts";
 import {
   makeSubagentManagerLayer,

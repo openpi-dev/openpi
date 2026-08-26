@@ -9,15 +9,14 @@ import { stripVTControlCharacters } from "node:util";
 import { Text, visibleWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
-import type { SubagentSnapshot } from "./src/domain.ts";
 import {
-  SPINNER_INTERVAL_MS,
-  TranscriptRenderer,
-  buildTranscriptLines,
+  AgentTranscriptRenderer,
   sanitizeText,
-  spinnerFrame,
-  summarizeToolArgs,
-} from "./src/ui/transcript.ts";
+} from "../shared/agent-transcript.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
+import { summarizeToolArgs } from "../shared/tool-activity.ts";
+import type { SubagentSnapshot } from "./src/domain.ts";
+import { subagentTranscriptDocument } from "./src/ui/transcript.ts";
 
 initTheme("dark", false);
 
@@ -50,6 +49,22 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
 
 function plain(lines: readonly string[]) {
   return stripVTControlCharacters(lines.join("\n"));
+}
+
+function renderSnapshot(
+  value: SubagentSnapshot,
+  width: number,
+  renderTheme: Theme,
+  renderer = new AgentTranscriptRenderer(),
+  options?: { readonly now?: number },
+  toolRenderer?: AgentToolRenderLedger,
+) {
+  return renderer.render(
+    subagentTranscriptDocument(value, toolRenderer),
+    width,
+    renderTheme,
+    options,
+  );
 }
 
 test("transcript sanitization strips terminal control sequences before rendering", () => {
@@ -93,7 +108,7 @@ test("extension tool calls use their Pi-native renderer instead of raw JSON", ()
     false,
   );
   const rendered = plain(
-    buildTranscriptLines(
+    renderSnapshot(
       snapshot({
         status: "done",
         transcript: [
@@ -130,7 +145,7 @@ test("extension tool calls use their Pi-native renderer instead of raw JSON", ()
 });
 
 test("takeover transcript renders finalized and live assistant Markdown within its width", () => {
-  const lines = buildTranscriptLines(
+  const lines = renderSnapshot(
     snapshot({
       transcript: [
         {
@@ -183,8 +198,8 @@ test("shared transcript renders fenced code and CJK deterministically at narrow 
     ],
   });
 
-  const first = buildTranscriptLines(value, 12, theme);
-  const second = buildTranscriptLines(value, 12, theme);
+  const first = renderSnapshot(value, 12, theme);
+  const second = renderSnapshot(value, 12, theme);
   const rendered = plain(first);
 
   assert.deepEqual(second, first);
@@ -196,7 +211,7 @@ test("shared transcript renders fenced code and CJK deterministically at narrow 
 
 test("thinking renders Markdown but preserves redaction", () => {
   const rendered = plain(
-    buildTranscriptLines(
+    renderSnapshot(
       snapshot({
         transcript: [
           {
@@ -232,11 +247,8 @@ test("tool calls summarize known bounded JSON arguments and safely fall back", (
   );
   assert.equal(summarizeToolArgs("read", '{"path":"src/a.ts"}'), "src/a.ts");
   assert.equal(
-    summarizeToolArgs(
-      "rg",
-      '{"pattern":"buildTranscriptLines","path":"extensions"}',
-    ),
-    "buildTranscriptLines · extensions",
+    summarizeToolArgs("rg", '{"pattern":"renderSnapshot","path":"extensions"}'),
+    "renderSnapshot · extensions",
   );
   assert.equal(
     summarizeToolArgs("fd", '{"pattern":"*.test.ts","path":"extensions"}'),
@@ -274,7 +286,7 @@ test("tool argument summaries relativize paths inside the child cwd", () => {
 
 test("tool call and output lines drop the child cwd prefix", () => {
   const cwd = process.cwd();
-  const lines = buildTranscriptLines(
+  const lines = renderSnapshot(
     snapshot({
       transcript: [
         {
@@ -309,7 +321,7 @@ test("tool call and output lines drop the child cwd prefix", () => {
 
 test("pending tool calls use the parent activity verbs", () => {
   const rendered = plain(
-    buildTranscriptLines(
+    renderSnapshot(
       snapshot({
         transcript: [
           {
@@ -344,7 +356,7 @@ test("pending tool calls use the parent activity verbs", () => {
 });
 
 test("settled tools use one semantic activity row", () => {
-  const lines = buildTranscriptLines(
+  const lines = renderSnapshot(
     snapshot({
       transcript: [
         {
@@ -375,7 +387,7 @@ test("settled tools use one semantic activity row", () => {
 });
 
 test("parallel tool results reuse their earlier command lines", () => {
-  const lines = buildTranscriptLines(
+  const lines = renderSnapshot(
     snapshot({
       transcript: [
         {
@@ -425,7 +437,7 @@ test("parallel tool results reuse their earlier command lines", () => {
 
 test("tool errors and empty results use status glyphs", () => {
   const rendered = plain(
-    buildTranscriptLines(
+    renderSnapshot(
       snapshot({
         transcript: [
           {
@@ -468,7 +480,7 @@ test("a running tool becomes settled without reflowing", () => {
   };
   // Production order: the assistant message (with the call) lands in the
   // transcript before tool_execution_start, so both sources describe one tool.
-  const running = buildTranscriptLines(
+  const running = renderSnapshot(
     snapshot({
       transcript: [call],
       liveTools: [
@@ -485,7 +497,7 @@ test("a running tool becomes settled without reflowing", () => {
     undefined,
     { now: 0 },
   );
-  const settled = buildTranscriptLines(
+  const settled = renderSnapshot(
     snapshot({
       transcript: [
         call,
@@ -514,7 +526,7 @@ test("a running tool becomes settled without reflowing", () => {
 });
 
 test("the spinner advances between frames instead of freezing in the cache", () => {
-  const renderer = new TranscriptRenderer();
+  const renderer = new AgentTranscriptRenderer();
   const snap = snapshot({
     transcript: [
       {
@@ -534,15 +546,18 @@ test("the spinner advances between frames instead of freezing in the cache", () 
     ],
   });
 
-  const first = renderer.render(snap, 80, theme, { now: 0 });
-  const later = renderer.render(snap, 80, theme, { now: SPINNER_INTERVAL_MS });
+  const document = subagentTranscriptDocument(snap);
+  const first = renderer.render(document, 80, theme, { now: 0 });
+  const later = renderer.render(document, 80, theme, {
+    now: SPINNER_INTERVAL_MS,
+  });
   assert.notEqual(first[1], later[1]);
   assert.equal(first[1]?.slice(3), later[1]?.slice(3));
 });
 
 test("empty live assistant buffers do not hide live tools or Pi-style queued messages", () => {
   const rendered = plain(
-    buildTranscriptLines(
+    renderSnapshot(
       snapshot({
         liveAssistant: { text: "", thinking: "" },
         liveTools: [
@@ -571,7 +586,7 @@ test("empty live assistant buffers do not hide live tools or Pi-style queued mes
 });
 
 test("cached items are keyed by width and by tool phase", () => {
-  const renderer = new TranscriptRenderer();
+  const renderer = new AgentTranscriptRenderer();
   const call = {
     kind: "assistant" as const,
     parts: [
@@ -584,8 +599,9 @@ test("cached items are keyed by width and by tool phase", () => {
     ],
   };
   const pending = snapshot({ transcript: [call] });
-  const wide = renderer.render(pending, 80, theme, { now: 0 });
-  const narrow = renderer.render(pending, 24, theme, { now: 0 });
+  const pendingDocument = subagentTranscriptDocument(pending);
+  const wide = renderer.render(pendingDocument, 80, theme, { now: 0 });
+  const narrow = renderer.render(pendingDocument, 24, theme, { now: 0 });
   assert.ok(wide.every((line) => visibleWidth(line) <= 80));
   assert.ok(narrow.every((line) => visibleWidth(line) <= 24));
   assert.notDeepEqual(wide, narrow);
@@ -593,18 +609,20 @@ test("cached items are keyed by width and by tool phase", () => {
   // The same item re-renders once its result lands: a width-only cache key
   // would serve the stale pending glyph forever.
   const settled = renderer.render(
-    snapshot({
-      transcript: [
-        call,
-        {
-          kind: "toolResult",
-          toolId: "call-1",
-          name: "bash",
-          isError: false,
-          outputPreview: "a",
-        },
-      ],
-    }),
+    subagentTranscriptDocument(
+      snapshot({
+        transcript: [
+          call,
+          {
+            kind: "toolResult",
+            toolId: "call-1",
+            name: "bash",
+            isError: false,
+            outputPreview: "a",
+          },
+        ],
+      }),
+    ),
     80,
     theme,
     { now: 0 },
@@ -621,7 +639,7 @@ test("spinnerFrame is deterministic and advances every 120ms", () => {
 });
 
 test("tool rendering keeps every line within a narrow width", () => {
-  const lines = buildTranscriptLines(
+  const lines = renderSnapshot(
     snapshot({
       transcript: [
         {
@@ -662,7 +680,7 @@ test("tool rendering keeps every line within a narrow width", () => {
 });
 
 test("cached finalized transcript output is rebuilt after invalidation", () => {
-  const renderer = new TranscriptRenderer();
+  const renderer = new AgentTranscriptRenderer();
   const cached = snapshot({
     transcript: [
       {
@@ -686,16 +704,16 @@ test("cached finalized transcript output is rebuilt after invalidation", () => {
     }) as Theme;
 
   assert.match(
-    plain(buildTranscriptLines(cached, 80, taggedTheme("first"), renderer)),
+    plain(renderSnapshot(cached, 80, taggedTheme("first"), renderer)),
     /\[first:toolTitle\]Running\s+npm test/,
   );
   assert.match(
-    plain(buildTranscriptLines(cached, 80, taggedTheme("second"), renderer)),
+    plain(renderSnapshot(cached, 80, taggedTheme("second"), renderer)),
     /\[first:toolTitle\]Running\s+npm test/,
   );
   renderer.invalidate();
   assert.match(
-    plain(buildTranscriptLines(cached, 80, taggedTheme("second"), renderer)),
+    plain(renderSnapshot(cached, 80, taggedTheme("second"), renderer)),
     /\[second:toolTitle\]Running\s+npm test/,
   );
 });

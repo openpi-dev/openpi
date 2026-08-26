@@ -37,19 +37,41 @@ async function withTempDir(run: (directory: string) => Promise<void>) {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((next) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((next, fail) => {
     resolve = next;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
+}
+
+async function settleWithin<T>(operation: Promise<T>, timeoutMs = 250) {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(new Error(`Operation did not settle within ${timeoutMs} ms`)),
+      timeoutMs,
+    );
+  });
+  try {
+    return await Promise.race([operation, timeout]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
 }
 
 function runnerHarness(options: {
+  bind?: () => Promise<void>;
   prompt?: () => Promise<void>;
   abort?: () => Promise<void>;
   shutdown?: () => Promise<void>;
 }) {
   const listeners = new Set<AgentSessionEventListener>();
   const messages: AgentSession["messages"] = [];
+  const firstDisposal = deferred<void>();
+  let bindings = 0;
+  let prompts = 0;
   let aborts = 0;
   let disposals = 0;
   const session = {
@@ -59,12 +81,16 @@ function runnerHarness(options: {
       hasHandlers: () => options.shutdown !== undefined,
       emit: async () => options.shutdown?.(),
     },
-    async bindExtensions() {},
+    async bindExtensions() {
+      bindings++;
+      await options.bind?.();
+    },
     subscribe(listener: AgentSessionEventListener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     async prompt() {
+      prompts++;
       await options.prompt?.();
     },
     async abort() {
@@ -73,6 +99,7 @@ function runnerHarness(options: {
     },
     dispose() {
       disposals++;
+      firstDisposal.resolve();
     },
     getContextUsage: () => undefined,
     getAllTools: () => [],
@@ -81,12 +108,16 @@ function runnerHarness(options: {
   const factory: WorkflowAgentSessionFactory = async () => ({ session });
   return {
     factory,
+    session,
     messages,
     emit: (event: AgentSessionEvent) => {
       for (const listener of listeners) listener(event);
     },
+    bindings: () => bindings,
+    prompts: () => prompts,
     aborts: () => aborts,
     disposals: () => disposals,
+    firstDisposal: firstDisposal.promise,
   };
 }
 
@@ -390,6 +421,125 @@ test("schema-less agents accept an empty assistant message_end", async () => {
   assert.equal(outcome.aborted, false);
   assert.equal(outcome.output, "");
   assert.equal(outcome.error, undefined);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("a pre-aborted startup does not create or bind a child session", async () => {
+  const harness = runnerHarness({});
+  const controller = new AbortController();
+  let factoryCalls = 0;
+  const factory: WorkflowAgentSessionFactory = async (options) => {
+    factoryCalls++;
+    return harness.factory(options);
+  };
+  controller.abort(new Error("cancel before startup"));
+
+  const outcome = await settleWithin(
+    runHarnessAgent(harness, {
+      signal: controller.signal,
+      sessionFactory: factory,
+    }),
+  );
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.equal(factoryCalls, 0);
+  assert.equal(harness.bindings(), 0);
+  assert.equal(harness.prompts(), 0);
+  assert.equal(harness.disposals(), 0);
+});
+
+test("cancel during session creation returns before a late session is disposed", async () => {
+  const harness = runnerHarness({});
+  const creationStarted = deferred<void>();
+  const creation = deferred<{ session: AgentSession }>();
+  const controller = new AbortController();
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+    sessionFactory: () => {
+      creationStarted.resolve();
+      return creation.promise;
+    },
+  });
+  await creationStarted.promise;
+
+  controller.abort(new Error("cancel during creation"));
+  let outcome;
+  try {
+    outcome = await settleWithin(outcomePromise);
+  } finally {
+    creation.resolve({ session: harness.session });
+  }
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.equal(harness.bindings(), 0);
+  assert.equal(harness.prompts(), 0);
+  await settleWithin(harness.firstDisposal);
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("cancel during session creation observes a late factory failure", async () => {
+  const harness = runnerHarness({});
+  const creationStarted = deferred<void>();
+  const creation = deferred<{ session: AgentSession }>();
+  const controller = new AbortController();
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+    sessionFactory: () => {
+      creationStarted.resolve();
+      return creation.promise;
+    },
+  });
+  await creationStarted.promise;
+
+  controller.abort(new Error("cancel before factory failure"));
+  let outcome;
+  try {
+    outcome = await settleWithin(outcomePromise);
+  } finally {
+    creation.reject(new Error("late factory failure"));
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.equal(harness.bindings(), 0);
+  assert.equal(harness.prompts(), 0);
+  assert.equal(harness.aborts(), 0);
+  assert.equal(harness.disposals(), 0);
+});
+
+test("cancel during extension binding owns the session and observes a late failure", async () => {
+  const bindingStarted = deferred<void>();
+  const binding = deferred<void>();
+  const harness = runnerHarness({
+    bind: () => {
+      bindingStarted.resolve();
+      return binding.promise;
+    },
+  });
+  const controller = new AbortController();
+  const outcomePromise = runHarnessAgent(harness, {
+    signal: controller.signal,
+  });
+  await bindingStarted.promise;
+
+  controller.abort(new Error("cancel during binding"));
+  let outcome;
+  try {
+    outcome = await settleWithin(outcomePromise);
+  } finally {
+    binding.reject(new Error("late binding failure"));
+  }
+  await new Promise<void>((resolve) => setImmediate(resolve));
+
+  assert.equal(outcome.ok, false);
+  assert.equal(outcome.aborted, true);
+  assert.equal(harness.bindings(), 1);
+  assert.equal(harness.prompts(), 0);
+  assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
 });
 

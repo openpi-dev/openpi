@@ -7,7 +7,6 @@ import {
   parseSetupConfig,
 } from "../shared/setup-config.ts";
 import {
-  buildFooterContent,
   buildSegmentCatalog,
   fitSegmentsToWidth,
   renderFooter,
@@ -316,18 +315,22 @@ test("statuses remain visible even when metric layout is empty after normalize",
   assert.match(lines.join("\n"), /bg: sleep/);
 });
 
-test("legacy buildFooterContent still groups selected items", () => {
-  const content = buildFooterContent(modelInfo, gitInfo, [
-    "model",
-    "context",
-    "cache",
-  ]);
-  assert.deepEqual(content, {
-    showCwd: false,
-    model: "\uec10 seal/gpt-5.6-sol",
-    usage: "\uebe4 25%/1.0m · cache 82%",
-    git: "",
+test("renderFooter renders only the configured segments", () => {
+  const lines = renderFooter({
+    cwd: "/tmp/project",
+    modelInfo,
+    gitInfo,
+    style: "plain",
+    lines: [["model", "context", "cache"]],
+    width: 80,
+    theme,
   });
+
+  assert.equal(lines.length, 1);
+  assert.match(lines[0]!, /seal\/gpt-5\.6-sol/);
+  assert.match(lines[0]!, /25%\/1\.0m/);
+  assert.match(lines[0]!, /cache 82%/);
+  assert.doesNotMatch(lines[0]!, /project|main|PR #42/);
 });
 
 test("fitSegmentsToWidth never empties a previously non-empty side first", () => {
