@@ -11,19 +11,20 @@
  */
 
 import {
-  createAgentSession,
-  DefaultResourceLoader,
-  defineTool,
-  SessionManager,
-  SettingsManager,
   type AgentSession,
   type AgentSessionEvent,
   type AgentSessionEventListener,
+  createAgentSession,
+  DefaultResourceLoader,
+  defineTool,
   type ExtensionAPI,
   type ExtensionContext,
+  SessionManager,
+  SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { Type, type TSchema } from "typebox";
+import { type TSchema, Type } from "typebox";
+import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import {
   bindChildSessionExtensions,
   childToolPolicy,
@@ -31,18 +32,17 @@ import {
   shutdownAndDisposeChildSession,
 } from "../shared/child-session.ts";
 import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
-import { emptyUsage, type AgentUsage, type TranscriptEntry } from "./model.ts";
-import {
-  createReplayFilesystemBoundary,
-  type ReplayFilesystemBoundaryOptions,
-} from "./replay-safety.ts";
+import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import {
   buildWorkflowAgentPrompt,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
 } from "./prompt.ts";
+import {
+  createReplayFilesystemBoundary,
+  type ReplayFilesystemBoundaryOptions,
+} from "./replay-safety.ts";
 import { safeStringify, truncateUtf8 } from "./serialization.ts";
-import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
@@ -518,6 +518,38 @@ export async function runAgent(
   let customTools: ToolDefinition[] | undefined;
   let session: AgentSession | undefined;
   let unsubscribeToolGuards: (() => void) | undefined;
+  let aborted = false;
+  let abortOperation: Promise<unknown> | undefined;
+  let rejectForAbort: ((error: Error) => void) | undefined;
+  const abortRace = new Promise<never>((_resolve, reject) => {
+    rejectForAbort = reject;
+  });
+  // The same promise covers startup and prompting. Keep it observed even when
+  // a pre-aborted run returns before either race is installed.
+  void abortRace.catch(() => {});
+  const abortError = () =>
+    options.signal?.reason instanceof Error
+      ? options.signal.reason
+      : new Error("Agent was aborted");
+  const onAbort = () => {
+    if (aborted) return;
+    aborted = true;
+    if (session) {
+      try {
+        abortOperation ??= session.abort();
+        void abortOperation.catch(() => {});
+      } catch (error) {
+        abortOperation = Promise.reject(error);
+        void abortOperation.catch(() => {});
+      }
+    }
+    rejectForAbort?.(abortError());
+  };
+  if (options.signal) {
+    if (options.signal.aborted) onAbort();
+    else options.signal.addEventListener("abort", onAbort, { once: true });
+  }
+
   try {
     customTools =
       options.schema !== undefined
@@ -531,7 +563,8 @@ export async function runAgent(
       options.tools,
       customTools !== undefined,
     );
-    ({ session } = await (options.sessionFactory ?? createAgentSession)({
+    if (aborted) throw abortError();
+    const sessionCreation = (options.sessionFactory ?? createAgentSession)({
       cwd: options.cwd,
       ...(options.model ? { model: options.model } : {}),
       ...(options.thinkingLevel
@@ -543,8 +576,28 @@ export async function runAgent(
         options.sessionManager ?? SessionManager.inMemory(options.cwd),
       ...(customTools ? { customTools } : {}),
       ...childToolPolicy(childTools),
-    }));
-    await bindChildSessionExtensions(session, childTools);
+    });
+    // Promise.race cannot cancel the factory. If cancellation wins, retain
+    // ownership of a late session and dispose it without re-entering startup.
+    void sessionCreation
+      .then(
+        ({ session: lateSession }) => {
+          if (!aborted) return;
+          return shutdownAndDisposeChildSession(lateSession, {
+            abort: true,
+            timeoutMs: options.shutdownTimeoutMs,
+          });
+        },
+        () => undefined,
+      )
+      .catch(() => {});
+    ({ session } = await Promise.race([sessionCreation, abortRace]));
+    if (aborted) throw abortError();
+    await Promise.race([
+      bindChildSessionExtensions(session, childTools),
+      abortRace,
+    ]);
+    if (aborted) throw abortError();
     unsubscribeToolGuards = guardWorkflowChildTools(
       session,
       options.toolCallTimeoutMs,
@@ -553,13 +606,29 @@ export async function runAgent(
   } catch (error) {
     settled = true;
     unsubscribeToolGuards?.();
+    options.signal?.removeEventListener("abort", onAbort);
     const cleanup = session
       ? await shutdownAndDisposeChildSession(session, {
           abort: true,
+          abortOperation,
           timeoutMs: options.shutdownTimeoutMs,
         })
       : undefined;
     const cleanupError = cleanup?.errors.join("; ");
+    if (aborted) {
+      return {
+        ok: false,
+        output: "",
+        error: cleanupError
+          ? `Agent was aborted; Cleanup failed: ${cleanupError}`
+          : "Agent was aborted",
+        aborted: true,
+        usage: emptyUsage(),
+        model: options.model?.id,
+        contextWindow: options.model?.contextWindow,
+        transcript: [],
+      };
+    }
     return {
       ok: false,
       output: "",
@@ -710,33 +779,6 @@ export async function runAgent(
     });
   });
 
-  let aborted = false;
-  let abortOperation: Promise<unknown> | undefined;
-  let rejectForAbort: ((error: Error) => void) | undefined;
-  const abortRace = new Promise<never>((_resolve, reject) => {
-    rejectForAbort = reject;
-  });
-  const onAbort = () => {
-    if (aborted) return;
-    aborted = true;
-    try {
-      abortOperation ??= childSession.abort();
-      void abortOperation.catch(() => {});
-    } catch (error) {
-      abortOperation = Promise.reject(error);
-      void abortOperation.catch(() => {});
-    }
-    rejectForAbort?.(
-      options.signal?.reason instanceof Error
-        ? options.signal.reason
-        : new Error("Agent was aborted"),
-    );
-  };
-  if (options.signal) {
-    if (options.signal.aborted) onAbort();
-    else options.signal.addEventListener("abort", onAbort, { once: true });
-  }
-
   let output = "";
   let transcript: TranscriptEntry[] = [];
   let cleanupErrors: string[] = [];
@@ -831,6 +873,20 @@ export async function runAgent(
       output,
       error:
         "Agent finished without calling structured_output; no structured result matching the schema was produced.",
+      aborted: false,
+      usage,
+      model: modelId,
+      contextWindow,
+      transcript,
+    };
+  }
+
+  if (options.schema === undefined && assistantSettlement === undefined) {
+    return {
+      ok: false,
+      output,
+      structured,
+      error: "Agent finished without an assistant response.",
       aborted: false,
       usage,
       model: modelId,

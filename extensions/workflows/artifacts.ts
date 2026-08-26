@@ -1,27 +1,29 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
+import {
+  boundedJournal,
+  JOURNAL_MAX_BYTES,
+  type JournalEntry,
+  parseJournal,
+  type WorkflowJournal,
+} from "./journal.ts";
 import {
   refreshWorkflowGraph,
   type TranscriptEntry,
   type WorkflowDetails,
 } from "./model.ts";
 import {
-  boundedJournal,
-  parseJournal,
-  type JournalEntry,
-  type WorkflowJournal,
-} from "./journal.ts";
-import {
+  encodeCompleteJson,
   safeStringify,
-  toSerializable,
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
-import * as fs from "node:fs";
-import * as path from "node:path";
 
 export const JOURNAL_FILE = "journal.json";
 
 const ARTIFACT_TRANSCRIPT_MAX_BYTES = 32 * 1024;
 const ARTIFACT_TRANSCRIPT_ENTRY_MAX_BYTES = 8 * 1024;
+const AGENT_RESULT_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 export const WORKFLOW_CHECKPOINT_INTERVAL_MS = 500;
 const ENTRY_TRUNCATION_MARKER = "\n[entry truncated]";
 const TRANSCRIPT_TRUNCATION_MARKER =
@@ -111,27 +113,26 @@ export function persistWorkflowAgentResult(
     "agent-results",
     `agent-${String(index).padStart(4, "0")}.json`,
   );
-  writeRunFile(
-    runDir,
-    artifact,
-    JSON.stringify(
-      toSerializable(
-        {
-          output: result.output,
-          ...(result.structured !== undefined
-            ? { structured: result.structured }
-            : {}),
-        },
-        {
-          maxDepth: 32,
-          maxNodes: 100_000,
-          maxStringBytes: 2 * 1024 * 1024,
-        },
-      ),
-      null,
-      2,
-    ),
+  const encoded = encodeCompleteJson(
+    {
+      output: result.output,
+      ...(result.structured !== undefined
+        ? { structured: result.structured }
+        : {}),
+    },
+    {
+      maxBytes: AGENT_RESULT_ARTIFACT_MAX_BYTES,
+      maxDepth: 32,
+      maxNodes: 100_000,
+      maxStringBytes: AGENT_RESULT_ARTIFACT_MAX_BYTES,
+    },
   );
+  if (!encoded.ok) {
+    throw new Error(
+      `Agent result artifact exceeded the ${AGENT_RESULT_ARTIFACT_MAX_BYTES}-byte budget (${encoded.limit} limit at ${encoded.path})`,
+    );
+  }
+  writeRunFile(runDir, artifact, encoded.json);
   return artifact;
 }
 
@@ -256,10 +257,42 @@ export function createWorkflowPersistence(
  * turn into a new way for a run to fail.
  */
 export function loadJournal(runDir: string): WorkflowJournal | undefined {
+  let descriptor: number | undefined;
   try {
-    const raw = fs.readFileSync(path.join(runDir, JOURNAL_FILE), "utf8");
+    descriptor = fs.openSync(path.join(runDir, JOURNAL_FILE), "r");
+    const initialSize = fs.fstatSync(descriptor).size;
+    if (initialSize > JOURNAL_MAX_BYTES) return undefined;
+
+    // Read at most one byte beyond the cap. The descriptor pins the inspected
+    // file, while the extra byte catches growth after fstat without ever
+    // allocating or parsing an unbounded journal.
+    const bytes = Buffer.allocUnsafe(initialSize + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const read = fs.readSync(
+        descriptor,
+        bytes,
+        length,
+        bytes.length - length,
+        null,
+      );
+      if (read === 0) break;
+      length += read;
+    }
+    // Filling the extra byte means the file changed after inspection. Reject
+    // that race even when the new size would still fit the ordinary cap.
+    if (length === bytes.length) return undefined;
+    const raw = bytes.toString("utf8", 0, length);
     return parseJournal(JSON.parse(raw));
   } catch {
     return undefined;
+  } finally {
+    if (descriptor !== undefined) {
+      try {
+        fs.closeSync(descriptor);
+      } catch {
+        // Loading a replay cache is optional and always fails open to a miss.
+      }
+    }
   }
 }

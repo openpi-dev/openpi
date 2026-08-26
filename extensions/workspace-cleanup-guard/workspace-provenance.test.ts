@@ -5,6 +5,18 @@ import path from "node:path";
 import test from "node:test";
 import { createWorkspaceCleanupGuard } from "./workspace-provenance.ts";
 
+function guardFor(
+  confirmDelete: (paths: readonly string[]) => Promise<boolean>,
+) {
+  const guard = createWorkspaceCleanupGuard();
+  return {
+    ...guard,
+    before(attempt: { id: string; command: string; cwd: string }) {
+      return guard.before({ ...attempt, confirmDelete });
+    },
+  };
+}
+
 async function withWorkspace(run: (workspace: string) => Promise<void>) {
   const workspace = await mkdtemp(
     path.join(tmpdir(), "openpi-workspace-provenance-"),
@@ -21,9 +33,7 @@ test("r11-style mixed cleanup cannot delete a baseline file", async () => {
     const goMod = path.join(workspace, "go.mod");
     const scratch = path.join(workspace, "tt_test.go");
     await writeFile(goMod, "module bookstore\n\ngo 1.18\n");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     const overwrite = await guard.before({
       id: "overwrite-go-mod",
@@ -65,9 +75,7 @@ test("r11-style mixed cleanup cannot delete a baseline file", async () => {
 
 test("session-created scratch can be deleted without confirmation", async () => {
   await withWorkspace(async (workspace) => {
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
     const scratch = path.join(workspace, "scratch.txt");
 
     assert.equal(
@@ -98,9 +106,7 @@ test("session-created scratch can be deleted without confirmation", async () => 
 
 test("scratch created by the native write tool can be deleted without confirmation", async () => {
   await withWorkspace(async (workspace) => {
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
     const scratch = path.join(workspace, "zz_test.go");
 
     await guard.beforeWrite({
@@ -125,9 +131,7 @@ test("native write keeps an overwritten baseline file protected", async () => {
   await withWorkspace(async (workspace) => {
     const target = path.join(workspace, "go.mod");
     await writeFile(target, "module bookstore\n");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     await guard.beforeWrite({
       id: "overwrite-go-mod",
@@ -149,9 +153,7 @@ test("native write keeps an overwritten baseline file protected", async () => {
 test("a failed native write never grants scratch deletion authority", async () => {
   await withWorkspace(async (workspace) => {
     const target = path.join(workspace, "failed.txt");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     await guard.beforeWrite({
       id: "failed-write",
@@ -174,11 +176,9 @@ test("confirmed deletion of a pre-existing file is allowed", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "obsolete.txt"), "old");
     const confirmations: string[][] = [];
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async (paths) => {
-        confirmations.push([...paths]);
-        return true;
-      },
+    const guard = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
     });
 
     const decision = await guard.before({
@@ -195,9 +195,7 @@ test("confirmed deletion of a pre-existing file is allowed", async () => {
 test("ambiguous shell deletion is not misrepresented as protected", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     const decision = await guard.before({
       id: "ambiguous",
@@ -213,9 +211,7 @@ test("ambiguous shell deletion is not misrepresented as protected", async () => 
 test("a later command failure does not erase proven scratch creation", async () => {
   await withWorkspace(async (workspace) => {
     const target = path.join(workspace, "test_main.go");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     await guard.before({
       id: "create-then-fail",
@@ -238,9 +234,7 @@ test("a later command failure does not erase proven scratch creation", async () 
 test("a literal mkdir target remains session-owned after a later failure", async () => {
   await withWorkspace(async (workspace) => {
     const scratch = path.join(workspace, "testmain");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
 
     await guard.before({
       id: "mkdir-then-fail",
@@ -263,9 +257,7 @@ test("a literal mkdir target remains session-owned after a later failure", async
 test("a sandbox wrapper cannot hide a protected cleanup from the guard", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "go.mod"), "module bookstore\n");
-    const guard = createWorkspaceCleanupGuard({
-      confirmDelete: async () => false,
-    });
+    const guard = guardFor(async () => false);
     const wrapped =
       "/usr/bin/sandbox-exec -p '(version 1)' /usr/bin/env PATH=/usr/bin /bin/bash -c 'cd \"$(pwd)\" && rm -f go.mod && ls -la'";
 

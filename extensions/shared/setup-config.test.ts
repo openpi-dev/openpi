@@ -119,6 +119,57 @@ test("a readable or absent config saves normally", async () => {
   assert.deepEqual(loadSetupConfig(), DEFAULT_SETUP_CONFIG);
 });
 
+test("legacy footerItems migrates and writes back canonical footerLines idempotently", async () => {
+  const legacyDocument = JSON.stringify({
+    ui: {
+      footerStyle: "powerline",
+      footerItems: ["model", "context", "cache", "git"],
+    },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, legacyDocument);
+
+  const migrated = loadSetupConfig();
+  const repeated = loadSetupConfig();
+  assert.deepEqual(repeated, migrated);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), legacyDocument);
+  assert.equal("footerItems" in migrated.ui, false);
+  assert.equal(migrated.ui.footerStyle, "powerline");
+  assert.deepEqual(migrated.ui.footerLines, [
+    ["model", "context", "cache", "flex", "git"],
+  ]);
+
+  await saveSetupConfig(migrated);
+  const firstWrite = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal("footerItems" in firstWrite.ui, false);
+  assert.deepEqual(firstWrite.ui.footerLines, migrated.ui.footerLines);
+
+  await saveSetupConfig(loadSetupConfig());
+  const secondWrite = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.deepEqual(secondWrite, firstWrite);
+});
+
+test("save and update strip runtime footerItems extras at the writer boundary", async () => {
+  const withLegacyExtra = {
+    ...DEFAULT_SETUP_CONFIG,
+    ui: {
+      ...DEFAULT_SETUP_CONFIG.ui,
+      footerItems: ["cache"] as const,
+    },
+  };
+
+  await saveSetupConfig(withLegacyExtra);
+  const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal("footerItems" in saved.ui, false);
+
+  const { config } = await updateSetupConfig((current) => ({
+    ...current,
+    ui: { ...current.ui, footerItems: ["cost"] as const },
+  }));
+  const updated = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal("footerItems" in config.ui, false);
+  assert.equal("footerItems" in updated.ui, false);
+});
+
 test("an update patches the document as it is on disk, not as it was read", async () => {
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
 
@@ -436,6 +487,20 @@ test("a stored value that had to be normalized is reported, not hidden", async (
     DEFAULT_SETUP_CONFIG.workflows.concurrency,
   );
   assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
+});
+
+test("legacy footerItems migration remains visible in update reports", async () => {
+  writeFileSync(
+    SETUP_CONFIG_PATH,
+    JSON.stringify({
+      ui: {
+        footerItems: ["model", "context", "cache", "git"],
+      },
+    }),
+  );
+
+  const { replaced } = await updateSetupConfig((current) => current);
+  assert.deepEqual(replaced, ["ui.footerItems"]);
 });
 
 test("legacy model-free recaps are explicitly migrated to disabled suggestions", async () => {

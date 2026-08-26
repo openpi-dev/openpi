@@ -1651,18 +1651,25 @@ export default function workflows(pi: ExtensionAPI) {
           });
         const callKey = replayIdentity ? replayKey(replayIdentity) : undefined;
         let replayBoundaryViolated = false;
+        const persistAgentResult = (result: {
+          output: string;
+          structured?: unknown;
+        }) => {
+          try {
+            return {
+              ok: true as const,
+              artifact: persistWorkflowAgentResult(runDir, index, result),
+            };
+          } catch (error) {
+            return { ok: false as const, error: errorText(error) };
+          }
+        };
         // Checked before controller.schedule on purpose: schedule() charges the
         // run's agent-call budget on entry, and a replayed call runs no agent.
         const cached =
           callKey && replayLease.canReplay ? replay?.take(callKey) : undefined;
         if (cached) {
           const finishedAt = Date.now();
-          record.invocation = transitionInvocation(record.invocation!, {
-            status: "replayed",
-            at: finishedAt,
-          });
-          record.state = "done";
-          record.replayed = true;
           record.finishedAt = finishedAt;
           record.preview = sanitizeWorkflowDisplayText(
             cached.output,
@@ -1674,12 +1681,38 @@ export default function workflows(pi: ExtensionAPI) {
               cached.structured,
             );
           }
-          record.resultArtifact = persistWorkflowAgentResult(runDir, index, {
+          const persisted = persistAgentResult({
             output: cached.output,
             ...(cached.structured !== undefined
               ? { structured: cached.structured }
               : {}),
           });
+          if (!persisted.ok) {
+            record.invocation = transitionInvocation(record.invocation!, {
+              status: "rejected",
+              at: finishedAt,
+            });
+            record.state = "error";
+            record.error = sanitizeWorkflowDisplayLine(persisted.error);
+            emit();
+            replayLease.end();
+            return {
+              ok: false,
+              output: cached.output,
+              ...(cached.structured !== undefined
+                ? { structured: cached.structured }
+                : {}),
+              ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+              error: persisted.error,
+            };
+          }
+          record.invocation = transitionInvocation(record.invocation!, {
+            status: "replayed",
+            at: finishedAt,
+          });
+          record.state = "done";
+          record.replayed = true;
+          record.resultArtifact = persisted.artifact;
           const ref = handoffs.register({
             callId,
             settled: true,
@@ -1874,7 +1907,18 @@ export default function workflows(pi: ExtensionAPI) {
               });
               const acceptance = judged.ledger;
               if (acceptance) record.acceptance = acceptance;
-              const outcomeOk = judged.ok;
+              let artifactError: string | undefined;
+              if (judged.ok) {
+                const persisted = persistAgentResult({
+                  output: outcome.output,
+                  ...(outcome.structured !== undefined
+                    ? { structured: outcome.structured }
+                    : {}),
+                });
+                if (persisted.ok) record.resultArtifact = persisted.artifact;
+                else artifactError = persisted.error;
+              }
+              const outcomeOk = judged.ok && artifactError === undefined;
               record.invocation = transitionInvocation(record.invocation!, {
                 status: "settled",
                 outcome: outcomeOk ? "success" : "error",
@@ -1882,21 +1926,11 @@ export default function workflows(pi: ExtensionAPI) {
               });
               record.state = outcomeOk ? "done" : "error";
               if (outcomeOk) delete record.error;
-              else
-                record.error = judged.error
-                  ? sanitizeWorkflowDisplayLine(judged.error)
+              else {
+                const failureError = artifactError ?? judged.error;
+                record.error = failureError
+                  ? sanitizeWorkflowDisplayLine(failureError)
                   : undefined;
-              if (outcomeOk) {
-                record.resultArtifact = persistWorkflowAgentResult(
-                  runDir,
-                  index,
-                  {
-                    output: outcome.output,
-                    ...(outcome.structured !== undefined
-                      ? { structured: outcome.structured }
-                      : {}),
-                  },
-                );
               }
               const ref = handoffs.register({
                 callId,

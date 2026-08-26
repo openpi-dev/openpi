@@ -62,6 +62,101 @@ test("sandbox exposes only workflow capabilities and validates results", async (
   assert.equal(peak, 2);
 });
 
+test("oversized workflow args fail closed before executing the script", async () => {
+  let agentCalls = 0;
+  const oversized = Array.from({ length: 3_000 }, () => "x".repeat(100));
+
+  await assert.rejects(
+    run(
+      `
+        const response = await agent("must not run");
+        return { response, args };
+      `,
+      {
+        args: oversized,
+        onAgent: async () => {
+          agentCalls++;
+          return { ok: true, output: "unexpected" };
+        },
+      },
+    ),
+    /Workflow args exceed the .* IPC limit/,
+  );
+  assert.equal(agentCalls, 0);
+});
+
+test("oversized raw string args fail closed instead of being truncated", async () => {
+  await assert.rejects(
+    run(`return args.length;`, { args: "x".repeat(300_000) }),
+    /Workflow args exceed the .* IPC limit/,
+  );
+});
+
+test("workflow args preserve large strings that fit the IPC budget", async () => {
+  const value = "x".repeat(100_000);
+  const result = await run(`return args.value.length;`, { args: { value } });
+
+  assert.equal(result, value.length);
+});
+
+test("workflow args fail closed on depth and node limits", async () => {
+  let tooDeep: Record<string, unknown> = { leaf: true };
+  for (let depth = 0; depth < 17; depth++) tooDeep = { next: tooDeep };
+
+  await assert.rejects(
+    run(`return args;`, { args: tooDeep }),
+    /Workflow args exceed the .*depth limit/,
+  );
+  await assert.rejects(
+    run(`return args;`, { args: Array.from({ length: 10_000 }, () => 1) }),
+    /Workflow args exceed the .*nodes limit/,
+  );
+});
+
+test("workflow args accept exact byte, node, and depth limits", async () => {
+  const maxBytes = 256 * 1024;
+  const envelopeOverhead = Buffer.byteLength(
+    JSON.stringify({ defined: true, value: "" }),
+    "utf8",
+  );
+  const exactBytes = "x".repeat(maxBytes - envelopeOverhead);
+  assert.equal(
+    await run(`return args.length;`, { args: exactBytes }),
+    exactBytes.length,
+  );
+  await assert.rejects(
+    run(`return args.length;`, { args: `${exactBytes}x` }),
+    /bytes limit/,
+  );
+
+  assert.equal(
+    await run(`return args.length;`, {
+      args: Array.from({ length: 9_997 }, () => 1),
+    }),
+    9_997,
+  );
+  await assert.rejects(
+    run(`return args.length;`, {
+      args: Array.from({ length: 9_998 }, () => 1),
+    }),
+    /nodes limit/,
+  );
+
+  let exactDepth: Record<string, unknown> = { leaf: true };
+  for (let depth = 0; depth < 14; depth++) exactDepth = { next: exactDepth };
+  assert.equal(
+    await run(
+      `
+        let current = args;
+        for (let depth = 0; depth < 14; depth++) current = current.next;
+        return current.leaf;
+      `,
+      { args: exactDepth },
+    ),
+    true,
+  );
+});
+
 test("sandbox result serialization handles cycles and bigint", async () => {
   const result = await run(`
     const value = { count: 7n };

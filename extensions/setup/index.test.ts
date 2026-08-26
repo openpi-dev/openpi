@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -22,7 +22,6 @@ const {
   buildInteractiveSetupPrompt,
   buildSetupSuccessText,
   CONFIGURE_MY_PI_SETUP_TOOL_NAME,
-  shouldOfferPiIntercom,
   SUBAGENT_ROLE_MODELS_SCHEMA,
 } = await import("./index.ts");
 const { SETUP_CONFIG_PATH, loadSetupConfig } = await import(
@@ -224,6 +223,27 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
   assert.equal(loadSetupConfig().postEdit.command, "");
 });
 
+test("legacy ui_footer_items stays an input adapter and persists only footerLines", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
+  assert.ok(tool);
+
+  await tool.execute(
+    "setup-footer-call",
+    { ui_footer_items: ["model", "cache", "git"] },
+    new AbortController().signal,
+    () => {},
+    h.ctx,
+  );
+
+  assert.deepEqual(loadSetupConfig().ui.footerLines, [
+    ["model", "cache", "flex", "git"],
+  ]);
+  const stored = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal("footerItems" in stored.ui, false);
+});
+
 test("session_start hides configure_my_pi_setup after registration refresh", async () => {
   const h = visibilityHarness();
   assert.equal(h.isActive(), true, "registerTool refresh activates the tool");
@@ -241,6 +261,7 @@ test("openpi-setup and my-pi-setup expose the tool then inject the setup message
     assert.equal(h.isActive(), true);
     assert.equal(h.userMessages.length, 1);
     assert.match(String(h.userMessages[0]?.content), /关闭下一步预测/);
+    assert.doesNotMatch(String(h.userMessages[0]?.content), /intercom/i);
   }
 });
 
@@ -430,40 +451,6 @@ test("failed configure_my_pi_setup stays visible until the setup run settles", a
   assert.equal(h.isActive(), false);
 });
 
-test("offers optional Intercom only for an idle argument-free TUI setup", () => {
-  const status = { configured: false, installed: false, active: false };
-  assert.equal(
-    shouldOfferPiIntercom({ request: "", status, mode: "tui", idle: true }),
-    true,
-  );
-  assert.equal(
-    shouldOfferPiIntercom({
-      request: "关闭下一步预测",
-      status,
-      mode: "tui",
-      idle: true,
-    }),
-    false,
-  );
-  assert.equal(
-    shouldOfferPiIntercom({ request: "", status, mode: "rpc", idle: true }),
-    false,
-  );
-  assert.equal(
-    shouldOfferPiIntercom({ request: "", status, mode: "tui", idle: false }),
-    false,
-  );
-  assert.equal(
-    shouldOfferPiIntercom({
-      request: "",
-      status: { ...status, installed: true },
-      mode: "tui",
-      idle: true,
-    }),
-    false,
-  );
-});
-
 test("the role-model schema exposes every built-in role as an optional property", () => {
   const schema = SUBAGENT_ROLE_MODELS_SCHEMA as unknown as {
     readonly properties: Record<
@@ -510,9 +497,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Recommend compact/);
   assert.match(message, /Post-edit defaults off/);
   assert.match(message, /Agent role models/);
-  assert.match(message, /Intercom: optional cross-session messaging/);
-  assert.match(message, /native setup confirmation/);
-  assert.match(message, /parent-only/);
+  assert.doesNotMatch(message, /intercom/i);
   assert.match(message, /explorer, implementer, reviewer, and advisor/);
   assert.match(message, /subagent_spawn and workflow agent_type/);
   assert.match(message, /subagent_role_models=\{explorer/);

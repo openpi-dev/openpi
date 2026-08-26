@@ -1,0 +1,6 @@
+# Owner approval is required only for review policy and GitHub-executed code.
+# All ordinary repository changes may be approved by any collaborator with write access.
+
+/.github/CODEOWNERS @tt-a1i
+/.github/workflows/** @tt-a1i
+/.github/actions/** @tt-a1i
