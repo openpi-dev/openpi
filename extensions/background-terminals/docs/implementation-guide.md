@@ -45,7 +45,6 @@ there against the pinned toolchain):
 
 ```
 extensions/background-terminals/
-├── tsconfig.json             # extends ../../tsconfig.json; keeps extension-local scope
 ├── index.ts                  # extension edge: tools, command, widget, events (plain TS + runTool)
 ├── docs/
 │   └── implementation-guide.md   (this file)
@@ -59,24 +58,20 @@ extensions/background-terminals/
 │   └── ui/
 │       ├── ps.ts             # /ps picker + detail view components
 │       └── output-view.ts    # stdout/stderr → wrapped display lines
-└── (production source only; tests mirror this module under `tests/extensions/`)
+├── manager.test.ts           # node:test end-to-end through a real ManagedRuntime
+├── output.test.ts            # OutputBuffer truncation/decoding unit tests
+├── result-delivery.test.ts   # (copied semantics, tiny)
+└── ps.test.ts                # selection-reconciliation tests (like takeover.test.ts)
 ```
 
-Tests live under the top-level `tests/extensions/` mirror. The repository's root
-`package.json` discovers all nested `*.test.ts` and `*.spec.ts` files through
-`scripts/run-tests.mjs`, so new tests cannot be silently skipped because of their depth.
+Tests live at the extension root and the repository's root `package.json` runs them with
+`node --test --experimental-strip-types extensions/*/*.test.ts`.
 
 ## 3. Current repository toolchain
 
-Dependencies, the lockfile, the Effect language-service plugin, and verification scripts now
-live at the repository root. This extension keeps only a scoped `tsconfig.json`:
-
-```jsonc
-{
-  "extends": "../../tsconfig.json",
-  "include": ["index.ts", "src/**/*.ts"]
-}
-```
+Dependencies, the lockfile, the TypeScript project, the Effect language-service plugin, and
+verification scripts live at the repository root. The root `tsconfig.json` includes every
+extension source and test file; do not add an extension-local TypeScript project.
 
 Run `bun install --frozen-lockfile`, `bun run check`, and `bun run test` from the repository root. Per AGENTS.md,
 avoid explicit return types unless needed and never use `as any` without exhausting typed

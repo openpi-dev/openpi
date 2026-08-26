@@ -34,7 +34,6 @@ import {
   type TaskToolDetails,
 } from "./ui.ts";
 
-const TOOL_NAMES = ["tasks_add", "tasks_update", "tasks_list"] as const;
 const TASK_WIDGET_KEY = "session-tasks-panel";
 const CONFLICT_NAMES = new Set(["todo", "TodoWrite", "update_plan"]);
 const TOOL_PURPOSE =
@@ -541,8 +540,6 @@ export default function sessionTasks(pi: ExtensionAPI) {
     uiMode = undefined;
   });
 }
-
-export { TOOL_NAMES as TASK_TOOL_NAMES };
 
 function mutationWillCloseBatch(
   snapshot: TaskSnapshot,
