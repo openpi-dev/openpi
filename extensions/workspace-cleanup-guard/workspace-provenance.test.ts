@@ -265,6 +265,125 @@ test("dynamic rm targets in compound command positions fail closed", async () =>
   });
 });
 
+test("rm targets in nested shell execution contexts fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    const commands = [
+      'target="keep.txt"; echo "$(rm "$target")"',
+      'target="keep.txt"; output=$(rm "$target")',
+      'target="keep.txt"; echo `rm "$target"`',
+      'target="keep.txt"; cat <(rm "$target")',
+      "sh -c 'rm \"$1\"' sh keep.txt",
+      'target="keep.txt"; eval \'rm "$target"\'',
+      'target="keep.txt"; case x in x) rm "$target";; esac',
+      'target="keep.txt"; f(){ rm "$target"; }; f',
+      'target="keep.txt"; time rm "$target"',
+      'target="keep.txt"\ncat <<EOF\n$(rm "$target")\nEOF',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `nested-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, true, command);
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
+  });
+});
+
+test("literal rm targets in nested shell execution contexts remain protected", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    const confirmations: string[][] = [];
+    const guard = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    });
+
+    const commands = [
+      'echo "$(rm keep.txt)"',
+      "output=$(rm keep.txt)",
+      "echo `rm keep.txt`",
+      "cat <(rm keep.txt)",
+      "sh -c 'rm keep.txt'",
+      "eval 'rm keep.txt'",
+      "case x in x) rm keep.txt;; esac",
+      "f(){ rm keep.txt; }; f",
+      "time rm keep.txt",
+      "cat <<EOF\n$(rm keep.txt)\nEOF",
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `nested-literal-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, false, command);
+    }
+    assert.deepEqual(
+      confirmations,
+      commands.map(() => ["keep.txt"]),
+    );
+  });
+});
+
+test("dynamic eval and shell command sources fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    for (const [index, command] of [
+      'code=\'rm "$target"\'; eval "$code"',
+      'code=\'rm "$1"\'; sh -c "$code" sh keep.txt',
+      'code=\'rm "$1"\'; bash -lc "$code" bash keep.txt',
+    ].entries()) {
+      const decision = await guard.before({
+        id: `dynamic-source-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, true, command);
+    }
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("excessively nested shell execution fails closed", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => true);
+    const command = `${"echo $(".repeat(40)}rm "$target"${")".repeat(40)}`;
+
+    const decision = await guard.before({
+      id: "deeply-nested",
+      command,
+      cwd: workspace,
+    });
+
+    assert.equal(decision.kind, "block");
+    assert.equal(decision.opaqueDestructiveCommand, true);
+  });
+});
+
 test("literal rm targets in compound command positions remain protected", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
@@ -349,6 +468,13 @@ test("rm text outside command position does not trigger deletion protection", as
       "command -v rm",
       "printf ok # rm keep.txt",
       'printf ok # ignored | rm "$target"',
+      "echo '$(rm \"$target\")'",
+      'echo "<(rm keep.txt)"',
+      "sh -c 'echo rm'",
+      "eval 'echo rm'",
+      "cat <<EOF\nrm keep.txt\nEOF",
+      "cat <<EOF\n\\$(rm keep.txt)\nEOF",
+      "cat <<'EOF'\n$(rm keep.txt)\nEOF",
       "cat <<'EOF'\nrm keep.txt\nEOF",
     ].entries()) {
       const decision = await guard.before({
