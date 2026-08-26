@@ -260,8 +260,11 @@ function containsRmReference(command: string) {
   let quote: "'" | '"' | undefined;
   for (let index = 0; index < command.length; index += 1) {
     const character = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+    if (!quote && character === "$" && (next === "'" || next === '"')) {
+      continue;
+    }
     if (character === "\\" && quote !== "'") {
-      const next = command[index + 1] ?? "";
       if (next !== "\n") {
         decoded +=
           quote === '"' && !'$`"\\'.includes(next) ? `\\${next}` : next;

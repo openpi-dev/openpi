@@ -206,6 +206,9 @@ test("unproven or non-standalone rm input fails closed", async () => {
       "command r''m keep.txt",
       "env r\\m keep.txt",
       "command r\\\nm keep.txt",
+      "r$''m keep.txt",
+      'r$""m keep.txt',
+      "r$'m' keep.txt",
       'target="keep.txt"; (rm "$target")',
       'target="keep.txt"; if true; then rm "$target"; fi',
       'target="keep.txt"; { rm "$target"; }',
@@ -357,6 +360,8 @@ test("ordinary Bash and identifiers without an rm executable stay native", async
       "alias ll='ls -l'",
       "printf '%s' firmware rm-notes.txt terms",
       "printf '%s' \"r\\m\"",
+      "printf '%s' $'firmware'",
+      "printf '%s' $'rm-notes.txt'",
     ].entries()) {
       const decision = await guard.before({
         id: `ordinary-${index}`,
