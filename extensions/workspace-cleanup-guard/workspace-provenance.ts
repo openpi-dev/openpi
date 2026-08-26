@@ -33,6 +33,34 @@ interface ShellInspection {
 
 const DYNAMIC_PATH = /[*?[$`]/u;
 const STANDALONE_CONTROL_CHARACTERS = ";&|<>(){}$`*?[]#";
+const COMMAND_FORWARDERS = new Set([
+  "!",
+  "alias",
+  "bash",
+  "builtin",
+  "chroot",
+  "command",
+  "dash",
+  "doas",
+  "env",
+  "eval",
+  "exec",
+  "find",
+  "hash",
+  "ksh",
+  "nice",
+  "nohup",
+  "sandbox-exec",
+  "setsid",
+  "sh",
+  "sudo",
+  "time",
+  "timeout",
+  "trap",
+  "watch",
+  "xargs",
+  "zsh",
+]);
 
 function splitShellSegments(command: string) {
   const segments: string[] = [];
@@ -285,6 +313,96 @@ function containsRmReference(command: string) {
   );
 }
 
+function stripShellComment(command: string) {
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let comment = false;
+  let source = "";
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? "";
+    if (comment) {
+      if (character === "\n") {
+        comment = false;
+        source += character;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      source += character;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      source += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      if (!quote) quote = character;
+      else if (quote === character) quote = undefined;
+      source += character;
+      continue;
+    }
+    if (
+      !quote &&
+      character === "#" &&
+      (index === 0 || /[\s;&|()]/u.test(command[index - 1] ?? ""))
+    ) {
+      comment = true;
+      continue;
+    }
+    source += character;
+  }
+  return source.trimEnd();
+}
+
+function heredocContainsExecutableRm(command: string) {
+  const lines = command.split("\n");
+  if (lines.length < 3) return undefined;
+  const header = lines[0] ?? "";
+  const match = /<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2[ \t]*$/u.exec(
+    header,
+  );
+  if (!match) return undefined;
+  const stripTabs = match[1] === "-";
+  const delimiterQuoted = Boolean(match[2]);
+  const delimiter = match[3] ?? "";
+  const closing = lines.findIndex((line, index) => {
+    if (index === 0) return false;
+    return (stripTabs ? line.replace(/^\t+/u, "") : line) === delimiter;
+  });
+  if (closing < 0 || lines.slice(closing + 1).some((line) => line.trim())) {
+    return undefined;
+  }
+  if (containsRmReference(stripShellComment(header))) return true;
+  if (delimiterQuoted) return false;
+  const body = lines.slice(1, closing).join("\n");
+  return /\$\(|`/u.test(body) && containsRmReference(body);
+}
+
+function containsExecutableRmReference(command: string) {
+  const heredoc = heredocContainsExecutableRm(command);
+  if (heredoc !== undefined) return heredoc;
+
+  const source = stripShellComment(command);
+  if (!containsRmReference(source)) return false;
+  const tokens = standaloneShellTokens(source);
+  if (!tokens) return true;
+
+  const executableIndex = tokens.findIndex(
+    (token) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(token),
+  );
+  const executable = tokens[executableIndex]?.split("/").at(-1) ?? "";
+  if (
+    executable === "command" &&
+    (tokens[executableIndex + 1] === "-v" ||
+      tokens[executableIndex + 1] === "-V")
+  ) {
+    return false;
+  }
+  return COMMAND_FORWARDERS.has(executable) || executable === "rm";
+}
+
 function inspectShell(command: string): ShellInspection {
   const removals = directRmTargets(command);
   if (removals) {
@@ -294,7 +412,7 @@ function inspectShell(command: string): ShellInspection {
       opaqueDestructiveCommand: false,
     };
   }
-  if (!containsRmReference(command)) {
+  if (!containsExecutableRmReference(command)) {
     return {
       creations: inspectCreations(command),
       removals: [],
@@ -356,7 +474,7 @@ export function createWorkspaceCleanupGuard() {
     kind: "block" as const,
     protectedPaths: [],
     reason:
-      "Blocked cleanup: OpenPI could not prove this shell command's deletion effects. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
+      "Blocked cleanup: OpenPI recognized a source-visible deletion outside its supported direct rm command grammar. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
   });
 
   return {
