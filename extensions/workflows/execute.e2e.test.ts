@@ -396,49 +396,9 @@ test("print hosts wait by default and reject detached delivery", async () => {
   assert.equal(inline.details.background, false);
   assert.equal(inline.details.delivery?.state, "consumed-inline");
 
-  const legacyInline = (await workflow.execute(
-    "e2e-print-legacy-inline",
-    {
-      script: "return { legacyInline: true };",
-      background: false,
-    },
-    undefined,
-    undefined,
-    printCtx,
-  )) as AgentToolResult<WorkflowDetails>;
-  const legacyInlineContent = legacyInline.content[0];
-  assert.equal(legacyInlineContent?.type, "text");
-  if (legacyInlineContent?.type !== "text") assert.fail("expected text result");
-  assert.match(
-    legacyInlineContent.text,
-    /replace background: false with wait: true.*next breaking release/is,
-  );
-  assert.equal(legacyInline.details.background, false);
-  assert.equal(
-    readWorkflowJson(legacyInline.details.runId).migrationWarning,
-    undefined,
-  );
-
   const workflowsDir = join(agentDir, "workflows");
   const runDirsBefore = readdirSync(workflowsDir).sort();
   const messagesBefore = sentMessages.length;
-  await assert.rejects(
-    Promise.resolve().then(() =>
-      workflow.execute(
-        "e2e-print-legacy-parse-error",
-        {
-          script: "return {",
-          background: false,
-        },
-        undefined,
-        undefined,
-        printCtx,
-      ),
-    ),
-    /replace background: false with wait: true.*failed to parse/is,
-  );
-  assert.deepEqual(readdirSync(workflowsDir).sort(), runDirsBefore);
-
   await assert.rejects(
     Promise.resolve().then(() =>
       workflow.execute(
@@ -456,59 +416,6 @@ test("print hosts wait by default and reject detached delivery", async () => {
   );
   assert.deepEqual(readdirSync(workflowsDir).sort(), runDirsBefore);
   assert.equal(sentMessages.length, messagesBefore);
-
-  await assert.rejects(
-    Promise.resolve().then(() =>
-      workflow.execute(
-        "e2e-print-legacy-detached",
-        {
-          script: "return { detached: true };",
-          background: true,
-        },
-        undefined,
-        undefined,
-        printCtx,
-      ),
-    ),
-    /replace background: true with wait: false.*cannot deliver.*wait: true/is,
-  );
-  assert.deepEqual(readdirSync(workflowsDir).sort(), runDirsBefore);
-  assert.equal(sentMessages.length, messagesBefore);
-});
-
-test("legacy detached alias warns without persisting migration text", async () => {
-  sentMessages.length = 0;
-  modelIdle = true;
-  const launch = (await workflow.execute(
-    "e2e-legacy-detached",
-    {
-      script: 'export const meta = { name: "legacy-detached" };\nreturn 9;',
-      background: true,
-    },
-    undefined,
-    undefined,
-    ctx,
-  )) as AgentToolResult<WorkflowDetails>;
-
-  assert.equal(launch.details.background, true);
-  const launchContent = launch.content[0];
-  assert.equal(launchContent?.type, "text");
-  if (launchContent?.type !== "text") assert.fail("expected text result");
-  assert.match(
-    launchContent.text,
-    /replace background: true with wait: false.*next breaking release/is,
-  );
-  const persisted = readWorkflowJson(launch.details.runId);
-  assert.equal(persisted.background, true);
-  assert.equal(persisted.migrationWarning, undefined);
-
-  await waitFor(
-    () =>
-      sentMessages.some(
-        (sent) => sent.message.details?.runId === launch.details.runId,
-      ),
-    "legacy detached completion",
-  );
 });
 
 test("background runs deliver a follow-up that triggers a turn only when idle", async () => {

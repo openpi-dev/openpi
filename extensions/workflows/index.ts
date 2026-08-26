@@ -542,12 +542,6 @@ const WorkflowParams = Type.Object(
         description: WORKFLOW_PARAMETER_DESCRIPTIONS.args,
       }),
     ),
-    background: Type.Optional(
-      Type.Boolean({
-        deprecated: true,
-        description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
-      }),
-    ),
     wait: Type.Optional(
       Type.Boolean({
         description: WORKFLOW_PARAMETER_DESCRIPTIONS.wait,
@@ -596,10 +590,6 @@ function errorText(error: unknown): string {
   return sanitizeWorkflowDisplayLine(
     error instanceof Error ? error.message : String(error),
   );
-}
-
-function withWorkflowMigrationWarning(text: string, warning?: string) {
-  return warning ? `${warning}\n\n${text}` : text;
 }
 
 function isWorkflowRenderDetails(value: unknown): value is WorkflowDetails {
@@ -1137,21 +1127,11 @@ export default function workflows(pi: ExtensionAPI) {
     parameters: WorkflowParams,
 
     async execute(_toolCallId, params, signal, onUpdate, ctx) {
-      const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
-      const launchPolicy = resolveWorkflowLaunchPolicy(
-        { wait: params.wait, background: params.background },
-        canDeliverLater,
-      );
       let prepared: ReturnType<typeof prepareWorkflowScript>;
       try {
         prepared = prepareWorkflowScript(params.script);
       } catch (error) {
-        throw new Error(
-          withWorkflowMigrationWarning(
-            `Workflow script failed to parse: ${errorText(error)}`,
-            launchPolicy.migrationWarning,
-          ),
-        );
+        throw new Error(`Workflow script failed to parse: ${errorText(error)}`);
       }
 
       let args: unknown;
@@ -1166,6 +1146,11 @@ export default function workflows(pi: ExtensionAPI) {
       const meta = prepared.meta;
       const runId = `wf_${randomBytes(6).toString("hex")}`;
       const runDir = path.join(getAgentDir(), "workflows", runId);
+      const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
+      const launchPolicy = resolveWorkflowLaunchPolicy(
+        { wait: params.wait },
+        canDeliverLater,
+      );
       const background = launchPolicy.detached;
       const now = Date.now();
 
@@ -2158,14 +2143,11 @@ export default function workflows(pi: ExtensionAPI) {
           content: [
             {
               type: "text",
-              text: withWorkflowMigrationWarning(
-                buildBackgroundWorkflowLaunchResult({
-                  runId,
-                  name: details.name,
-                  runDir,
-                }),
-                launchPolicy.migrationWarning,
-              ),
+              text: buildBackgroundWorkflowLaunchResult({
+                runId,
+                name: details.name,
+                runDir,
+              }),
             },
           ],
           details: compactToolDetails(details),
@@ -2176,10 +2158,7 @@ export default function workflows(pi: ExtensionAPI) {
       if (waitOutcome === "aborted") {
         void settleForLaterDelivery(true);
         throw new Error(
-          withWorkflowMigrationWarning(
-            `Workflow wait interrupted; run ${runId} continues in the background.`,
-            launchPolicy.migrationWarning,
-          ),
+          `Workflow wait interrupted; run ${runId} continues in the background.`,
         );
       }
       recordTerminalRun();
@@ -2187,24 +2166,16 @@ export default function workflows(pi: ExtensionAPI) {
       if (details.status !== "completed") {
         // Pi marks tool failures only when execute throws; returning isError is
         // ignored by the extension API.
-        throw new Error(
-          withWorkflowMigrationWarning(
-            buildWorkflowResultMessage(details, runDir),
-            launchPolicy.migrationWarning,
-          ),
-        );
+        throw new Error(buildWorkflowResultMessage(details, runDir));
       }
       return {
         content: [
           {
             type: "text",
-            text: withWorkflowMigrationWarning(
-              buildProjectedWorkflowResultMessage(
-                details,
-                runDir,
-                ctx.getContextUsage?.(),
-              ),
-              launchPolicy.migrationWarning,
+            text: buildProjectedWorkflowResultMessage(
+              details,
+              runDir,
+              ctx.getContextUsage?.(),
             ),
           },
         ],
@@ -2220,11 +2191,7 @@ export default function workflows(pi: ExtensionAPI) {
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("accent", (meta as WorkflowMeta).name ?? "(script)");
-      if (args.background !== undefined) {
-        text += theme.fg("dim", ` (deprecated: use wait: ${!args.background})`);
-      } else if (args.wait === true) {
-        text += theme.fg("dim", " (wait)");
-      }
+      if (args.wait === true) text += theme.fg("dim", " (wait)");
       const description = (meta as WorkflowMeta).description;
       if (description) text += `\n  ${theme.fg("dim", description)}`;
       for (const phase of meta.phases.slice(0, 8)) {

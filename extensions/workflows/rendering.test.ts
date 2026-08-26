@@ -62,19 +62,15 @@ function captureRenderers() {
   return { workflow, message };
 }
 
-test("workflow launch schema deprecates background and rejects unknown fields", () => {
+test("workflow launch schema accepts only the positive wait policy", () => {
   const { workflow } = captureRenderers();
   const parameters = workflow.parameters as unknown as {
-    properties?: Record<string, { deprecated?: boolean; description?: string }>;
+    properties?: Record<string, unknown>;
     additionalProperties?: boolean;
   };
 
   assert.ok(parameters.properties?.wait);
-  assert.equal(parameters.properties?.background?.deprecated, true);
-  assert.match(
-    parameters.properties?.background?.description ?? "",
-    /true with wait=false.*false with wait=true.*next breaking release/i,
-  );
+  assert.equal(parameters.properties?.background, undefined);
   assert.equal(parameters.additionalProperties, false);
 
   const toolCall = (args: Record<string, unknown>) => ({
@@ -89,9 +85,10 @@ test("workflow launch schema deprecates background and rejects unknown fields", 
     validateToolArguments(workflow, toolCall({ script, wait: false })),
     { script, wait: false },
   );
-  assert.deepEqual(
-    validateToolArguments(workflow, toolCall({ script, background: true })),
-    { script, background: true },
+  assert.throws(
+    () =>
+      validateToolArguments(workflow, toolCall({ script, background: true })),
+    /Validation failed.*background/s,
   );
   assert.throws(
     () => validateToolArguments(workflow, toolCall({ script, detached: true })),
@@ -123,35 +120,6 @@ test("workflow call rendering labels an explicit inline wait", () => {
   });
 
   assert.match(component.render(100).join("\n"), /workflow inline \(wait\)/);
-});
-
-test("workflow call rendering gives legacy background migration guidance", () => {
-  const { workflow } = captureRenderers();
-  assert.ok(workflow.renderCall);
-  const args = {
-    script: 'export const meta = { name: "legacy" }; return 1;',
-    background: true,
-  };
-
-  const component = workflow.renderCall(args, theme, {
-    args,
-    toolCallId: "call-legacy-background",
-    invalidate() {},
-    lastComponent: undefined,
-    state: {},
-    cwd: process.cwd(),
-    executionStarted: true,
-    argsComplete: true,
-    isPartial: false,
-    expanded: false,
-    showImages: false,
-    isError: false,
-  });
-
-  assert.match(
-    component.render(100).join("\n"),
-    /workflow legacy \(deprecated: use wait: false\)/,
-  );
 });
 
 test("workflow tool errors with malformed details fall back to plain text", (t) => {

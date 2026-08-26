@@ -1,49 +1,24 @@
 export interface WorkflowLaunchPolicyInput {
   wait?: boolean;
-  background?: boolean;
 }
 
 export interface WorkflowLaunchPolicy {
   wait: boolean;
   detached: boolean;
-  migrationWarning?: string;
 }
 
-function backgroundMigrationWarning(background: boolean) {
-  return `Deprecated Workflow parameter "background": replace background: ${background} with wait: ${!background}. "background" will be removed in the next breaking release.`;
-}
-
-/** Resolve the caller's launch policy and warn on the legacy inverse alias. */
+/** Resolve the caller's wait preference against the host delivery capability. */
 export function resolveWorkflowLaunchPolicy(
   input: WorkflowLaunchPolicyInput,
   canDeliverLater: boolean,
 ): WorkflowLaunchPolicy {
-  const migrationWarning =
-    input.background === undefined
-      ? undefined
-      : backgroundMigrationWarning(input.background);
-  if (
-    input.wait !== undefined &&
-    input.background !== undefined &&
-    input.wait === input.background
-  ) {
-    throw new Error(
-      `${migrationWarning} wait and background conflict because background is the inverse of wait; remove background and provide only wait.`,
-    );
-  }
-  const wait =
-    input.wait ??
-    (input.background !== undefined ? !input.background : !canDeliverLater);
+  const wait = input.wait ?? !canDeliverLater;
   if (!wait && !canDeliverLater) {
     throw new Error(
-      `${migrationWarning ? `${migrationWarning} ` : ""}This host cannot deliver a workflow result later; use wait: true.`,
+      "This host cannot deliver a workflow result later; use wait: true",
     );
   }
-  return {
-    wait,
-    detached: !wait,
-    ...(migrationWarning ? { migrationWarning } : {}),
-  };
+  return { wait, detached: !wait };
 }
 
 /**

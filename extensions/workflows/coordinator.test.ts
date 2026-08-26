@@ -27,50 +27,10 @@ test("explicit wait selects inline or detached launch policy", () => {
   });
 });
 
-test("legacy background maps to wait and returns an actionable warning", () => {
-  const detached = resolveWorkflowLaunchPolicy({ background: true }, true);
-  assert.deepEqual(
-    { wait: detached.wait, detached: detached.detached },
-    { wait: false, detached: true },
-  );
-  assert.match(
-    detached.migrationWarning ?? "",
-    /replace background: true with wait: false.*next breaking release/i,
-  );
-
-  const inline = resolveWorkflowLaunchPolicy({ background: false }, true);
-  assert.deepEqual(
-    { wait: inline.wait, detached: inline.detached },
-    { wait: true, detached: false },
-  );
-  assert.match(
-    inline.migrationWarning ?? "",
-    /replace background: false with wait: true.*next breaking release/i,
-  );
-});
-
-test("consistent aliases warn while conflicts fail with migration guidance", () => {
-  const consistent = resolveWorkflowLaunchPolicy(
-    { wait: true, background: false },
-    true,
-  );
-  assert.equal(consistent.wait, true);
-  assert.match(consistent.migrationWarning ?? "", /remove|replace/i);
-
-  assert.throws(
-    () => resolveWorkflowLaunchPolicy({ wait: true, background: true }, true),
-    /replace background: true with wait: false.*conflict.*remove background/is,
-  );
-});
-
-test("unsupported detached delivery fails closed with alias guidance", () => {
+test("unsupported detached delivery fails closed", () => {
   assert.throws(
     () => resolveWorkflowLaunchPolicy({ wait: false }, false),
     /cannot deliver/,
-  );
-  assert.throws(
-    () => resolveWorkflowLaunchPolicy({ background: true }, false),
-    /replace background: true with wait: false.*cannot deliver.*wait: true/is,
   );
 });
 
