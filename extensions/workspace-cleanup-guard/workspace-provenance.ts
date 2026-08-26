@@ -1,6 +1,5 @@
 import { lstat } from "node:fs/promises";
 import path from "node:path";
-import { inspectShell } from "./shell-inspection.ts";
 
 type Origin = "baseline" | "session_created";
 
@@ -24,6 +23,253 @@ interface WriteAttempt {
   id: string;
   path: string;
   cwd: string;
+}
+
+interface ShellInspection {
+  creations: string[];
+  removals: string[];
+  opaqueDestructiveCommand: boolean;
+}
+
+const DYNAMIC_PATH = /[*?[$`]/u;
+const RM_REFERENCE = /\brm\b/u;
+const STANDALONE_CONTROL_CHARACTERS = ";&|<>(){}$`*?[]#";
+
+function splitShellSegments(command: string) {
+  const segments: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      current += char;
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      current += char;
+      if (char === quote) quote = undefined;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      current += char;
+      continue;
+    }
+    if (
+      char === "\n" ||
+      char === ";" ||
+      (char === "&" && next === "&") ||
+      (char === "|" && next === "|")
+    ) {
+      if (current.trim()) segments.push(current.trim());
+      current = "";
+      if ((char === "&" || char === "|") && next === char) index += 1;
+      continue;
+    }
+    current += char;
+  }
+  if (current.trim()) segments.push(current.trim());
+  return segments;
+}
+
+function shellTokens(segment: string) {
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  const push = () => {
+    if (!current) return;
+    tokens.push(current);
+    current = "";
+  };
+  for (const char of segment) {
+    if (escaped) {
+      current += char;
+      escaped = false;
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      escaped = true;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = undefined;
+      else current += char;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      continue;
+    }
+    if (/\s/u.test(char)) {
+      push();
+      continue;
+    }
+    if (char === ">") {
+      push();
+      tokens.push(">");
+      continue;
+    }
+    current += char;
+  }
+  push();
+  return tokens;
+}
+
+function literalPath(value: string | undefined) {
+  if (!value || value === "--" || DYNAMIC_PATH.test(value)) return undefined;
+  return value;
+}
+
+function standaloneShellTokens(command: string) {
+  const source = command.trim();
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let tokenStarted = false;
+  const push = () => {
+    if (!tokenStarted) return;
+    tokens.push(current);
+    current = "";
+    tokenStarted = false;
+  };
+
+  for (const character of source) {
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (quote === '"') {
+      if (character === '"') {
+        quote = undefined;
+      } else if (character === "\\" || character === "$" || character === "`") {
+        return undefined;
+      } else {
+        current += character;
+      }
+      continue;
+    }
+    if (escaped) {
+      if (character === "\n" || character === "\r") return undefined;
+      current += character;
+      tokenStarted = true;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      tokenStarted = true;
+      continue;
+    }
+    if (character === "\n" || character === "\r") return undefined;
+    if (/\s/u.test(character)) {
+      push();
+      continue;
+    }
+    if (STANDALONE_CONTROL_CHARACTERS.includes(character)) return undefined;
+    current += character;
+    tokenStarted = true;
+  }
+  if (quote || escaped) return undefined;
+  push();
+  return tokens;
+}
+
+function directRmTargets(command: string) {
+  const tokens = standaloneShellTokens(command);
+  if (!tokens || tokens[0] !== "rm") return undefined;
+
+  const targets: string[] = [];
+  let afterOptions = false;
+  for (const token of tokens.slice(1)) {
+    if (!afterOptions && token === "--") {
+      afterOptions = true;
+      continue;
+    }
+    if (!afterOptions && token.startsWith("-")) continue;
+    if (!token || token.startsWith("~") || path.isAbsolute(token)) {
+      return undefined;
+    }
+    targets.push(token);
+  }
+  return targets.length > 0 ? targets : undefined;
+}
+
+function inspectCreations(command: string) {
+  const creations = new Set<string>();
+  for (const segment of splitShellSegments(command)) {
+    const tokens = shellTokens(segment);
+    for (let index = 0; index < tokens.length; index += 1) {
+      if (tokens[index] !== ">") continue;
+      const target = literalPath(tokens[index + 1]);
+      if (target) creations.add(target);
+    }
+
+    if (tokens[0]?.split("/").at(-1) !== "mkdir") continue;
+    const targets: string[] = [];
+    let afterOptions = false;
+    let supported = true;
+    for (const token of tokens.slice(1)) {
+      if (!afterOptions && token === "--") {
+        afterOptions = true;
+        continue;
+      }
+      if (!afterOptions && (token === "-p" || token === "--parents")) {
+        continue;
+      }
+      if (!afterOptions && token.startsWith("-")) {
+        supported = false;
+        break;
+      }
+      const target = literalPath(token);
+      if (!target) {
+        supported = false;
+        break;
+      }
+      targets.push(target);
+    }
+    if (supported) {
+      for (const target of targets) creations.add(target);
+    }
+  }
+  return [...creations];
+}
+
+function inspectShell(command: string): ShellInspection {
+  const removals = directRmTargets(command);
+  if (removals) {
+    return {
+      creations: [],
+      removals,
+      opaqueDestructiveCommand: false,
+    };
+  }
+  if (!RM_REFERENCE.test(command)) {
+    return {
+      creations: inspectCreations(command),
+      removals: [],
+      opaqueDestructiveCommand: false,
+    };
+  }
+  return {
+    creations: [],
+    removals: [],
+    opaqueDestructiveCommand: true,
+  };
 }
 
 function containedPath(cwd: string, candidate: string) {
@@ -69,6 +315,13 @@ export function createWorkspaceCleanupGuard() {
     return { path: contained.absolute, existed, observeOnCommandError };
   };
 
+  const unverifiedCleanup = () => ({
+    kind: "block" as const,
+    protectedPaths: [],
+    reason:
+      "Blocked cleanup: OpenPI could not prove this shell command's deletion effects. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
+  });
+
   return {
     async beforeWrite(attempt: WriteAttempt) {
       const creation = await prepareCreation(attempt.cwd, attempt.path, false);
@@ -80,13 +333,13 @@ export function createWorkspaceCleanupGuard() {
 
     async before(attempt: BashAttempt) {
       const inspected = inspectShell(attempt.command);
-      if (inspected.kind === "unverified") {
-        return {
-          kind: "block" as const,
-          protectedPaths: [],
-          reason:
-            "Blocked cleanup: OpenPI could not prove this shell command's deletion effects. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
-        };
+      if (inspected.opaqueDestructiveCommand) return unverifiedCleanup();
+
+      const containedRemovals = inspected.removals.map((candidate) =>
+        containedPath(attempt.cwd, candidate),
+      );
+      if (containedRemovals.some((candidate) => !candidate)) {
+        return unverifiedCleanup();
       }
 
       const creations: PendingEffects["creations"] = [];
@@ -97,8 +350,7 @@ export function createWorkspaceCleanupGuard() {
 
       const removals: string[] = [];
       const protectedPaths: string[] = [];
-      for (const candidate of inspected.removals) {
-        const contained = containedPath(attempt.cwd, candidate);
+      for (const contained of containedRemovals) {
         if (!contained) continue;
         const origin = origins.get(contained.absolute);
         const present = await exists(contained.absolute);
