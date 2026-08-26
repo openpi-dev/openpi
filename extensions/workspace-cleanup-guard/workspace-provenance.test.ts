@@ -231,6 +231,73 @@ test("dynamic rm targets fail closed without prompting for unknown paths", async
   });
 });
 
+test("dynamic rm targets in compound command positions fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    const commands = [
+      'target="keep.txt"; printf x | rm "$target"',
+      'target="keep.txt"; command rm "$target"',
+      'target="keep.txt"; (rm "$target")',
+      'target="keep.txt"; if true; then rm "$target"; fi',
+      'target="keep.txt"; { rm "$target"; }',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `compound-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, true, command);
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
+  });
+});
+
+test("literal rm targets in compound command positions remain protected", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    const confirmations: string[][] = [];
+    const guard = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    });
+
+    const commands = [
+      "printf x | rm keep.txt",
+      "command rm keep.txt",
+      "(rm keep.txt)",
+      "if true; then rm keep.txt; fi",
+      "{ rm keep.txt; }",
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `compound-literal-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      assert.equal(decision.opaqueDestructiveCommand, false, command);
+    }
+    assert.deepEqual(
+      confirmations,
+      commands.map(() => ["keep.txt"]),
+    );
+  });
+});
+
 test("quoted and escaped metacharacters remain literal rm targets", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep*.txt"), "keep");
@@ -279,7 +346,9 @@ test("rm text outside command position does not trigger deletion protection", as
 
     for (const [index, command] of [
       "echo rm",
+      "command -v rm",
       "printf ok # rm keep.txt",
+      'printf ok # ignored | rm "$target"',
       "cat <<'EOF'\nrm keep.txt\nEOF",
     ].entries()) {
       const decision = await guard.before({

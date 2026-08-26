@@ -42,6 +42,18 @@ interface Heredoc {
 }
 
 const DYNAMIC_UNQUOTED_PATH_CHARACTER = /[*?[$`{}]/u;
+const SHELL_ASSIGNMENT = /^[A-Za-z_][A-Za-z0-9_]*=/u;
+const COMMAND_POSITION_PREFIXES = new Set([
+  "!",
+  "{",
+  "if",
+  "then",
+  "elif",
+  "else",
+  "while",
+  "until",
+  "do",
+]);
 
 function heredocsInLine(line: string) {
   const heredocs: Heredoc[] = [];
@@ -142,17 +154,25 @@ function splitShellSegments(command: string) {
   let current = "";
   let quote: "'" | '"' | undefined;
   let escaped = false;
+  let wordStarted = false;
+  let subshellDepth = 0;
+  const push = () => {
+    if (current.trim()) segments.push(current.trim());
+    current = "";
+  };
   for (let index = 0; index < command.length; index += 1) {
     const char = command[index] ?? "";
     const next = command[index + 1] ?? "";
     if (escaped) {
       current += char;
       escaped = false;
+      wordStarted = true;
       continue;
     }
     if (char === "\\" && quote !== "'") {
       current += char;
       escaped = true;
+      wordStarted = true;
       continue;
     }
     if (quote) {
@@ -163,22 +183,43 @@ function splitShellSegments(command: string) {
     if (char === "'" || char === '"') {
       quote = char;
       current += char;
+      wordStarted = true;
       continue;
     }
+    if (char === "#" && !wordStarted) {
+      push();
+      while (index + 1 < command.length && command[index + 1] !== "\n") {
+        index += 1;
+      }
+      wordStarted = false;
+      continue;
+    }
+    const opensSubshell = char === "(" && !wordStarted;
+    const closesSubshell = char === ")" && subshellDepth > 0;
     if (
       char === "\n" ||
       char === ";" ||
-      (char === "&" && next === "&") ||
-      (char === "|" && next === "|")
+      char === "&" ||
+      char === "|" ||
+      opensSubshell ||
+      closesSubshell
     ) {
-      if (current.trim()) segments.push(current.trim());
-      current = "";
-      if ((char === "&" || char === "|") && next === char) index += 1;
+      push();
+      if (opensSubshell) subshellDepth += 1;
+      if (closesSubshell) subshellDepth -= 1;
+      if (
+        ((char === "&" || char === "|") && next === char) ||
+        (char === "|" && next === "&")
+      ) {
+        index += 1;
+      }
+      wordStarted = false;
       continue;
     }
     current += char;
+    wordStarted = !/\s/u.test(char);
   }
-  if (current.trim()) segments.push(current.trim());
+  push();
   return segments;
 }
 
@@ -268,6 +309,33 @@ function literalPath(token: ShellToken | undefined) {
   return token.value;
 }
 
+function executableTokens(tokens: ShellToken[]) {
+  let index = 0;
+  while (index < tokens.length) {
+    const token = tokens[index]?.value ?? "";
+    if (SHELL_ASSIGNMENT.test(token) || COMMAND_POSITION_PREFIXES.has(token)) {
+      index += 1;
+      continue;
+    }
+    if (token.split("/").at(-1) !== "command") break;
+
+    index += 1;
+    let queriesCommand = false;
+    while (index < tokens.length) {
+      const option = tokens[index]?.value ?? "";
+      if (option === "--") {
+        index += 1;
+        break;
+      }
+      if (!option.startsWith("-") || option === "-") break;
+      queriesCommand ||= option.includes("v") || option.includes("V");
+      index += 1;
+    }
+    if (queriesCommand) return [];
+  }
+  return tokens.slice(index);
+}
+
 function inspectShell(command: string): ShellInspection {
   const creations = new Set<string>();
   const removals = new Set<string>();
@@ -295,12 +363,13 @@ function inspectShell(command: string): ShellInspection {
       if (target) creations.add(target);
     }
 
-    const executable = tokens[0]?.value.split("/").at(-1);
+    const commandTokens = executableTokens(tokens);
+    const executable = commandTokens[0]?.value.split("/").at(-1);
     if (executable === "mkdir") {
       const targets: string[] = [];
       let afterOptions = false;
       let supported = true;
-      for (const token of tokens.slice(1)) {
+      for (const token of commandTokens.slice(1)) {
         if (!afterOptions && token.value === "--") {
           afterOptions = true;
           continue;
@@ -329,7 +398,7 @@ function inspectShell(command: string): ShellInspection {
     if (executable !== "rm") continue;
     let sawLiteral = false;
     let afterOptions = false;
-    for (const token of tokens.slice(1)) {
+    for (const token of commandTokens.slice(1)) {
       if (!afterOptions && token.value === "--") {
         afterOptions = true;
         continue;
