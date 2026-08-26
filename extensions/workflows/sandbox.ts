@@ -3,7 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_WORKFLOW_AGENT_CALLS } from "../shared/setup-config.ts";
-import { safeStringify, toSerializable } from "./serialization.ts";
+import { encodeCompleteJson, toSerializable } from "./serialization.ts";
 
 const MAX_SOURCE_BYTES = 512 * 1024;
 const MAX_ARGS_BYTES = 256 * 1024;
@@ -147,13 +147,23 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       ),
     );
 
-  const argsJson = safeStringify(
+  const encodedArgs = encodeCompleteJson(
     { defined: options.args !== undefined, value: options.args },
-    { maxBytes: MAX_ARGS_BYTES, maxDepth: 16, maxNodes: 10_000 },
+    {
+      maxBytes: MAX_ARGS_BYTES,
+      maxDepth: 16,
+      maxNodes: 10_000,
+      maxStringBytes: MAX_ARGS_BYTES,
+    },
   );
-  if (byteLength(argsJson) > MAX_ARGS_BYTES) {
-    return Promise.reject(new Error("Workflow args exceed the IPC limit"));
+  if (!encodedArgs.ok) {
+    return Promise.reject(
+      new Error(
+        `Workflow args exceed the ${MAX_ARGS_BYTES}-byte IPC limit (${encodedArgs.limit} limit at ${encodedArgs.path})`,
+      ),
+    );
   }
+  const argsJson = encodedArgs.json;
 
   return new Promise<unknown>((resolve, reject) => {
     const workerPath = fileURLToPath(

@@ -1,9 +1,13 @@
+import { existsSync, readFileSync, statSync } from "node:fs";
 import * as path from "node:path";
 import {
   type AgentSession,
+  DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
+  type PackageSource,
   ProjectTrustStore,
+  type ResolvedPaths,
   type SessionShutdownEvent,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
@@ -37,16 +41,218 @@ export const CHILD_SAFE_PACKAGE_TOOL_NAMES = [
  * Loading it in children can therefore cross-wire identities; the parent
  * extension remains loaded and fully usable.
  */
-function isPiIntercomNpmResource(resource: {
-  resolvedPath?: string;
-  filePath?: string;
+function manifestNamesPiIntercom(manifestPath: string) {
+  try {
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as unknown;
+    return (
+      typeof manifest === "object" &&
+      manifest !== null &&
+      !Array.isArray(manifest) &&
+      (manifest as Record<string, unknown>).name === "pi-intercom"
+    );
+  } catch (error) {
+    throw new Error(
+      `Cannot verify child package identity from ${manifestPath}`,
+      { cause: error },
+    );
+  }
+}
+
+function installedPathNamesPiIntercom(installedPath: string) {
+  try {
+    const stats = statSync(installedPath);
+    if (stats.isDirectory()) {
+      const manifestPath = path.join(installedPath, "package.json");
+      if (existsSync(manifestPath)) {
+        return manifestNamesPiIntercom(manifestPath);
+      }
+      if (path.basename(installedPath) === "pi-intercom") {
+        throw new Error(
+          `Cannot verify child package identity from ${installedPath}`,
+        );
+      }
+      return false;
+    }
+    if (!stats.isFile()) {
+      throw new Error(
+        `Cannot verify child package identity from ${installedPath}`,
+      );
+    }
+
+    let current = path.dirname(installedPath);
+    let hasIntercomDirectoryName = false;
+    while (true) {
+      hasIntercomDirectoryName ||= path.basename(current) === "pi-intercom";
+      const manifestPath = path.join(current, "package.json");
+      if (existsSync(manifestPath)) {
+        return manifestNamesPiIntercom(manifestPath);
+      }
+      const parent = path.dirname(current);
+      if (parent === current) {
+        if (hasIntercomDirectoryName) {
+          throw new Error(
+            `Cannot verify child package identity from ${installedPath}`,
+          );
+        }
+        return false;
+      }
+      current = parent;
+    }
+  } catch (error) {
+    if (
+      error instanceof Error &&
+      error.message.startsWith("Cannot verify child package identity")
+    ) {
+      throw error;
+    }
+    throw new Error(
+      `Cannot verify child package identity from ${installedPath}`,
+      { cause: error },
+    );
+  }
+}
+
+function piMatchesPublishedIntercomSource(options: {
+  source: string;
+  cwd: string;
+  agentDir: string;
 }) {
-  const resourcePath = resource.resolvedPath ?? resource.filePath;
-  if (!resourcePath) return false;
-  const segments = path.resolve(resourcePath).split(path.sep);
-  return segments.some(
-    (segment, index) =>
-      segment === "node_modules" && segments[index + 1] === "pi-intercom",
+  const settingsManager = SettingsManager.inMemory({
+    packages: [options.source],
+  });
+  const packageManager = new DefaultPackageManager({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    settingsManager,
+  });
+  return (
+    packageManager.removeSourceFromSettings("npm:pi-intercom") ||
+    packageManager.removeSourceFromSettings(
+      "git:https://github.com/nicobailon/pi-intercom",
+    )
+  );
+}
+
+function createPiIntercomPackageMatcher(options: {
+  cwd: string;
+  agentDir: string;
+}) {
+  const sourceMatches = new Map<string, boolean>();
+  const installedPathMatches = new Map<string, boolean>();
+  return (source: string, installedPath?: string) => {
+    let sourceMatch = sourceMatches.get(source);
+    if (sourceMatch === undefined) {
+      sourceMatch = piMatchesPublishedIntercomSource({
+        source,
+        cwd: options.cwd,
+        agentDir: options.agentDir,
+      });
+      sourceMatches.set(source, sourceMatch);
+    }
+    if (sourceMatch || installedPath === undefined) return sourceMatch;
+
+    const resolvedPath = path.resolve(installedPath);
+    let installedPathMatch = installedPathMatches.get(resolvedPath);
+    if (installedPathMatch === undefined) {
+      installedPathMatch = installedPathNamesPiIntercom(resolvedPath);
+      installedPathMatches.set(resolvedPath, installedPathMatch);
+    }
+    return installedPathMatch;
+  };
+}
+
+function packageSourceValue(source: PackageSource) {
+  return typeof source === "string" ? source : source.source;
+}
+
+function blockedPackageSources(
+  packageManager: DefaultPackageManager,
+  resolvedPaths: ResolvedPaths,
+  options: { cwd: string; agentDir: string },
+) {
+  const isPiIntercomPackage = createPiIntercomPackageMatcher(options);
+  const blocked = {
+    user: new Set<string>(),
+    project: new Set<string>(),
+  };
+  for (const configured of packageManager.listConfiguredPackages()) {
+    if (isPiIntercomPackage(configured.source, configured.installedPath)) {
+      blocked[configured.scope].add(configured.source);
+    }
+  }
+
+  const resources = [
+    ...resolvedPaths.extensions,
+    ...resolvedPaths.skills,
+    ...resolvedPaths.prompts,
+    ...resolvedPaths.themes,
+  ];
+  for (const resource of resources) {
+    const { metadata } = resource;
+    if (
+      metadata.origin !== "package" ||
+      metadata.scope === "temporary" ||
+      !isPiIntercomPackage(metadata.source, metadata.baseDir)
+    ) {
+      continue;
+    }
+    blocked[metadata.scope].add(metadata.source);
+  }
+  return blocked;
+}
+
+function createEphemeralChildSettings(
+  sourceSettings: SettingsManager,
+  blockedSources: { user: Set<string>; project: Set<string> },
+  projectTrusted: boolean,
+) {
+  const globalSettings = sourceSettings.getGlobalSettings();
+  const projectSettings = sourceSettings.getProjectSettings();
+  const settingsForScope = (
+    settings: typeof globalSettings,
+    scope: "user" | "project",
+  ) => ({
+    ...settings,
+    packages: settings.packages?.filter(
+      (source) => !blockedSources[scope].has(packageSourceValue(source)),
+    ),
+  });
+  const contents = {
+    global: JSON.stringify(settingsForScope(globalSettings, "user")),
+    project: JSON.stringify(settingsForScope(projectSettings, "project")),
+  };
+  const storage: Parameters<typeof SettingsManager.fromStorage>[0] = {
+    withLock(scope, update) {
+      const next = update(contents[scope]);
+      if (next !== undefined) contents[scope] = next;
+    },
+  };
+  return SettingsManager.fromStorage(storage, { projectTrusted });
+}
+
+async function createChildSettingsManager(options: {
+  cwd: string;
+  agentDir: string;
+  projectTrusted: boolean;
+}) {
+  const sourceSettings = SettingsManager.create(options.cwd, options.agentDir, {
+    projectTrusted: options.projectTrusted,
+  });
+  const packageManager = new DefaultPackageManager({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    settingsManager: sourceSettings,
+  });
+  const resolvedPaths = await packageManager.resolve(async () => "skip");
+  const blockedSources = blockedPackageSources(packageManager, resolvedPaths, {
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+  });
+
+  return createEphemeralChildSettings(
+    sourceSettings,
+    blockedSources,
+    options.projectTrusted,
   );
 }
 
@@ -133,7 +339,9 @@ export interface ChildResourceOptions {
 /** Load normal global/package resources and trust-gated project resources. */
 export async function createChildResources(options: ChildResourceOptions) {
   const agentDir = options.agentDir ?? getAgentDir();
-  const settingsManager = SettingsManager.create(options.cwd, agentDir, {
+  const settingsManager = await createChildSettingsManager({
+    cwd: options.cwd,
+    agentDir,
     projectTrusted: options.projectTrusted,
   });
   const loader = new DefaultResourceLoader({
@@ -143,16 +351,6 @@ export async function createChildResources(options: ChildResourceOptions) {
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),
-    extensionsOverride: (base) => ({
-      ...base,
-      extensions: base.extensions.filter(
-        (extension) => !isPiIntercomNpmResource(extension),
-      ),
-    }),
-    skillsOverride: (base) => ({
-      ...base,
-      skills: base.skills.filter((skill) => !isPiIntercomNpmResource(skill)),
-    }),
   });
   await loader.reload();
   return { loader, settingsManager };

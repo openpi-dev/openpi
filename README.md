@@ -125,7 +125,6 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
-| 跨 Session   | 可选 parent-only `pi-intercom`；父子通信仍走 Subagent / Workflow 原生通道                                 |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
@@ -152,7 +151,7 @@ OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_
 跨回合工作项                     → Tasks
 持续自主目标                     → Goal
 同一 Session 的阶段切换          → Context Pivot
-真正跨顶层 Session               → pi-intercom（可选）
+真正跨顶层 Session               → 独立 pi-intercom package（按需安装）
 ```
 
 ---
@@ -374,7 +373,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 | 用户配置         | 单一受限 typed tool 写入；不散落扩展私有配置入口                          |
 | 模型消费         | Suggestion 默认关闭；adaptive 仅在显式开启后允许模型自主加载能力           |
 
-可选的 [pi-intercom](https://github.com/nicobailon/pi-intercom) 只在顶层 Pi Session 加载。它使用进程级身份，而 OpenPI Child 是同一进程内的并发 Session；Child Resource Loader 会移除 pi-intercom 扩展与 Skill，避免身份串线。Replay 也不会复用其调用。
+独立的 [pi-intercom](https://github.com/nicobailon/pi-intercom) package 只适合顶层 Pi Session。它使用进程级身份，而 OpenPI Child 是同一进程内的并发 Session；Child Resource Loader 会从 npm、Git 和 local package source 中精确移除 pi-intercom 扩展与 Skill，避免身份串线，同时保留普通同名项目资源。Replay 也不会复用其调用。
 
 ---
 
@@ -418,7 +417,6 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Subagent / Bash / Write/Edit | `full` / `compact` / `compact`                 |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
-| pi-intercom                  | 不静默安装；由用户明确选择                     |
 | 主题                         | 保留用户现有选择                               |
 
 </details>
@@ -493,21 +491,21 @@ bun run test
 
 Host SDK 与 TypeBox 按 Pi Package 契约声明为 Peer Dependencies；仓库开发依赖不随包重复提供。
 
-### 可选：顶层 Pi Session 通信
+### 独立可选：顶层 Pi Session 通信
 
-运行 `/openpi-setup`，在原生确认框中选择安装；也可手动执行：
+[pi-intercom](https://github.com/nicobailon/pi-intercom) 是独立维护的 Pi package。OpenPI 不探测、推荐、安装或配置它；需要跨顶层 Session 通信时，请先审查其独立仓库，再通过 Pi 原生 package 命令按需安装：
 
 ```bash
 pi install npm:pi-intercom
 ```
 
-新私有配置默认 `confirmSend: true`、`inboundTrigger: "replies"`；已有配置绝不重写。安装失败不显示成功，也不写配置；安装后需 `/reload`。跨顶层 Session 用 pi-intercom，父子委派继续使用 `subagent_*` 与 Workflow 原生结果通道。
+安装、配置和升级均由 Pi 与 pi-intercom 自身负责；OpenPI 不写入或迁移已有 intercom 偏好。跨顶层 Session 可使用 pi-intercom，OpenPI 父子委派继续使用 `subagent_*` 与 Workflow 原生结果通道。
 
 ### 命令速查
 
 | 命令                       | 作用                                           |
 | -------------------------- | ---------------------------------------------- |
-| `/openpi-setup [自然语言]` | 查看或修改统一配置；可选择安装 pi-intercom     |
+| `/openpi-setup [自然语言]` | 查看或修改 OpenPI 自有配置                     |
 | `/ps`                      | 查看、跟踪与终止后台终端                       |
 | `/subagents` / `/btw`      | 管理 Subagent / 在旁路 Context 中提问；仅 TUI  |
 | `/workflows`               | 查看阶段、Agent、Graph 与产物；可停止运行      |
@@ -641,6 +639,6 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 
 本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
 
-`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。可选的顶层 Session 通信由 [pi-intercom](https://github.com/nicobailon/pi-intercom) 提供。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 本项目以 MIT 许可证发布（见 [`LICENSE`](LICENSE)）；`THIRD_PARTY_NOTICES.md` 记录第三方来源与各自许可。
