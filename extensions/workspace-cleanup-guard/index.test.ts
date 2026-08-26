@@ -140,7 +140,7 @@ test("refused deletion of a pre-existing file is blocked", async () => {
   });
 });
 
-test("an opaque rm target is blocked without opening confirmation", async () => {
+test("an unverified rm target is blocked without opening confirmation", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
     let confirmations = 0;
@@ -158,12 +158,12 @@ test("an opaque rm target is blocked without opening confirmation", async () => 
     )) as { block?: boolean; reason?: string } | undefined;
 
     assert.equal(result?.block, true);
-    assert.match(result?.reason ?? "", /literal workspace-relative paths/u);
+    assert.match(result?.reason ?? "", /direct rm command/u);
     assert.equal(confirmations, 0);
   });
 });
 
-test("a nested opaque rm target is blocked at the extension boundary", async () => {
+test("a nested unverified rm target is blocked at the extension boundary", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
     let confirmations = 0;
@@ -181,7 +181,7 @@ test("a nested opaque rm target is blocked at the extension boundary", async () 
     )) as { block?: boolean; reason?: string } | undefined;
 
     assert.equal(result?.block, true);
-    assert.match(result?.reason ?? "", /literal workspace-relative paths/u);
+    assert.match(result?.reason ?? "", /direct rm command/u);
     assert.equal(confirmations, 0);
   });
 });

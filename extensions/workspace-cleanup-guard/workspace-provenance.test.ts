@@ -217,10 +217,9 @@ test("dynamic rm targets fail closed without prompting for unknown paths", async
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, true, command);
       if (decision.kind === "block") {
         assert.deepEqual(decision.protectedPaths, [], command);
-        assert.match(decision.reason, /literal workspace-relative paths/u);
+        assert.match(decision.reason, /direct rm command/u);
       }
     }
     assert.equal(confirmations, 0);
@@ -255,7 +254,6 @@ test("dynamic rm targets in compound command positions fail closed", async () =>
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, true, command);
     }
     assert.equal(confirmations, 0);
     assert.equal(
@@ -294,7 +292,6 @@ test("rm targets in nested shell execution contexts fail closed", async () => {
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, true, command);
     }
     assert.equal(confirmations, 0);
     assert.equal(
@@ -304,7 +301,7 @@ test("rm targets in nested shell execution contexts fail closed", async () => {
   });
 });
 
-test("literal rm targets in nested shell execution contexts remain protected", async () => {
+test("literal nested rm targets are confirmed when statically executable and otherwise fail closed", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
     const confirmations: string[][] = [];
@@ -333,12 +330,9 @@ test("literal rm targets in nested shell execution contexts remain protected", a
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, false, command);
     }
-    assert.deepEqual(
-      confirmations,
-      commands.map(() => ["keep.txt"]),
-    );
+    assert.equal(confirmations.length, 8);
+    assert(confirmations.every((paths) => paths.join() === "keep.txt"));
   });
 });
 
@@ -362,7 +356,6 @@ test("dynamic eval and shell command sources fail closed", async () => {
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, true, command);
     }
     assert.equal(confirmations, 0);
   });
@@ -380,7 +373,6 @@ test("excessively nested shell execution fails closed", async () => {
     });
 
     assert.equal(decision.kind, "block");
-    assert.equal(decision.opaqueDestructiveCommand, true);
   });
 });
 
@@ -408,12 +400,9 @@ test("literal rm targets in compound command positions remain protected", async 
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, false, command);
     }
-    assert.deepEqual(
-      confirmations,
-      commands.map(() => ["keep.txt"]),
-    );
+    assert.equal(confirmations.length, 4);
+    assert(confirmations.every((paths) => paths.join() === "keep.txt"));
   });
 });
 
@@ -442,7 +431,6 @@ test("quoted and escaped metacharacters remain literal rm targets", async () => 
       });
 
       assert.equal(decision.kind, "block", command);
-      assert.equal(decision.opaqueDestructiveCommand, false, command);
     }
     assert.deepEqual(confirmations, [
       ["keep*.txt"],
@@ -454,7 +442,7 @@ test("quoted and escaped metacharacters remain literal rm targets", async () => 
   });
 });
 
-test("rm text outside command position does not trigger deletion protection", async () => {
+test("non-executing comments and heredocs do not trigger deletion protection", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
     let confirmations = 0;
@@ -464,14 +452,8 @@ test("rm text outside command position does not trigger deletion protection", as
     });
 
     for (const [index, command] of [
-      "echo rm",
-      "command -v rm",
       "printf ok # rm keep.txt",
       'printf ok # ignored | rm "$target"',
-      "echo '$(rm \"$target\")'",
-      'echo "<(rm keep.txt)"',
-      "sh -c 'echo rm'",
-      "eval 'echo rm'",
       "cat <<EOF\nrm keep.txt\nEOF",
       "cat <<EOF\n\\$(rm keep.txt)\nEOF",
       "cat <<'EOF'\n$(rm keep.txt)\nEOF",
@@ -484,13 +466,123 @@ test("rm text outside command position does not trigger deletion protection", as
       });
 
       assert.equal(decision.kind, "allow", command);
-      assert.equal(decision.opaqueDestructiveCommand, false, command);
     }
     assert.equal(confirmations, 0);
   });
 });
 
-test("blocked opaque cleanup cannot grant pending scratch ownership", async () => {
+test("indirect rm references and shell evaluators fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    for (const [index, command] of [
+      "echo rm",
+      "command -v rm",
+      "echo '$(rm \"$target\")'",
+      'echo "<(rm keep.txt)"',
+      "sh -c 'echo ok'",
+      "eval 'echo ok'",
+      'code="echo ok"; eval "$code"',
+      'echo "$(',
+    ].entries()) {
+      const decision = await guard.before({
+        id: `indirect-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+    }
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("indirect execution bypass matrix fails closed", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    const commands = [
+      'target=keep.txt; env rm "$target"',
+      'target=keep.txt; exec rm "$target"',
+      'target=keep.txt; cmd=rm; "$cmd" "$target"',
+      'target=keep.txt; $(printf rm) "$target"',
+      "printf 'keep.txt\\n' | xargs rm",
+      "find . -name keep.txt -exec rm {} +",
+      "target=keep.txt; trap 'rm \"$target\"' EXIT",
+      "target=keep.txt; builtin eval 'rm \"$target\"'",
+      "bash -O extglob -c 'rm \"$1\"' bash keep.txt",
+      "shopt -s expand_aliases\nalias zap='rm \"$target\"'\nzap",
+      "target=keep.txt\nshopt -s expand_aliases\nalias zap=\"$(printf '\\162\\155 keep.txt')\"\nzap",
+      'target=keep.txt; cmd=/bin/rm; hash -p "$cmd" zap; zap "$target"',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `reviewed-bypass-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+      if (decision.kind === "block") {
+        assert.deepEqual(decision.protectedPaths, [], command);
+      }
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
+  });
+});
+
+test("additional Bash AST execution contexts fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const guard = guardFor(async () => {
+      confirmations += 1;
+      return true;
+    });
+
+    const commands = [
+      'target=keep.txt; for x in x; do rm "$target"; done',
+      'target=keep.txt; while true; do rm "$target"; break; done',
+      'target=keep.txt; until false; do rm "$target"; break; done',
+      'target=keep.txt; select x in x; do rm "$target"; break; done <<< 1',
+      'target=keep.txt; coproc rm "$target"; wait',
+      'target=keep.txt; arr=($(rm "$target"))',
+      'target=keep.txt; echo "${x:-$(rm "$target")}"',
+      'target=keep.txt; cat <<< "$(rm "$target")"',
+      'target=keep.txt; [[ $(rm "$target") == x ]]',
+      'target=keep.txt; mapfile < <(rm "$target")',
+    ];
+    for (const [index, command] of commands.entries()) {
+      const decision = await guard.before({
+        id: `additional-context-${index}`,
+        command,
+        cwd: workspace,
+      });
+
+      assert.equal(decision.kind, "block", command);
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(
+      await readFile(path.join(workspace, "keep.txt"), "utf8"),
+      "keep",
+    );
+  });
+});
+
+test("blocked unverified cleanup cannot grant pending scratch ownership", async () => {
   await withWorkspace(async (workspace) => {
     const scratch = path.join(workspace, "scratch.txt");
     const guard = guardFor(async () => false);
@@ -511,7 +603,6 @@ test("blocked opaque cleanup cannot grant pending scratch ownership", async () =
     });
 
     assert.equal(cleanup.kind, "block");
-    assert.equal(cleanup.opaqueDestructiveCommand, false);
   });
 });
 
