@@ -15,10 +15,11 @@ import {
 import { Type } from "typebox";
 import {
   agentFailureMessage,
-  createFirstResponseWatchdog,
+  createModelProgressWatchdog,
   guardWorkflowChildTools,
   observeAssistantSettlement,
   recordToolExecutionTiming,
+  resolveModelProgressTimeoutMs,
   runAgent,
   type ToolExecutionTiming,
   transcriptFromMessages,
@@ -129,7 +130,7 @@ function runHarnessAgent(
     prompt: "fixture",
     cwd: process.cwd(),
     loader: {} as Parameters<typeof runAgent>[0]["loader"],
-    settingsManager: {} as Parameters<typeof runAgent>[0]["settingsManager"],
+    settingsManager: SettingsManager.inMemory(),
     modelRegistry: { find: () => undefined } as unknown as Parameters<
       typeof runAgent
     >[0]["modelRegistry"],
@@ -604,18 +605,126 @@ test("cancel during a hanging tool ignores late events and progress writers", as
   prompt.resolve();
 });
 
-test("late prompt completion after first-response timeout cannot become success", async () => {
+test("a later provider turn with no visible progress is aborted and cannot become success", async () => {
   const prompt = deferred<void>();
-  const harness = runnerHarness({ prompt: () => prompt.promise });
-  const outcome = await runHarnessAgent(harness, {
-    firstResponseTimeoutMs: 5,
+  let emitAbort = () => {};
+  const harness = runnerHarness({
+    prompt: () => prompt.promise,
+    abort: async () => emitAbort(),
+  });
+  emitAbort = () => {
+    const aborted = {
+      ...assistantTextMessage(""),
+      content: [],
+      stopReason: "aborted" as const,
+      errorMessage: "Request was aborted",
+    };
+    harness.messages.push(aborted);
+    harness.emit({ type: "message_end", message: aborted });
+  };
+  const outcomePromise = runHarnessAgent(harness, {
+    modelProgressTimeoutMs: 10,
     shutdownTimeoutMs: 20,
   });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const first = {
+    ...assistantTextMessage("first turn evidence"),
+    content: [
+      { type: "text" as const, text: "first turn evidence" },
+      {
+        type: "toolCall" as const,
+        id: "read-1",
+        name: "read",
+        arguments: { path: "fixture.txt" },
+      },
+    ],
+    stopReason: "toolUse" as const,
+  };
+  const result = {
+    role: "toolResult" as const,
+    toolCallId: "read-1",
+    toolName: "read",
+    content: [{ type: "text" as const, text: "retained tool evidence" }],
+    isError: false,
+    timestamp: 1_100,
+  };
+  harness.emit({ type: "turn_start" });
+  harness.messages.push(first);
+  harness.emit({ type: "message_start", message: first });
+  harness.emit({ type: "message_end", message: first });
+  harness.emit({
+    type: "tool_execution_start",
+    toolCallId: "read-1",
+    toolName: "read",
+    args: { path: "fixture.txt" },
+  });
+  harness.messages.push(result);
+  harness.emit({
+    type: "tool_execution_end",
+    toolCallId: "read-1",
+    toolName: "read",
+    result,
+    isError: false,
+  });
+  harness.emit({ type: "turn_end", message: first, toolResults: [result] });
+  harness.emit({ type: "turn_start" });
+  harness.emit({ type: "message_start", message: assistantTextMessage("") });
+
+  const outcome = await settleWithin(outcomePromise);
+  const late = assistantTextMessage("late success");
+  harness.messages.push(late);
+  harness.emit({ type: "message_end", message: late });
   prompt.resolve();
+
   assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /no assistant response event/i);
+  assert.equal(outcome.aborted, false);
+  assert.match(outcome.error ?? "", /no model-visible progress/i);
+  assert.equal(outcome.output, "first turn evidence");
+  assert.equal(outcome.usage.turns, 2);
+  assert.equal(
+    outcome.transcript.some(
+      (entry) =>
+        entry.role === "toolResult" && entry.text === "retained tool evidence",
+    ),
+    true,
+  );
   assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
+});
+
+test("model-visible deltas extend a provider turn until assistant completion", async () => {
+  let run = async () => {};
+  const harness = runnerHarness({ prompt: () => run() });
+  run = async () => {
+    const partial = assistantTextMessage("");
+    harness.emit({ type: "turn_start" });
+    harness.emit({ type: "message_start", message: partial });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const progressing = assistantTextMessage("working");
+    harness.emit({
+      type: "message_update",
+      message: progressing,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "working",
+        partial: progressing,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const completed = assistantTextMessage("done");
+    harness.messages.push(completed);
+    harness.emit({ type: "message_end", message: completed });
+  };
+
+  const outcome = await runHarnessAgent(harness, {
+    modelProgressTimeoutMs: 30,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "done");
+  assert.equal(harness.aborts(), 0);
 });
 
 test("cleanup timeout is surfaced instead of reporting agent success", async () => {
@@ -626,45 +735,76 @@ test("cleanup timeout is surfaced instead of reporting agent success", async () 
   assert.equal(harness.disposals(), 1);
 });
 
-test("first-response watchdog aborts a silent provider request", async () => {
+test("model-progress watchdog aborts a silent provider turn", async () => {
   let aborted = false;
-  const watchdog = createFirstResponseWatchdog(
+  const watchdog = createModelProgressWatchdog(
     async () => {
       aborted = true;
     },
     { timeoutMs: 10, model: "fixture-model" },
   );
+  watchdog.armTurn();
 
   await assert.rejects(
     watchdog.waitFor(new Promise<never>(() => {})),
-    /no assistant response event for fixture-model within 10 ms.*stalled/i,
+    /provider turn for fixture-model.*no model-visible progress for 10 ms.*stalled/i,
   );
   assert.equal(aborted, true);
 });
 
-test("first assistant response disarms the watchdog without limiting the run", async () => {
-  const watchdog = createFirstResponseWatchdog(
-    async () => {
-      throw new Error("watchdog should have been disarmed");
-    },
-    { timeoutMs: 10 },
+test("model-progress timeout preserves the default and honors wider Pi idle settings", () => {
+  assert.equal(
+    resolveModelProgressTimeoutMs(SettingsManager.inMemory()),
+    45_000,
   );
-  watchdog.markResponse();
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 120_000 }),
+    ),
+    120_000,
+  );
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 120_000 }),
+      5,
+    ),
+    5,
+  );
+});
+
+test("model progress refreshes its turn while completion leaves tool time unrestricted", async () => {
+  let timedOut = false;
+  const watchdog = createModelProgressWatchdog(
+    async () => {
+      timedOut = true;
+    },
+    { timeoutMs: 30 },
+  );
+  watchdog.armTurn();
 
   const result = await watchdog.waitFor(
-    new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
+    (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      watchdog.markProgress();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      watchdog.completeTurn();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return "done";
+    })(),
   );
   assert.equal(result, "done");
+  assert.equal(timedOut, false);
 });
 
 test("explicit watchdog cancellation disarms a pending operation", async () => {
   let timedOut = false;
-  const watchdog = createFirstResponseWatchdog(
+  const watchdog = createModelProgressWatchdog(
     async () => {
       timedOut = true;
     },
     { timeoutMs: 5 },
   );
+  watchdog.armTurn();
   void watchdog.waitFor(new Promise<never>(() => {}));
   watchdog.cancel();
 

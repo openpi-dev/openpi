@@ -46,7 +46,7 @@ import { safeStringify, truncateUtf8 } from "./serialization.ts";
 import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
-export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
+export const MODEL_PROGRESS_TIMEOUT_MS = 45_000;
 const TRANSCRIPT_ENTRY_MAX_BYTES = 16 * 1024;
 const TRANSCRIPT_TOTAL_MAX_BYTES = 256 * 1024;
 const TRANSCRIPT_MAX_ENTRIES = 200;
@@ -110,8 +110,8 @@ export interface RunAgentOptions {
   replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions;
   /** Test-only override for the per-tool execution timeout. */
   toolCallTimeoutMs?: number;
-  /** Test-only override for the first assistant response-event timeout. */
-  firstResponseTimeoutMs?: number;
+  /** Test-only override for the per-provider-turn model-progress timeout. */
+  modelProgressTimeoutMs?: number;
   /** Test-only override for the end-to-end abort/shutdown deadline. */
   shutdownTimeoutMs?: number;
   /** Test seam for lifecycle races; production always uses createAgentSession. */
@@ -461,35 +461,82 @@ function formatTimeout(timeoutMs: number) {
     : `${timeoutMs} ms`;
 }
 
-/** Abort a provider call that opens but never emits its first assistant event. */
-export function createFirstResponseWatchdog(
-  onTimeout: () => Promise<unknown>,
+export function resolveModelProgressTimeoutMs(
+  settingsManager: SettingsManager,
+  override?: number,
+) {
+  if (override !== undefined) return override;
+  const configured =
+    settingsManager.getProjectSettings().httpIdleTimeoutMs ??
+    settingsManager.getGlobalSettings().httpIdleTimeoutMs;
+  return typeof configured === "number" && Number.isFinite(configured)
+    ? Math.max(MODEL_PROGRESS_TIMEOUT_MS, Math.floor(configured))
+    : MODEL_PROGRESS_TIMEOUT_MS;
+}
+
+/** Abort any provider turn that stops producing model-visible progress. */
+export function createModelProgressWatchdog(
+  onTimeout: (error: Error) => Promise<unknown>,
   options: { timeoutMs?: number; model?: string } = {},
 ) {
-  const timeoutMs = options.timeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? MODEL_PROGRESS_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let activeTurn = false;
+  let closed = false;
+  let rejectTimeout!: (error: Error) => void;
   const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const schedule = () => {
+    clear();
+    if (!activeTurn || closed) return;
     // This timer owns the awaited watchdog outcome. Keep it referenced so a
     // short-lived Node 22 process cannot exit with the promise still pending.
     timer = setTimeout(() => {
       timer = undefined;
+      activeTurn = false;
+      closed = true;
       const model = options.model ? ` for ${options.model}` : "";
-      reject(
-        new Error(
-          `Agent received no assistant response event${model} within ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
-        ),
+      const error = new Error(
+        `Agent provider turn${model} produced no model-visible progress for ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
       );
-      void onTimeout().catch(() => {});
+      rejectTimeout(error);
+      try {
+        void onTimeout(error).catch(() => {});
+      } catch {
+        // The timeout result remains authoritative even if abort throws before
+        // returning its promise; bounded shutdown below gets another chance.
+      }
     }, timeoutMs);
-  });
-
+  };
+  const armTurn = () => {
+    if (closed) return;
+    activeTurn = true;
+    schedule();
+  };
+  const markProgress = () => {
+    if (!activeTurn || closed) return;
+    schedule();
+  };
+  const completeTurn = () => {
+    activeTurn = false;
+    clear();
+  };
   const cancel = () => {
-    if (timer) clearTimeout(timer);
-    timer = undefined;
+    closed = true;
+    activeTurn = false;
+    clear();
   };
 
   return {
-    markResponse: cancel,
+    armTurn,
+    markProgress,
+    completeTurn,
     cancel,
     async waitFor<T>(operation: Promise<T>) {
       try {
@@ -501,13 +548,24 @@ export function createFirstResponseWatchdog(
   };
 }
 
-function isAssistantResponseEvent(event: AgentSessionEvent) {
-  return (
-    (event.type === "message_start" ||
-      event.type === "message_update" ||
-      event.type === "message_end") &&
-    event.message.role === "assistant"
-  );
+function isModelVisibleProgress(event: AgentSessionEvent) {
+  if (event.type !== "message_update" || event.message.role !== "assistant") {
+    return false;
+  }
+  // Raw transport heartbeats never become AgentSession events. Empty stream,
+  // text, and thinking starts likewise cannot keep a provider turn alive.
+  const update = event.assistantMessageEvent;
+  if (
+    update.type === "text_delta" ||
+    update.type === "thinking_delta" ||
+    update.type === "toolcall_delta"
+  ) {
+    return update.delta.length > 0;
+  }
+  if (update.type === "text_end" || update.type === "thinking_end") {
+    return update.content.length > 0;
+  }
+  return update.type === "toolcall_start" || update.type === "toolcall_end";
 }
 
 export async function runAgent(
@@ -519,6 +577,8 @@ export async function runAgent(
   let session: AgentSession | undefined;
   let unsubscribeToolGuards: (() => void) | undefined;
   let aborted = false;
+  let terminalCause: "abort" | "model-progress-timeout" | undefined;
+  let modelProgressTimeoutMessage: string | undefined;
   let abortOperation: Promise<unknown> | undefined;
   let rejectForAbort: ((error: Error) => void) | undefined;
   const abortRace = new Promise<never>((_resolve, reject) => {
@@ -534,6 +594,7 @@ export async function runAgent(
   const onAbort = () => {
     if (aborted) return;
     aborted = true;
+    terminalCause ??= "abort";
     if (session) {
       try {
         abortOperation ??= session.abort();
@@ -721,10 +782,13 @@ export async function runAgent(
     }
   };
 
-  let markFirstResponse = () => {};
-  let cancelFirstResponseWatchdog = () => {};
+  let armModelProgress = () => {};
+  let markModelProgress = () => {};
+  let completeModelTurn = () => {};
+  let cancelModelProgressWatchdog = () => {};
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
+    if (event.type === "turn_start") armModelProgress();
     if (event.type === "tool_execution_start") {
       toolRenderer.start(
         event.toolCallId,
@@ -747,7 +811,10 @@ export async function runAgent(
         event.isError,
       );
     }
-    if (isAssistantResponseEvent(event)) markFirstResponse();
+    if (isModelVisibleProgress(event)) markModelProgress();
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      completeModelTurn();
+    }
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
         assistantSettlement,
@@ -784,19 +851,29 @@ export async function runAgent(
   let cleanupErrors: string[] = [];
   try {
     if (!aborted) {
-      const watchdog = createFirstResponseWatchdog(
-        () => {
+      const watchdog = createModelProgressWatchdog(
+        (error) => {
+          terminalCause ??= "model-progress-timeout";
+          if (terminalCause === "model-progress-timeout") {
+            modelProgressTimeoutMessage ??= error.message;
+          }
           abortOperation ??= childSession.abort();
           void abortOperation.catch(() => {});
           return abortOperation;
         },
         {
-          timeoutMs: options.firstResponseTimeoutMs,
+          timeoutMs: resolveModelProgressTimeoutMs(
+            options.settingsManager,
+            options.modelProgressTimeoutMs,
+          ),
           model: modelId,
         },
       );
-      markFirstResponse = watchdog.markResponse;
-      cancelFirstResponseWatchdog = watchdog.cancel;
+      armModelProgress = watchdog.armTurn;
+      markModelProgress = watchdog.markProgress;
+      completeModelTurn = watchdog.completeTurn;
+      cancelModelProgressWatchdog = watchdog.cancel;
+      watchdog.armTurn();
       await Promise.race([
         watchdog.waitFor(
           childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
@@ -807,7 +884,7 @@ export async function runAgent(
   } catch (error) {
     promptErrorMessage = errorText(error);
   } finally {
-    cancelFirstResponseWatchdog();
+    cancelModelProgressWatchdog();
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
     unsubscribe();
@@ -834,7 +911,11 @@ export async function runAgent(
       ? `Cleanup failed: ${cleanupErrors.join("; ")}`
       : undefined;
 
-  if (aborted || assistantSettlement?.stopReason === "aborted") {
+  if (
+    terminalCause === "abort" ||
+    (terminalCause === undefined &&
+      assistantSettlement?.stopReason === "aborted")
+  ) {
     return {
       ok: false,
       output,
@@ -851,7 +932,9 @@ export async function runAgent(
   }
 
   const failureMessage =
-    agentFailureMessage(assistantSettlement, promptErrorMessage) ??
+    (terminalCause === "model-progress-timeout"
+      ? modelProgressTimeoutMessage
+      : agentFailureMessage(assistantSettlement, promptErrorMessage)) ??
     cleanupError;
   if (failureMessage !== undefined) {
     return {

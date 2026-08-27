@@ -64,7 +64,7 @@ const ENTRY_CLOSE_TIMEOUT_MS = 10_000;
  * First-response watchdog: a run whose provider accepts the request but
  * never emits an assistant event is settled as a failure so it cannot
  * occupy a concurrency slot forever. Matches the workflow runner's
- * FIRST_RESPONSE_TIMEOUT_MS (extensions/workflows/runner.ts).
+ * MODEL_PROGRESS_TIMEOUT_MS (extensions/workflows/runner.ts).
  */
 export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;

@@ -270,7 +270,7 @@ return agent("Synthesize the verified findings", {
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。每个 Child Provider turn 必须在 45 秒内产生模型可见的 thinking、text、tool call 或完成事件，并在持续输出时按进展续期；空 stream start 与 transport heartbeat 不算进展。用户显式配置了更宽的 Pi `httpIdleTimeoutMs` 时沿用该上限。超时会 abort 当前 Child、保留已有 Transcript/usage/evidence，并让 sibling 与后续阶段继续结算。
 
 ---
 
