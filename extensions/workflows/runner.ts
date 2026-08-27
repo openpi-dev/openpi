@@ -873,7 +873,6 @@ export async function runAgent(
       markModelProgress = watchdog.markProgress;
       completeModelTurn = watchdog.completeTurn;
       cancelModelProgressWatchdog = watchdog.cancel;
-      watchdog.armTurn();
       await Promise.race([
         watchdog.waitFor(
           childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),

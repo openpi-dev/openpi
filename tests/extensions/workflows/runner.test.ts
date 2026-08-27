@@ -605,6 +605,26 @@ test("cancel during a hanging tool ignores late events and progress writers", as
   prompt.resolve();
 });
 
+test("slow preflight does not arm the provider-turn watchdog", async () => {
+  let run = async () => {};
+  const harness = runnerHarness({ prompt: () => run() });
+  run = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const completed = assistantTextMessage("completed after preflight");
+    harness.emit({ type: "turn_start" });
+    harness.messages.push(completed);
+    harness.emit({ type: "message_end", message: completed });
+  };
+
+  const outcome = await runHarnessAgent(harness, {
+    modelProgressTimeoutMs: 10,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "completed after preflight");
+  assert.equal(harness.aborts(), 0);
+});
+
 test("a later provider turn with no visible progress is aborted and cannot become success", async () => {
   const prompt = deferred<void>();
   let emitAbort = () => {};
