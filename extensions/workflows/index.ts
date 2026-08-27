@@ -2153,8 +2153,8 @@ export default function workflows(pi: ExtensionAPI) {
         try {
           await completion;
         } catch (error) {
-          details.status = "failed";
-          details.finishedAt = Date.now();
+          if (details.status === "running") details.status = "failed";
+          details.finishedAt ??= Date.now();
           details.error = details.error ?? errorText(error);
         } finally {
           recordTerminalRun();

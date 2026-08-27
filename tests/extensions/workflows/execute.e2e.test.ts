@@ -191,8 +191,9 @@ assert.match(String(sentMessages[0]?.message.content), /wf_1e9acbad/);
 sentMessages.length = 0;
 
 const workflow = tools.get("workflow")!;
+const workflowStop = tools.get("workflow_stop")!;
 const status = tools.get("workflow_status")!;
-assert.ok(workflow && status);
+assert.ok(workflow && workflowStop && status);
 
 function runDirFor(runId: unknown) {
   assert.equal(typeof runId, "string");
@@ -621,6 +622,75 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
     "delivered",
   );
+});
+
+test("cancelled detached delivery preserves aborted status after artifact persistence failure", async () => {
+  sentMessages.length = 0;
+  modelIdle = true;
+  let sessionCreated = false;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreated = true;
+    return { session: fakeAgentSession("cancelled output", promptGate) };
+  });
+
+  try {
+    const launch = (await workflow.execute(
+      "e2e-cancelled-persistence-failure",
+      {
+        script:
+          'export const meta = { name: "cancelled-persistence-failure" };\n' +
+          'return await agent("wait for cancellation", { agent_type: "reviewer" });',
+        background: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+    const runId = launch.details.runId;
+    const transcripts = join(runDirFor(runId), "transcripts.json");
+    await waitFor(
+      () => sessionCreated && existsSync(transcripts),
+      "active detached workflow before cancellation",
+    );
+
+    // Make the final artifact write fail after the cancellation path has
+    // selected `aborted`; terminal recovery can still rewrite workflow.json.
+    rmSync(transcripts);
+    mkdirSync(transcripts);
+    writeFileSync(join(transcripts, "blocker"), "keep directory non-empty\n");
+
+    await workflowStop.execute("e2e-cancel-stop", { runId });
+    releasePrompt();
+
+    await waitFor(
+      () => sentMessages.some((sent) => sent.message.details?.runId === runId),
+      "cancelled completion delivery",
+    );
+
+    const persisted = readWorkflowJson(runId);
+    assert.equal(persisted.status, "aborted");
+    assert.match(String(persisted.error), /Workflow was aborted/);
+    assert.match(String(persisted.error), /Artifact persistence failed/);
+
+    const delivered = sentMessages.find(
+      (sent) => sent.message.details?.runId === runId,
+    );
+    assert.ok(delivered);
+    const deliveredDetails = delivered.message.details as {
+      status?: unknown;
+      error?: unknown;
+    };
+    assert.equal(deliveredDetails.status, "aborted");
+    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
+    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+  } finally {
+    releasePrompt();
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
 });
 
 test("a failing script reports the error and records the run as failed", async () => {
