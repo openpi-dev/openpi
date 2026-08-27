@@ -1,4 +1,5 @@
 import type { WorkflowDetails } from "./model.ts";
+import type { ResultDeliveryQueue } from "../shared/result-delivery.ts";
 
 export interface WorkflowCompletionEnvelope {
   deliveryId: string;
@@ -177,7 +178,7 @@ export function createWorkflowResultDelivery(
     return flushing;
   };
 
-  return {
+  const queue = {
     /** Register inline interest before the run starts. */
     holdInline(details: WorkflowDetails) {
       persistState(details, "held-for-inline");
@@ -194,15 +195,21 @@ export function createWorkflowResultDelivery(
 
     /** Abort won the wait/terminal arbitration; deliver the result later. */
     releaseInline(envelope: WorkflowCompletionEnvelope) {
-      persistState(envelope.details, "pending", { lastError: undefined });
-      enqueue(envelope);
+      retainPending(
+        envelope,
+        { lastError: undefined },
+        "Initial delivery persistence failed",
+      );
       if (options.isIdle()) void flush(true);
     },
 
-    /** Queue a detached run after terminal status and pending are persisted. */
+    /** Queue a detached run with in-memory retry ownership before persistence. */
     defer(envelope: WorkflowCompletionEnvelope) {
-      persistState(envelope.details, "pending", { lastError: undefined });
-      enqueue(envelope);
+      retainPending(
+        envelope,
+        { lastError: undefined },
+        "Initial delivery persistence failed",
+      );
       if (options.isIdle()) void flush(true);
     },
 
@@ -241,4 +248,5 @@ export function createWorkflowResultDelivery(
       pending.clear();
     },
   };
+  return queue satisfies ResultDeliveryQueue<WorkflowCompletionEnvelope>;
 }

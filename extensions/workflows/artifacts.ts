@@ -103,6 +103,24 @@ function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
 
+export function persistWorkflowTerminalState(
+  runDir: string,
+  details: WorkflowDetails,
+) {
+  const terminalManifest: WorkflowDetails = {
+    ...details,
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
+  delete terminalManifest.result;
+  delete terminalManifest.resultArtifact;
+  delete terminalManifest.transcriptArtifact;
+  writeRunFile(
+    runDir,
+    "workflow.json",
+    safeStringify(terminalManifest, { maxBytes: 1024 * 1024 }),
+  );
+}
+
 /** Persist one successful child result before any handoff/context projection. */
 export function persistWorkflowAgentResult(
   runDir: string,
@@ -148,6 +166,15 @@ export function persistWorkflowJson(
       boundedArtifactTranscript(agent.transcript),
     ]),
   );
+
+  // Publish terminal execution facts before dependent side artifacts. If a
+  // later artifact write fails, readers still see an explained terminal run
+  // instead of the previous `running` manifest. The final manifest below adds
+  // the artifact references once every dependent file has committed.
+  if (details.status !== "running") {
+    persistWorkflowTerminalState(runDir, details);
+  }
+
   writeRunFile(
     runDir,
     "transcripts.json",

@@ -576,6 +576,53 @@ test("failed completion delivery remains durable and retries once with the same 
   );
 });
 
+test("shutdown preserves a failed completion for reload recovery", async () => {
+  sentMessages.length = 0;
+  modelIdle = false;
+  sendFailures = 1;
+  const run = (await workflow.execute(
+    "e2e-shutdown-reload-delivery",
+    {
+      script:
+        'export const meta = { name: "shutdown-reload-delivery" };\nreturn { durable: true };',
+      background: true,
+    },
+    undefined,
+    undefined,
+    ctx,
+  )) as { details: { runId?: unknown } };
+
+  await waitFor(
+    () =>
+      (readWorkflowJson(run.details.runId).delivery as { state?: string })
+        ?.state === "pending",
+    "pending completion before shutdown",
+  );
+  for (const handler of handlers.get("session_shutdown") ?? []) {
+    await handler({}, ctx);
+  }
+  assert.equal(
+    (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
+    "pending",
+  );
+
+  modelIdle = true;
+  for (const handler of handlers.get("session_start") ?? []) {
+    await handler({}, { ...ctx, mode: "print" } as unknown as ExtensionContext);
+  }
+  await waitFor(
+    () =>
+      sentMessages.filter(
+        (sent) => sent.message.details?.runId === run.details.runId,
+      ).length === 1,
+    "completion after reload recovery",
+  );
+  assert.equal(
+    (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
+    "delivered",
+  );
+});
+
 test("a failing script reports the error and records the run as failed", async () => {
   await assert.rejects(
     Promise.resolve(

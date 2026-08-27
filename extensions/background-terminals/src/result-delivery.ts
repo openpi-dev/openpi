@@ -1,3 +1,5 @@
+import type { ResultDeliveryQueue } from "../../shared/result-delivery.ts";
+
 /**
  * Deferred one-shot delivery map (same semantics as subagents'): a settled
  * terminal's result is held here until it is either drained into a follow-up
@@ -8,7 +10,7 @@
 export function createDeferredResultDelivery<T extends { id: string }>() {
   const pending = new Map<string, T>();
 
-  return {
+  const queue = {
     defer(result: T) {
       pending.set(result.id, result);
       return pending.size;
@@ -38,6 +40,7 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
       pending.clear();
     },
   };
+  return queue satisfies ResultDeliveryQueue<T>;
 }
 
 /**

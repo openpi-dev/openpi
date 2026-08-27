@@ -1,3 +1,5 @@
+import type { ResultDeliveryQueue } from "../../shared/result-delivery.ts";
+
 export interface SubagentResultDeliveryOptions<T> {
   /** True only when the parent has no run or queued continuation in flight. */
   readonly isIdle: () => boolean;
@@ -46,7 +48,7 @@ export function createSubagentResultDelivery<T extends { id: string }>(
     }
   };
 
-  return {
+  const queue = {
     defer(result: T) {
       pending.set(result.id, result);
       if (options.isIdle()) flush();
@@ -61,5 +63,9 @@ export function createSubagentResultDelivery<T extends { id: string }>(
     clear() {
       pending.clear();
     },
+    size() {
+      return pending.size;
+    },
   };
+  return queue satisfies ResultDeliveryQueue<T>;
 }
