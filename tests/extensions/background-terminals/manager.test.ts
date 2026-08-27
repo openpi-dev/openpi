@@ -13,7 +13,6 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-<<<<<<< HEAD:tests/extensions/background-terminals/manager.test.ts
 import { Effect, ManagedRuntime } from "effect";
 import type { TerminalSnapshot } from "../../../extensions/background-terminals/src/domain.ts";
 import {
@@ -24,10 +23,12 @@ import {
   signalWindowsProcessTree,
   TerminalManager,
   type TerminalManagerShape,
-<<<<<<< HEAD:tests/extensions/background-terminals/manager.test.ts
   waitForWindowsTaskkill,
 } from "../../../extensions/background-terminals/src/manager.ts";
-import { createTerminalRuntime, runTool } from "../../../extensions/background-terminals/src/runtime.ts";
+import {
+  createTerminalRuntime,
+  runTool,
+} from "../../../extensions/background-terminals/src/runtime.ts";
 
 const cwd = process.cwd();
 
@@ -172,18 +173,50 @@ test("Windows taskkill treats an already-exited target as a natural race", async
   assert.equal(directSignal, false);
 });
 
-test("Windows taskkill wait is bounded and stops a wedged helper", async () => {
+test("Windows taskkill timeout waits for the stopped helper to close", async () => {
   let helperKilled = false;
+  let resolveHelperKilled!: () => void;
+  const helperKilledPromise = new Promise<void>((resolve) => {
+    resolveHelperKilled = resolve;
+  });
   const killer = new EventEmitter() as ChildProcess;
   killer.kill = () => {
     helperKilled = true;
+    resolveHelperKilled();
     return true;
   };
 
-  const result = await waitForWindowsTaskkill(46, false, () => killer, 1);
+  const resultPromise = waitForWindowsTaskkill(46, false, () => killer, 1, 100);
+  let resolved = false;
+  void resultPromise.then(() => {
+    resolved = true;
+  });
+  await helperKilledPromise;
 
-  assert.deepEqual(result, { outcome: "timed_out", timeoutMs: 1 });
   assert.equal(helperKilled, true);
+  assert.equal(resolved, false, "the next termination phase cannot overlap");
+  killer.emit("close", null, "SIGKILL");
+  assert.deepEqual(await resultPromise, {
+    outcome: "timed_out",
+    timeoutMs: 1,
+    helperClosed: true,
+    helperCloseTimeoutMs: 100,
+  });
+});
+
+test("Windows taskkill helper close has a second explicit bound", async () => {
+  const killer = new EventEmitter() as ChildProcess;
+  killer.kill = () => true;
+
+  assert.deepEqual(
+    await waitForWindowsTaskkill(47, false, () => killer, 1, 1),
+    {
+      outcome: "timed_out",
+      timeoutMs: 1,
+      helperClosed: false,
+      helperCloseTimeoutMs: 1,
+    },
+  );
 });
 
 async function withManager(

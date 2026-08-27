@@ -8,6 +8,7 @@ test("push/view roundtrip preserves text and counts bytes", () => {
   buf.push("world\n");
   const view = buf.view();
   assert.equal(view.text, "hello world\n");
+  assert.equal(view.modelSafeText, "hello world\n");
   assert.equal(view.totalBytes, Buffer.byteLength("hello world\n"));
   assert.equal(view.truncatedBytes, 0);
 });

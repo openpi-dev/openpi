@@ -48,6 +48,8 @@ const STOP_TIMEOUT_MS = 5_000;
 /** SIGTERM is normally enough; the second deadline covers a wedged process. */
 const FORCE_KILL_AFTER_MS = 2_000;
 const FORCE_CLOSE_WAIT_MS = 500;
+/** Reserve this inside each existing termination phase for helper closure. */
+const TASKKILL_HELPER_CLOSE_WAIT_MS = 100;
 /** After termination, how long to wait for the natural close→flush→settle
  * path before force-settling (a grandchild can hold the stdio pipes open). */
 const SETTLE_GRACE_MS = 1_000;
@@ -252,7 +254,12 @@ export type WindowsTaskkillResult =
       readonly signal: NodeJS.Signals | null;
     }
   | { readonly outcome: "launch_failed"; readonly error: string }
-  | { readonly outcome: "timed_out"; readonly timeoutMs: number };
+  | {
+      readonly outcome: "timed_out";
+      readonly timeoutMs: number;
+      readonly helperClosed: boolean;
+      readonly helperCloseTimeoutMs: number;
+    };
 
 function spawnTaskkill(pid: number, force: boolean) {
   return spawn(
@@ -267,7 +274,9 @@ export function waitForWindowsTaskkill(
   pid: number,
   force: boolean,
   launch: TaskkillSpawner = spawnTaskkill,
-  timeoutMs = force ? FORCE_CLOSE_WAIT_MS : FORCE_KILL_AFTER_MS,
+  timeoutMs = (force ? FORCE_CLOSE_WAIT_MS : FORCE_KILL_AFTER_MS) -
+    TASKKILL_HELPER_CLOSE_WAIT_MS,
+  helperCloseTimeoutMs = TASKKILL_HELPER_CLOSE_WAIT_MS,
 ) {
   return new Promise<WindowsTaskkillResult>((resolve) => {
     let killer: ChildProcess;
@@ -280,10 +289,13 @@ export function waitForWindowsTaskkill(
 
     let finished = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let helperCloseTimer: ReturnType<typeof setTimeout> | undefined;
+    let timedOut = false;
     const finish = (result: WindowsTaskkillResult) => {
       if (finished) return;
       finished = true;
       if (timer) clearTimeout(timer);
+      if (helperCloseTimer) clearTimeout(helperCloseTimer);
       killer.off("error", onError);
       killer.off("close", onClose);
       resolve(result);
@@ -291,16 +303,35 @@ export function waitForWindowsTaskkill(
     const onError = (error: Error) =>
       finish({ outcome: "launch_failed", error: boundedError(error) });
     const onClose = (exitCode: number | null, signal: NodeJS.Signals | null) =>
-      finish({ outcome: "completed", exitCode, signal });
+      finish(
+        timedOut
+          ? {
+              outcome: "timed_out",
+              timeoutMs,
+              helperClosed: true,
+              helperCloseTimeoutMs,
+            }
+          : { outcome: "completed", exitCode, signal },
+      );
     killer.once("error", onError);
     killer.once("close", onClose);
     timer = setTimeout(() => {
+      timedOut = true;
       try {
         killer.kill("SIGKILL");
       } catch {
         // The helper may already be gone; the bounded result stays the same.
       }
-      finish({ outcome: "timed_out", timeoutMs });
+      helperCloseTimer = setTimeout(
+        () =>
+          finish({
+            outcome: "timed_out",
+            timeoutMs,
+            helperClosed: false,
+            helperCloseTimeoutMs,
+          }),
+        helperCloseTimeoutMs,
+      );
     }, timeoutMs);
   });
 }
@@ -362,7 +393,7 @@ export async function signalWindowsProcessTree(
     attempt.outcome === "launch_failed"
       ? `taskkill failed to launch: ${attempt.error}`
       : attempt.outcome === "timed_out"
-        ? `taskkill timed out after ${attempt.timeoutMs}ms`
+        ? `taskkill timed out after ${attempt.timeoutMs}ms; helper ${attempt.helperClosed ? "closed after SIGKILL" : `did not close within an additional ${attempt.helperCloseTimeoutMs}ms`}`
         : `taskkill exited ${attempt.exitCode ?? "without a code"}${attempt.signal ? ` (${attempt.signal})` : ""}`;
   // A failed graceful taskkill must leave the shell PID alive for the
   // serialized `/T /F` phase. Killing only the shell here would orphan its

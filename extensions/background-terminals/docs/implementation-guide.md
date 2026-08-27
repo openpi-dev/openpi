@@ -110,6 +110,7 @@ export interface TerminalSnapshot {
 
 export interface OutputView {
   readonly text: string;               // decoded, possibly head-trimmed text (bounded)
+  readonly modelSafeText: string;      // stateful bounded projection for model-facing output
   readonly totalBytes: number;         // true total bytes ever received
   readonly truncatedBytes: number;     // bytes dropped from the head (0 = complete)
   readonly spillPath?: string;         // on-disk full capture, when spilling engaged (§7.6)
@@ -388,7 +389,7 @@ export class OutputBuffer {
        older whole chunks until retained bytes fit. Every discarded byte
        increments truncatedBytes; totalBytes counts the original input. */
   }
-  view(): OutputView { /* { text: this.chunks.join(""), totalBytes, truncatedBytes, spillPath } */ }
+  view(): OutputView { /* { text, modelSafeText, totalBytes, truncatedBytes, spillPath } */ }
 }
 ```
 

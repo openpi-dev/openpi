@@ -140,8 +140,7 @@ function outputSection(
   maxLines: number,
 ) {
   if (view.totalBytes === 0) return `${label}: (empty)`;
-  const sanitized = sanitizeTerminalText(view.text);
-  const truncation = truncateTail(sanitized, {
+  const truncation = truncateTail(view.modelSafeText, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(maxLines, DEFAULT_MAX_LINES),
   });

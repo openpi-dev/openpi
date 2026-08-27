@@ -4,6 +4,7 @@ import type {
   OutputView,
   TerminalSnapshot,
 } from "../../../extensions/background-terminals/src/domain.ts";
+import { RETAINED_PER_STREAM } from "../../../extensions/background-terminals/src/manager.ts";
 import {
   BG_START_PARAMETER_DESCRIPTIONS,
   BG_START_TOOL_DESCRIPTION,
@@ -11,9 +12,9 @@ import {
   buildStatusResult,
   buildTerminalBatchResultMessage,
   buildTerminalResultMessage,
-<<<<<<< HEAD:tests/extensions/background-terminals/prompt.test.ts
 } from "../../../extensions/background-terminals/src/prompt.ts";
 import { OutputBuffer } from "../../../extensions/background-terminals/src/output.ts";
+import { sanitizeTerminalText } from "../../../extensions/shared/terminal-text.ts";
 
 test("start descriptions identify the platform-specific shell contract", () => {
   assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
@@ -31,7 +32,14 @@ test("start descriptions identify the platform-specific shell contract", () => {
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
-  return { text: "", totalBytes: 0, truncatedBytes: 0, ...overrides };
+  const text = overrides.text ?? "";
+  return {
+    text,
+    modelSafeText: overrides.modelSafeText ?? sanitizeTerminalText(text),
+    totalBytes: 0,
+    truncatedBytes: 0,
+    ...overrides,
+  };
 }
 
 function snap(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
@@ -204,6 +212,23 @@ test("model-facing output is sanitized before tail truncation", () => {
     "raw retained evidence is unchanged",
   );
   assert.match(stdout.text, /HIDDEN/);
+});
+
+test("model-safe output keeps control-string state across the retained head", () => {
+  const buffer = new OutputBuffer(RETAINED_PER_STREAM);
+  buffer.push(`\u001b]52;c;${"x".repeat(RETAINED_PER_STREAM)}`);
+  buffer.push("\nMODEL_HIDDEN_PAYLOAD\n\u0007visible tail\n");
+  const stdout = buffer.view();
+
+  assert.ok(!stdout.text.includes("\u001b]52"), "the OSC opener was evicted");
+  assert.match(stdout.text, /MODEL_HIDDEN_PAYLOAD/);
+  for (const result of [
+    buildStatusResult(snap({ stdout })),
+    buildTerminalResultMessage(snap({ stdout })),
+  ]) {
+    assert.ok(!result.includes("MODEL_HIDDEN_PAYLOAD"));
+    assert.match(result, /visible tail/);
+  }
 });
 
 test("batched completion sanitizes controls without flattening logs", () => {
