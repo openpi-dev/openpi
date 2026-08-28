@@ -49,13 +49,13 @@ import {
 } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
 import { formatActivityStatus } from "../shared/activity-status.ts";
+import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { waitBounded } from "../shared/child-session.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
 } from "../shared/editor-layers.ts";
-import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { loadSetupConfig } from "../shared/setup-config.ts";
 import { SPINNER_INTERVAL_MS } from "../shared/spinner.ts";
 import {
@@ -87,6 +87,14 @@ import {
   persistWorkflowAgentResult,
   persistWorkflowJson,
 } from "./artifacts.ts";
+import {
+  buildExpandedWorkflowCompletion,
+  buildWorkflowCompletionDisplay,
+  isWorkflowCompletionDisplay,
+  workflowCompletionAlerts,
+  workflowCompletionResultPreview,
+  workflowCompletionSummary,
+} from "./completion-projection.ts";
 import { RunController } from "./controller.ts";
 import {
   resolveWorkflowLaunchPolicy,
@@ -170,14 +178,14 @@ import {
   WORKFLOW_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import {
-  createWorkflowResultDelivery,
-  type WorkflowCompletionEnvelope,
-} from "./result-delivery.ts";
-import {
   beginProcessReplayWorkspaceLease,
   createReplayIdentity,
   isReplaySafeAgentCall,
 } from "./replay-safety.ts";
+import {
+  createWorkflowResultDelivery,
+  type WorkflowCompletionEnvelope,
+} from "./result-delivery.ts";
 import {
   createWorkflowResources,
   runAgent,
@@ -812,9 +820,13 @@ export default function workflows(pi: ExtensionAPI) {
           customType: "workflow-result",
           content,
           display: true,
-          ...(envelopes.length === 1
-            ? { details: compactToolDetails(envelopes[0]!.details) }
-            : {}),
+          details: buildWorkflowCompletionDisplay(
+            envelopes.map((envelope) => ({
+              deliveryId: envelope.deliveryId,
+              details: envelope.details,
+              runDir: path.join(getAgentDir(), "workflows", envelope.runId),
+            })),
+          ),
         },
         wake
           ? { deliverAs: "followUp", triggerTurn: true }
@@ -2380,7 +2392,6 @@ export default function workflows(pi: ExtensionAPI) {
   pi.registerMessageRenderer(
     "workflow-result",
     (message, { expanded }, theme) => {
-      const details = message.details as WorkflowDetails | undefined;
       const body =
         typeof message.content === "string"
           ? message.content
@@ -2388,18 +2399,66 @@ export default function workflows(pi: ExtensionAPI) {
               ?.map((part) => (part.type === "text" ? part.text : ""))
               .join("") ?? "");
       const safeBody = sanitizeWorkflowDisplayText(body);
-      if (!details) return new Text(safeBody, 0, 0);
-      const headerParts = runHeader(details, theme, Date.now());
-      const header = headerParts.right
-        ? `${headerParts.left} ${headerParts.right}`
-        : headerParts.left;
-      if (expanded) return new Text(`${header}\n\n${safeBody}`, 0, 0);
-      const preview = safeBody.split("\n").slice(0, 8).join("\n");
-      return new Text(
-        `${header}\n${preview}\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`,
-        0,
-        0,
-      );
+      const display = isWorkflowCompletionDisplay(message.details)
+        ? message.details
+        : undefined;
+      const legacyDetails = isWorkflowRenderDetails(message.details)
+        ? message.details
+        : undefined;
+      if (!display && !legacyDetails) {
+        return new Text(safeBody, 0, 0);
+      }
+      if (legacyDetails) {
+        const headerParts = runHeader(legacyDetails, theme, Date.now());
+        const header = headerParts.right
+          ? `${headerParts.left} ${headerParts.right}`
+          : headerParts.left;
+        if (expanded) return new Text(`${header}\n\n${safeBody}`, 0, 0);
+        const preview = safeBody.split("\n").slice(0, 8).join("\n");
+        return new Text(
+          `${header}\n${preview}\n${theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`)}`,
+          0,
+          0,
+        );
+      }
+      if (!display) return new Text(safeBody, 0, 0);
+      if (expanded) {
+        return new Text(buildExpandedWorkflowCompletion(display), 0, 0);
+      }
+      return {
+        render(width: number) {
+          const rows: string[] = [];
+          for (const { details } of display.entries) {
+            rows.push(
+              truncateToWidth(
+                `${statusGlyph(details.status, theme, Date.now())} ${workflowCompletionSummary(details)}`,
+                width,
+                "…",
+              ),
+            );
+            for (const alert of workflowCompletionAlerts(details)) {
+              rows.push(
+                truncateToWidth(`  ${theme.fg("error", alert)}`, width, "…"),
+              );
+            }
+            const result = workflowCompletionResultPreview(details);
+            if (result) {
+              rows.push(
+                truncateToWidth(
+                  `  ${theme.fg("accent", "Result:")} ${result}`,
+                  width,
+                  "…",
+                ),
+              );
+            }
+          }
+          rows.push(
+            theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`),
+          );
+          return rows;
+        },
+        invalidate() {},
+      };
     },
   );
 }

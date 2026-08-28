@@ -1,16 +1,21 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  initTheme,
   type AgentToolResult,
   type ExtensionAPI,
+  initTheme,
   type MessageRenderer,
   type Theme,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
+import { buildWorkflowCompletionDisplay } from "../../../extensions/workflows/completion-projection.ts";
 import workflows from "../../../extensions/workflows/index.ts";
-import type { WorkflowDetails } from "../../../extensions/workflows/model.ts";
+import {
+  emptyUsage,
+  type WorkflowDetails,
+} from "../../../extensions/workflows/model.ts";
 
 initTheme("dark", false);
 
@@ -33,6 +38,35 @@ function runningWorkflow(): WorkflowDetails {
     startedAt: 0,
     phases: [],
     agents: [],
+  };
+}
+
+function finishedWorkflow(
+  overrides: Partial<WorkflowDetails> = {},
+): WorkflowDetails {
+  return {
+    runId: "wf_finished",
+    name: "render-check",
+    status: "completed",
+    background: true,
+    startedAt: 0,
+    finishedAt: 293_000,
+    phases: [{ title: "audit" }],
+    agents: [
+      {
+        index: 1,
+        label: "reviewer",
+        state: "done",
+        startedAt: 0,
+        finishedAt: 293_000,
+        preview: "",
+        usage: emptyUsage(),
+        transcript: [],
+      },
+    ],
+    logs: [{ at: 1, text: "ordinary diagnostic log" }],
+    result: { verdict: "ship it" },
+    ...overrides,
   };
 }
 
@@ -170,4 +204,148 @@ test("running workflow result messages let the glyph carry the state", () => {
   const rendered = component.render(100).join("\n");
   assert.match(rendered, /workflow render-check/);
   assert.doesNotMatch(rendered, /\brunning\b/);
+});
+
+test("single completion keeps success diagnostics behind expansion", () => {
+  const { message } = captureRenderers();
+  const details = finishedWorkflow();
+  const display = buildWorkflowCompletionDisplay([
+    {
+      deliveryId: "workflow:wf_finished:terminal",
+      details,
+      runDir: "/tmp/wf_finished",
+    },
+  ]);
+  assert.equal(display.runId, details.runId);
+  const component = message(
+    {
+      role: "custom",
+      customType: "workflow-result",
+      content:
+        'Background workflow "render-check" (wf_finished) finished.\n\nfull model payload',
+      display: true,
+      details: display,
+      timestamp: Date.now(),
+    },
+    { expanded: false, outputPad: 0 },
+    theme,
+  );
+  assert.ok(component);
+  const collapsed = component.render(120).join("\n");
+  assert.equal((collapsed.match(/render-check/g) ?? []).length, 1);
+  assert.equal((collapsed.match(/1\/1 agents/g) ?? []).length, 1);
+  assert.equal((collapsed.match(/4m53s/g) ?? []).length, 1);
+  assert.match(collapsed, /Result:.*ship it/);
+  assert.doesNotMatch(
+    collapsed,
+    /Background workflow|Run dir:|Log:|Agents:|Delivery id:/,
+  );
+  assert.doesNotMatch(collapsed, /ordinary diagnostic log/);
+
+  const expanded = message(
+    {
+      role: "custom",
+      customType: "workflow-result",
+      content: "model-only transport wrapper",
+      display: true,
+      details: buildWorkflowCompletionDisplay([
+        {
+          deliveryId: "workflow:wf_finished:terminal",
+          details,
+          runDir: "/tmp/wf_finished",
+        },
+      ]),
+      timestamp: Date.now(),
+    },
+    { expanded: true, outputPad: 0 },
+    theme,
+  );
+  assert.ok(expanded);
+  const full = expanded.render(120).join("\n");
+  assert.match(full, /Run dir: \/tmp\/wf_finished/);
+  assert.match(full, /^Log: *$/m);
+  assert.match(full, /^Agents: *$/m);
+  assert.match(full, /Delivery id: workflow:wf_finished:terminal/);
+  assert.doesNotMatch(full, /model-only transport wrapper|Background workflow/);
+});
+
+test("batch completion foregrounds abnormal evidence within width", () => {
+  const { message } = captureRenderers();
+  const failed = finishedWorkflow({
+    runId: "wf_failed",
+    name: "failed\u001b]52;c;clipboard\u0007",
+    status: "failed",
+    error: "top-level failure",
+    logs: [
+      { at: 1, text: "ordinary log" },
+      { at: 2, text: "pipeline: item 2 dropped — stage failed" },
+    ],
+    logsDropped: 3,
+    agents: [
+      {
+        index: 1,
+        label: "owner-lost",
+        state: "uncertain",
+        startedAt: 0,
+        finishedAt: 293_000,
+        preview: "",
+        usage: emptyUsage(),
+        transcript: [],
+      },
+      {
+        index: 2,
+        label: "writer",
+        state: "error",
+        startedAt: 0,
+        finishedAt: 293_000,
+        error: "failed",
+        preview: "",
+        usage: emptyUsage(),
+        worktreePath: "/repo/.git/pi-worktrees/writer",
+        worktreeHandoffArtifact: "worktrees/writer.json",
+        worktreeCleanup: {
+          removed: false,
+          branchDeleted: false,
+          branch: "pi/writer",
+          detached: false,
+          reason: "uncommitted changes",
+        },
+        transcript: [],
+      },
+    ],
+  });
+  const completed = finishedWorkflow({
+    runId: "wf_ok",
+    name: "ok-run",
+    startedAt: 292_000,
+    finishedAt: 293_000,
+  });
+  const component = message(
+    {
+      role: "custom",
+      customType: "workflow-result",
+      content: "full batch model payload",
+      display: true,
+      details: buildWorkflowCompletionDisplay([
+        { deliveryId: "delivery-failed", details: failed, runDir: "/tmp/f" },
+        { deliveryId: "delivery-ok", details: completed, runDir: "/tmp/o" },
+      ]),
+      timestamp: Date.now(),
+    },
+    { expanded: false, outputPad: 0 },
+    theme,
+  );
+  assert.ok(component);
+  const rows = component.render(56);
+  const collapsed = rows.join("\n");
+  assert.match(collapsed, /workflow failed/);
+  assert.match(collapsed, /Failed agents: writer/);
+  assert.match(collapsed, /Uncertain agents: owner-lost/);
+  assert.match(collapsed, /3 earlier log line\(s\) dropped/);
+  assert.match(collapsed, /Dropped work: pipeline: item 2 dropped/);
+  assert.match(collapsed, /Retained worktree \[writer\]/);
+  assert.match(collapsed, /workflow ok-run/);
+  assert.doesNotMatch(collapsed, /ordinary log|Run dir:|Delivery id:/);
+  assert.doesNotMatch(collapsed, /\]52|\u0007/);
+  assert.ok(rows.every((row) => visibleWidth(row) <= 56));
 });

@@ -2,6 +2,11 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  type AgentRecord,
+  emptyUsage,
+  type WorkflowDetails,
+} from "../../../extensions/workflows/model.ts";
+import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildProjectedWorkflowCompletionBatch,
@@ -13,11 +18,6 @@ import {
   WORKFLOW_STOP_TOOL_DESCRIPTION,
   WORKFLOW_TOOL_DESCRIPTION,
 } from "../../../extensions/workflows/prompt.ts";
-import {
-  emptyUsage,
-  type AgentRecord,
-  type WorkflowDetails,
-} from "../../../extensions/workflows/model.ts";
 
 test("background follow-up uses a sentence lead-in, not the old bracket form", () => {
   const msg = buildBackgroundWorkflowFollowUp({
@@ -76,6 +76,46 @@ test("completion batches share one bounded fair projection budget", () => {
       new RegExp(`wf_${index.toString(16).padStart(4, "0")}`),
     );
   }
+});
+
+test("model completion payload retains durable evidence independently of the renderer", () => {
+  const details: WorkflowDetails = {
+    runId: "wf_evidence",
+    name: "evidence",
+    status: "completed",
+    background: true,
+    startedAt: 0,
+    finishedAt: 1_000,
+    phases: [{ title: "inspect" }],
+    agents: [
+      {
+        index: 1,
+        label: "reviewer",
+        state: "done",
+        startedAt: 0,
+        finishedAt: 1_000,
+        preview: "",
+        usage: emptyUsage(),
+        transcript: [],
+      },
+    ],
+    logs: [{ at: 1, text: "durable diagnostic" }],
+    result: { verdict: "keep this result" },
+  };
+  const payload = buildProjectedWorkflowCompletionBatch([
+    {
+      deliveryId: "workflow:wf_evidence:terminal",
+      details,
+      runDir: "/tmp/wf_evidence",
+    },
+  ]);
+  assert.match(payload, /^Background workflow "evidence"/);
+  assert.match(payload, /Run dir: \/tmp\/wf_evidence/);
+  assert.match(payload, /^Log:$/m);
+  assert.match(payload, /^Agents:$/m);
+  assert.match(payload, /keep this result/);
+  assert.match(payload, /Delivery id: workflow:wf_evidence:terminal/);
+  assert.match(payload, /duplicate|do not repeat it verbatim/i);
 });
 
 test("uncertain agents are never described as settled failures", () => {
@@ -291,7 +331,7 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
     new URL("../../../skills/workflows/EXAMPLES.md", import.meta.url),
     "utf8",
   );
-  assert.match(skill, /^---\nname: workflows\n/);
+  assert.match(skill, /^---\r?\nname: workflows\r?\n/);
   assert.match(skill, /Use when .*multi-phase/i);
   assert.match(reference, /operator/);
   assert.match(reference, /acceptance/);
