@@ -63,6 +63,7 @@ If those answers are unclear, investigate before adding surface area.
 - Preserve unrelated and uncommitted user work. Make the smallest scoped change that satisfies the request.
 - Follow existing patterns and tests before inventing a new abstraction.
 - Run `bun run check` and `bun run test` after making a change. If a relevant validation command does not exist, call that out and propose one.
+- When opening or updating a pull request, follow `.github/PULL_REQUEST_TEMPLATE.md` and complete its Problem, Value, Approach, Validation, and Impact sections.
 - Avoid explicit return types unless they are necessary. Prefer inference over repeatedly declaring types.
 - Treat `as any` as an absolute last resort; use real type safety.
 - Keep user-visible behavior, model-visible context, and persisted/runtime state tests separate when the distinction matters.
