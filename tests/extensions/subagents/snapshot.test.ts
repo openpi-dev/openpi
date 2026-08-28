@@ -1,0 +1,160 @@
+import assert from "node:assert/strict";
+import test from "node:test";
+import {
+  measureSubagentSnapshotBytes,
+  measureSubagentSnapshotsBytes,
+  parseSubagentSnapshot,
+  parseSubagentSnapshots,
+  projectSubagentSnapshot,
+  projectSubagentSnapshots,
+  truncateUtf8Head,
+  truncateUtf8Tail,
+} from "../../../extensions/subagents/src/snapshot.ts";
+import type { SubagentSnapshot } from "../../../extensions/subagents/src/domain.ts";
+
+function snapshot(id: string, overrides: Partial<SubagentSnapshot> = {}) {
+  return {
+    id,
+    origin: "model" as const,
+    backend: "pi" as const,
+    title: `Agent ${id}`,
+    prompt: "Inspect the repository and report the result.",
+    cwd: "C:/work/openpi",
+    status: "done" as const,
+    createdAt: 1,
+    settledAt: 2,
+    meta: { backend: "pi" as const, modelLabel: "test/model" },
+    usage: { tokens: 10, contextWindow: 1000 },
+    transcript: [
+      { kind: "user" as const, text: "Inspect this" },
+      {
+        kind: "assistant" as const,
+        parts: [{ type: "text" as const, text: "The result is ready." }],
+      },
+    ],
+    liveTools: [],
+    queued: [],
+    finalText: "BEGIN\nThe exact final result is here.\nEND",
+    turns: 1,
+    ...overrides,
+  } satisfies SubagentSnapshot;
+}
+
+test("UTF-8 head and tail truncation never split a multibyte character", () => {
+  const value = "开头" + "中".repeat(20) + "结尾";
+  for (const limit of [1, 2, 3, 4, 7, 11, 23]) {
+    const head = truncateUtf8Head(value, limit);
+    const tail = truncateUtf8Tail(value, limit);
+    assert.ok(Buffer.byteLength(head, "utf8") <= limit);
+    assert.ok(Buffer.byteLength(tail, "utf8") <= limit);
+    assert.doesNotMatch(`${head}${tail}`, /�/);
+  }
+  assert.equal(truncateUtf8Tail(value, 6), "结尾");
+});
+
+test("a giant agent is bounded in serialized UTF-8 bytes and marked", () => {
+  const source = snapshot("giant", {
+    finalText: `开头\n${"中间证据\n".repeat(20_000)}最终结论`,
+    transcript: Array.from({ length: 100 }, (_, index) => ({
+      kind: "user" as const,
+      text: `消息 ${index}`,
+    })),
+  });
+  const projected = projectSubagentSnapshot(source, 4096);
+  assert.ok(projected);
+  assert.ok(measureSubagentSnapshotBytes(projected) <= 4096);
+  assert.equal(projected.id, "giant");
+  assert.equal(projected.status, "done");
+  assert.equal(projected.snapshot?.truncated, true);
+  assert.ok((projected.snapshot?.omittedBytes ?? 0) > 0);
+  assert.match(projected.finalText, /^开头/);
+  assert.match(projected.finalText, /最终结论$/);
+});
+
+test("aggregate projection gives every agent identity under one UTF-8 cap", () => {
+  const source = [
+    snapshot("giant", { finalText: "中".repeat(100_000) }),
+    ...["medium-1", "medium-2", "medium-3"].map((id) =>
+      snapshot(id, { finalText: "证据".repeat(10_000) }),
+    ),
+  ];
+  const projected = projectSubagentSnapshots(source, 12_000);
+  assert.ok(projected);
+  assert.ok(measureSubagentSnapshotsBytes(projected) <= 12_000);
+  assert.deepEqual(
+    projected.map((entry) => [entry.id, entry.status]),
+    source.map((entry) => [entry.id, entry.status]),
+  );
+  assert.ok(projected.every((entry) => entry.snapshot?.truncated));
+});
+
+test("reprojecting does not inflate omission statistics", () => {
+  const source = snapshot("repeat", {
+    finalText: "首" + "中".repeat(20_000) + "尾",
+  });
+  const first = projectSubagentSnapshot(source, 4096);
+  assert.ok(first);
+  const second = projectSubagentSnapshot(first, 4096);
+  assert.ok(second);
+  assert.deepEqual(second.snapshot?.omitted, first.snapshot?.omitted);
+  assert.equal(second.snapshot?.omittedBytes, first.snapshot?.omittedBytes);
+  assert.equal(
+    measureSubagentSnapshotBytes(second),
+    measureSubagentSnapshotBytes(first),
+  );
+});
+
+test("artifact references remain exact while display text is projected", () => {
+  const artifactPath =
+    "C:/cache/openpi/subagent-results/" + "a".repeat(120) + ".txt";
+  const projected = projectSubagentSnapshot(
+    snapshot("artifact", {
+      resultArtifact: artifactPath,
+      finalText: "中".repeat(20_000),
+    }),
+    4096,
+  );
+  assert.ok(projected);
+  assert.equal(projected.resultArtifact, artifactPath);
+  assert.equal(projected.snapshot?.truncated, true);
+});
+
+test("persisted snapshot parsers reject malformed nested values and oversized input", () => {
+  const valid = snapshot("valid");
+  assert.equal(parseSubagentSnapshot(JSON.stringify(valid), 4096)?.id, "valid");
+  assert.equal(
+    parseSubagentSnapshot(
+      JSON.stringify({
+        ...valid,
+        transcript: [{ kind: "assistant", parts: [null] }],
+      }),
+      4096,
+    ),
+    undefined,
+  );
+  assert.equal(
+    parseSubagentSnapshot(
+      JSON.stringify({ ...valid, usage: { tokens: "many" } }),
+      4096,
+    ),
+    undefined,
+  );
+  assert.equal(parseSubagentSnapshot('{"id":', 4096), undefined);
+  assert.equal(parseSubagentSnapshot("中".repeat(100), 64), undefined);
+  assert.equal(
+    parseSubagentSnapshots(
+      JSON.stringify({ snapshots: [{ ...valid, liveTools: [{ toolId: 1 }] }] }),
+      4096,
+    ),
+    undefined,
+  );
+  assert.equal(parseSubagentSnapshots("[]", 0), undefined);
+});
+
+test("projection fails when the minimum identity cannot fit", () => {
+  const source = snapshot("agent-with-an-identity-that-is-too-large", {
+    title: "标题".repeat(100),
+  });
+  assert.equal(projectSubagentSnapshot(source, 32), undefined);
+  assert.equal(projectSubagentSnapshots([source], 32), undefined);
+});

@@ -42,6 +42,12 @@ import type {
   TranscriptItem,
 } from "./domain.ts";
 import {
+  DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
+  projectSubagentSnapshots,
+  truncateUtf8Head,
+  truncateUtf8Tail,
+} from "./snapshot.ts";
+import {
   BackendUnavailableError,
   ConcurrencyLimitError,
   SendError,
@@ -70,11 +76,11 @@ export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
 const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
-const FINAL_TEXT_MAX_LENGTH = 1_024 * 1_024;
 const MAX_TRANSCRIPT_ITEMS = 512;
+const MAX_QUEUE_MESSAGES = 128;
 
 function bounded(text: string) {
-  return text.slice(0, ERROR_TEXT_MAX_LENGTH);
+  return truncateUtf8Head(text, ERROR_TEXT_MAX_LENGTH);
 }
 
 function formatWatchdogTimeout(ms: number) {
@@ -82,7 +88,7 @@ function formatWatchdogTimeout(ms: number) {
 }
 
 function boundedTranscriptText(text: string) {
-  return text.slice(0, TRANSCRIPT_TEXT_MAX_LENGTH);
+  return truncateUtf8Head(text, TRANSCRIPT_TEXT_MAX_LENGTH);
 }
 
 function appendTranscript(snapshot: MutableSnapshot, item: TranscriptItem) {
@@ -123,7 +129,9 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
+  resultArtifact?: string;
   turns: number;
+  snapshot?: SubagentSnapshot["snapshot"];
 }
 
 interface Entry {
@@ -215,6 +223,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
   Effect.gen(function* () {
     const firstResponseTimeoutMs =
       config.firstResponseTimeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
+    const maxSnapshotBytes =
+      config.maxSnapshotBytes ?? DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES;
+    if (!Number.isSafeInteger(maxSnapshotBytes) || maxSnapshotBytes <= 0) {
+      throw new Error("maxSnapshotBytes must be a positive safe integer");
+    }
     const registry = yield* BackendRegistry;
     // Detached forker for sync contexts (read-model commands, pruning) that
     // preserves the manager's services instead of using the global runtime.
@@ -238,6 +251,76 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     let onSettled:
       | ((snap: SubagentSnapshot, consumed: boolean) => void)
       | undefined;
+
+    /** Copy a bounded projection back into the live object held by readers. */
+    const assignSnapshot = (
+      target: MutableSnapshot,
+      source: SubagentSnapshot,
+    ) => {
+      target.title = source.title;
+      target.prompt = source.prompt;
+      target.cwd = source.cwd;
+      target.status = source.status;
+      target.createdAt = source.createdAt;
+      target.settledAt = source.settledAt;
+      target.errorText = source.errorText;
+      target.meta = { ...source.meta };
+      target.usage = { ...source.usage };
+      target.transcript = [...source.transcript];
+      target.liveAssistant = source.liveAssistant
+        ? { ...source.liveAssistant }
+        : undefined;
+      target.liveTools = [...source.liveTools];
+      target.queued = [...source.queued];
+      target.finalText = source.finalText;
+      target.resultArtifact = source.resultArtifact;
+      target.turns = source.turns;
+      target.snapshot = source.snapshot;
+    };
+
+    /** Keep the manager's entire read model under one aggregate byte bound. */
+    const enforceSnapshotBudget = () => {
+      if (entries.size === 0) return;
+      const current = [...entries.values()].map(
+        (entry) => entry.snapshot as SubagentSnapshot,
+      );
+      const projected = projectSubagentSnapshots(current, maxSnapshotBytes);
+      if (!projected) {
+        throw new Error(
+          `Subagent snapshot aggregate exceeds the configured ${maxSnapshotBytes}-byte minimum identity budget`,
+        );
+      }
+      const projectedById = new Map(
+        projected.map((snapshot) => [snapshot.id, snapshot] as const),
+      );
+      for (const entry of entries.values()) {
+        const snapshot = projectedById.get(entry.snapshot.id);
+        if (!snapshot) throw new Error("Projected subagent identity disappeared");
+        assignSnapshot(entry.snapshot, snapshot);
+      }
+    };
+
+    const cloneSnapshot = (snapshot: SubagentSnapshot): SubagentSnapshot => ({
+      ...snapshot,
+      meta: { ...snapshot.meta },
+      usage: { ...snapshot.usage },
+      transcript: snapshot.transcript.map((item) =>
+        item.kind === "assistant"
+          ? { ...item, parts: item.parts.map((part) => ({ ...part })) }
+          : { ...item },
+      ),
+      liveAssistant: snapshot.liveAssistant
+        ? { ...snapshot.liveAssistant }
+        : undefined,
+      liveTools: snapshot.liveTools.map((tool) => ({ ...tool })),
+      queued: snapshot.queued.map((message) => ({ ...message })),
+      snapshot: snapshot.snapshot
+        ? {
+            ...snapshot.snapshot,
+            omitted: { ...snapshot.snapshot.omitted },
+          }
+        : undefined,
+    });
 
     const notify = (id?: string) => {
       const waiters = changeWaiters;
@@ -324,6 +407,28 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         Effect.ignore,
       );
 
+    const registerEntry = (
+      id: string,
+      entry: Entry,
+    ): Effect.Effect<void, SpawnError> =>
+      Effect.try({
+        try: () => {
+          entries.set(id, entry);
+          enforceSnapshotBudget();
+        },
+        catch: (error) =>
+          new SpawnError({
+            message: error instanceof Error ? error.message : String(error),
+          }),
+      }).pipe(
+        Effect.catch((error: SpawnError) =>
+          Effect.sync(() => entries.delete(id)).pipe(
+            Effect.andThen(closeEntryScope(entry)),
+            Effect.andThen(Effect.fail(error)),
+          ),
+        ),
+      );
+
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
       const candidates = [...entries.values()]
@@ -340,6 +445,16 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         cleanups.add(fiber);
         fiber.addObserver(() => cleanups.delete(fiber));
       }
+    };
+
+    /** Persist exact terminal text before the bounded read-model projection. */
+    const persistExactResult = (entry: Entry, text: string) => {
+      if (!text || !config.persistResultArtifact) return;
+      const artifact = config.persistResultArtifact(text);
+      if (typeof artifact !== "string" || artifact.length === 0) {
+        throw new Error("persistResultArtifact must return a non-empty path");
+      }
+      entry.snapshot.resultArtifact = artifact;
     };
 
     const settle = (entry: Entry, outcome: RunOutcome) => {
@@ -362,26 +477,23 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.status = "done";
           s.outcome = "completed";
           s.errorText = undefined;
-          s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
+          s.finalText = outcome.finalText;
+          persistExactResult(entry, outcome.finalText);
           break;
         case "Failed":
           s.status = "error";
           s.outcome = "failed";
           s.errorText = bounded(outcome.errorText);
           // Never let a failed run report the previous run's successful output.
-          s.finalText = (outcome.partialText ?? "").slice(
-            0,
-            FINAL_TEXT_MAX_LENGTH,
-          );
+          s.finalText = outcome.partialText ?? "";
+          persistExactResult(entry, s.finalText);
           break;
         case "Interrupted":
           s.status = "error";
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
-          s.finalText = (outcome.partialText ?? "").slice(
-            0,
-            FINAL_TEXT_MAX_LENGTH,
-          );
+          s.finalText = outcome.partialText ?? "";
+          persistExactResult(entry, s.finalText);
           break;
       }
       s.liveAssistant = undefined;
@@ -389,10 +501,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       s.liveTools = [];
       s.queued = [];
       const consumed = (waitInterest.get(s.id) ?? 0) > 0;
+      enforceSnapshotBudget();
+      const settledSnapshot = cloneSnapshot(s);
       notify(s.id);
       try {
         // During teardown, don't queue results into a shutting-down session.
-        if (!disposed) onSettled?.(s, consumed);
+        if (!disposed) onSettled?.(settledSnapshot, consumed);
       } catch {
         // The parent session may be unavailable; settlement stays final.
       }
@@ -446,6 +560,8 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
+          s.resultArtifact = undefined;
+          s.snapshot = undefined;
           armWatchdog(entry);
           break;
         case "RunSettled":
@@ -464,14 +580,16 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             event.kind === "text"
               ? {
                   ...live,
-                  text: (live.text + event.delta).slice(
-                    -LIVE_ASSISTANT_MAX_LENGTH,
+                  text: truncateUtf8Tail(
+                    live.text + event.delta,
+                    LIVE_ASSISTANT_MAX_LENGTH,
                   ),
                 }
               : {
                   ...live,
-                  thinking: (live.thinking + event.delta).slice(
-                    -LIVE_ASSISTANT_MAX_LENGTH,
+                  thinking: truncateUtf8Tail(
+                    live.thinking + event.delta,
+                    LIVE_ASSISTANT_MAX_LENGTH,
                   ),
                 };
           break;
@@ -497,7 +615,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         case "ToolStart":
           entry.liveToolMap.set(event.toolId, {
             toolId: event.toolId,
-            name: event.name,
+            name: boundedTranscriptText(event.name),
             argsPreview: event.argsPreview
               ? boundedTranscriptText(event.argsPreview)
               : undefined,
@@ -523,7 +641,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           appendTranscript(s, {
             kind: "toolResult",
             toolId: event.toolId,
-            name: event.name,
+            name: boundedTranscriptText(event.name),
             isError: event.isError,
             outputPreview: event.outputPreview
               ? boundedTranscriptText(event.outputPreview)
@@ -531,7 +649,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           });
           break;
         case "QueueChanged":
-          s.queued = event.queued;
+          s.queued = event.queued.slice(-MAX_QUEUE_MESSAGES).map((message) => ({
+            kind: message.kind,
+            text: boundedTranscriptText(message.text),
+          }));
           break;
         case "UsageChanged":
           s.usage = {
@@ -546,6 +667,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.errorText = bounded(event.message);
           break;
       }
+      enforceSnapshotBudget();
       notify(s.id);
     };
 
@@ -622,7 +744,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             scope,
             liveToolMap: new Map(),
           };
-          entries.set(id, entry);
+          yield* registerEntry(id, entry);
           // The run is live from the caller's perspective before RunStarted
           // reaches the pump; guard that window too.
           armWatchdog(entry);
@@ -875,6 +997,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
 export interface SubagentManagerConfig {
   /** Test-only override for the first-response watchdog timeout. */
   firstResponseTimeoutMs?: number;
+  /** Aggregate UTF-8 budget for all live/settled read-model snapshots. */
+  maxSnapshotBytes?: number;
+  /** Persist an exact terminal result before the in-memory projection is cut. */
+  persistResultArtifact?: (content: string) => string;
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;

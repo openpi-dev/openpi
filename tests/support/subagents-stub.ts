@@ -147,26 +147,33 @@ const makeStubSession = (
             { type: "toolCall", toolId, name: profile.toolName, argsPreview },
           ],
         });
-        yield* emit({
-          _tag: "ToolStart",
-          toolId,
-          name: profile.toolName,
-          argsPreview,
-        });
+        const toolIds = userText.trimStart().startsWith("MANYTOOLS:")
+          ? Array.from({ length: 130 }, (_, index) => `${toolId}-${index}`)
+          : [toolId];
+        for (const activeToolId of toolIds) {
+          yield* emit({
+            _tag: "ToolStart",
+            toolId: activeToolId,
+            name: profile.toolName,
+            argsPreview,
+          });
+        }
         yield* pause;
         yield* emit({
           _tag: "ToolUpdate",
-          toolId,
+          toolId: toolIds[0]!,
           outputPreview: "src docs package.json",
         });
         yield* pause;
-        yield* emit({
-          _tag: "ToolEnd",
-          toolId,
-          name: profile.toolName,
-          isError: false,
-          outputPreview: "src docs package.json",
-        });
+        for (const activeToolId of toolIds) {
+          yield* emit({
+            _tag: "ToolEnd",
+            toolId: activeToolId,
+            name: profile.toolName,
+            isError: false,
+            outputPreview: "src docs package.json",
+          });
+        }
         yield* emit({
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),

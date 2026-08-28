@@ -70,6 +70,10 @@ import {
   planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../shared/plan-mode-state.ts";
+import {
+  allocateResultBudgets,
+  type ParentContextUsage,
+} from "../shared/result-budget.ts";
 import { loadSetupConfig, type DetailDisplay } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
@@ -130,12 +134,9 @@ import {
 import {
   persistResultArtifact,
   projectResult,
+  readResultArtifact,
   type ResultProjection,
 } from "./src/result-artifact.ts";
-import {
-  allocateResultBudgets,
-  type ParentContextUsage,
-} from "../shared/result-budget.ts";
 import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
@@ -185,6 +186,7 @@ interface SubagentResultDetails {
   readonly artifactSaveFailed?: boolean;
   readonly fullResultSaved?: boolean;
   readonly count?: number;
+  readonly projection?: SubagentProjectionDetails;
   readonly results?: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
@@ -194,9 +196,17 @@ interface SubagentResultDetails {
     readonly elapsed?: string;
     readonly artifactSaveFailed?: boolean;
     readonly fullResultSaved?: boolean;
+    readonly projection?: SubagentProjectionDetails;
   }>;
   /** Display-only projection for the custom message renderer. */
   readonly displayContent?: string;
+}
+
+interface SubagentProjectionDetails {
+  readonly truncated: boolean;
+  readonly omittedBytes: number;
+  readonly omitted: NonNullable<SubagentSnapshot["snapshot"]>["omitted"];
+  readonly resultArtifact?: string;
 }
 
 interface SubagentResultEntryData {
@@ -221,7 +231,64 @@ function describeSubagent(snap: SubagentSnapshot) {
     formatElapsed(snap),
     snap.cwd,
   ].filter(Boolean);
-  return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
+  const projection = projectionNotice(snap);
+  return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})${projection ? ` · ${projection}` : ""}`;
+}
+
+function exactResultText(snap: SubagentSnapshot): string | undefined {
+  if (!snap.resultArtifact) return undefined;
+  return readResultArtifact(snap.resultArtifact);
+}
+
+function resultText(snap: SubagentSnapshot): string {
+  const artifact = exactResultText(snap);
+  if (snap.resultArtifact && artifact === undefined) {
+    throw new Error(
+      `The exact subagent result artifact is unavailable: ${snap.resultArtifact}`,
+    );
+  }
+  return artifact !== undefined
+    ? artifact || "(no output)"
+    : snap.finalText || "(no output)";
+}
+
+function projectionDetails(
+  snap: SubagentSnapshot,
+): SubagentProjectionDetails | undefined {
+  const projection = snap.snapshot;
+  if (!projection?.truncated && !snap.resultArtifact) return undefined;
+  return {
+    truncated: projection?.truncated ?? false,
+    omittedBytes: projection?.omittedBytes ?? 0,
+    omitted: projection?.omitted ?? {
+      transcriptItems: 0,
+      liveTools: 0,
+      queued: 0,
+      liveAssistantBytes: 0,
+      finalTextBytes: 0,
+      promptBytes: 0,
+    },
+    ...(snap.resultArtifact ? { resultArtifact: snap.resultArtifact } : {}),
+  };
+}
+
+function projectionNotice(snap: SubagentSnapshot): string | undefined {
+  const projection = snap.snapshot;
+  if (!projection?.truncated) return undefined;
+  const omitted = [
+    projection.omitted.transcriptItems > 0
+      ? `${projection.omitted.transcriptItems} transcript item(s)`
+      : undefined,
+    projection.omitted.liveTools > 0
+      ? `${projection.omitted.liveTools} live tool(s)`
+      : undefined,
+    projection.omitted.queued > 0
+      ? `${projection.omitted.queued} queued message(s)`
+      : undefined,
+    projection.omitted.finalTextBytes > 0 ? "final output" : undefined,
+  ].filter((value): value is string => value !== undefined);
+  const detail = omitted.length > 0 ? omitted.join(", ") : "display data";
+  return `snapshot truncated: ${detail} omitted${snap.resultArtifact ? "; exact result artifact available" : ""}`;
 }
 
 export function truncatedOutput(
@@ -230,11 +297,31 @@ export function truncatedOutput(
   writeArtifact: (content: string) => string = (content) =>
     persistResultArtifact(getAgentDir(), content),
 ): string {
-  const output = snap.finalText || "(no output)";
+  const artifactPath = snap.resultArtifact;
+  const artifact = exactResultText(snap);
+  if (artifactPath && artifact === undefined) {
+    throw new Error(
+      `The exact subagent result artifact is unavailable: ${artifactPath}`,
+    );
+  }
+  const output =
+    artifact !== undefined ? artifact || "(no output)" : snap.finalText || "(no output)";
+  // A projected finalText is not authoritative. Do not create a second
+  // artifact containing only that projection when the original artifact is
+  // unavailable.
+  const finalTextWasOmitted = (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0;
+  const persist =
+    artifact !== undefined || !finalTextWasOmitted
+      ? artifact !== undefined && artifactPath
+        ? () => artifactPath
+        : writeArtifact
+      : () => {
+          throw new Error("The exact subagent result artifact is unavailable");
+        };
   return projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
-    writeArtifact,
+    writeArtifact: persist,
   }).text;
 }
 
@@ -309,9 +396,7 @@ export function createSubagentResultDispatcher(
       AUTOMATIC_OUTPUT_MAX_BYTES - wrapperBytes,
     );
     const allocation = allocateResultBudgets(
-      snaps.map((snap) =>
-        Buffer.byteLength(snap.finalText || "(no output)", "utf8"),
-      ),
+      snaps.map((snap) => Buffer.byteLength(resultText(snap), "utf8")),
       getContextUsage(),
       {
         maxBatchBytes: projectionBatchBytes,
@@ -354,38 +439,46 @@ export function createSubagentResultDispatcher(
     );
     const details: SubagentResultDetails =
       snaps.length === 1
-        ? {
-            id: snaps[0]!.id,
-            title: snaps[0]!.title,
-            status: snaps[0]!.status,
-            ...(snaps[0]!.outcome ? { outcome: snaps[0]!.outcome } : {}),
-            ...(snaps[0]!.worktreeBranch
-              ? { worktreeBranch: snaps[0]!.worktreeBranch }
-              : {}),
-            elapsed: formatElapsed(snaps[0]!),
-            ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
-            ...(projections[0]!.artifactSaveFailed
-              ? { artifactSaveFailed: true }
-              : {}),
-          }
-        : {
-            count: snaps.length,
-            results: snaps.map((snap, index) => ({
-              id: snap.id,
-              title: snap.title,
-              status: snap.status,
-              ...(snap.outcome ? { outcome: snap.outcome } : {}),
-              ...(snap.worktreeBranch
-                ? { worktreeBranch: snap.worktreeBranch }
+        ? (() => {
+            const projection = projectionDetails(snaps[0]!);
+            return {
+              id: snaps[0]!.id,
+              title: snaps[0]!.title,
+              status: snaps[0]!.status,
+              ...(snaps[0]!.outcome ? { outcome: snaps[0]!.outcome } : {}),
+              ...(snaps[0]!.worktreeBranch
+                ? { worktreeBranch: snaps[0]!.worktreeBranch }
                 : {}),
-              elapsed: formatElapsed(snap),
-              ...(projections[index]!.artifactPath
-                ? { fullResultSaved: true }
-                : {}),
-              ...(projections[index]!.artifactSaveFailed
+              elapsed: formatElapsed(snaps[0]!),
+              ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
+              ...(projections[0]!.artifactSaveFailed
                 ? { artifactSaveFailed: true }
                 : {}),
-            })),
+              ...(projection ? { projection } : {}),
+            };
+          })()
+        : {
+            count: snaps.length,
+            results: snaps.map((snap, index) => {
+              const projection = projectionDetails(snap);
+              return {
+                id: snap.id,
+                title: snap.title,
+                status: snap.status,
+                ...(snap.outcome ? { outcome: snap.outcome } : {}),
+                ...(snap.worktreeBranch
+                  ? { worktreeBranch: snap.worktreeBranch }
+                  : {}),
+                elapsed: formatElapsed(snap),
+                ...(projections[index]!.artifactPath
+                  ? { fullResultSaved: true }
+                  : {}),
+                ...(projections[index]!.artifactSaveFailed
+                  ? { artifactSaveFailed: true }
+                  : {}),
+                ...(projection ? { projection } : {}),
+              };
+            }),
           };
     pi.appendEntry<SubagentResultEntryData>("subagent-result", {
       content: displayContent,
@@ -524,6 +617,8 @@ export default function (
     (runtime ??= createSubagentRuntime({
       initialModelCounter: restoredIdCounters.modelCounter,
       initialBtwCounter: restoredIdCounters.btwCounter,
+      persistResultArtifact: (content) =>
+        persistResultArtifact(getAgentDir(), content),
     }));
 
   const persistId = (id: string) =>
@@ -1087,6 +1182,8 @@ export default function (
         const verb = snap.status === "error" ? "failed" : "finished";
         let header = `## ${snap.id} "${snap.title}" ${verb}`;
         if (snap.errorText) header += `\nError: ${snap.errorText}`;
+        const projection = projectionNotice(snap);
+        if (projection) header += `\n[${projection}]`;
         return { id, snap, header };
       });
       const separatorsBytes = Math.max(0, entries.length - 1) * 7;
@@ -1115,9 +1212,7 @@ export default function (
         WAIT_OUTPUT_MAX_BYTES - fixedBytes,
       );
       const allocation = allocateResultBudgets(
-        resultEntries.map(({ snap }) =>
-          Buffer.byteLength(snap.finalText || "(no output)", "utf8"),
-        ),
+        resultEntries.map(({ snap }) => Buffer.byteLength(resultText(snap), "utf8")),
         ctx.getContextUsage(),
         {
           maxBatchBytes: projectionBatchBytes,
@@ -1153,6 +1248,7 @@ export default function (
         details: {
           results: ids.map((id) => {
             const snap = manager.view.get(id);
+            const projection = snap ? projectionDetails(snap) : undefined;
             return {
               id,
               title: snap?.title,
@@ -1166,6 +1262,7 @@ export default function (
               ...(artifactSaveFailures.has(id)
                 ? { artifactSaveFailed: true }
                 : {}),
+              ...(projection ? { projection } : {}),
             };
           }),
         },
@@ -1333,9 +1430,16 @@ export default function (
       let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
       if (snap.errorText) text += `\nError: ${snap.errorText}`;
 
-      const output = latestText(snap);
-      if (output) {
-        const preview = truncateHead(output, { maxBytes: 2048, maxLines: 20 });
+      const output =
+        snap.status === "running" ? latestText(snap) : resultText(snap);
+      if (output && output !== "(no output)") {
+        const preview =
+          snap.status === "running"
+            ? truncateHead(output, { maxBytes: 2048, maxLines: 20 })
+            : (() => {
+                const content = truncatedOutput(snap, 2048);
+                return { content, truncated: content !== output };
+              })();
         text += `\n\nLatest output:\n${preview.content}`;
         if (preview.truncated) text += "\n[...]";
       } else if (snap.status === "running") {
@@ -1344,7 +1448,14 @@ export default function (
 
       return {
         content: [{ type: "text", text }],
-        details: { id: snap.id, status: snap.status, turns: snap.turns },
+        details: {
+          id: snap.id,
+          status: snap.status,
+          turns: snap.turns,
+          ...(projectionDetails(snap)
+            ? { projection: projectionDetails(snap) }
+            : {}),
+        },
       };
     },
   });
@@ -1364,12 +1475,16 @@ export default function (
       return {
         content: [{ type: "text", text }],
         details: {
-          subagents: subs.map((snap) => ({
-            id: snap.id,
-            title: snap.title,
-            harness: snap.backend,
-            status: snap.status,
-          })),
+          subagents: subs.map((snap) => {
+            const projection = projectionDetails(snap);
+            return {
+              id: snap.id,
+              title: snap.title,
+              harness: snap.backend,
+              status: snap.status,
+              ...(projection ? { projection } : {}),
+            };
+          }),
         },
       };
     },

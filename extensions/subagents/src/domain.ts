@@ -139,6 +139,22 @@ export interface QueuedMessage {
   readonly kind: "steer" | "follow-up";
 }
 
+/** Why a live snapshot does not contain the complete child conversation. */
+export interface SubagentSnapshotProjection {
+  readonly maxBytes: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly omittedBytes: number;
+  readonly omitted: {
+    readonly transcriptItems: number;
+    readonly liveTools: number;
+    readonly queued: number;
+    readonly liveAssistantBytes: number;
+    readonly finalTextBytes: number;
+    readonly promptBytes: number;
+  };
+}
+
 // --- Events ------------------------------------------------------------------
 
 export type RunOutcome =
@@ -232,8 +248,12 @@ export interface SubagentSnapshot {
   readonly queued: ReadonlyArray<QueuedMessage>;
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
+  /** Content-addressed exact result, when the bounded projection omitted text. */
+  readonly resultArtifact?: string;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
+  /** Aggregate UTF-8 budget metadata for this in-memory projection. */
+  readonly snapshot?: SubagentSnapshotProjection;
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */

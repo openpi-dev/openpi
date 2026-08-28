@@ -77,6 +77,18 @@ export function persistResultArtifact(agentDir: string, content: string) {
   return artifactPath;
 }
 
+/** Read a generated result artifact without following a symlink. */
+export function readResultArtifact(artifactPath: string) {
+  try {
+    const resolved = path.resolve(artifactPath);
+    const stat = lstatSync(resolved);
+    if (!stat.isFile() || stat.isSymbolicLink()) return undefined;
+    return readFileSync(resolved, "utf8");
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * Build the single model-visible projection used by automatic delivery and
  * explicit waits. Short answers pass through byte-for-byte. Long answers keep

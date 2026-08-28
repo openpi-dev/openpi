@@ -197,6 +197,72 @@ test("stub subagent completes and delivers a final result", async () => {
   });
 });
 
+test("terminal text is persisted before the bounded settlement snapshot", async () => {
+  let persisted: string | undefined;
+  let settlementObserved = false;
+  await withManager(
+    async (manager, runtime) => {
+      manager.view.setOnSettled((snap) => {
+        settlementObserved = true;
+        assert.equal(snap.resultArtifact, "C:/exact/result.txt");
+        assert.equal(persisted, snap.finalText);
+      });
+
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("Persist this exact result")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+      assert.equal(settlementObserved, true);
+      assert.match(persisted ?? "", /Persist this exact result/);
+    },
+    {
+      persistResultArtifact: (content) => {
+        persisted = content;
+        return "C:/exact/result.txt";
+      },
+    },
+  );
+});
+
+test("activity projection never drops raw active tool ids", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("MANYTOOLS: preserve active tool ids")),
+    );
+    await new Promise<void>((resolve, reject) => {
+      let unsubscribe = () => {};
+      const timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error("Timed out waiting for all active tools"));
+      }, STATUS_WAIT_TIMEOUT_MS);
+      const observe = () => {
+        if ((manager.view.get(snap.id)?.liveTools.length ?? 0) < 130) return;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve();
+      };
+      unsubscribe = manager.view.subscribeTo(snap.id, observe);
+      observe();
+    });
+    await runTool(runtime, manager.waitFor([snap.id]));
+  });
+});
+
+test("an impossible snapshot cap rejects spawn without retaining the entry", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      await assert.rejects(
+        runTool(runtime, manager.spawn("pi", task("Too little room"))),
+        /minimum identity budget/,
+      );
+      assert.equal(manager.view.size(), 0);
+    },
+    { maxSnapshotBytes: 32 },
+  );
+});
+
 test("FAIL: prompts settle as errors; unconsumed settles are delivered", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
