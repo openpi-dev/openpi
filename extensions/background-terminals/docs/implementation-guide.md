@@ -531,10 +531,12 @@ Unknown id → throw with the known-ids list (copy the exact error style from `s
 stdout and stderr sections:
 
 ```ts
-const stdout = truncateTail(snap.stdout.text, { maxBytes: 16 * 1024, maxLines: 400 });
-const stderr = truncateTail(snap.stderr.text, { maxBytes: 8 * 1024, maxLines: 200 });
+const stdout = truncateTail(snap.stdout.modelSafeText, { maxBytes: 16 * 1024, maxLines: 400 });
+const stderr = truncateTail(snap.stderr.modelSafeText, { maxBytes: 8 * 1024, maxLines: 200 });
 ```
 
+The stateful `modelSafeText` projection is built before the retained head can
+move, so a control string cannot become visible when its opener is evicted.
 `truncateTail` (not head) because for process logs the end matters — this is the documented
 guidance in docs/extensions.md Output Truncation. When truncated, append
 `[stdout truncated: showing last X of Y. Full log: <spillPath or "in /ps viewer">]` using

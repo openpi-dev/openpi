@@ -207,6 +207,11 @@ test("Windows taskkill timeout waits for the stopped helper to close", async () 
 test("Windows taskkill helper close has a second explicit bound", async () => {
   const killer = new EventEmitter() as ChildProcess;
   killer.kill = () => true;
+  let unrefed = false;
+  killer.unref = () => {
+    unrefed = true;
+    return killer;
+  };
 
   assert.deepEqual(
     await waitForWindowsTaskkill(47, false, () => killer, 1, 1),
@@ -217,6 +222,31 @@ test("Windows taskkill helper close has a second explicit bound", async () => {
       helperCloseTimeoutMs: 1,
     },
   );
+  assert.equal(unrefed, true);
+});
+
+test("an unclosed graceful taskkill helper blocks force escalation", async () => {
+  const killer = new EventEmitter() as ChildProcess;
+  killer.kill = () => true;
+  killer.unref = () => killer;
+  const signals: Array<NodeJS.Signals | number | undefined> = [];
+
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 48,
+      kill(signal) {
+        signals.push(signal);
+        return true;
+      },
+    },
+    "SIGTERM",
+    () => false,
+    () => killer,
+  );
+
+  assert.equal(result.outcome, "unresolved");
+  assert.match(result.detail, /did not close/);
+  assert.deepEqual(signals, []);
 });
 
 async function withManager(

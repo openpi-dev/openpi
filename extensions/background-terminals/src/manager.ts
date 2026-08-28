@@ -245,6 +245,7 @@ export type ProcessTreeSignalResult =
   | { readonly outcome: "sent" }
   | { readonly outcome: "already_exited"; readonly detail: string }
   | { readonly outcome: "fallback_sent"; readonly detail: string }
+  | { readonly outcome: "unresolved"; readonly detail: string }
   | { readonly outcome: "failed"; readonly detail: string };
 
 export type WindowsTaskkillResult =
@@ -269,7 +270,7 @@ function spawnTaskkill(pid: number, force: boolean) {
   );
 }
 
-/** Resolve only after taskkill has either failed to launch or closed. */
+/** Resolve after taskkill closes or its still-live helper is explicitly detached. */
 export function waitForWindowsTaskkill(
   pid: number,
   force: boolean,
@@ -322,16 +323,15 @@ export function waitForWindowsTaskkill(
       } catch {
         // The helper may already be gone; the bounded result stays the same.
       }
-      helperCloseTimer = setTimeout(
-        () =>
-          finish({
-            outcome: "timed_out",
-            timeoutMs,
-            helperClosed: false,
-            helperCloseTimeoutMs,
-          }),
-        helperCloseTimeoutMs,
-      );
+      helperCloseTimer = setTimeout(() => {
+        killer.unref();
+        finish({
+          outcome: "timed_out",
+          timeoutMs,
+          helperClosed: false,
+          helperCloseTimeoutMs,
+        });
+      }, helperCloseTimeoutMs);
     }, timeoutMs);
   });
 }
@@ -395,6 +395,13 @@ export async function signalWindowsProcessTree(
       : attempt.outcome === "timed_out"
         ? `taskkill timed out after ${attempt.timeoutMs}ms; helper ${attempt.helperClosed ? "closed after SIGKILL" : `did not close within an additional ${attempt.helperCloseTimeoutMs}ms`}`
         : `taskkill exited ${attempt.exitCode ?? "without a code"}${attempt.signal ? ` (${attempt.signal})` : ""}`;
+  if (
+    attempt.outcome === "timed_out" &&
+    !attempt.helperClosed &&
+    !targetExited()
+  ) {
+    return { outcome: "unresolved", detail };
+  }
   // A failed graceful taskkill must leave the shell PID alive for the
   // serialized `/T /F` phase. Killing only the shell here would orphan its
   // descendants and make the original process-tree handle unusable.
@@ -477,12 +484,13 @@ function terminateChild(
     return Effect.gen(function* () {
       const attempts: ProcessTreeSignalResult[] = [];
       const gracefulDeadline = Date.now() + FORCE_KILL_AFTER_MS;
-      attempts.push(yield* signalProcessTree(child, "SIGTERM", targetExited));
+      const graceful = yield* signalProcessTree(child, "SIGTERM", targetExited);
+      attempts.push(graceful);
       yield* awaitChildClose(child, closed).pipe(
         Effect.timeout(Math.max(0, gracefulDeadline - Date.now())),
         Effect.ignore,
       );
-      if (!closed()) {
+      if (!closed() && graceful.outcome !== "unresolved") {
         const forceDeadline = Date.now() + FORCE_CLOSE_WAIT_MS;
         attempts.push(yield* signalProcessTree(child, "SIGKILL", targetExited));
         yield* awaitChildClose(child, closed).pipe(
