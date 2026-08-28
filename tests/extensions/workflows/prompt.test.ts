@@ -75,6 +75,7 @@ test("completion batches share one bounded fair projection budget", () => {
       projected,
       new RegExp(`wf_${index.toString(16).padStart(4, "0")}`),
     );
+    assert.match(projected, new RegExp(`delivery-${index}(?:"|\\b)`));
   }
 });
 
@@ -109,7 +110,8 @@ test("model completion payload retains durable evidence independently of the ren
       runDir: "/tmp/wf_evidence",
     },
   ]);
-  assert.match(payload, /^Background workflow "evidence"/);
+  assert.match(payload, /^Workflow completion delivery facts/);
+  assert.match(payload, /Background workflow "evidence"/);
   assert.match(payload, /Run dir: \/tmp\/wf_evidence/);
   assert.match(payload, /^Log:$/m);
   assert.match(payload, /^Agents:$/m);

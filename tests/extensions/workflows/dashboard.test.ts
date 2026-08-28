@@ -16,11 +16,11 @@ import {
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import type {
   Theme,
   WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
-import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { safeStringify } from "../../../extensions/workflows/serialization.ts";
 
 // runsDir() resolves against getAgentDir(), which reads this env var.
@@ -852,7 +852,7 @@ test("narrator lines survive the disk round trip and are re-sanitized", () => {
       phases: [],
       agents: [],
       logs: [
-        { at: 1, text: "round 1: 3 found" },
+        { at: 1, text: "round 1: 3 found", kind: "pipeline-drop" },
         { at: 2, text: "round 2:\u001b[31m red\u001b[0m\nsecond row" },
         { at: 3 },
         "not an entry",
@@ -865,6 +865,7 @@ test("narrator lines survive the disk round trip and are re-sanitized", () => {
   )?.details;
   assert.equal(details?.logs?.length, 2);
   assert.equal(details?.logs?.[0]?.text, "round 1: 3 found");
+  assert.equal(details?.logs?.[0]?.kind, "pipeline-drop");
   assert.ok(
     !/[\u0000-\u001f\u007f-\u009f]/.test(details?.logs?.[1]?.text ?? ""),
   );

@@ -1322,9 +1322,9 @@ export default function workflows(pi: ExtensionAPI) {
 
       // The script's narrator. Unlike phase(), this is append-only progress
       // text, so it never mutates the phase list a run is judged against.
-      const logFn = (text: string) => {
+      const logFn = (text: string, kind?: "pipeline-drop") => {
         if (runSettled) return;
-        appendLog(details, text, Date.now());
+        appendLog(details, text, Date.now(), kind);
         emit();
       };
 
@@ -2435,7 +2435,14 @@ export default function workflows(pi: ExtensionAPI) {
             }
           }
           rows.push(
-            theme.fg("muted", `(${keyHint("app.tools.expand", "to expand")})`),
+            truncateToWidth(
+              theme.fg(
+                "muted",
+                `(${keyHint("app.tools.expand", "to expand")})`,
+              ),
+              width,
+              "…",
+            ),
           );
           return rows;
         },

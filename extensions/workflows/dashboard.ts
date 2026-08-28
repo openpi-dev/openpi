@@ -20,8 +20,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../shared/agent-session-page.ts";
-import { contextPercent } from "../shared/context-utilization.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   panelFrame,
   type ScreenHint,
@@ -428,6 +428,9 @@ export function normalizePersistedWorkflowDetails(
     logs.push({
       at: typeof entry.at === "number" ? entry.at : startedAt,
       text: sanitizeLine(entry.text, MAX_LOG_TEXT),
+      ...(entry.kind === "pipeline-drop"
+        ? { kind: "pipeline-drop" as const }
+        : {}),
     });
   }
 

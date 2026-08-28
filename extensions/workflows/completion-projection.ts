@@ -1,5 +1,5 @@
-import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { allocateResultBudgets } from "../shared/result-budget.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { projectText } from "../shared/text-projection.ts";
 import {
   countStates,
@@ -9,6 +9,7 @@ import {
   shortenHome,
   statusWord,
   type WorkflowDetails,
+  type WorkflowLogEntry,
   type WorkflowStatus,
 } from "./model.ts";
 import { safeStringify } from "./serialization.ts";
@@ -66,6 +67,23 @@ function completionSummary(details: WorkflowDetails) {
   );
 }
 
+function isDroppedWorkLog(entry: WorkflowLogEntry) {
+  if (entry.kind === "pipeline-drop") return true;
+  const text = entry.text;
+  const negated =
+    /\b(?:no|none|nothing|not|zero|0)\b.{0,48}\b(?:dropped|discarded|omitted)\b/iu.test(
+      text,
+    ) ||
+    /(?:没有|并未|未曾|未|无|零(?:个|项)?).{0,24}(?:丢弃|丢失|遗漏)/u.test(
+      text,
+    );
+  if (negated) return false;
+  return (
+    /\b(?:dropped|discarded|omitted)\b/iu.test(text) ||
+    /(?:被)?(?:丢弃|丢失|遗漏)/u.test(text)
+  );
+}
+
 /** Exceptional evidence that must remain visible while the report is collapsed. */
 function completionAlerts(details: WorkflowDetails) {
   const alerts: string[] = [];
@@ -82,19 +100,31 @@ function completionAlerts(details: WorkflowDetails) {
   }
 
   for (const entry of details.logs ?? []) {
-    if (/\bdropped\b/i.test(entry.text))
-      alerts.push(`Dropped work: ${entry.text}`);
+    if (!isDroppedWorkLog(entry)) continue;
+    alerts.push(`Dropped work: ${sanitizeWorkflowDisplayLine(entry.text)}`);
   }
 
   for (const agent of details.agents) {
-    if (!agent.worktreePath) continue;
-    const reason = agent.worktreeCleanup?.reason ?? "cleanup was unsafe";
+    if (agent.worktreePath) {
+      const reason = agent.worktreeCleanup?.reason ?? "cleanup was unsafe";
+      alerts.push(
+        `Retained worktree [${sanitizeWorkflowDisplayLine(agent.label)}]: ${shortenHome(agent.worktreePath)} (${sanitizeWorkflowDisplayLine(reason)})${
+          agent.worktreeHandoffArtifact
+            ? `; handoff ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}`
+            : ""
+        }`,
+      );
+      continue;
+    }
+    if (!agent.worktreeHandoffArtifact) continue;
+    const cleanup = agent.worktreeCleanup;
+    const work = cleanup?.commits
+      ? `${cleanup.commits} commit${cleanup.commits === 1 ? "" : "s"} on ${cleanup.branch}`
+      : agent.worktreeBranch
+        ? `branch ${agent.worktreeBranch}`
+         : "isolated work";
     alerts.push(
-      `Retained worktree [${agent.label}]: ${shortenHome(agent.worktreePath)} (${reason})${
-        agent.worktreeHandoffArtifact
-          ? `; handoff ${agent.worktreeHandoffArtifact}`
-          : ""
-      }`,
+      `Worktree handoff [${sanitizeWorkflowDisplayLine(agent.label)}]: ${sanitizeWorkflowDisplayLine(work)}; ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}`,
     );
   }
 

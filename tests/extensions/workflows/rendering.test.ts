@@ -359,7 +359,13 @@ test("batch completion foregrounds abnormal evidence within width", () => {
     error: "top-level failure",
     logs: [
       { at: 1, text: "ordinary log" },
-      { at: 2, text: "pipeline: item 2 dropped — stage failed" },
+      { at: 2, text: "coverage complete: no items dropped" },
+      {
+        at: 3,
+        text: "pipeline: item 2 dropped — stage failed",
+        kind: "pipeline-drop",
+      },
+      { at: 4, text: "项目被丢弃：上游结果为空" },
     ],
     logsDropped: 3,
     agents: [
@@ -400,6 +406,27 @@ test("batch completion foregrounds abnormal evidence within width", () => {
     name: "ok-run",
     startedAt: 292_000,
     finishedAt: 293_000,
+    agents: [
+      {
+        index: 1,
+        label: "writer-ok",
+        state: "done",
+        startedAt: 292_000,
+        finishedAt: 293_000,
+        preview: "",
+        usage: emptyUsage(),
+        worktreeBranch: "pi/writer-ok",
+        worktreeHandoffArtifact: "worktrees/writer-ok.json",
+        worktreeCleanup: {
+          removed: true,
+          branchDeleted: false,
+          branch: "pi/writer-ok",
+          detached: false,
+          commits: 1,
+        },
+        transcript: [],
+      },
+    ],
   });
   const component = message(
     {
@@ -424,9 +451,22 @@ test("batch completion foregrounds abnormal evidence within width", () => {
   assert.match(collapsed, /Uncertain agents: owner-lost/);
   assert.match(collapsed, /3 earlier log line\(s\) dropped/);
   assert.match(collapsed, /Dropped work: pipeline: item 2 dropped/);
+  assert.match(collapsed, /Dropped work: 项目被丢弃/);
+  assert.doesNotMatch(collapsed, /Dropped work: coverage complete/);
   assert.match(collapsed, /Retained worktree \[writer\]/);
   assert.match(collapsed, /workflow ok-run/);
+  assert.match(collapsed, /Worktree handoff \[writer-ok\]/);
   assert.doesNotMatch(collapsed, /ordinary log|Run dir:|Delivery id:/);
   assert.doesNotMatch(collapsed, /\]52|\u0007/);
   assert.ok(rows.every((row) => visibleWidth(row) <= 56));
+  assert.match(
+    component.render(120).join("\n"),
+    /Worktree handoff \[writer-ok\]: 1 commit on pi\/writer-ok; worktrees\/writer-ok.json/,
+  );
+  for (const width of [1, 2, 3, 4, 8, 12]) {
+    assert.ok(
+      component.render(width).every((row) => visibleWidth(row) <= width),
+      `width ${width}`,
+    );
+  }
 });
