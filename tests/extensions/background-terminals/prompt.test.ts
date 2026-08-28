@@ -4,6 +4,7 @@ import type {
   OutputView,
   TerminalSnapshot,
 } from "../../../extensions/background-terminals/src/domain.ts";
+import { RETAINED_PER_STREAM } from "../../../extensions/background-terminals/src/manager.ts";
 import {
   BG_START_PARAMETER_DESCRIPTIONS,
   BG_START_TOOL_DESCRIPTION,
@@ -12,6 +13,8 @@ import {
   buildTerminalBatchResultMessage,
   buildTerminalResultMessage,
 } from "../../../extensions/background-terminals/src/prompt.ts";
+import { OutputBuffer } from "../../../extensions/background-terminals/src/output.ts";
+import { sanitizeTerminalText } from "../../../extensions/shared/terminal-text.ts";
 
 test("start descriptions identify the platform-specific shell contract", () => {
   assert.match(BG_START_TOOL_DESCRIPTION, /sh -c on POSIX/);
@@ -29,7 +32,14 @@ test("start descriptions identify the platform-specific shell contract", () => {
 });
 
 function view(overrides: Partial<OutputView> = {}): OutputView {
-  return { text: "", totalBytes: 0, truncatedBytes: 0, ...overrides };
+  const text = overrides.text ?? "";
+  return {
+    text,
+    modelSafeText: overrides.modelSafeText ?? sanitizeTerminalText(text),
+    totalBytes: 0,
+    truncatedBytes: 0,
+    ...overrides,
+  };
 }
 
 function snap(overrides: Partial<TerminalSnapshot> = {}): TerminalSnapshot {
@@ -75,11 +85,25 @@ test("kill report distinguishes killed / raced natural exit / already settled", 
       killed: false,
       exit: "exit 1",
     },
+    {
+      id: "bt-4",
+      title: "d",
+      status: "failed",
+      wasRunning: true,
+      killed: false,
+      terminationFailed: true,
+      errorText: "taskkill exited 5",
+      exit: "unknown",
+    },
   ]);
   const lines = report.split("\n");
   assert.equal(lines[0], 'Killed bt-1 "a" (SIGTERM).');
   assert.match(lines[1], /exited on its own before the kill landed \(exit 0\)/);
   assert.match(lines[2], /was already failed \(exit 1\)/);
+  assert.match(
+    lines[3],
+    /Could not confirm process-tree termination.*taskkill exited 5/,
+  );
 });
 
 test("status result marks head-truncated output with a pointer at the full log", () => {
@@ -160,4 +184,62 @@ test("completion output is a shorter tail than the detailed status view", () => 
   assert.match(completion, /line-100/);
   assert.match(completion, /stdout truncated/);
   assert.match(status, /line-1\n/);
+});
+
+test("model-facing output is sanitized before tail truncation", () => {
+  const buffer = new OutputBuffer(64 * 1024);
+  const hidden = "HIDDEN".repeat(4_096);
+  buffer.push("\u001b]52;c;");
+  buffer.push(hidden);
+  buffer.push("\u0007\nvisible line 1\nvisible line 2\n");
+  const stdout = buffer.view();
+  const retainedEvidence = stdout.text;
+  const terminal = snap({ stdout });
+
+  for (const result of [
+    buildStatusResult(terminal),
+    buildTerminalResultMessage(terminal),
+  ]) {
+    assert.ok(!result.includes("HIDDEN"));
+    assert.ok(!result.includes("\u001b]52"));
+    assert.ok(!result.includes("\u0007"));
+    assert.match(result, /visible line 1\nvisible line 2/);
+  }
+
+  assert.equal(
+    stdout.text,
+    retainedEvidence,
+    "raw retained evidence is unchanged",
+  );
+  assert.match(stdout.text, /HIDDEN/);
+});
+
+test("model-safe output keeps control-string state across the retained head", () => {
+  const buffer = new OutputBuffer(RETAINED_PER_STREAM);
+  buffer.push(`\u001b]52;c;${"x".repeat(RETAINED_PER_STREAM)}`);
+  buffer.push("\nMODEL_HIDDEN_PAYLOAD\n\u0007visible tail\n");
+  const stdout = buffer.view();
+
+  assert.ok(!stdout.text.includes("\u001b]52"), "the OSC opener was evicted");
+  assert.match(stdout.text, /MODEL_HIDDEN_PAYLOAD/);
+  for (const result of [
+    buildStatusResult(snap({ stdout })),
+    buildTerminalResultMessage(snap({ stdout })),
+  ]) {
+    assert.ok(!result.includes("MODEL_HIDDEN_PAYLOAD"));
+    assert.match(result, /visible tail/);
+  }
+});
+
+test("batched completion sanitizes controls without flattening logs", () => {
+  const batch = buildTerminalBatchResultMessage([
+    "Background terminal bt-1 exited.\n\nstdout:\n\u001b[31mred\u001b[0m\nnext line",
+    "Background terminal bt-2 exited.\n\nstdout:\nsafe\u202eevil\u202c",
+  ]);
+
+  assert.ok(!batch.includes("\u001b"));
+  assert.ok(!batch.includes("\u202e"));
+  assert.ok(!batch.includes("\u202c"));
+  assert.match(batch, /stdout:\nred\nnext line/);
+  assert.match(batch, /stdout:\nsafeevil/);
 });

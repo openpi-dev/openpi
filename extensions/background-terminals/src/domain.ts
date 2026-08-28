@@ -23,6 +23,8 @@ export type TerminalStatus =
 export interface OutputView {
   /** Decoded, possibly head-trimmed text (bounded by the in-memory cap). */
   readonly text: string;
+  /** Stateful, bounded projection safe for model-facing output. */
+  readonly modelSafeText: string;
   /** True total bytes ever received on this stream. */
   readonly totalBytes: number;
   /** Bytes dropped from the head of the in-memory view (0 = complete). */

@@ -87,6 +87,7 @@ import {
   persistWorkflowAgentResult,
   persistWorkflowDeliveryState,
   persistWorkflowJson,
+  persistWorkflowTerminalState,
 } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
 import {
@@ -638,6 +639,17 @@ function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
 
+function appendArtifactPersistenceFailure(
+  details: WorkflowDetails,
+  error: unknown,
+) {
+  const persistenceFailure = `Artifact persistence failed: ${errorText(error)}`;
+  if (details.status !== "aborted") details.status = "failed";
+  details.error = details.error
+    ? `${details.error}; ${persistenceFailure}`
+    : persistenceFailure;
+}
+
 function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
   return {
     ...details,
@@ -1071,6 +1083,10 @@ export default function workflows(
       navigationLayerRegistered = false;
     }
     await shutdownActiveWorkflowRuns([...activeRuns.values()]);
+    // Give deferred completions one final delivery attempt. Failed sends stay
+    // durably pending; clearing first would discard an envelope whose initial
+    // persistence may have failed.
+    await resultDelivery.parentSettled();
     try {
       lastContext?.ui.setStatus("workflows", undefined);
       lastContext?.ui.setWidget(widgetKey, undefined);
@@ -1081,7 +1097,6 @@ export default function workflows(
     widgetVisible = false;
     requestWidgetRender = undefined;
     stripState.focused = false;
-    resultDelivery.clear();
   });
 
   pi.registerCommand("workflows", {
@@ -1298,6 +1313,15 @@ export default function workflows(
         flush(terminal);
       };
 
+      const persistTerminalRecovery = () => {
+        try {
+          persistWorkflowTerminalState(runDir, details);
+        } catch {
+          // The original persistence error remains authoritative; restart
+          // reconciliation handles the remaining uncertainty.
+        }
+      };
+
       const terminalize = (
         status: WorkflowDetails["status"],
         error?: string,
@@ -1350,7 +1374,8 @@ export default function workflows(
         try {
           persistence.flush();
         } catch (persistenceError) {
-          details.error = `${error}; artifact persistence failed: ${errorText(persistenceError)}`;
+          appendArtifactPersistenceFailure(details, persistenceError);
+          persistTerminalRecovery();
         }
         flushNow(true);
       };
@@ -2136,8 +2161,8 @@ export default function workflows(
         try {
           persistence.flush();
         } catch (error) {
-          details.status = "failed";
-          details.error = `Artifact persistence failed: ${errorText(error)}`;
+          appendArtifactPersistenceFailure(details, error);
+          persistTerminalRecovery();
           throw new Error(details.error);
         } finally {
           flushNow(true);
@@ -2167,8 +2192,8 @@ export default function workflows(
         try {
           await completion;
         } catch (error) {
-          details.status = "failed";
-          details.finishedAt = Date.now();
+          if (details.status === "running") details.status = "failed";
+          details.finishedAt ??= Date.now();
           details.error = details.error ?? errorText(error);
         } finally {
           recordTerminalRun();
