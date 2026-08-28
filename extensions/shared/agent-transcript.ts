@@ -244,23 +244,61 @@ function renderToolResultItem(
   );
 }
 
-function hasEarlierToolCall(
+/**
+ * Pairing lookups precomputed in one forward pass.
+ *
+ * `itemContext` runs for every item on every render, and it runs BEFORE the
+ * render cache is consulted, so a per-item scan made pairing cost quadratic in
+ * transcript length on a path that repaints while a child is streaming. One
+ * pass builds both lookups instead.
+ */
+interface PairingIndex {
+  /**
+   * Tool id to the index of its FIRST `toolCall`. A result only needs to know
+   * whether any call precedes it, so the earliest call is sufficient: if that
+   * one is not earlier, none is.
+   */
+  readonly firstCallAt: ReadonlyMap<string, number>;
+  /**
+   * Tool id to the ascending indices of its `toolResult` items. A call pairs
+   * with the first result AFTER it, not the first result overall, so the whole
+   * ascending list is kept and searched from the call's position. Collapsing
+   * this to a single index would mispair a tool id that appears more than once
+   * (retries, repeated streaming ids).
+   */
+  readonly resultsById: ReadonlyMap<string, ReadonlyArray<number>>;
+}
+
+function buildPairingIndex(
   transcript: ReadonlyArray<AgentTranscriptItem>,
+): PairingIndex {
+  const firstCallAt = new Map<string, number>();
+  const resultsById = new Map<string, number[]>();
+  for (let index = 0; index < transcript.length; index++) {
+    const item = transcript[index]!;
+    if (item.kind === "assistant") {
+      for (const part of item.parts) {
+        if (part.type !== "toolCall") continue;
+        if (!firstCallAt.has(part.toolId)) firstCallAt.set(part.toolId, index);
+      }
+      continue;
+    }
+    if (item.kind !== "toolResult") continue;
+    const seen = resultsById.get(item.toolId);
+    if (seen) seen.push(index);
+    else resultsById.set(item.toolId, [index]);
+  }
+  return { firstCallAt, resultsById };
+}
+
+/** Whether any `toolCall` for this id appears before `resultIndex`. */
+function hasEarlierToolCall(
+  pairing: PairingIndex,
   resultIndex: number,
   toolId: string,
 ) {
-  for (let index = resultIndex - 1; index >= 0; index--) {
-    const candidate = transcript[index];
-    if (candidate?.kind !== "assistant") continue;
-    if (
-      candidate.parts.some(
-        (part) => part.type === "toolCall" && part.toolId === toolId,
-      )
-    ) {
-      return true;
-    }
-  }
-  return false;
+  const firstCall = pairing.firstCallAt.get(toolId);
+  return firstCall !== undefined && firstCall < resultIndex;
 }
 
 function renderTranscriptItem(
@@ -324,12 +362,13 @@ function itemContext(
   transcript: ReadonlyArray<AgentTranscriptItem>,
   index: number,
   liveIds: ReadonlySet<string>,
+  pairing: PairingIndex,
 ): ItemContext {
   const item = transcript[index]!;
   if (item.kind === "user")
     return { tools: new Map(), paired: false, token: "" };
   if (item.kind === "toolResult") {
-    const paired = hasEarlierToolCall(transcript, index, item.toolId);
+    const paired = hasEarlierToolCall(pairing, index, item.toolId);
     return { tools: new Map(), paired, token: paired ? "p" : "o" };
   }
 
@@ -340,7 +379,7 @@ function itemContext(
       tools.set(part.toolId, { phase: "live" });
       continue;
     }
-    const result = findResult(transcript, index, part.toolId);
+    const result = findResult(transcript, pairing, index, part.toolId);
     tools.set(
       part.toolId,
       result
@@ -358,14 +397,17 @@ function itemContext(
 /** The result for a call, if it has already landed later in the transcript. */
 function findResult(
   transcript: ReadonlyArray<AgentTranscriptItem>,
+  pairing: PairingIndex,
   callIndex: number,
   toolId: string,
 ) {
-  for (let index = callIndex + 1; index < transcript.length; index++) {
+  const indices = pairing.resultsById.get(toolId);
+  if (!indices) return undefined;
+  // Ascending by construction, so the first entry past the call is the match.
+  for (const index of indices) {
+    if (index <= callIndex) continue;
     const candidate = transcript[index];
-    if (candidate?.kind === "toolResult" && candidate.toolId === toolId) {
-      return candidate;
-    }
+    return candidate?.kind === "toolResult" ? candidate : undefined;
   }
   return undefined;
 }
@@ -390,10 +432,11 @@ export class AgentTranscriptRenderer {
     const liveTools = document.liveTools ?? [];
     if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
     const liveIds = new Set(liveTools.map((tool) => tool.toolId));
+    const pairing = buildPairingIndex(document.items);
 
     for (let index = 0; index < document.items.length; index++) {
       const item = document.items[index];
-      const context = itemContext(document.items, index, liveIds);
+      const context = itemContext(document.items, index, liveIds, pairing);
       const key = `${width}|${context.token}`;
       const cacheable = !document.toolRenderer || !itemHasTool(item);
       const cached = cacheable ? this.itemCache.get(item)?.get(key) : undefined;
