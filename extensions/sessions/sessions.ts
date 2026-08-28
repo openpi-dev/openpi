@@ -162,6 +162,30 @@ export function filterSessionInfos(
   );
 }
 
+/**
+ * Mirror pi-tui SelectList's centered viewport so background stats work is
+ * limited to rows the picker can actually render. Keep the formula locked by
+ * tests because SelectList does not expose its visible range.
+ */
+export function selectSessionStatsWindow(
+  sessions: readonly SessionInfoLike[],
+  selectedPath: string,
+  maxVisible: number,
+) {
+  if (sessions.length === 0) return [];
+  const visible = Math.max(1, Math.min(maxVisible, sessions.length));
+  const found = sessions.findIndex((session) => session.path === selectedPath);
+  const selectedIndex = found >= 0 ? found : 0;
+  const startIndex = Math.max(
+    0,
+    Math.min(
+      selectedIndex - Math.floor(visible / 2),
+      sessions.length - visible,
+    ),
+  );
+  return sessions.slice(startIndex, startIndex + visible);
+}
+
 export function getSessionPaneLayout(width: number): SessionPaneLayout {
   if (width < 80) {
     return { mode: "single", listWidth: width, previewWidth: 0 };

@@ -22,7 +22,10 @@ import {
   wrapTextWithAnsi,
 } from "@earendil-works/pi-tui";
 import { hintLine } from "../shared/screen-chrome.ts";
-import { createSessionStatsLoader, type SessionStats } from "./git-stats.js";
+import {
+  createSessionStatsLoader,
+  type SessionStatsState,
+} from "./git-stats.js";
 import {
   createSessionPreviewCache,
   measureSessionPreviewBytes,
@@ -44,6 +47,7 @@ import {
   type PreviewBlock,
   type PreviewMessageLike,
   parseLimit,
+  selectSessionStatsWindow,
   type SessionInfoLike,
   type SessionPreview,
 } from "./sessions.js";
@@ -301,20 +305,16 @@ const renderPreviewBlock = (
   return renderTextBlock(`◇ ${block.label}`, block.text, width, theme, "muted");
 };
 
-/** Cached across picker openings, while the loader bounds process-wide Git work. */
-const statsLoader = createSessionStatsLoader();
-const statsCache = statsLoader.cache;
-
 const formatItemLabel = (
   session: SessionInfoLike,
   width: number,
   theme: any,
-  statsCache: Map<string, SessionStats>,
+  statsState: SessionStatsState | undefined,
 ): string => {
   const itemWidth = width - 4;
   const timeStr = formatRelativeTime(session.modified);
 
-  const stats = statsCache.get(session.path);
+  const stats = statsState?.status === "ready" ? statsState.stats : undefined;
   let statsStr = "";
   let statsLen = 0;
   if (stats && (stats.add > 0 || stats.mod > 0 || stats.del > 0)) {
@@ -329,6 +329,12 @@ const formatItemLabel = (
       (stats.del > 0 ? `${stats.del}`.length + 1 : 0) +
       parts.length -
       1;
+  } else if (statsState?.status === "pending") {
+    statsStr = theme.fg("dim", "…");
+    statsLen = 1;
+  } else if (statsState?.status === "unavailable") {
+    statsStr = theme.fg("warning", "?");
+    statsLen = 1;
   }
 
   const title = buildSessionLabel(session);
@@ -580,8 +586,12 @@ async function showSessionPicker(
       let previewTimer: ReturnType<typeof setTimeout> | undefined;
       let previewController: AbortController | undefined;
       let previewSeq = 0;
-      let statsController = new AbortController();
-      let statsGeneration = 0;
+      // Stats use a picker-scoped, per-query first-observation cache. Rows that
+      // become visible later may observe later repository state; reopening the
+      // picker refreshes every row without polling repositories while idle.
+      const statsLoader = createSessionStatsLoader();
+      let statsUniverseVersion = 0;
+      let statsWindowSignature = "";
       let workspaceLoadSeq = 0;
       let disposed = false;
       let settled = false;
@@ -602,8 +612,7 @@ async function showSessionPicker(
         if (disposed) return;
         disposed = true;
         workspaceLoadSeq++;
-        statsGeneration++;
-        statsController.abort();
+        statsLoader.cancel();
         cancelPreviewLoad();
         previewCache.clear();
         activePreview = undefined;
@@ -614,27 +623,26 @@ async function showSessionPicker(
         disposePicker();
         done(result);
       };
-      const cancelStatsLoad = () => {
-        statsGeneration++;
-        statsController.abort();
-      };
-      const triggerStatsLoad = (list: SessionInfoLike[]) => {
-        cancelStatsLoad();
-        statsController = new AbortController();
-        const generation = statsGeneration;
-        const signal = statsController.signal;
-        void statsLoader.load(list, signal, () => {
-          if (disposed || signal.aborted || generation !== statsGeneration)
-            return;
-          tui.requestRender();
+      const ensureStatsWindowLoad = (visibleCount: number) => {
+        const targets = selectSessionStatsWindow(
+          filteredEntries.map((entry) => entry.session),
+          selectedPath,
+          visibleCount,
+        );
+        const signature = `${statsUniverseVersion}:${targets
+          .map((session) => session.path)
+          .join("\0")}`;
+        if (signature === statsWindowSignature) return;
+        statsWindowSignature = signature;
+        void statsLoader.reconcile(targets, sorted, () => {
+          if (!disposed) tui.requestRender();
         });
       };
 
-      triggerStatsLoad(sorted);
-
       const loadWorkspaceSessions = async (allWorkspaces: boolean) => {
         const loadSeq = ++workspaceLoadSeq;
-        cancelStatsLoad();
+        statsLoader.cancel();
+        statsWindowSignature = "";
         cancelPreviewLoad();
         previewCache.clear();
         activePreview = undefined;
@@ -650,11 +658,11 @@ async function showSessionPicker(
           if (disposed || loadSeq !== workspaceLoadSeq) return;
 
           sorted = sortSessions(results);
+          statsUniverseVersion++;
           for (const s of sorted) {
             sessionByPath.set(s.path, s);
           }
           entries = buildSessionSearchEntries(sorted);
-          triggerStatsLoad(sorted);
 
           filteredEntries = filterSessionEntries(entries, filter);
           const matchedIndex = filteredEntries.findIndex(
@@ -744,7 +752,12 @@ async function showSessionPicker(
       ): SelectItem[] =>
         current.map((entry) => ({
           value: entry.session.path,
-          label: formatItemLabel(entry.session, listWidth, theme, statsCache),
+          label: formatItemLabel(
+            entry.session,
+            listWidth,
+            theme,
+            statsLoader.get(entry.session),
+          ),
         }));
 
       const rebuild = () => {
@@ -780,20 +793,21 @@ async function showSessionPicker(
           );
           container.addChild(new Spacer(1));
         } else {
-          const items = buildItems(filteredEntries, width);
-          selectList = new SelectList(
-            items,
-            Math.max(1, Math.min(maxVisible, Math.max(items.length, 1))),
-            {
-              selectedPrefix: (text) =>
-                theme.fg(focus === "list" ? "accent" : "muted", text),
-              selectedText: (text) =>
-                theme.fg(focus === "list" ? "accent" : "muted", text),
-              description: (text) => theme.fg("muted", text),
-              scrollInfo: (text) => theme.fg("dim", text),
-              noMatch: () => theme.fg("warning", "  No matching sessions"),
-            },
+          const effectiveVisible = Math.max(
+            1,
+            Math.min(maxVisible, Math.max(filteredEntries.length, 1)),
           );
+          ensureStatsWindowLoad(effectiveVisible);
+          const items = buildItems(filteredEntries, width);
+          selectList = new SelectList(items, effectiveVisible, {
+            selectedPrefix: (text) =>
+              theme.fg(focus === "list" ? "accent" : "muted", text),
+            selectedText: (text) =>
+              theme.fg(focus === "list" ? "accent" : "muted", text),
+            description: (text) => theme.fg("muted", text),
+            scrollInfo: (text) => theme.fg("dim", text),
+            noMatch: () => theme.fg("warning", "  No matching sessions"),
+          });
           const selectedIndex = filteredEntries.findIndex(
             (entry) => entry.session.path === selectedPath,
           );
@@ -863,23 +877,21 @@ async function showSessionPicker(
           leftLines.push("");
           leftLines.push(theme.fg("muted", "  Loading sessions..."));
         } else {
-          const items = buildItems(filteredEntries, layout.listWidth);
-          selectList = new SelectList(
-            items,
-            Math.max(
-              listHeight,
-              Math.min(maxVisible, Math.max(items.length, 1)),
-            ),
-            {
-              selectedPrefix: (text) =>
-                theme.fg(focus === "list" ? "accent" : "muted", text),
-              selectedText: (text) =>
-                theme.fg(focus === "list" ? "accent" : "muted", text),
-              description: (text) => theme.fg("muted", text),
-              scrollInfo: (text) => theme.fg("dim", text),
-              noMatch: () => theme.fg("warning", "  No matching sessions"),
-            },
+          const effectiveVisible = Math.max(
+            listHeight,
+            Math.min(maxVisible, Math.max(filteredEntries.length, 1)),
           );
+          ensureStatsWindowLoad(effectiveVisible);
+          const items = buildItems(filteredEntries, layout.listWidth);
+          selectList = new SelectList(items, effectiveVisible, {
+            selectedPrefix: (text) =>
+              theme.fg(focus === "list" ? "accent" : "muted", text),
+            selectedText: (text) =>
+              theme.fg(focus === "list" ? "accent" : "muted", text),
+            description: (text) => theme.fg("muted", text),
+            scrollInfo: (text) => theme.fg("dim", text),
+            noMatch: () => theme.fg("warning", "  No matching sessions"),
+          });
           const selectedIndex = filteredEntries.findIndex(
             (entry) => entry.session.path === selectedPath,
           );
