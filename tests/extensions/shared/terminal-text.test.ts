@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   hasTerminalControls,
   sanitizeTerminalText,
+  TerminalTextSanitizer,
 } from "../../../extensions/shared/terminal-text.ts";
 
 test("terminal sanitizer removes CSI and terminated or unterminated terminal strings", () => {
@@ -24,6 +25,13 @@ test("terminal sanitizer removes CSI and terminated or unterminated terminal str
   assert.equal(sanitizeTerminalText("before\u001b_unterminated APC"), "before");
   assert.equal(sanitizeTerminalText("before\u0090unterminated DCS"), "before");
   assert.equal(sanitizeTerminalText("a\u0085b\tc"), "ab  c");
+});
+
+test("terminal sanitizer preserves hidden-string state across chunks", () => {
+  const sanitizer = new TerminalTextSanitizer();
+  assert.equal(sanitizer.push("before\u001b]52;c;hidden"), "before");
+  assert.equal(sanitizer.push("\nmore hidden\u001b"), "");
+  assert.equal(sanitizer.push("\\after"), "after");
 });
 
 test("terminal sanitizer removes bidi spoofing controls but preserves shaping joiners", () => {

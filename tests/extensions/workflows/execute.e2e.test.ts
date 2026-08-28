@@ -191,8 +191,9 @@ assert.match(String(sentMessages[0]?.message.content), /wf_1e9acbad/);
 sentMessages.length = 0;
 
 const workflow = tools.get("workflow")!;
+const workflowStop = tools.get("workflow_stop")!;
 const status = tools.get("workflow_status")!;
-assert.ok(workflow && status);
+assert.ok(workflow && workflowStop && status);
 
 function runDirFor(runId: unknown) {
   assert.equal(typeof runId, "string");
@@ -574,6 +575,151 @@ test("failed completion delivery remains durable and retries once with the same 
     ).length,
     1,
   );
+});
+
+test("shutdown preserves a failed completion for reload recovery", async () => {
+  sentMessages.length = 0;
+  modelIdle = false;
+  sendFailures = 1;
+  const run = (await workflow.execute(
+    "e2e-shutdown-reload-delivery",
+    {
+      script:
+        'export const meta = { name: "shutdown-reload-delivery" };\nreturn { durable: true };',
+      background: true,
+    },
+    undefined,
+    undefined,
+    ctx,
+  )) as { details: { runId?: unknown } };
+
+  await waitFor(
+    () =>
+      (readWorkflowJson(run.details.runId).delivery as { state?: string })
+        ?.state === "pending",
+    "pending completion before shutdown",
+  );
+  for (const handler of handlers.get("session_shutdown") ?? []) {
+    await handler({}, ctx);
+  }
+  assert.equal(
+    (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
+    "pending",
+  );
+
+  const reloadedHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const reloadedPi = {
+    ...pi,
+    registerTool() {},
+    on(event: string, handler: unknown) {
+      reloadedHandlers.set(event, [
+        ...(reloadedHandlers.get(event) ?? []),
+        handler as (event: unknown, ctx: ExtensionContext) => unknown,
+      ]);
+    },
+  } as unknown as ExtensionAPI;
+  workflows(reloadedPi);
+
+  modelIdle = true;
+  for (const handler of reloadedHandlers.get("session_start") ?? []) {
+    await handler({}, { ...ctx, mode: "print" } as unknown as ExtensionContext);
+  }
+  await waitFor(
+    () =>
+      sentMessages.filter(
+        (sent) => sent.message.details?.runId === run.details.runId,
+      ).length === 1,
+    "completion after reload recovery",
+  );
+  assert.equal(
+    (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
+    "delivered",
+  );
+
+  // The original instance represents the process that was replaced. Drain
+  // its intentionally retained in-memory retry so later tests do not batch it
+  // with an unrelated completion; the assertion above was reached solely via
+  // the fresh instance and persisted session state.
+  for (const handler of handlers.get("agent_settled") ?? []) {
+    await handler({}, ctx);
+  }
+  await waitFor(
+    () => sentMessages.length === 2,
+    "discarded predecessor instance retry",
+  );
+  sentMessages.length = 0;
+});
+
+test("cancelled detached delivery preserves aborted status after artifact persistence failure", async () => {
+  sentMessages.length = 0;
+  modelIdle = true;
+  let sessionCreated = false;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreated = true;
+    return { session: fakeAgentSession("cancelled output", promptGate) };
+  });
+
+  try {
+    const launch = (await workflow.execute(
+      "e2e-cancelled-persistence-failure",
+      {
+        script:
+          'export const meta = { name: "cancelled-persistence-failure" };\n' +
+          'return await agent("wait for cancellation", { agent_type: "reviewer" });',
+        background: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+    const runId = launch.details.runId;
+    const transcripts = join(runDirFor(runId), "transcripts.json");
+    await waitFor(
+      () => sessionCreated && existsSync(transcripts),
+      "active detached workflow before cancellation",
+    );
+
+    // Make the final artifact write fail after the cancellation path has
+    // selected `aborted`; terminal recovery can still rewrite workflow.json.
+    rmSync(transcripts);
+    mkdirSync(transcripts);
+    writeFileSync(join(transcripts, "blocker"), "keep directory non-empty\n");
+
+    await workflowStop.execute("e2e-cancel-stop", { runId });
+    releasePrompt();
+
+    await waitFor(
+      () => sentMessages.some((sent) => sent.message.details?.runId === runId),
+      "cancelled completion delivery",
+    );
+
+    const persisted = readWorkflowJson(runId);
+    assert.equal(persisted.status, "aborted");
+    assert.match(String(persisted.error), /Workflow was aborted/);
+    assert.match(String(persisted.error), /Artifact persistence failed/);
+
+    const delivered = sentMessages.find(
+      (sent) => sent.message.details?.runId === runId,
+    );
+    assert.ok(delivered);
+    const deliveredDetails = delivered.message.details as {
+      status?: unknown;
+      error?: unknown;
+    };
+    assert.equal(deliveredDetails.status, "aborted");
+    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
+    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+  } finally {
+    releasePrompt();
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
 });
 
 test("a failing script reports the error and records the run as failed", async () => {
