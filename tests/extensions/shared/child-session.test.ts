@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  realpath,
   readdir,
   readFile,
   rm,
@@ -13,6 +14,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   createAgentSession,
+  DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
   ProjectTrustStore,
@@ -649,6 +651,210 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
     for (const marker of executionMarkers) {
       assert.equal(await readFile(marker, "utf8"), "executed");
     }
+  });
+});
+
+test("headless child resources exclude OpenPI git polling at 1/8/64 retained sessions", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const gitInfoPath = await realpath(
+      fileURLToPath(
+        new URL("../../../extensions/git-info/index.ts", import.meta.url),
+      ),
+    );
+    const gitReadPath = await realpath(
+      fileURLToPath(
+        new URL("../../../extensions/git-read/index.ts", import.meta.url),
+      ),
+    );
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        packages: [
+          {
+            source: repoRoot,
+            extensions: [`+${gitInfoPath}`, "extensions/git-read/index.ts"],
+          },
+        ],
+      }),
+    );
+
+    const topLevelSettings = SettingsManager.create(cwd, agentDir, {
+      projectTrusted: true,
+    });
+    const topLevelLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: topLevelSettings,
+    });
+    await topLevelLoader.reload();
+    const topLevelPaths = await Promise.all(
+      topLevelLoader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    const topLevelPollers = topLevelPaths.filter(
+      (extensionPath) => extensionPath === gitInfoPath,
+    ).length;
+    assert.equal(topLevelPollers, 1, "the parent loader must keep git-info");
+
+    const child = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const childPaths = await Promise.all(
+      child.loader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    const childPollers = childPaths.filter(
+      (extensionPath) => extensionPath === gitInfoPath,
+    ).length;
+    const childPackageManager = new DefaultPackageManager({
+      cwd,
+      agentDir,
+      settingsManager: child.settingsManager,
+    });
+    const childPackagePaths = await childPackageManager.resolve(
+      async () => "skip",
+    );
+    const childGitInfoResource = await Promise.all(
+      childPackagePaths.extensions.map(async (resource) => ({
+        ...resource,
+        canonicalPath: await realpath(resource.path),
+      })),
+    ).then((resources) =>
+      resources.find((resource) => resource.canonicalPath === gitInfoPath),
+    );
+    assert.equal(
+      childGitInfoResource?.enabled,
+      false,
+      "the child package filter must disable git-info before import",
+    );
+    assert.equal(
+      childPaths.includes(gitReadPath),
+      true,
+      "ordinary child-safe OpenPI extensions must remain loaded",
+    );
+
+    for (const retained of [1, 8, 64]) {
+      assert.equal(
+        retained * childPollers,
+        0,
+        `${retained} retained children must create no git-info pollers`,
+      );
+      assert.equal(
+        retained * topLevelPollers,
+        retained,
+        "the parent-loader control must remain valid",
+      );
+    }
+
+    for (const source of [gitInfoPath, path.dirname(gitInfoPath)]) {
+      await writeFile(
+        path.join(agentDir, "settings.json"),
+        JSON.stringify({ extensions: [source] }),
+      );
+      const directSettings = SettingsManager.create(cwd, agentDir, {
+        projectTrusted: true,
+      });
+      const directLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager: directSettings,
+      });
+      await directLoader.reload();
+      assert.deepEqual(directLoader.getExtensions().errors, []);
+      const parentDirectPaths = await Promise.all(
+        directLoader
+          .getExtensions()
+          .extensions.map((extension) => realpath(extension.resolvedPath)),
+      );
+      assert.equal(
+        parentDirectPaths.includes(gitInfoPath),
+        true,
+        `parent source ${source} must load git-info as the control`,
+      );
+      const directChild = await createChildResources({
+        cwd,
+        agentDir,
+        projectTrusted: true,
+      });
+      const directPaths = await Promise.all(
+        directChild.loader
+          .getExtensions()
+          .extensions.map((extension) => realpath(extension.resolvedPath)),
+      );
+      assert.equal(
+        directPaths.includes(gitInfoPath),
+        false,
+        `child source ${source} must not restore git-info`,
+      );
+    }
+
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [{ source: repoRoot, extensions: [] }] }),
+    );
+    const disabledExtensionsChild = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    assert.deepEqual(
+      disabledExtensionsChild.loader.getExtensions().extensions,
+      [],
+      "an empty package extension filter must remain fully disabled",
+    );
+  });
+});
+
+test("nested manifestless packages are not mistaken for OpenPI", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const openPiCheckout = path.join(directory, "openpi-checkout");
+    const ordinaryPackage = path.join(openPiCheckout, "ordinary-package");
+    const ordinaryGitInfo = path.join(
+      ordinaryPackage,
+      "extensions",
+      "git-info",
+      "index.ts",
+    );
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await mkdir(path.dirname(ordinaryGitInfo), { recursive: true });
+    await writeFile(
+      path.join(openPiCheckout, "package.json"),
+      JSON.stringify({ name: "@tt-a1i/openpi" }),
+    );
+    await writeFile(
+      ordinaryGitInfo,
+      `export default function (pi) {
+        pi.registerCommand("ordinary-lg", { handler() {} });
+      }`,
+    );
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [ordinaryPackage] }),
+    );
+
+    const child = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const childPaths = await Promise.all(
+      child.loader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    assert.equal(childPaths.includes(await realpath(ordinaryGitInfo)), true);
   });
 });
 
