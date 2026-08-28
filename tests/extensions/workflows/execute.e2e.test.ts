@@ -860,7 +860,6 @@ type ReplayAcceptanceFixture = {
     content: Array<{ type: string; text: string }>;
     details: { runId?: unknown };
   };
-  persisted: Record<string, unknown>;
   agents: ReplayAcceptanceAgent[];
   runDir: string;
   sessionCreations: number;
@@ -982,7 +981,6 @@ async function runTamperedAcceptanceReplay(
     const persisted = readWorkflowJson(resumed.details.runId);
     return {
       resumed,
-      persisted,
       agents: persisted.agents as ReplayAcceptanceAgent[],
       runDir: runDirFor(resumed.details.runId),
       sessionCreations,
