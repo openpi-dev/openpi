@@ -607,8 +607,24 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     "pending",
   );
 
+  const reloadedHandlers = new Map<
+    string,
+    Array<(event: unknown, ctx: ExtensionContext) => unknown>
+  >();
+  const reloadedPi = {
+    ...pi,
+    registerTool() {},
+    on(event: string, handler: unknown) {
+      reloadedHandlers.set(event, [
+        ...(reloadedHandlers.get(event) ?? []),
+        handler as (event: unknown, ctx: ExtensionContext) => unknown,
+      ]);
+    },
+  } as unknown as ExtensionAPI;
+  workflows(reloadedPi);
+
   modelIdle = true;
-  for (const handler of handlers.get("session_start") ?? []) {
+  for (const handler of reloadedHandlers.get("session_start") ?? []) {
     await handler({}, { ...ctx, mode: "print" } as unknown as ExtensionContext);
   }
   await waitFor(
@@ -622,6 +638,19 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     (readWorkflowJson(run.details.runId).delivery as { state?: string }).state,
     "delivered",
   );
+
+  // The original instance represents the process that was replaced. Drain
+  // its intentionally retained in-memory retry so later tests do not batch it
+  // with an unrelated completion; the assertion above was reached solely via
+  // the fresh instance and persisted session state.
+  for (const handler of handlers.get("agent_settled") ?? []) {
+    await handler({}, ctx);
+  }
+  await waitFor(
+    () => sentMessages.length === 2,
+    "discarded predecessor instance retry",
+  );
+  sentMessages.length = 0;
 });
 
 test("cancelled detached delivery preserves aborted status after artifact persistence failure", async () => {

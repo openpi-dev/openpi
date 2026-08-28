@@ -1,4 +1,4 @@
-import type { ResultDeliveryQueue } from "../../shared/result-delivery.ts";
+import type { ConsumableResultDeliveryQueue } from "../../shared/result-delivery.ts";
 
 export interface SubagentResultDeliveryOptions<T> {
   /** True only when the parent has no run or queued continuation in flight. */
@@ -67,5 +67,5 @@ export function createSubagentResultDelivery<T extends { id: string }>(
       return pending.size;
     },
   };
-  return queue satisfies ResultDeliveryQueue<T>;
+  return queue satisfies ConsumableResultDeliveryQueue<T>;
 }

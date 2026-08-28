@@ -1,16 +1,13 @@
 import type { WorkflowDetails } from "./model.ts";
-import type { ResultDeliveryQueue } from "../shared/result-delivery.ts";
+import type {
+  DurableResultDeliveryQueue,
+  DurableResultDeliveryReceipt,
+} from "../shared/result-delivery.ts";
 
 export interface WorkflowCompletionEnvelope {
   deliveryId: string;
   runId: string;
   details: WorkflowDetails;
-}
-
-export interface WorkflowDeliveryReceipt {
-  deliveryId: string;
-  delivered: boolean;
-  error?: string;
 }
 
 export interface WorkflowResultDeliveryOptions {
@@ -19,7 +16,7 @@ export interface WorkflowResultDeliveryOptions {
   deliver: (
     envelopes: readonly WorkflowCompletionEnvelope[],
     wake: boolean,
-  ) => Promise<readonly WorkflowDeliveryReceipt[]>;
+  ) => Promise<readonly DurableResultDeliveryReceipt[]>;
 }
 
 function errorText(error: unknown) {
@@ -106,7 +103,7 @@ export function createWorkflowResultDelivery(
           pending.delete(envelope.deliveryId);
         }
 
-        let receipts: readonly WorkflowDeliveryReceipt[] | undefined;
+        let receipts: readonly DurableResultDeliveryReceipt[] | undefined;
         try {
           receipts = await options.deliver(envelopes, passWake);
         } catch (error) {
@@ -231,6 +228,10 @@ export function createWorkflowResultDelivery(
       return true;
     },
 
+    retryPending() {
+      return flush(true) ?? Promise.resolve();
+    },
+
     parentSettled() {
       return flush(true);
     },
@@ -248,5 +249,5 @@ export function createWorkflowResultDelivery(
       pending.clear();
     },
   };
-  return queue satisfies ResultDeliveryQueue<WorkflowCompletionEnvelope>;
+  return queue satisfies DurableResultDeliveryQueue<WorkflowCompletionEnvelope>;
 }

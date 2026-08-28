@@ -1,4 +1,4 @@
-import type { ResultDeliveryQueue } from "../../shared/result-delivery.ts";
+import type { ConsumableResultDeliveryQueue } from "../../shared/result-delivery.ts";
 
 /**
  * Deferred one-shot delivery map (same semantics as subagents'): a settled
@@ -40,7 +40,7 @@ export function createDeferredResultDelivery<T extends { id: string }>() {
       pending.clear();
     },
   };
-  return queue satisfies ResultDeliveryQueue<T>;
+  return queue satisfies ConsumableResultDeliveryQueue<T>;
 }
 
 /**
