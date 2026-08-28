@@ -306,7 +306,21 @@ OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程�
 
 ### Explicit Acceptance
 
-可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。支持 1–32 条验收条件；`description` 为人类可读说明（1–500 字符），可选的 `requiredEvidence` 为字符串数组（至多 16 个标签，每项至多 120 字符），子 Agent 必须在 `acceptance.criteria[].evidence` 中返回完全匹配的标签：
+
+```js
+acceptance: {
+  criteria: [
+    {
+      id: "tests",
+      description: "Focused tests pass.",
+      requiredEvidence: ["test-command"],
+    },
+  ],
+}
+```
+
+条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
 
 ### Worktree Handoff
 
