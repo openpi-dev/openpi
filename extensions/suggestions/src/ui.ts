@@ -13,9 +13,15 @@ import {
 } from "../../shared/below-editor-navigation.ts";
 
 const FAKE_CURSOR_PATTERN = /\u001b\[7m \u001b\[(?:0|27)m/;
-const IME_PREEDIT_MIN_COLUMNS = 12;
-const IME_PREEDIT_MAX_COLUMNS = 32;
-const GHOST_MIN_COLUMNS = 8;
+/**
+ * Cells kept after the ghost for the hidden hardware cursor. The terminal owns
+ * that column and CJK IME preedit is drawn there, so a composition can briefly
+ * cover the ghost's last cell. Reserving a wide fixed preedit band instead
+ * costs 16-31% of every idle row, and Pi's editor contract exposes only
+ * committed input, never an IME composition event, so a wider reservation
+ * cannot be limited to frames that actually need it.
+ */
+const HARDWARE_CURSOR_CELLS = 1;
 
 export interface SuggestionToken {
   readonly generation: number;
@@ -99,14 +105,14 @@ function ghostGeometry(lines: readonly string[], width: number) {
   // One terminal cell must remain after the hidden hardware cursor. At
   // narrower widths, suppress the ghost rather than placing the cursor at the
   // terminal's out-of-range column width.
-  if (remaining <= GHOST_MIN_COLUMNS) return undefined;
+  if (remaining <= HARDWARE_CURSOR_CELLS) return undefined;
 
-  const desiredPreedit = Math.min(
-    IME_PREEDIT_MAX_COLUMNS,
-    Math.max(IME_PREEDIT_MIN_COLUMNS, Math.floor(width * 0.3)),
-  );
-  const preedit = Math.min(desiredPreedit, remaining - GHOST_MIN_COLUMNS);
-  return { index, prefix, available: remaining - preedit, preedit };
+  return {
+    index,
+    prefix,
+    available: remaining - HARDWARE_CURSOR_CELLS,
+    preedit: HARDWARE_CURSOR_CELLS,
+  };
 }
 
 export function renderGhostSuggestion(
@@ -124,10 +130,10 @@ export function renderGhostSuggestion(
     Math.max(0, width - preedit - visibleWidth(content)),
   );
   const rendered = [...lines];
-  // CJK IMEs draw uncommitted preedit at the terminal's hidden hardware
-  // cursor before the editor receives an input event. Keep the visible fake
-  // cursor and ghost inline, but move that hardware anchor to reserved cells
-  // at the row end so preedit cannot overwrite the suggestion.
+  // Keep the visible fake cursor and ghost inline, then park the hidden
+  // hardware cursor in the single reserved cell at the row end. Terminal-owned
+  // CJK IME preedit paints from that anchor, so an active composition can
+  // cover the ghost's final cell until the next editor input dismisses it.
   rendered[index] =
     `${content}${padding}${CURSOR_MARKER}${" ".repeat(preedit)}`;
   return rendered;

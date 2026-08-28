@@ -86,7 +86,7 @@ test("latest-wins state rejects stale or non-empty-editor offers", () => {
   assert.equal(state.isActive(), false);
 });
 
-test("renders the ghost on the first row with reserved IME preedit cells", () => {
+test("ghost text fills the row except the reserved hardware-cursor cell", () => {
   const width = 40;
   const lines = renderGhostSuggestion(
     ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(width - 1)}`, "bottom"],
@@ -102,14 +102,35 @@ test("renders the ghost on the first row with reserved IME preedit cells", () =>
   );
   assert.equal(lines[2], "bottom");
 
-  // The visible fake cursor and ghost stay on the first editor row. The hidden
-  // hardware cursor moves after them, leaving cells where terminal-owned CJK
-  // IME preedit can draw without overwriting the suggestion.
+  // The visible fake cursor and ghost stay on the first editor row. Only the
+  // single cell holding the hidden hardware cursor follows them, so an idle
+  // suggestion uses the rest of the row.
   const markerIndex = lines[1]!.indexOf(CURSOR_MARKER);
   assert.ok(markerIndex > lines[1]!.indexOf("run the full test suite"));
   assert.equal(
     visibleWidth(lines[1]!.slice(markerIndex + CURSOR_MARKER.length)),
-    12,
+    1,
+  );
+  assert.equal(visibleWidth(lines[1]!), width);
+});
+
+test("a truncated ghost ends next to the reserved hardware-cursor cell", () => {
+  const width = 40;
+  const lines = renderGhostSuggestion(
+    ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(width - 1)}`, "bottom"],
+    width,
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    (text) => text,
+  );
+
+  const markerIndex = lines[1]!.indexOf(CURSOR_MARKER);
+  const beforeMarker = lines[1]!.slice(0, markerIndex);
+  assert.ok(beforeMarker.includes("…"));
+  // No idle padding band survives between the ellipsis and the reserved cell.
+  assert.equal(visibleWidth(beforeMarker), width - 1);
+  assert.equal(
+    visibleWidth(lines[1]!.slice(markerIndex + CURSOR_MARKER.length)),
+    1,
   );
   assert.equal(visibleWidth(lines[1]!), width);
 });
@@ -142,11 +163,11 @@ test("an invisible suggestion never steals Right from a custom editor", () => {
   assert.equal(state.peek(), undefined);
 });
 
-test("an editor too narrow to reserve an IME cell does not steal Right", () => {
+test("an editor too narrow to reserve the hardware-cursor cell does not steal Right", () => {
   const base = new FakeEditor();
   const { state, editor } = suggestionEditor({ base });
   state.offer(state.begin(), "run tests", true);
-  editor.render(9);
+  editor.render(2);
 
   editor.handleInput("\u001b[C");
 
