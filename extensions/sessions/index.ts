@@ -24,6 +24,15 @@ import {
 import { hintLine } from "../shared/screen-chrome.ts";
 import { createSessionStatsLoader, type SessionStats } from "./git-stats.js";
 import {
+  createSessionPreviewCache,
+  measureSessionPreviewBytes,
+  previewCacheKey,
+} from "./preview-cache.js";
+import {
+  loadSessionPreviewData,
+  readPreviewFileIdentity,
+} from "./preview-loader.js";
+import {
   buildPreviewError,
   buildSessionDescription,
   buildSessionLabel,
@@ -33,6 +42,7 @@ import {
   formatRelativeTime,
   getSessionPaneLayout,
   type PreviewBlock,
+  type PreviewMessageLike,
   parseLimit,
   type SessionInfoLike,
   type SessionPreview,
@@ -442,14 +452,28 @@ const renderPreview = (
 
 const loadSessionPreview = async (
   session: SessionInfoLike,
+  cache: ReturnType<typeof createSessionPreviewCache>,
+  signal: AbortSignal,
 ): Promise<SessionPreview> => {
-  try {
-    const manager = SessionManager.open(session.path);
-    const context = manager.buildSessionContext();
-    return buildSessionPreview(session, context.messages as any[]);
-  } catch (error) {
-    return buildPreviewError(session, error);
-  }
+  const initialIdentity = await readPreviewFileIdentity(session.path);
+  const cached = cache.get(previewCacheKey(initialIdentity));
+  if (cached) return cached;
+
+  const data = await loadSessionPreviewData(session.path, { signal });
+  const preview = buildSessionPreview(
+    session,
+    data.messages as PreviewMessageLike[],
+    {
+      totalMessages: data.totalMessages,
+      truncatedBytes: data.truncatedBytes,
+    },
+  );
+  cache.set(
+    previewCacheKey(data.identity),
+    preview,
+    measureSessionPreviewBytes(preview),
+  );
+  return preview;
 };
 
 async function listSessions(
@@ -551,9 +575,10 @@ async function showSessionPicker(
       let previewScrollOffset = 0;
       let toolsExpanded = false;
       let thinkingVisible = false;
-      const previewCache = new Map<string, SessionPreview>();
+      const previewCache = createSessionPreviewCache();
       let activePreview: SessionPreview | undefined;
       let previewTimer: ReturnType<typeof setTimeout> | undefined;
+      let previewController: AbortController | undefined;
       let previewSeq = 0;
       let statsController = new AbortController();
       let statsGeneration = 0;
@@ -565,14 +590,23 @@ async function showSessionPicker(
       let showAllWorkspaces = false;
       let isLoading = false;
 
+      const cancelPreviewLoad = () => {
+        previewSeq++;
+        if (previewTimer) clearTimeout(previewTimer);
+        previewTimer = undefined;
+        previewController?.abort();
+        previewController = undefined;
+      };
+
       const disposePicker = () => {
         if (disposed) return;
         disposed = true;
         workspaceLoadSeq++;
         statsGeneration++;
         statsController.abort();
-        previewSeq++;
-        if (previewTimer) clearTimeout(previewTimer);
+        cancelPreviewLoad();
+        previewCache.clear();
+        activePreview = undefined;
       };
       const finishPicker = (result: SessionInfoLike | null) => {
         if (settled) return;
@@ -580,9 +614,6 @@ async function showSessionPicker(
         disposePicker();
         done(result);
       };
-      const previewKey = (session: SessionInfoLike): string =>
-        `${session.path}:${session.modified.getTime()}`;
-
       const cancelStatsLoad = () => {
         statsGeneration++;
         statsController.abort();
@@ -604,6 +635,9 @@ async function showSessionPicker(
       const loadWorkspaceSessions = async (allWorkspaces: boolean) => {
         const loadSeq = ++workspaceLoadSeq;
         cancelStatsLoad();
+        cancelPreviewLoad();
+        previewCache.clear();
+        activePreview = undefined;
         isLoading = true;
         tui.requestRender();
         try {
@@ -648,17 +682,11 @@ async function showSessionPicker(
       };
 
       const schedulePreviewLoad = () => {
+        cancelPreviewLoad();
         previewScrollOffset = 0;
         const session = sessionByPath.get(selectedPath);
         if (!session) {
           activePreview = undefined;
-          return;
-        }
-
-        const key = previewKey(session);
-        const cached = previewCache.get(key);
-        if (cached) {
-          activePreview = cached;
           return;
         }
 
@@ -668,15 +696,39 @@ async function showSessionPicker(
           blocks: [{ kind: "notice", text: "Loading selected session…" }],
         };
 
-        if (previewTimer) clearTimeout(previewTimer);
-        const seq = ++previewSeq;
+        const seq = previewSeq;
         previewTimer = setTimeout(() => {
-          void loadSessionPreview(session).then((preview) => {
-            if (seq !== previewSeq || selectedPath !== session.path) return;
-            previewCache.set(key, preview);
-            activePreview = preview;
-            tui.requestRender();
-          });
+          previewTimer = undefined;
+          const controller = new AbortController();
+          previewController = controller;
+          void loadSessionPreview(session, previewCache, controller.signal)
+            .then((preview) => {
+              if (
+                controller.signal.aborted ||
+                seq !== previewSeq ||
+                selectedPath !== session.path
+              ) {
+                return;
+              }
+              activePreview = preview;
+              tui.requestRender();
+            })
+            .catch((error) => {
+              if (
+                controller.signal.aborted ||
+                seq !== previewSeq ||
+                selectedPath !== session.path
+              ) {
+                return;
+              }
+              activePreview = buildPreviewError(session, error);
+              tui.requestRender();
+            })
+            .finally(() => {
+              if (previewController === controller) {
+                previewController = undefined;
+              }
+            });
         }, PREVIEW_LOAD_DEBOUNCE_MS);
       };
 
@@ -909,8 +961,11 @@ async function showSessionPicker(
           return renderSplitPane(width);
         },
         invalidate: () => {
+          cancelPreviewLoad();
           previewCache.clear();
+          activePreview = undefined;
           rebuild();
+          schedulePreviewLoad();
         },
         dispose: disposePicker,
         handleInput: (data) => {

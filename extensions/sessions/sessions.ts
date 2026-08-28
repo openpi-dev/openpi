@@ -340,12 +340,21 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
 export function buildSessionPreview(
   session: SessionInfoLike,
   messages: PreviewMessageLike[],
-  options: { maxMessages?: number } = {},
+  options: {
+    maxMessages?: number;
+    totalMessages?: number;
+    truncatedBytes?: number;
+  } = {},
 ): SessionPreview {
   const maxMessages = options.maxMessages ?? 80;
   const blocks: PreviewBlock[] = [];
-  const omitted = Math.max(0, messages.length - maxMessages);
-  const visibleMessages = omitted > 0 ? messages.slice(-maxMessages) : messages;
+  const visibleMessages =
+    messages.length > maxMessages ? messages.slice(-maxMessages) : messages;
+  const totalMessages = Math.max(
+    visibleMessages.length,
+    options.totalMessages ?? messages.length,
+  );
+  const omitted = Math.max(0, totalMessages - visibleMessages.length);
 
   if (omitted > 0) {
     blocks.push({
@@ -353,12 +362,18 @@ export function buildSessionPreview(
       text: `… ${omitted} earlier messages omitted`,
     });
   }
+  if ((options.truncatedBytes ?? 0) > 0) {
+    blocks.push({
+      kind: "notice",
+      text: `… ${options.truncatedBytes} bytes of preview content omitted`,
+    });
+  }
 
   for (const message of visibleMessages) {
     blocks.push(...messageToBlocks(message));
   }
 
-  const messageCount = session.messageCount ?? messages.length;
+  const messageCount = session.messageCount ?? totalMessages;
   return {
     title: buildSessionLabel(session),
     subtitle: `${formatTimestamp(session.modified)} · ${messageCount} messages · ${cleanDisplayLine(session.cwd)}`,

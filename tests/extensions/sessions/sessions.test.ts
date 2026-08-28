@@ -95,3 +95,20 @@ test("persisted session labels and preview content are terminal-safe", () => {
     isError: undefined,
   });
 });
+
+test("bounded preview reports omitted messages and content bytes", () => {
+  const preview = buildSessionPreview(
+    session,
+    [
+      { role: "user", content: "recent one" },
+      { role: "assistant", content: "recent two" },
+    ],
+    { totalMessages: 100, truncatedBytes: 2048 },
+  );
+
+  assert.deepEqual(preview.blocks.slice(0, 2), [
+    { kind: "notice", text: "… 98 earlier messages omitted" },
+    { kind: "notice", text: "… 2048 bytes of preview content omitted" },
+  ]);
+  assert.match(preview.subtitle, /100 messages/);
+});
