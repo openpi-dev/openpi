@@ -1,8 +1,13 @@
 # Fast-Forward and Linear Git History
 
-OpenPI should keep `main` as a linear sequence of commits. Pull requests should
-be rebased onto the latest `main`, and merging a pull request should not create
-a merge commit.
+OpenPI aims to keep `main` as a linear sequence of commits. Pull requests
+should be rebased onto the latest `main`, and merging a pull request should not
+create a merge commit.
+
+This guide describes the intended workflow, not the repository's currently
+enforced configuration. At the time of writing, GitHub still allows merge
+commits and `main` does not require linear history. Maintainers must complete
+the settings below before relying on GitHub to enforce this policy.
 
 This policy applies to new contributions. Do not rewrite published `main`
 history merely to improve its appearance: a history rewrite changes commit
@@ -10,19 +15,23 @@ IDs and forces every collaborator to resynchronize their checkout.
 
 ## Repository settings
 
-The GitHub branch protection rule or ruleset for `main` should:
+In the repository-wide **Pull Requests** settings:
+
+- allow **Rebase and merge** and **Squash and merge**; and
+- disable **Create a merge commit**.
+
+In the branch protection rule or ruleset for `main`:
 
 - require the relevant CI checks and reviews;
 - block force pushes and branch deletion;
-- enable **Require linear history**;
-- allow **Rebase and merge** and **Squash and merge**;
-- disable **Create a merge commit**; and
+- enable **Require linear history**; and
 - require the pull request branch to be current when that is necessary for
   reliable checks.
 
-Repository settings are the final enforcement layer. Contributors should
-still prepare a linear branch locally so that conflicts and test failures are
-resolved before merge.
+These settings are the final enforcement layer. Until they are enabled, the
+repository can still accept history that conflicts with this guide.
+Contributors should prepare a linear branch locally so that conflicts and test
+failures are resolved before merge.
 
 ## Preparing a pull request
 
@@ -53,14 +62,35 @@ git rebase --abort
 ```
 
 A rebase changes the topic commits' IDs. If the branch was already pushed,
-update it with a lease so that concurrent remote work is not overwritten:
+record the remote tip before fetching, then fetch and compare that expected
+SHA with the updated remote-tracking branch:
 
 ```bash
-git push --force-with-lease origin <topic-branch>
+expected=$(git ls-remote --exit-code origin refs/heads/<topic-branch> | cut -f1)
+git fetch origin <topic-branch>
+test "$expected" = "$(git rev-parse origin/<topic-branch>)" || {
+  echo "Remote branch changed; inspect and reconcile its commits before pushing."
+  exit 1
+}
+git log --oneline HEAD..origin/<topic-branch>
 ```
 
-Do not use an unqualified `--force`. Before pushing, inspect the patch and the
-topic branch history, then run the repository checks:
+If the final command shows remote-only commits, stop and reconcile them with
+the collaborator who pushed them. After confirming that the expected remote
+tip is the one being replaced, update the branch with an explicit lease:
+
+```bash
+git push --force-with-lease=refs/heads/<topic-branch>:"$expected" \
+  origin HEAD:refs/heads/<topic-branch>
+```
+
+Keep `expected` in the same shell for the comparison and push. If the remote
+branch changes after the check, the explicit lease rejects the push. For a new
+remote branch, use a normal `git push -u origin <topic-branch>` instead.
+
+Do not use an unqualified `--force` or an implicit `--force-with-lease`. Before
+pushing, inspect the patch and the topic branch history, then run the
+repository checks:
 
 ```bash
 git diff --check origin/main...HEAD
@@ -137,7 +167,7 @@ If the pull request requires its merge topology to be preserved, cannot be
 rebased cleanly, or has stale checks, stop and resolve that condition. Do not
 select **Create a merge commit** merely to bypass the linear-history policy.
 Normally, the author should rebase onto the latest `main`, resolve conflicts,
-push with `--force-with-lease`, and rerun CI.
+push with the explicit expected-SHA lease described above, and rerun CI.
 
 For a pull request from a fork, ask the author to perform the rebase when a
 maintainer cannot update the branch. If the author allows maintainer edits,
@@ -171,4 +201,4 @@ verified backup, and collaborator coordination.
 | Multiple commits | **Squash and merge** by default |
 | Multiple independently tested, review-quality commits with lasting value | **Rebase and merge** as an explicit exception |
 | The branch conflicts with or trails `main` | Rebase and rerun checks first |
-| Merge topology is a required part of the change | Obtain maintainer agreement before making an exception |
+| Merge topology is a required part of the change | This policy does not support it; propose and approve a separate policy and repository-settings change first |
