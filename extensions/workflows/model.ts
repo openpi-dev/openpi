@@ -174,6 +174,23 @@ export interface WorkflowDetails {
   error?: string;
 }
 
+/** Bounded tool-result projection; authoritative details remain in run artifacts. */
+export function compactWorkflowToolDetails(
+  details: WorkflowDetails,
+): WorkflowDetails {
+  return {
+    ...details,
+    ...(details.result !== undefined
+      ? {
+          result: JSON.parse(
+            safeStringify(details.result, { maxBytes: 64 * 1024 }),
+          ),
+        }
+      : {}),
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
+}
+
 export function workflowGraphRecords(
   agents: readonly AgentRecord[],
 ): WorkflowGraphRecord[] {

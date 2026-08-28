@@ -10,7 +10,10 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
-import { buildWorkflowCompletionDisplay } from "../../../extensions/workflows/completion-projection.ts";
+import {
+  buildWorkflowCompletionDisplay,
+  isWorkflowCompletionDisplay,
+} from "../../../extensions/workflows/completion-projection.ts";
 import workflows from "../../../extensions/workflows/index.ts";
 import {
   emptyUsage,
@@ -267,6 +270,84 @@ test("single completion keeps success diagnostics behind expansion", () => {
   assert.match(full, /^Agents: *$/m);
   assert.match(full, /Delivery id: workflow:wf_finished:terminal/);
   assert.doesNotMatch(full, /model-only transport wrapper|Background workflow/);
+});
+
+test("malformed completion display fails closed to sanitized message content", () => {
+  const { message } = captureRenderers();
+  const body = "fallback body\u001b]52;c;clipboard\u0007";
+  const component = message(
+    {
+      role: "custom",
+      customType: "workflow-result",
+      content: body,
+      display: true,
+      details: {
+        version: 1,
+        entries: [
+          {
+            deliveryId: "delivery-bad",
+            runDir: "/tmp/wf_bad",
+            details: { runId: "wf_bad", agents: [null] },
+          },
+        ],
+      },
+      timestamp: Date.now(),
+    },
+    { expanded: false, outputPad: 0 },
+    theme,
+  );
+  assert.ok(component);
+  const rendered = component.render(100).join("\n");
+  assert.equal(rendered.trimEnd(), "fallback body");
+  assert.doesNotMatch(rendered, /[\u001b\u0007]/);
+});
+
+test("completion display is a bounded operator projection, not runtime state", () => {
+  const entries = Array.from({ length: 64 }, (_, runIndex) => {
+    const runId = `wf_${runIndex.toString(16).padStart(4, "0")}`;
+    return {
+      deliveryId: `delivery-${runIndex}-${"d".repeat(1_000)}`,
+      runDir: `/tmp/${runId}`,
+      details: finishedWorkflow({
+        runId,
+        name: `batch-${runIndex}-${"n".repeat(1_000)}`,
+        agents: Array.from({ length: 128 }, (_, agentIndex) => ({
+          index: agentIndex + 1,
+          label: `agent-${agentIndex}-${"a".repeat(500)}`,
+          state: agentIndex % 17 === 0 ? ("error" as const) : ("done" as const),
+          startedAt: 0,
+          finishedAt: 293_000,
+          error: agentIndex % 17 === 0 ? "failed" : undefined,
+          preview: "p".repeat(2_000),
+          usage: emptyUsage(),
+          transcript: [
+            { role: "assistant" as const, text: "t".repeat(10_000) },
+          ],
+        })),
+        logs: Array.from({ length: 100 }, (_, index) => ({
+          at: index,
+          text: `log-${index}-${"l".repeat(300)}`,
+        })),
+        result: { evidence: "r".repeat(100_000) },
+      }),
+    };
+  });
+  const display = buildWorkflowCompletionDisplay(entries);
+  const encoded = JSON.stringify(display);
+  assert.ok(Buffer.byteLength(encoded, "utf8") <= 64 * 1024);
+  assert.equal(isWorkflowCompletionDisplay(display), true);
+  assert.doesNotMatch(encoded, /"details"|"agents"|"logs"|"transcript"/);
+  assert.ok(display.entries.every((entry) => entry.expanded.length > 0));
+  assert.equal(
+    isWorkflowCompletionDisplay({
+      ...display,
+      entries: display.entries.map((entry) => ({
+        ...entry,
+        details: { agents: [null] },
+      })),
+    }),
+    false,
+  );
 });
 
 test("batch completion foregrounds abnormal evidence within width", () => {

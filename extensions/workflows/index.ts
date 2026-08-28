@@ -130,6 +130,7 @@ import {
   agentContext,
   aggregateUsage,
   appendLog,
+  compactWorkflowToolDetails,
   countStates,
   createUsageReader,
   emptyUsage,
@@ -194,7 +195,7 @@ import {
   type WorkflowModel,
 } from "./runner.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
-import { safeStringify, writeFileAtomic } from "./serialization.ts";
+import { writeFileAtomic } from "./serialization.ts";
 import {
   finalizeWorktreeHandoff,
   prepareWorktreeHandoff,
@@ -640,20 +641,6 @@ function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
 
-function compactToolDetails(details: WorkflowDetails): WorkflowDetails {
-  return {
-    ...details,
-    ...(details.result !== undefined
-      ? {
-          result: JSON.parse(
-            safeStringify(details.result, { maxBytes: 64 * 1024 }),
-          ),
-        }
-      : {}),
-    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
-  };
-}
-
 export interface ActiveWorkflowRunLifecycle {
   details: WorkflowDetails;
   controller: Pick<RunController, "abort" | "settle">;
@@ -807,12 +794,13 @@ export default function workflows(pi: ExtensionAPI) {
         details,
       ),
     deliver: async (envelopes, wake) => {
+      const sourceEntries = envelopes.map((envelope) => ({
+        deliveryId: envelope.deliveryId,
+        details: envelope.details,
+        runDir: path.join(getAgentDir(), "workflows", envelope.runId),
+      }));
       const content = buildProjectedWorkflowCompletionBatch(
-        envelopes.map((envelope) => ({
-          deliveryId: envelope.deliveryId,
-          details: envelope.details,
-          runDir: path.join(getAgentDir(), "workflows", envelope.runId),
-        })),
+        sourceEntries,
         lastContext?.getContextUsage?.(),
       );
       pi.sendMessage(
@@ -820,13 +808,7 @@ export default function workflows(pi: ExtensionAPI) {
           customType: "workflow-result",
           content,
           display: true,
-          details: buildWorkflowCompletionDisplay(
-            envelopes.map((envelope) => ({
-              deliveryId: envelope.deliveryId,
-              details: envelope.details,
-              runDir: path.join(getAgentDir(), "workflows", envelope.runId),
-            })),
-          ),
+          details: buildWorkflowCompletionDisplay(sourceEntries),
         },
         wake
           ? { deliverAs: "followUp", triggerTurn: true }
@@ -1253,7 +1235,7 @@ export default function workflows(pi: ExtensionAPI) {
         if (background) return;
         onUpdate?.({
           content: [{ type: "text", text: summaryLine(details) }],
-          details: compactToolDetails(details),
+          details: compactWorkflowToolDetails(details),
         });
       };
       const emit = (checkpoint = true) => {
@@ -2164,7 +2146,7 @@ export default function workflows(pi: ExtensionAPI) {
               }),
             },
           ],
-          details: compactToolDetails(details),
+          details: compactWorkflowToolDetails(details),
         };
       }
 
@@ -2193,7 +2175,7 @@ export default function workflows(pi: ExtensionAPI) {
             ),
           },
         ],
-        details: compactToolDetails(details),
+        details: compactWorkflowToolDetails(details),
       };
     },
 
@@ -2428,20 +2410,20 @@ export default function workflows(pi: ExtensionAPI) {
       return {
         render(width: number) {
           const rows: string[] = [];
-          for (const { details } of display.entries) {
+          for (const entry of display.entries) {
             rows.push(
               truncateToWidth(
-                `${statusGlyph(details.status, theme, Date.now())} ${workflowCompletionSummary(details)}`,
+                `${statusGlyph(entry.status, theme, Date.now())} ${workflowCompletionSummary(entry)}`,
                 width,
                 "…",
               ),
             );
-            for (const alert of workflowCompletionAlerts(details)) {
+            for (const alert of workflowCompletionAlerts(entry)) {
               rows.push(
                 truncateToWidth(`  ${theme.fg("error", alert)}`, width, "…"),
               );
             }
-            const result = workflowCompletionResultPreview(details);
+            const result = workflowCompletionResultPreview(entry);
             if (result) {
               rows.push(
                 truncateToWidth(
