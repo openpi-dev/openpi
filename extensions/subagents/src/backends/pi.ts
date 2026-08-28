@@ -51,6 +51,17 @@ type ThinkingLevel = NonNullable<
   NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"]
 >;
 
+export type PiAgentSessionFactory = (
+  options: Parameters<typeof createAgentSession>[0],
+) => Promise<{ session: AgentSession }>;
+
+export interface PiBackendOptions {
+  /** Test seam for production-adapter lifecycle coverage. */
+  readonly sessionFactory?: PiAgentSessionFactory;
+  /** Test-only override for bounded child shutdown. */
+  readonly shutdownTimeoutMs?: number;
+}
+
 // --- Event translation ----------------------------------------------------------
 
 function messageRole(msg: unknown): Message["role"] | undefined {
@@ -166,6 +177,7 @@ function boundedError(error: unknown) {
 
 const makePiSession = (
   task: SpawnTask,
+  options: PiBackendOptions,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
     const registry = task.parent.modelRegistry;
@@ -193,7 +205,9 @@ const makePiSession = (
             ? { appendSystemPrompt: [...task.appendSystemPrompt] }
             : {}),
         });
-        const { session } = await createAgentSession({
+        const { session } = await (
+          options.sessionFactory ?? createAgentSession
+        )({
           cwd: task.cwd,
           sessionManager: SessionManager.create(task.cwd),
           settingsManager,
@@ -208,7 +222,9 @@ const makePiSession = (
         try {
           await bindChildSessionExtensions(session, task.tools);
         } catch (error) {
-          await shutdownAndDisposeChildSession(session);
+          await shutdownAndDisposeChildSession(session, {
+            timeoutMs: options.shutdownTimeoutMs,
+          });
           throw error;
         }
         return session;
@@ -223,6 +239,12 @@ const makePiSession = (
       /** One terminal event per run: lifecycle, prompt-rejection, and abort
        * fallbacks can all race to settle; the first wins. */
       settled: false,
+      /** Abort owns the current run's terminal outcome. Pi events that arrive
+       * after abort acknowledgement belong to that cancelled run and cannot
+       * revive it; the next explicit startRun reopens event handling. */
+      discardRunEvents: false,
+      /** Distinguishes a late prompt rejection from the active restarted run. */
+      runGeneration: 0,
     };
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
@@ -306,7 +328,7 @@ const makePiSession = (
     };
 
     const handleEvent = (event: AgentSessionEvent) => {
-      if (state.closed) return;
+      if (state.closed || state.discardRunEvents) return;
       switch (event.type) {
         case "agent_start":
           // Extensions may register tools between runs; guard new ones too.
@@ -422,7 +444,7 @@ const makePiSession = (
         }
         await shutdownAndDisposeChildSession(session, {
           abort: true,
-          timeoutMs: CHILD_SHUTDOWN_TIMEOUT_MS,
+          timeoutMs: options.shutdownTimeoutMs ?? CHILD_SHUTDOWN_TIMEOUT_MS,
         });
         // A direct child can run multiple turns, so its worktree lives until
         // this session scope closes. Cleanup is fail-closed and shares a hard
@@ -438,10 +460,19 @@ const makePiSession = (
 
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
+      const runGeneration = ++state.runGeneration;
+      state.discardRunEvents = false;
       state.runError = undefined;
       state.settled = false;
       emit({ _tag: "RunStarted" });
       void session.prompt(text).catch((error) => {
+        if (
+          state.closed ||
+          state.discardRunEvents ||
+          runGeneration !== state.runGeneration
+        ) {
+          return;
+        }
         state.runError = boundedError(error);
         // Preflight failures may never start the agent lifecycle, so no
         // agent_settled will arrive for them.
@@ -485,6 +516,7 @@ const makePiSession = (
         }),
       interrupt: Effect.promise(async () => {
         if (state.closed) return;
+        state.discardRunEvents = true;
         try {
           session.clearQueue();
         } catch {
@@ -508,7 +540,10 @@ const makePiSession = (
     } satisfies SubagentSession;
   });
 
-export const piBackend: SubagentBackend = {
-  name: "pi",
-  spawn: makePiSession,
-};
+export const makePiBackend = (options: PiBackendOptions = {}) =>
+  ({
+    name: "pi",
+    spawn: (task) => makePiSession(task, options),
+  }) satisfies SubagentBackend;
+
+export const piBackend = makePiBackend();
