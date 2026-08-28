@@ -42,7 +42,16 @@ git fetch origin
 git switch -c <topic-branch> origin/main
 ```
 
-Before requesting review or after `main` changes, rebase the topic branch:
+If the topic branch was already pushed, record its exact remote tip before
+rewriting any commits:
+
+```bash
+expected=$(git ls-remote --exit-code origin refs/heads/<topic-branch> | cut -f1)
+test -n "$expected" || exit 1
+```
+
+Keep `expected` in the same shell. Before requesting review or after `main`
+changes, fetch and rebase the topic branch:
 
 ```bash
 git fetch origin
@@ -62,31 +71,27 @@ git rebase --abort
 ```
 
 A rebase changes the topic commits' IDs. If the branch was already pushed,
-record the remote tip before fetching, then fetch and compare that expected
-SHA with the updated remote-tracking branch:
+compare its current remote tip with the SHA recorded before the rebase:
 
 ```bash
-expected=$(git ls-remote --exit-code origin refs/heads/<topic-branch> | cut -f1)
-git fetch origin <topic-branch>
-test "$expected" = "$(git rev-parse origin/<topic-branch>)" || {
+current=$(git ls-remote --exit-code origin refs/heads/<topic-branch> | cut -f1)
+test "$expected" = "$current" || {
   echo "Remote branch changed; inspect and reconcile its commits before pushing."
   exit 1
 }
-git log --oneline HEAD..origin/<topic-branch>
 ```
 
-If the final command shows remote-only commits, stop and reconcile them with
-the collaborator who pushed them. After confirming that the expected remote
-tip is the one being replaced, update the branch with an explicit lease:
+After reviewing the rebased patch and confirming that the expected remote tip
+is the one being replaced, update the branch with an explicit lease:
 
 ```bash
 git push --force-with-lease=refs/heads/<topic-branch>:"$expected" \
   origin HEAD:refs/heads/<topic-branch>
 ```
 
-Keep `expected` in the same shell for the comparison and push. If the remote
-branch changes after the check, the explicit lease rejects the push. For a new
-remote branch, use a normal `git push -u origin <topic-branch>` instead.
+If the remote branch changes after the comparison, the explicit lease still
+rejects the push. For a new remote branch, skip the `expected` steps and use a
+normal `git push -u origin <topic-branch>` instead.
 
 Do not use an unqualified `--force` or an implicit `--force-with-lease`. Before
 pushing, inspect the patch and the topic branch history, then run the
