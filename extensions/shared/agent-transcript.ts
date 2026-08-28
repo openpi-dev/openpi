@@ -46,6 +46,8 @@ export type AgentTranscriptItem =
 
 export interface AgentTranscriptDocument {
   readonly items: ReadonlyArray<AgentTranscriptItem>;
+  /** Pairing index built by the document producer; render falls back to building it. */
+  readonly pairing?: PairingIndex;
   readonly cwd?: string;
   /** Ephemeral native renderer for the live child; never persisted. */
   readonly toolRenderer?: AgentToolRenderer;
@@ -244,32 +246,15 @@ function renderToolResultItem(
   );
 }
 
-/**
- * Pairing lookups precomputed in one forward pass.
- *
- * `itemContext` runs for every item on every render, and it runs BEFORE the
- * render cache is consulted, so a per-item scan made pairing cost quadratic in
- * transcript length on a path that repaints while a child is streaming. One
- * pass builds both lookups instead.
- */
-interface PairingIndex {
-  /**
-   * Tool id to the index of its FIRST `toolCall`. A result only needs to know
-   * whether any call precedes it, so the earliest call is sufficient: if that
-   * one is not earlier, none is.
-   */
+/** Tool-call/tool-result pairing lookups, precomputed in one forward pass. */
+export interface PairingIndex {
+  /** Earliest call index per tool id; a result only needs "is any call earlier?". */
   readonly firstCallAt: ReadonlyMap<string, number>;
-  /**
-   * Tool id to the ascending indices of its `toolResult` items. A call pairs
-   * with the first result AFTER it, not the first result overall, so the whole
-   * ascending list is kept and searched from the call's position. Collapsing
-   * this to a single index would mispair a tool id that appears more than once
-   * (retries, repeated streaming ids).
-   */
+  /** Ascending result indices per tool id; calls pair with the first result AFTER them. */
   readonly resultsById: ReadonlyMap<string, ReadonlyArray<number>>;
 }
 
-function buildPairingIndex(
+export function buildPairingIndex(
   transcript: ReadonlyArray<AgentTranscriptItem>,
 ): PairingIndex {
   const firstCallAt = new Map<string, number>();
@@ -432,7 +417,7 @@ export class AgentTranscriptRenderer {
     const liveTools = document.liveTools ?? [];
     if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
     const liveIds = new Set(liveTools.map((tool) => tool.toolId));
-    const pairing = buildPairingIndex(document.items);
+    const pairing = document.pairing ?? buildPairingIndex(document.items);
 
     for (let index = 0; index < document.items.length; index++) {
       const item = document.items[index];
