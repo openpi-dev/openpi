@@ -85,6 +85,7 @@ import {
   createWorkflowPersistence,
   loadJournal,
   persistWorkflowAgentResult,
+  persistWorkflowDeliveryState,
   persistWorkflowJson,
 } from "./artifacts.ts";
 import { RunController } from "./controller.ts";
@@ -185,6 +186,11 @@ import {
   type WorkflowAgentSessionFactory,
   type WorkflowModel,
 } from "./runner.ts";
+import {
+  createWorkflowSettledRunRetention,
+  projectWorkflowDetails,
+  type WorkflowSettledRunRetentionOptions,
+} from "./retention.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { safeStringify, writeFileAtomic } from "./serialization.ts";
 import {
@@ -757,17 +763,28 @@ function runDetailText(
   return `Run ${run.runId} — ${run.status}`;
 }
 
-export default function workflows(pi: ExtensionAPI) {
+export interface WorkflowExtensionOptions {
+  /** Test/configuration seam for the settled session-memory projection. */
+  readonly settledRetention?: WorkflowSettledRunRetentionOptions;
+}
+
+const WORKFLOW_DELIVERY_DETAILS_MAX_BYTES = 128 * 1024;
+
+export default function workflows(
+  pi: ExtensionAPI,
+  options: WorkflowExtensionOptions = {},
+) {
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
-  const settledRuns = new Map<string, WorkflowDetails>();
-  /** Keep current-session settled records live for their ephemeral UI renderer. */
-  const dashboardDetails = () =>
-    new Map<string, WorkflowDetails>([...settledRuns, ...activeDetails()]);
+  const settledRuns = createWorkflowSettledRunRetention(
+    options.settledRetention,
+  );
+  /** Settled details are loaded from canonical artifacts by the dashboard. */
+  const dashboardDetails = () => activeDetails();
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "workflows", {
       enable: OPENPI_TOOL_SURFACE.workflows.entry,
@@ -785,22 +802,41 @@ export default function workflows(pi: ExtensionAPI) {
   ): WorkflowCompletionEnvelope => {
     const deliveryId = details.delivery?.id;
     if (!deliveryId) throw new Error("Workflow delivery identity is missing");
+    const projection = projectWorkflowDetails(
+      details,
+      WORKFLOW_DELIVERY_DETAILS_MAX_BYTES,
+    );
+    if (!projection) {
+      throw new Error(
+        `Workflow ${details.runId} cannot create a bounded completion projection`,
+      );
+    }
     return {
       deliveryId,
       runId: details.runId,
-      details,
+      details: projection,
     };
   };
   const resultDelivery = createWorkflowResultDelivery({
     isIdle: () => lastContext?.isIdle() ?? false,
-    persist: (details) =>
-      persistWorkflowJson(
+    persist: (details) => {
+      if (!details.delivery)
+        throw new Error("Workflow delivery identity is missing");
+      persistWorkflowDeliveryState(
         path.join(getAgentDir(), "workflows", details.runId),
-        details,
-      ),
+        details.delivery,
+      );
+    },
     deliver: async (envelopes, wake) => {
+      const hydrated = envelopes.map((envelope) => ({
+        ...envelope,
+        details:
+          readPersistedWorkflowDetails(envelope.runId, {
+            hydrateArtifacts: true,
+          }) ?? envelope.details,
+      }));
       const content = buildProjectedWorkflowCompletionBatch(
-        envelopes.map((envelope) => ({
+        hydrated.map((envelope) => ({
           deliveryId: envelope.deliveryId,
           details: envelope.details,
           runDir: path.join(getAgentDir(), "workflows", envelope.runId),
@@ -812,8 +848,8 @@ export default function workflows(pi: ExtensionAPI) {
           customType: "workflow-result",
           content,
           display: true,
-          ...(envelopes.length === 1
-            ? { details: compactToolDetails(envelopes[0]!.details) }
+          ...(hydrated.length === 1
+            ? { details: compactToolDetails(hydrated[0]!.details) }
             : {}),
         },
         wake
@@ -859,7 +895,10 @@ export default function workflows(pi: ExtensionAPI) {
     const running = newestEntry(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
-    return running ?? newestEntry(settledRuns);
+    return (
+      running ??
+      newestEntry(settledRuns.entriesArray())
+    );
   };
 
   const updateWorkflowWidget = () => {
@@ -915,7 +954,7 @@ export default function workflows(pi: ExtensionAPI) {
   };
 
   const recordSettledRun = (details: WorkflowDetails) => {
-    settledRuns.set(details.runId, details);
+    settledRuns.set(details);
     if (details.status === "completed") completedRuns += 1;
     else failedRuns += 1;
   };
@@ -985,7 +1024,7 @@ export default function workflows(pi: ExtensionAPI) {
     turnStartedAt = 0;
     completedRuns = 0;
     failedRuns = 0;
-    settledRuns.clear();
+    settledRuns.resetSession();
     installWorkflowNavigation(ctx);
     updateIndicator();
 
@@ -2257,24 +2296,25 @@ export default function workflows(pi: ExtensionAPI) {
 
     const active = activeRuns.get(resolution.runId);
     if (active) return { ok: true, details: active.details } as const;
-    const settled = settledRuns.get(resolution.runId);
-    if (settled) return { ok: true, details: settled } as const;
-
     const details = readPersistedWorkflowDetails(resolution.runId, {
       hydrateArtifacts: true,
     });
-    if (!details) {
+    if (details) {
+      // A run absent from activeRuns cannot still be running this session; a
+      // persisted "running" is a run that was hard-killed or missed the
+      // shutdown settle deadline.
       return {
-        ok: false,
-        error: `Workflow run ${resolution.runId} could not be read.`,
+        ok: true,
+        details: recoverStaleWorkflowDetails(details),
       } as const;
     }
-    // A run absent from activeRuns cannot still be running this session; a
-    // persisted "running" is a run that was hard-killed or missed the
-    // shutdown settle deadline.
+    // Keep the bounded projection as a diagnostic fallback when an artifact is
+    // temporarily unreadable. An explicit id still resolves to a known run.
+    const settled = settledRuns.get(resolution.runId);
+    if (settled) return { ok: true, details: settled } as const;
     return {
-      ok: true,
-      details: recoverStaleWorkflowDetails(details),
+      ok: false,
+      error: `Workflow run ${resolution.runId} could not be read.`,
     } as const;
   };
 
@@ -2347,32 +2387,57 @@ export default function workflows(pi: ExtensionAPI) {
         if (!resolution.ok) throw new Error(resolution.error);
         const details = resolution.details;
         const runDir = path.join(getAgentDir(), "workflows", details.runId);
+        const retention = settledRuns.stats;
         return Promise.resolve({
           content: [
             { type: "text", text: buildWorkflowStatusSummary(details, runDir) },
           ],
-          details: { runs: [summarize(details)] },
+          details: {
+            runs: [summarize(details)],
+            retention,
+            settledRunsEvicted: retention.settledRunsEvicted,
+          },
         });
       }
       const runs = [
         ...[...activeRuns.values()].map((run) => run.details),
         ...settledRuns.values(),
       ];
+      const retention = settledRuns.stats;
       if (runs.length === 0) {
         return Promise.resolve({
           content: [
-            { type: "text", text: "No active or recently finished workflows." },
+            {
+              type: "text",
+              text:
+                retention.evictedRuns > 0
+                  ? `No active or retained workflows. ${retention.evictedRuns} settled run(s) omitted from memory in the current session; canonical artifacts remain available on disk.`
+                  : "No active or recently finished workflows.",
+            },
           ],
-          details: { runs: [] },
+          details: {
+            runs: [],
+            retention,
+            settledRunsEvicted: retention.settledRunsEvicted,
+          },
         });
       }
       const lines = runs.map((d) => {
         const { done, failed, uncertain } = countStates(d);
         return `${d.runId}${d.name ? ` "${d.name}"` : ""} — ${statusWord(d.status)} · ${done + failed}/${d.agents.length} agents${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""}`;
       });
+      if (retention.evictedRuns > 0) {
+        lines.push(
+          `Retention (current session): ${retention.retainedRuns} settled projection(s) retained; ${retention.evictedRuns} evicted/omitted (${retention.evictedBytes} UTF-8 bytes). Canonical artifacts remain available on disk.`,
+        );
+      }
       return Promise.resolve({
         content: [{ type: "text", text: lines.join("\n") }],
-        details: { runs: runs.map(summarize) },
+        details: {
+          runs: runs.map(summarize),
+          retention,
+          settledRunsEvicted: retention.settledRunsEvicted,
+        },
       });
     },
   });

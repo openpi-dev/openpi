@@ -143,6 +143,21 @@ export interface WorkflowLogEntry {
   text: string;
 }
 
+/** Metadata attached only to the bounded in-memory settled-run projection. */
+export interface WorkflowMemoryProjection {
+  readonly kind: "settled";
+  readonly maxBytes: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly omitted: {
+    readonly agents: number;
+    readonly logs: number;
+    readonly transcriptEntries: number;
+    readonly result: boolean;
+    readonly graph: boolean;
+  };
+}
+
 export interface WorkflowDetails {
   runId: string;
   /** Pi session that launched this run. */
@@ -172,6 +187,8 @@ export interface WorkflowDetails {
   /** Read-only lineage projection; never execution or admission authority. */
   graph?: WorkflowGraphProjection;
   error?: string;
+  /** Present only on the session-memory projection, never canonical history. */
+  memoryProjection?: WorkflowMemoryProjection;
 }
 
 export function workflowGraphRecords(
