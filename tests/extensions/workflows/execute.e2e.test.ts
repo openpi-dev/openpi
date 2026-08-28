@@ -27,6 +27,7 @@ import type {
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
+import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import type { WorkflowDetails } from "../../../extensions/workflows/model.ts";
 import type { WorkflowAgentSessionFactory } from "../../../extensions/workflows/runner.ts";
 
@@ -50,8 +51,12 @@ writeFileSync(join(repoDir, "fixture.txt"), "fixture\n");
 git(["add", "."]);
 git(["commit", "-q", "-m", "fixture"]);
 
-const { default: workflows, __setWorkflowTestAgentSessionFactory } =
-  await import("../../../extensions/workflows/index.ts");
+const {
+  default: workflows,
+  __setWorkflowTestAgentSessionFactory,
+  __setWorkflowTestLifecycleHooks,
+  shutdownActiveWorkflowRuns,
+} = await import("../../../extensions/workflows/index.ts");
 
 type CapturedTool = {
   name: string;
@@ -986,6 +991,80 @@ test("an oversized legacy replay is rejected without a success record", async ()
     );
     assert.equal(existsSync(join(resumedDir, "journal.json")), false);
   } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+});
+
+test("forced settlement persists worktree cleanup that finishes later", async () => {
+  let activeRun:
+    | Parameters<typeof shutdownActiveWorkflowRuns>[0][number]
+    | undefined;
+  let markCleanupStarted = () => {};
+  let releaseCleanup = () => {};
+  const cleanupStarted = new Promise<void>((resolve) => {
+    markCleanupStarted = resolve;
+  });
+  const cleanupGate = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
+  let actualCleanup: Awaited<ReturnType<typeof reclaimWorktree>> | undefined;
+
+  __setWorkflowTestAgentSessionFactory(async () => ({
+    session: fakeAgentSession("isolated agent output"),
+  }));
+  __setWorkflowTestLifecycleHooks({
+    onRunStarted(run) {
+      activeRun = run;
+    },
+    async reclaimWorktree(repoCwd, worktree) {
+      markCleanupStarted();
+      await cleanupGate;
+      actualCleanup = await reclaimWorktree(repoCwd, worktree);
+      return actualCleanup;
+    },
+  });
+
+  try {
+    const launch = (await workflow.execute(
+      "e2e-forced-worktree-cleanup",
+      {
+        script:
+          'export const meta = { name: "forced-worktree-cleanup" };\n' +
+          'await agent("finish in isolation", { agent_type: "reviewer", isolation: "worktree" });\n' +
+          "return true;",
+        background: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+
+    await cleanupStarted;
+    assert.ok(activeRun);
+    assert.equal(await shutdownActiveWorkflowRuns([activeRun], 10), false);
+
+    const forced = readWorkflowJson(launch.details.runId);
+    assert.equal(forced.status, "failed");
+    const forcedAgent = (forced.agents as Array<Record<string, unknown>>)[0];
+    assert.equal(forcedAgent?.worktreeCleanup, undefined);
+
+    releaseCleanup();
+    await activeRun.completion;
+    assert.ok(actualCleanup);
+
+    const persisted = readWorkflowJson(launch.details.runId);
+    const agent = (persisted.agents as Array<Record<string, unknown>>)[0];
+    assert.deepEqual(agent?.worktreeCleanup, actualCleanup);
+    assert.equal(
+      agent?.worktreeBranch,
+      actualCleanup.branchDeleted ? undefined : actualCleanup.branch,
+    );
+    if (actualCleanup.removed) assert.equal(agent?.worktreePath, undefined);
+    assert.equal(typeof agent?.worktreeHandoffArtifact, "string");
+  } finally {
+    releaseCleanup();
+    if (activeRun?.completion) await activeRun.completion.catch(() => {});
+    __setWorkflowTestLifecycleHooks(undefined);
     __setWorkflowTestAgentSessionFactory(undefined);
   }
 });
