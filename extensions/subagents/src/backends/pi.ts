@@ -239,11 +239,12 @@ const makePiSession = (
       /** One terminal event per run: lifecycle, prompt-rejection, and abort
        * fallbacks can all race to settle; the first wins. */
       settled: false,
-      /** Abort owns the current run's terminal outcome. Pi events that arrive
-       * after abort acknowledgement belong to that cancelled run and cannot
-       * revive it; the next explicit startRun reopens event handling. */
+      /** Abort owns the current run's terminal outcome. Events stay discarded
+       * across a restart until Pi emits the next run's agent_start boundary. */
       discardRunEvents: false,
-      /** Distinguishes a late prompt rejection from the active restarted run. */
+      /** A restart requested after interruption is waiting for agent_start. */
+      awaitingRunStart: false,
+      /** Distinguishes late prompt rejections from the active run. */
       runGeneration: 0,
     };
 
@@ -328,7 +329,12 @@ const makePiSession = (
     };
 
     const handleEvent = (event: AgentSessionEvent) => {
-      if (state.closed || state.discardRunEvents) return;
+      if (state.closed) return;
+      if (state.discardRunEvents) {
+        if (!state.awaitingRunStart || event.type !== "agent_start") return;
+        state.awaitingRunStart = false;
+        state.discardRunEvents = false;
+      }
       switch (event.type) {
         case "agent_start":
           // Extensions may register tools between runs; guard new ones too.
@@ -461,18 +467,18 @@ const makePiSession = (
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
       const runGeneration = ++state.runGeneration;
-      state.discardRunEvents = false;
+      state.awaitingRunStart = state.discardRunEvents;
       state.runError = undefined;
       state.settled = false;
       emit({ _tag: "RunStarted" });
       void session.prompt(text).catch((error) => {
-        if (
-          state.closed ||
-          state.discardRunEvents ||
-          runGeneration !== state.runGeneration
-        ) {
+        if (state.closed || runGeneration !== state.runGeneration) {
           return;
         }
+        // A preflight rejection may happen before agent_start, so it must also
+        // release a restart boundary that would otherwise discard forever.
+        state.awaitingRunStart = false;
+        state.discardRunEvents = false;
         state.runError = boundedError(error);
         // Preflight failures may never start the agent lifecycle, so no
         // agent_settled will arrive for them.
@@ -517,6 +523,8 @@ const makePiSession = (
       interrupt: Effect.promise(async () => {
         if (state.closed) return;
         state.discardRunEvents = true;
+        state.awaitingRunStart = false;
+        state.runGeneration++;
         try {
           session.clearQueue();
         } catch {

@@ -314,6 +314,60 @@ test("streaming send steers while idle send starts a distinct run", async () => 
   }
 });
 
+test("cancelled run events do not cross a restarted run boundary", async () => {
+  const fixtures = harnessFactory();
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    let settlements = 0;
+    manager.view.setOnSettled(() => settlements++);
+
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("cancelled turn")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+
+    const report = await runtime.runPromise(manager.cancel([spawned.id]));
+    assert.equal(report[0]?.cancelled, true);
+    assert.equal(settlements, 1);
+
+    await runtime.runPromise(manager.send(spawned.id, "restarted turn"));
+    assert.deepEqual(harness.calls.prompts, [
+      "cancelled turn",
+      "restarted turn",
+    ]);
+
+    harness.emitAssistant("stale cancelled result");
+    harness.emit({ type: "agent_settled" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
+    assert.equal(manager.view.get(spawned.id)?.finalText, "");
+    assert.equal(settlements, 1);
+
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("fresh restarted result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(manager.view.get(spawned.id)?.status, "done");
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "fresh restarted result",
+    );
+    assert.equal(settlements, 2);
+  } finally {
+    await runtime.dispose();
+  }
+});
+
 test("prompt and tool cancellation ignore late completion and free capacity", async () => {
   const latePrompt = deferred<void>();
   const fixtures = harnessFactory((_options, index) =>
