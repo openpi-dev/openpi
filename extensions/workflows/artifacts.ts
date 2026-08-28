@@ -127,10 +127,10 @@ export function persistWorkflowAgentResult(
   index: number,
   result: { output: string; structured?: unknown },
 ) {
-  const artifact = path.join(
-    "agent-results",
-    `agent-${String(index).padStart(4, "0")}.json`,
-  );
+  // Artifact references are persisted as portable workflow paths. The host
+  // filesystem join happens in writeRunFile; handoff validation and replay
+  // consumers intentionally use `/` regardless of the platform.
+  const artifact = `agent-results/agent-${String(index).padStart(4, "0")}.json`;
   const encoded = encodeCompleteJson(
     {
       output: result.output,
