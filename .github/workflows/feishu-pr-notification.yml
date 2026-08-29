@@ -43,14 +43,14 @@ jobs:
               ...(pr.requested_reviewers ?? []).map((reviewer) => reviewer.login),
               ...(pr.requested_teams ?? []).map((team) => `team/${team.slug}`),
             ];
-            const reviewerText = reviewers.length > 0 ? reviewers.join(", ") : "none requested";
+            const reviewerText = reviewers.length > 0 ? reviewers.join(", ") : "未指定";
             const lines = [
-              `New PR in ${process.env.REPOSITORY}`,
+              `${process.env.REPOSITORY} 有新的 PR`,
               `#${pr.number} ${pr.title}`,
-              `Author: ${author}`,
-              `Reviewers: ${reviewerText}`,
-              `Branch: ${pr.head.label} -> ${pr.base.ref}`,
-              pr.html_url,
+              `作者：${author}`,
+              `审阅人：${reviewerText}`,
+              `分支：${pr.head.label} -> ${pr.base.ref}`,
+              `PR 链接：${pr.html_url}`,
             ];
             const timestamp = String(Math.floor(Date.now() / 1000));
             const stringToSign = `${timestamp}\n${process.env.FEISHU_PR_BOT_SECRET}`;
