@@ -20,13 +20,16 @@ export function shouldClearContext(
 }
 
 class ClearContextEditor extends CustomEditor {
+  private readonly isIdle: () => boolean;
+
   constructor(
     tui: TUI,
     theme: EditorTheme,
     keybindings: KeybindingsManager,
-    private readonly isIdle: () => boolean,
+    isIdle: () => boolean,
   ) {
     super(tui, theme, keybindings);
+    this.isIdle = isIdle;
   }
 
   handleInput(data: string) {
