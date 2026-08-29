@@ -5,7 +5,7 @@ last-reviewed: 2026-08-29
 applies-to: OpenPI repository documentation from this Decision forward
 owner: OpenPI maintainers
 related-issues: "#198, #277"
-related-prs: none
+related-prs: "#278"
 supersedes: none
 ---
 
