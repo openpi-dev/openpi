@@ -135,6 +135,7 @@ test("agent result artifacts are complete or fail without leaving a file", () =>
       output: "complete",
       structured: { verdict: "accepted", emoji: "你好🙂" },
     });
+    assert.equal(artifact, "agent-results/agent-0001.json");
     assert.deepEqual(
       JSON.parse(readFileSync(join(directory, artifact), "utf8")),
       {

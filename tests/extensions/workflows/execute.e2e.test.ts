@@ -229,7 +229,11 @@ async function waitFor(
 }
 
 /** A minimal AgentSession stand-in for one successful child agent call. */
-function fakeAgentSession(output: string, promptGate?: Promise<void>) {
+function fakeAgentSession(
+  output: string,
+  promptGate?: Promise<void>,
+  onPrompt?: (prompt: string) => void,
+) {
   const listeners = new Set<AgentSessionEventListener>();
   // The reviewer agent type requests the read-only tool surface; the child
   // preflight in bindChildSessionExtensions requires all of them active.
@@ -279,7 +283,8 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async prompt() {
+    async prompt(promptValue?: unknown) {
+      onPrompt?.(typeof promptValue === "string" ? promptValue : "");
       await promptGate;
       const assistant = messages.find(
         (message) => message.role === "assistant",
@@ -1097,6 +1102,112 @@ test("replay acceptance verdicts do not create success filesystem side effects",
       false,
     );
     assert.equal(existsSync(join(runDir, "journal.json")), false);
+  }
+});
+
+test("structured agent results survive handoff refs and downstream inputs", async () => {
+  let sessionCreations = 0;
+  let downstreamPrompt = "";
+  const factory: WorkflowAgentSessionFactory = async (options) => {
+    sessionCreations++;
+    if (sessionCreations > 1) {
+      return {
+        session: fakeAgentSession("downstream output", undefined, (prompt) => {
+          downstreamPrompt = prompt;
+        }),
+      };
+    }
+
+    const structuredTool = options?.customTools?.find(
+      (tool) => tool.name === "structured_output",
+    );
+    assert.ok(structuredTool);
+    const session = fakeAgentSession("");
+    const existingTools = session.getAllTools();
+    session.getAllTools = () => [
+      ...existingTools,
+      {
+        name: structuredTool.name,
+        description: structuredTool.description,
+        parameters: structuredTool.parameters,
+        promptGuidelines: structuredTool.promptGuidelines,
+        sourceInfo: {
+          path: "<custom:structured_output>",
+          source: "custom",
+          scope: "temporary",
+          origin: "top-level",
+        },
+      },
+    ];
+    session.getActiveToolNames = () => [
+      ...existingTools.map((tool) => tool.name),
+      structuredTool.name,
+    ];
+    session.getToolDefinition = (name) =>
+      name === structuredTool.name ? structuredTool : undefined;
+    session.prompt = async () => {
+      await structuredTool.execute(
+        "structured-handoff",
+        { verdict: "accepted", score: 7 },
+        new AbortController().signal,
+        () => {},
+        ctx,
+      );
+    };
+    return { session };
+  };
+  __setWorkflowTestAgentSessionFactory(factory);
+
+  try {
+    const result = (await workflow.execute(
+      "e2e-structured-handoff",
+      {
+        script:
+          'export const meta = { name: "structured-handoff" };\n' +
+          'const first = await agent("produce a verdict", { agent_type: "reviewer", schema: { type: "object", properties: { verdict: { type: "string" }, score: { type: "number" } }, required: ["verdict", "score"] } });\n' +
+          'const second = await agent("consume the upstream verdict", { agent_type: "reviewer", inputs: [first.ref] });\n' +
+          "return { firstOk: first.ok, firstRef: first.ref ?? null, secondOk: second.ok, secondOutput: second.output };",
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+
+    const runId = result.details.runId;
+    const runDir = runDirFor(runId);
+    const returned = JSON.parse(
+      readFileSync(join(runDir, "result.json"), "utf8"),
+    ) as {
+      firstOk: unknown;
+      firstRef: unknown;
+      secondOk: unknown;
+      secondOutput: unknown;
+    };
+    assert.equal(returned.firstOk, true);
+    assert.equal(typeof returned.firstRef, "string");
+    assert.equal(returned.secondOk, true);
+    assert.equal(returned.secondOutput, "downstream output");
+    assert.match(downstreamPrompt, /accepted/);
+
+    const persisted = readWorkflowJson(runId);
+    const agents = persisted.agents as Array<{
+      callId?: unknown;
+      state: unknown;
+      resultArtifact?: unknown;
+      resultRef?: unknown;
+      inputCallIds?: unknown;
+    }>;
+    assert.equal(agents.length, 2);
+    assert.equal(agents[0]?.state, "done");
+    assert.equal(agents[0]?.resultArtifact, "agent-results/agent-0001.json");
+    assert.equal(typeof agents[0]?.resultRef, "string");
+    assert.equal(agents[1]?.state, "done");
+    assert.equal(agents[1]?.resultArtifact, "agent-results/agent-0002.json");
+    assert.deepEqual(agents[1]?.inputCallIds, [agents[0]?.callId]);
+    assert.equal(sessionCreations, 2);
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
   }
 });
 
