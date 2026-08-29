@@ -858,7 +858,7 @@ test("nested manifestless packages are not mistaken for OpenPI", async () => {
   });
 });
 
-test("child package snapshot cannot install an unresolved historical Git source", async () => {
+test("child package snapshot handles canonical and historical package Git sources offline", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
     const agentDir = path.join(directory, "agent");
@@ -867,12 +867,18 @@ test("child package snapshot cannot install an unresolved historical Git source"
       "git:github.com/nicobailon/pi-intercom@feature/test",
       "git:git@github.com:nicobailon/pi-intercom@feature/test",
     ];
+    const openPiSources = [
+      "git:github.com/openpi-dev/openpi",
+      "git:github.com/tt-a1i/openpi",
+    ];
     const ordinarySource = "npm:ordinary-missing-package@1.0.0";
     await mkdir(cwd, { recursive: true });
     await mkdir(agentDir, { recursive: true });
     await writeFile(
       path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: [...intercomSources, ordinarySource] }),
+      JSON.stringify({
+        packages: [...intercomSources, ...openPiSources, ordinarySource],
+      }),
     );
 
     const previousOffline = process.env.PI_OFFLINE;
@@ -890,6 +896,10 @@ test("child package snapshot cannot install an unresolved historical Git source"
     }
 
     assert.deepEqual(child.settingsManager.getGlobalSettings().packages, [
+      ...openPiSources.map((source) => ({
+        source,
+        extensions: ["-extensions/git-info/index.ts"],
+      })),
       ordinarySource,
     ]);
     for (const source of intercomSources) {
