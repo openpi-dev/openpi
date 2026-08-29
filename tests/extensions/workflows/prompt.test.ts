@@ -93,7 +93,7 @@ test("oversized completion batches split into bounded messages without losing de
       result: { evidence: "x".repeat(8_000) },
     };
     return {
-      deliveryId: `delivery-large-${index}`,
+      deliveryId: `delivery-large-${index}-${"d".repeat(600)}`,
       details,
       runDir: `/tmp/${details.runId}`,
     };
@@ -112,6 +112,53 @@ test("oversized completion batches split into bounded messages without losing de
     assert.equal(
       batches.filter((batch) =>
         batch.content.includes(JSON.stringify(entry.deliveryId)),
+      ).length,
+      1,
+    );
+  }
+});
+
+test("completion batching keeps small and large deliveries grouped", () => {
+  const makeEntry = (index: number, evidenceLength = 200) => {
+    const details: WorkflowDetails = {
+      runId: `wf_grouped_${index}`,
+      status: "completed",
+      background: true,
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+      result: { evidence: "x".repeat(evidenceLength) },
+    };
+    return {
+      deliveryId: `delivery-grouped-${index}`,
+      details,
+      runDir: `/tmp/${details.runId}/${"r".repeat(600)}`,
+    };
+  };
+
+  const smallEntries = [0, 1, 2].map((index) => makeEntry(index));
+  const smallBatches = buildProjectedWorkflowCompletionBatches(smallEntries);
+  assert.equal(smallBatches.length, 1);
+  assert.deepEqual(
+    smallBatches[0]?.entries.map((entry) => entry.deliveryId),
+    smallEntries.map((entry) => entry.deliveryId),
+  );
+
+  const largeEntries = Array.from({ length: 128 }, (_, index) =>
+    makeEntry(index, 8_000),
+  );
+  const largeBatches = buildProjectedWorkflowCompletionBatches(largeEntries, {
+    tokens: 10_000,
+    contextWindow: 100_000,
+  });
+  assert.ok(largeBatches.length < largeEntries.length / 2);
+  for (const entry of largeEntries) {
+    assert.equal(
+      largeBatches.filter((batch) =>
+        batch.entries.some(
+          (candidate) => candidate.deliveryId === entry.deliveryId,
+        ),
       ).length,
       1,
     );

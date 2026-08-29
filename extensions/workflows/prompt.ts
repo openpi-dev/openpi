@@ -285,12 +285,8 @@ export function buildProjectedWorkflowCompletionBatches(
   for (const entry of entries) {
     const candidate = [...current, entry];
     try {
-      const content = buildProjectedWorkflowCompletionBatch(candidate, usage);
+      buildProjectedWorkflowCompletionBatch(candidate, usage);
       current = candidate;
-      if (current.length === 1) {
-        batches.push({ entries: current, content });
-        current = [];
-      }
     } catch (error) {
       if (current.length === 0) throw error;
       batches.push({
