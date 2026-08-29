@@ -221,6 +221,8 @@ export interface SubagentSnapshot {
   readonly meta: SubagentMeta;
   readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
   readonly transcript: ReadonlyArray<TranscriptItem>;
+  /** Monotonic version bumped on every transcript mutation (see manager). */
+  readonly transcriptVersion: number;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
   readonly liveTools: ReadonlyArray<LiveToolState>;

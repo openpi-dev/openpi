@@ -28,6 +28,7 @@ function snapshot(
     ...(settledAt === undefined ? {} : { settledAt }),
     meta: { backend: "pi", modelLabel: "openai-codex/gpt-5.6-sol" },
     usage: { tokens: 1_000, contextWindow: 10_000 },
+    transcriptVersion: 0,
     transcript: [],
     liveTools: [],
     queued: [],

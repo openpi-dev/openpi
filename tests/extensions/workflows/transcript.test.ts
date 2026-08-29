@@ -39,6 +39,7 @@ function directSnapshot(): SubagentSnapshot {
     settledAt: 1,
     meta: { backend: "pi" },
     usage: {},
+    transcriptVersion: 0,
     transcript: [
       { kind: "user", text: "请检查 **状态**" },
       {

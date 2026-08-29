@@ -78,7 +78,6 @@ import {
   acceptanceInstruction,
   acceptanceSchema,
   applyAcceptance,
-  evaluateAcceptance,
   parseAcceptanceContract,
 } from "./acceptance.ts";
 import {
@@ -1718,11 +1717,33 @@ export default function workflows(pi: ExtensionAPI) {
             cached.output,
             PREVIEW_LENGTH,
           );
-          if (acceptanceContract) {
-            record.acceptance = evaluateAcceptance(
-              acceptanceContract,
-              cached.structured,
+          const judged = applyAcceptance({
+            contract: acceptanceContract,
+            structured: cached.structured,
+            agentOk: true,
+          });
+          if (judged.ledger) record.acceptance = judged.ledger;
+          if (!judged.ok) {
+            const error = sanitizeWorkflowDisplayLine(
+              judged.error ?? "Agent failed",
             );
+            record.invocation = transitionInvocation(record.invocation!, {
+              status: "rejected",
+              at: finishedAt,
+            });
+            record.state = "error";
+            record.error = error;
+            emit();
+            replayLease.end();
+            return {
+              ok: false,
+              output: cached.output,
+              ...(cached.structured !== undefined
+                ? { structured: cached.structured }
+                : {}),
+              ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+              error,
+            };
           }
           const persisted = persistAgentResult({
             output: cached.output,

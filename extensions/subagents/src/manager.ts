@@ -93,6 +93,9 @@ function appendTranscript(snapshot: MutableSnapshot, item: TranscriptItem) {
       snapshot.transcript.length - MAX_TRANSCRIPT_ITEMS,
     );
   }
+  // Monotonic version so UI projections can detect transcript changes by
+  // O(1) comparison instead of scanning the mutable array.
+  snapshot.transcriptVersion++;
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -112,6 +115,8 @@ interface MutableSnapshot {
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
   transcript: TranscriptItem[];
+  /** Bumped on every transcript mutation; UI caches key on this. */
+  transcriptVersion: number;
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
@@ -585,6 +590,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
               meta,
               usage: { contextWindow: meta.contextWindow },
               transcript: [],
+              transcriptVersion: 0,
               liveTools: [],
               queued: [],
               finalText: "",
