@@ -666,6 +666,7 @@ export interface ActiveWorkflowRunLifecycle {
 }
 
 interface WorkflowLifecycleTestHooks {
+  readonly persistWorkflow?: typeof persistWorkflowJson;
   readonly reclaimWorktree?: typeof reclaimWorktree;
   readonly onRunStarted?: (run: ActiveWorkflowRunLifecycle) => void;
 }
@@ -1227,6 +1228,9 @@ export default function workflows(pi: ExtensionAPI) {
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details, {
         journal: () => journalEntries,
+        ...(workflowLifecycleTestHooks?.persistWorkflow
+          ? { persist: workflowLifecycleTestHooks.persistWorkflow }
+          : {}),
       });
 
       // A caller wait never owns the run. All runs survive an interrupted
@@ -2085,8 +2089,15 @@ export default function workflows(pi: ExtensionAPI) {
                 if (!cleanup.removed) record.worktreePath = worktree.path;
                 // Forced settlement fixes the execution verdict, but cleanup
                 // provenance discovered afterward still belongs in the run.
-                if (runSettled) persistence.checkpoint({ immediate: true });
-                else emit();
+                // No later final flush remains, so failures must be observable.
+                if (runSettled) {
+                  try {
+                    persistence.flush();
+                  } catch (error) {
+                    appendArtifactPersistenceFailure(details, error);
+                    persistTerminalRecovery();
+                  }
+                } else emit();
               }
             }
           }, invocationSignal)

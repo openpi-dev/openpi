@@ -28,6 +28,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
+import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
 import type { WorkflowDetails } from "../../../extensions/workflows/model.ts";
 import type { WorkflowAgentSessionFactory } from "../../../extensions/workflows/runner.ts";
 
@@ -996,6 +997,11 @@ test("an oversized legacy replay is rejected without a success record", async ()
 });
 
 test("forced settlement persists worktree cleanup that finishes later", async () => {
+  modelIdle = true;
+  for (const handler of handlers.get("agent_settled") ?? []) {
+    await handler({}, ctx);
+  }
+  sentMessages.length = 0;
   let activeRun:
     | Parameters<typeof shutdownActiveWorkflowRuns>[0][number]
     | undefined;
@@ -1008,11 +1014,23 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
     releaseCleanup = resolve;
   });
   let actualCleanup: Awaited<ReturnType<typeof reclaimWorktree>> | undefined;
+  let latePersistenceFailures = 0;
 
   __setWorkflowTestAgentSessionFactory(async () => ({
     session: fakeAgentSession("isolated agent output"),
   }));
   __setWorkflowTestLifecycleHooks({
+    persistWorkflow(runDir, details, journal) {
+      if (
+        latePersistenceFailures === 0 &&
+        details.status === "failed" &&
+        details.agents.some((agent) => agent.worktreeCleanup !== undefined)
+      ) {
+        latePersistenceFailures++;
+        throw new Error("injected late cleanup persistence failure");
+      }
+      persistWorkflowJson(runDir, details, journal);
+    },
     onRunStarted(run) {
       activeRun = run;
     },
@@ -1051,8 +1069,26 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
     releaseCleanup();
     await activeRun.completion;
     assert.ok(actualCleanup);
+    assert.equal(latePersistenceFailures, 1);
+
+    const deliveriesForRun = () =>
+      sentMessages.filter((sent) =>
+        String(sent.message.content).includes(
+          `(${String(launch.details.runId)})`,
+        ),
+      );
+    await waitFor(
+      () => deliveriesForRun().length === 1,
+      "forced settlement completion delivery",
+    );
 
     const persisted = readWorkflowJson(launch.details.runId);
+    assert.equal(persisted.status, "failed");
+    assert.match(String(persisted.error), /Session shutdown deadline exceeded/);
+    assert.match(
+      String(persisted.error),
+      /Artifact persistence failed: injected late cleanup persistence failure/,
+    );
     const agent = (persisted.agents as Array<Record<string, unknown>>)[0];
     assert.deepEqual(agent?.worktreeCleanup, actualCleanup);
     assert.equal(
@@ -1061,6 +1097,28 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
     );
     if (actualCleanup.removed) assert.equal(agent?.worktreePath, undefined);
     assert.equal(typeof agent?.worktreeHandoffArtifact, "string");
+    const delivery = persisted.delivery as Record<string, unknown>;
+    assert.equal(
+      delivery.id,
+      `workflow:${String(launch.details.runId)}:terminal`,
+    );
+    assert.equal(delivery.state, "delivered");
+    assert.equal(delivery.attempts, 1);
+    assert.equal(typeof delivery.updatedAt, "number");
+    assert.equal(typeof delivery.deliveredAt, "number");
+
+    const delivered = deliveriesForRun()[0];
+    assert.ok(delivered);
+    assert.match(String(delivered.message.content), /failed/);
+    assert.match(
+      String(delivered.message.content),
+      /Session shutdown deadline exceeded/,
+    );
+
+    for (const handler of handlers.get("agent_settled") ?? []) {
+      await handler({}, ctx);
+    }
+    assert.equal(deliveriesForRun().length, 1);
   } finally {
     releaseCleanup();
     if (activeRun?.completion) await activeRun.completion.catch(() => {});
