@@ -77,13 +77,16 @@
   },
   "scripts": {
     "prepublishOnly": "bun run check && bun run test",
-    "check": "bun run format:check && bun run lint && bun run typecheck",
+    "check": "bun run check:config-contract && bun run check:discipline && bun run format:check && bun run lint && bun run typecheck",
+    "check:config-contract": "node scripts/check-config-contract.mjs",
+    "check:discipline": "node scripts/check-discipline-ledger.mjs",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint . --error-on-warnings",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/run-tests.mjs"
+    "test": "node scripts/run-tests.mjs",
+    "provenance": "node scripts/provenance.mjs"
   },
   "packageManager": "bun@1.3.14"
 }

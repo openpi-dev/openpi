@@ -174,6 +174,35 @@ export interface WorkflowDetails {
   error?: string;
 }
 
+/**
+ * Bound only the current-session terminal projection. Persisted workflow
+ * records and side artifacts remain the canonical history.
+ */
+export const MAX_SETTLED_RUNS = 32;
+
+/** Evict the oldest terminal projections without touching active-run state. */
+export function evictOldestSettledRuns(
+  settledRuns: Map<string, WorkflowDetails>,
+  maxRuns = MAX_SETTLED_RUNS,
+): string[] {
+  const limit = Number.isFinite(maxRuns)
+    ? Math.max(0, Math.floor(maxRuns))
+    : MAX_SETTLED_RUNS;
+  const evicted: string[] = [];
+  while (settledRuns.size > limit) {
+    let oldest: { runId: string; at: number } | undefined;
+    for (const [runId, details] of settledRuns) {
+      if (details.status === "running") continue;
+      const at = details.finishedAt ?? details.startedAt;
+      if (!oldest || at < oldest.at) oldest = { runId, at };
+    }
+    if (!oldest) break;
+    settledRuns.delete(oldest.runId);
+    evicted.push(oldest.runId);
+  }
+  return evicted;
+}
+
 export function workflowGraphRecords(
   agents: readonly AgentRecord[],
 ): WorkflowGraphRecord[] {

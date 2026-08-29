@@ -60,6 +60,8 @@ Capability discovery defaults to `explicit`, preserving the zero-resident OpenPI
 
 Legacy `footerItems` is accepted and migrated at the input boundary, but new setup writes persist only canonical `footerLines`. Configurations written by this version are not guaranteed to retain their Footer layout when read by an older OpenPI version.
 
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
 ## Optional cross-session communication
 
 [pi-intercom](https://github.com/nicobailon/pi-intercom) is an independently maintained Pi package for communication between top-level Sessions. OpenPI does not detect, recommend, install, configure, migrate, or remove it. If you need that capability, review its repository and install it through Pi's native package command:

@@ -402,6 +402,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力

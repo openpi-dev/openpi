@@ -29,7 +29,10 @@ import type {
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
-import type { WorkflowDetails } from "../../../extensions/workflows/model.ts";
+import {
+  MAX_SETTLED_RUNS,
+  type WorkflowDetails,
+} from "../../../extensions/workflows/model.ts";
 import type { WorkflowAgentSessionFactory } from "../../../extensions/workflows/runner.ts";
 
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-wf-e2e-"));
@@ -757,6 +760,54 @@ test("a failing script reports the error and records the run as failed", async (
   const persisted = readWorkflowJson(failed.runId);
   assert.equal(persisted.status, "failed");
   assert.match(String(persisted.error), /kaboom/);
+});
+
+test("settled retention is bounded while status and artifacts remain observable", async () => {
+  const before = (await status.execute("e2e-retention-before", {})) as {
+    details: { settledRunsEvicted: number };
+  };
+  const runIds: string[] = [];
+
+  for (let index = 0; index < MAX_SETTLED_RUNS + 1; index++) {
+    const result = (await workflow.execute(
+      `e2e-retention-${index}`,
+      {
+        script: `export const meta = { name: "retention-${index}" };\nreturn ${index};`,
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+    assert.equal(typeof result.details.runId, "string");
+    runIds.push(result.details.runId as string);
+  }
+
+  const after = (await status.execute("e2e-retention-after", {})) as {
+    content: Array<{ text?: string }>;
+    details: {
+      runs: Array<{ runId: unknown }>;
+      settledRunsEvicted: number;
+    };
+  };
+  assert.ok(after.details.runs.length <= MAX_SETTLED_RUNS);
+  assert.ok(
+    after.details.settledRunsEvicted >= before.details.settledRunsEvicted + 1,
+  );
+  assert.match(
+    after.content[0]?.text ?? "",
+    /settled workflow details? evicted from memory; persisted artifacts retained\./,
+  );
+
+  const oldestRunId = runIds[0]!;
+  assert.equal(existsSync(join(runDirFor(oldestRunId), "workflow.json")), true);
+  const lookup = (await status.execute("e2e-retention-lookup", {
+    runId: oldestRunId,
+  })) as {
+    details: { runs: Array<{ runId: unknown; status: unknown }> };
+  };
+  assert.equal(lookup.details.runs[0]?.runId, oldestRunId);
+  assert.equal(lookup.details.runs[0]?.status, "completed");
 });
 
 test("agent calls run through the injected session factory and resume replays the journal", async () => {

@@ -125,6 +125,7 @@ import {
   countStates,
   createUsageReader,
   emptyUsage,
+  evictOldestSettledRuns,
   formatElapsed,
   formatUsage,
   isWorkflowRunId,
@@ -790,7 +791,10 @@ export default function workflows(pi: ExtensionAPI) {
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
+  // This is an ephemeral UI projection. Persistence and result delivery own
+  // the durable history and pending completion independently.
   const settledRuns = new Map<string, WorkflowDetails>();
+  let settledRunsEvicted = 0;
   /** Keep current-session settled records live for their ephemeral UI renderer. */
   const dashboardDetails = () =>
     new Map<string, WorkflowDetails>([...settledRuns, ...activeDetails()]);
@@ -942,6 +946,7 @@ export default function workflows(pi: ExtensionAPI) {
 
   const recordSettledRun = (details: WorkflowDetails) => {
     settledRuns.set(details.runId, details);
+    settledRunsEvicted += evictOldestSettledRuns(settledRuns).length;
     if (details.status === "completed") completedRuns += 1;
     else failedRuns += 1;
   };
@@ -1011,6 +1016,7 @@ export default function workflows(pi: ExtensionAPI) {
     turnStartedAt = 0;
     completedRuns = 0;
     failedRuns = 0;
+    settledRunsEvicted = 0;
     settledRuns.clear();
     installWorkflowNavigation(ctx);
     updateIndicator();
@@ -2427,9 +2433,13 @@ export default function workflows(pi: ExtensionAPI) {
           content: [
             { type: "text", text: buildWorkflowStatusSummary(details, runDir) },
           ],
-          details: { runs: [summarize(details)] },
+          details: { runs: [summarize(details)], settledRunsEvicted },
         });
       }
+      const retentionNote =
+        settledRunsEvicted > 0
+          ? `\n${settledRunsEvicted} settled workflow detail${settledRunsEvicted === 1 ? "" : "s"} evicted from memory; persisted artifacts retained.`
+          : "";
       const runs = [
         ...[...activeRuns.values()].map((run) => run.details),
         ...settledRuns.values(),
@@ -2437,9 +2447,12 @@ export default function workflows(pi: ExtensionAPI) {
       if (runs.length === 0) {
         return Promise.resolve({
           content: [
-            { type: "text", text: "No active or recently finished workflows." },
+            {
+              type: "text",
+              text: `No active or recently finished workflows.${retentionNote}`,
+            },
           ],
-          details: { runs: [] },
+          details: { runs: [], settledRunsEvicted },
         });
       }
       const lines = runs.map((d) => {
@@ -2447,8 +2460,8 @@ export default function workflows(pi: ExtensionAPI) {
         return `${d.runId}${d.name ? ` "${d.name}"` : ""} — ${statusWord(d.status)} · ${done + failed}/${d.agents.length} agents${failed ? `, ${failed} failed` : ""}${uncertain ? `, ${uncertain} uncertain` : ""}`;
       });
       return Promise.resolve({
-        content: [{ type: "text", text: lines.join("\n") }],
-        details: { runs: runs.map(summarize) },
+        content: [{ type: "text", text: lines.join("\n") + retentionNote }],
+        details: { runs: runs.map(summarize), settledRunsEvicted },
       });
     },
   });

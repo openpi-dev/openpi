@@ -11,6 +11,9 @@ import {
 
 export const MIN_CONTEXT_PIVOT_TOKENS = 30_000;
 const STATUS_KEY = "context-pivot";
+const NOTHING_TO_COMPACT_ERROR = "Nothing to compact (session too small)";
+const NO_DISCARDABLE_HISTORY_MESSAGE =
+  "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.";
 
 interface PendingPivot {
   brief: string;
@@ -55,6 +58,13 @@ export function buildPivotSummary(brief: string): string {
     "",
     brief.trim(),
   ].join("\n");
+}
+
+function formatContextPivotError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === NOTHING_TO_COMPACT_ERROR
+    ? NO_DISCARDABLE_HISTORY_MESSAGE
+    : `Context pivot failed: ${message}`;
 }
 
 function impossibleKeptId(entries: readonly SessionEntry[]) {
@@ -176,11 +186,11 @@ export default function contextPivot(pi: ExtensionAPI) {
           onError: (error) => {
             if (pivotGeneration === generation) pending = undefined;
             clear();
+            const message = formatContextPivotError(error);
             if (ctx.hasUI) {
-              ctx.ui.notify(
-                `Context pivot failed: ${error instanceof Error ? error.message : String(error)}`,
-                "error",
-              );
+              ctx.ui.notify(message, "error");
+            } else {
+              console.error(message);
             }
           },
         });
