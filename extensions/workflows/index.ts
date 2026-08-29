@@ -665,6 +665,21 @@ export interface ActiveWorkflowRunLifecycle {
   forceSettle(error: string): void;
 }
 
+interface WorkflowLifecycleTestHooks {
+  readonly persistWorkflow?: typeof persistWorkflowJson;
+  readonly reclaimWorktree?: typeof reclaimWorktree;
+  readonly onRunStarted?: (run: ActiveWorkflowRunLifecycle) => void;
+}
+
+let workflowLifecycleTestHooks: WorkflowLifecycleTestHooks | undefined;
+
+/** Test-only control for deterministic lifecycle race coverage. */
+export function __setWorkflowTestLifecycleHooks(
+  hooks: WorkflowLifecycleTestHooks | undefined,
+) {
+  workflowLifecycleTestHooks = hooks;
+}
+
 /** Abort every live child and bound the whole session-shutdown barrier once. */
 export async function shutdownActiveWorkflowRuns(
   runs: readonly ActiveWorkflowRunLifecycle[],
@@ -1213,6 +1228,9 @@ export default function workflows(pi: ExtensionAPI) {
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details, {
         journal: () => journalEntries,
+        ...(workflowLifecycleTestHooks?.persistWorkflow
+          ? { persist: workflowLifecycleTestHooks.persistWorkflow }
+          : {}),
       });
 
       // A caller wait never owns the run. All runs survive an interrupted
@@ -2040,7 +2058,10 @@ export default function workflows(pi: ExtensionAPI) {
                     detached: false,
                   };
                 } else {
-                  cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
+                  const reclaimer =
+                    workflowLifecycleTestHooks?.reclaimWorktree ??
+                    reclaimWorktree;
+                  cleanup = await reclaimer(ctx.cwd, worktree).catch(
                     (error): WorktreeCleanup => ({
                       removed: false,
                       branchDeleted: false,
@@ -2062,13 +2083,21 @@ export default function workflows(pi: ExtensionAPI) {
                     };
                   }
                 }
-                if (!runSettled) {
-                  record.worktreeCleanup = cleanup;
-                  if (cleanup.branchDeleted) delete record.worktreeBranch;
-                  else record.worktreeBranch = cleanup.branch;
-                  if (!cleanup.removed) record.worktreePath = worktree.path;
-                  emit();
-                }
+                record.worktreeCleanup = cleanup;
+                if (cleanup.branchDeleted) delete record.worktreeBranch;
+                else record.worktreeBranch = cleanup.branch;
+                if (!cleanup.removed) record.worktreePath = worktree.path;
+                // Forced settlement fixes the execution verdict, but cleanup
+                // provenance discovered afterward still belongs in the run.
+                // No later final flush remains, so failures must be observable.
+                if (runSettled) {
+                  try {
+                    persistence.flush();
+                  } catch (error) {
+                    appendArtifactPersistenceFailure(details, error);
+                    persistTerminalRecovery();
+                  }
+                } else emit();
               }
             }
           }, invocationSignal)
@@ -2140,6 +2169,7 @@ export default function workflows(pi: ExtensionAPI) {
       activeRuns.set(runId, activeRun);
       const completion = runScript();
       activeRun.completion = completion;
+      workflowLifecycleTestHooks?.onRunStarted?.(activeRun);
       if (ctx.hasUI) lastContext = ctx;
       updateIndicator();
 

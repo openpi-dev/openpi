@@ -14,11 +14,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tt-a1i/openpi.git"
+    "url": "git+https://github.com/openpi-dev/openpi.git"
   },
-  "homepage": "https://github.com/tt-a1i/openpi#readme",
+  "homepage": "https://github.com/openpi-dev/openpi#readme",
   "bugs": {
-    "url": "https://github.com/tt-a1i/openpi/issues"
+    "url": "https://github.com/openpi-dev/openpi/issues"
   },
   "files": [
     "extensions",
@@ -46,7 +46,7 @@
     "themes": [
       "./themes"
     ],
-    "image": "https://raw.githubusercontent.com/tt-a1i/openpi/main/assets/openpi-package.png"
+    "image": "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png"
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-beta.99",
