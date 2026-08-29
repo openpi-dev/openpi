@@ -4,6 +4,7 @@ import type {
   WorkflowDetails,
   WorkflowMemoryProjection,
 } from "./model.ts";
+import { toSerializable } from "./serialization.ts";
 
 /** Defaults apply only to settled session-memory projections. Disk is canonical. */
 export const DEFAULT_WORKFLOW_SETTLED_MAX_RUNS = 32;
@@ -51,7 +52,7 @@ function bounded(value: string | undefined, maxBytes: number) {
 }
 
 function jsonBytes(value: unknown) {
-  const serialized = JSON.stringify(value);
+  const serialized = JSON.stringify(toSerializable(value));
   if (serialized === undefined)
     throw new Error("Workflow projection is not serializable");
   return Buffer.byteLength(serialized, "utf8");

@@ -61,6 +61,20 @@ function writeRun(
   );
 }
 
+function retainedRun(runId: string, startedAt: number): WorkflowDetails {
+  return {
+    runId,
+    sessionId: SESSION,
+    name: runId,
+    background: false,
+    status: "completed",
+    startedAt,
+    finishedAt: startedAt + 1_000,
+    agents: [],
+    phases: [],
+  };
+}
+
 test("persisted nonterminal invocation facts are projected as uncertain", () => {
   const restored = normalizePersistedWorkflowDetails("wf_dead", {
     status: "running",
@@ -352,6 +366,44 @@ test("the dashboard reports the current request, not the session's history", () 
   );
 });
 
+test("retained projections keep a settled run visible when disk state is unreadable", () => {
+  const runId = "wf_fa11bac";
+  const details = retainedRun(runId, 6_000);
+  writeRun(runId, details.startedAt, details.finishedAt);
+  writeFileSync(join(agentDir, "workflows", runId, "workflow.json"), "{");
+
+  const entry = loadRunEntries(
+    new Map(),
+    SESSION,
+    new Set(),
+    0,
+    new Map([[runId, details]]),
+  ).find((candidate) => candidate.runId === runId);
+
+  assert.ok(entry);
+  assert.equal(entry.live, false);
+  assert.equal(entry.details, details);
+});
+
+test("retained projections without session metadata keep current-session runs visible", () => {
+  const runId = "wf_retained_minimal";
+  const details = retainedRun(runId, 7_000);
+  delete details.sessionId;
+  writeRun(runId, details.startedAt, details.finishedAt);
+  writeFileSync(join(agentDir, "workflows", runId, "workflow.json"), "{");
+
+  const entry = loadRunEntries(
+    new Map(),
+    SESSION,
+    new Set(),
+    0,
+    new Map([[runId, details]]),
+  ).find((candidate) => candidate.runId === runId);
+
+  assert.ok(entry);
+  assert.equal(entry.live, false);
+  assert.equal(entry.details, details);
+});
 test("restored run directories require a generated safe id", () => {
   writeRun("wf_\u001b]52;c;clipboard\u0007", 9_000);
   const runIds = loadRunEntries(new Map(), SESSION, new Set()).map(

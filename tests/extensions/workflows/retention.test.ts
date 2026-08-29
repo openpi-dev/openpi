@@ -89,6 +89,20 @@ test("projection byte accounting is UTF-8 safe and preserves exact references", 
   );
 });
 
+test("projection byte accounting accepts bigint and cyclic workflow values", () => {
+  const source = details("wf_non_json_values");
+  const cyclic: Record<string, unknown> = { count: 1n };
+  cyclic.self = cyclic;
+  source.result = cyclic;
+
+  const projection = projectWorkflowDetails(source, 100_000);
+
+  assert.ok(projection);
+  assert.equal(projection?.result, "[result omitted from memory]");
+  assert.doesNotThrow(() => measureWorkflowDetailsBytes(source));
+  assert.doesNotThrow(() => new WorkflowSettledRunRetention().set(source));
+});
+
 test("replacement does not count a failed projection as a new eviction", () => {
   const initial = details("wf_replace");
   const initialProjection = projectWorkflowDetails(initial, 100_000)!;

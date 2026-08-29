@@ -795,8 +795,10 @@ export default function workflows(
   const settledRuns = createWorkflowSettledRunRetention(
     options.settledRetention,
   );
-  /** Settled details are loaded from canonical artifacts by the dashboard. */
+  /** Disk remains canonical; retained projections cover transient read failures. */
   const dashboardDetails = () => activeDetails();
+  const dashboardRetainedDetails = () =>
+    new Map<string, WorkflowDetails>(settledRuns.entriesArray());
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "workflows", {
       enable: OPENPI_TOOL_SURFACE.workflows.entry,
@@ -993,6 +995,7 @@ export default function workflows(
         initialRunId,
         startedSince,
         stopRun,
+        dashboardRetainedDetails,
       );
       acknowledgeSettledRuns();
     } finally {
