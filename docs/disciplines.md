@@ -1,9 +1,22 @@
 # Engineering disciplines
 
-This ledger is append-only. Add a new `OP-*` row at the end; do not renumber,
-rewrite, or delete an earlier row. The checker enforces consecutive IDs and
-verifies every referenced command. `CI=yes` means the command is directly or
-transitively reached from the workflow's `bun run check` or `bun run test`.
+This ledger is an enforcement inventory, not a second way to adopt project
+constraints. An `OP-*` row records a promise that an accepted Decision already
+adopted or that the repository explicitly carries as a grandfathered legacy
+constraint. Adding a row alone does not adopt a new durable constraint.
+
+The ledger is append-only. Add a new `OP-*` row at the end; do not renumber,
+rewrite, or delete an earlier row. New durable constraints require accepted
+Decision provenance in the change that adds the row. `OP-01` through `OP-12`
+predate Decision 0001 and are grandfathered as legacy constraints; their checks
+remain operational without retroactively manufacturing Decision provenance.
+
+The checker enforces consecutive IDs and verifies every referenced command.
+`Status=enforced` means a repository check covers the promise; `Status=manual`
+means contributors must verify it outside repository-only state. `CI=yes` means
+the command is directly or transitively reached from the workflow's
+`bun run check` or `bun run test`. These fields describe enforcement and CI
+reachability, not adoption or evidence-validation state.
 
 | ID | Promise | Status | CI | Check |
 | --- | --- | --- | --- | --- |

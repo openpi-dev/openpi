@@ -21,6 +21,8 @@ Issues remain the canonical discussion and work-tracking surface. The repository
 
 Evidence validation and project adoption are separate. Research, design, architecture, and Benchmark records use evidence states; Decision records use adoption states. A recommendation becomes a project constraint only through an accepted Decision.
 
+The engineering discipline ledger is an enforcement projection of constraints adopted by a Decision or explicitly retained as grandfathered legacy constraints. Its `enforced` or `manual` status and CI reachability describe how a promise is checked; they do not adopt the promise or validate its evidence. Adding a ledger row alone cannot create a new durable project constraint.
+
 This policy is forward-only. Existing documents remain legacy records until a scoped review migrates them. No automated rewrite or bulk metadata migration is implied.
 
 ## Evidence boundary
@@ -40,6 +42,7 @@ Repository checks may later verify structure and reachability, but they cannot p
 
 - Contributors have one entry point for choosing a durable record.
 - Accepted constraints require explicit Decision provenance.
+- The discipline ledger reports enforcement separately from adoption; rows that predate this Decision remain operational as grandfathered legacy constraints without gaining retroactive Decision provenance.
 - Existing records do not become validated merely because they are indexed.
 - Benchmark protocol, automated validation, and individual result publication can proceed as separate changes with their own evidence gates.
 - Large or sensitive raw artifacts remain outside Git under stable, reviewable identities.

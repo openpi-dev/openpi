@@ -8,6 +8,7 @@ This directory is the canonical home for durable project knowledge. GitHub Issue
 | --- | --- | --- |
 | Discuss a question or track work | GitHub Issue | Context, alternatives, status, and decisions still needed |
 | Explain contribution procedures | [`contributing/`](contributing/) | Current contributor workflow, not architecture or research |
+| Track an engineering promise and its enforcement | [`disciplines.md`](disciplines.md) | Inventory of adopted or grandfathered constraints and their CI or manual checks; not an adoption path |
 | Preserve sourced investigation | [`research/`](research/) | Facts, sources, inferences, recommendations, and unknowns |
 | Preserve design exploration | [`design/`](design/) | Alternatives and trade-offs; not an adopted project constraint by itself |
 | Adopt a durable project constraint | [`decisions/`](decisions/) | Accepted choice, rationale, alternatives, consequences, and replacement history |
@@ -27,6 +28,8 @@ Research, design, architecture, and Benchmark records may be:
 
 Decision records instead use `proposed`, `accepted`, `rejected`, or `superseded`. A validated observation can support a Decision, but it does not adopt the Decision automatically.
 
+The engineering discipline ledger uses enforcement states (`enforced` or `manual`) and CI reachability (`yes` or `no`). Those fields describe how a promise is checked, not whether it is adopted or whether supporting evidence is validated. Adding an `OP-*` row does not adopt a new durable constraint; new constraints still require accepted Decision provenance. Rows that predate Decision 0001 are grandfathered as legacy constraints while their existing checks remain operational.
+
 New or materially revised governed records should state their status, creation and verification dates, applicable source boundary, related Issues and PRs, and superseding relationship. Existing documents predate this contract and remain legacy records until a scoped review migrates them; their presence does not imply validation under the new policy.
 
 ## Evidence boundary
@@ -39,4 +42,4 @@ Historical conclusions are append-only in meaning. Amend a record or mark it `su
 
 ## Governance
 
-[`Decision 0001`](decisions/0001-documentation-and-evidence-governance.md) adopts this information architecture. Category indexes define local shape without widening that Decision. Changes that alter category ownership, evidence states, or publication gates require a new or superseding Decision.
+[`Decision 0001`](decisions/0001-documentation-and-evidence-governance.md) adopts this information architecture. Category indexes and the discipline ledger describe local shape and enforcement without widening that Decision. Changes that add or remove a durable project constraint, or alter category ownership, evidence states, or publication gates, require a new or superseding Decision.
