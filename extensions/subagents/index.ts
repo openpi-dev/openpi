@@ -74,6 +74,7 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   createWorktree,
+  formatWorktreeCleanupWarning,
   reclaimWorktree,
   type Worktree,
 } from "../shared/worktree.ts";
@@ -791,7 +792,37 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         // The session scope owns reclamation, but it never opened, so this
         // worktree would otherwise be orphaned on disk.
-        if (worktree) await reclaimWorktree(cwd, worktree).catch(() => {});
+        if (worktree) {
+          const spawnError =
+            error instanceof Error ? error.message : String(error);
+          let cleanupWarning: string | undefined;
+          let cleanupError: unknown;
+          try {
+            const cleanup = await reclaimWorktree(cwd, worktree);
+            cleanupWarning = formatWorktreeCleanupWarning(
+              cleanup,
+              worktree.path,
+            );
+          } catch (failure) {
+            cleanupError = failure;
+          }
+          if (cleanupError) {
+            const reason =
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError);
+            throw new Error(
+              `${spawnError}; worktree cleanup failed: ${reason}; checkout preserved at ${worktree.path}`,
+              { cause: error },
+            );
+          }
+          if (cleanupWarning) {
+            throw new Error(
+              `${spawnError}; worktree cleanup warning: ${cleanupWarning}`,
+              { cause: error },
+            );
+          }
+        }
         throw error;
       }
       persistId(snap.id);

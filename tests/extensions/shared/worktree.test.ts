@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { after, before, describe, test } from "node:test";
 import {
   createWorktree,
+  formatWorktreeCleanupWarning,
   reclaimWorktree,
   resolveGitCommonDir,
   worktreeCommitCount,
@@ -68,6 +69,86 @@ describe("worktreeSlug", () => {
     // legal branch name, which would fail the spawn outright.
     assert.equal(worktreeSlug("a..b", "x"), "a.b");
     assert.ok(!worktreeSlug("bump v1.2..3", "x").includes(".."));
+  });
+});
+
+describe("formatWorktreeCleanupWarning", () => {
+  test("identifies a preserved checkout", () => {
+    assert.equal(
+      formatWorktreeCleanupWarning(
+        {
+          removed: false,
+          branchDeleted: false,
+          branch: "pi/example",
+          detached: false,
+          reason: "git declined to remove the worktree",
+        },
+        "C:/repo/.git/pi-worktrees/example",
+      ),
+      "git declined to remove the worktree; checkout was not confirmed removed; inspect C:/repo/.git/pi-worktrees/example",
+    );
+  });
+
+  test("does not claim an uninspectable checkout still exists", () => {
+    assert.equal(
+      formatWorktreeCleanupWarning(
+        {
+          removed: false,
+          branchDeleted: false,
+          branch: "pi/example",
+          detached: false,
+          reason: "could not inspect worktree HEAD",
+        },
+        "C:/repo/.git/pi-worktrees/example",
+      ),
+      "could not inspect worktree HEAD; checkout was not confirmed removed; inspect C:/repo/.git/pi-worktrees/example",
+    );
+  });
+
+  test("identifies a leftover branch after directory removal", () => {
+    assert.equal(
+      formatWorktreeCleanupWarning(
+        {
+          removed: true,
+          branchDeleted: false,
+          branch: "pi/example",
+          detached: false,
+          reason: "could not delete empty branch",
+        },
+        "C:/repo/.git/pi-worktrees/example",
+      ),
+      "could not delete empty branch; branch pi/example remains",
+    );
+  });
+
+  test("identifies a leftover branch even without a cleanup reason", () => {
+    assert.equal(
+      formatWorktreeCleanupWarning(
+        {
+          removed: true,
+          branchDeleted: false,
+          branch: "pi/example",
+          detached: false,
+        },
+        "C:/repo/.git/pi-worktrees/example",
+      ),
+      "branch pi/example remains",
+    );
+  });
+
+  test("does not report a warning after complete cleanup", () => {
+    assert.equal(
+      formatWorktreeCleanupWarning(
+        {
+          removed: true,
+          branchDeleted: true,
+          branch: "pi/example",
+          detached: false,
+        },
+        "C:/repo/.git/pi-worktrees/example",
+      ),
+      undefined,
+    );
   });
 });
 
