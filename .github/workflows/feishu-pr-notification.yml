@@ -1,0 +1,94 @@
+name: Feishu PR Notification
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  pull-requests: read
+
+jobs:
+  notify:
+    name: Notify Feishu
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: ${{ !github.event.pull_request.draft }}
+    steps:
+      - name: Send PR notification
+        env:
+          FEISHU_PR_BOT_WEBHOOK: ${{ secrets.FEISHU_PR_BOT_WEBHOOK }}
+          FEISHU_PR_BOT_SECRET: ${{ secrets.FEISHU_PR_BOT_SECRET }}
+          REPOSITORY: ${{ github.repository }}
+          EVENT_PATH: ${{ github.event_path }}
+        run: |
+          if test -z "${FEISHU_PR_BOT_WEBHOOK}" && test -z "${FEISHU_PR_BOT_SECRET}"; then
+            echo "Feishu bot secrets are not configured; skipping notification."
+            exit 0
+          fi
+
+          if test -z "${FEISHU_PR_BOT_WEBHOOK}" || test -z "${FEISHU_PR_BOT_SECRET}"; then
+            echo "Both FEISHU_PR_BOT_WEBHOOK and FEISHU_PR_BOT_SECRET must be configured."
+            exit 1
+          fi
+
+          node <<'NODE'
+          const crypto = require("node:crypto");
+          const fs = require("node:fs");
+
+          async function main() {
+            const event = JSON.parse(fs.readFileSync(process.env.EVENT_PATH, "utf8"));
+            const pr = event.pull_request;
+            const author = pr.user?.login ?? "unknown";
+            const reviewers = [
+              ...(pr.requested_reviewers ?? []).map((reviewer) => reviewer.login),
+              ...(pr.requested_teams ?? []).map((team) => `team/${team.slug}`),
+            ];
+            const reviewerText = reviewers.length > 0 ? reviewers.join(", ") : "none requested";
+            const lines = [
+              `New PR in ${process.env.REPOSITORY}`,
+              `#${pr.number} ${pr.title}`,
+              `Author: ${author}`,
+              `Reviewers: ${reviewerText}`,
+              `Branch: ${pr.head.label} -> ${pr.base.ref}`,
+              pr.html_url,
+            ];
+            const timestamp = String(Math.floor(Date.now() / 1000));
+            const stringToSign = `${timestamp}\n${process.env.FEISHU_PR_BOT_SECRET}`;
+            const sign = crypto.createHmac("sha256", stringToSign).update("").digest("base64");
+
+            const response = await fetch(process.env.FEISHU_PR_BOT_WEBHOOK, {
+              method: "POST",
+              headers: { "content-type": "application/json" },
+              body: JSON.stringify({
+                timestamp,
+                sign,
+                msg_type: "text",
+                content: { text: lines.join("\n") },
+              }),
+            });
+            const text = await response.text();
+
+            if (!response.ok) {
+              throw new Error(`Feishu webhook returned ${response.status}: ${text}`);
+            }
+
+            let payload;
+            try {
+              payload = JSON.parse(text);
+            } catch {
+              throw new Error(`Feishu webhook returned an invalid JSON response: ${text}`);
+            }
+
+            const succeeded = payload.code === 0 || payload.StatusCode === 0;
+            if (!succeeded) {
+              throw new Error(`Feishu webhook failed: ${text}`);
+            }
+
+            console.log("Feishu PR notification sent.");
+          }
+
+          main().catch((error) => {
+            console.error(error);
+            process.exit(1);
+          });
+          NODE

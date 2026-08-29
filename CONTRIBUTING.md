@@ -3,6 +3,7 @@
 Thank you for contributing to OpenPI. Start with the guide that matches your change:
 
 - [Fast-Forward and Linear Git History](docs/contributing/linear-git-history.md) - branch preparation, safe rebasing, pull request merge methods, and local updates.
+- [Feishu PR notifications](docs/contributing/feishu-pr-notifications.md) - repository secret setup for pull request group bot messages.
 
 The contribution guides are recommendations for the current repository workflow. Repository administrators must configure GitHub settings separately before those recommendations become enforced policy.
 
