@@ -724,7 +724,7 @@ test("cancelled detached delivery preserves aborted status after artifact persis
     );
     assert.ok(delivered);
     const deliveredDetails = delivered.message.details as {
-      entries?: Array<{ status?: unknown; alerts?: unknown }>;
+      entries?: Array<{ status?: unknown; alerts?: unknown[] }>;
     };
     const deliveredEntry = deliveredDetails.entries?.[0];
     assert.equal(deliveredEntry?.status, "aborted");
