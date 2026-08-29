@@ -724,12 +724,20 @@ test("cancelled detached delivery preserves aborted status after artifact persis
     );
     assert.ok(delivered);
     const deliveredDetails = delivered.message.details as {
-      status?: unknown;
-      error?: unknown;
+      entries?: Array<{ status?: unknown; alerts?: unknown }>;
     };
-    assert.equal(deliveredDetails.status, "aborted");
-    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
-    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+    const deliveredEntry = deliveredDetails.entries?.[0];
+    assert.equal(deliveredEntry?.status, "aborted");
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Workflow was aborted"),
+      ),
+    );
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Artifact persistence failed"),
+      ),
+    );
   } finally {
     releasePrompt();
     __setWorkflowTestAgentSessionFactory(undefined);
