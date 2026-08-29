@@ -4,40 +4,47 @@ import {
   SessionManager,
   type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { installClearContextShortcut } from "../../../extensions/clear-context/index.ts";
+import {
+  installClearContextShortcut,
+  shouldClearContext,
+} from "../../../extensions/clear-context/index.ts";
 
-function harness(text: string) {
-  const listeners: Array<(data: string) => unknown> = [];
-  let editorText = text;
+test("Ctrl+C clears context only for an idle empty editor", () => {
+  assert.equal(shouldClearContext("\u0003", "", true), true);
+  assert.equal(shouldClearContext("\u0003", "draft", true), false);
+  assert.equal(shouldClearContext("\u0003", "", false), false);
+  assert.equal(shouldClearContext("x", "", true), false);
+});
+
+test("whitespace-only drafts preserve the native editor behavior", () => {
+  assert.equal(shouldClearContext("\u0003", "  \n", true), false);
+});
+
+test("shortcut is installed on the focused editor layer and restores the previous editor", () => {
+  const previousEditor = () => undefined;
+  let configuredEditor = previousEditor;
+  let terminalInputInstalled = false;
   const ctx = {
     mode: "tui",
+    isIdle: () => true,
     ui: {
-      getEditorText: () => editorText,
-      setEditorText: (value: string) => {
-        editorText = value;
+      getEditorComponent: () => configuredEditor,
+      setEditorComponent: (factory: typeof previousEditor | undefined) => {
+        configuredEditor = factory ?? previousEditor;
       },
-      onTerminalInput: (listener: (data: string) => unknown) => {
-        listeners.push(listener);
-        return () => listeners.splice(listeners.indexOf(listener), 1);
+      onTerminalInput: () => {
+        terminalInputInstalled = true;
+        return () => {};
       },
     },
   } as unknown as ExtensionContext;
+
   const remove = installClearContextShortcut(ctx);
-  return { ctx, editorText: () => editorText, listeners, remove };
-}
+  assert.notEqual(configuredEditor, previousEditor);
+  assert.equal(terminalInputInstalled, false);
 
-test("Ctrl+C preserves the native clear-editor behavior when input has content", () => {
-  const h = harness("draft");
-  assert.deepEqual(h.listeners[0]?.("\u0003"), undefined);
-  assert.equal(h.editorText(), "draft");
-  h.remove();
-});
-
-test("Ctrl+C submits Pi's built-in /new command when the editor is empty", () => {
-  const h = harness("  \n");
-  assert.deepEqual(h.listeners[0]?.("\u0003"), { data: "\r" });
-  assert.equal(h.editorText(), "/new");
-  h.remove();
+  remove();
+  assert.equal(configuredEditor, previousEditor);
 });
 
 test("Pi's new session has no history from the cleared session", () => {
