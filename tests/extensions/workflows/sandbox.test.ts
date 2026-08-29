@@ -211,11 +211,46 @@ test("sandbox rejects non-yielding synchronous code after await Promise.resolve(
   );
 });
 
+test("sandbox rejects non-yielding synchronous code after chained microtasks", async () => {
+  await assert.rejects(
+    run(
+      `await Promise.resolve().then(() => Promise.resolve()); while (true) {}`,
+    ),
+    /timed out/,
+  );
+});
+
 test("sandbox rejects non-yielding synchronous code after await agent()", async () => {
   await assert.rejects(
     run(`await agent("step"); while (true) {}`, {
       onAgent: async () => ({ ok: true, output: "done" }),
     }),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code between sequential agent calls", async () => {
+  let firstCallSettled = false;
+  await assert.rejects(
+    run(`await agent("first"); while (true) {}; await agent("second");`, {
+      onAgent: async () => {
+        firstCallSettled = true;
+        return { ok: true, output: "first-done" };
+      },
+    }),
+    /timed out/,
+  );
+  assert.equal(firstCallSettled, true);
+});
+
+test("sandbox rejects non-yielding synchronous code after parallel agent calls", async () => {
+  await assert.rejects(
+    run(
+      `await parallel([() => agent("p1"), () => agent("p2")]); while (true) {}`,
+      {
+        onAgent: async (prompt) => ({ ok: true, output: `${prompt}-done` }),
+      },
+    ),
     /timed out/,
   );
 });

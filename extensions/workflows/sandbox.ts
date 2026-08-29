@@ -423,6 +423,10 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       finish(new Error("Workflow sandbox sent an unknown IPC message"));
     });
 
+    // Arm the synchronous execution watchdog for the initial script invocation
+    // (covers non-yielding code before and after initial microtask yields).
+    armWatchdog();
+
     child.send(
       {
         kind: "init",
@@ -434,7 +438,6 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       },
       (error) => {
         if (error) finish(error);
-        else armWatchdog();
       },
     );
   });
