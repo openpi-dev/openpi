@@ -1,6 +1,6 @@
 # Releasing OpenPI to npm
 
-OpenPI releases `@tt-a1i/openpi` through [the Release workflow](.github/workflows/release.yml). Do not publish from a local checkout.
+OpenPI releases `@tt-a1i/openpi` through [the Release workflow](.github/workflows/release.yml). The repository workflow keeps the release triggers and OIDC permission while calling a pinned reusable implementation from [`openpi-dev/automation`](https://github.com/openpi-dev/automation). Do not publish from a local checkout.
 
 ## One-time repository setup
 
