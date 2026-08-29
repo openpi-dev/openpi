@@ -72,6 +72,43 @@ test("failed delivery stays pending and retries with the same per-run id", async
   assert.deepEqual(persisted, ["pending", "pending", "delivered"]);
 });
 
+test("initial persistence failure retains a detached envelope for retry", async () => {
+  const run = details("wf_initial_persist");
+  let failPersistence = true;
+  const calls: string[][] = [];
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    persist: (current) => {
+      if (failPersistence) throw new Error("disk unavailable");
+    },
+    deliver: async (envelopes) => {
+      calls.push(envelopes.map((entry) => entry.deliveryId));
+      return envelopes.map((entry) => ({
+        deliveryId: entry.deliveryId,
+        delivered: true,
+      }));
+    },
+  });
+
+  delivery.defer({
+    deliveryId: run.delivery!.id,
+    runId: run.runId,
+    details: run,
+  });
+  assert.equal(delivery.size(), 1);
+  assert.equal(run.delivery?.state, "pending");
+  assert.match(
+    run.delivery?.lastError ?? "",
+    /initial delivery persistence failed/i,
+  );
+
+  failPersistence = false;
+  await delivery.parentSettled();
+  assert.equal(delivery.size(), 0);
+  assert.equal(run.delivery?.state, "delivered");
+  assert.deepEqual(calls, [["workflow:wf_initial_persist:terminal"]]);
+});
+
 test("partial batch receipts retry only unacknowledged runs", async () => {
   const first = details("wf_a1");
   const second = details("wf_b2");

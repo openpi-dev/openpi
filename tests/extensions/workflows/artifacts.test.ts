@@ -1,5 +1,11 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -9,6 +15,7 @@ import {
   loadJournal,
   persistWorkflowAgentResult,
   persistWorkflowJson,
+  persistWorkflowTerminalState,
 } from "../../../extensions/workflows/artifacts.ts";
 import { JOURNAL_MAX_BYTES } from "../../../extensions/workflows/journal.ts";
 import {
@@ -205,6 +212,100 @@ test("workflow persistence derives a non-authoritative graph from explicit resul
     assert.deepEqual(stored.graph?.edges, [
       { source: "wf_fixture:call:1", target: "wf_fixture:call:2" },
     ]);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminal persistence publishes status before dependent artifacts", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-terminal-commit-"));
+  try {
+    const details = workflowDetails();
+    details.status = "failed";
+    details.error = "artifact write failed";
+    details.result = { partial: true };
+
+    persistWorkflowJson(directory, details);
+
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.error, "artifact write failed");
+    assert.equal(stored.resultArtifact, "result.json");
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(directory, "result.json"), "utf8")),
+      { partial: true },
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a dependent artifact write failure cannot leave the prior running manifest", () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), "pi-workflow-terminal-failure-"),
+  );
+  try {
+    const details = workflowDetails();
+    details.status = "completed";
+    details.finishedAt = 2;
+    // The terminal manifest commits before this dependent artifact write.
+    // A directory cannot be atomically replaced by the file writer.
+    mkdirSync(join(directory, "transcripts.json"));
+
+    assert.throws(
+      () => persistWorkflowJson(directory, details),
+      /EISDIR|directory/i,
+    );
+
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.status, "completed");
+    assert.equal(stored.resultArtifact, undefined);
+    assert.equal(stored.transcriptArtifact, undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminal recovery state remains explained when dependent artifact writing fails", () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), "pi-workflow-terminal-recovery-"),
+  );
+  try {
+    const details = workflowDetails();
+    details.status = "failed";
+    details.error = "Artifact persistence failed: disk unavailable";
+    persistWorkflowTerminalState(directory, details);
+
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.status, "failed");
+    assert.equal(stored.error, details.error);
+    assert.equal(stored.resultArtifact, undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("terminal recovery preserves an aborted status while recording persistence failure", () => {
+  const directory = mkdtempSync(
+    join(tmpdir(), "pi-workflow-terminal-aborted-recovery-"),
+  );
+  try {
+    const details = workflowDetails();
+    details.status = "aborted";
+    details.error = "Workflow was aborted by the user";
+    persistWorkflowTerminalState(directory, details);
+
+    const stored = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.status, "aborted");
+    assert.equal(stored.error, "Workflow was aborted by the user");
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

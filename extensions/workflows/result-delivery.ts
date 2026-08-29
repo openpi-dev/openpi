@@ -1,15 +1,13 @@
 import type { WorkflowDetails } from "./model.ts";
+import type {
+  DurableResultDeliveryQueue,
+  DurableResultDeliveryReceipt,
+} from "../shared/result-delivery.ts";
 
 export interface WorkflowCompletionEnvelope {
   deliveryId: string;
   runId: string;
   details: WorkflowDetails;
-}
-
-export interface WorkflowDeliveryReceipt {
-  deliveryId: string;
-  delivered: boolean;
-  error?: string;
 }
 
 export interface WorkflowResultDeliveryOptions {
@@ -18,7 +16,7 @@ export interface WorkflowResultDeliveryOptions {
   deliver: (
     envelopes: readonly WorkflowCompletionEnvelope[],
     wake: boolean,
-  ) => Promise<readonly WorkflowDeliveryReceipt[]>;
+  ) => Promise<readonly DurableResultDeliveryReceipt[]>;
 }
 
 function errorText(error: unknown) {
@@ -105,7 +103,7 @@ export function createWorkflowResultDelivery(
           pending.delete(envelope.deliveryId);
         }
 
-        let receipts: readonly WorkflowDeliveryReceipt[] | undefined;
+        let receipts: readonly DurableResultDeliveryReceipt[] | undefined;
         try {
           receipts = await options.deliver(envelopes, passWake);
         } catch (error) {
@@ -177,7 +175,7 @@ export function createWorkflowResultDelivery(
     return flushing;
   };
 
-  return {
+  const queue = {
     /** Register inline interest before the run starts. */
     holdInline(details: WorkflowDetails) {
       persistState(details, "held-for-inline");
@@ -194,15 +192,21 @@ export function createWorkflowResultDelivery(
 
     /** Abort won the wait/terminal arbitration; deliver the result later. */
     releaseInline(envelope: WorkflowCompletionEnvelope) {
-      persistState(envelope.details, "pending", { lastError: undefined });
-      enqueue(envelope);
+      retainPending(
+        envelope,
+        { lastError: undefined },
+        "Initial delivery persistence failed",
+      );
       if (options.isIdle()) void flush(true);
     },
 
-    /** Queue a detached run after terminal status and pending are persisted. */
+    /** Queue a detached run with in-memory retry ownership before persistence. */
     defer(envelope: WorkflowCompletionEnvelope) {
-      persistState(envelope.details, "pending", { lastError: undefined });
-      enqueue(envelope);
+      retainPending(
+        envelope,
+        { lastError: undefined },
+        "Initial delivery persistence failed",
+      );
       if (options.isIdle()) void flush(true);
     },
 
@@ -224,6 +228,10 @@ export function createWorkflowResultDelivery(
       return true;
     },
 
+    retryPending() {
+      return flush(true) ?? Promise.resolve();
+    },
+
     parentSettled() {
       return flush(true);
     },
@@ -241,4 +249,5 @@ export function createWorkflowResultDelivery(
       pending.clear();
     },
   };
+  return queue satisfies DurableResultDeliveryQueue<WorkflowCompletionEnvelope>;
 }
