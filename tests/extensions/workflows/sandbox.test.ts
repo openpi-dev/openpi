@@ -204,6 +204,22 @@ test("sandbox VM still rejects non-yielding synchronous code", async () => {
   await assert.rejects(run(`while (true) {}`), /timed out/);
 });
 
+test("sandbox rejects non-yielding synchronous code after await Promise.resolve()", async () => {
+  await assert.rejects(
+    run(`await Promise.resolve(); while (true) {}`),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code after await agent()", async () => {
+  await assert.rejects(
+    run(`await agent("step"); while (true) {}`, {
+      onAgent: async () => ({ ok: true, output: "done" }),
+    }),
+    /timed out/,
+  );
+});
+
 test("workflow sandbox imposes no fixed whole-agent wall timer", async () => {
   let signalAborted = false;
   const result = await run(`return (await agent("delayed")).output;`, {

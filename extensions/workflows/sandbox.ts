@@ -19,6 +19,11 @@ const MAX_LOG_MESSAGE_BYTES = 8 * 1024;
  * bypasses the controller entirely.
  */
 export const AGENT_CALL_BACKSTOP_MARGIN = 8;
+/**
+ * Maximum synchronous execution time allowed between async agent boundaries.
+ * Non-yielding code (e.g. while(true){}) after await is terminated by this timeout.
+ */
+export const SANDBOX_SYNC_TIMEOUT_MS = 1_000;
 
 export interface SandboxAgentOptions {
   agent_type?: unknown;
@@ -192,6 +197,24 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     const activeAgentRequests = new Map<number, AbortController>();
     let requestCount = 0;
     let finished = false;
+    let executionWatchdog: NodeJS.Timeout | undefined;
+
+    const armWatchdog = (timeoutMs = SANDBOX_SYNC_TIMEOUT_MS) => {
+      if (finished) return;
+      if (executionWatchdog) clearTimeout(executionWatchdog);
+      executionWatchdog = setTimeout(() => {
+        if (finished) return;
+        finish(new Error("Script execution timed out"));
+      }, timeoutMs);
+      executionWatchdog.unref?.();
+    };
+
+    const disarmWatchdog = () => {
+      if (executionWatchdog) {
+        clearTimeout(executionWatchdog);
+        executionWatchdog = undefined;
+      }
+    };
 
     // The child parses this and falls back to zeros if it is ever unusable, so
     // a broken snapshot degrades `usage()` to a zero reading instead of
@@ -205,6 +228,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     };
 
     const cleanup = () => {
+      disarmWatchdog();
       for (const abortController of activeAgentRequests.values()) {
         abortController.abort(new Error("Workflow stopped"));
       }
@@ -294,6 +318,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         return;
       }
       if (raw.kind === "agent") {
+        disarmWatchdog();
         if (
           typeof raw.payloadJson !== "string" ||
           byteLength(raw.payloadJson) > MAX_AGENT_MESSAGE_BYTES
@@ -352,6 +377,9 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
             resultJson,
             usageJson: usageJson(),
           });
+          if (activeAgentRequests.size === 0) {
+            armWatchdog();
+          }
         };
         activeAgentRequests.set(id, abortController);
         let agentOperation: Promise<SandboxAgentResult>;
@@ -406,6 +434,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       },
       (error) => {
         if (error) finish(error);
+        else armWatchdog();
       },
     );
   });
