@@ -268,6 +268,47 @@ export function buildProjectedWorkflowCompletionBatch(
   return projected ? `${manifest}\n\n${projected}` : manifest;
 }
 
+/** Split transport batches so every manifest and projected body fit together. */
+export function buildProjectedWorkflowCompletionBatches(
+  entries: readonly {
+    deliveryId: string;
+    details: WorkflowDetails;
+    runDir: string;
+  }[],
+  usage?: ParentContextUsage | null,
+) {
+  const batches: Array<{
+    entries: (typeof entries)[number][];
+    content: string;
+  }> = [];
+  let current: (typeof entries)[number][] = [];
+  for (const entry of entries) {
+    const candidate = [...current, entry];
+    try {
+      const content = buildProjectedWorkflowCompletionBatch(candidate, usage);
+      current = candidate;
+      if (current.length === 1) {
+        batches.push({ entries: current, content });
+        current = [];
+      }
+    } catch (error) {
+      if (current.length === 0) throw error;
+      batches.push({
+        entries: current,
+        content: buildProjectedWorkflowCompletionBatch(current, usage),
+      });
+      current = [entry];
+    }
+  }
+  if (current.length > 0) {
+    batches.push({
+      entries: current,
+      content: buildProjectedWorkflowCompletionBatch(current, usage),
+    });
+  }
+  return batches;
+}
+
 /** Builds the background-launch result and tells the parent model how to inspect or stop the run. */
 export function buildBackgroundWorkflowLaunchResult(options: {
   runId: string;

@@ -163,7 +163,7 @@ import {
 import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
-  buildProjectedWorkflowCompletionBatch,
+  buildProjectedWorkflowCompletionBatches,
   buildProjectedWorkflowResultMessage,
   buildWorkflowAgentPrompt,
   buildWorkflowResultMessage,
@@ -799,21 +799,23 @@ export default function workflows(pi: ExtensionAPI) {
         details: envelope.details,
         runDir: path.join(getAgentDir(), "workflows", envelope.runId),
       }));
-      const content = buildProjectedWorkflowCompletionBatch(
+      const batches = buildProjectedWorkflowCompletionBatches(
         sourceEntries,
         lastContext?.getContextUsage?.(),
       );
-      pi.sendMessage(
-        {
-          customType: "workflow-result",
-          content,
-          display: true,
-          details: buildWorkflowCompletionDisplay(sourceEntries),
-        },
-        wake
-          ? { deliverAs: "followUp", triggerTurn: true }
-          : { deliverAs: "nextTurn" },
-      );
+      for (const batch of batches) {
+        pi.sendMessage(
+          {
+            customType: "workflow-result",
+            content: batch.content,
+            display: true,
+            details: buildWorkflowCompletionDisplay(batch.entries),
+          },
+          wake
+            ? { deliverAs: "followUp", triggerTurn: true }
+            : { deliverAs: "nextTurn" },
+        );
+      }
       return envelopes.map((envelope) => ({
         deliveryId: envelope.deliveryId,
         delivered: true,

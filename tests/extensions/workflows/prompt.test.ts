@@ -10,6 +10,7 @@ import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildProjectedWorkflowCompletionBatch,
+  buildProjectedWorkflowCompletionBatches,
   buildProjectedWorkflowResultMessage,
   buildWorkflowResultMessage,
   buildWorkflowStatusSummary,
@@ -76,6 +77,44 @@ test("completion batches share one bounded fair projection budget", () => {
       new RegExp(`wf_${index.toString(16).padStart(4, "0")}`),
     );
     assert.match(projected, new RegExp(`delivery-${index}(?:"|\\b)`));
+  }
+});
+
+test("oversized completion batches split into bounded messages without losing delivery facts", () => {
+  const entries = Array.from({ length: 128 }, (_, index) => {
+    const details: WorkflowDetails = {
+      runId: `wf_large_${index.toString(16).padStart(4, "0")}`,
+      status: "completed",
+      background: true,
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+      result: { evidence: "x".repeat(8_000) },
+    };
+    return {
+      deliveryId: `delivery-large-${index}`,
+      details,
+      runDir: `/tmp/${details.runId}`,
+    };
+  });
+
+  const batches = buildProjectedWorkflowCompletionBatches(entries, {
+    tokens: 10_000,
+    contextWindow: 100_000,
+  });
+
+  assert.ok(batches.length > 1);
+  for (const batch of batches) {
+    assert.ok(Buffer.byteLength(batch.content, "utf8") <= 48 * 1024);
+  }
+  for (const entry of entries) {
+    assert.equal(
+      batches.filter((batch) =>
+        batch.content.includes(JSON.stringify(entry.deliveryId)),
+      ).length,
+      1,
+    );
   }
 });
 
