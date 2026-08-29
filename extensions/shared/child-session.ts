@@ -250,6 +250,9 @@ function piMatchesPublishedOpenPiSource(options: {
   return (
     packageManager.removeSourceFromSettings("npm:@tt-a1i/openpi") ||
     packageManager.removeSourceFromSettings(
+      "git:https://github.com/openpi-dev/openpi",
+    ) ||
+    packageManager.removeSourceFromSettings(
       "git:https://github.com/tt-a1i/openpi",
     )
   );
