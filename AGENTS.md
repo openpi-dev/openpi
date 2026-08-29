@@ -70,6 +70,14 @@ If those answers are unclear, investigate before adding surface area.
 - Runtime provenance: before diagnosing installed behavior, provider compatibility, a manual Pi smoke, or any UI result, read README section “开发运行时：区分 npm 与当前源码”. Prove both the checkout revision and the single OpenPI source reported by `pi list` before reasoning from source code.
 - Preserve ignored local evidence as user work. Never use `git clean -fdx`; ignored benchmark runs, logs, and harnesses may be the only local copy.
 
+### Knowledge and evidence
+
+- Use GitHub Issues for discussion and work tracking. Preserve a reusable conclusion in the appropriate `docs/` category and link the Issue and record both ways.
+- Keep facts, inferences, recommendations, unknowns, protocols, and validated results distinct. A research recommendation or complete-looking design is not a project constraint without an accepted Decision.
+- Formal Benchmark records must retain frozen source, model, task, and verifier identities; usage accounting; failure classification; limitations; and a verifiable evidence reference.
+- Before publishing or materially revising a governed record, read [`docs/README.md`](docs/README.md) and the relevant category index. Existing legacy documents are not silently reclassified or rewritten.
+- Preserve large or sensitive raw evidence outside the repository under a stable identity. Never bulk-add, move, overwrite, clean, or publish ignored Benchmark assets, credentials, or private Session data.
+
 ## Package configuration contract
 
 - `/openpi-setup [natural-language request]` is the single canonical user-facing configuration entry point. `/my-pi-setup` is a compatibility alias only. Do not add extension-specific setup commands for package-owned choices.
