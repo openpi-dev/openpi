@@ -31,6 +31,11 @@ export interface WorkflowStripEntry {
   details: WorkflowDetails;
 }
 
+/** Changes only when the strip needs an immediate lifecycle repaint. */
+export function workflowStripEntryKey(entry: WorkflowStripEntry | undefined) {
+  return entry ? `${entry.runId}:${entry.details.status}` : undefined;
+}
+
 function cleanLine(value: string) {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
@@ -48,7 +53,7 @@ function statusGlyph(status: WorkflowStatus, theme: Theme, now: number) {
 
 /** Live, one-line Claude-style workflow entry rendered below the editor. */
 export class WorkflowStripWidget {
-  private readonly timer: ReturnType<typeof setInterval>;
+  private timer: ReturnType<typeof setInterval> | undefined;
   private readonly tui: TUI;
   private readonly theme: Theme;
   private readonly strip: BelowEditorStripState;
@@ -64,20 +69,39 @@ export class WorkflowStripWidget {
     this.theme = theme;
     this.strip = strip;
     this.getEntry = getEntry;
-    this.timer = setInterval(
-      () => this.tui.requestRender(),
-      SPINNER_INTERVAL_MS,
-    );
-    this.timer.unref?.();
+    this.syncSpinner();
   }
 
   dispose() {
-    clearInterval(this.timer);
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
   }
 
-  invalidate() {}
+  invalidate() {
+    this.syncSpinner();
+  }
+
+  private syncSpinner() {
+    if (this.getEntry()?.details.status === "running") {
+      if (this.timer) return;
+      const timer = setInterval(() => {
+        if (this.timer !== timer) return;
+        if (this.getEntry()?.details.status !== "running") {
+          clearInterval(timer);
+          this.timer = undefined;
+        }
+        this.tui.requestRender();
+      }, SPINNER_INTERVAL_MS);
+      this.timer = timer;
+      timer.unref?.();
+      return;
+    }
+    if (this.timer) clearInterval(this.timer);
+    this.timer = undefined;
+  }
 
   render(width: number) {
+    this.syncSpinner();
     const entry = this.getEntry();
     if (!entry || width <= 0) return [];
     const details = entry.details;

@@ -48,6 +48,7 @@ function snap(
     createdAt: Date.now() - 12_000,
     meta: { backend: "pi", modelLabel: "provider/a-very-long-model-label" },
     usage: { tokens: 12_000, contextWindow: 100_000 },
+    transcriptVersion: 0,
     transcript: [],
     liveTools: [],
     queued: [],

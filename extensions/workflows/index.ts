@@ -48,7 +48,10 @@ import {
   truncateToWidth,
 } from "@earendil-works/pi-tui";
 import { type Static, Type } from "typebox";
-import { formatActivityStatus } from "../shared/activity-status.ts";
+import {
+  createStatusWriter,
+  formatActivityStatus,
+} from "../shared/activity-status.ts";
 import { waitBounded } from "../shared/child-session.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
 import {
@@ -78,7 +81,6 @@ import {
   acceptanceInstruction,
   acceptanceSchema,
   applyAcceptance,
-  evaluateAcceptance,
   parseAcceptanceContract,
 } from "./acceptance.ts";
 import {
@@ -127,6 +129,7 @@ import {
   countStates,
   createUsageReader,
   emptyUsage,
+  evictOldestSettledRuns,
   formatElapsed,
   formatUsage,
   isWorkflowRunId,
@@ -146,6 +149,7 @@ import {
 import {
   WorkflowNavigationEditor,
   type WorkflowStripEntry,
+  workflowStripEntryKey,
   WorkflowStripState,
   WorkflowStripWidget,
 } from "./navigation.ts";
@@ -671,6 +675,21 @@ export interface ActiveWorkflowRunLifecycle {
   forceSettle(error: string): void;
 }
 
+interface WorkflowLifecycleTestHooks {
+  readonly persistWorkflow?: typeof persistWorkflowJson;
+  readonly reclaimWorktree?: typeof reclaimWorktree;
+  readonly onRunStarted?: (run: ActiveWorkflowRunLifecycle) => void;
+}
+
+let workflowLifecycleTestHooks: WorkflowLifecycleTestHooks | undefined;
+
+/** Test-only control for deterministic lifecycle race coverage. */
+export function __setWorkflowTestLifecycleHooks(
+  hooks: WorkflowLifecycleTestHooks | undefined,
+) {
+  workflowLifecycleTestHooks = hooks;
+}
+
 /** Abort every live child and bound the whole session-shutdown barrier once. */
 export async function shutdownActiveWorkflowRuns(
   runs: readonly ActiveWorkflowRunLifecycle[],
@@ -804,6 +823,7 @@ export default function workflows(
       enable: OPENPI_TOOL_SURFACE.workflows.entry,
     });
   const stripState = new WorkflowStripState();
+  const statusWriter = createStatusWriter("workflows");
   const widgetKey = "workflow-navigation";
 
   /**
@@ -879,6 +899,7 @@ export default function workflows(
   let completedRuns = 0;
   let failedRuns = 0;
   let widgetVisible = false;
+  let widgetEntryKey: string | undefined;
   let requestWidgetRender: (() => void) | undefined;
   let navigationLayerRegistered = false;
   let dashboardOpen = false;
@@ -918,10 +939,19 @@ export default function workflows(
   const updateWorkflowWidget = () => {
     const ctx = lastContext;
     if (!ctx || ctx.mode !== "tui") return;
-    const visible = Boolean(stripEntry());
-    if (visible === widgetVisible) return;
+    const entry = stripEntry();
+    const visible = Boolean(entry);
+    const entryKey = workflowStripEntryKey(entry);
+    if (visible === widgetVisible) {
+      if (visible && entryKey !== widgetEntryKey) {
+        widgetEntryKey = entryKey;
+        requestWidgetRender?.();
+      }
+      return;
+    }
     if (!visible) {
       stripState.focused = false;
+      widgetEntryKey = undefined;
       requestWidgetRender = undefined;
       ctx.ui.setWidget(widgetKey, undefined);
       widgetVisible = false;
@@ -936,6 +966,7 @@ export default function workflows(
       { placement: "belowEditor" },
     );
     widgetVisible = true;
+    widgetEntryKey = entryKey;
   };
 
   const updateIndicator = () => {
@@ -943,18 +974,16 @@ export default function workflows(
     if (!ctx) return;
     try {
       const running = activeRuns.size;
-      if (running === 0 && completedRuns === 0 && failedRuns === 0) {
-        ctx.ui.setStatus("workflows", undefined);
-      } else {
-        ctx.ui.setStatus(
-          "workflows",
-          formatActivityStatus(ctx.ui.theme, "workflows", {
-            running,
-            done: completedRuns,
-            failed: failedRuns,
-          }),
-        );
-      }
+      statusWriter.write(
+        ctx.ui,
+        running === 0 && completedRuns === 0 && failedRuns === 0
+          ? undefined
+          : formatActivityStatus(ctx.ui.theme, "workflows", {
+              running,
+              done: completedRuns,
+              failed: failedRuns,
+            }),
+      );
       updateWorkflowWidget();
     } catch {
       // UI may be unavailable.
@@ -1096,8 +1125,10 @@ export default function workflows(
     } catch {
       // UI may already be disposed.
     }
+    statusWriter.reset();
     lastContext = undefined;
     widgetVisible = false;
+    widgetEntryKey = undefined;
     requestWidgetRender = undefined;
     stripState.focused = false;
   });
@@ -1255,6 +1286,9 @@ export default function workflows(
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details, {
         journal: () => journalEntries,
+        ...(workflowLifecycleTestHooks?.persistWorkflow
+          ? { persist: workflowLifecycleTestHooks.persistWorkflow }
+          : {}),
       });
 
       // A caller wait never owns the run. All runs survive an interrupted
@@ -1742,11 +1776,33 @@ export default function workflows(
             cached.output,
             PREVIEW_LENGTH,
           );
-          if (acceptanceContract) {
-            record.acceptance = evaluateAcceptance(
-              acceptanceContract,
-              cached.structured,
+          const judged = applyAcceptance({
+            contract: acceptanceContract,
+            structured: cached.structured,
+            agentOk: true,
+          });
+          if (judged.ledger) record.acceptance = judged.ledger;
+          if (!judged.ok) {
+            const error = sanitizeWorkflowDisplayLine(
+              judged.error ?? "Agent failed",
             );
+            record.invocation = transitionInvocation(record.invocation!, {
+              status: "rejected",
+              at: finishedAt,
+            });
+            record.state = "error";
+            record.error = error;
+            emit();
+            replayLease.end();
+            return {
+              ok: false,
+              output: cached.output,
+              ...(cached.structured !== undefined
+                ? { structured: cached.structured }
+                : {}),
+              ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+              error,
+            };
           }
           const persisted = persistAgentResult({
             output: cached.output,
@@ -2082,7 +2138,10 @@ export default function workflows(
                     detached: false,
                   };
                 } else {
-                  cleanup = await reclaimWorktree(ctx.cwd, worktree).catch(
+                  const reclaimer =
+                    workflowLifecycleTestHooks?.reclaimWorktree ??
+                    reclaimWorktree;
+                  cleanup = await reclaimer(ctx.cwd, worktree).catch(
                     (error): WorktreeCleanup => ({
                       removed: false,
                       branchDeleted: false,
@@ -2104,13 +2163,21 @@ export default function workflows(
                     };
                   }
                 }
-                if (!runSettled) {
-                  record.worktreeCleanup = cleanup;
-                  if (cleanup.branchDeleted) delete record.worktreeBranch;
-                  else record.worktreeBranch = cleanup.branch;
-                  if (!cleanup.removed) record.worktreePath = worktree.path;
-                  emit();
-                }
+                record.worktreeCleanup = cleanup;
+                if (cleanup.branchDeleted) delete record.worktreeBranch;
+                else record.worktreeBranch = cleanup.branch;
+                if (!cleanup.removed) record.worktreePath = worktree.path;
+                // Forced settlement fixes the execution verdict, but cleanup
+                // provenance discovered afterward still belongs in the run.
+                // No later final flush remains, so failures must be observable.
+                if (runSettled) {
+                  try {
+                    persistence.flush();
+                  } catch (error) {
+                    appendArtifactPersistenceFailure(details, error);
+                    persistTerminalRecovery();
+                  }
+                } else emit();
               }
             }
           }, invocationSignal)
@@ -2182,6 +2249,7 @@ export default function workflows(
       activeRuns.set(runId, activeRun);
       const completion = runScript();
       activeRun.completion = completion;
+      workflowLifecycleTestHooks?.onRunStarted?.(activeRun);
       if (ctx.hasUI) lastContext = ctx;
       updateIndicator();
 

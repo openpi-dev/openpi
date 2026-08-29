@@ -8,6 +8,7 @@ import {
 } from "@earendil-works/pi-tui";
 import {
   WorkflowNavigationEditor,
+  workflowStripEntryKey,
   WorkflowStripState,
   WorkflowStripWidget,
   workflowStripInput,
@@ -164,6 +165,21 @@ function workflow(): WorkflowDetails {
   };
 }
 
+test("workflow strip repaint key changes only when its selected status changes", () => {
+  const running = workflow();
+  const updatedProgress = { ...running, currentPhase: "Review" };
+  const settled = { ...running, status: "completed" as const };
+
+  assert.equal(
+    workflowStripEntryKey({ runId: running.runId, details: running }),
+    workflowStripEntryKey({ runId: running.runId, details: updatedProgress }),
+  );
+  assert.notEqual(
+    workflowStripEntryKey({ runId: running.runId, details: running }),
+    workflowStripEntryKey({ runId: running.runId, details: settled }),
+  );
+});
+
 test("workflow strip sanitizes restored or legacy metadata defensively", () => {
   const details = workflow();
   details.name = "audit\u001b]52;c;clipboard\u0007\nnow";
@@ -224,6 +240,61 @@ test("workflow strip repaints on the shared spinner cadence", (t) => {
     assert.equal(renders, 0);
     t.mock.timers.tick(1);
     assert.equal(renders, 1);
+  } finally {
+    widget.dispose();
+  }
+});
+
+test("settled workflow strip does not request renders while idle", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const details = workflow();
+  details.status = "completed";
+  let renders = 0;
+  const widget = new WorkflowStripWidget(
+    {
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TUI,
+    theme,
+    new WorkflowStripState(),
+    () => ({ runId: "wf_test", details }),
+  );
+  try {
+    t.mock.timers.tick(60_000);
+    assert.equal(renders, 0);
+  } finally {
+    widget.dispose();
+  }
+});
+
+test("workflow strip stops repainting after its entry settles", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const details = workflow();
+  let renders = 0;
+  const widget = new WorkflowStripWidget(
+    {
+      requestRender() {
+        renders += 1;
+      },
+    } as unknown as TUI,
+    theme,
+    new WorkflowStripState(),
+    () => ({ runId: "wf_test", details }),
+  );
+  try {
+    t.mock.timers.tick(SPINNER_INTERVAL_MS);
+    assert.equal(renders, 1);
+    details.status = "completed";
+    t.mock.timers.tick(SPINNER_INTERVAL_MS);
+    assert.equal(renders, 2);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS * 2);
+    assert.equal(renders, 2);
+
+    details.status = "running";
+    widget.render(100);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS);
+    assert.equal(renders, 3);
   } finally {
     widget.dispose();
   }

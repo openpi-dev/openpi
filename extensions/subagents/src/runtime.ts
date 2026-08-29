@@ -11,8 +11,22 @@ import { BackendRegistry, type SubagentBackend } from "./backend.ts";
 import { piBackend } from "./backends/pi.ts";
 import type { BackendName } from "./domain.ts";
 
+/**
+ * Test-only injection seam for extension-level tests that drive real spawns
+ * without a child pi session: production never sets it. The underscore-prefixed
+ * setter name makes any accidental production use self-evidently wrong.
+ */
+let testBackends: readonly SubagentBackend[] | undefined;
+
+/** Test-only: replace the backends the manager can spawn against. */
+export function __setSubagentTestBackends(
+  backends: readonly SubagentBackend[] | undefined,
+) {
+  testBackends = backends;
+}
+
 const BackendRegistryLive = Layer.sync(BackendRegistry, () => {
-  const backends: SubagentBackend[] = [piBackend];
+  const backends: readonly SubagentBackend[] = testBackends ?? [piBackend];
   return new Map<BackendName, SubagentBackend>(
     backends.map((backend) => [backend.name, backend]),
   );

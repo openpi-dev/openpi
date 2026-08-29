@@ -44,6 +44,7 @@ import {
 import { Markdown, Text } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
+  createStatusWriter,
   formatActivityStatus,
   hasActivity,
   unreadActivityCounts,
@@ -74,13 +75,15 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   createWorktree,
+  formatWorktreeCleanupWarning,
   reclaimWorktree,
   type Worktree,
 } from "../shared/worktree.ts";
 import {
   normalizeSubagentTitle,
-  SubagentStripWidget,
   selectSubagentStripEntry,
+  subagentStripEntryKey,
+  SubagentStripWidget,
 } from "./navigation.ts";
 import {
   type AgentType,
@@ -364,9 +367,11 @@ export default function (pi: ExtensionAPI) {
    */
   let settledAcknowledgedAt = 0;
   const stripState = new BelowEditorStripState();
+  const statusWriter = createStatusWriter("subagents");
   const widgetKey = "subagent-navigation";
   let navigationManager: SubagentManagerShape | undefined;
   let widgetVisible = false;
+  let widgetEntryKey: string | undefined;
   let requestWidgetRender: (() => void) | undefined;
   let navigationLayerRegistered = false;
   let dashboardOpen = false;
@@ -422,10 +427,19 @@ export default function (pi: ExtensionAPI) {
   const updateSubagentWidget = () => {
     const ctx = sessionContext;
     if (!ctx || ctx.mode !== "tui") return;
-    const visible = Boolean(stripEntry());
-    if (visible === widgetVisible) return;
+    const entry = stripEntry();
+    const visible = Boolean(entry);
+    const entryKey = subagentStripEntryKey(entry);
+    if (visible === widgetVisible) {
+      if (visible && entryKey !== widgetEntryKey) {
+        widgetEntryKey = entryKey;
+        requestWidgetRender?.();
+      }
+      return;
+    }
     if (!visible) {
       stripState.focused = false;
+      widgetEntryKey = undefined;
       requestWidgetRender = undefined;
       ctx.ui.setWidget(widgetKey, undefined);
       widgetVisible = false;
@@ -440,6 +454,7 @@ export default function (pi: ExtensionAPI) {
       { placement: "belowEditor" },
     );
     widgetVisible = true;
+    widgetEntryKey = entryKey;
   };
 
   const updateStatus = (manager: SubagentManagerShape) => {
@@ -451,8 +466,8 @@ export default function (pi: ExtensionAPI) {
     // In the TUI the below-editor strip already reports the same activity and
     // carries the manage affordance, so a footer status line would repeat it.
     const tui = sessionContext?.mode === "tui";
-    ui.setStatus(
-      "subagents",
+    statusWriter.write(
+      ui,
       !tui && hasActivity(counts)
         ? formatActivityStatus(ui.theme, "subagents", counts)
         : undefined,
@@ -592,10 +607,12 @@ export default function (pi: ExtensionAPI) {
     } catch {
       // UI may already be disposed.
     }
+    statusWriter.reset();
     sessionContext = undefined;
     ui = undefined;
     navigationManager = undefined;
     widgetVisible = false;
+    widgetEntryKey = undefined;
     requestWidgetRender = undefined;
     stripState.focused = false;
     dashboardOpen = false;
@@ -791,7 +808,37 @@ export default function (pi: ExtensionAPI) {
       } catch (error) {
         // The session scope owns reclamation, but it never opened, so this
         // worktree would otherwise be orphaned on disk.
-        if (worktree) await reclaimWorktree(cwd, worktree).catch(() => {});
+        if (worktree) {
+          const spawnError =
+            error instanceof Error ? error.message : String(error);
+          let cleanupWarning: string | undefined;
+          let cleanupError: unknown;
+          try {
+            const cleanup = await reclaimWorktree(cwd, worktree);
+            cleanupWarning = formatWorktreeCleanupWarning(
+              cleanup,
+              worktree.path,
+            );
+          } catch (failure) {
+            cleanupError = failure;
+          }
+          if (cleanupError) {
+            const reason =
+              cleanupError instanceof Error
+                ? cleanupError.message
+                : String(cleanupError);
+            throw new Error(
+              `${spawnError}; worktree cleanup failed: ${reason}; checkout preserved at ${worktree.path}`,
+              { cause: error },
+            );
+          }
+          if (cleanupWarning) {
+            throw new Error(
+              `${spawnError}; worktree cleanup warning: ${cleanupWarning}`,
+              { cause: error },
+            );
+          }
+        }
         throw error;
       }
       persistId(snap.id);

@@ -1,0 +1,17 @@
+name: Feishu PR Notification
+
+on:
+  pull_request_target:
+    types: [opened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  notify:
+    name: Notify Feishu
+    uses: openpi-dev/automation/.github/workflows/openpi-feishu-pr-notification.yml@main
+    secrets:
+      FEISHU_PR_BOT_WEBHOOK: ${{ secrets.FEISHU_PR_BOT_WEBHOOK }}
+      FEISHU_PR_BOT_SECRET: ${{ secrets.FEISHU_PR_BOT_SECRET }}

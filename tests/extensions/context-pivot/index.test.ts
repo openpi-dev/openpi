@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+  CompactOptions,
   ExtensionAPI,
   ExtensionContext,
+  ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import contextPivot, {
   buildPivotSummary,
@@ -76,4 +78,134 @@ test("builds a clean pivot summary without notebook or handoff coupling", () => 
   assert.doesNotMatch(summary, /notebook/i);
   assert.doesNotMatch(summary, /handoff/i);
   assert.equal(MIN_CONTEXT_PIVOT_TOKENS, 30_000);
+});
+
+test("translates native no-history failures and clears the pivot state", async () => {
+  let tool: ToolDefinition | undefined;
+  let compactOptions: CompactOptions | undefined;
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const notifications: Array<{ message: string; level: string }> = [];
+  const statuses: Array<string | undefined> = [];
+  const sentMessages: string[] = [];
+  const pi = {
+    registerTool(candidate: ToolDefinition) {
+      tool = candidate;
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      handlers.set(event, handler);
+    },
+    registerCommand() {},
+    sendUserMessage(message: string) {
+      sentMessages.push(message);
+    },
+  } as unknown as ExtensionAPI;
+
+  contextPivot(pi);
+  assert.ok(tool);
+
+  const ctx = {
+    hasUI: true,
+    getContextUsage: () => ({
+      tokens: MIN_CONTEXT_PIVOT_TOKENS,
+      contextWindow: 200_000,
+      percent: 15,
+    }),
+    compact(options: CompactOptions) {
+      compactOptions = options;
+    },
+    ui: {
+      notify(message: string, level: string) {
+        notifications.push({ message, level });
+      },
+      setStatus(_key: string, value: string | undefined) {
+        statuses.push(value);
+      },
+      theme: { fg: (_color: string, text: string) => text },
+    },
+  } as unknown as ExtensionContext;
+
+  await tool.execute(
+    "context-pivot-test",
+    { brief: "Continue with the next phase." },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.ok(compactOptions?.onError);
+  compactOptions.onError(new Error("Nothing to compact (session too small)"));
+
+  assert.equal(
+    notifications.at(-1)?.message,
+    "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.",
+  );
+  assert.equal(notifications.at(-1)?.level, "error");
+  assert.equal(statuses.at(-1), undefined);
+  assert.deepEqual(sentMessages, []);
+  assert.equal(handlers.get("session_before_compact")?.({}), undefined);
+
+  await tool.execute(
+    "context-pivot-test-2",
+    { brief: "Continue with the next phase." },
+    undefined,
+    undefined,
+    ctx,
+  );
+  assert.ok(compactOptions?.onError);
+  compactOptions.onError(new Error("provider unavailable"));
+  assert.equal(
+    notifications.at(-1)?.message,
+    "Context pivot failed: provider unavailable",
+  );
+});
+
+test("reports native no-history failures without a UI", async () => {
+  let tool: ToolDefinition | undefined;
+  let compactOptions: CompactOptions | undefined;
+  const pi = {
+    registerTool(candidate: ToolDefinition) {
+      tool = candidate;
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    on() {},
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+
+  contextPivot(pi);
+  assert.ok(tool);
+
+  const errors: string[] = [];
+  const originalError = console.error;
+  console.error = (message: unknown) => errors.push(String(message));
+  try {
+    const ctx = {
+      hasUI: false,
+      getContextUsage: () => ({
+        tokens: MIN_CONTEXT_PIVOT_TOKENS,
+        contextWindow: 200_000,
+        percent: 15,
+      }),
+      compact(options: CompactOptions) {
+        compactOptions = options;
+      },
+    } as unknown as ExtensionContext;
+
+    await tool.execute(
+      "context-pivot-headless-test",
+      { brief: "Continue with the next phase." },
+      undefined,
+      undefined,
+      ctx,
+    );
+    assert.ok(compactOptions?.onError);
+    compactOptions.onError(new Error("Nothing to compact (session too small)"));
+  } finally {
+    console.error = originalError;
+  }
+
+  assert.deepEqual(errors, [
+    "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.",
+  ]);
 });

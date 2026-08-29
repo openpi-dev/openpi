@@ -1,12 +1,12 @@
 # Releasing OpenPI to npm
 
-OpenPI releases `@tt-a1i/openpi` through [the Release workflow](.github/workflows/release.yml). Do not publish from a local checkout.
+OpenPI releases `@tt-a1i/openpi` through [the Release workflow](.github/workflows/release.yml). The repository workflow keeps the release triggers and OIDC permission while following the reusable implementation on the [`openpi-dev/automation`](https://github.com/openpi-dev/automation) `main` branch. Do not publish from a local checkout.
 
 ## One-time repository setup
 
 Before the first workflow release:
 
-1. Configure the npm trusted publisher for organization/user `tt-a1i`, repository `openpi`, workflow `release.yml`, and environment `npm`.
+1. Configure the npm trusted publisher for GitHub organization/user `openpi-dev`, repository `openpi`, workflow `release.yml`, and environment `npm`. The published npm package remains `@tt-a1i/openpi`.
 2. Protect the GitHub `npm` environment with a required reviewer and prevent unreviewed deployment from other branches or tags. Allow only the protected `main` branch and version tags matching `v*.*.*`.
 
 The workflow has no long-lived npm token. Its publish job receives an OIDC identity only after the unprivileged validation job succeeds and the `npm` environment permits the deployment. The publish job consumes only the validated package artifact and does not run repository lifecycle scripts.
