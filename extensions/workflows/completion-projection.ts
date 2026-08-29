@@ -122,7 +122,7 @@ function completionAlerts(details: WorkflowDetails) {
       ? `${cleanup.commits} commit${cleanup.commits === 1 ? "" : "s"} on ${cleanup.branch}`
       : agent.worktreeBranch
         ? `branch ${agent.worktreeBranch}`
-         : "isolated work";
+        : "isolated work";
     alerts.push(
       `Worktree handoff [${sanitizeWorkflowDisplayLine(agent.label)}]: ${sanitizeWorkflowDisplayLine(work)}; ${sanitizeWorkflowDisplayLine(agent.worktreeHandoffArtifact)}`,
     );
