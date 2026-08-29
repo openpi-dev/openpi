@@ -2,18 +2,15 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 
-const AUTOMATION_SHA = "f11b483efea42336d14d74841e84e85881bfc68f";
-
 function workflow(name: string) {
   return readFileSync(`.github/workflows/${name}.yml`, "utf8");
 }
 
-test("shared repository workflows call one immutable automation revision", () => {
+test("shared repository workflows follow the automation main branch", () => {
   const workflows = [workflow("feishu-pr-notification"), workflow("release")];
 
   for (const source of workflows) {
-    assert.match(source, /uses: openpi-dev\/automation\/.+@[0-9a-f]{40}/u);
-    assert.match(source, new RegExp(`@${AUTOMATION_SHA}`));
+    assert.match(source, /uses: openpi-dev\/automation\/.+@main/u);
     assert.doesNotMatch(source, /^\s+(?:run|steps|runs-on):/mu);
   }
 });
