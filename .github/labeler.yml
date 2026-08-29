@@ -1,0 +1,55 @@
+# Keep this taxonomy focused on stable ownership boundaries. The labeler may
+# apply more than one area label when a pull request crosses those boundaries.
+
+area:workflows:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/workflows/**"
+          - "skills/workflows/**"
+          - "tests/extensions/workflows/**"
+
+area:subagents:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subagents/**"
+          - "skills/subagents/**"
+          - "tests/extensions/subagents/**"
+
+area:background-terminals:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/background-terminals/**"
+          - "skills/background-terminals/**"
+          - "tests/extensions/background-terminals/**"
+
+area:setup:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/setup/**"
+          - "extensions/shared/setup-*.ts"
+          - "tests/extensions/setup/**"
+          - "SETUP.md"
+
+area:ui:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/file-mutation-display/**"
+          - "extensions/ui-customization/**"
+          - "extensions/user-input-fold/**"
+          - "themes/**"
+          - "assets/**"
+          - "tests/extensions/file-mutation-display/**"
+          - "tests/extensions/ui-customization/**"
+          - "tests/extensions/user-input-fold/**"
+
+area:github:
+  - changed-files:
+      - any-glob-to-any-file:
+          - ".github/**"
+          - "tests/github/**"
+
+documentation:
+  - changed-files:
+      - any-glob-to-any-file:
+          - "**/*.md"
+

@@ -52,3 +52,30 @@ test("project-specific CI remains defined in this repository", () => {
   assert.match(source, /Background terminals \(Windows\)/u);
   assert.doesNotMatch(source, /openpi-dev\/automation/u);
 });
+
+test("the PR labeler is pinned, least-privileged, and does not execute PR code", () => {
+  const source = workflow("labeler");
+
+  assert.match(source, /^\s*pull_request_target:/mu);
+  assert.match(source, /uses: actions\/labeler@[0-9a-f]{40} # v7\.0\.0/u);
+  assert.match(source, /^\s*pull-requests: write$/mu);
+  assert.match(source, /^\s*contents: read$/mu);
+  assert.match(source, /^\s*sync-labels: true$/mu);
+  assert.doesNotMatch(source, /actions\/checkout|\brun:/u);
+});
+
+test("the PR labeler covers OpenPI's stable ownership boundaries", () => {
+  const source = readFileSync(".github/labeler.yml", "utf8");
+
+  for (const label of [
+    "area:workflows",
+    "area:subagents",
+    "area:background-terminals",
+    "area:setup",
+    "area:ui",
+    "area:github",
+    "documentation",
+  ]) {
+    assert.match(source, new RegExp(`^${label}:`, "mu"));
+  }
+});
