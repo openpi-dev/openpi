@@ -28,6 +28,7 @@ const ZERO_USAGE = {
 
 export interface PiAgentSessionHarnessOptions {
   readonly model?: AgentSession["model"];
+  readonly initialMessages?: AgentSession["messages"];
   readonly activeTools?: readonly string[];
   readonly contextUsage?: {
     readonly tokens: number | null;
@@ -35,6 +36,10 @@ export interface PiAgentSessionHarnessOptions {
   };
   readonly sessionFile?: string;
   readonly bind?: () => Promise<void>;
+  readonly preflight?: (
+    text: string,
+    harness: PiAgentSessionHarness,
+  ) => Promise<void>;
   readonly prompt?: (
     text: string,
     harness: PiAgentSessionHarness,
@@ -62,6 +67,8 @@ export interface PiAgentSessionHarness {
     disposals: number;
   };
   emit(event: AgentSessionEvent): void;
+  /** Explicitly settle the oldest default prompt Promise. */
+  resolvePrompt(): void;
   emitUser(text: string): void;
   emitAssistant(
     text: string,
@@ -86,7 +93,9 @@ export function createPiAgentSessionHarness(
   options: PiAgentSessionHarnessOptions = {},
 ) {
   const listeners = new Set<AgentSessionEventListener>();
-  const messages: AgentSession["messages"] = [];
+  const messages: AgentSession["messages"] = [
+    ...(options.initialMessages ?? []),
+  ];
   const calls = {
     bindings: [] as Array<{ mode: "print" }>,
     prompts: [] as string[],
@@ -101,6 +110,7 @@ export function createPiAgentSessionHarness(
   let contextUsage = options.contextUsage;
   let activeTools = [...(options.activeTools ?? [])];
   let harness: PiAgentSessionHarness;
+  const pendingDefaultPrompts: Array<() => void> = [];
 
   const emit = (event: AgentSessionEvent) => {
     for (const listener of [...listeners]) listener(event);
@@ -164,9 +174,25 @@ export function createPiAgentSessionHarness(
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async prompt(text: string) {
+    async prompt(
+      text: string,
+      promptOptions?: Parameters<AgentSession["prompt"]>[1],
+    ) {
       calls.prompts.push(text);
-      await options.prompt?.(text, harness);
+      try {
+        await options.preflight?.(text, harness);
+      } catch (error) {
+        promptOptions?.preflightResult?.(false);
+        throw error;
+      }
+      promptOptions?.preflightResult?.(true);
+      if (options.prompt) {
+        await options.prompt(text, harness);
+        return;
+      }
+      await new Promise<void>((resolve) => {
+        pendingDefaultPrompts.push(resolve);
+      });
     },
     async steer(text: string) {
       calls.steers.push(text);
@@ -207,6 +233,9 @@ export function createPiAgentSessionHarness(
     messages,
     calls,
     emit,
+    resolvePrompt() {
+      pendingDefaultPrompts.shift()?.();
+    },
     emitUser(text) {
       const message = {
         role: "user",

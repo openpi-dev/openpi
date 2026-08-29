@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import type {
+  AgentSession,
   CreateAgentSessionOptions,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
@@ -203,6 +204,7 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
       harness.emitAssistant("Repository inspected");
       harness.setStreaming(false);
       harness.emit({ type: "agent_settled" });
+      harness.resolvePrompt();
       harness.emit({ type: "agent_settled" });
     },
   );
@@ -284,6 +286,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
     harness.emitAssistant("first result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([first.id]));
     assert.equal(manager.view.get(first.id)?.finalText, "first result");
 
@@ -295,6 +298,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
     harness.emitAssistant("second result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([first.id]));
 
     const afterRestart = manager.view.get(first.id);
@@ -314,7 +318,7 @@ test("streaming send steers while idle send starts a distinct run", async () => 
   }
 });
 
-test("cancelled run events do not cross a restarted run boundary", async () => {
+test("cancelled active run restarts only after the old prompt is quiescent", async () => {
   const fixtures = harnessFactory();
   const backend = makePiBackend({
     sessionFactory: fixtures.factory,
@@ -334,7 +338,11 @@ test("cancelled run events do not cross a restarted run boundary", async () => {
     harness.setStreaming(true);
     harness.emit({ type: "agent_start" });
 
-    const report = await runtime.runPromise(manager.cancel([spawned.id]));
+    const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
+    await waitFor(() => harness.calls.aborts === 1, "active run abort");
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    const report = await cancellation;
     assert.equal(report[0]?.cancelled, true);
     assert.equal(settlements, 1);
 
@@ -343,10 +351,10 @@ test("cancelled run events do not cross a restarted run boundary", async () => {
       "cancelled turn",
       "restarted turn",
     ]);
-
-    harness.emitAssistant("stale cancelled result");
-    harness.emit({ type: "agent_settled" });
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(
+      () => manager.view.get(spawned.id)?.status === "running",
+      "restarted run to reach the manager",
+    );
     assert.equal(manager.view.get(spawned.id)?.status, "running");
     assert.equal(manager.view.get(spawned.id)?.finalText, "");
     assert.equal(settlements, 1);
@@ -356,6 +364,7 @@ test("cancelled run events do not cross a restarted run boundary", async () => {
     harness.emitAssistant("fresh restarted result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
     await runtime.runPromise(manager.waitFor([spawned.id]));
     assert.equal(manager.view.get(spawned.id)?.status, "done");
     assert.equal(
@@ -364,6 +373,502 @@ test("cancelled run events do not cross a restarted run boundary", async () => {
     );
     assert.equal(settlements, 2);
   } finally {
+    await runtime.dispose();
+  }
+});
+
+test("preflight cancellation stays single-flight until the exact prompt settles", async () => {
+  const firstPrompt = deferred<void>();
+  const secondPrompt = deferred<void>();
+  let promptIndex = 0;
+  let concurrentPrompts = 0;
+  let maxConcurrentPrompts = 0;
+  const fixtures = harnessFactory(() => ({
+    prompt: async () => {
+      const index = promptIndex++;
+      concurrentPrompts++;
+      maxConcurrentPrompts = Math.max(maxConcurrentPrompts, concurrentPrompts);
+      try {
+        await (index === 0 ? firstPrompt.promise : secondPrompt.promise);
+      } finally {
+        concurrentPrompts--;
+      }
+    },
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    let settlements = 0;
+    manager.view.setOnSettled(() => settlements++);
+
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("cancel during preflight")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    assert.deepEqual(harness.calls.prompts, ["cancel during preflight"]);
+    await assert.rejects(
+      runtime.runPromise(
+        manager.send(spawned.id, "must not overlap preflight"),
+      ),
+      /prompt is still starting/,
+    );
+    assert.deepEqual(harness.calls.prompts, ["cancel during preflight"]);
+
+    let cancelFinished = false;
+    const cancellation = runtime
+      .runPromise(manager.cancel([spawned.id]))
+      .then((result) => {
+        cancelFinished = true;
+        return result;
+      });
+    await waitFor(() => harness.calls.aborts === 1, "initial preflight abort");
+    await assert.rejects(
+      runtime.runPromise(manager.send(spawned.id, "must not overlap cancel")),
+      /cancellation is still in progress/,
+    );
+    assert.deepEqual(harness.calls.prompts, ["cancel during preflight"]);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(cancelFinished, false);
+    assert.equal(settlements, 0);
+
+    // A cancelled Pi preflight can resume after abort() returned, then enter
+    // the agent lifecycle. These events still belong to prompt #1.
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    await waitFor(
+      () => harness.calls.aborts === 2,
+      "late preflight agent_start to be aborted again",
+    );
+    harness.emitTextDelta("stale delta");
+    harness.emit({
+      type: "tool_execution_start",
+      toolCallId: "stale-tool",
+      toolName: "read",
+      args: { path: "stale.txt" },
+    });
+    harness.emitAssistant("stale cancelled result");
+    harness.emit({ type: "agent_settled" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(cancelFinished, false);
+    assert.equal(settlements, 0);
+
+    firstPrompt.resolve();
+    const report = await cancellation;
+    assert.equal(report[0]?.cancelled, true);
+    assert.equal(settlements, 1);
+    assert.equal(manager.view.get(spawned.id)?.finalText, "");
+    assert.equal(manager.view.get(spawned.id)?.transcript.length, 0);
+
+    await runtime.runPromise(manager.send(spawned.id, "fresh restart"));
+    assert.deepEqual(harness.calls.prompts, [
+      "cancel during preflight",
+      "fresh restart",
+    ]);
+    assert.equal(maxConcurrentPrompts, 1);
+
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitTextDelta("fresh delta");
+    harness.emitAssistant("fresh result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    secondPrompt.resolve();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+
+    const restarted = manager.view.get(spawned.id);
+    assert.equal(restarted?.status, "done");
+    assert.equal(restarted?.finalText, "fresh result");
+    assert.equal(settlements, 2);
+    assert.equal(
+      restarted?.transcript.some((item) =>
+        JSON.stringify(item).includes("stale"),
+      ),
+      false,
+    );
+  } finally {
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("settled restart waits for the previous prompt Promise microtask boundary", async () => {
+  const firstPrompt = deferred<void>();
+  const secondPrompt = deferred<void>();
+  let promptIndex = 0;
+  let concurrentPrompts = 0;
+  let maxConcurrentPrompts = 0;
+  const fixtures = harnessFactory(() => ({
+    prompt: async () => {
+      const index = promptIndex++;
+      concurrentPrompts++;
+      maxConcurrentPrompts = Math.max(maxConcurrentPrompts, concurrentPrompts);
+      try {
+        await (index === 0 ? firstPrompt.promise : secondPrompt.promise);
+      } finally {
+        concurrentPrompts--;
+      }
+    },
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("first prompt")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("first result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+
+    let restartAccepted = false;
+    const restart = runtime
+      .runPromise(manager.send(spawned.id, "second prompt"))
+      .then(() => {
+        restartAccepted = true;
+      });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(restartAccepted, false);
+    assert.deepEqual(harness.calls.prompts, ["first prompt"]);
+
+    firstPrompt.resolve();
+    await restart;
+    assert.deepEqual(harness.calls.prompts, ["first prompt", "second prompt"]);
+    assert.equal(maxConcurrentPrompts, 1);
+
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("second result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    secondPrompt.resolve();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(manager.view.get(spawned.id)?.finalText, "second result");
+  } finally {
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("cancel invalidates a restart waiting on the previous prompt Promise", async () => {
+  const firstPrompt = deferred<void>();
+  const secondPrompt = deferred<void>();
+  let promptIndex = 0;
+  const fixtures = harnessFactory(() => ({
+    prompt: () =>
+      promptIndex++ === 0 ? firstPrompt.promise : secondPrompt.promise,
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    let settlements = 0;
+    manager.view.setOnSettled(() => settlements++);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("completed but prompt still unwinding")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("first result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(settlements, 1);
+
+    const restart = runtime.runPromise(
+      manager.send(spawned.id, "restart that will be cancelled"),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(harness.calls.prompts, [
+      "completed but prompt still unwinding",
+    ]);
+
+    const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
+    await waitFor(
+      () => harness.calls.aborts === 1,
+      "pending restart cancellation",
+    );
+    firstPrompt.resolve();
+    await restart;
+    const report = await cancellation;
+
+    assert.equal(report[0]?.cancelled, true);
+    assert.deepEqual(harness.calls.prompts, [
+      "completed but prompt still unwinding",
+    ]);
+    assert.equal(manager.view.get(spawned.id)?.status, "error");
+    assert.equal(manager.view.get(spawned.id)?.finalText, "");
+    assert.equal(settlements, 2);
+  } finally {
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("an aborted send cannot start its deferred restart later", async () => {
+  const firstPrompt = deferred<void>();
+  const secondPrompt = deferred<void>();
+  let promptIndex = 0;
+  const fixtures = harnessFactory(() => ({
+    prompt: () =>
+      promptIndex++ === 0 ? firstPrompt.promise : secondPrompt.promise,
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("completed before aborted send")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("stable prior result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+
+    const controller = new AbortController();
+    const send = runtime.runPromise(
+      manager.send(spawned.id, "must never start"),
+      { signal: controller.signal },
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    controller.abort();
+    await assert.rejects(send);
+
+    firstPrompt.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.deepEqual(harness.calls.prompts, ["completed before aborted send"]);
+    assert.equal(manager.view.get(spawned.id)?.status, "done");
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "stable prior result",
+    );
+  } finally {
+    firstPrompt.resolve();
+    secondPrompt.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("run-local terminal evidence survives preflight and post-run compaction", async () => {
+  const initialMessages = Array.from({ length: 64 }, (_, index) => ({
+    role: "user" as const,
+    content: `old context ${index}`,
+    timestamp: index,
+  })) as AgentSession["messages"];
+  const fixtures = harnessFactory(() => ({ initialMessages }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("complete after compaction")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+
+    // Pi may replace the entire message array during prompt preflight.
+    harness.messages.splice(0, harness.messages.length, {
+      role: "user",
+      content: "compacted context",
+      timestamp: Date.now(),
+    });
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("fresh completed result");
+    // Post-run compaction can replace it again before agent_settled.
+    harness.messages.splice(0, harness.messages.length);
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "fresh completed result",
+    );
+
+    await runtime.runPromise(manager.send(spawned.id, "fail after compaction"));
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("fresh failed partial", {
+      stopReason: "error",
+      errorMessage: "fresh provider failure",
+    });
+    harness.messages.splice(0, harness.messages.length);
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(manager.view.get(spawned.id)?.status, "error");
+    assert.equal(
+      manager.view.get(spawned.id)?.errorText,
+      "fresh provider failure",
+    );
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "fresh failed partial",
+    );
+
+    await runtime.runPromise(
+      manager.send(spawned.id, "interrupt after compaction"),
+    );
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitTextDelta("fresh interrupted partial");
+    harness.messages.splice(0, harness.messages.length);
+    const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
+    await waitFor(() => harness.calls.aborts === 1, "compacted run abort");
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await cancellation;
+    assert.equal(manager.view.get(spawned.id)?.status, "error");
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "fresh interrupted partial",
+    );
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("cancelled restart preflight never reuses the previous run output", async () => {
+  const restartPreflight = deferred<void>();
+  let preflightIndex = 0;
+  const fixtures = harnessFactory(() => ({
+    preflight: () =>
+      preflightIndex++ === 0 ? Promise.resolve() : restartPreflight.promise,
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("successful first run")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("previous successful result");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "previous successful result",
+    );
+
+    await runtime.runPromise(manager.send(spawned.id, "cancel this preflight"));
+    await waitFor(
+      () => harness.calls.prompts.length === 2,
+      "restart preflight to begin",
+    );
+    const cancellation = runtime.runPromise(manager.cancel([spawned.id]));
+    await waitFor(() => harness.calls.aborts === 1, "restart preflight abort");
+    restartPreflight.resolve();
+    const report = await cancellation;
+
+    assert.equal(report[0]?.cancelled, true);
+    assert.equal(manager.view.get(spawned.id)?.status, "error");
+    assert.equal(manager.view.get(spawned.id)?.finalText, "");
+  } finally {
+    restartPreflight.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("a preflight that ignores abort is force-closed without reopening the session", async () => {
+  const stuckPreflight = deferred<void>();
+  let providerRuns = 0;
+  const fixtures = harnessFactory((_options, index) =>
+    index === 0
+      ? {
+          preflight: () => stuckPreflight.promise,
+          prompt: async () => {
+            providerRuns++;
+          },
+        }
+      : {},
+  );
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend, 10_000);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("never-ending preflight")),
+    );
+    const startedAt = Date.now();
+    const report = await runtime.runPromise(manager.cancel([spawned.id]));
+    assert.ok(Date.now() - startedAt >= 4_500);
+    assert.equal(report[0]?.cancelled, true);
+    assert.match(
+      manager.view.get(spawned.id)?.errorText ?? "",
+      /Abort deadline exceeded/,
+    );
+    await waitFor(
+      () => fixtures.harnesses[0]?.calls.disposals === 1,
+      "stuck preflight session disposal",
+    );
+    await assert.rejects(
+      runtime.runPromise(manager.send(spawned.id, "must stay closed")),
+      /session is closed/,
+    );
+    assert.deepEqual(fixtures.harnesses[0]?.calls.prompts, [
+      "never-ending preflight",
+    ]);
+    stuckPreflight.resolve();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(providerRuns, 0);
+
+    const fresh = await runtime.runPromise(
+      manager.spawn("pi", task("fresh after forced close")),
+    );
+    assert.equal(fresh.status, "running");
+    const freshCancellation = runtime.runPromise(manager.cancel([fresh.id]));
+    const freshHarness = fixtures.harnesses[1];
+    assert.ok(freshHarness);
+    await waitFor(() => freshHarness.calls.aborts === 1, "fresh run abort");
+    freshHarness.emit({ type: "agent_settled" });
+    freshHarness.resolvePrompt();
+    await freshCancellation;
+  } finally {
+    stuckPreflight.resolve();
     await runtime.dispose();
   }
 });
@@ -408,9 +913,25 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
       "tool starts to reach the manager",
     );
 
-    const report = await runtime.runPromise(
-      manager.cancel(spawned.map((snapshot) => snapshot.id)),
+    let cancellationFinished = false;
+    const cancellation = runtime
+      .runPromise(manager.cancel(spawned.map((snapshot) => snapshot.id)))
+      .then((result) => {
+        cancellationFinished = true;
+        return result;
+      });
+    await waitFor(
+      () => fixtures.harnesses.every((harness) => harness.calls.aborts === 1),
+      "all prompt and tool aborts",
     );
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(cancellationFinished, false);
+    latePrompt.reject(new Error("late prompt rejection"));
+    for (const harness of fixtures.harnesses.slice(1)) {
+      harness.emit({ type: "agent_settled" });
+      harness.resolvePrompt();
+    }
+    const report = await cancellation;
     assert.ok(report.every((result) => result.cancelled));
     assert.ok(
       spawned.every(
@@ -424,7 +945,6 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
     const toolHarness = fixtures.harnesses[2];
     assert.ok(promptHarness);
     assert.ok(toolHarness);
-    latePrompt.reject(new Error("late prompt rejection"));
     promptHarness.emit({ type: "agent_start" });
     promptHarness.emitAssistant("late prompt completion");
     promptHarness.emit({ type: "agent_settled" });
@@ -440,13 +960,27 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(settlements, 4);
     assert.equal(manager.view.get(spawned[0]!.id)?.finalText, "");
-    assert.equal(manager.view.get(spawned[2]!.id)?.finalText, "");
+    assert.equal(
+      manager.view.get(spawned[2]!.id)?.finalText,
+      "tool run started",
+    );
 
     const afterCancellation = await runtime.runPromise(
       manager.spawn("pi", task("capacity was released")),
     );
     assert.equal(afterCancellation.status, "running");
-    await runtime.runPromise(manager.cancel([afterCancellation.id]));
+    const afterCancellationStop = runtime.runPromise(
+      manager.cancel([afterCancellation.id]),
+    );
+    const afterCancellationHarness = fixtures.harnesses[4];
+    assert.ok(afterCancellationHarness);
+    await waitFor(
+      () => afterCancellationHarness.calls.aborts === 1,
+      "replacement run abort",
+    );
+    afterCancellationHarness.emit({ type: "agent_settled" });
+    afterCancellationHarness.resolvePrompt();
+    await afterCancellationStop;
   } finally {
     await runtime.dispose();
   }
@@ -504,6 +1038,7 @@ test("a silent provider is terminalized once, disposed, and releases all slots",
     assert.ok(late);
     late.emitAssistant("late provider completion");
     late.emit({ type: "agent_settled" });
+    late.resolvePrompt();
     await new Promise((resolve) => setTimeout(resolve, 20));
     assert.equal(settlements, 4);
     assert.equal(manager.view.get(stalled[0]!.id)?.finalText, "");
@@ -512,7 +1047,13 @@ test("a silent provider is terminalized once, disposed, and releases all slots",
       manager.spawn("pi", task("fresh after watchdog")),
     );
     assert.equal(fresh.status, "running");
-    await runtime.runPromise(manager.cancel([fresh.id]));
+    const freshCancellation = runtime.runPromise(manager.cancel([fresh.id]));
+    const freshHarness = fixtures.harnesses[4];
+    assert.ok(freshHarness);
+    await waitFor(() => freshHarness.calls.aborts === 1, "fresh run abort");
+    freshHarness.emit({ type: "agent_settled" });
+    freshHarness.resolvePrompt();
+    await freshCancellation;
   } finally {
     await runtime.dispose();
   }
@@ -521,6 +1062,7 @@ test("a silent provider is terminalized once, disposed, and releases all slots",
 test("adapter scope cleanup is bounded across shutdown timeouts and failures", async () => {
   const never = new Promise<void>(() => {});
   const timedOutFixtures = harnessFactory(() => ({
+    prompt: async () => {},
     shutdown: () => never,
   }));
   const timedOutBackend = makePiBackend({
@@ -538,6 +1080,7 @@ test("adapter scope cleanup is bounded across shutdown timeouts and failures", a
   assert.equal(timedOutHarness.calls.disposals, 1);
 
   const failedFixtures = harnessFactory(() => ({
+    prompt: async () => {},
     shutdown: async () => {
       throw new Error("shutdown fixture failed");
     },
