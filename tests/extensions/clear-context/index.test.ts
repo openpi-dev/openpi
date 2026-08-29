@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
+import {
+  SessionManager,
+  type ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import { installClearContextShortcut } from "../../../extensions/clear-context/index.ts";
 
 function harness(text: string) {
@@ -35,4 +38,16 @@ test("Ctrl+C submits Pi's built-in /new command when the editor is empty", () =>
   assert.deepEqual(h.listeners[0]?.("\u0003"), { data: "\r" });
   assert.equal(h.editorText(), "/new");
   h.remove();
+});
+
+test("Pi's new session has no history from the cleared session", () => {
+  const session = SessionManager.inMemory(process.cwd());
+  session.appendCustomMessageEntry("test-history", "old context", true);
+  const previousSessionId = session.getSessionId();
+
+  session.newSession();
+
+  assert.notEqual(session.getSessionId(), previousSessionId);
+  assert.deepEqual(session.getBranch(), []);
+  assert.deepEqual(session.buildSessionContext().messages, []);
 });
