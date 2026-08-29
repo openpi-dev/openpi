@@ -682,8 +682,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /explicit.*adaptive/);
   assert.match(message, /adaptive.*opt-in/);
   assert.match(message, /dim inline text on the first row/);
-  assert.match(message, /one cell reserved for the hidden hardware cursor/);
-  assert.match(message, /CJK IME preedit.*briefly cover/);
+  assert.match(message, /reserved cells.*CJK IME preedit/);
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
