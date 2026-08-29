@@ -67,18 +67,21 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   );
   assert.deepEqual(manifest.repository, {
     type: "git",
-    url: "git+https://github.com/tt-a1i/openpi.git",
+    url: "git+https://github.com/openpi-dev/openpi.git",
   });
-  assert.equal(manifest.homepage, "https://github.com/tt-a1i/openpi#readme");
+  assert.equal(
+    manifest.homepage,
+    "https://github.com/openpi-dev/openpi#readme",
+  );
   assert.deepEqual(manifest.bugs, {
-    url: "https://github.com/tt-a1i/openpi/issues",
+    url: "https://github.com/openpi-dev/openpi/issues",
   });
   assert.deepEqual(manifest.pi?.extensions, ["./extensions"]);
   assert.equal(manifest.pi?.skills, undefined);
   assert.deepEqual(manifest.pi?.themes, ["./themes"]);
   assert.equal(
     manifest.pi?.image,
-    "https://raw.githubusercontent.com/tt-a1i/openpi/main/assets/openpi-package.png",
+    "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png",
   );
   assert.deepEqual(manifest.files, [
     "extensions",

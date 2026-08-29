@@ -9,7 +9,7 @@ pi install npm:@tt-a1i/openpi
 To inspect the current source before loading it, install directly from GitHub instead:
 
 ```sh
-pi install git:github.com/tt-a1i/openpi
+pi install git:github.com/openpi-dev/openpi
 ```
 
 Pi installs the package dependencies automatically. Restart Pi or run `/reload` after installation.

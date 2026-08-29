@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
-  <a href="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
@@ -30,11 +30,11 @@ pi install npm:@tt-a1i/openpi
 ```
 
 <p align="center">
-  <a href="https://tt-a1i.github.io/openpi/"><strong>项目网站</strong></a> ·
+  <a href="https://openpi-dev.github.io/openpi/"><strong>项目网站</strong></a> ·
   <a href="#30-秒开始"><strong>立即开始</strong></a> ·
   <a href="#默认轻按需强">为什么默认更轻</a> ·
   <a href="#运行模型">看看它怎么工作</a> ·
-  <a href="https://github.com/tt-a1i/openpi/issues/22">查看 Benchmark</a>
+  <a href="https://github.com/openpi-dev/openpi/issues/22">查看 Benchmark</a>
 </p>
 
 <p align="center">
@@ -426,7 +426,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 - Pi `0.84.1` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
-- GitHub 安装：`pi install git:github.com/tt-a1i/openpi`。
+- GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
 
 #### 开发运行时：区分 npm 与当前源码
 
@@ -445,7 +445,7 @@ pi list
 **2. 开发时让 Pi 直接加载当前 checkout**
 
 ```bash
-git clone https://github.com/tt-a1i/openpi.git ~/work/openpi
+git clone https://github.com/openpi-dev/openpi.git ~/work/openpi
 cd ~/work/openpi
 bun install --frozen-lockfile
 
@@ -633,7 +633,7 @@ bun run test
 
 npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm Registry 安装 OpenPI。
 
-测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [`docs/design/`](docs/design/)，问题请提交到 [GitHub Issues](https://github.com/tt-a1i/openpi/issues)。
+测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [`docs/design/`](docs/design/)，问题请提交到 [GitHub Issues](https://github.com/openpi-dev/openpi/issues)。
 
 ---
 
