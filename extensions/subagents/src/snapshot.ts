@@ -361,8 +361,8 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
   const errorText = snapshot.errorText
     ? trimText(snapshot.errorText, options.coreBytes)
     : undefined;
-  // This is a recovery reference, not display text. A partial path is not a
-  // usable artifact reference, so a candidate that cannot retain it fails.
+  // This is a compact recovery reference, not display text. It is retained
+  // only as an already-validated digest identity.
   const resultArtifact = snapshot.resultArtifact;
   const meta = compactMeta(snapshot.meta);
   const transcript = options.includeDisplay
@@ -411,6 +411,10 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
     prompt: prompt.text,
     cwd: cwd.text,
     status: snapshot.status,
+    ...(snapshot.outcome ? { outcome: snapshot.outcome } : {}),
+    ...(snapshot.worktreeBranch
+      ? { worktreeBranch: snapshot.worktreeBranch }
+      : {}),
     createdAt: snapshot.createdAt,
     ...(snapshot.settledAt !== undefined
       ? { settledAt: snapshot.settledAt }
@@ -425,6 +429,7 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
         ? { contextWindow: snapshot.usage.contextWindow }
         : {}),
     },
+    transcriptVersion: snapshot.transcriptVersion,
     transcript: transcript.items,
     ...(snapshot.liveAssistant
       ? {
@@ -611,196 +616,4 @@ export function measureSubagentSnapshotsBytes(
   snapshots: ReadonlyArray<SubagentSnapshot>,
 ) {
   return jsonBytes(snapshots);
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === "number" && Number.isFinite(value);
-}
-
-function isNonNegativeInteger(value: unknown): value is number {
-  return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
-}
-
-function isSubagentMeta(value: unknown): value is SubagentMeta {
-  if (!isRecord(value) || value.backend !== "pi") return false;
-  return (
-    (value.modelLabel === undefined || typeof value.modelLabel === "string") &&
-    (value.contextWindow === undefined ||
-      isFiniteNumber(value.contextWindow)) &&
-    (value.sessionFilePath === undefined ||
-      typeof value.sessionFilePath === "string")
-  );
-}
-
-function isTranscriptPart(value: unknown): value is TranscriptPart {
-  if (!isRecord(value) || typeof value.type !== "string") return false;
-  if (value.type === "text" || value.type === "thinking") {
-    return (
-      typeof value.text === "string" &&
-      (value.type === "text" ||
-        value.redacted === undefined ||
-        typeof value.redacted === "boolean")
-    );
-  }
-  return (
-    value.type === "toolCall" &&
-    typeof value.toolId === "string" &&
-    typeof value.name === "string" &&
-    (value.argsPreview === undefined || typeof value.argsPreview === "string")
-  );
-}
-
-function isTranscriptItem(value: unknown): value is TranscriptItem {
-  if (!isRecord(value) || typeof value.kind !== "string") return false;
-  if (value.kind === "user") return typeof value.text === "string";
-  if (value.kind === "assistant") {
-    return Array.isArray(value.parts) && value.parts.every(isTranscriptPart);
-  }
-  return (
-    value.kind === "toolResult" &&
-    typeof value.toolId === "string" &&
-    typeof value.name === "string" &&
-    typeof value.isError === "boolean" &&
-    (value.outputPreview === undefined ||
-      typeof value.outputPreview === "string")
-  );
-}
-
-function isLiveToolState(value: unknown): value is LiveToolState {
-  return (
-    isRecord(value) &&
-    typeof value.toolId === "string" &&
-    typeof value.name === "string" &&
-    (value.argsPreview === undefined ||
-      typeof value.argsPreview === "string") &&
-    (value.outputPreview === undefined ||
-      typeof value.outputPreview === "string") &&
-    (value.done === undefined || typeof value.done === "boolean") &&
-    (value.isError === undefined || typeof value.isError === "boolean")
-  );
-}
-
-function isQueuedMessage(value: unknown): value is QueuedMessage {
-  return (
-    isRecord(value) &&
-    typeof value.text === "string" &&
-    (value.kind === "steer" || value.kind === "follow-up")
-  );
-}
-
-function isSnapshotProjection(
-  value: unknown,
-): value is SubagentSnapshotProjection {
-  if (!isRecord(value)) return false;
-  const omitted = value.omitted;
-  return (
-    isNonNegativeInteger(value.maxBytes) &&
-    isNonNegativeInteger(value.bytes) &&
-    typeof value.truncated === "boolean" &&
-    isNonNegativeInteger(value.omittedBytes) &&
-    isRecord(omitted) &&
-    isNonNegativeInteger(omitted.transcriptItems) &&
-    isNonNegativeInteger(omitted.liveTools) &&
-    isNonNegativeInteger(omitted.queued) &&
-    isNonNegativeInteger(omitted.liveAssistantBytes) &&
-    isNonNegativeInteger(omitted.finalTextBytes) &&
-    isNonNegativeInteger(omitted.promptBytes)
-  );
-}
-
-function isSubagentSnapshot(value: unknown): value is SubagentSnapshot {
-  if (!isRecord(value)) return false;
-  const usage = value.usage;
-  const liveAssistant = value.liveAssistant;
-  return (
-    typeof value.id === "string" &&
-    (value.origin === "model" || value.origin === "btw") &&
-    value.backend === "pi" &&
-    typeof value.title === "string" &&
-    typeof value.prompt === "string" &&
-    typeof value.cwd === "string" &&
-    (value.status === "running" ||
-      value.status === "done" ||
-      value.status === "error") &&
-    isFiniteNumber(value.createdAt) &&
-    (value.settledAt === undefined || isFiniteNumber(value.settledAt)) &&
-    (value.errorText === undefined || typeof value.errorText === "string") &&
-    isSubagentMeta(value.meta) &&
-    isRecord(usage) &&
-    (usage.tokens === undefined || isFiniteNumber(usage.tokens)) &&
-    (usage.contextWindow === undefined ||
-      isFiniteNumber(usage.contextWindow)) &&
-    Array.isArray(value.transcript) &&
-    value.transcript.every(isTranscriptItem) &&
-    (liveAssistant === undefined ||
-      (isRecord(liveAssistant) &&
-        typeof liveAssistant.text === "string" &&
-        typeof liveAssistant.thinking === "string")) &&
-    Array.isArray(value.liveTools) &&
-    value.liveTools.every(isLiveToolState) &&
-    Array.isArray(value.queued) &&
-    value.queued.every(isQueuedMessage) &&
-    typeof value.finalText === "string" &&
-    (value.resultArtifact === undefined ||
-      (typeof value.resultArtifact === "string" &&
-        value.resultArtifact.length > 0)) &&
-    isNonNegativeInteger(value.turns) &&
-    (value.snapshot === undefined || isSnapshotProjection(value.snapshot))
-  );
-}
-
-/** Parse only bounded persisted snapshot data; oversized legacy data fails closed. */
-export function parseSubagentSnapshot(
-  raw: string,
-  maxBytes = DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
-) {
-  if (
-    typeof raw !== "string" ||
-    !Number.isSafeInteger(maxBytes) ||
-    maxBytes <= 0 ||
-    byteLength(raw) > maxBytes
-  )
-    return undefined;
-  try {
-    const value: unknown = JSON.parse(raw);
-    return isSubagentSnapshot(value)
-      ? projectSubagentSnapshot(value, maxBytes)
-      : undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** Bounded parser for an aggregate snapshot persisted by a future host. */
-export function parseSubagentSnapshots(
-  raw: string,
-  maxBytes = DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
-) {
-  if (
-    typeof raw !== "string" ||
-    !Number.isSafeInteger(maxBytes) ||
-    maxBytes <= 0 ||
-    byteLength(raw) > maxBytes
-  )
-    return undefined;
-  try {
-    const value: unknown = JSON.parse(raw);
-    const snapshots = Array.isArray(value)
-      ? value
-      : value &&
-          typeof value === "object" &&
-          Array.isArray((value as { snapshots?: unknown }).snapshots)
-        ? (value as { snapshots: unknown[] }).snapshots
-        : undefined;
-    if (!snapshots) return undefined;
-    if (snapshots.some((snapshot) => !isSubagentSnapshot(snapshot)))
-      return undefined;
-    return projectSubagentSnapshots(snapshots, maxBytes);
-  } catch {
-    return undefined;
-  }
 }

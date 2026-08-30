@@ -1,16 +1,17 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import type {
+  ResultArtifactRef,
+  SubagentSnapshot,
+} from "../../../extensions/subagents/src/domain.ts";
 import {
   measureSubagentSnapshotBytes,
   measureSubagentSnapshotsBytes,
-  parseSubagentSnapshot,
-  parseSubagentSnapshots,
   projectSubagentSnapshot,
   projectSubagentSnapshots,
   truncateUtf8Head,
   truncateUtf8Tail,
 } from "../../../extensions/subagents/src/snapshot.ts";
-import type { SubagentSnapshot } from "../../../extensions/subagents/src/domain.ts";
 
 function snapshot(id: string, overrides: Partial<SubagentSnapshot> = {}) {
   return {
@@ -25,6 +26,7 @@ function snapshot(id: string, overrides: Partial<SubagentSnapshot> = {}) {
     settledAt: 2,
     meta: { backend: "pi" as const, modelLabel: "test/model" },
     usage: { tokens: 10, contextWindow: 1000 },
+    transcriptVersion: 0,
     transcript: [
       { kind: "user" as const, text: "Inspect this" },
       {
@@ -88,6 +90,24 @@ test("aggregate projection gives every agent identity under one UTF-8 cap", () =
   assert.ok(projected.every((entry) => entry.snapshot?.truncated));
 });
 
+test("projection is detached and leaves its source transcript intact", () => {
+  const source = snapshot("source", {
+    transcript: Array.from({ length: 80 }, (_, index) => ({
+      kind: "user" as const,
+      text: `message ${index}`,
+    })),
+    finalText: `BEGIN\n${"evidence\n".repeat(10_000)}END`,
+  });
+  const originalTranscript = source.transcript;
+  const projected = projectSubagentSnapshot(source, 4096);
+
+  assert.ok(projected);
+  assert.equal(source.transcript, originalTranscript);
+  assert.equal(source.transcript.length, 80);
+  assert.notEqual(projected.transcript, source.transcript);
+  assert.notEqual(projected.finalText, source.finalText);
+});
+
 test("reprojecting does not inflate omission statistics", () => {
   const source = snapshot("repeat", {
     finalText: "首" + "中".repeat(20_000) + "尾",
@@ -105,50 +125,20 @@ test("reprojecting does not inflate omission statistics", () => {
 });
 
 test("artifact references remain exact while display text is projected", () => {
-  const artifactPath =
-    "C:/cache/openpi/subagent-results/" + "a".repeat(120) + ".txt";
+  const artifactRef: ResultArtifactRef = {
+    version: 1,
+    digest: "a".repeat(64),
+  };
   const projected = projectSubagentSnapshot(
     snapshot("artifact", {
-      resultArtifact: artifactPath,
+      resultArtifact: artifactRef,
       finalText: "中".repeat(20_000),
     }),
     4096,
   );
   assert.ok(projected);
-  assert.equal(projected.resultArtifact, artifactPath);
+  assert.deepEqual(projected.resultArtifact, artifactRef);
   assert.equal(projected.snapshot?.truncated, true);
-});
-
-test("persisted snapshot parsers reject malformed nested values and oversized input", () => {
-  const valid = snapshot("valid");
-  assert.equal(parseSubagentSnapshot(JSON.stringify(valid), 4096)?.id, "valid");
-  assert.equal(
-    parseSubagentSnapshot(
-      JSON.stringify({
-        ...valid,
-        transcript: [{ kind: "assistant", parts: [null] }],
-      }),
-      4096,
-    ),
-    undefined,
-  );
-  assert.equal(
-    parseSubagentSnapshot(
-      JSON.stringify({ ...valid, usage: { tokens: "many" } }),
-      4096,
-    ),
-    undefined,
-  );
-  assert.equal(parseSubagentSnapshot('{"id":', 4096), undefined);
-  assert.equal(parseSubagentSnapshot("中".repeat(100), 64), undefined);
-  assert.equal(
-    parseSubagentSnapshots(
-      JSON.stringify({ snapshots: [{ ...valid, liveTools: [{ toolId: 1 }] }] }),
-      4096,
-    ),
-    undefined,
-  );
-  assert.equal(parseSubagentSnapshots("[]", 0), undefined);
 });
 
 test("projection fails when the minimum identity cannot fit", () => {

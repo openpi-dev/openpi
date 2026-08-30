@@ -4,15 +4,15 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { type TUI, visibleWidth } from "@earendil-works/pi-tui";
 import type { SubagentSnapshot } from "../../../extensions/subagents/src/domain.ts";
 import type { SubagentReadModel } from "../../../extensions/subagents/src/manager.ts";
 import {
-  reconcileDashboardSelection,
-  sanitizeSubagentDisplayLine,
-  SubagentDashboard,
-  TakeoverView,
   type DashboardSelection,
+  reconcileDashboardSelection,
+  SubagentDashboard,
+  sanitizeSubagentDisplayLine,
+  TakeoverView,
 } from "../../../extensions/subagents/src/ui/takeover.ts";
 
 const theme = {
@@ -198,6 +198,37 @@ test("chrome rows stay width-bounded and takeover uses three rules", () => {
   } finally {
     pick.dispose();
     takeover.dispose();
+  }
+});
+
+test("takeover rehydrates the full snapshot instead of the bounded projection", () => {
+  const projected = snap("run", "done", {
+    transcript: [
+      {
+        kind: "assistant",
+        parts: [{ type: "text", text: "bounded projection only" }],
+      },
+    ],
+  });
+  const full = snap("run", "done", {
+    transcript: [
+      {
+        kind: "assistant",
+        parts: [{ type: "text", text: "complete retained history" }],
+      },
+    ],
+  });
+  const list: SubagentReadModel = {
+    ...model([projected]),
+    getFull: (id) => (id === "run" ? full : undefined),
+  };
+  const view = new TakeoverView(tui(), theme, keys, "run", list, () => {});
+  try {
+    const output = view.render(80).join("\n");
+    assert.match(output, /complete retained history/);
+    assert.doesNotMatch(output, /bounded projection only/);
+  } finally {
+    view.dispose();
   }
 });
 

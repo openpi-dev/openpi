@@ -10,6 +10,7 @@
  * - subagent_wait: block until the listed subagents settle, return results.
  * - subagent_cancel: stop one or more running subagents.
  * - subagent_check: peek at a subagent's status and recent activity.
+ * - subagent_result: read bounded pages of a settled exact result by subagent id.
  * - subagent_list: list all subagents.
  *
  * Unawaited subagents queue their result as a follow-up message when they
@@ -74,7 +75,7 @@ import {
   allocateResultBudgets,
   type ParentContextUsage,
 } from "../shared/result-budget.ts";
-import { loadSetupConfig, type DetailDisplay } from "../shared/setup-config.ts";
+import { type DetailDisplay, loadSetupConfig } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -87,9 +88,9 @@ import {
 } from "../shared/worktree.ts";
 import {
   normalizeSubagentTitle,
+  SubagentStripWidget,
   selectSubagentStripEntry,
   subagentStripEntryKey,
-  SubagentStripWidget,
 } from "./navigation.ts";
 import {
   type AgentType,
@@ -123,19 +124,26 @@ import {
   SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS,
   SUBAGENT_CHECK_TOOL_DESCRIPTION,
   SUBAGENT_LIST_TOOL_DESCRIPTION,
+  SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_RESULT_TOOL_DESCRIPTION,
   SUBAGENT_SEND_PARAMETER_DESCRIPTIONS,
   SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
-  stripSubagentResultTransportInstruction,
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
+  stripSubagentResultTransportInstruction,
 } from "./src/prompt.ts";
 import {
+  isResultArtifactRef,
+  MAX_RESULT_PAGE_BYTES,
+  MAX_RESULT_PAGE_LINES,
+  pageResultText,
   persistResultArtifact,
   projectResult,
-  readResultArtifact,
   type ResultProjection,
+  readResultArtifact,
+  resolveExactResultText,
 } from "./src/result-artifact.ts";
 import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
@@ -145,8 +153,8 @@ import {
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
-  renderWaitResultPreview,
   renderWaitResult,
+  renderWaitResultPreview,
   type WaitResultDetails,
 } from "./src/ui/wait-result.ts";
 
@@ -206,7 +214,7 @@ interface SubagentProjectionDetails {
   readonly truncated: boolean;
   readonly omittedBytes: number;
   readonly omitted: NonNullable<SubagentSnapshot["snapshot"]>["omitted"];
-  readonly resultArtifact?: string;
+  readonly exactResultAvailable?: boolean;
 }
 
 interface SubagentResultEntryData {
@@ -236,39 +244,45 @@ function describeSubagent(snap: SubagentSnapshot) {
 }
 
 function exactResultText(snap: SubagentSnapshot): string | undefined {
-  if (!snap.resultArtifact) return undefined;
-  return readResultArtifact(snap.resultArtifact);
+  if (!isResultArtifactRef(snap.resultArtifact)) return undefined;
+  return readResultArtifact(getAgentDir(), snap.resultArtifact);
 }
 
 function resultText(snap: SubagentSnapshot): string {
   const artifact = exactResultText(snap);
-  if (snap.resultArtifact && artifact === undefined) {
-    throw new Error(
-      `The exact subagent result artifact is unavailable: ${snap.resultArtifact}`,
-    );
-  }
+  // Retention and best-effort writes can make a prior recovery path disappear.
+  // A cache miss must degrade to the retained result, never suppress delivery.
   return artifact !== undefined
     ? artifact || "(no output)"
     : snap.finalText || "(no output)";
+}
+
+function withCanonicalResult(
+  snap: SubagentSnapshot,
+  result: Pick<SubagentSnapshot, "finalText" | "resultArtifact"> | undefined,
+) {
+  if (!result) return { snap, resultIsCanonical: false };
+  return {
+    snap: {
+      ...snap,
+      finalText: result.finalText,
+      resultArtifact: result.resultArtifact,
+    },
+    resultIsCanonical: true,
+  };
 }
 
 function projectionDetails(
   snap: SubagentSnapshot,
 ): SubagentProjectionDetails | undefined {
   const projection = snap.snapshot;
-  if (!projection?.truncated && !snap.resultArtifact) return undefined;
+  if (!projection?.truncated) return undefined;
+  const exactResultAvailable = exactResultText(snap) !== undefined;
   return {
-    truncated: projection?.truncated ?? false,
-    omittedBytes: projection?.omittedBytes ?? 0,
-    omitted: projection?.omitted ?? {
-      transcriptItems: 0,
-      liveTools: 0,
-      queued: 0,
-      liveAssistantBytes: 0,
-      finalTextBytes: 0,
-      promptBytes: 0,
-    },
-    ...(snap.resultArtifact ? { resultArtifact: snap.resultArtifact } : {}),
+    truncated: true,
+    omittedBytes: projection.omittedBytes,
+    omitted: projection.omitted,
+    ...(exactResultAvailable ? { exactResultAvailable: true } : {}),
   };
 }
 
@@ -288,58 +302,49 @@ function projectionNotice(snap: SubagentSnapshot): string | undefined {
     projection.omitted.finalTextBytes > 0 ? "final output" : undefined,
   ].filter((value): value is string => value !== undefined);
   const detail = omitted.length > 0 ? omitted.join(", ") : "display data";
-  return `snapshot truncated: ${detail} omitted${snap.resultArtifact ? "; exact result artifact available" : ""}`;
+  const hasExactArtifact = exactResultText(snap) !== undefined;
+  return `snapshot truncated: ${detail} omitted${hasExactArtifact ? "; exact result artifact available" : ""}`;
 }
 
 export function truncatedOutput(
   snap: SubagentSnapshot,
   maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
-  writeArtifact: (content: string) => string = (content) =>
+  writeArtifact: (content: string) => unknown = (content) =>
     persistResultArtifact(getAgentDir(), content),
-): string {
-  const artifactPath = snap.resultArtifact;
+  resultOptions: { readonly resultIsCanonical?: boolean } = {},
+): ResultProjection {
   const artifact = exactResultText(snap);
-  if (artifactPath && artifact === undefined) {
-    throw new Error(
-      `The exact subagent result artifact is unavailable: ${artifactPath}`,
-    );
-  }
   const output =
-    artifact !== undefined ? artifact || "(no output)" : snap.finalText || "(no output)";
+    artifact !== undefined
+      ? artifact || "(no output)"
+      : snap.finalText || "(no output)";
   // A projected finalText is not authoritative. Do not create a second
   // artifact containing only that projection when the original artifact is
-  // unavailable.
-  const finalTextWasOmitted = (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0;
-  const persist =
-    artifact !== undefined || !finalTextWasOmitted
-      ? artifact !== undefined && artifactPath
-        ? () => artifactPath
-        : writeArtifact
+  // unavailable. A cache miss with a complete retained result can safely
+  // repopulate the cache on demand.
+  const finalTextWasOmitted =
+    !resultOptions.resultIsCanonical &&
+    (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0;
+  const artifactAvailable = artifact !== undefined;
+  const persist = artifactAvailable
+    ? () => undefined
+    : !finalTextWasOmitted
+      ? writeArtifact
       : () => {
           throw new Error("The exact subagent result artifact is unavailable");
         };
   return projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
+    recoveryId: snap.id,
+    artifactAvailable,
     writeArtifact: persist,
-  }).text;
-}
-
-function projectSubagentOutput(
-  snap: SubagentSnapshot,
-  maxBytes: number,
-): ResultProjection {
-  const output = snap.finalText || "(no output)";
-  return projectResult(output, {
-    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
-    maxLines: Math.min(600, DEFAULT_MAX_LINES),
-    writeArtifact: (content) => persistResultArtifact(getAgentDir(), content),
   });
 }
 
 type OutputProjection = Pick<
   ResultProjection,
-  "text" | "artifactPath" | "artifactSaveFailed"
+  "text" | "artifactPersisted" | "artifactSaveFailed"
 >;
 
 function normalizeProjection(
@@ -371,7 +376,7 @@ export function createSubagentResultDispatcher(
   outputFor: (
     snap: SubagentSnapshot,
     maxBytes: number,
-  ) => string | OutputProjection = projectSubagentOutput,
+  ) => string | OutputProjection = truncatedOutput,
   getContextUsage: () => ParentContextUsage | undefined = () => undefined,
 ) {
   return (snaps: readonly SubagentSnapshot[]) => {
@@ -450,7 +455,9 @@ export function createSubagentResultDispatcher(
                 ? { worktreeBranch: snaps[0]!.worktreeBranch }
                 : {}),
               elapsed: formatElapsed(snaps[0]!),
-              ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
+              ...(projections[0]!.artifactPersisted
+                ? { fullResultSaved: true }
+                : {}),
               ...(projections[0]!.artifactSaveFailed
                 ? { artifactSaveFailed: true }
                 : {}),
@@ -470,7 +477,7 @@ export function createSubagentResultDispatcher(
                   ? { worktreeBranch: snap.worktreeBranch }
                   : {}),
                 elapsed: formatElapsed(snap),
-                ...(projections[index]!.artifactPath
+                ...(projections[index]!.artifactPersisted
                   ? { fullResultSaved: true }
                   : {}),
                 ...(projections[index]!.artifactSaveFailed
@@ -598,7 +605,7 @@ export default function (
   let dashboardOpen = false;
   const dispatchResults = createSubagentResultDispatcher(
     pi,
-    projectSubagentOutput,
+    truncatedOutput,
     () => sessionContext?.getContextUsage(),
   );
   const resultDelivery = createSubagentResultDelivery<SubagentSnapshot>({
@@ -748,7 +755,7 @@ export default function (
       status: snap.status,
       errorText: snap.errorText,
       prompt: snap.prompt,
-      answer: truncatedOutput(snap),
+      answer: truncatedOutput(snap).text,
       sessionFilePath: snap.meta.sessionFilePath,
     });
     ui?.notify(
@@ -1175,16 +1182,23 @@ export default function (
             readonly id: string;
             readonly snap: SubagentSnapshot;
             readonly header: string;
+            readonly resultIsCanonical: boolean;
           }
       > = ids.map((id) => {
         const snap = manager.view.get(id);
         if (!snap) return { id, section: `## ${id}\n\n(no longer tracked)` };
+        const result = withCanonicalResult(snap, manager.view.getResult?.(id));
         const verb = snap.status === "error" ? "failed" : "finished";
         let header = `## ${snap.id} "${snap.title}" ${verb}`;
         if (snap.errorText) header += `\nError: ${snap.errorText}`;
         const projection = projectionNotice(snap);
         if (projection) header += `\n[${projection}]`;
-        return { id, snap, header };
+        return {
+          id,
+          snap: result.snap,
+          header,
+          resultIsCanonical: result.resultIsCanonical,
+        };
       });
       const separatorsBytes = Math.max(0, entries.length - 1) * 7;
       const fixedBytes =
@@ -1205,6 +1219,7 @@ export default function (
           readonly id: string;
           readonly snap: SubagentSnapshot;
           readonly header: string;
+          readonly resultIsCanonical: boolean;
         } => "snap" in entry,
       );
       const projectionBatchBytes = Math.max(
@@ -1212,7 +1227,9 @@ export default function (
         WAIT_OUTPUT_MAX_BYTES - fixedBytes,
       );
       const allocation = allocateResultBudgets(
-        resultEntries.map(({ snap }) => Buffer.byteLength(resultText(snap), "utf8")),
+        resultEntries.map(({ snap }) =>
+          Buffer.byteLength(resultText(snap), "utf8"),
+        ),
         ctx.getContextUsage(),
         {
           maxBatchBytes: projectionBatchBytes,
@@ -1229,9 +1246,14 @@ export default function (
       const sections = entries.map((entry) => {
         if ("section" in entry) return entry.section;
         const outputBudget = allocation.budgets[resultIndex++]!;
-        const projection = projectSubagentOutput(entry.snap, outputBudget);
+        const projection = truncatedOutput(
+          entry.snap,
+          outputBudget,
+          undefined,
+          { resultIsCanonical: entry.resultIsCanonical },
+        );
         if (projection.artifactSaveFailed) artifactSaveFailures.add(entry.id);
-        if (projection.artifactPath) fullResultsSaved.add(entry.id);
+        if (projection.artifactPersisted) fullResultsSaved.add(entry.id);
         return `${entry.header}\n\n${projection.text}`;
       });
 
@@ -1430,15 +1452,25 @@ export default function (
       let text = `${describeSubagent(snap)}\nTurns: ${snap.turns}`;
       if (snap.errorText) text += `\nError: ${snap.errorText}`;
 
+      const result =
+        snap.status === "running"
+          ? undefined
+          : withCanonicalResult(snap, manager.view.getResult?.(snap.id));
+      const resultSnap = result?.snap ?? snap;
       const output =
-        snap.status === "running" ? latestText(snap) : resultText(snap);
+        snap.status === "running" ? latestText(snap) : resultText(resultSnap);
       if (output && output !== "(no output)") {
         const preview =
           snap.status === "running"
             ? truncateHead(output, { maxBytes: 2048, maxLines: 20 })
             : (() => {
-                const content = truncatedOutput(snap, 2048);
-                return { content, truncated: content !== output };
+                const projected = truncatedOutput(resultSnap, 2048, undefined, {
+                  resultIsCanonical: result?.resultIsCanonical,
+                });
+                return {
+                  content: projected.text,
+                  truncated: projected.truncated || projected.text !== output,
+                };
               })();
         text += `\n\nLatest output:\n${preview.content}`;
         if (preview.truncated) text += "\n[...]";
@@ -1455,6 +1487,84 @@ export default function (
           ...(projectionDetails(snap)
             ? { projection: projectionDetails(snap) }
             : {}),
+        },
+      };
+    },
+  });
+
+  pi.registerTool({
+    name: "subagent_result",
+    label: "Read Subagent Result",
+    description: SUBAGENT_RESULT_TOOL_DESCRIPTION,
+    parameters: Type.Object({
+      id: Type.String({
+        description: SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS.id,
+      }),
+      offset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS.offset,
+        }),
+      ),
+      limit: Type.Optional(
+        Type.Integer({
+          minimum: 1,
+          maximum: MAX_RESULT_PAGE_LINES,
+          description: SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS.limit,
+        }),
+      ),
+    }),
+    async execute(_toolCallId, params) {
+      const manager = await getManager();
+      const snap = manager.view.get(params.id);
+      if (!snap || !isModelVisible(snap)) {
+        const known = manager.view
+          .list()
+          .filter(isModelVisible)
+          .map((s) => s.id);
+        throw new Error(
+          `Unknown subagent id "${params.id}". Known: ${known.join(", ") || "none"}.`,
+        );
+      }
+      if (snap.status === "running") {
+        throw new Error(
+          `Subagent ${snap.id} is still running; use subagent_wait or wait for automatic delivery.`,
+        );
+      }
+
+      const canonical = withCanonicalResult(
+        snap,
+        manager.view.getResult?.(snap.id),
+      );
+      const artifact = exactResultText(canonical.snap);
+      // Prefer the protected artifact. Fall back to retained canonical
+      // finalText, never to a truncated projection.
+      const exact = resolveExactResultText({
+        artifactText: artifact,
+        retainedFinalText: canonical.snap.finalText,
+        resultIsCanonical: canonical.resultIsCanonical,
+        omittedFinalTextBytes:
+          canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
+      });
+      if (exact === undefined) {
+        throw new Error(
+          `Exact result for ${snap.id} is unavailable; the bounded projection is not a recovery source.`,
+        );
+      }
+      const page = pageResultText(exact, {
+        offset: params.offset,
+        limit: params.limit,
+        maxBytes: MAX_RESULT_PAGE_BYTES,
+      });
+      return {
+        content: [{ type: "text", text: page.text }],
+        details: {
+          id: snap.id,
+          offset: page.offset,
+          limit: page.limit,
+          totalLines: page.totalLines,
+          hasMore: page.hasMore,
+          ...(artifact !== undefined ? { exactResultAvailable: true } : {}),
         },
       };
     },

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -14,11 +15,19 @@ import subagents, {
   createSubagentResultDispatcher,
   truncatedOutput,
 } from "../../../extensions/subagents/index.ts";
+import type { ResultArtifactRef } from "../../../extensions/subagents/src/domain.ts";
 import { projectResult } from "../../../extensions/subagents/src/result-artifact.ts";
 
 initTheme("dark", false);
 
 const emptySessionManager = { getBranch: () => [] };
+
+function artifactRef(seed: string): ResultArtifactRef {
+  return {
+    version: 1,
+    digest: createHash("sha256").update(seed, "utf8").digest("hex"),
+  };
+}
 
 test("subagent results render before the hidden wake-up message", () => {
   const events: unknown[] = [];
@@ -92,7 +101,7 @@ test("subagent results render before the hidden wake-up message", () => {
 test("automatic result projection keeps both ends and persists the exact final answer", () => {
   const finalText = `BEGIN\n${"evidence\n".repeat(100)}FINAL-VERDICT`;
   let persisted = "";
-  const text = truncatedOutput(
+  const projected = truncatedOutput(
     {
       id: "sa-3",
       origin: "model",
@@ -119,10 +128,99 @@ test("automatic result projection keeps both ends and persists the exact final a
     },
   );
 
+  const text = projected.text;
   assert.equal(persisted, finalText);
+  assert.equal(projected.artifactPersisted, true);
   assert.match(text, /^BEGIN/);
   assert.match(text, /FINAL-VERDICT/);
-  assert.match(text, /Full final answer: "\/tmp\/subagent-final\.txt"/);
+  assert.match(
+    text,
+    /Full final answer available via subagent_result\(id="sa-3"/,
+  );
+  assert.doesNotMatch(text, /\/tmp\/subagent-final\.txt/);
+});
+
+test("an evicted exact-result artifact falls back to the retained result", () => {
+  const text = truncatedOutput(
+    {
+      id: "sa-evicted",
+      origin: "model",
+      backend: "pi",
+      title: "inspect",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "retained fallback result",
+      resultArtifact: artifactRef("missing-result"),
+      turns: 1,
+    },
+    4096,
+  ).text;
+
+  assert.equal(text, "retained fallback result");
+});
+
+test("a canonical fallback rehydrates a projected result after artifact eviction", () => {
+  const finalText = `BEGIN\n${"middle evidence\n".repeat(100)}FINAL-VERDICT`;
+  let persisted = "";
+  const projected = truncatedOutput(
+    {
+      id: "sa-canonical",
+      origin: "model",
+      backend: "pi",
+      title: "inspect",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText,
+      resultArtifact: artifactRef("evicted-result"),
+      snapshot: {
+        maxBytes: 1024,
+        bytes: 1024,
+        truncated: true,
+        omittedBytes: 1000,
+        omitted: {
+          transcriptItems: 0,
+          liveTools: 0,
+          queued: 0,
+          liveAssistantBytes: 0,
+          finalTextBytes: 1000,
+          promptBytes: 0,
+        },
+      },
+      turns: 1,
+    },
+    120,
+    (content) => {
+      persisted = content;
+      return "/tmp/recovered-subagent-result.txt";
+    },
+    { resultIsCanonical: true },
+  );
+  const text = projected.text;
+
+  assert.equal(persisted, finalText);
+  assert.equal(projected.artifactPersisted, true);
+  assert.match(text, /^BEGIN/);
+  assert.match(text, /FINAL-VERDICT/);
+  assert.match(text, /subagent_result\(id="sa-canonical"/);
+  assert.doesNotMatch(text, /recovered-subagent-result/);
 });
 
 test("automatic projection carries artifact save failures into result details", () => {
@@ -180,7 +278,7 @@ test("automatic projection carries canonical outcome and recovery metadata", () 
   const dispatch = createSubagentResultDispatcher(pi, () => ({
     text: "projected result",
     truncated: true,
-    artifactPath: "/tmp/subagent-final.txt",
+    artifactPersisted: true,
   }));
 
   dispatch([
@@ -314,7 +412,7 @@ test("automatic result wrappers and projections stay inside the shared batch cap
       projectResult(snap.finalText, {
         maxBytes,
         maxLines: 600,
-        writeArtifact: () => `/tmp/${snap.id}.txt`,
+        writeArtifact: () => `/${"x".repeat(10_000)}`,
       }).text,
   );
   const snapshot = (id: string) => ({
@@ -345,6 +443,7 @@ test("automatic result wrappers and projections stay inside the shared batch cap
   ]);
 
   assert.ok(Buffer.byteLength(delivered, "utf8") <= 48 * 1024);
+  assert.doesNotMatch(delivered, /x{1000}/);
   for (const id of ["sa-1", "sa-2", "sa-3", "sa-4"]) {
     assert.match(delivered, new RegExp(`BEGIN-${id}`));
     assert.match(delivered, new RegExp(`END-${id}`));
@@ -598,6 +697,7 @@ test("session start preserves the complete registered subagent family", () => {
       "subagent_cancel",
       "subagent_send",
       "subagent_check",
+      "subagent_result",
       "subagent_list",
     ],
   );
@@ -667,6 +767,10 @@ test("the complete subagent family fails closed before the first spawn", async (
     );
     await assert.rejects(
       invoke("subagent_send", { id: "sa-missing", text: "hello" }),
+      /Unknown subagent id "sa-missing"\. Known: none\./,
+    );
+    await assert.rejects(
+      invoke("subagent_result", { id: "sa-missing" }),
       /Unknown subagent id "sa-missing"\. Known: none\./,
     );
     for (const name of ["subagent_wait", "subagent_cancel"]) {

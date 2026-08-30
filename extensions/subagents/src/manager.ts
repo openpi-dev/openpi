@@ -26,33 +26,35 @@ import {
   Scope,
   Stream,
 } from "effect";
-import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
+import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
   LiveToolState,
+  ResultArtifactRef,
   RunOutcome,
   SpawnTask,
   SubagentEvent,
-  SubagentOrigin,
   SubagentMeta,
+  SubagentOrigin,
   SubagentSnapshot,
   SubagentStatus,
   TranscriptItem,
 } from "./domain.ts";
-import {
-  DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
-  projectSubagentSnapshots,
-  truncateUtf8Head,
-  truncateUtf8Tail,
-} from "./snapshot.ts";
 import {
   BackendUnavailableError,
   ConcurrencyLimitError,
   SendError,
   SpawnError,
 } from "./domain.ts";
+import { resultArtifactRefMatchesContent } from "./result-artifact.ts";
+import {
+  DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
+  projectSubagentSnapshots,
+  truncateUtf8Head,
+  truncateUtf8Tail,
+} from "./snapshot.ts";
 
 /** Model-spawned subagents get their own pool so a user aside cannot starve it. */
 export const MAX_RUNNING = 4;
@@ -78,9 +80,14 @@ const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
 const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
 const MAX_TRANSCRIPT_ITEMS = 512;
 const MAX_QUEUE_MESSAGES = 128;
+const MAX_RETAINED_FINAL_TEXT_BYTES = 1 * 1024 * 1024;
 
 function bounded(text: string) {
   return truncateUtf8Head(text, ERROR_TEXT_MAX_LENGTH);
+}
+
+function boundedFinalText(text: string) {
+  return truncateUtf8Head(text, MAX_RETAINED_FINAL_TEXT_BYTES);
 }
 
 function formatWatchdogTimeout(ms: number) {
@@ -129,13 +136,15 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
-  resultArtifact?: string;
+  resultArtifact?: ResultArtifactRef;
   turns: number;
-  snapshot?: SubagentSnapshot["snapshot"];
 }
 
 interface Entry {
+  /** Canonical state used to fold backend events and rehydrate takeover UI. */
   snapshot: MutableSnapshot;
+  /** Detached aggregate-bounded projection for ordinary readers and tools. */
+  projection?: SubagentSnapshot;
   session: SubagentSession;
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
@@ -149,11 +158,24 @@ interface Entry {
 
 // --- Read model ----------------------------------------------------------------
 
-/** Synchronous bridge for the TUI. Snapshots are live objects; do not mutate. */
+/** Synchronous bridge for bounded readers and the local takeover UI. */
 export interface SubagentReadModel {
+  /** Aggregate-bounded projection for dashboards and model-facing tools. */
   list(): ReadonlyArray<SubagentSnapshot>;
+  /** Aggregate-bounded projection for dashboards and model-facing tools. */
   get(id: string): SubagentSnapshot | undefined;
-  /** Native tool projection retained by the live child session, when present. */
+  /**
+   * Complete retained state for the local takeover UI. It is deliberately not
+   * used by model-facing tools, which consume the bounded projection above.
+   */
+  getFull?(id: string): SubagentSnapshot | undefined;
+  /**
+   * Canonical terminal-result fields for delivery only. This intentionally
+   * excludes transcript-like state from model-facing tool responses.
+   */
+  getResult?(
+    id: string,
+  ): Pick<SubagentSnapshot, "finalText" | "resultArtifact"> | undefined;
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
   /** Any-change notification (footer status, dashboard). */
@@ -252,33 +274,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       | ((snap: SubagentSnapshot, consumed: boolean) => void)
       | undefined;
 
-    /** Copy a bounded projection back into the live object held by readers. */
-    const assignSnapshot = (
-      target: MutableSnapshot,
-      source: SubagentSnapshot,
-    ) => {
-      target.title = source.title;
-      target.prompt = source.prompt;
-      target.cwd = source.cwd;
-      target.status = source.status;
-      target.createdAt = source.createdAt;
-      target.settledAt = source.settledAt;
-      target.errorText = source.errorText;
-      target.meta = { ...source.meta };
-      target.usage = { ...source.usage };
-      target.transcript = [...source.transcript];
-      target.liveAssistant = source.liveAssistant
-        ? { ...source.liveAssistant }
-        : undefined;
-      target.liveTools = [...source.liveTools];
-      target.queued = [...source.queued];
-      target.finalText = source.finalText;
-      target.resultArtifact = source.resultArtifact;
-      target.turns = source.turns;
-      target.snapshot = source.snapshot;
-    };
-
-    /** Keep the manager's entire read model under one aggregate byte bound. */
+    /** Keep the manager's read-model projection under one aggregate byte bound. */
     const enforceSnapshotBudget = () => {
       if (entries.size === 0) return;
       const current = [...entries.values()].map(
@@ -295,12 +291,29 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       );
       for (const entry of entries.values()) {
         const snapshot = projectedById.get(entry.snapshot.id);
-        if (!snapshot) throw new Error("Projected subagent identity disappeared");
-        assignSnapshot(entry.snapshot, snapshot);
+        if (!snapshot)
+          throw new Error("Projected subagent identity disappeared");
+        // Projection is disposable. Never write it back into the event-folding
+        // snapshot: takeover can then render the retained transcript in full.
+        entry.projection = snapshot;
       }
     };
 
-    const cloneSnapshot = (snapshot: SubagentSnapshot): SubagentSnapshot => ({
+    const tryEnforceSnapshotBudget = () => {
+      try {
+        enforceSnapshotBudget();
+        return true;
+      } catch {
+        // Read-model projection is optional at runtime. Lifecycle state must
+        // still settle even if a plugin returns an unrepresentable value.
+        return false;
+      }
+    };
+
+    const cloneSnapshot = (
+      snapshot: SubagentSnapshot,
+      projection?: SubagentSnapshot["snapshot"],
+    ): SubagentSnapshot => ({
       ...snapshot,
       meta: { ...snapshot.meta },
       usage: { ...snapshot.usage },
@@ -314,10 +327,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         : undefined,
       liveTools: snapshot.liveTools.map((tool) => ({ ...tool })),
       queued: snapshot.queued.map((message) => ({ ...message })),
-      snapshot: snapshot.snapshot
+      snapshot: projection
         ? {
-            ...snapshot.snapshot,
-            omitted: { ...snapshot.snapshot.omitted },
+            ...projection,
+            omitted: { ...projection.omitted },
           }
         : undefined,
     });
@@ -447,14 +460,31 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       }
     };
 
-    /** Persist exact terminal text before the bounded read-model projection. */
+    /**
+     * Persist an optional exact-result recovery artifact. Filesystem failures
+     * must never prevent terminal state, waiters, or delivery hooks from
+     * observing settlement.
+     */
     const persistExactResult = (entry: Entry, text: string) => {
       if (!text || !config.persistResultArtifact) return;
-      const artifact = config.persistResultArtifact(text);
-      if (typeof artifact !== "string" || artifact.length === 0) {
-        throw new Error("persistResultArtifact must return a non-empty path");
+      try {
+        const artifact = config.persistResultArtifact(text);
+        if (!resultArtifactRefMatchesContent(artifact, text)) return;
+
+        // `resultArtifact` is deliberately retained as a compact, path-free
+        // reference. Check that it fits before retaining it, so a malformed
+        // callback result cannot make the following settlement projection
+        // throw.
+        const previous = entry.snapshot.resultArtifact;
+        entry.snapshot.resultArtifact = artifact;
+        const fits = tryEnforceSnapshotBudget();
+        entry.snapshot.resultArtifact = previous;
+        if (!fits) return;
+        entry.snapshot.resultArtifact = artifact;
+      } catch {
+        // The bounded in-memory result remains available when the cache is
+        // full, inaccessible, colliding, or cannot be cleaned.
       }
-      entry.snapshot.resultArtifact = artifact;
     };
 
     const settle = (entry: Entry, outcome: RunOutcome) => {
@@ -470,38 +500,50 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
+        s.resultArtifact = undefined;
       }
       s.settledAt = Date.now();
       switch (outcome._tag) {
-        case "Completed":
+        case "Completed": {
           s.status = "done";
           s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText;
-          persistExactResult(entry, outcome.finalText);
+          persistExactResult(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
-        case "Failed":
+        }
+        case "Failed": {
           s.status = "error";
           s.outcome = "failed";
           s.errorText = bounded(outcome.errorText);
           // Never let a failed run report the previous run's successful output.
           s.finalText = outcome.partialText ?? "";
           persistExactResult(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
-        case "Interrupted":
+        }
+        case "Interrupted": {
           s.status = "error";
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
           s.finalText = outcome.partialText ?? "";
           persistExactResult(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
+        }
       }
       s.liveAssistant = undefined;
       entry.liveToolMap.clear();
       s.liveTools = [];
       s.queued = [];
       const consumed = (waitInterest.get(s.id) ?? 0) > 0;
-      enforceSnapshotBudget();
+      if (!tryEnforceSnapshotBudget()) {
+        // An artifact reference is optional. Retrying without it keeps a
+        // malformed callback result from suppressing settlement notification.
+        s.resultArtifact = undefined;
+        tryEnforceSnapshotBudget();
+      }
       const settledSnapshot = cloneSnapshot(s);
       notify(s.id);
       try {
@@ -561,7 +603,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.settledAt = undefined;
           s.errorText = undefined;
           s.resultArtifact = undefined;
-          s.snapshot = undefined;
           armWatchdog(entry);
           break;
         case "RunSettled":
@@ -667,7 +708,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.errorText = bounded(event.message);
           break;
       }
-      enforceSnapshotBudget();
+      tryEnforceSnapshotBudget();
       notify(s.id);
     };
 
@@ -769,7 +810,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           entry.pump = yield* Scope.provide(Effect.forkScoped(pump), scope);
 
           notify(id);
-          return entry.snapshot as SubagentSnapshot;
+          return (entry.projection ?? entry.snapshot) as SubagentSnapshot;
         });
 
         return yield* doSpawn.pipe(
@@ -943,8 +984,29 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     });
 
     const view: SubagentReadModel = {
-      list: () => [...entries.values()].map((entry) => entry.snapshot),
-      get: (id) => entries.get(id)?.snapshot,
+      list: () =>
+        [...entries.values()].map(
+          (entry) => (entry.projection ?? entry.snapshot) as SubagentSnapshot,
+        ),
+      get: (id) => {
+        const entry = entries.get(id);
+        return entry
+          ? ((entry.projection ?? entry.snapshot) as SubagentSnapshot)
+          : undefined;
+      },
+      getFull: (id) =>
+        entries.get(id)?.snapshot as SubagentSnapshot | undefined,
+      getResult: (id) => {
+        const snapshot = entries.get(id)?.snapshot;
+        return snapshot
+          ? {
+              finalText: snapshot.finalText,
+              ...(snapshot.resultArtifact
+                ? { resultArtifact: snapshot.resultArtifact }
+                : {}),
+            }
+          : undefined;
+      },
       getToolRenderer: (id) => entries.get(id)?.session.toolRenderer,
       size: () => entries.size,
       subscribe: (listener) => {
@@ -987,8 +1049,18 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       waitFor,
       cancel,
       send,
-      get: (id) => Effect.sync(() => entries.get(id)?.snapshot),
-      list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
+      get: (id) =>
+        Effect.sync(() => {
+          const entry = entries.get(id);
+          return entry
+            ? ((entry.projection ?? entry.snapshot) as SubagentSnapshot)
+            : undefined;
+        }),
+      list: Effect.sync(() =>
+        [...entries.values()].map(
+          (entry) => (entry.projection ?? entry.snapshot) as SubagentSnapshot,
+        ),
+      ),
       disposeAll,
       view,
     });
@@ -1000,7 +1072,7 @@ export interface SubagentManagerConfig {
   /** Aggregate UTF-8 budget for all live/settled read-model snapshots. */
   maxSnapshotBytes?: number;
   /** Persist an exact terminal result before the in-memory projection is cut. */
-  persistResultArtifact?: (content: string) => string;
+  persistResultArtifact?: (content: string) => ResultArtifactRef;
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;

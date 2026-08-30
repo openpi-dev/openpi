@@ -139,6 +139,13 @@ export interface QueuedMessage {
   readonly kind: "steer" | "follow-up";
 }
 
+/** Path-free identity of an exact terminal-result cache entry. */
+export interface ResultArtifactRef {
+  readonly version: 1;
+  /** Lowercase SHA-256 digest of the UTF-8 artifact content. */
+  readonly digest: string;
+}
+
 /** Why a live snapshot does not contain the complete child conversation. */
 export interface SubagentSnapshotProjection {
   readonly maxBytes: number;
@@ -249,7 +256,7 @@ export interface SubagentSnapshot {
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
   /** Content-addressed exact result, when the bounded projection omitted text. */
-  readonly resultArtifact?: string;
+  readonly resultArtifact?: ResultArtifactRef;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
   /** Aggregate UTF-8 budget metadata for this in-memory projection. */
