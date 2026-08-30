@@ -135,7 +135,7 @@ interface ToolSurfaceState {
   subscribed: boolean;
 }
 
-const OWNER_SOURCE_PATHS = {
+export const OPENPI_OWNER_SOURCE_PATHS = {
   capabilities: fileURLToPath(
     new URL("../capabilities/index.ts", import.meta.url),
   ),
@@ -268,7 +268,7 @@ function availableOwnedToolNames(
   }
 
   const expectedSource =
-    state.sourceByOwner.get(owner) ?? OWNER_SOURCE_PATHS[owner];
+    state.sourceByOwner.get(owner) ?? OPENPI_OWNER_SOURCE_PATHS[owner];
   return new Set(
     reportedTools
       .filter(

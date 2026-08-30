@@ -5,6 +5,8 @@
 > 状态：已在 `codex/workflow-v2` 实施；最终验证与真实模型 smoke 见文末实施记录。
 >
 > 依据：当前 OpenPI 源码、Issues #71/#74/#75/#90、Claude Code `2.1.241` 运行时合同访谈，以及三份相互独立的 interface 设计评审。
+>
+> 后续决定（2026-08-30）：Issue #132 / PR #139 将新调用策略收敛为 `wait`，同时为已发布的 `background` alias 保留迁移窗口。本文件保留 Workflow V2 落地时的历史合同与验证证据；当前行为以代码和当前用户文档为准，后续结果见文末 addendum。
 
 ## 结论
 
@@ -663,3 +665,16 @@ bun run test
 ### 14.3 当前结论
 
 Lifecycle、delivery、Schema stability、dynamic capacity、fair projection 和 artifact 证据链已经实现并有确定性或真实模型证据。尚未把通用 Execution Fabric 暴露给模型，也没有自动插入 Report Agent；这两项是刻意不做，而非未完成缺口。真正的大规模质量仍应通过后续冻结配置的 2×2 benchmark 决定，不用单次 smoke 冒充跑分提升。
+
+## 15. 后续合同变更（2026-08-30）
+
+Issue #132 / PR #139 将 `wait` 作为唯一推荐的新调用策略。由于 `background` 从 OpenPI v0.2.0 起就是已发布输入，本次继续把它作为 deprecated inverse alias 接受：`background: true` 对应 `wait: false`，`background: false` 对应 `wait: true`；真正删除只在另行公告的 breaking release 进行。除这一已发布兼容字段外，未知输入继续 fail closed。
+
+Coordinator 在单一输入边界完成 legacy 映射，内部仍只产生 `inline | detached` 运行模式。`WorkflowDetails.background` 与 persisted artifact 中的同名字段继续记录实际 detached 状态，不记录调用时使用的是 `wait` 还是兼容 alias，也不改写历史 artifact。
+
+该后续变更的最终验证以 PR #139 exact-head review 为准，至少包括：
+
+- `wait`、legacy `background`、冲突输入、host delivery 能力和 wait interruption 的专项测试；
+- `bun run check`；
+- `bun run test`；
+- GitHub CI：Node 22.19.0、Node 24 与 Windows background-terminal suite。

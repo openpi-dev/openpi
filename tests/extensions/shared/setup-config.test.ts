@@ -23,11 +23,12 @@ const {
   DEFAULT_SETUP_CONFIG,
   FOOTER_PRESET_DEFINITIONS,
   formatSetupConfig,
-  POST_EDIT_COMMAND_MAX_CHARS,
-  SETUP_CONFIG_PATH,
   loadSetupConfig,
   parseSetupConfig,
+  POST_EDIT_COMMAND_MAX_CHARS,
+  processStartedAtQuery,
   saveSetupConfig,
+  SETUP_CONFIG_PATH,
   updateSetupConfig,
 } = await import("../../../extensions/shared/setup-config.ts");
 
@@ -46,6 +47,64 @@ const removeLockArtifacts = () => {
   }
 };
 
+async function runSetupConfigChildScenario({
+  source,
+  tempPrefix,
+  env = {},
+  failureLabel,
+}: {
+  source: string;
+  tempPrefix: string;
+  env?: NodeJS.ProcessEnv;
+  failureLabel: string;
+}) {
+  const scenarioAgentDir = mkdtempSync(join(tmpdir(), tempPrefix));
+  const child = spawn(
+    process.execPath,
+    ["--experimental-strip-types", "--input-type=module", "--eval", source],
+    {
+      env: {
+        ...process.env,
+        PI_CODING_AGENT_DIR: scenarioAgentDir,
+        SETUP_CONFIG_MODULE_URL: setupConfigModuleUrl,
+        ...env,
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  child.stdout.setEncoding("utf8");
+  child.stderr.setEncoding("utf8");
+  let stdout = "";
+  let stderr = "";
+  child.stdout.on("data", (chunk: string) => {
+    stdout += chunk;
+  });
+  child.stderr.on("data", (chunk: string) => {
+    stderr += chunk;
+  });
+
+  await new Promise<void>((resolve, reject) => {
+    let settled = false;
+    const finish = (error?: unknown) => {
+      if (settled) return;
+      settled = true;
+      rmSync(scenarioAgentDir, { recursive: true, force: true });
+      if (error) reject(error);
+      else resolve();
+    };
+    child.once("error", (error) => {
+      finish(new Error(`${failureLabel} failed to spawn`, { cause: error }));
+    });
+    child.once("exit", (code) => {
+      if (code === 0 && stdout === "preserved\n") finish();
+      else
+        finish(
+          new Error(`${failureLabel} exited ${code}: ${stderr || stdout}`),
+        );
+    });
+  });
+}
+
 test("capability discovery defaults to explicit and accepts adaptive opt-in", () => {
   assert.equal(DEFAULT_SETUP_CONFIG.capabilities.discovery, "explicit");
   assert.equal(
@@ -62,6 +121,29 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
     formatSetupConfig(DEFAULT_SETUP_CONFIG),
     /Capability discovery: explicit/,
   );
+});
+
+test("process start-time queries are platform-specific and conservative", () => {
+  const windowsQuery = processStartedAtQuery(123, "win32");
+  assert.equal(windowsQuery.command, "powershell.exe");
+  assert.deepEqual(windowsQuery.args.slice(0, 3), [
+    "-NoProfile",
+    "-NonInteractive",
+    "-Command",
+  ]);
+  assert.match(windowsQuery.args.at(-1) ?? "", /Get-Process -Id 123/);
+  assert.equal(windowsQuery.parseOutput("1700000000000"), 1_700_000_000_000);
+  assert.equal(windowsQuery.parseOutput("not a timestamp"), undefined);
+
+  const posixQuery = processStartedAtQuery(123, "linux");
+  assert.equal(posixQuery.command, "ps");
+  assert.deepEqual(posixQuery.args, ["-o", "lstart=", "-p", "123"]);
+  assert.deepEqual(posixQuery.env, { LC_ALL: "C" });
+  assert.equal(
+    posixQuery.parseOutput("Mon Jan  1 00:00:00 2024\n"),
+    Date.parse("Mon Jan  1 00:00:00 2024"),
+  );
+  assert.equal(posixQuery.parseOutput("not a timestamp"), undefined);
 });
 
 test("every one-line footer preset keeps model context left and cwd right", () => {
@@ -374,6 +456,67 @@ test("a reused PID does not impersonate the dead lock owner", async () => {
   }
 });
 
+test("process start-time query failures do not authorize lock recovery", async () => {
+  const source = `
+const childProcess = await import("node:child_process");
+const { syncBuiltinESMExports } = await import("node:module");
+childProcess.default.execFile = (...args) => {
+  const callback = args.at(-1);
+  if (typeof callback !== "function") {
+    throw new Error("expected execFile callback");
+  }
+  queueMicrotask(() => callback(new Error("mock process start query failure"), ""));
+};
+syncBuiltinESMExports();
+
+const { existsSync, linkSync, readFileSync, rmSync, writeFileSync } = await import("node:fs");
+const {
+  DEFAULT_SETUP_CONFIG,
+  SETUP_CONFIG_PATH,
+  saveSetupConfig,
+  updateSetupConfig,
+} = await import(process.env.SETUP_CONFIG_MODULE_URL);
+
+await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+const lockPath = SETUP_CONFIG_PATH + ".lock";
+const owner = {
+  version: 1,
+  pid: process.pid,
+  processStartedAt: 1,
+  processStartedAtVerified: true,
+  createdAt: Date.now(),
+  token: "44444444-4444-4444-8444-444444444444",
+};
+const metadata = JSON.stringify(owner) + "\\n";
+const claimPath = lockPath + ".owner." + owner.pid + "." + owner.processStartedAt + "." + owner.token;
+writeFileSync(claimPath, metadata);
+linkSync(claimPath, lockPath);
+
+let mutated = false;
+try {
+  await updateSetupConfig((current) => {
+    mutated = true;
+    return { ...current, ui: { ...current.ui, showHeader: true } };
+  });
+  throw new Error("lock was recovered after an unknown process start-time query");
+} catch (error) {
+  if (!(error instanceof Error) || !error.message.includes("Timed out waiting")) throw error;
+}
+if (mutated) throw new Error("mutator ran under unknown lock ownership");
+if (!existsSync(lockPath) || readFileSync(lockPath, "utf8") !== metadata) {
+  throw new Error("unknown lock ownership was modified");
+}
+rmSync(process.env.PI_CODING_AGENT_DIR, { recursive: true, force: true });
+process.stdout.write("preserved\\n");
+`;
+
+  await runSetupConfigChildScenario({
+    source,
+    tempPrefix: "my-pi-setup-query-failure-lock-",
+    failureLabel: "query failure owner check",
+  });
+});
+
 test("live and uncertain lock owners are never stolen", async () => {
   const source = `
 const { spawn } = await import("node:child_process");
@@ -435,44 +578,11 @@ process.stdout.write("preserved\\n");
 `;
 
   const runs = ["live", "unknown", "mismatched"].map((scenario) => {
-    const scenarioAgentDir = mkdtempSync(
-      join(tmpdir(), `my-pi-setup-${scenario}-lock-`),
-    );
-    const child = spawn(
-      process.execPath,
-      ["--experimental-strip-types", "--input-type=module", "--eval", source],
-      {
-        env: {
-          ...process.env,
-          PI_CODING_AGENT_DIR: scenarioAgentDir,
-          SETUP_CONFIG_MODULE_URL: setupConfigModuleUrl,
-          SETUP_LOCK_SCENARIO: scenario,
-        },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    child.stdout.setEncoding("utf8");
-    child.stderr.setEncoding("utf8");
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk: string) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-    return new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code) => {
-        rmSync(scenarioAgentDir, { recursive: true, force: true });
-        if (code === 0 && stdout === "preserved\n") resolve();
-        else
-          reject(
-            new Error(
-              `${scenario} owner check exited ${code}: ${stderr || stdout}`,
-            ),
-          );
-      });
+    return runSetupConfigChildScenario({
+      source,
+      tempPrefix: `my-pi-setup-${scenario}-lock-`,
+      env: { SETUP_LOCK_SCENARIO: scenario },
+      failureLabel: `${scenario} owner check`,
     });
   });
 

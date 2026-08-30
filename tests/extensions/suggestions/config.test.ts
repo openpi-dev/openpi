@@ -18,7 +18,7 @@ const defaultUi = {
   customFooter: true,
   footerStyle: "plain" as const,
   footerLines: DEFAULT_FOOTER_LINES,
-  subagentResultDisplay: "full" as const,
+  subagentResultDisplay: "compact" as const,
   bashToolDisplay: "compact" as const,
   fileMutationDisplay: "compact" as const,
 };
@@ -27,7 +27,7 @@ test("setup defaults to disabled next-action suggestions", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
@@ -59,7 +59,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: full by default\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
@@ -130,7 +130,7 @@ test("UI defaults to a compact header and one-line plain footer", () => {
       customFooter: false,
       footerStyle: "plain",
       footerLines: DEFAULT_FOOTER_LINES,
-      subagentResultDisplay: "full",
+      subagentResultDisplay: "compact",
       bashToolDisplay: "compact",
       fileMutationDisplay: "compact",
     },
@@ -143,7 +143,7 @@ test("UI defaults to a compact header and one-line plain footer", () => {
   assert.equal(
     parseSetupConfig({ ui: { subagentResultDisplay: "unknown" } }).ui
       .subagentResultDisplay,
-    "full",
+    "compact",
   );
   assert.equal(
     parseSetupConfig({ ui: { bashToolDisplay: "full" } }).ui.bashToolDisplay,

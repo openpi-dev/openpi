@@ -125,7 +125,7 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
         {
           script:
             'export const meta = { name: "pending", phases: [] };\nawait new Promise(() => {});',
-          background: true,
+          wait: false,
         },
         undefined,
         undefined,

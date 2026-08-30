@@ -31,6 +31,7 @@ export const REASONING_EFFORTS = [
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export type SubagentStatus = "running" | "done" | "error";
+export type SubagentOutcome = "completed" | "failed" | "interrupted";
 
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
@@ -215,6 +216,8 @@ export interface SubagentSnapshot {
   readonly prompt: string;
   readonly cwd: string;
   readonly status: SubagentStatus;
+  readonly outcome?: SubagentOutcome;
+  readonly worktreeBranch?: string;
   readonly createdAt: number;
   readonly settledAt?: number;
   readonly errorText?: string;

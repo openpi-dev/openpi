@@ -1,5 +1,5 @@
+import { type ChildProcess, spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { spawn, type ChildProcess } from "node:child_process";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import { MAX_WORKFLOW_AGENT_CALLS } from "../shared/setup-config.ts";
@@ -53,7 +53,7 @@ export interface RunWorkflowSandboxOptions {
     signal: AbortSignal,
   ) => Promise<SandboxAgentResult>;
   onPhase: (title: string) => void;
-  onLog: (text: string) => void;
+  onLog: (text: string, kind?: "pipeline-drop") => void;
   /**
    * Cumulative run usage, read at send time so the child's `usage()` reflects
    * the agent that just settled rather than a value captured at launch.
@@ -287,7 +287,10 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
           if (!isRecord(payload) || typeof payload.text !== "string") {
             throw new Error("invalid text");
           }
-          options.onLog(payload.text);
+          if (payload.kind !== undefined && payload.kind !== "pipeline-drop") {
+            throw new Error("invalid log kind");
+          }
+          options.onLog(payload.text, payload.kind);
         } catch {
           finish(new Error("Workflow sandbox sent an invalid log line"));
         }

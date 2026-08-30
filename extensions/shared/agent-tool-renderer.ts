@@ -10,6 +10,8 @@ export interface AgentToolRenderRequest {
   readonly toolId: string;
   readonly name: string;
   readonly cwd?: string;
+  /** The child page's local Pi-native evidence visibility. */
+  readonly expanded?: boolean;
 }
 
 /** Operator-only projection. It is deliberately absent from persisted state. */
@@ -34,6 +36,7 @@ interface ToolExecutionRecord {
   isPartial: boolean;
   component?: ToolExecutionComponent;
   componentCwd?: string;
+  componentExpanded?: boolean;
 }
 
 const inertTui = {
@@ -99,6 +102,7 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
         current.definition = definition;
         current.component = undefined;
         current.componentCwd = undefined;
+        current.componentExpanded = undefined;
       }
       current.name = name;
       if (current.args !== args) {
@@ -190,12 +194,18 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
         cwd,
       );
       execution.componentCwd = cwd;
+      execution.componentExpanded = false;
       if (execution.executionStarted)
         execution.component.markExecutionStarted();
       if (execution.argsComplete) execution.component.setArgsComplete();
       if (execution.result) {
         execution.component.updateResult(execution.result, execution.isPartial);
       }
+    }
+    const expanded = request.expanded === true;
+    if (execution.componentExpanded !== expanded) {
+      execution.component.setExpanded(expanded);
+      execution.componentExpanded = expanded;
     }
     return execution.component.render(width);
   }

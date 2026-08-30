@@ -83,7 +83,7 @@ function validateBrief(brief: string, ctx: ExtensionContext) {
   }
   if (tokens < MIN_CONTEXT_PIVOT_TOKENS) {
     throw new Error(
-      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
+      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or use /sessions to browse or switch an existing session; start a new Session in Pi when a clean session is needed.`,
     );
   }
 }
@@ -137,7 +137,7 @@ export default function contextPivot(pi: ExtensionAPI) {
     name: "context_pivot",
     label: "Context Pivot",
     description:
-      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /handoff instead for a genuinely new session.",
+      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /sessions to browse or switch an existing session; start a new Session in Pi when a genuinely new session is needed.",
     promptSnippet:
       "Compress a long current session into a clean brief before changing phase",
     promptGuidelines: [

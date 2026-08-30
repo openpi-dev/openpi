@@ -183,7 +183,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
     footerLines: DEFAULT_FOOTER_LINES,
-    subagentResultDisplay: "full",
+    subagentResultDisplay: "compact",
     bashToolDisplay: "compact",
     fileMutationDisplay: "compact",
   },
@@ -493,7 +493,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         ui.subagentResultDisplay as DetailDisplay,
       )
         ? (ui.subagentResultDisplay as DetailDisplay)
-        : "full",
+        : "compact",
       bashToolDisplay: DETAIL_DISPLAYS.includes(
         ui.bashToolDisplay as DetailDisplay,
       )
@@ -639,24 +639,55 @@ const sameOwner = (left: LockOwner, right: LockOwner) =>
 const sameFile = (left: Stats, right: Stats) =>
   left.dev === right.dev && left.ino === right.ino;
 
+const parsePowerShellProcessStartedAt = (stdout: string) => {
+  const startedAt = Number(stdout.trim());
+  return isPositiveInteger(startedAt) ? startedAt : undefined;
+};
+
+const parsePsProcessStartedAt = (stdout: string) => {
+  const startedAt = Date.parse(stdout.trim());
+  return Number.isFinite(startedAt) ? startedAt : undefined;
+};
+
+export function processStartedAtQuery(
+  pid: number,
+  platform = process.platform,
+) {
+  if (platform === "win32") {
+    const script = [
+      "$ErrorActionPreference='Stop'",
+      `$p=Get-Process -Id ${pid}`,
+      "[Console]::Out.Write(([DateTimeOffset]$p.StartTime).ToUnixTimeMilliseconds())",
+    ].join("; ");
+    return {
+      command: "powershell.exe",
+      args: ["-NoProfile", "-NonInteractive", "-Command", script],
+      env: undefined,
+      parseOutput: parsePowerShellProcessStartedAt,
+    };
+  }
+  return {
+    command: "ps",
+    args: ["-o", "lstart=", "-p", String(pid)],
+    env: { LC_ALL: "C" },
+    parseOutput: parsePsProcessStartedAt,
+  };
+}
+
 const queryProcessStartedAt = (pid: number) =>
   new Promise<number | undefined>((resolve) => {
-    if (process.platform === "win32") {
-      resolve(undefined);
-      return;
-    }
+    const query = processStartedAtQuery(pid);
     try {
       execFile(
-        "ps",
-        ["-o", "lstart=", "-p", String(pid)],
+        query.command,
+        query.args,
         {
           encoding: "utf8",
-          env: { ...process.env, LC_ALL: "C" },
+          env: query.env ? { ...process.env, ...query.env } : process.env,
           timeout: 1_000,
         },
         (error, stdout) => {
-          const startedAt = error ? Number.NaN : Date.parse(stdout.trim());
-          resolve(Number.isFinite(startedAt) ? startedAt : undefined);
+          resolve(error ? undefined : query.parseOutput(stdout));
         },
       );
     } catch {

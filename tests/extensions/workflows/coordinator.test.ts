@@ -1,44 +1,52 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
-  resolveWorkflowLaunchPolicy,
+  resolveWorkflowLaunchMode,
   waitForWorkflowCompletion,
 } from "../../../extensions/workflows/coordinator.ts";
 
 test("interactive launch defaults detached while non-delivery hosts wait", () => {
-  assert.deepEqual(resolveWorkflowLaunchPolicy({}, true), {
-    wait: false,
-    detached: true,
-  });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({}, false), {
-    wait: true,
-    detached: false,
-  });
+  assert.equal(resolveWorkflowLaunchMode({}, true), "detached");
+  assert.equal(resolveWorkflowLaunchMode({}, false), "inline");
 });
 
 test("wait is authoritative and legacy background maps to its inverse", () => {
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ wait: true }, true), {
-    wait: true,
-    detached: false,
-  });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ background: true }, true), {
-    wait: false,
-    detached: true,
-  });
-  assert.deepEqual(resolveWorkflowLaunchPolicy({ background: false }, true), {
-    wait: true,
-    detached: false,
-  });
+  assert.equal(resolveWorkflowLaunchMode({ wait: true }, true), "inline");
+  assert.equal(resolveWorkflowLaunchMode({ wait: false }, true), "detached");
+  assert.equal(
+    resolveWorkflowLaunchMode({ background: true }, true),
+    "detached",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ background: false }, true),
+    "inline",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ wait: true, background: false }, true),
+    "inline",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ wait: false, background: true }, true),
+    "detached",
+  );
 });
 
 test("conflicting aliases and unsupported detached delivery fail closed", () => {
   assert.throws(
-    () => resolveWorkflowLaunchPolicy({ wait: true, background: true }, true),
-    /conflict/,
+    () => resolveWorkflowLaunchMode({ wait: true, background: true }, true),
+    /conflict.*background is the deprecated inverse of wait/i,
   );
   assert.throws(
-    () => resolveWorkflowLaunchPolicy({ wait: false }, false),
+    () => resolveWorkflowLaunchMode({ wait: false, background: false }, true),
+    /conflict.*background is the deprecated inverse of wait/i,
+  );
+  assert.throws(
+    () => resolveWorkflowLaunchMode({ wait: false }, false),
     /cannot deliver/,
+  );
+  assert.throws(
+    () => resolveWorkflowLaunchMode({ background: true }, false),
+    /cannot deliver.*wait: true/i,
   );
 });
 

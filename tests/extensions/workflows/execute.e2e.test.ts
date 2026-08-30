@@ -11,6 +11,7 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   rmSync,
   writeFileSync,
@@ -165,7 +166,9 @@ for (const [runId, status] of [
   );
 }
 
-workflows(pi);
+workflows(pi, {
+  settledRetention: { maxRuns: 8, maxBytes: 64 * 1024 },
+});
 for (const handler of handlers.get("session_start") ?? []) {
   await handler({}, {
     ...ctx,
@@ -361,7 +364,7 @@ test("oversized workflow args fail before child sessions or journals are created
     for (const rawArgs of args) {
       const launch = (await workflow.execute(
         "e2e-oversized-workflow-args",
-        { script, args: rawArgs, background: true },
+        { script, args: rawArgs, wait: false },
         undefined,
         undefined,
         ctx,
@@ -387,6 +390,132 @@ test("oversized workflow args fail before child sessions or journals are created
   }
 
   assert.equal(sessionCreations, 0);
+});
+
+test("print hosts wait by default and reject detached delivery", async () => {
+  const printCtx = {
+    ...ctx,
+    mode: "print",
+    hasUI: false,
+  } as unknown as ExtensionContext;
+  const inline = (await workflow.execute(
+    "e2e-print-default",
+    {
+      script:
+        'export const meta = { name: "print-default" };\nreturn { inline: true };',
+    },
+    undefined,
+    undefined,
+    printCtx,
+  )) as AgentToolResult<WorkflowDetails>;
+
+  assert.equal(inline.details.status, "completed");
+  assert.equal(inline.details.background, false);
+  assert.equal(inline.details.delivery?.state, "consumed-inline");
+
+  const legacyInline = (await workflow.execute(
+    "e2e-print-legacy-inline",
+    {
+      script:
+        'export const meta = { name: "print-legacy-inline" };\nreturn { inline: true };',
+      background: false,
+    },
+    undefined,
+    undefined,
+    printCtx,
+  )) as AgentToolResult<WorkflowDetails>;
+  assert.equal(legacyInline.details.background, false);
+  assert.equal(legacyInline.details.delivery?.state, "consumed-inline");
+  assert.doesNotMatch(
+    legacyInline.content
+      .map((entry) => (entry.type === "text" ? entry.text : ""))
+      .join("\n"),
+    /deprecated|migration/i,
+  );
+
+  const workflowsDir = join(agentDir, "workflows");
+  const runDirsBefore = readdirSync(workflowsDir).sort();
+  const messagesBefore = sentMessages.length;
+  for (const input of [{ wait: false }, { background: true }]) {
+    await assert.rejects(
+      Promise.resolve().then(() =>
+        workflow.execute(
+          "e2e-print-detached",
+          { script: "return { detached: true };", ...input },
+          undefined,
+          undefined,
+          printCtx,
+        ),
+      ),
+      /cannot deliver.*wait: true/i,
+    );
+  }
+  assert.deepEqual(readdirSync(workflowsDir).sort(), runDirsBefore);
+  assert.equal(sentMessages.length, messagesBefore);
+});
+
+test("interrupting an inline wait leaves the run stoppable and delivers one terminal result", async () => {
+  sentMessages.length = 0;
+  modelIdle = true;
+  let sessionCreated = false;
+  let releasePrompt = () => {};
+  const promptGate = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreated = true;
+    return { session: fakeAgentSession("interrupted output", promptGate) };
+  });
+
+  try {
+    const controller = new AbortController();
+    let interruptedMessage = "";
+    const execution = Promise.resolve(
+      workflow.execute(
+        "e2e-interrupted-inline-wait",
+        {
+          script:
+            'export const meta = { name: "interrupted-inline-wait" };\n' +
+            'return await agent("wait for interruption", { agent_type: "reviewer" });',
+          wait: true,
+        },
+        controller.signal,
+        undefined,
+        ctx,
+      ),
+    ).then(
+      () => assert.fail("interrupted inline wait unexpectedly resolved"),
+      (error: unknown) => {
+        interruptedMessage = String(
+          error instanceof Error ? error.message : error,
+        );
+      },
+    );
+
+    await waitFor(() => sessionCreated, "inline workflow before interruption");
+    controller.abort();
+    await execution;
+    const runId = interruptedMessage.match(/run (wf_[0-9a-f]+)/)?.[1];
+    assert.ok(runId);
+    assert.match(interruptedMessage, /continues in the background/);
+    assert.equal(readWorkflowJson(runId).status, "running");
+
+    await workflowStop.execute("e2e-interrupted-inline-stop", { runId });
+    releasePrompt();
+    await waitFor(
+      () => readWorkflowJson(runId).status === "aborted",
+      "interrupted inline workflow cancellation",
+    );
+    await waitFor(
+      () =>
+        sentMessages.filter((sent) => sent.message.details?.runId === runId)
+          .length === 1,
+      "interrupted inline terminal delivery",
+    );
+  } finally {
+    releasePrompt();
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
 });
 
 test("background runs deliver a follow-up that triggers a turn only when idle", async () => {
@@ -427,7 +556,7 @@ test("background runs deliver a follow-up that triggers a turn only when idle", 
     "e2e-bg-busy",
     {
       script: 'export const meta = { name: "bg-busy" };\nreturn 8;',
-      background: true,
+      wait: false,
     },
     undefined,
     undefined,
@@ -724,12 +853,20 @@ test("cancelled detached delivery preserves aborted status after artifact persis
     );
     assert.ok(delivered);
     const deliveredDetails = delivered.message.details as {
-      status?: unknown;
-      error?: unknown;
+      entries?: Array<{ status?: unknown; alerts?: unknown[] }>;
     };
-    assert.equal(deliveredDetails.status, "aborted");
-    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
-    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+    const deliveredEntry = deliveredDetails.entries?.[0];
+    assert.equal(deliveredEntry?.status, "aborted");
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Workflow was aborted"),
+      ),
+    );
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Artifact persistence failed"),
+      ),
+    );
   } finally {
     releasePrompt();
     __setWorkflowTestAgentSessionFactory(undefined);
@@ -801,7 +938,7 @@ test("settled retention is bounded while status and artifacts remain observable"
   );
   assert.match(
     after.content[0]?.text ?? "",
-    /settled workflow details? evicted from memory; persisted artifacts retained\./,
+    /Retention \(current session\): .* evicted\/omitted .*Canonical artifacts remain available on disk\./,
   );
 
   const oldestRunId = runIds[0]!;
@@ -1360,6 +1497,85 @@ test("an oversized legacy replay is rejected without a success record", async ()
   } finally {
     __setWorkflowTestAgentSessionFactory(undefined);
   }
+});
+
+test("extension retention stays bounded and reports evictions under settled-run pressure", async () => {
+  const before = (await status.execute("e2e-retention-before", {})) as {
+    details: {
+      retention: {
+        retainedRuns: number;
+        retainedBytes: number;
+        evictedRuns: number;
+      };
+    };
+  };
+  const beforeEvictions = before.details.retention.evictedRuns;
+  let sessionCreations = 0;
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreations++;
+    return { session: fakeAgentSession(`pressure output ${sessionCreations}`) };
+  });
+  const script =
+    'export const meta = { name: "retention-pressure" };\n' +
+    'const r = await agent("pressure fixture", { agent_type: "reviewer", label: "pressure-agent" });\n' +
+    'log("pressure log: " + r.output);\n' +
+    "return { ok: r.ok, output: r.output };";
+
+  const runIds: string[] = [];
+  try {
+    for (let index = 0; index < 16; index++) {
+      const result = (await workflow.execute(
+        `e2e-retention-pressure-${index}`,
+        { script, wait: true },
+        undefined,
+        undefined,
+        ctx,
+      )) as { details: { runId?: unknown; status?: unknown } };
+      assert.equal(result.details.status, "completed");
+      assert.equal(typeof result.details.runId, "string");
+      runIds.push(result.details.runId as string);
+    }
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+
+  for (const runId of runIds) {
+    const persisted = readWorkflowJson(runId);
+    assert.equal((persisted.agents as unknown[]).length, 1);
+    assert.equal((persisted.logs as unknown[]).length, 1);
+  }
+
+  const after = (await status.execute("e2e-retention-after", {})) as {
+    content: Array<{ text: string }>;
+    details: {
+      runs: Array<{ name?: unknown; total: number }>;
+      retention: {
+        retainedRuns: number;
+        retainedBytes: number;
+        evictedRuns: number;
+        settledRunsEvicted: number;
+      };
+      settledRunsEvicted: number;
+    };
+  };
+  assert.equal(sessionCreations, 16);
+  assert.equal(after.details.retention.retainedRuns, 8);
+  assert.ok(after.details.retention.retainedBytes <= 64 * 1024);
+  assert.ok(after.details.retention.evictedRuns - beforeEvictions >= 8);
+  assert.equal(
+    after.details.retention.settledRunsEvicted,
+    after.details.retention.evictedRuns,
+  );
+  assert.equal(
+    after.details.settledRunsEvicted,
+    after.details.retention.evictedRuns,
+  );
+  const retainedPressureRuns = after.details.runs.filter(
+    (run) => run.name === "retention-pressure",
+  );
+  assert.equal(retainedPressureRuns.length, 8);
+  assert.ok(retainedPressureRuns.every((run) => run.total === 1));
+  assert.match(after.content[0]!.text, /evicted\/omitted/);
 });
 
 test("forced settlement persists worktree cleanup that finishes later", async () => {
