@@ -1,15 +1,17 @@
 import {
-  CustomEditor,
   type ExtensionAPI,
   type ExtensionContext,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import { Key, matchesKey, type EditorComponent } from "@earendil-works/pi-tui";
 import {
-  Key,
-  matchesKey,
-  type EditorTheme,
-  type TUI,
-} from "@earendil-works/pi-tui";
+  BelowEditorNavigationEditor,
+  BelowEditorStripState,
+} from "../shared/below-editor-navigation.ts";
+import {
+  registerEditorLayer,
+  removeEditorLayer,
+} from "../shared/editor-layers.ts";
 
 export function shouldClearContext(
   data: string,
@@ -19,20 +21,26 @@ export function shouldClearContext(
   return isIdle && editorText.length === 0 && matchesKey(data, Key.ctrl("c"));
 }
 
-class ClearContextEditor extends CustomEditor {
+export class ClearContextEditor extends BelowEditorNavigationEditor {
   private readonly isIdle: () => boolean;
 
   constructor(
-    tui: TUI,
-    theme: EditorTheme,
+    base: EditorComponent,
     keybindings: KeybindingsManager,
     isIdle: () => boolean,
   ) {
-    super(tui, theme, keybindings);
+    super(
+      base,
+      keybindings,
+      new BelowEditorStripState(),
+      () => false,
+      () => undefined,
+      () => undefined,
+    );
     this.isIdle = isIdle;
   }
 
-  handleInput(data: string) {
+  override handleInput(data: string) {
     if (shouldClearContext(data, this.getText(), this.isIdle())) {
       // Route through Pi's built-in /new command so session replacement keeps
       // Pi's persistence, cleanup, and transcript lifecycle as the source of truth.
@@ -45,16 +53,17 @@ class ClearContextEditor extends CustomEditor {
   }
 }
 
-function installClearContextShortcut(ctx: ExtensionContext) {
+function installClearContextShortcut(pi: ExtensionAPI, ctx: ExtensionContext) {
   if (ctx.mode !== "tui") return () => {};
 
-  const previousEditor = ctx.ui.getEditorComponent();
-  ctx.ui.setEditorComponent(
-    (tui, theme, keybindings) =>
-      new ClearContextEditor(tui, theme, keybindings, () => ctx.isIdle()),
-  );
+  registerEditorLayer(pi, ctx, {
+    id: "clear-context",
+    order: 100,
+    wrap: (base, _tui, _theme, keybindings) =>
+      new ClearContextEditor(base, keybindings, () => ctx.isIdle()),
+  });
 
-  return () => ctx.ui.setEditorComponent(previousEditor);
+  return () => removeEditorLayer(pi, "clear-context");
 }
 
 export default function clearContext(pi: ExtensionAPI) {
@@ -62,7 +71,7 @@ export default function clearContext(pi: ExtensionAPI) {
 
   pi.on("session_start", (_event, ctx) => {
     removeShortcut();
-    removeShortcut = installClearContextShortcut(ctx);
+    removeShortcut = installClearContextShortcut(pi, ctx);
   });
 
   pi.on("session_shutdown", () => {
