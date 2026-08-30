@@ -339,6 +339,16 @@ test("an editor too narrow to reserve an IME cell does not steal Right", () => {
   assert.equal(state.peek(), undefined);
 });
 
+test("suppresses ghost when the minimum IME band cannot fit", () => {
+  const base = new FakeEditor();
+  const { state, editor } = suggestionEditor({ base });
+  state.offer(state.begin(), "run tests", true);
+
+  assert.equal(editor.render(20)[1], `${FAKE_CURSOR}${" ".repeat(19)}`);
+  assert.notEqual(editor.render(21)[1], base.render(21)[1]);
+  assert.match(editor.render(21)[1]!, /run tes/);
+});
+
 test("supports a custom editor cursor with a selective reverse reset", () => {
   const selectiveCursor = "\u001b[7m \u001b[27m";
   const lines = renderGhostSuggestion(

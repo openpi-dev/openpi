@@ -103,7 +103,9 @@ function ghostGeometry(lines: readonly string[], width: number) {
   // Keep enough cells for a readable ghost and a conservative IME preedit
   // band. At narrower widths, suppress the ghost rather than placing the
   // hidden hardware cursor at the terminal's out-of-range column width.
-  if (remaining <= GHOST_MIN_COLUMNS) return undefined;
+  if (remaining < GHOST_MIN_COLUMNS + IME_PREEDIT_MIN_COLUMNS) {
+    return undefined;
+  }
 
   const desiredPreedit = Math.min(
     IME_PREEDIT_MAX_COLUMNS,
