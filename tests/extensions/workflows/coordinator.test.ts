@@ -6,19 +6,47 @@ import {
 } from "../../../extensions/workflows/coordinator.ts";
 
 test("interactive launch defaults detached while non-delivery hosts wait", () => {
-  assert.equal(resolveWorkflowLaunchMode(undefined, true), "detached");
-  assert.equal(resolveWorkflowLaunchMode(undefined, false), "inline");
+  assert.equal(resolveWorkflowLaunchMode({}, true), "detached");
+  assert.equal(resolveWorkflowLaunchMode({}, false), "inline");
 });
 
-test("explicit wait selects inline or detached launch policy", () => {
-  assert.equal(resolveWorkflowLaunchMode(true, true), "inline");
-  assert.equal(resolveWorkflowLaunchMode(false, true), "detached");
+test("wait is authoritative and legacy background maps to its inverse", () => {
+  assert.equal(resolveWorkflowLaunchMode({ wait: true }, true), "inline");
+  assert.equal(resolveWorkflowLaunchMode({ wait: false }, true), "detached");
+  assert.equal(
+    resolveWorkflowLaunchMode({ background: true }, true),
+    "detached",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ background: false }, true),
+    "inline",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ wait: true, background: false }, true),
+    "inline",
+  );
+  assert.equal(
+    resolveWorkflowLaunchMode({ wait: false, background: true }, true),
+    "detached",
+  );
 });
 
-test("unsupported detached delivery fails closed", () => {
+test("conflicting aliases and unsupported detached delivery fail closed", () => {
   assert.throws(
-    () => resolveWorkflowLaunchMode(false, false),
+    () => resolveWorkflowLaunchMode({ wait: true, background: true }, true),
+    /conflict.*background is the deprecated inverse of wait/i,
+  );
+  assert.throws(
+    () => resolveWorkflowLaunchMode({ wait: false, background: false }, true),
+    /conflict.*background is the deprecated inverse of wait/i,
+  );
+  assert.throws(
+    () => resolveWorkflowLaunchMode({ wait: false }, false),
     /cannot deliver/,
+  );
+  assert.throws(
+    () => resolveWorkflowLaunchMode({ background: true }, false),
+    /cannot deliver.*wait: true/i,
   );
 });
 

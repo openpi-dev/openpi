@@ -99,7 +99,7 @@ function captureRenderers() {
   return { workflow, message };
 }
 
-test("workflow launch schema accepts only the positive wait policy", () => {
+test("workflow launch schema recommends wait while preserving only the published alias", () => {
   const { workflow } = captureRenderers();
   const parameters = workflow.parameters as unknown as {
     properties?: Record<string, unknown>;
@@ -107,7 +107,10 @@ test("workflow launch schema accepts only the positive wait policy", () => {
   };
 
   assert.ok(parameters.properties?.wait);
-  assert.equal(parameters.properties?.background, undefined);
+  assert.deepEqual(
+    (parameters.properties?.background as { deprecated?: unknown })?.deprecated,
+    true,
+  );
   assert.equal(parameters.additionalProperties, false);
 
   const toolCall = (args: Record<string, unknown>) => ({
@@ -122,10 +125,9 @@ test("workflow launch schema accepts only the positive wait policy", () => {
     validateToolArguments(workflow, toolCall({ script, wait: false })),
     { script, wait: false },
   );
-  assert.throws(
-    () =>
-      validateToolArguments(workflow, toolCall({ script, background: true })),
-    /Validation failed.*background/s,
+  assert.deepEqual(
+    validateToolArguments(workflow, toolCall({ script, background: true })),
+    { script, background: true },
   );
   assert.throws(
     () => validateToolArguments(workflow, toolCall({ script, detached: true })),
@@ -157,6 +159,35 @@ test("workflow call rendering labels an explicit inline wait", () => {
   });
 
   assert.match(component.render(100).join("\n"), /workflow inline \(wait\)/);
+});
+
+test("workflow call rendering gives legacy callers an actionable migration", () => {
+  const { workflow } = captureRenderers();
+  assert.ok(workflow.renderCall);
+  const args = {
+    script: 'export const meta = { name: "legacy" }; return 1;',
+    background: true,
+  };
+
+  const component = workflow.renderCall(args, theme, {
+    args,
+    toolCallId: "call-legacy-background",
+    invalidate() {},
+    lastComponent: undefined,
+    state: {},
+    cwd: process.cwd(),
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: false,
+    expanded: false,
+    showImages: false,
+    isError: false,
+  });
+
+  assert.match(
+    component.render(100).join("\n"),
+    /workflow legacy \(deprecated: use wait: false\)/,
+  );
 });
 
 test("workflow tool errors with malformed details fall back to plain text", (t) => {
