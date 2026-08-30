@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createStatusWriter,
   formatActivityStatus,
   hasActivity,
   unreadActivityCounts,
@@ -51,6 +52,41 @@ test("a settle without a timestamp is treated as unread", () => {
     done: 1,
     failed: 0,
   });
+});
+
+test("the status writer forwards changes and swallows repeats", () => {
+  const writes: Array<[string, string | undefined]> = [];
+  const ui = {
+    setStatus(key: string, text: string | undefined) {
+      writes.push([key, text]);
+    },
+  };
+  const writer = createStatusWriter("subagents");
+
+  // Pi repaints the whole TUI on every setStatus, so the first clear has to
+  // land but its repeats must not.
+  assert.equal(writer.write(ui, undefined), true);
+  assert.equal(writer.write(ui, undefined), false);
+  assert.equal(writer.write(ui, "1 running"), true);
+  assert.equal(writer.write(ui, "1 running"), false);
+  assert.equal(writer.write(ui, undefined), true);
+  assert.deepEqual(writes, [
+    ["subagents", undefined],
+    ["subagents", "1 running"],
+    ["subagents", undefined],
+  ]);
+
+  // A new session's footer starts empty, so its first write must land even
+  // when the text matches what the previous session last showed.
+  const nextSession = {
+    setStatus(key: string, text: string | undefined) {
+      writes.push([key, text]);
+    },
+  };
+  assert.equal(writer.write(nextSession, undefined), true);
+
+  writer.reset();
+  assert.equal(writer.write(nextSession, undefined), true);
 });
 
 test("status text names its own view command", () => {

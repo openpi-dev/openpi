@@ -5,8 +5,8 @@
 
 import * as os from "node:os";
 import {
-  truncateHead,
   type ExtensionContext,
+  truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { spinnerFrame } from "../shared/spinner.ts";
@@ -141,6 +141,23 @@ export interface AgentRecord {
 export interface WorkflowLogEntry {
   at: number;
   text: string;
+  /** Runtime-authored evidence, distinct from free-form script narration. */
+  kind?: "pipeline-drop";
+}
+
+/** Metadata attached only to the bounded in-memory settled-run projection. */
+export interface WorkflowMemoryProjection {
+  readonly kind: "settled";
+  readonly maxBytes: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly omitted: {
+    readonly agents: number;
+    readonly logs: number;
+    readonly transcriptEntries: number;
+    readonly result: boolean;
+    readonly graph: boolean;
+  };
 }
 
 export interface WorkflowDetails {
@@ -172,6 +189,54 @@ export interface WorkflowDetails {
   /** Read-only lineage projection; never execution or admission authority. */
   graph?: WorkflowGraphProjection;
   error?: string;
+  /** Present only on the session-memory projection, never canonical history. */
+  memoryProjection?: WorkflowMemoryProjection;
+}
+
+/** Bounded tool-result projection; authoritative details remain in run artifacts. */
+export function compactWorkflowToolDetails(
+  details: WorkflowDetails,
+): WorkflowDetails {
+  return {
+    ...details,
+    ...(details.result !== undefined
+      ? {
+          result: JSON.parse(
+            safeStringify(details.result, { maxBytes: 64 * 1024 }),
+          ),
+        }
+      : {}),
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
+}
+
+/**
+ * Bound only the current-session terminal projection. Persisted workflow
+ * records and side artifacts remain the canonical history.
+ */
+export const MAX_SETTLED_RUNS = 32;
+
+/** Evict the oldest terminal projections without touching active-run state. */
+export function evictOldestSettledRuns(
+  settledRuns: Map<string, WorkflowDetails>,
+  maxRuns = MAX_SETTLED_RUNS,
+): string[] {
+  const limit = Number.isFinite(maxRuns)
+    ? Math.max(0, Math.floor(maxRuns))
+    : MAX_SETTLED_RUNS;
+  const evicted: string[] = [];
+  while (settledRuns.size > limit) {
+    let oldest: { runId: string; at: number } | undefined;
+    for (const [runId, details] of settledRuns) {
+      if (details.status === "running") continue;
+      const at = details.finishedAt ?? details.startedAt;
+      if (!oldest || at < oldest.at) oldest = { runId, at };
+    }
+    if (!oldest) break;
+    settledRuns.delete(oldest.runId);
+    evicted.push(oldest.runId);
+  }
+  return evicted;
 }
 
 export function workflowGraphRecords(
@@ -306,11 +371,12 @@ export function appendLog(
   details: WorkflowDetails,
   text: string,
   at: number,
+  kind?: WorkflowLogEntry["kind"],
 ): void {
   const clean = sanitizeLine(text, MAX_LOG_TEXT);
   if (!clean) return;
   const logs = (details.logs ??= []);
-  logs.push({ at, text: clean });
+  logs.push({ at, text: clean, ...(kind ? { kind } : {}) });
   const excess = logs.length - MAX_LOG_ENTRIES;
   if (excess > 0) {
     logs.splice(0, excess);

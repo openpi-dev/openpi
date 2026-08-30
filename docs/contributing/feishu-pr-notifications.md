@@ -1,6 +1,6 @@
 # Feishu PR notifications
 
-The Feishu group bot notification is handled by `.github/workflows/feishu-pr-notification.yml`.
+The Feishu group bot notification is triggered by `.github/workflows/feishu-pr-notification.yml`. The caller follows the reusable implementation on the [`openpi-dev/automation`](https://github.com/openpi-dev/automation) `main` branch.
 
 To enable it:
 
@@ -11,6 +11,6 @@ To enable it:
 
 The workflow skips notifications when neither secret exists and fails when only one is configured. The webhook URL and signing secret are never included in the message or logs.
 
-The workflow runs when a pull request is opened or marked ready for review. It uses `pull_request_target` so the repository secret is available for PRs from forks. It checks out only `github.workflow_sha`, the trusted commit that supplied the workflow, and never checks out or executes pull request code.
+The workflow runs when a pull request is opened or marked ready for review. It uses `pull_request_target` so the repository secret is available for PRs from forks. The repository caller passes only the two Feishu secrets to the reusable workflow; neither workflow checks out or executes pull request code.
 
 Notifications are event-driven: if an author moves a pull request back to draft and then marks it ready again, the group receives another notification.

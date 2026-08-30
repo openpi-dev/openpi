@@ -1,14 +1,14 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import {
+  type AgentRecord,
   appendLog,
+  createUsageReader,
   MAX_LOG_ENTRIES,
   MAX_LOG_TEXT,
   sanitizeLine,
   sanitizeWorkflowDisplayLine,
   sanitizeWorkflowDisplayText,
-  createUsageReader,
-  type AgentRecord,
   type WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
 import { runWorkflowSandbox } from "../../../extensions/workflows/sandbox.ts";
@@ -313,7 +313,7 @@ test("a stage that throws says why instead of leaving a bare null", async () => 
   // Without this, a script bug, a deliberate skip, and a genuinely failed
   // agent are one indistinguishable null — and the "how many dropped" count
   // every script is told to report becomes a guess.
-  const logs: string[] = [];
+  const logs: Array<{ text: string; kind?: "pipeline-drop" }> = [];
   const result = await runSandbox(
     `
       return await pipeline(
@@ -322,12 +322,13 @@ test("a stage that throws says why instead of leaving a bare null", async () => 
         (prev) => { if (prev === "b") throw new Error("guard rejected b"); return prev; },
       );
     `,
-    { onLog: (text) => logs.push(text) },
+    { onLog: (text, kind) => logs.push({ text, kind }) },
   );
   assert.deepEqual(result, ["a", null]);
   assert.equal(logs.length, 1);
-  assert.match(logs[0] ?? "", /item 1 dropped/);
-  assert.match(logs[0] ?? "", /guard rejected b/);
+  assert.equal(logs[0]?.kind, "pipeline-drop");
+  assert.match(logs[0]?.text ?? "", /item 1 dropped/);
+  assert.match(logs[0]?.text ?? "", /guard rejected b/);
 });
 
 test("a stage mutating its own input array cannot manufacture nulls", async () => {

@@ -285,8 +285,11 @@ export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
 export const SUBAGENT_LIST_TOOL_DESCRIPTION =
   "List all subagents (running and finished) with their status.";
 
-/** Builds the child completion/failure wrapper injected into the parent model's context. */
-export function buildSubagentResultMessage(options: {
+const SUBAGENT_RESULT_TRANSPORT_INSTRUCTION =
+  "(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)";
+
+/** Builds the user-visible child completion/failure projection. */
+export function buildSubagentResultDisplayMessage(options: {
   id: string;
   title: string;
   status: "running" | "done" | "error";
@@ -297,9 +300,34 @@ export function buildSubagentResultMessage(options: {
   let text = `Subagent ${options.id} "${options.title}" ${verb}.`;
   if (options.errorText) text += `\nError: ${options.errorText}`;
   text += `\n\n${options.output}`;
+  return text;
+}
+
+/** Builds the child completion/failure wrapper injected into the parent model's context. */
+export function buildSubagentResultMessage(options: {
+  id: string;
+  title: string;
+  status: "running" | "done" | "error";
+  errorText?: string;
+  output: string;
+}) {
+  let text = buildSubagentResultDisplayMessage(options);
   // This message is already displayed to the user, so tell the parent to act on
   // it rather than reprint it verbatim.
-  text +=
-    "\n\n(This result is already shown to the user. Act on it and relay only the decisions or next steps — do not repeat it verbatim.)";
+  text += `\n\n${SUBAGENT_RESULT_TRANSPORT_INSTRUCTION}`;
   return text;
+}
+
+/** Remove the transport-only suffix from results persisted before the split. */
+export function stripSubagentResultTransportInstruction(content: string) {
+  const separator = `\n\n${SUBAGENT_RESULT_TRANSPORT_INSTRUCTION}`;
+  const withoutBatchedSeparators = content.replaceAll(
+    `${separator}\n\nSubagent `,
+    "\n\nSubagent ",
+  );
+  return (
+    withoutBatchedSeparators.endsWith(separator)
+      ? withoutBatchedSeparators.slice(0, -separator.length)
+      : withoutBatchedSeparators
+  ).trimEnd();
 }

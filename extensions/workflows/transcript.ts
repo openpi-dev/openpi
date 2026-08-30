@@ -133,7 +133,7 @@ export class WorkflowTranscriptRenderer {
     cwd: string | undefined,
     width: number,
     theme: Theme,
-    options?: { readonly now?: number },
+    options?: { readonly now?: number; readonly expanded?: boolean },
   ) {
     return this.renderer.render(
       this.adapter.document(transcript, cwd),

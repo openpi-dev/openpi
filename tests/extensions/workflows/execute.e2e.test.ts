@@ -29,7 +29,10 @@ import type {
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
-import type { WorkflowDetails } from "../../../extensions/workflows/model.ts";
+import {
+  MAX_SETTLED_RUNS,
+  type WorkflowDetails,
+} from "../../../extensions/workflows/model.ts";
 import type { WorkflowAgentSessionFactory } from "../../../extensions/workflows/runner.ts";
 
 const agentDir = mkdtempSync(join(tmpdir(), "my-pi-setup-wf-e2e-"));
@@ -162,7 +165,9 @@ for (const [runId, status] of [
   );
 }
 
-workflows(pi);
+workflows(pi, {
+  settledRetention: { maxRuns: 8, maxBytes: 64 * 1024 },
+});
 for (const handler of handlers.get("session_start") ?? []) {
   await handler({}, {
     ...ctx,
@@ -226,7 +231,11 @@ async function waitFor(
 }
 
 /** A minimal AgentSession stand-in for one successful child agent call. */
-function fakeAgentSession(output: string, promptGate?: Promise<void>) {
+function fakeAgentSession(
+  output: string,
+  promptGate?: Promise<void>,
+  onPrompt?: (prompt: string) => void,
+) {
   const listeners = new Set<AgentSessionEventListener>();
   // The reviewer agent type requests the read-only tool surface; the child
   // preflight in bindChildSessionExtensions requires all of them active.
@@ -276,7 +285,8 @@ function fakeAgentSession(output: string, promptGate?: Promise<void>) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    async prompt() {
+    async prompt(promptValue?: unknown) {
+      onPrompt?.(typeof promptValue === "string" ? promptValue : "");
       await promptGate;
       const assistant = messages.find(
         (message) => message.role === "assistant",
@@ -716,12 +726,20 @@ test("cancelled detached delivery preserves aborted status after artifact persis
     );
     assert.ok(delivered);
     const deliveredDetails = delivered.message.details as {
-      status?: unknown;
-      error?: unknown;
+      entries?: Array<{ status?: unknown; alerts?: unknown[] }>;
     };
-    assert.equal(deliveredDetails.status, "aborted");
-    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
-    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+    const deliveredEntry = deliveredDetails.entries?.[0];
+    assert.equal(deliveredEntry?.status, "aborted");
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Workflow was aborted"),
+      ),
+    );
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Artifact persistence failed"),
+      ),
+    );
   } finally {
     releasePrompt();
     __setWorkflowTestAgentSessionFactory(undefined);
@@ -757,6 +775,54 @@ test("a failing script reports the error and records the run as failed", async (
   const persisted = readWorkflowJson(failed.runId);
   assert.equal(persisted.status, "failed");
   assert.match(String(persisted.error), /kaboom/);
+});
+
+test("settled retention is bounded while status and artifacts remain observable", async () => {
+  const before = (await status.execute("e2e-retention-before", {})) as {
+    details: { settledRunsEvicted: number };
+  };
+  const runIds: string[] = [];
+
+  for (let index = 0; index < MAX_SETTLED_RUNS + 1; index++) {
+    const result = (await workflow.execute(
+      `e2e-retention-${index}`,
+      {
+        script: `export const meta = { name: "retention-${index}" };\nreturn ${index};`,
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+    assert.equal(typeof result.details.runId, "string");
+    runIds.push(result.details.runId as string);
+  }
+
+  const after = (await status.execute("e2e-retention-after", {})) as {
+    content: Array<{ text?: string }>;
+    details: {
+      runs: Array<{ runId: unknown }>;
+      settledRunsEvicted: number;
+    };
+  };
+  assert.ok(after.details.runs.length <= MAX_SETTLED_RUNS);
+  assert.ok(
+    after.details.settledRunsEvicted >= before.details.settledRunsEvicted + 1,
+  );
+  assert.match(
+    after.content[0]?.text ?? "",
+    /Retention \(current session\): .* evicted\/omitted .*Canonical artifacts remain available on disk\./,
+  );
+
+  const oldestRunId = runIds[0]!;
+  assert.equal(existsSync(join(runDirFor(oldestRunId), "workflow.json")), true);
+  const lookup = (await status.execute("e2e-retention-lookup", {
+    runId: oldestRunId,
+  })) as {
+    details: { runs: Array<{ runId: unknown; status: unknown }> };
+  };
+  assert.equal(lookup.details.runs[0]?.runId, oldestRunId);
+  assert.equal(lookup.details.runs[0]?.status, "completed");
 });
 
 test("agent calls run through the injected session factory and resume replays the journal", async () => {
@@ -1049,6 +1115,112 @@ test("replay acceptance verdicts do not create success filesystem side effects",
   }
 });
 
+test("structured agent results survive handoff refs and downstream inputs", async () => {
+  let sessionCreations = 0;
+  let downstreamPrompt = "";
+  const factory: WorkflowAgentSessionFactory = async (options) => {
+    sessionCreations++;
+    if (sessionCreations > 1) {
+      return {
+        session: fakeAgentSession("downstream output", undefined, (prompt) => {
+          downstreamPrompt = prompt;
+        }),
+      };
+    }
+
+    const structuredTool = options?.customTools?.find(
+      (tool) => tool.name === "structured_output",
+    );
+    assert.ok(structuredTool);
+    const session = fakeAgentSession("");
+    const existingTools = session.getAllTools();
+    session.getAllTools = () => [
+      ...existingTools,
+      {
+        name: structuredTool.name,
+        description: structuredTool.description,
+        parameters: structuredTool.parameters,
+        promptGuidelines: structuredTool.promptGuidelines,
+        sourceInfo: {
+          path: "<custom:structured_output>",
+          source: "custom",
+          scope: "temporary",
+          origin: "top-level",
+        },
+      },
+    ];
+    session.getActiveToolNames = () => [
+      ...existingTools.map((tool) => tool.name),
+      structuredTool.name,
+    ];
+    session.getToolDefinition = (name) =>
+      name === structuredTool.name ? structuredTool : undefined;
+    session.prompt = async () => {
+      await structuredTool.execute(
+        "structured-handoff",
+        { verdict: "accepted", score: 7 },
+        new AbortController().signal,
+        () => {},
+        ctx,
+      );
+    };
+    return { session };
+  };
+  __setWorkflowTestAgentSessionFactory(factory);
+
+  try {
+    const result = (await workflow.execute(
+      "e2e-structured-handoff",
+      {
+        script:
+          'export const meta = { name: "structured-handoff" };\n' +
+          'const first = await agent("produce a verdict", { agent_type: "reviewer", schema: { type: "object", properties: { verdict: { type: "string" }, score: { type: "number" } }, required: ["verdict", "score"] } });\n' +
+          'const second = await agent("consume the upstream verdict", { agent_type: "reviewer", inputs: [first.ref] });\n' +
+          "return { firstOk: first.ok, firstRef: first.ref ?? null, secondOk: second.ok, secondOutput: second.output };",
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { details: { runId?: unknown } };
+
+    const runId = result.details.runId;
+    const runDir = runDirFor(runId);
+    const returned = JSON.parse(
+      readFileSync(join(runDir, "result.json"), "utf8"),
+    ) as {
+      firstOk: unknown;
+      firstRef: unknown;
+      secondOk: unknown;
+      secondOutput: unknown;
+    };
+    assert.equal(returned.firstOk, true);
+    assert.equal(typeof returned.firstRef, "string");
+    assert.equal(returned.secondOk, true);
+    assert.equal(returned.secondOutput, "downstream output");
+    assert.match(downstreamPrompt, /accepted/);
+
+    const persisted = readWorkflowJson(runId);
+    const agents = persisted.agents as Array<{
+      callId?: unknown;
+      state: unknown;
+      resultArtifact?: unknown;
+      resultRef?: unknown;
+      inputCallIds?: unknown;
+    }>;
+    assert.equal(agents.length, 2);
+    assert.equal(agents[0]?.state, "done");
+    assert.equal(agents[0]?.resultArtifact, "agent-results/agent-0001.json");
+    assert.equal(typeof agents[0]?.resultRef, "string");
+    assert.equal(agents[1]?.state, "done");
+    assert.equal(agents[1]?.resultArtifact, "agent-results/agent-0002.json");
+    assert.deepEqual(agents[1]?.inputCallIds, [agents[0]?.callId]);
+    assert.equal(sessionCreations, 2);
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+});
+
 test("oversized authoritative agent results fail without a success record", async () => {
   const factory: WorkflowAgentSessionFactory = async (options) => {
     const structuredTool = options?.customTools?.find(
@@ -1198,6 +1370,85 @@ test("an oversized legacy replay is rejected without a success record", async ()
   } finally {
     __setWorkflowTestAgentSessionFactory(undefined);
   }
+});
+
+test("extension retention stays bounded and reports evictions under settled-run pressure", async () => {
+  const before = (await status.execute("e2e-retention-before", {})) as {
+    details: {
+      retention: {
+        retainedRuns: number;
+        retainedBytes: number;
+        evictedRuns: number;
+      };
+    };
+  };
+  const beforeEvictions = before.details.retention.evictedRuns;
+  let sessionCreations = 0;
+  __setWorkflowTestAgentSessionFactory(async () => {
+    sessionCreations++;
+    return { session: fakeAgentSession(`pressure output ${sessionCreations}`) };
+  });
+  const script =
+    'export const meta = { name: "retention-pressure" };\n' +
+    'const r = await agent("pressure fixture", { agent_type: "reviewer", label: "pressure-agent" });\n' +
+    'log("pressure log: " + r.output);\n' +
+    "return { ok: r.ok, output: r.output };";
+
+  const runIds: string[] = [];
+  try {
+    for (let index = 0; index < 16; index++) {
+      const result = (await workflow.execute(
+        `e2e-retention-pressure-${index}`,
+        { script, wait: true },
+        undefined,
+        undefined,
+        ctx,
+      )) as { details: { runId?: unknown; status?: unknown } };
+      assert.equal(result.details.status, "completed");
+      assert.equal(typeof result.details.runId, "string");
+      runIds.push(result.details.runId as string);
+    }
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
+
+  for (const runId of runIds) {
+    const persisted = readWorkflowJson(runId);
+    assert.equal((persisted.agents as unknown[]).length, 1);
+    assert.equal((persisted.logs as unknown[]).length, 1);
+  }
+
+  const after = (await status.execute("e2e-retention-after", {})) as {
+    content: Array<{ text: string }>;
+    details: {
+      runs: Array<{ name?: unknown; total: number }>;
+      retention: {
+        retainedRuns: number;
+        retainedBytes: number;
+        evictedRuns: number;
+        settledRunsEvicted: number;
+      };
+      settledRunsEvicted: number;
+    };
+  };
+  assert.equal(sessionCreations, 16);
+  assert.equal(after.details.retention.retainedRuns, 8);
+  assert.ok(after.details.retention.retainedBytes <= 64 * 1024);
+  assert.ok(after.details.retention.evictedRuns - beforeEvictions >= 8);
+  assert.equal(
+    after.details.retention.settledRunsEvicted,
+    after.details.retention.evictedRuns,
+  );
+  assert.equal(
+    after.details.settledRunsEvicted,
+    after.details.retention.evictedRuns,
+  );
+  const retainedPressureRuns = after.details.runs.filter(
+    (run) => run.name === "retention-pressure",
+  );
+  assert.equal(retainedPressureRuns.length, 8);
+  assert.ok(retainedPressureRuns.every((run) => run.total === 1));
+  assert.match(after.content[0]!.text, /evicted\/omitted/);
 });
 
 test("forced settlement persists worktree cleanup that finishes later", async () => {

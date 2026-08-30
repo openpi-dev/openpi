@@ -11,30 +11,7 @@ permissions:
 jobs:
   notify:
     name: Notify Feishu
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: ${{ !github.event.pull_request.draft }}
-    steps:
-      - name: Check out trusted workflow source
-        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - name: Send PR notification
-        env:
-          FEISHU_PR_BOT_WEBHOOK: ${{ secrets.FEISHU_PR_BOT_WEBHOOK }}
-          FEISHU_PR_BOT_SECRET: ${{ secrets.FEISHU_PR_BOT_SECRET }}
-          REPOSITORY: ${{ github.repository }}
-          EVENT_PATH: ${{ github.event_path }}
-        run: |
-          if test -z "${FEISHU_PR_BOT_WEBHOOK}" && test -z "${FEISHU_PR_BOT_SECRET}"; then
-            echo "Feishu bot secrets are not configured; skipping notification."
-            exit 0
-          fi
-
-          if test -z "${FEISHU_PR_BOT_WEBHOOK}" || test -z "${FEISHU_PR_BOT_SECRET}"; then
-            echo "Both FEISHU_PR_BOT_WEBHOOK and FEISHU_PR_BOT_SECRET must be configured."
-            exit 1
-          fi
-
-          node .github/actions/feishu-pr-notification/index.cjs
+    uses: openpi-dev/automation/.github/workflows/openpi-feishu-pr-notification.yml@main
+    secrets:
+      FEISHU_PR_BOT_WEBHOOK: ${{ secrets.FEISHU_PR_BOT_WEBHOOK }}
+      FEISHU_PR_BOT_SECRET: ${{ secrets.FEISHU_PR_BOT_SECRET }}

@@ -20,8 +20,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../shared/agent-session-page.ts";
-import { contextPercent } from "../shared/context-utilization.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   panelFrame,
   type ScreenHint,
@@ -428,6 +428,9 @@ export function normalizePersistedWorkflowDetails(
     logs.push({
       at: typeof entry.at === "number" ? entry.at : startedAt,
       text: sanitizeLine(entry.text, MAX_LOG_TEXT),
+      ...(entry.kind === "pipeline-drop"
+        ? { kind: "pipeline-drop" as const }
+        : {}),
     });
   }
 
@@ -566,22 +569,31 @@ export function loadRunEntries(
   referencedRunIds: ReadonlySet<string>,
   /** Hide runs untouched by the current request; live runs always show. */
   startedSince = 0,
+  /** Bounded settled projections used only if canonical disk state is unreadable. */
+  retained: ReadonlyMap<string, WorkflowDetails> = new Map(),
 ): RunEntry[] {
   const entries: RunEntry[] = [];
-  for (const runId of listPersistedRunIds()) {
+  const runIds = new Set([...listPersistedRunIds(), ...retained.keys()]);
+  for (const runId of runIds) {
     const live = active.get(runId);
     if (live) {
       entries.push({ runId, details: live, live: true });
       continue;
     }
-    const details = readPersistedWorkflowDetails(runId, {
+    const persisted = readPersistedWorkflowDetails(runId, {
       hydrateArtifacts: true,
     });
+    const retainedDetails = retained.get(runId);
+    const details = persisted ?? retainedDetails;
     if (!details) continue;
+    const fromRetention =
+      persisted === undefined && retainedDetails !== undefined;
     const touchedAt = Math.max(details.startedAt, details.finishedAt ?? 0);
     if (
       touchedAt < startedSince ||
-      (details.sessionId !== sessionId && !referencedRunIds.has(runId))
+      (!fromRetention &&
+        details.sessionId !== sessionId &&
+        !referencedRunIds.has(runId))
     ) {
       continue;
     }
@@ -713,11 +725,13 @@ export class WorkflowDashboard {
   private theme: Theme;
   private keybindings: KeybindingsManager;
   private getActive: () => Map<string, WorkflowDetails>;
+  private getRetained: () => ReadonlyMap<string, WorkflowDetails>;
   private sessionId: string;
   private referencedRunIds: ReadonlySet<string>;
   private startedSince: number;
   private close: () => void;
   private onAbort?: (runId: string) => boolean;
+  private initialToolsExpanded: boolean;
 
   constructor(
     tui: TUI,
@@ -730,16 +744,20 @@ export class WorkflowDashboard {
     close: () => void,
     initialRunId?: string,
     onAbort?: (runId: string) => boolean,
+    getRetained: () => ReadonlyMap<string, WorkflowDetails> = () => new Map(),
+    initialToolsExpanded = false,
   ) {
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
     this.getActive = getActive;
+    this.getRetained = getRetained;
     this.sessionId = sessionId;
     this.referencedRunIds = referencedRunIds;
     this.startedSince = startedSince;
     this.close = close;
     this.onAbort = onAbort;
+    this.initialToolsExpanded = initialToolsExpanded;
     this.refresh();
     if (initialRunId) {
       const resolution = resolveWorkflowRunTarget(
@@ -805,6 +823,7 @@ export class WorkflowDashboard {
       this.sessionId,
       this.referencedRunIds,
       this.startedSince,
+      this.getRetained(),
     );
     if (selected) {
       const index = this.entries.findIndex((e) => e.runId === selected);
@@ -1037,6 +1056,7 @@ export class WorkflowDashboard {
           this.tui.requestRender();
         },
       },
+      { toolsExpanded: this.initialToolsExpanded },
     );
     this.tui.requestRender();
   }
@@ -1405,6 +1425,7 @@ export async function showWorkflowDashboard(
   initialRunId?: string,
   startedSince = 0,
   onAbort?: (runId: string) => boolean,
+  getRetained?: () => ReadonlyMap<string, WorkflowDetails>,
 ) {
   await ctx.ui.custom<void>(
     (tui, theme, keybindings, done) => {
@@ -1422,6 +1443,8 @@ export async function showWorkflowDashboard(
         },
         initialRunId,
         onAbort,
+        getRetained,
+        ctx.ui.getToolsExpanded(),
       );
       return dashboard;
     },
