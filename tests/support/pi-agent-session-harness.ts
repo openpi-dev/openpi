@@ -111,6 +111,7 @@ export function createPiAgentSessionHarness(
   let activeTools = [...(options.activeTools ?? [])];
   let harness: PiAgentSessionHarness;
   const pendingDefaultPrompts: Array<() => void> = [];
+  let queuedPromptResolutions = 0;
 
   const emit = (event: AgentSessionEvent) => {
     for (const listener of [...listeners]) listener(event);
@@ -191,6 +192,11 @@ export function createPiAgentSessionHarness(
         return;
       }
       await new Promise<void>((resolve) => {
+        if (queuedPromptResolutions > 0) {
+          queuedPromptResolutions--;
+          resolve();
+          return;
+        }
         pendingDefaultPrompts.push(resolve);
       });
     },
@@ -234,7 +240,9 @@ export function createPiAgentSessionHarness(
     calls,
     emit,
     resolvePrompt() {
-      pendingDefaultPrompts.shift()?.();
+      const resolve = pendingDefaultPrompts.shift();
+      if (resolve) resolve();
+      else queuedPromptResolutions++;
     },
     emitUser(text) {
       const message = {

@@ -7,6 +7,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type {
+  SubagentCleanupReceipt,
   SubagentBackend,
   SubagentSession,
 } from "../../../extensions/subagents/src/backend.ts";
@@ -254,6 +255,116 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
   assert.equal(harness.calls.clearQueues, 1);
   assert.equal(harness.calls.aborts, 1);
   assert.equal(harness.calls.disposals, 1);
+});
+
+test("prompt rejection wins over an earlier agent_settled event", async () => {
+  const prompt = deferred<void>();
+  const fixtures = harnessFactory(() => ({
+    prompt: () => prompt.promise,
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend, 10_000);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("settled event before prompt rejection")),
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("partial provider output");
+    harness.setStreaming(false);
+    harness.emit({ type: "agent_settled" });
+
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
+
+    prompt.reject(new Error("provider rejected after settlement event"));
+    await waitFor(
+      () => manager.view.get(spawned.id)?.status === "error",
+      "prompt rejection to settle",
+    );
+    assert.equal(
+      manager.view.get(spawned.id)?.errorText,
+      "provider rejected after settlement event",
+    );
+  } finally {
+    prompt.resolve();
+    await runtime.dispose();
+  }
+});
+
+test("a prompt that resolves without lifecycle events fails explicitly", async () => {
+  const fixtures = harnessFactory(() => ({ prompt: async () => {} }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const runtime = createManagerRuntime(backend, 10_000);
+  try {
+    const manager = await runtime.runPromise(SubagentManager);
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("extension handled prompt")),
+    );
+    await waitFor(
+      () => manager.view.get(spawned.id)?.status === "error",
+      "prompt without lifecycle to fail",
+    );
+    assert.match(
+      manager.view.get(spawned.id)?.errorText ?? "",
+      /prompt completed without lifecycle events/i,
+    );
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.setStreaming(true);
+    harness.emit({ type: "agent_start" });
+    harness.emitAssistant("late lifecycle output");
+    harness.emit({ type: "agent_settled" });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.finalText, "");
+  } finally {
+    await runtime.dispose();
+  }
+});
+
+test("a non-quiescent prompt preserves its worktree and exposes cleanup uncertainty", async () => {
+  const stuckPreflight = deferred<void>();
+  let cleanupCalls = 0;
+  const fixtures = harnessFactory(() => ({
+    preflight: () => stuckPreflight.promise,
+  }));
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 25,
+    worktreeCleanup: async () => {
+      cleanupCalls++;
+      throw new Error("worktree cleanup should not run");
+    },
+  });
+  let cleanupReceipt: (() => SubagentCleanupReceipt | undefined) | undefined;
+  await Effect.runPromise(
+    Effect.scoped(
+      Effect.gen(function* () {
+        const session = yield* backend.spawn(
+          task("stuck preflight worktree", {
+            worktree: {
+              path: "C:/fixture-worktree",
+              branch: "pi/fixture-worktree",
+              repoCwd: process.cwd(),
+            },
+          }),
+        );
+        cleanupReceipt = session.cleanupReceipt;
+      }),
+    ),
+  );
+  assert.equal(cleanupCalls, 0);
+  assert.match(cleanupReceipt?.()?.message ?? "", /prompt did not quiesce/i);
+  stuckPreflight.resolve();
 });
 
 test("streaming send steers while idle send starts a distinct run", async () => {
@@ -532,7 +643,8 @@ test("settled restart waits for the previous prompt Promise microtask boundary",
     harness.emitAssistant("first result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
-    await runtime.runPromise(manager.waitFor([spawned.id]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
 
     let restartAccepted = false;
     const restart = runtime
@@ -591,8 +703,8 @@ test("cancel invalidates a restart waiting on the previous prompt Promise", asyn
     harness.emitAssistant("first result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
-    await runtime.runPromise(manager.waitFor([spawned.id]));
-    assert.equal(settlements, 1);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
 
     const restart = runtime.runPromise(
       manager.send(spawned.id, "restart that will be cancelled"),
@@ -617,7 +729,7 @@ test("cancel invalidates a restart waiting on the previous prompt Promise", asyn
     ]);
     assert.equal(manager.view.get(spawned.id)?.status, "error");
     assert.equal(manager.view.get(spawned.id)?.finalText, "");
-    assert.equal(settlements, 2);
+    assert.equal(settlements, 1);
   } finally {
     firstPrompt.resolve();
     secondPrompt.resolve();
@@ -650,7 +762,8 @@ test("an aborted send cannot start its deferred restart later", async () => {
     harness.emitAssistant("stable prior result");
     harness.setStreaming(false);
     harness.emit({ type: "agent_settled" });
-    await runtime.runPromise(manager.waitFor([spawned.id]));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
 
     const controller = new AbortController();
     const send = runtime.runPromise(
@@ -813,6 +926,7 @@ test("cancelled restart preflight never reuses the previous run output", async (
 test("a preflight that ignores abort is force-closed without reopening the session", async () => {
   const stuckPreflight = deferred<void>();
   let providerRuns = 0;
+  let cleanupCalls = 0;
   const fixtures = harnessFactory((_options, index) =>
     index === 0
       ? {
@@ -826,12 +940,25 @@ test("a preflight that ignores abort is force-closed without reopening the sessi
   const backend = makePiBackend({
     sessionFactory: fixtures.factory,
     shutdownTimeoutMs: 50,
+    worktreeCleanup: async () => {
+      cleanupCalls++;
+      throw new Error("unsafe worktree cleanup should not run");
+    },
   });
   const runtime = createManagerRuntime(backend, 10_000);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
-      manager.spawn("pi", task("never-ending preflight")),
+      manager.spawn(
+        "pi",
+        task("never-ending preflight", {
+          worktree: {
+            path: "C:/fixture-worktree",
+            branch: "pi/fixture-worktree",
+            repoCwd: process.cwd(),
+          },
+        }),
+      ),
     );
     const startedAt = Date.now();
     const report = await runtime.runPromise(manager.cancel([spawned.id]));
@@ -841,6 +968,11 @@ test("a preflight that ignores abort is force-closed without reopening the sessi
       manager.view.get(spawned.id)?.errorText ?? "",
       /Abort deadline exceeded/,
     );
+    assert.match(
+      manager.view.get(spawned.id)?.errorText ?? "",
+      /worktree cleanup skipped; checkout preserved at C:\/fixture-worktree/,
+    );
+    assert.equal(cleanupCalls, 0);
     await waitFor(
       () => fixtures.harnesses[0]?.calls.disposals === 1,
       "stuck preflight session disposal",
