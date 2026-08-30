@@ -8,5 +8,6 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 
 - [`CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md) — official-source research on dynamic fan-out and bounded execution.
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
+- [`OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md`](OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md) — Issue #19/#20 的零常驻工具面与三臂诊断复盘。
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
