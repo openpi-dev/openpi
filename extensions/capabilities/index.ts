@@ -25,7 +25,9 @@ import {
   resetOpenPiToolSurface,
 } from "../shared/tool-surface.ts";
 import {
+  CAPABILITY_SHIMMER_INTERVAL_MS,
   CapabilityIntentHighlightEditor,
+  capabilityShimmerPhase,
   colorCapabilityKeyword,
   isLightNamedTheme,
 } from "./src/ui.ts";
@@ -85,6 +87,28 @@ export function createCapabilitiesExtension(
   },
 ) {
   return function capabilities(pi: ExtensionAPI) {
+    let shimmerEditor: CapabilityIntentHighlightEditor | undefined;
+    let shimmerTimer: ReturnType<typeof setInterval> | undefined;
+    let requestShimmerRender: (() => void) | undefined;
+
+    const stopShimmer = () => {
+      if (shimmerTimer) clearInterval(shimmerTimer);
+      shimmerTimer = undefined;
+      shimmerEditor = undefined;
+      requestShimmerRender = undefined;
+    };
+
+    const startShimmer = (
+      editor: CapabilityIntentHighlightEditor,
+      requestRender: () => void,
+    ) => {
+      shimmerEditor = editor;
+      requestShimmerRender = requestRender;
+      shimmerTimer ??= setInterval(() => {
+        if (shimmerEditor?.hasCapabilityIntent()) requestShimmerRender?.();
+      }, CAPABILITY_SHIMMER_INTERVAL_MS);
+    };
+
     const reconcileDiscoveryGateway = () => {
       const adaptive =
         dependencies.loadConfig().capabilities.discovery === "adaptive";
@@ -98,6 +122,7 @@ export function createCapabilitiesExtension(
     pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, reconcileDiscoveryGateway);
 
     pi.on("session_start", (_event, ctx) => {
+      stopShimmer();
       resetOpenPiToolSurface(
         pi,
         dependencies.sourcePath
@@ -108,17 +133,25 @@ export function createCapabilitiesExtension(
       registerEditorLayer(pi, ctx, {
         id: "capability-intent-highlight",
         order: 150,
-        wrap: (base, _tui, _theme, keybindings) =>
-          new CapabilityIntentHighlightEditor(base, keybindings, (text) =>
-            colorCapabilityKeyword(text, {
-              colorMode: ctx.ui.theme.getColorMode(),
-              light: isLightNamedTheme(ctx.ui.theme.name),
-            }),
-          ),
+        wrap: (base, tui, _theme, keybindings) => {
+          const editor = new CapabilityIntentHighlightEditor(
+            base,
+            keybindings,
+            (text) =>
+              colorCapabilityKeyword(text, {
+                colorMode: ctx.ui.theme.getColorMode(),
+                light: isLightNamedTheme(ctx.ui.theme.name),
+                phase: capabilityShimmerPhase(),
+              }),
+          );
+          startShimmer(editor, () => tui.requestRender());
+          return editor;
+        },
       });
     });
 
     pi.on("session_shutdown", () => {
+      stopShimmer();
       removeEditorLayer(pi, "capability-intent-highlight");
     });
 

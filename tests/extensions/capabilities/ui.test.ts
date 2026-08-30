@@ -9,10 +9,15 @@ import {
 } from "../../../extensions/suggestions/src/ui.ts";
 import {
   CapabilityIntentHighlightEditor,
+  capabilityShimmerPhase,
   colorCapabilityKeyword,
   highlightCapabilityNames,
   isLightNamedTheme,
 } from "../../../extensions/capabilities/src/ui.ts";
+
+function stripSgr(value: string) {
+  return value.replace(/\u001b\[[0-9;]*m/gu, "");
+}
 
 function baseEditor(initial: string): EditorComponent {
   let text = initial;
@@ -39,40 +44,39 @@ function editor(initial: string) {
   };
 }
 
-test("uses Claude-style lavender with a contrast-safe light variant", () => {
+test("renders a moving purple shimmer with a contrast-safe light variant", () => {
   assert.equal(isLightNamedTheme("light"), true);
   assert.equal(isLightNamedTheme("github-light-default"), true);
   assert.equal(isLightNamedTheme("dark"), false);
   assert.equal(isLightNamedTheme(undefined), false);
 
-  assert.equal(
-    colorCapabilityKeyword("subagent", {
-      colorMode: "truecolor",
-      light: false,
-    }),
-    "\u001b[38;2;210;168;255msubagent\u001b[39m",
-  );
-  assert.equal(
-    colorCapabilityKeyword("workflow", {
-      colorMode: "256color",
-      light: false,
-    }),
-    "\u001b[38;5;183mworkflow\u001b[39m",
-  );
-  assert.equal(
-    colorCapabilityKeyword("subagent", {
-      colorMode: "truecolor",
-      light: true,
-    }),
-    "\u001b[38;2;130;80;223msubagent\u001b[39m",
-  );
-  assert.equal(
-    colorCapabilityKeyword("workflow", {
-      colorMode: "256color",
-      light: true,
-    }),
-    "\u001b[38;5;98mworkflow\u001b[39m",
-  );
+  const darkFrame = colorCapabilityKeyword("subagent", {
+    colorMode: "truecolor",
+    light: false,
+    phase: 0,
+  });
+  const darkNextFrame = colorCapabilityKeyword("subagent", {
+    colorMode: "truecolor",
+    light: false,
+    phase: 0.5,
+  });
+  const lightFrame = colorCapabilityKeyword("workflow", {
+    colorMode: "256color",
+    light: true,
+    phase: 0,
+  });
+
+  assert.notEqual(darkFrame, darkNextFrame);
+  assert.match(darkFrame, /\u001b\[38;2;[0-9;]+m/gu);
+  assert.match(lightFrame, /\u001b\[38;5;[0-9]+m/gu);
+  assert.match(darkFrame, /\u001b\[39m$/u);
+  assert.equal(stripSgr(darkFrame), "subagent");
+  assert.equal(stripSgr(darkNextFrame), "subagent");
+  assert.equal(stripSgr(lightFrame), "workflow");
+
+  assert.equal(capabilityShimmerPhase(0), 0);
+  assert.equal(capabilityShimmerPhase(1_400), 0);
+  assert.equal(capabilityShimmerPhase(700), 0.5);
 });
 
 test("highlights capability names only when shared intent authorizes them", () => {
