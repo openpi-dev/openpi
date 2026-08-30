@@ -1,16 +1,23 @@
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   type AgentSession,
   DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,
+  type LoadExtensionsResult,
   type PackageSource,
   ProjectTrustStore,
   type ResolvedPaths,
   type SessionShutdownEvent,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  OPENPI_OWNER_SOURCE_PATHS,
+  OPENPI_TOOL_SURFACE,
+  type OpenPiToolOwner,
+} from "./tool-surface.ts";
 
 export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -165,6 +172,161 @@ function packageSourceValue(source: PackageSource) {
   return typeof source === "string" ? source : source.source;
 }
 
+const CHILD_DISABLED_OPENPI_EXTENSION =
+  "-extensions/git-info/index.ts" as const;
+const OPENPI_GIT_INFO_EXTENSION_PATH = realpathSync.native(
+  fileURLToPath(new URL("../git-info/index.ts", import.meta.url)),
+);
+
+function canonicalExistingPath(value: string) {
+  try {
+    return realpathSync.native(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function excludeOpenPiGitInfoExtension(
+  resources: LoadExtensionsResult,
+): LoadExtensionsResult {
+  return {
+    ...resources,
+    extensions: resources.extensions.filter(
+      (extension) =>
+        canonicalExistingPath(extension.resolvedPath) !==
+        OPENPI_GIT_INFO_EXTENSION_PATH,
+    ),
+  };
+}
+
+function installedPathNamesOpenPi(installedPath: string) {
+  try {
+    const stats = statSync(installedPath);
+    if (stats.isDirectory()) {
+      const manifestPath = path.join(installedPath, "package.json");
+      if (!existsSync(manifestPath)) return false;
+      const manifest = JSON.parse(
+        readFileSync(manifestPath, "utf8"),
+      ) as unknown;
+      return (
+        typeof manifest === "object" &&
+        manifest !== null &&
+        !Array.isArray(manifest) &&
+        (manifest as Record<string, unknown>).name === "@tt-a1i/openpi"
+      );
+    }
+    let current = stats.isFile() ? path.dirname(installedPath) : undefined;
+    while (current) {
+      const manifestPath = path.join(current, "package.json");
+      if (existsSync(manifestPath)) {
+        const manifest = JSON.parse(
+          readFileSync(manifestPath, "utf8"),
+        ) as unknown;
+        return (
+          typeof manifest === "object" &&
+          manifest !== null &&
+          !Array.isArray(manifest) &&
+          (manifest as Record<string, unknown>).name === "@tt-a1i/openpi"
+        );
+      }
+      const parent = path.dirname(current);
+      if (parent === current) return false;
+      current = parent;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function piMatchesPublishedOpenPiSource(options: {
+  source: string;
+  cwd: string;
+  agentDir: string;
+}) {
+  const settingsManager = SettingsManager.inMemory({
+    packages: [options.source],
+  });
+  const packageManager = new DefaultPackageManager({
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+    settingsManager,
+  });
+  return (
+    packageManager.removeSourceFromSettings("npm:@tt-a1i/openpi") ||
+    packageManager.removeSourceFromSettings(
+      "git:https://github.com/openpi-dev/openpi",
+    ) ||
+    packageManager.removeSourceFromSettings(
+      "git:https://github.com/tt-a1i/openpi",
+    )
+  );
+}
+
+function createOpenPiPackageMatcher(options: {
+  cwd: string;
+  agentDir: string;
+}) {
+  const sourceMatches = new Map<string, boolean>();
+  const installedPathMatches = new Map<string, boolean>();
+  return (source: string, installedPath?: string) => {
+    let sourceMatch = sourceMatches.get(source);
+    if (sourceMatch === undefined) {
+      sourceMatch = piMatchesPublishedOpenPiSource({ source, ...options });
+      sourceMatches.set(source, sourceMatch);
+    }
+    if (sourceMatch || installedPath === undefined) return sourceMatch;
+
+    const resolvedPath = path.resolve(installedPath);
+    let installedPathMatch = installedPathMatches.get(resolvedPath);
+    if (installedPathMatch === undefined) {
+      installedPathMatch = installedPathNamesOpenPi(resolvedPath);
+      installedPathMatches.set(resolvedPath, installedPathMatch);
+    }
+    return installedPathMatch;
+  };
+}
+
+function openPiPackageSources(
+  packageManager: DefaultPackageManager,
+  options: { cwd: string; agentDir: string },
+) {
+  const isOpenPiPackage = createOpenPiPackageMatcher(options);
+  const sources = {
+    user: new Set<string>(),
+    project: new Set<string>(),
+  };
+  for (const configured of packageManager.listConfiguredPackages()) {
+    if (isOpenPiPackage(configured.source, configured.installedPath)) {
+      sources[configured.scope].add(configured.source);
+    }
+  }
+  return sources;
+}
+
+function disablesOpenPiGitInfo(pattern: string) {
+  return (
+    pattern.startsWith("-") &&
+    pattern.slice(1).replace(/^\.\//, "") ===
+      CHILD_DISABLED_OPENPI_EXTENSION.slice(1)
+  );
+}
+
+function disableOpenPiGitInfo(source: PackageSource): PackageSource {
+  if (typeof source !== "string") {
+    if (source.extensions?.length === 0) return source;
+    if (source.autoload === false && source.extensions === undefined) {
+      return source;
+    }
+  }
+  const configured = typeof source === "string" ? { source } : source;
+  const extensions = [...(configured.extensions ?? [])];
+  if (!extensions.some(disablesOpenPiGitInfo)) {
+    extensions.push(CHILD_DISABLED_OPENPI_EXTENSION);
+  }
+  return { ...configured, extensions };
+}
+
 function blockedPackageSources(
   packageManager: DefaultPackageManager,
   resolvedPaths: ResolvedPaths,
@@ -204,6 +366,7 @@ function blockedPackageSources(
 function createEphemeralChildSettings(
   sourceSettings: SettingsManager,
   blockedSources: { user: Set<string>; project: Set<string> },
+  openPiSources: { user: Set<string>; project: Set<string> },
   projectTrusted: boolean,
 ) {
   const globalSettings = sourceSettings.getGlobalSettings();
@@ -213,9 +376,15 @@ function createEphemeralChildSettings(
     scope: "user" | "project",
   ) => ({
     ...settings,
-    packages: settings.packages?.filter(
-      (source) => !blockedSources[scope].has(packageSourceValue(source)),
-    ),
+    packages: settings.packages
+      ?.filter(
+        (source) => !blockedSources[scope].has(packageSourceValue(source)),
+      )
+      .map((source) =>
+        openPiSources[scope].has(packageSourceValue(source))
+          ? disableOpenPiGitInfo(source)
+          : source,
+      ),
   });
   const contents = {
     global: JSON.stringify(settingsForScope(globalSettings, "user")),
@@ -248,10 +417,15 @@ async function createChildSettingsManager(options: {
     cwd: options.cwd,
     agentDir: options.agentDir,
   });
+  const openPiSources = openPiPackageSources(packageManager, {
+    cwd: options.cwd,
+    agentDir: options.agentDir,
+  });
 
   return createEphemeralChildSettings(
     sourceSettings,
     blockedSources,
+    openPiSources,
     options.projectTrusted,
   );
 }
@@ -302,6 +476,42 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "context_pivot",
 ] as const;
 
+const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
+  (Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
+    .filter((owner) => {
+      const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
+      const toolNames = [...entry, ...deferred];
+      return (
+        toolNames.length > 0 &&
+        toolNames.every((name) =>
+          CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
+        )
+      );
+    })
+    .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
+    .filter(
+      (extensionPath): extensionPath is string => extensionPath !== undefined,
+    ),
+);
+
+function isVerifiedParentOnlyOpenPiExtension(extension: {
+  path: string;
+  resolvedPath: string;
+  sourceInfo: { path: string };
+}) {
+  return [
+    extension.path,
+    extension.resolvedPath,
+    extension.sourceInfo.path,
+  ].some((candidate) => {
+    const canonicalPath = canonicalExistingPath(candidate);
+    return (
+      canonicalPath !== undefined &&
+      PARENT_ONLY_OPENPI_EXTENSION_PATHS.has(canonicalPath)
+    );
+  });
+}
+
 /**
  * Fresh SDK options avoid turning the denylist into an accidental allowlist.
  *
@@ -348,6 +558,15 @@ export async function createChildResources(options: ChildResourceOptions) {
     cwd: options.cwd,
     agentDir,
     settingsManager,
+    extensionsOverride(base) {
+      const withoutGitInfo = excludeOpenPiGitInfoExtension(base);
+      return {
+        ...withoutGitInfo,
+        extensions: withoutGitInfo.extensions.filter(
+          (extension) => !isVerifiedParentOnlyOpenPiExtension(extension),
+        ),
+      };
+    },
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),

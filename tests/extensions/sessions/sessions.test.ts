@@ -6,6 +6,7 @@ import {
   buildSessionPreview,
   filterSessionEntries,
   parseLimit,
+  selectSessionStatsWindow,
   type SessionInfoLike,
 } from "../../../extensions/sessions/sessions.ts";
 
@@ -33,6 +34,37 @@ test("session search matches normalized metadata", () => {
   ];
   assert.equal(filterSessionEntries(entries, "oauth").length, 1);
   assert.equal(filterSessionEntries(entries, "billing").length, 0);
+});
+
+test("session stats window follows the SelectList centered viewport", () => {
+  const sessions = Array.from({ length: 20 }, (_, index) => ({
+    ...session,
+    id: `session-${index}`,
+    path: `/tmp/session-${index}.jsonl`,
+  }));
+
+  assert.deepEqual(
+    selectSessionStatsWindow(sessions, sessions[0]!.path, 5).map(
+      (entry) => entry.path,
+    ),
+    sessions.slice(0, 5).map((entry) => entry.path),
+  );
+  assert.deepEqual(
+    selectSessionStatsWindow(sessions, sessions[10]!.path, 5).map(
+      (entry) => entry.path,
+    ),
+    sessions.slice(8, 13).map((entry) => entry.path),
+  );
+  assert.deepEqual(
+    selectSessionStatsWindow(sessions, sessions[19]!.path, 5).map(
+      (entry) => entry.path,
+    ),
+    sessions.slice(15).map((entry) => entry.path),
+  );
+  assert.equal(
+    selectSessionStatsWindow(sessions, "/missing.jsonl", 5)[0]?.path,
+    sessions[0]!.path,
+  );
 });
 
 test("persisted session labels and preview content are terminal-safe", () => {
@@ -94,4 +126,21 @@ test("persisted session labels and preview content are terminal-safe", () => {
     output: "okdone",
     isError: undefined,
   });
+});
+
+test("bounded preview reports omitted messages and content bytes", () => {
+  const preview = buildSessionPreview(
+    session,
+    [
+      { role: "user", content: "recent one" },
+      { role: "assistant", content: "recent two" },
+    ],
+    { totalMessages: 100, truncatedBytes: 2048 },
+  );
+
+  assert.deepEqual(preview.blocks.slice(0, 2), [
+    { kind: "notice", text: "… 98 earlier messages omitted" },
+    { kind: "notice", text: "… 2048 bytes of preview content omitted" },
+  ]);
+  assert.match(preview.subtitle, /100 messages/);
 });

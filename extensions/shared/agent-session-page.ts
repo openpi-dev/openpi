@@ -38,6 +38,11 @@ export interface AgentSessionPageSource {
   abort?(): void;
 }
 
+export interface AgentSessionPageOptions {
+  /** Inherited from the parent UI when the child page opens. */
+  readonly toolsExpanded?: boolean;
+}
+
 function safeLine(value: string) {
   return sanitizeTerminalText(value).replace(/\s+/g, " ").trim();
 }
@@ -76,6 +81,7 @@ export class AgentSessionPage implements Component, Focusable {
   private viewport = new TranscriptViewport();
   private rowCount = 0;
   private viewportSize = 1;
+  private toolsExpanded: boolean;
 
   private _focused = false;
   get focused() {
@@ -90,15 +96,22 @@ export class AgentSessionPage implements Component, Focusable {
     theme: Theme,
     keybindings: KeybindingsManager,
     source: AgentSessionPageSource,
+    options?: AgentSessionPageOptions,
   ) {
     this.tui = tui;
     this.theme = theme;
     this.keybindings = keybindings;
     this.source = source;
+    this.toolsExpanded = options?.toolsExpanded === true;
   }
 
   handleInput(data: string) {
     const state = this.source.getState();
+    if (this.keybindings.matches(data, "app.tools.expand")) {
+      this.toolsExpanded = !this.toolsExpanded;
+      this.tui.requestRender();
+      return;
+    }
     if (
       this.source.abort &&
       state?.status === "running" &&
@@ -229,6 +242,7 @@ export class AgentSessionPage implements Component, Focusable {
     const transcriptCapacity = Math.max(1, bodyHeight - errorRows);
     const transcript = this.renderer.render(state.document, width, this.theme, {
       now,
+      expanded: this.toolsExpanded,
     });
     this.rowCount = transcript.length;
     this.viewportSize = transcriptCapacity;
@@ -282,6 +296,10 @@ export class AgentSessionPage implements Component, Focusable {
     const hints: ScreenHint[] = [];
     hints.push([keys("app.interrupt"), "back"]);
     if (this.source.abort) hints.push([keys("app.clear"), "abort run"]);
+    hints.push([
+      keys("app.tools.expand"),
+      this.toolsExpanded ? "collapse tools" : "expand tools",
+    ]);
     hints.push(
       [
         `${keys("tui.editor.cursorUp")}/${keys("tui.editor.cursorDown")}`,

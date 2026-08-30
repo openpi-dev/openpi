@@ -1,4 +1,6 @@
 import { execFile } from "node:child_process";
+import { realpath } from "node:fs/promises";
+import { resolve } from "node:path";
 import type { SessionInfoLike } from "./sessions.ts";
 
 export interface SessionStats {
@@ -7,8 +9,15 @@ export interface SessionStats {
   del: number;
 }
 
+export type SessionStatsState =
+  | { status: "pending" }
+  | { status: "ready"; stats: SessionStats }
+  | { status: "unavailable" };
+
+type CachedSessionStats = Exclude<SessionStatsState, { status: "pending" }>;
+
 interface StatsLoaderOptions {
-  cache?: Map<string, SessionStats>;
+  cache?: Map<string, CachedSessionStats>;
   maxCache?: number;
   maxConcurrency?: number;
   runGit?: (
@@ -16,6 +25,8 @@ interface StatsLoaderOptions {
     cwd: string,
     signal: AbortSignal,
   ) => Promise<string>;
+  canonicalizeCwd?: (cwd: string) => Promise<string>;
+  canonicalizeConcurrency?: number;
 }
 
 interface QueueEntry {
@@ -27,6 +38,7 @@ interface QueueEntry {
 const GIT_STATS_TIMEOUT_MS = 3_000;
 const DEFAULT_MAX_CACHE = 256;
 const DEFAULT_MAX_CONCURRENCY = 4;
+const DEFAULT_CANONICALIZE_CONCURRENCY = 8;
 
 const abortError = () => {
   const error = new Error("Session stats load was cancelled.");
@@ -97,7 +109,7 @@ function createQueue(maxConcurrency: number) {
 }
 
 const runGit = (args: string[], cwd: string, signal: AbortSignal) =>
-  new Promise<string>((resolve) => {
+  new Promise<string>((resolveOutput, reject) => {
     try {
       execFile(
         "git",
@@ -108,10 +120,13 @@ const runGit = (args: string[], cwd: string, signal: AbortSignal) =>
           timeout: GIT_STATS_TIMEOUT_MS,
           signal,
         },
-        (error, stdout) => resolve(error ? "" : stdout),
+        (error, stdout) => {
+          if (error) reject(error);
+          else resolveOutput(stdout);
+        },
       );
-    } catch {
-      resolve("");
+    } catch (error) {
+      reject(error);
     }
   });
 
@@ -133,94 +148,265 @@ const calculateStats = (outputs: readonly string[]) => {
 };
 
 export function createSessionStatsLoader(options: StatsLoaderOptions = {}) {
-  const cache = options.cache ?? new Map<string, SessionStats>();
+  const cache = options.cache ?? new Map<string, CachedSessionStats>();
   const maxCache = options.maxCache ?? DEFAULT_MAX_CACHE;
   const execute = options.runGit ?? runGit;
+  const canonicalize = options.canonicalizeCwd ?? realpath;
+  const canonicalizeConcurrency = Math.max(
+    1,
+    options.canonicalizeConcurrency ?? DEFAULT_CANONICALIZE_CONCURRENCY,
+  );
   const queue = createQueue(
     Math.max(1, options.maxConcurrency ?? DEFAULT_MAX_CONCURRENCY),
   );
-  const loading = new Map<string, AbortSignal>();
+  interface Request {
+    key: string;
+    cwd: string;
+    after: string;
+    before: string;
+    includeWorktreeDiff: boolean;
+  }
+  interface ActiveRequest {
+    controller: AbortController;
+    promise: Promise<void>;
+  }
 
-  const loadOne = async (
-    session: SessionInfoLike,
-    isLatestForCwd: boolean,
+  const active = new Map<string, ActiveRequest>();
+  const pathKeys = new Map<string, string>();
+  const canonicalCwds = new Map<string, Promise<string>>();
+  let canonicalUniverse:
+    | {
+        universe: readonly SessionInfoLike[];
+        controller: AbortController;
+        promise: Promise<Map<string, string>>;
+      }
+    | undefined;
+  let requestedPaths = new Set<string>();
+  let reconcileGeneration = 0;
+  let notify = () => {};
+
+  const canonicalCwd = (cwd: string) => {
+    const absolute = resolve(cwd);
+    let pending = canonicalCwds.get(absolute);
+    if (!pending) {
+      pending = canonicalize(absolute).catch(() => absolute);
+      canonicalCwds.set(absolute, pending);
+    }
+    return pending;
+  };
+
+  const buildCanonicalWorkspaceMap = async (
+    sessions: readonly SessionInfoLike[],
     signal: AbortSignal,
-    onUpdate: () => void,
   ) => {
-    const key = session.path;
-    if (cache.has(key)) return;
-    const currentLoad = loading.get(key);
-    if (currentLoad && !currentLoad.aborted) return;
-    loading.set(key, signal);
+    const workspaces = [
+      ...new Set(sessions.map((session) => resolve(session.cwd))),
+    ];
+    const result = new Map<string, string>();
+    let index = 0;
+    const worker = async () => {
+      while (!signal.aborted) {
+        const cwd = workspaces[index++];
+        if (!cwd) return;
+        result.set(cwd, await canonicalCwd(cwd));
+      }
+    };
+    await Promise.all(
+      Array.from(
+        { length: Math.min(canonicalizeConcurrency, workspaces.length) },
+        worker,
+      ),
+    );
+    if (signal.aborted) throw abortError();
+    return result;
+  };
 
+  const canonicalWorkspaceMap = (sessions: readonly SessionInfoLike[]) => {
+    if (
+      canonicalUniverse?.universe === sessions &&
+      !canonicalUniverse.controller.signal.aborted
+    ) {
+      return canonicalUniverse.promise;
+    }
+    canonicalUniverse?.controller.abort();
+    const controller = new AbortController();
+    const promise = buildCanonicalWorkspaceMap(sessions, controller.signal);
+    canonicalUniverse = { universe: sessions, controller, promise };
+    return promise;
+  };
+
+  const latestPathsByCwd = (
+    sessions: readonly SessionInfoLike[],
+    canonical: ReadonlyMap<string, string>,
+  ) => {
+    const latest = new Map<string, SessionInfoLike>();
+    for (const session of sessions) {
+      const cwd = canonical.get(resolve(session.cwd)) ?? resolve(session.cwd);
+      const current = latest.get(cwd);
+      if (!current || session.modified.getTime() > current.modified.getTime()) {
+        latest.set(cwd, session);
+      }
+    }
+    return new Map(
+      [...latest].map(([cwd, session]) => [cwd, session.path] as const),
+    );
+  };
+
+  const requestFor = (
+    session: SessionInfoLike,
+    latest: ReadonlyMap<string, string>,
+    canonical: ReadonlyMap<string, string>,
+  ): Request => {
+    const cwd = canonical.get(resolve(session.cwd)) ?? resolve(session.cwd);
     const after = session.created
       ? session.created.toISOString()
       : new Date(session.modified.getTime() - 24 * 3600 * 1000).toISOString();
     const before = session.modified.toISOString();
-
-    try {
-      const outputs = await Promise.all([
-        queue
-          .run(
-            () =>
-              execute(
-                [
-                  "log",
-                  `--after=${after}`,
-                  `--before=${before}`,
-                  "--numstat",
-                  "--pretty=format:",
-                ],
-                session.cwd,
-                signal,
-              ),
-            signal,
-          )
-          .catch(() => ""),
-        isLatestForCwd
-          ? queue
-              .run(
-                () => execute(["diff", "--numstat"], session.cwd, signal),
-                signal,
-              )
-              .catch(() => "")
-          : Promise.resolve(""),
-      ]);
-      if (signal.aborted || loading.get(key) !== signal) return;
-
-      if (cache.size >= maxCache) {
-        const oldest = cache.keys().next().value;
-        if (oldest !== undefined) cache.delete(oldest);
-      }
-      cache.set(key, calculateStats(outputs));
-      onUpdate();
-    } finally {
-      if (loading.get(key) === signal) loading.delete(key);
-    }
+    const includeWorktreeDiff = latest.get(cwd) === session.path;
+    return {
+      key: JSON.stringify([cwd, after, before, includeWorktreeDiff]),
+      cwd,
+      after,
+      before,
+      includeWorktreeDiff,
+    };
   };
 
-  const load = (
-    sessions: SessionInfoLike[],
-    signal: AbortSignal,
+  const putCache = (key: string, value: CachedSessionStats) => {
+    if (cache.has(key)) cache.delete(key);
+    while (cache.size >= Math.max(1, maxCache)) {
+      const oldest = cache.keys().next().value;
+      if (oldest === undefined) break;
+      cache.delete(oldest);
+    }
+    cache.set(key, value);
+  };
+
+  const start = (request: Request) => {
+    const controller = new AbortController();
+    const promise = Promise.all([
+      queue.run(
+        () =>
+          execute(
+            [
+              "log",
+              `--after=${request.after}`,
+              `--before=${request.before}`,
+              "--numstat",
+              "--pretty=format:",
+            ],
+            request.cwd,
+            controller.signal,
+          ),
+        controller.signal,
+      ),
+      request.includeWorktreeDiff
+        ? queue.run(
+            () =>
+              execute(["diff", "--numstat"], request.cwd, controller.signal),
+            controller.signal,
+          )
+        : Promise.resolve(""),
+    ])
+      .then((outputs) => {
+        if (!controller.signal.aborted) {
+          putCache(request.key, {
+            status: "ready",
+            stats: calculateStats(outputs),
+          });
+          notify();
+        }
+      })
+      .catch(() => {
+        const cancelled = controller.signal.aborted;
+        if (!cancelled) {
+          putCache(request.key, { status: "unavailable" });
+          notify();
+          controller.abort();
+        }
+      })
+      .finally(() => {
+        if (active.get(request.key)?.controller === controller) {
+          active.delete(request.key);
+        }
+      });
+    const entry = { controller, promise };
+    active.set(request.key, entry);
+    return entry;
+  };
+
+  const cancelKey = (key: string) => {
+    const entry = active.get(key);
+    if (!entry) return;
+    active.delete(key);
+    entry.controller.abort();
+  };
+
+  const reconcile = async (
+    targets: readonly SessionInfoLike[],
+    universe: readonly SessionInfoLike[],
     onUpdate: () => void,
   ) => {
-    const latestByCwd = new Map<string, string>();
-    for (const session of sessions) {
-      if (!latestByCwd.has(session.cwd)) {
-        latestByCwd.set(session.cwd, session.path);
-      }
+    notify = onUpdate;
+    const generation = ++reconcileGeneration;
+    requestedPaths = new Set(targets.map((session) => session.path));
+    if (targets.length === 0) {
+      for (const key of [...active.keys()]) cancelKey(key);
+      pathKeys.clear();
+      return;
     }
-    return Promise.all(
-      sessions.map((session) =>
-        loadOne(
-          session,
-          latestByCwd.get(session.cwd) === session.path,
-          signal,
-          onUpdate,
-        ),
-      ),
-    ).then(() => undefined);
+
+    let canonical: ReadonlyMap<string, string>;
+    try {
+      canonical = await canonicalWorkspaceMap(universe);
+    } catch {
+      return;
+    }
+    if (generation !== reconcileGeneration) return;
+    const latest = latestPathsByCwd(universe, canonical);
+    const requests = targets.map((session) => ({
+      session,
+      request: requestFor(session, latest, canonical),
+    }));
+    const wanted = new Set(requests.map(({ request }) => request.key));
+
+    for (const key of active.keys()) {
+      if (!wanted.has(key)) cancelKey(key);
+    }
+
+    pathKeys.clear();
+    const pending: Promise<void>[] = [];
+    for (const { session, request } of requests) {
+      pathKeys.set(session.path, request.key);
+      if (cache.has(request.key)) continue;
+      const current = active.get(request.key) ?? start(request);
+      pending.push(current.promise);
+    }
+    await Promise.all(pending);
   };
 
-  return { cache, load };
+  const get = (session: SessionInfoLike): SessionStatsState | undefined => {
+    if (!requestedPaths.has(session.path)) return undefined;
+    const key = pathKeys.get(session.path);
+    if (!key) return { status: "pending" };
+    const cached = cache.get(key);
+    if (cached) {
+      cache.delete(key);
+      cache.set(key, cached);
+      return cached;
+    }
+    if (active.has(key)) return { status: "pending" };
+    return undefined;
+  };
+
+  const cancel = () => {
+    reconcileGeneration++;
+    canonicalUniverse?.controller.abort();
+    canonicalUniverse = undefined;
+    for (const key of [...active.keys()]) cancelKey(key);
+    pathKeys.clear();
+    requestedPaths.clear();
+  };
+
+  return { cache, get, reconcile, cancel };
 }

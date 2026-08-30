@@ -204,7 +204,7 @@ test("sandbox VM still rejects non-yielding synchronous code", async () => {
   await assert.rejects(run(`while (true) {}`), /timed out/);
 });
 
-test("workflow agent invocations have no per-request wall timer", async () => {
+test("workflow sandbox imposes no fixed whole-agent wall timer", async () => {
   let signalAborted = false;
   const result = await run(`return (await agent("delayed")).output;`, {
     onAgent: async (_prompt, _options, signal) => {

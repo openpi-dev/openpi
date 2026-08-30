@@ -17,6 +17,7 @@ import type {
   BackendName,
   ParentContext,
   SpawnTask,
+  SubagentStatus,
 } from "../../../extensions/subagents/src/domain.ts";
 import {
   makeSubagentManagerLayer,
@@ -27,6 +28,77 @@ import {
   type SubagentManagerShape,
 } from "../../../extensions/subagents/src/manager.ts";
 import { runTool } from "../../../extensions/subagents/src/runtime.ts";
+
+const STATUS_WAIT_TIMEOUT_MS = 5_000;
+
+interface StatusWaitOptions {
+  readonly agentId: string;
+  readonly target: string;
+  readonly read: () => SubagentStatus | undefined;
+  readonly subscribe: (listener: () => void) => () => void;
+  readonly matches: (status: SubagentStatus | undefined) => boolean;
+  readonly timeoutMs?: number;
+}
+
+async function waitForStatus({
+  agentId,
+  target,
+  read,
+  subscribe,
+  matches,
+  timeoutMs = STATUS_WAIT_TIMEOUT_MS,
+}: StatusWaitOptions) {
+  let lastObserved = read();
+  if (matches(lastObserved)) return lastObserved;
+
+  await new Promise<void>((resolve, reject) => {
+    let finished = false;
+    let unsubscribe = () => {};
+    const timer = setTimeout(() => {
+      if (finished) return;
+      finished = true;
+      unsubscribe();
+      reject(
+        new Error(
+          `Timed out after ${timeoutMs}ms waiting for subagent ${agentId} to ${target}; last observed status: ${lastObserved ?? "missing"}`,
+        ),
+      );
+    }, timeoutMs);
+    const observe = () => {
+      if (finished) return;
+      lastObserved = read();
+      if (!matches(lastObserved)) return;
+      finished = true;
+      clearTimeout(timer);
+      unsubscribe();
+      resolve();
+    };
+
+    unsubscribe = subscribe(observe);
+    if (finished) unsubscribe();
+    else observe();
+  });
+
+  return lastObserved;
+}
+
+function waitForManagerStatus(
+  manager: SubagentManagerShape,
+  agentId: string,
+  target: string,
+  matches: (status: SubagentStatus | undefined) => boolean,
+) {
+  return waitForStatus({
+    agentId,
+    target,
+    read: () => manager.view.get(agentId)?.status,
+    subscribe: (listener) => manager.view.subscribeTo(agentId, listener),
+    matches,
+  });
+}
+
+const isSettledStatus = (status: SubagentStatus | undefined) =>
+  status === "done" || status === "error";
 
 const TestRegistryLive = Layer.sync(BackendRegistry, () => {
   const backends: SubagentBackend[] = [
@@ -75,6 +147,25 @@ async function withManager(
   }
 }
 
+test("status waits fail within their own deadline with diagnostic state", async () => {
+  let unsubscribed = false;
+
+  await assert.rejects(
+    waitForStatus({
+      agentId: "sa-stuck",
+      target: "leave running",
+      read: () => "running",
+      subscribe: () => () => {
+        unsubscribed = true;
+      },
+      matches: isSettledStatus,
+      timeoutMs: 10,
+    }),
+    /Timed out after 10ms waiting for subagent sa-stuck to leave running; last observed status: running/,
+  );
+  assert.equal(unsubscribed, true);
+});
+
 test("stub subagent completes and delivers a final result", async () => {
   await withManager(async (manager, runtime) => {
     const settled: Array<{ id: string; consumed: boolean }> = [];
@@ -94,6 +185,7 @@ test("stub subagent completes and delivers a final result", async () => {
     const done = manager.view.get(snap.id);
     assert.ok(done);
     assert.equal(done.status, "done");
+    assert.equal(done.outcome, "completed");
     assert.match(
       done.finalText,
       /\[stub:pi\] completed: Say hello to the tests/,
@@ -116,12 +208,16 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
       runtime,
       manager.spawn("pi", task("FAIL: blow up please")),
     );
-    // Poll without wait-interest so the settle is delivered unconsumed.
-    while (manager.view.get(snap.id)?.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+    // Observe without wait-interest so the settle is delivered unconsumed.
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "settle after the failed run",
+      isSettledStatus,
+    );
     const failed = manager.view.get(snap.id);
     assert.equal(failed?.status, "error");
+    assert.equal(failed?.outcome, "failed");
     assert.match(failed?.errorText ?? "", /task failed/);
     assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
   });
@@ -131,13 +227,22 @@ test("cancel interrupts a running stub subagent", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
-      manager.spawn("pi", task("Long running task")),
+      manager.spawn("pi", {
+        ...task("Long running task"),
+        worktree: {
+          path: "/repo/.git/pi-worktrees/impl-1",
+          branch: "pi/impl-1",
+          repoCwd: "/repo",
+        },
+      }),
     );
+    assert.equal(snap.worktreeBranch, "pi/impl-1");
     const report = await runTool(runtime, manager.cancel([snap.id]));
     assert.deepEqual(report, [
       { id: snap.id, title: "test", status: "error", cancelled: true },
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+    assert.equal(manager.view.get(snap.id)?.outcome, "interrupted");
   });
 });
 
@@ -304,19 +409,28 @@ test("restarting a settled subagent settles again so its result re-delivers", as
     );
     const snap = await runTool(runtime, manager.spawn("pi", task("First")));
     // Let the first run settle on its own (unconsumed, as after a spawn).
-    while (manager.view.get(snap.id)?.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "settle after the first run",
+      isSettledStatus,
+    );
     assert.equal(settles.length, 1);
     assert.equal(settles[0]?.consumed, false);
 
     await runTool(runtime, manager.send(snap.id, "Second"));
-    while (manager.view.get(snap.id)?.status !== "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
-    while (manager.view.get(snap.id)?.status === "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "start the restarted run",
+      (status) => status === "running",
+    );
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "settle after the restarted run",
+      isSettledStatus,
+    );
     assert.equal(settles.length, 2);
     assert.equal(settles[1]?.id, snap.id);
     assert.equal(settles[1]?.consumed, false);
@@ -335,9 +449,12 @@ test("send steers an idle subagent into another turn", async () => {
 
     await runTool(runtime, manager.send(snap.id, "Second turn"));
     // The fresh run flips the status back to running...
-    while (manager.view.get(snap.id)?.status !== "running") {
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    }
+    await waitForManagerStatus(
+      manager,
+      snap.id,
+      "start the second turn",
+      (status) => status === "running",
+    );
     await runTool(runtime, manager.waitFor([snap.id]));
     const afterSecond = manager.view.get(snap.id);
     assert.equal(afterSecond?.status, "done");

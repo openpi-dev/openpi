@@ -1,6 +1,7 @@
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
+  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
@@ -13,7 +14,11 @@ import {
   OPENPI_SETUP_EPISODE_CHANNEL,
   type OpenPiSetupEpisodeState,
 } from "../shared/setup-episode-state.ts";
-import { patchOwnedTools } from "../shared/tool-surface.ts";
+import {
+  isOwnedToolActive,
+  isOwnedToolAvailable,
+  patchOwnedTools,
+} from "../shared/tool-surface.ts";
 import {
   applyFooterConfig,
   CAPABILITY_DISCOVERY_MODES,
@@ -128,7 +133,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- UI: the large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
-    "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Bash and Write/Edit default to compact. Recommend compact for users who scan activity first and inspect evidence on demand.",
+    "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
     "- Agent role models: built-in explorer, implementer, reviewer, and advisor roles are shared by subagent_spawn and workflow agent_type, and inherit the parent model by default. Assign only an available registry model to an individual role when needed; clearing that role returns it to inheritance. Custom agent-type files still override a built-in role's complete definition.",
     "",
     "Natural-language configuration examples the user might ask for:",
@@ -143,7 +148,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "make explorer use my available fast model" → subagent_role_models={explorer:{provider:"…",model:"…"}}',
     '- "make explorer inherit again" → subagent_role_models={explorer:null}',
     "",
-    "Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
+    "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
   ];
 }
 
@@ -157,7 +162,12 @@ export function buildSetupSuccessText(
   ].join(" ");
 }
 
+export function buildSetupNoopClosureText() {
+  return "No configuration update was confirmed in this setup run. The configuration writer is now hidden. To make a configuration change, run /openpi-setup <request>; do not edit configuration files directly.";
+}
+
 export const CONFIGURE_MY_PI_SETUP_TOOL_NAME = "configure_my_pi_setup";
+const SETUP_REQUEST_CUSTOM_TYPE = "openpi-setup-request";
 
 type SetupEpisode = "idle" | "armed" | "active";
 
@@ -165,6 +175,7 @@ function showConfigureTool(pi: ExtensionAPI) {
   patchOwnedTools(pi, "setup", {
     enable: [CONFIGURE_MY_PI_SETUP_TOOL_NAME],
   });
+  return isOwnedToolActive(pi, "setup", CONFIGURE_MY_PI_SETUP_TOOL_NAME);
 }
 
 function hideConfigureTool(pi: ExtensionAPI) {
@@ -175,40 +186,123 @@ function hideConfigureTool(pi: ExtensionAPI) {
 
 export default function openPiSetup(pi: ExtensionAPI) {
   let episode: SetupEpisode = "idle";
+  let claimedToolCallId: string | undefined;
+  let blockedMatchingClaimCount = 0;
+  let requestSequence = 0;
+  const pendingRequests: Array<{ requestId: string; prompt: string }> = [];
   const publishEpisode = () =>
     pi.events.emit(OPENPI_SETUP_EPISODE_CHANNEL, {
-      active: episode !== "idle",
+      active: episode === "active",
     } satisfies OpenPiSetupEpisodeState);
 
-  const endEpisode = () => {
+  const hideActiveWriter = () => {
+    claimedToolCallId = undefined;
+    blockedMatchingClaimCount = 0;
+    episode = pendingRequests.length > 0 ? "armed" : "idle";
+    hideConfigureTool(pi);
+    publishEpisode();
+  };
+
+  const resetEpisode = () => {
+    claimedToolCallId = undefined;
+    blockedMatchingClaimCount = 0;
+    pendingRequests.length = 0;
     episode = "idle";
     hideConfigureTool(pi);
     publishEpisode();
   };
 
   pi.on("session_start", () => {
-    endEpisode();
+    resetEpisode();
   });
 
-  pi.on("agent_start", () => {
-    if (episode === "armed") {
-      episode = "active";
-      publishEpisode();
+  const dispatchNextRequest = (ctx: ExtensionContext) => {
+    const request = pendingRequests.shift();
+    if (!request) return;
+    if (!showConfigureTool(pi)) {
+      resetEpisode();
+      if (ctx.hasUI) {
+        ctx.ui.notify(
+          "OpenPI lost ownership of its configuration writer before setup started.",
+          "error",
+        );
+      }
+      pi.sendMessage({
+        customType: "openpi-setup-closed",
+        content:
+          "OpenPI could not activate its owned configuration writer, so setup was not started. Check for duplicate or mismatched OpenPI extension sources, then retry with /openpi-setup <request>. Do not edit configuration files directly.",
+        display: true,
+        details: { reason: "writer_activation_failed" },
+      });
+      return;
     }
+    claimedToolCallId = undefined;
+    blockedMatchingClaimCount = 0;
+    episode = "active";
+    publishEpisode();
+    pi.sendMessage(
+      {
+        customType: SETUP_REQUEST_CUSTOM_TYPE,
+        content: request.prompt,
+        display: true,
+        details: { requestId: request.requestId },
+      },
+      { triggerTurn: true },
+    );
+  };
+
+  pi.on("tool_call", (event) => {
+    if (event.toolName !== CONFIGURE_MY_PI_SETUP_TOOL_NAME) return;
+    if (
+      episode !== "active" ||
+      !isOwnedToolActive(pi, "setup", CONFIGURE_MY_PI_SETUP_TOOL_NAME)
+    ) {
+      return {
+        block: true as const,
+        reason:
+          "The OpenPI configuration writer is not active for this setup episode. Run /openpi-setup <request> to start a new setup episode.",
+      };
+    }
+    if (claimedToolCallId !== undefined) {
+      if (claimedToolCallId === event.toolCallId) {
+        blockedMatchingClaimCount += 1;
+      }
+      return {
+        block: true as const,
+        reason:
+          "This setup episode already admitted one configure_my_pi_setup call. Wait for its result before retrying.",
+      };
+    }
+    claimedToolCallId = event.toolCallId;
   });
 
   pi.on("tool_execution_end", (event) => {
     if (
-      episode === "active" &&
-      event.toolName === CONFIGURE_MY_PI_SETUP_TOOL_NAME &&
-      !event.isError
-    ) {
-      endEpisode();
+      episode !== "active" ||
+      event.toolName !== CONFIGURE_MY_PI_SETUP_TOOL_NAME ||
+      event.toolCallId !== claimedToolCallId
+    )
+      return;
+    if (!event.isError) {
+      hideActiveWriter();
+    } else if (blockedMatchingClaimCount > 0) {
+      blockedMatchingClaimCount -= 1;
+    } else {
+      claimedToolCallId = undefined;
     }
   });
 
-  pi.on("agent_settled", () => {
-    if (episode === "active") endEpisode();
+  pi.on("agent_settled", (_event, ctx) => {
+    if (episode === "active") {
+      hideActiveWriter();
+      pi.sendMessage({
+        customType: "openpi-setup-closed",
+        content: buildSetupNoopClosureText(),
+        display: true,
+        details: { reason: "settled_without_successful_apply" },
+      });
+    }
+    if (pendingRequests.length > 0) dispatchNextRequest(ctx);
   });
 
   pi.registerTool({
@@ -473,7 +567,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "",
           "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
-          "Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
+          "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
         ]
       : buildInteractiveSetupPrompt({
           currentConfiguration,
@@ -482,13 +576,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
           savedConfigExists,
         });
 
-    episode = "armed";
-    showConfigureTool(pi);
-    publishEpisode();
-    pi.sendUserMessage(
-      prompt.join("\n"),
-      ctx.isIdle() ? undefined : { deliverAs: "followUp" },
-    );
+    if (!isOwnedToolAvailable(pi, "setup", CONFIGURE_MY_PI_SETUP_TOOL_NAME)) {
+      resetEpisode();
+      const message =
+        "OpenPI could not find its owned configuration writer. Setup was not started; check for duplicate or mismatched OpenPI extension sources.";
+      if (ctx.hasUI) ctx.ui.notify(message, "error");
+      throw new Error(message);
+    }
+    const requestId = `setup-${++requestSequence}`;
+    pendingRequests.push({ requestId, prompt: prompt.join("\n") });
+    if (episode === "idle") episode = "armed";
+    if (ctx.isIdle() && episode === "armed") dispatchNextRequest(ctx);
   };
 
   pi.registerCommand("openpi-setup", {

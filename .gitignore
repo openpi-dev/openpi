@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Local linked worktrees
+/.worktrees/
+
 # Downloaded/generated executables
 bin/
 

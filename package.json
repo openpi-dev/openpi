@@ -14,11 +14,11 @@
   ],
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tt-a1i/openpi.git"
+    "url": "git+https://github.com/openpi-dev/openpi.git"
   },
-  "homepage": "https://github.com/tt-a1i/openpi#readme",
+  "homepage": "https://github.com/openpi-dev/openpi#readme",
   "bugs": {
-    "url": "https://github.com/tt-a1i/openpi/issues"
+    "url": "https://github.com/openpi-dev/openpi/issues"
   },
   "files": [
     "extensions",
@@ -46,7 +46,7 @@
     "themes": [
       "./themes"
     ],
-    "image": "https://raw.githubusercontent.com/tt-a1i/openpi/main/assets/openpi-package.png"
+    "image": "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png"
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-beta.99",
@@ -77,13 +77,17 @@
   },
   "scripts": {
     "prepublishOnly": "bun run check && bun run test",
-    "check": "bun run format:check && bun run lint && bun run typecheck",
+    "check": "bun run check:config-contract && bun run check:discipline && bun run format:check && bun run lint && bun run typecheck",
+    "check:config-contract": "node scripts/check-config-contract.mjs",
+    "check:discipline": "node scripts/check-discipline-ledger.mjs",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "lint": "biome lint . --error-on-warnings",
     "typecheck": "tsc --noEmit",
-    "test": "node scripts/run-tests.mjs"
+    "benchmark:workflow-child-startup": "node --experimental-strip-types scripts/benchmark-workflow-child-startup.mjs",
+    "test": "node scripts/run-tests.mjs",
+    "provenance": "node scripts/provenance.mjs"
   },
   "packageManager": "bun@1.3.14"
 }

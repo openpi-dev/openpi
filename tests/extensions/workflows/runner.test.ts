@@ -15,10 +15,11 @@ import {
 import { Type } from "typebox";
 import {
   agentFailureMessage,
-  createFirstResponseWatchdog,
+  createModelProgressWatchdog,
   guardWorkflowChildTools,
   observeAssistantSettlement,
   recordToolExecutionTiming,
+  resolveModelProgressTimeoutMs,
   runAgent,
   type ToolExecutionTiming,
   transcriptFromMessages,
@@ -66,16 +67,29 @@ function runnerHarness(options: {
   prompt?: () => Promise<void>;
   abort?: () => Promise<void>;
   shutdown?: () => Promise<void>;
+  onMessageRead?: () => void;
+  onContextUsage?: () => void;
 }) {
   const listeners = new Set<AgentSessionEventListener>();
-  const messages: AgentSession["messages"] = [];
+  const observedMessages = (value: AgentSession["messages"]) =>
+    new Proxy(value, {
+      get(target, property, receiver) {
+        if (typeof property === "string" && /^\d+$/.test(property)) {
+          options.onMessageRead?.();
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
+  let messages = observedMessages([]);
   const firstDisposal = deferred<void>();
   let bindings = 0;
   let prompts = 0;
   let aborts = 0;
   let disposals = 0;
   const session = {
-    messages,
+    get messages() {
+      return messages;
+    },
     model: undefined,
     extensionRunner: {
       hasHandlers: () => options.shutdown !== undefined,
@@ -101,7 +115,10 @@ function runnerHarness(options: {
       disposals++;
       firstDisposal.resolve();
     },
-    getContextUsage: () => undefined,
+    getContextUsage: () => {
+      options.onContextUsage?.();
+      return undefined;
+    },
     getAllTools: () => [],
     getToolDefinition: () => undefined,
   } as unknown as AgentSession;
@@ -109,7 +126,12 @@ function runnerHarness(options: {
   return {
     factory,
     session,
-    messages,
+    get messages() {
+      return messages;
+    },
+    replaceMessages: (next: AgentSession["messages"]) => {
+      messages = observedMessages(next);
+    },
     emit: (event: AgentSessionEvent) => {
       for (const listener of listeners) listener(event);
     },
@@ -129,7 +151,7 @@ function runHarnessAgent(
     prompt: "fixture",
     cwd: process.cwd(),
     loader: {} as Parameters<typeof runAgent>[0]["loader"],
-    settingsManager: {} as Parameters<typeof runAgent>[0]["settingsManager"],
+    settingsManager: SettingsManager.inMemory(),
     modelRegistry: { find: () => undefined } as unknown as Parameters<
       typeof runAgent
     >[0]["modelRegistry"],
@@ -424,6 +446,240 @@ test("schema-less agents accept an empty assistant message_end", async () => {
   assert.equal(harness.disposals(), 1);
 });
 
+test("runAgent projects a long tool loop without rescanning canonical history", async () => {
+  let messageReads = 0;
+  let contextUsageReads = 0;
+  let respond = () => {};
+  const harness = runnerHarness({
+    onMessageRead: () => messageReads++,
+    onContextUsage: () => contextUsageReads++,
+    prompt: async () => respond(),
+  });
+  respond = () => {
+    for (let index = 0; index < 50; index++) {
+      const toolCallId = `call-${index}`;
+      const assistant = {
+        ...assistantTextMessage(`cycle ${index}`),
+        content: [
+          { type: "text" as const, text: `cycle ${index}` },
+          {
+            type: "toolCall" as const,
+            id: toolCallId,
+            name: "read",
+            arguments: { path: `fixture-${index}.txt` },
+          },
+        ],
+        stopReason: "toolUse" as const,
+        timestamp: 1_000 + index * 2,
+      };
+      const result = {
+        role: "toolResult" as const,
+        toolCallId,
+        toolName: "read",
+        content: [{ type: "text" as const, text: `result ${index}` }],
+        isError: false,
+        timestamp: 1_001 + index * 2,
+      };
+      harness.messages.push(assistant);
+      harness.emit({ type: "message_end", message: assistant });
+      harness.emit({
+        type: "tool_execution_start",
+        toolCallId,
+        toolName: "read",
+        args: { path: `fixture-${index}.txt` },
+      });
+      harness.emit({
+        type: "tool_execution_end",
+        toolCallId,
+        toolName: "read",
+        result,
+        isError: false,
+      });
+      harness.messages.push(result);
+      harness.emit({ type: "message_end", message: result });
+    }
+    // Pi state is canonical even if a final projection event is missed.
+    harness.messages.push(assistantTextMessage("unannounced final state"));
+  };
+
+  const outcome = await runHarnessAgent(harness);
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "unannounced final state");
+  assert.equal(outcome.usage.turns, 51);
+  assert.equal(
+    outcome.transcript.some(
+      (entry) => entry.role === "toolResult" && entry.text === "result 49",
+    ),
+    true,
+  );
+  assert.ok(
+    messageReads <= harness.messages.length * 4,
+    `${harness.messages.length} messages caused ${messageReads} canonical history reads`,
+  );
+  assert.ok(
+    messageReads >= harness.messages.length,
+    "terminal reconciliation must read every canonical message",
+  );
+  assert.equal(
+    contextUsageReads,
+    2,
+    "context occupancy should be sampled only at hydrate and final reconcile",
+  );
+});
+
+test("compaction rebuilds progress after Pi finishes mutating active messages", async () => {
+  let contextUsageReads = 0;
+  let respond = async () => {};
+  const progress: Array<
+    Parameters<NonNullable<Parameters<typeof runAgent>[0]["onProgress"]>>[0]
+  > = [];
+  const harness = runnerHarness({
+    onContextUsage: () => contextUsageReads++,
+    prompt: () => respond(),
+  });
+  respond = async () => {
+    const discarded = assistantTextMessage("discarded before compaction");
+    harness.messages.push(discarded);
+    harness.emit({ type: "message_end", message: discarded });
+
+    harness.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary: "fixture summary",
+        firstKeptEntryId: "fixture-entry",
+        tokensBefore: 1_000,
+        estimatedTokensAfter: 100,
+      },
+      aborted: false,
+      willRetry: false,
+    });
+    // Pi emits first, then can synchronously finish mutating active state.
+    const retained = assistantTextMessage("retained summary context");
+    harness.replaceMessages([retained]);
+    await Promise.resolve();
+
+    const compacted = progress.at(-1);
+    assert.equal(compacted?.preview, "retained summary context");
+    assert.equal(
+      compacted?.transcript.some((entry) =>
+        entry.text.includes("discarded before compaction"),
+      ),
+      false,
+    );
+
+    const completed = assistantTextMessage("completed after compaction");
+    harness.messages.push(completed);
+    harness.emit({ type: "message_end", message: completed });
+  };
+
+  const outcome = await runHarnessAgent(harness, {
+    onProgress: (update) => progress.push(update),
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "completed after compaction");
+  assert.equal(outcome.usage.turns, 2);
+  assert.equal(
+    outcome.transcript.some((entry) =>
+      entry.text.includes("discarded before compaction"),
+    ),
+    false,
+  );
+  assert.equal(contextUsageReads, 3);
+});
+
+test("a deferred compaction projection failure stays inside the child outcome", async () => {
+  let respond = () => Promise.resolve();
+  const harness = runnerHarness({ prompt: () => respond() });
+  respond = () => {
+    harness.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary: "fixture summary",
+        firstKeptEntryId: "fixture-entry",
+        tokensBefore: 1_000,
+        estimatedTokensAfter: 100,
+      },
+      aborted: false,
+      willRetry: false,
+    });
+    harness.replaceMessages([assistantTextMessage("compacted")]);
+    return new Promise<void>(() => {});
+  };
+
+  const outcome = await settleWithin(
+    runHarnessAgent(harness, {
+      onProgress: () => {
+        throw new Error("progress writer failed");
+      },
+    }),
+  );
+
+  assert.equal(outcome.ok, false);
+  assert.match(
+    outcome.error ?? "",
+    /failed to reconcile agent progress.*progress writer failed/i,
+  );
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("a persistent reconciliation failure cannot bypass child cleanup", async () => {
+  let contextUsageReads = 0;
+  let respond = () => Promise.resolve();
+  const harness = runnerHarness({
+    prompt: () => respond(),
+    onContextUsage: () => {
+      contextUsageReads++;
+      if (contextUsageReads > 1) throw new Error("context accessor failed");
+    },
+  });
+  respond = () => {
+    harness.emit({
+      type: "compaction_end",
+      reason: "threshold",
+      result: {
+        summary: "fixture summary",
+        firstKeptEntryId: "fixture-entry",
+        tokensBefore: 1_000,
+        estimatedTokensAfter: 100,
+      },
+      aborted: false,
+      willRetry: false,
+    });
+    return new Promise<void>(() => {});
+  };
+
+  const outcome = await settleWithin(runHarnessAgent(harness));
+
+  assert.equal(outcome.ok, false);
+  assert.match(
+    outcome.error ?? "",
+    /failed to reconcile agent progress.*context accessor failed/i,
+  );
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+});
+
+test("a startup projection hydration failure cannot leak the child session", async () => {
+  const harness = runnerHarness({
+    onContextUsage: () => {
+      throw new Error("startup context accessor failed");
+    },
+  });
+
+  const outcome = await settleWithin(runHarnessAgent(harness));
+
+  assert.equal(outcome.ok, false);
+  assert.match(outcome.error ?? "", /startup context accessor failed/i);
+  assert.equal(harness.prompts(), 0);
+  assert.equal(harness.aborts(), 1);
+  assert.equal(harness.disposals(), 1);
+});
+
 test("a pre-aborted startup does not create or bind a child session", async () => {
   const harness = runnerHarness({});
   const controller = new AbortController();
@@ -604,18 +860,146 @@ test("cancel during a hanging tool ignores late events and progress writers", as
   prompt.resolve();
 });
 
-test("late prompt completion after first-response timeout cannot become success", async () => {
-  const prompt = deferred<void>();
-  const harness = runnerHarness({ prompt: () => prompt.promise });
+test("slow preflight does not arm the provider-turn watchdog", async () => {
+  let run = async () => {};
+  const harness = runnerHarness({ prompt: () => run() });
+  run = async () => {
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const completed = assistantTextMessage("completed after preflight");
+    harness.emit({ type: "turn_start" });
+    harness.messages.push(completed);
+    harness.emit({ type: "message_end", message: completed });
+  };
+
   const outcome = await runHarnessAgent(harness, {
-    firstResponseTimeoutMs: 5,
+    modelProgressTimeoutMs: 10,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "completed after preflight");
+  assert.equal(harness.aborts(), 0);
+});
+
+test("a later provider turn with no visible progress is aborted and cannot become success", async () => {
+  const prompt = deferred<void>();
+  let emitAbort = () => {};
+  const harness = runnerHarness({
+    prompt: () => prompt.promise,
+    abort: async () => emitAbort(),
+  });
+  emitAbort = () => {
+    const aborted = {
+      ...assistantTextMessage(""),
+      content: [],
+      stopReason: "aborted" as const,
+      errorMessage: "Request was aborted",
+    };
+    harness.messages.push(aborted);
+    harness.emit({ type: "message_end", message: aborted });
+  };
+  const outcomePromise = runHarnessAgent(harness, {
+    modelProgressTimeoutMs: 10,
     shutdownTimeoutMs: 20,
   });
+
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  const first = {
+    ...assistantTextMessage("first turn evidence"),
+    content: [
+      { type: "text" as const, text: "first turn evidence" },
+      {
+        type: "toolCall" as const,
+        id: "read-1",
+        name: "read",
+        arguments: { path: "fixture.txt" },
+      },
+    ],
+    stopReason: "toolUse" as const,
+  };
+  const result = {
+    role: "toolResult" as const,
+    toolCallId: "read-1",
+    toolName: "read",
+    content: [{ type: "text" as const, text: "retained tool evidence" }],
+    isError: false,
+    timestamp: 1_100,
+  };
+  harness.emit({ type: "turn_start" });
+  harness.messages.push(first);
+  harness.emit({ type: "message_start", message: first });
+  harness.emit({ type: "message_end", message: first });
+  harness.emit({
+    type: "tool_execution_start",
+    toolCallId: "read-1",
+    toolName: "read",
+    args: { path: "fixture.txt" },
+  });
+  harness.messages.push(result);
+  harness.emit({
+    type: "tool_execution_end",
+    toolCallId: "read-1",
+    toolName: "read",
+    result,
+    isError: false,
+  });
+  harness.emit({ type: "turn_end", message: first, toolResults: [result] });
+  harness.emit({ type: "turn_start" });
+  harness.emit({ type: "message_start", message: assistantTextMessage("") });
+
+  const outcome = await settleWithin(outcomePromise);
+  const late = assistantTextMessage("late success");
+  harness.messages.push(late);
+  harness.emit({ type: "message_end", message: late });
   prompt.resolve();
+
   assert.equal(outcome.ok, false);
-  assert.match(outcome.error ?? "", /no assistant response event/i);
+  assert.equal(outcome.aborted, false);
+  assert.match(outcome.error ?? "", /no model-visible progress/i);
+  assert.equal(outcome.output, "first turn evidence");
+  assert.equal(outcome.usage.turns, 2);
+  assert.equal(
+    outcome.transcript.some(
+      (entry) =>
+        entry.role === "toolResult" && entry.text === "retained tool evidence",
+    ),
+    true,
+  );
   assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
+});
+
+test("model-visible deltas extend a provider turn until assistant completion", async () => {
+  let run = async () => {};
+  const harness = runnerHarness({ prompt: () => run() });
+  run = async () => {
+    const partial = assistantTextMessage("");
+    harness.emit({ type: "turn_start" });
+    harness.emit({ type: "message_start", message: partial });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const progressing = assistantTextMessage("working");
+    harness.emit({
+      type: "message_update",
+      message: progressing,
+      assistantMessageEvent: {
+        type: "text_delta",
+        contentIndex: 0,
+        delta: "working",
+        partial: progressing,
+      },
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const completed = assistantTextMessage("done");
+    harness.messages.push(completed);
+    harness.emit({ type: "message_end", message: completed });
+  };
+
+  const outcome = await runHarnessAgent(harness, {
+    modelProgressTimeoutMs: 30,
+  });
+
+  assert.equal(outcome.ok, true);
+  assert.equal(outcome.output, "done");
+  assert.equal(harness.aborts(), 0);
 });
 
 test("cleanup timeout is surfaced instead of reporting agent success", async () => {
@@ -626,45 +1010,76 @@ test("cleanup timeout is surfaced instead of reporting agent success", async () 
   assert.equal(harness.disposals(), 1);
 });
 
-test("first-response watchdog aborts a silent provider request", async () => {
+test("model-progress watchdog aborts a silent provider turn", async () => {
   let aborted = false;
-  const watchdog = createFirstResponseWatchdog(
+  const watchdog = createModelProgressWatchdog(
     async () => {
       aborted = true;
     },
     { timeoutMs: 10, model: "fixture-model" },
   );
+  watchdog.armTurn();
 
   await assert.rejects(
     watchdog.waitFor(new Promise<never>(() => {})),
-    /no assistant response event for fixture-model within 10 ms.*stalled/i,
+    /provider turn for fixture-model.*no model-visible progress for 10 ms.*stalled/i,
   );
   assert.equal(aborted, true);
 });
 
-test("first assistant response disarms the watchdog without limiting the run", async () => {
-  const watchdog = createFirstResponseWatchdog(
-    async () => {
-      throw new Error("watchdog should have been disarmed");
-    },
-    { timeoutMs: 10 },
+test("model-progress timeout preserves the default and honors wider Pi idle settings", () => {
+  assert.equal(
+    resolveModelProgressTimeoutMs(SettingsManager.inMemory()),
+    45_000,
   );
-  watchdog.markResponse();
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 120_000 }),
+    ),
+    120_000,
+  );
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 120_000 }),
+      5,
+    ),
+    5,
+  );
+});
+
+test("model progress refreshes its turn while completion leaves tool time unrestricted", async () => {
+  let timedOut = false;
+  const watchdog = createModelProgressWatchdog(
+    async () => {
+      timedOut = true;
+    },
+    { timeoutMs: 30 },
+  );
+  watchdog.armTurn();
 
   const result = await watchdog.waitFor(
-    new Promise<string>((resolve) => setTimeout(() => resolve("done"), 20)),
+    (async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      watchdog.markProgress();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      watchdog.completeTurn();
+      await new Promise((resolve) => setTimeout(resolve, 40));
+      return "done";
+    })(),
   );
   assert.equal(result, "done");
+  assert.equal(timedOut, false);
 });
 
 test("explicit watchdog cancellation disarms a pending operation", async () => {
   let timedOut = false;
-  const watchdog = createFirstResponseWatchdog(
+  const watchdog = createModelProgressWatchdog(
     async () => {
       timedOut = true;
     },
     { timeoutMs: 5 },
   );
+  watchdog.armTurn();
   void watchdog.waitFor(new Promise<never>(() => {}));
   watchdog.cancel();
 

@@ -20,6 +20,7 @@ const {
   default: setupExtension,
   applySubagentRoleModelUpdates,
   buildInteractiveSetupPrompt,
+  buildSetupNoopClosureText,
   buildSetupSuccessText,
   CONFIGURE_MY_PI_SETUP_TOOL_NAME,
   SUBAGENT_ROLE_MODELS_SCHEMA,
@@ -52,6 +53,7 @@ function visibilityHarness(
     initialActive?: string[];
     mode?: ExtensionCommandContext["mode"];
     idle?: boolean;
+    setupSourcePath?: string;
   } = {},
 ) {
   const commands = new Map<
@@ -64,9 +66,13 @@ function visibilityHarness(
     ...(options.initialActive ?? ["read", "bash", "edit", "write"]),
   ];
   const userMessages: Array<{ content: unknown; options: unknown }> = [];
+  const customMessages: Array<{ message: unknown; options: unknown }> = [];
   const setActiveCalls: string[][] = [];
   const setupEpisodeStates: OpenPiSetupEpisodeState[] = [];
+  const notifications: Array<{ message: string; level: string | undefined }> =
+    [];
   let idle = options.idle ?? true;
+  let setupSourcePath = options.setupSourcePath;
 
   const pi = {
     events: {
@@ -102,13 +108,26 @@ function visibilityHarness(
       activeTools = [...names];
     },
     getAllTools() {
-      return [...tools.keys()].map((name) => ({ name }));
+      return [...tools.keys()].map((name) => ({
+        name,
+        ...(name === CONFIGURE_MY_PI_SETUP_TOOL_NAME && setupSourcePath
+          ? {
+              sourceInfo: {
+                path: setupSourcePath,
+                source: "extension",
+              },
+            }
+          : {}),
+      }));
     },
     getThinkingLevel() {
       return "off";
     },
     sendUserMessage(content: unknown, sendOptions?: unknown) {
       userMessages.push({ content, options: sendOptions });
+    },
+    sendMessage(message: unknown, sendOptions?: unknown) {
+      customMessages.push({ message, options: sendOptions });
     },
   } as unknown as ExtensionAPI;
 
@@ -122,7 +141,9 @@ function visibilityHarness(
     model: undefined,
     ui: {
       confirm: async () => false,
-      notify() {},
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
       setWorkingMessage() {},
     },
   } as unknown as ExtensionCommandContext & ExtensionContext;
@@ -131,8 +152,10 @@ function visibilityHarness(
     tools,
     commands,
     userMessages,
+    customMessages,
     setActiveCalls,
     setupEpisodeStates,
+    notifications,
     ctx,
     isActive() {
       return activeTools.includes(CONFIGURE_MY_PI_SETUP_TOOL_NAME);
@@ -140,10 +163,29 @@ function visibilityHarness(
     activeNames() {
       return [...activeTools];
     },
+    setActiveNames(names: string[]) {
+      activeTools = [...names];
+    },
+    setupRequests() {
+      return customMessages.filter(
+        ({ message }) =>
+          (message as { customType?: string }).customType ===
+          "openpi-setup-request",
+      );
+    },
+    closures() {
+      return customMessages.filter(
+        ({ message }) =>
+          (message as { customType?: string }).customType ===
+          "openpi-setup-closed",
+      );
+    },
     async emit(event: string, data: Record<string, unknown> = {}) {
+      const results = [];
       for (const handler of handlers.get(event) ?? []) {
-        await handler({ type: event, ...data }, ctx);
+        results.push(await handler({ type: event, ...data }, ctx));
       }
+      return results;
     },
     async runCommand(name: string, args = "") {
       const command = commands.get(name);
@@ -152,6 +194,9 @@ function visibilityHarness(
     },
     setIdle(value: boolean) {
       idle = value;
+    },
+    setSetupSourcePath(value: string) {
+      setupSourcePath = value;
     },
   };
 }
@@ -163,8 +208,6 @@ test("setup broadcasts its episode demand for interaction tools", async () => {
 
   await h.runCommand("openpi-setup", "调整 Footer");
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: true });
-
-  await h.emit("agent_start");
   await h.emit("agent_settled");
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
 });
@@ -259,23 +302,65 @@ test("openpi-setup and my-pi-setup expose the tool then inject the setup message
     assert.equal(h.isActive(), false);
     await h.runCommand(name, "关闭下一步预测");
     assert.equal(h.isActive(), true);
-    assert.equal(h.userMessages.length, 1);
-    assert.match(String(h.userMessages[0]?.content), /关闭下一步预测/);
-    assert.doesNotMatch(String(h.userMessages[0]?.content), /intercom/i);
+    assert.deepEqual(h.setupRequests()[0]?.options, { triggerTurn: true });
+    const content = (h.setupRequests()[0]?.message as { content?: unknown })
+      .content;
+    assert.match(String(content), /关闭下一步预测/);
+    assert.match(String(content), /available only for this setup run/i);
+    assert.match(String(content), /\/openpi-setup <request>/);
+    assert.doesNotMatch(String(content), /intercom/i);
+    assert.deepEqual(h.userMessages, []);
   }
+});
+
+test("setup activation fails closed for a foreign same-name writer", async () => {
+  const h = visibilityHarness({
+    setupSourcePath: "<foreign:configure_my_pi_setup>",
+  });
+  await h.emit("session_start");
+
+  await assert.rejects(
+    h.runCommand("openpi-setup", "关闭下一步预测"),
+    /could not find its owned configuration writer/i,
+  );
+
+  assert.equal(
+    h.isActive(),
+    true,
+    "OpenPI must preserve the foreign namesake while refusing setup",
+  );
+  assert.deepEqual(h.userMessages, []);
+  assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
 });
 
 test("successful configure_my_pi_setup hides the tool", async () => {
   const h = visibilityHarness();
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "关闭下一步预测");
-  await h.emit("agent_start");
   assert.equal(h.isActive(), true);
   await h.emit("tool_execution_end", {
+    toolCallId: "configure-1",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    isError: false,
+  });
+  assert.equal(
+    h.isActive(),
+    true,
+    "unadmitted results cannot close the episode",
+  );
+  await h.emit("tool_call", {
+    toolCallId: "configure-1",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
+  await h.emit("tool_execution_end", {
+    toolCallId: "configure-1",
     toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
     isError: false,
   });
   assert.equal(h.isActive(), false);
+  await h.emit("agent_settled");
+  assert.deepEqual(h.closures(), []);
 });
 
 test("successful setup result closes the episode and names the only re-entry", () => {
@@ -294,27 +379,129 @@ test("successful setup result closes the episode and names the only re-entry", (
   assert.match(result, /\/openpi-setup <request>/);
 });
 
+test("no-op setup result records the bounded re-entry contract", () => {
+  const result = buildSetupNoopClosureText();
+
+  assert.match(result, /no configuration update was confirmed/i);
+  assert.match(result, /now hidden/i);
+  assert.match(result, /\/openpi-setup <request>/);
+  assert.match(result, /do not edit configuration files directly/i);
+});
+
 test("keep-without-apply hides after the setup agent run settles", async () => {
   const h = visibilityHarness();
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "");
+  assert.equal(h.isActive(), true);
+  await h.emit("agent_settled");
+  assert.equal(h.isActive(), false);
+  assert.equal(h.closures().length, 1);
+  assert.equal(h.closures()[0]?.options, undefined);
+  assert.deepEqual(h.closures()[0]?.message, {
+    customType: "openpi-setup-closed",
+    content: buildSetupNoopClosureText(),
+    display: true,
+    details: { reason: "settled_without_successful_apply" },
+  });
+  assert.equal(
+    h.userMessages.length,
+    0,
+    "closure must not trigger a user turn",
+  );
+});
+
+test("busy follow-up keeps the writer hidden until its request is delivered", async () => {
+  const h = visibilityHarness({ idle: false });
+  await h.emit("session_start");
+  await h.runCommand("openpi-setup", "切换 Footer 为 powerline");
+  assert.deepEqual(h.setupRequests(), []);
+  assert.equal(h.isActive(), false);
+  // Retry/continuation events from the prior run cannot expose the writer.
   await h.emit("agent_start");
+  assert.equal(h.isActive(), false);
+  await h.emit("agent_settled");
+  assert.deepEqual(h.setupRequests()[0]?.options, { triggerTurn: true });
   assert.equal(h.isActive(), true);
   await h.emit("agent_settled");
   assert.equal(h.isActive(), false);
 });
 
-test("follow-up while busy does not tear down on the prior turn settle", async () => {
+test("queued setup fails closed if writer provenance changes before delivery", async () => {
   const h = visibilityHarness({ idle: false });
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "切换 Footer 为 powerline");
-  assert.deepEqual(h.userMessages[0]?.options, { deliverAs: "followUp" });
-  assert.equal(h.isActive(), true);
-  // Current in-flight turn settles before the setup follow-up runs.
+  h.setSetupSourcePath("<foreign:configure_my_pi_setup>");
+  h.setActiveNames([...h.activeNames(), CONFIGURE_MY_PI_SETUP_TOOL_NAME]);
+
   await h.emit("agent_settled");
-  assert.equal(h.isActive(), true);
-  await h.emit("agent_start");
-  await h.emit("agent_settled");
+
+  assert.deepEqual(h.setupRequests(), []);
+  assert.equal(h.isActive(), true, "the foreign namesake must be preserved");
+  assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
+  assert.deepEqual(h.notifications, []);
+  assert.deepEqual(h.closures()[0]?.options, undefined);
+  assert.match(
+    String(
+      (h.closures()[0]?.message as { content?: unknown } | undefined)?.content,
+    ),
+    /setup was not started/i,
+  );
+});
+
+test("one setup episode admits one writer call at a time and permits retry after failure", async () => {
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  await h.runCommand("openpi-setup", "关闭下一步预测");
+
+  const first = await h.emit("tool_call", {
+    toolCallId: "",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
+  const parallel = await h.emit("tool_call", {
+    toolCallId: "",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
+  assert.deepEqual(first, [undefined]);
+  assert.deepEqual(parallel, [
+    {
+      block: true,
+      reason:
+        "This setup episode already admitted one configure_my_pi_setup call. Wait for its result before retrying.",
+    },
+  ]);
+
+  await h.emit("tool_execution_end", {
+    toolCallId: "",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    isError: true,
+  });
+  const prematureRetry = await h.emit("tool_call", {
+    toolCallId: "apply-3",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
+  assert.equal(
+    (prematureRetry[0] as { block?: boolean } | undefined)?.block,
+    true,
+  );
+  await h.emit("tool_execution_end", {
+    toolCallId: "",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    isError: true,
+  });
+  const retry = await h.emit("tool_call", {
+    toolCallId: "apply-3",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
+  assert.deepEqual(retry, [undefined]);
+  await h.emit("tool_execution_end", {
+    toolCallId: "apply-3",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    isError: false,
+  });
   assert.equal(h.isActive(), false);
 });
 
@@ -322,17 +509,25 @@ test("overlapping openpi-setup follow-up survives the prior apply", async () => 
   const h = visibilityHarness();
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "关闭下一步预测");
-  await h.emit("agent_start");
   h.setIdle(false);
   await h.runCommand("openpi-setup", "开启下一步预测");
-  assert.deepEqual(h.userMessages[1]?.options, { deliverAs: "followUp" });
+  assert.equal(h.setupRequests().length, 1);
   assert.equal(h.isActive(), true);
+  await h.emit("tool_call", {
+    toolCallId: "first-apply",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
   await h.emit("tool_execution_end", {
+    toolCallId: "first-apply",
     toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
     isError: false,
   });
+  assert.equal(h.isActive(), false);
+  await h.emit("agent_settled");
+  assert.equal(h.setupRequests().length, 2);
+  assert.deepEqual(h.setupRequests()[1]?.options, { triggerTurn: true });
   assert.equal(h.isActive(), true);
-  await h.emit("agent_start");
   await h.emit("agent_settled");
   assert.equal(h.isActive(), false);
 });
@@ -343,7 +538,6 @@ test("a second openpi-setup after hide re-exposes via get+add", async () => {
   });
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "关闭下一步预测");
-  await h.emit("agent_start");
   await h.emit("agent_settled");
   assert.equal(h.isActive(), false);
 
@@ -426,7 +620,6 @@ test("setActiveTools never snapshot-restores unrelated tools away", async () => 
     "read",
     "workflow",
   ]);
-  await h.emit("agent_start");
   await h.emit("agent_settled");
   assert.deepEqual(h.activeNames().sort(), [
     "ask_user",
@@ -441,8 +634,13 @@ test("failed configure_my_pi_setup stays visible until the setup run settles", a
   const h = visibilityHarness();
   await h.emit("session_start");
   await h.runCommand("openpi-setup", "关闭下一步预测");
-  await h.emit("agent_start");
+  await h.emit("tool_call", {
+    toolCallId: "failed-apply",
+    toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
+    input: {},
+  });
   await h.emit("tool_execution_end", {
+    toolCallId: "failed-apply",
     toolName: CONFIGURE_MY_PI_SETUP_TOOL_NAME,
     isError: true,
   });
@@ -493,7 +691,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /ui_footer_preset=powerline/);
   assert.match(message, /activity.*core status/);
   assert.match(message, /Result detail display/);
-  assert.match(message, /Bash and Write\/Edit default to compact/);
+  assert.match(message, /all three default to compact/);
   assert.match(message, /Recommend compact/);
   assert.match(message, /Post-edit defaults off/);
   assert.match(message, /Agent role models/);
@@ -505,6 +703,8 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /successful Write\/Edit operations/);
   assert.match(message, /post_edit_command="npm run format"/);
   assert.match(message, /call configure_my_pi_setup at most once/);
+  assert.match(message, /available only for this setup run/i);
+  assert.match(message, /\/openpi-setup <request>/);
 });
 
 test("partially assigns and clears validated subagent role models", () => {
@@ -557,5 +757,7 @@ test("builds a focused review prompt when configuration already exists", () => {
     /keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
+  assert.match(message, /available only for this setup run/i);
+  assert.match(message, /\/openpi-setup <request>/);
   assert.doesNotMatch(message, /This is the first setup/);
 });

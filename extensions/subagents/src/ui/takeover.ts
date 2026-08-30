@@ -66,6 +66,8 @@ function statusGlyph(
 
 export interface TakeoverOptions {
   readonly badge?: string;
+  /** Captured from the parent UI when this child page opens. */
+  readonly toolsExpanded?: boolean;
 }
 
 export async function openSubagentTakeover(
@@ -75,9 +77,21 @@ export async function openSubagentTakeover(
   options?: TakeoverOptions,
 ) {
   if (!view.get(id)) return;
+  const takeoverOptions: TakeoverOptions = {
+    ...options,
+    toolsExpanded: ctx.ui.getToolsExpanded(),
+  };
   await ctx.ui.custom<null>(
     (tui, theme, keybindings, done) =>
-      new TakeoverView(tui, theme, keybindings, id, view, done, options),
+      new TakeoverView(
+        tui,
+        theme,
+        keybindings,
+        id,
+        view,
+        done,
+        takeoverOptions,
+      ),
     {
       overlay: true,
       overlayOptions: { anchor: "top-left", width: "100%", maxHeight: "100%" },
@@ -407,30 +421,36 @@ export class TakeoverView implements Component, Focusable {
     done: (value: null) => void,
     options?: TakeoverOptions,
   ) {
-    this.page = new AgentSessionPage(tui, theme, keybindings, {
-      getState: () => {
-        const snap = view.get(id);
-        if (!snap) return undefined;
-        return {
-          id: snap.id,
-          title: snap.title,
-          status: snap.status,
-          document: subagentTranscriptDocument(
-            snap,
-            view.getToolRenderer?.(id),
-          ),
-          metadata: [
-            options?.badge,
-            snap.meta.modelLabel,
-            formatContextUtilization(snap.usage),
-            formatElapsed(snap),
-          ],
-          errorText: snap.errorText,
-        };
+    this.page = new AgentSessionPage(
+      tui,
+      theme,
+      keybindings,
+      {
+        getState: () => {
+          const snap = view.get(id);
+          if (!snap) return undefined;
+          return {
+            id: snap.id,
+            title: snap.title,
+            status: snap.status,
+            document: subagentTranscriptDocument(
+              snap,
+              view.getToolRenderer?.(id),
+            ),
+            metadata: [
+              options?.badge,
+              snap.meta.modelLabel,
+              formatContextUtilization(snap.usage),
+              formatElapsed(snap),
+            ],
+            errorText: snap.errorText,
+          };
+        },
+        close: () => this.close(done),
+        abort: () => view.requestAbort(id),
       },
-      close: () => this.close(done),
-      abort: () => view.requestAbort(id),
-    });
+      { toolsExpanded: options?.toolsExpanded },
+    );
     this.unsubscribe = view.subscribeTo(id, () => {
       this.refreshTicker(view.get(id), tui);
       this.scheduleRender(tui);

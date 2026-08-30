@@ -2,6 +2,6 @@
 export const OPENPI_SETUP_EPISODE_CHANNEL = "openpi:setup-episode";
 
 export interface OpenPiSetupEpisodeState {
-  /** True for both armed and actively running setup episodes. */
+  /** True only while the owned setup writer is active for a delivered request. */
   readonly active: boolean;
 }

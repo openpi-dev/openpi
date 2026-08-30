@@ -11,6 +11,9 @@ import {
 } from "../../../extensions/shared/tool-surface.ts";
 import { createCapabilitiesExtension } from "../../../extensions/capabilities/index.ts";
 
+const SUBAGENT_SKILL_PATH_PATTERN =
+  /skills(?:\\\\|[\\/])subagents(?:\\\\|[\\/])SKILL\.md/;
+
 interface CapturedTool {
   name: string;
   description: string;
@@ -238,7 +241,7 @@ test("an explicit subagent request loads delegation directly", () => {
     "subagent_check",
     "subagent_list",
   ]);
-  assert.match(JSON.stringify(results), /skills\/subagents\/SKILL\.md/);
+  assert.match(JSON.stringify(results), SUBAGENT_SKILL_PATH_PATTERN);
 });
 
 test("reserved capability words load their groups without action verbs", () => {
@@ -310,7 +313,7 @@ test("the gateway returns progressive skill guidance for a loaded group", async 
     groups: ["delegate"],
   });
 
-  assert.match(result.content[0]!.text, /skills\/subagents\/SKILL\.md/);
+  assert.match(result.content[0]!.text, SUBAGENT_SKILL_PATH_PATTERN);
 });
 
 test("conditional or negated capability boilerplate does not widen the tool surface", () => {

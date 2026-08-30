@@ -103,6 +103,64 @@ test("contract validation rejects duplicate or unsafe identifiers", () => {
   );
 });
 
+test("contract validation rejects scalar or invalid requiredEvidence", () => {
+  assert.throws(
+    () =>
+      parseAcceptanceContract({
+        criteria: [
+          {
+            id: "tests",
+            description: "Focused tests pass.",
+            requiredEvidence: "test-command" as unknown as string[],
+          },
+        ],
+      }),
+    /requiredEvidence must be an array/,
+  );
+  assert.throws(
+    () =>
+      parseAcceptanceContract({
+        criteria: [
+          {
+            id: "tests",
+            description: "Focused tests pass.",
+            requiredEvidence: Array.from(
+              { length: 17 },
+              (_, i) => `label-${i}`,
+            ),
+          },
+        ],
+      }),
+    /at most 16 labels/,
+  );
+  assert.throws(
+    () =>
+      parseAcceptanceContract({
+        criteria: [
+          {
+            id: "tests",
+            description: "Focused tests pass.",
+            requiredEvidence: ["   "],
+          },
+        ],
+      }),
+    /invalid evidence label/,
+  );
+  assert.throws(
+    () =>
+      parseAcceptanceContract({
+        criteria: [
+          {
+            id: "tests",
+            description: "Focused tests pass.",
+            requiredEvidence: ["a".repeat(121)],
+          },
+        ],
+      }),
+    /invalid evidence label/,
+  );
+});
+
 test("acceptance composes with an existing structured schema", () => {
   const schema = acceptanceSchema(
     {

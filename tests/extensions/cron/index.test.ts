@@ -5,6 +5,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import cron from "../../../extensions/cron/index.ts";
+import { CRON_PROMPT_MAX_CHARS } from "../../../extensions/cron/schedule.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void>;
@@ -192,6 +193,21 @@ test("cron shutdown clears jobs and stops future delivery", async () => {
   assert.equal(h.stopped(), 1);
 
   h.setNow(60_000);
+  await h.run("list");
+  assert.equal(h.notifications.at(-1), "No scheduled prompts in this session.");
+  assert.equal(h.messages.length, 0);
+});
+
+test("cron does not create a job when the prompt exceeds the limit", async () => {
+  const h = harness();
+  await h.emit("session_start");
+  const oversized = "x".repeat(CRON_PROMPT_MAX_CHARS + 1);
+
+  for (const schedule of ["in 30s", "every 30s"]) {
+    await h.run(`${schedule} ${oversized}`);
+    assert.match(h.notifications.at(-1) ?? "", /Maximum is 2000 characters/);
+  }
+
   await h.run("list");
   assert.equal(h.notifications.at(-1), "No scheduled prompts in this session.");
   assert.equal(h.messages.length, 0);

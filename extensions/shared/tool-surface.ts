@@ -135,7 +135,7 @@ interface ToolSurfaceState {
   subscribed: boolean;
 }
 
-const OWNER_SOURCE_PATHS = {
+export const OPENPI_OWNER_SOURCE_PATHS = {
   capabilities: fileURLToPath(
     new URL("../capabilities/index.ts", import.meta.url),
   ),
@@ -268,7 +268,7 @@ function availableOwnedToolNames(
   }
 
   const expectedSource =
-    state.sourceByOwner.get(owner) ?? OWNER_SOURCE_PATHS[owner];
+    state.sourceByOwner.get(owner) ?? OPENPI_OWNER_SOURCE_PATHS[owner];
   return new Set(
     reportedTools
       .filter(
@@ -277,6 +277,33 @@ function availableOwnedToolNames(
       )
       .map(({ name }) => name),
   );
+}
+
+/** Verify that one active tool is the definition owned by this OpenPI source. */
+export function isOwnedToolActive(
+  pi: ActiveToolSurface,
+  owner: OpenPiToolOwner,
+  name: string,
+) {
+  if (!ownedToolNames(owner).includes(name)) {
+    throw new Error(`${owner} does not own tool ${JSON.stringify(name)}.`);
+  }
+  return (
+    pi.getActiveTools().includes(name) &&
+    availableOwnedToolNames(pi, stateFor(pi), owner).has(name)
+  );
+}
+
+/** Verify that one registered tool is available from this OpenPI source. */
+export function isOwnedToolAvailable(
+  pi: ActiveToolSurface,
+  owner: OpenPiToolOwner,
+  name: string,
+) {
+  if (!ownedToolNames(owner).includes(name)) {
+    throw new Error(`${owner} does not own tool ${JSON.stringify(name)}.`);
+  }
+  return availableOwnedToolNames(pi, stateFor(pi), owner).has(name);
 }
 
 function projectedOwnerTools(

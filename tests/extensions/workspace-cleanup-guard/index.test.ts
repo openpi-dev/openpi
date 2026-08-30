@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -137,6 +137,110 @@ test("refused deletion of a pre-existing file is blocked", async () => {
 
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /keep\.txt/u);
+  });
+});
+
+test("an unverified rm target is blocked without opening confirmation", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const h = harness({
+      cwd: workspace,
+      confirm: async () => {
+        confirmations += 1;
+        return true;
+      },
+    });
+
+    const result = (await h.emit(
+      "tool_call",
+      bashCall("remove", 'target="keep.txt"; rm "$target"'),
+    )) as { block?: boolean; reason?: string } | undefined;
+
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /direct rm command/u);
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("a nested unverified rm target is blocked at the extension boundary", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "keep.txt"), "keep");
+    let confirmations = 0;
+    const h = harness({
+      cwd: workspace,
+      confirm: async () => {
+        confirmations += 1;
+        return true;
+      },
+    });
+
+    const result = (await h.emit(
+      "tool_call",
+      bashCall("nested-remove", 'target="keep.txt"; echo "$(rm "$target")"'),
+    )) as { block?: boolean; reason?: string } | undefined;
+
+    assert.equal(result?.block, true);
+    assert.match(result?.reason ?? "", /direct rm command/u);
+    assert.equal(confirmations, 0);
+  });
+});
+
+test("source-visible prefixed and forwarded rm stay blocked", async () => {
+  await withWorkspace(async (workspace) => {
+    const target = path.join(workspace, "keep.txt");
+    await writeFile(target, "keep");
+    let confirmations = 0;
+    const h = harness({
+      cwd: workspace,
+      confirm: async () => {
+        confirmations += 1;
+        return true;
+      },
+    });
+
+    for (const [index, command] of [
+      "! rm keep.txt",
+      "zsh -c 'rm keep.txt'",
+      "x=foo; echo ${#x}; rm keep.txt",
+    ].entries()) {
+      const result = (await h.emit(
+        "tool_call",
+        bashCall(`forwarded-${index}`, command),
+      )) as { block?: boolean } | undefined;
+      assert.equal(result?.block, true, command);
+    }
+    assert.equal(confirmations, 0);
+    assert.equal(await readFile(target, "utf8"), "keep");
+  });
+});
+
+test("non-executable rm text stays available to ordinary Bash", async () => {
+  await withWorkspace(async (workspace) => {
+    let confirmations = 0;
+    const h = harness({
+      cwd: workspace,
+      confirm: async () => {
+        confirmations += 1;
+        return false;
+      },
+    });
+
+    for (const [index, command] of [
+      "echo rm",
+      "command -v rm",
+      "printf ok # rm keep.txt",
+      "cat <<EOF\nrm keep.txt\nEOF",
+      "cat <<'EOF'\n$(rm keep.txt)\nEOF",
+      "echo '$(rm keep.txt)'",
+    ].entries()) {
+      assert.equal(
+        await h.emit("tool_call", bashCall(`ordinary-${index}`, command)),
+        undefined,
+        command,
+      );
+    }
+    assert.equal(confirmations, 0);
   });
 });
 

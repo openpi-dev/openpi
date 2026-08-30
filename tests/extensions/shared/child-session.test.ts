@@ -2,17 +2,21 @@ import assert from "node:assert/strict";
 import {
   mkdir,
   mkdtemp,
+  realpath,
   readdir,
   readFile,
   rm,
   writeFile,
 } from "node:fs/promises";
+import fs from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import {
   createAgentSession,
+  DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
   ProjectTrustStore,
@@ -196,6 +200,184 @@ test("child binding restores only requested child-safe package tools after paren
     assert.equal(narrowed.getActiveToolNames().includes("fd"), false);
     assert.equal(narrowed.getActiveToolNames().includes("rg"), false);
     await shutdownAndDisposeChildSession(narrowed);
+  });
+});
+
+test("child resources remove only verified parent-only OpenPI extensions", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const extensionsDir = path.join(agentDir, "extensions");
+    await mkdir(extensionsDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        packages: [fileURLToPath(new URL("../../../", import.meta.url))],
+      }),
+    );
+    await writeFile(
+      path.join(extensionsDir, "third-party.ts"),
+      `export default function (pi) {
+        pi.registerTool({
+          name: "subagent_spawn",
+          label: "Third-party subagent spawn",
+          description: "fixture",
+          parameters: { type: "object", properties: {} },
+          async execute() { return { content: [{ type: "text", text: "ok" }] }; },
+        });
+      }`,
+    );
+
+    const { loader } = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const extensions = loader.getExtensions().extensions;
+
+    assert.equal(
+      extensions.some((extension) => extension.tools.has("openpi_load_tools")),
+      false,
+      "parent-only OpenPI extension should not reach the child runtime",
+    );
+    assert.equal(
+      extensions.some((extension) => extension.tools.has("fd")),
+      true,
+      "child-safe OpenPI file-search extension should remain",
+    );
+    assert.equal(
+      extensions.some((extension) => extension.tools.has("git_show")),
+      true,
+      "child-safe OpenPI git-read extension should remain",
+    );
+    assert.equal(
+      extensions.some((extension) => extension.tools.has("subagent_spawn")),
+      true,
+      "ordinary third-party extensions must survive tool-name collisions",
+    );
+  });
+});
+
+test("production child binding skips foreign Workflow artifacts", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const runDir = path.join(agentDir, "workflows", "wf_f0e1");
+    const artifactContents = [
+      JSON.stringify({
+        runId: "wf_f0e1",
+        sessionId: "foreign-session",
+        status: "completed",
+        startedAt: 1,
+        finishedAt: 2,
+        agents: [],
+        phases: [],
+        resultArtifact: "result.json",
+        transcriptArtifact: "transcripts.json",
+      }),
+      JSON.stringify({ result: "foreign result" }),
+      JSON.stringify({}),
+    ];
+    const artifactPaths = new Set([
+      path.join(runDir, "workflow.json"),
+      path.join(runDir, "result.json"),
+      path.join(runDir, "transcripts.json"),
+    ]);
+    let readCalls = 0;
+    let readBytes = 0;
+    let workflowParses = 0;
+    const originalReadFileSync = fs.readFileSync;
+    const originalJsonParse = JSON.parse;
+    const originalAgentDir = process.env.PI_CODING_AGENT_DIR;
+    let session:
+      | Awaited<ReturnType<typeof createAgentSession>>["session"]
+      | undefined;
+
+    await mkdir(runDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        packages: [fileURLToPath(new URL("../../../", import.meta.url))],
+      }),
+    );
+    await Promise.all(
+      ["workflow.json", "result.json", "transcripts.json"].map((name, index) =>
+        writeFile(path.join(runDir, name), artifactContents[index]!),
+      ),
+    );
+
+    Object.defineProperty(fs, "readFileSync", {
+      value: (...args: Parameters<typeof originalReadFileSync>) => {
+        const content = originalReadFileSync(...args);
+        const filePath = args[0];
+        if (typeof filePath === "string" && artifactPaths.has(filePath)) {
+          readCalls++;
+          readBytes += Buffer.byteLength(
+            typeof content === "string" ? content : content.toString(),
+          );
+        }
+        return content;
+      },
+    });
+    syncBuiltinESMExports();
+    JSON.parse = (text, reviver) => {
+      if (text === artifactContents[0]) {
+        workflowParses++;
+      }
+      return originalJsonParse(text, reviver);
+    };
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+
+    try {
+      const { loader, settingsManager } = await createChildResources({
+        cwd,
+        agentDir,
+        projectTrusted: true,
+      });
+      const structuredOutput = defineTool({
+        name: "structured_output",
+        label: "Structured Output",
+        description: "fixture structured result",
+        parameters: Type.Object({ value: Type.String() }),
+        async execute(_id, params) {
+          return {
+            content: [{ type: "text", text: params.value }],
+            details: {},
+          };
+        },
+      });
+      ({ session } = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: loader,
+        settingsManager,
+        sessionManager: SessionManager.inMemory(cwd),
+        customTools: [structuredOutput],
+        ...childToolPolicy(),
+      }));
+      await bindChildSessionExtensions(session);
+
+      assert.equal(
+        session.getActiveToolNames().includes("structured_output"),
+        true,
+        "dynamically registered workflow output tool should remain available",
+      );
+      assert.equal(readCalls, 0);
+      assert.equal(readBytes, 0);
+      assert.equal(workflowParses, 0);
+    } finally {
+      if (session) await shutdownAndDisposeChildSession(session);
+      Object.defineProperty(fs, "readFileSync", {
+        value: originalReadFileSync,
+      });
+      syncBuiltinESMExports();
+      JSON.parse = originalJsonParse;
+      if (originalAgentDir === undefined) {
+        delete process.env.PI_CODING_AGENT_DIR;
+      } else {
+        process.env.PI_CODING_AGENT_DIR = originalAgentDir;
+      }
+    }
   });
 });
 
@@ -652,7 +834,211 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
   });
 });
 
-test("child package snapshot cannot install an unresolved historical Git source", async () => {
+test("headless child resources exclude OpenPI git polling at 1/8/64 retained sessions", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const gitInfoPath = await realpath(
+      fileURLToPath(
+        new URL("../../../extensions/git-info/index.ts", import.meta.url),
+      ),
+    );
+    const gitReadPath = await realpath(
+      fileURLToPath(
+        new URL("../../../extensions/git-read/index.ts", import.meta.url),
+      ),
+    );
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({
+        packages: [
+          {
+            source: repoRoot,
+            extensions: [`+${gitInfoPath}`, "extensions/git-read/index.ts"],
+          },
+        ],
+      }),
+    );
+
+    const topLevelSettings = SettingsManager.create(cwd, agentDir, {
+      projectTrusted: true,
+    });
+    const topLevelLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: topLevelSettings,
+    });
+    await topLevelLoader.reload();
+    const topLevelPaths = await Promise.all(
+      topLevelLoader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    const topLevelPollers = topLevelPaths.filter(
+      (extensionPath) => extensionPath === gitInfoPath,
+    ).length;
+    assert.equal(topLevelPollers, 1, "the parent loader must keep git-info");
+
+    const child = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const childPaths = await Promise.all(
+      child.loader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    const childPollers = childPaths.filter(
+      (extensionPath) => extensionPath === gitInfoPath,
+    ).length;
+    const childPackageManager = new DefaultPackageManager({
+      cwd,
+      agentDir,
+      settingsManager: child.settingsManager,
+    });
+    const childPackagePaths = await childPackageManager.resolve(
+      async () => "skip",
+    );
+    const childGitInfoResource = await Promise.all(
+      childPackagePaths.extensions.map(async (resource) => ({
+        ...resource,
+        canonicalPath: await realpath(resource.path),
+      })),
+    ).then((resources) =>
+      resources.find((resource) => resource.canonicalPath === gitInfoPath),
+    );
+    assert.equal(
+      childGitInfoResource?.enabled,
+      false,
+      "the child package filter must disable git-info before import",
+    );
+    assert.equal(
+      childPaths.includes(gitReadPath),
+      true,
+      "ordinary child-safe OpenPI extensions must remain loaded",
+    );
+
+    for (const retained of [1, 8, 64]) {
+      assert.equal(
+        retained * childPollers,
+        0,
+        `${retained} retained children must create no git-info pollers`,
+      );
+      assert.equal(
+        retained * topLevelPollers,
+        retained,
+        "the parent-loader control must remain valid",
+      );
+    }
+
+    for (const source of [gitInfoPath, path.dirname(gitInfoPath)]) {
+      await writeFile(
+        path.join(agentDir, "settings.json"),
+        JSON.stringify({ extensions: [source] }),
+      );
+      const directSettings = SettingsManager.create(cwd, agentDir, {
+        projectTrusted: true,
+      });
+      const directLoader = new DefaultResourceLoader({
+        cwd,
+        agentDir,
+        settingsManager: directSettings,
+      });
+      await directLoader.reload();
+      assert.deepEqual(directLoader.getExtensions().errors, []);
+      const parentDirectPaths = await Promise.all(
+        directLoader
+          .getExtensions()
+          .extensions.map((extension) => realpath(extension.resolvedPath)),
+      );
+      assert.equal(
+        parentDirectPaths.includes(gitInfoPath),
+        true,
+        `parent source ${source} must load git-info as the control`,
+      );
+      const directChild = await createChildResources({
+        cwd,
+        agentDir,
+        projectTrusted: true,
+      });
+      const directPaths = await Promise.all(
+        directChild.loader
+          .getExtensions()
+          .extensions.map((extension) => realpath(extension.resolvedPath)),
+      );
+      assert.equal(
+        directPaths.includes(gitInfoPath),
+        false,
+        `child source ${source} must not restore git-info`,
+      );
+    }
+
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [{ source: repoRoot, extensions: [] }] }),
+    );
+    const disabledExtensionsChild = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    assert.deepEqual(
+      disabledExtensionsChild.loader.getExtensions().extensions,
+      [],
+      "an empty package extension filter must remain fully disabled",
+    );
+  });
+});
+
+test("nested manifestless packages are not mistaken for OpenPI", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const openPiCheckout = path.join(directory, "openpi-checkout");
+    const ordinaryPackage = path.join(openPiCheckout, "ordinary-package");
+    const ordinaryGitInfo = path.join(
+      ordinaryPackage,
+      "extensions",
+      "git-info",
+      "index.ts",
+    );
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await mkdir(path.dirname(ordinaryGitInfo), { recursive: true });
+    await writeFile(
+      path.join(openPiCheckout, "package.json"),
+      JSON.stringify({ name: "@tt-a1i/openpi" }),
+    );
+    await writeFile(
+      ordinaryGitInfo,
+      `export default function (pi) {
+        pi.registerCommand("ordinary-lg", { handler() {} });
+      }`,
+    );
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [ordinaryPackage] }),
+    );
+
+    const child = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const childPaths = await Promise.all(
+      child.loader
+        .getExtensions()
+        .extensions.map((extension) => realpath(extension.resolvedPath)),
+    );
+    assert.equal(childPaths.includes(await realpath(ordinaryGitInfo)), true);
+  });
+});
+
+test("child package snapshot handles canonical and historical package Git sources offline", async () => {
   await withTempDir(async (directory) => {
     const cwd = path.join(directory, "project");
     const agentDir = path.join(directory, "agent");
@@ -661,12 +1047,18 @@ test("child package snapshot cannot install an unresolved historical Git source"
       "git:github.com/nicobailon/pi-intercom@feature/test",
       "git:git@github.com:nicobailon/pi-intercom@feature/test",
     ];
+    const openPiSources = [
+      "git:github.com/openpi-dev/openpi",
+      "git:github.com/tt-a1i/openpi",
+    ];
     const ordinarySource = "npm:ordinary-missing-package@1.0.0";
     await mkdir(cwd, { recursive: true });
     await mkdir(agentDir, { recursive: true });
     await writeFile(
       path.join(agentDir, "settings.json"),
-      JSON.stringify({ packages: [...intercomSources, ordinarySource] }),
+      JSON.stringify({
+        packages: [...intercomSources, ...openPiSources, ordinarySource],
+      }),
     );
 
     const previousOffline = process.env.PI_OFFLINE;
@@ -684,6 +1076,10 @@ test("child package snapshot cannot install an unresolved historical Git source"
     }
 
     assert.deepEqual(child.settingsManager.getGlobalSettings().packages, [
+      ...openPiSources.map((source) => ({
+        source,
+        extensions: ["-extensions/git-info/index.ts"],
+      })),
       ordinarySource,
     ]);
     for (const source of intercomSources) {

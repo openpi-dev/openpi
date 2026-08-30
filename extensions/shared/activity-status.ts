@@ -1,6 +1,7 @@
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 
 type Theme = ExtensionContext["ui"]["theme"];
+type StatusUI = Pick<ExtensionContext["ui"], "setStatus">;
 
 export interface ActivityCounts {
   running: number;
@@ -40,6 +41,35 @@ export function unreadActivityCounts(
 
 export function hasActivity(counts: ActivityCounts) {
   return counts.running + counts.done + counts.failed > 0;
+}
+
+/**
+ * Pi's `setStatus` requests a global render unconditionally, without diffing
+ * the text, so rewriting the same value repaints the whole TUI for nothing.
+ * Managers notify on every child event (streaming text, tools, usage), and in
+ * the TUI the footer line stays `undefined` throughout, so the vast majority of
+ * those writes are no-ops. Keep the last written value and forward only real
+ * changes. The `ui` identity is part of the comparison: a new session hands out
+ * a new object whose footer starts empty, so the first write there must land.
+ */
+export function createStatusWriter(key: string) {
+  let lastUI: StatusUI | undefined;
+  let lastText: string | undefined;
+  return {
+    /** Returns whether the write reached Pi. */
+    write(ui: StatusUI, text: string | undefined) {
+      if (ui === lastUI && text === lastText) return false;
+      lastUI = ui;
+      lastText = text;
+      ui.setStatus(key, text);
+      return true;
+    },
+    /** Forget the cached value so the next write always lands. */
+    reset() {
+      lastUI = undefined;
+      lastText = undefined;
+    },
+  };
 }
 
 export function formatActivityStatus(

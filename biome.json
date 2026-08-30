@@ -5,6 +5,8 @@
       "extensions/**/*.ts",
       "tests/**/*.ts",
       "extensions/**/*.cjs",
+      ".github/actions/**/*.cjs",
+      "benchmarks/**/*.ts",
       "scripts/**/*.js",
       "scripts/**/*.mjs",
       "scripts/**/*.cjs",

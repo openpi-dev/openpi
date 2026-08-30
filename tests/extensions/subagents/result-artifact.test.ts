@@ -123,6 +123,7 @@ test("artifact failure is explicit and never advertises a false path", () => {
 
   assert.equal(result.truncated, true);
   assert.equal(result.artifactPath, undefined);
+  assert.equal(result.artifactSaveFailed, true);
   assert.match(result.text, /could not be saved/);
   assert.doesNotMatch(result.text, /Full final answer:/);
 });

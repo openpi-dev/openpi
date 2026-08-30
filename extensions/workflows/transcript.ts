@@ -1,6 +1,7 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import {
   AgentTranscriptRenderer,
+  buildPairingIndex,
   type AgentTranscriptDocument,
   type AgentTranscriptItem,
   type AgentTranscriptPart,
@@ -79,6 +80,7 @@ function buildWorkflowTranscriptDocument(
   const toolRenderer = workflowToolRenderer(transcript);
   return {
     items,
+    pairing: buildPairingIndex(items),
     cwd,
     ...(toolRenderer ? { toolRenderer } : {}),
   };
@@ -131,7 +133,7 @@ export class WorkflowTranscriptRenderer {
     cwd: string | undefined,
     width: number,
     theme: Theme,
-    options?: { readonly now?: number },
+    options?: { readonly now?: number; readonly expanded?: boolean },
   ) {
     return this.renderer.render(
       this.adapter.document(transcript, cwd),

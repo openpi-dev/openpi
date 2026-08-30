@@ -19,7 +19,7 @@
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
-  <a href="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/tt-a1i/openpi/actions/workflows/ci.yml/badge.svg"></a>
+  <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
   <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
@@ -30,11 +30,11 @@ pi install npm:@tt-a1i/openpi
 ```
 
 <p align="center">
-  <a href="https://tt-a1i.github.io/openpi/"><strong>项目网站</strong></a> ·
+  <a href="https://openpi-dev.github.io/openpi/"><strong>项目网站</strong></a> ·
   <a href="#30-秒开始"><strong>立即开始</strong></a> ·
   <a href="#默认轻按需强">为什么默认更轻</a> ·
   <a href="#运行模型">看看它怎么工作</a> ·
-  <a href="https://github.com/tt-a1i/openpi/issues/22">查看 Benchmark</a>
+  <a href="https://github.com/openpi-dev/openpi/issues/22">查看 Benchmark</a>
 </p>
 
 <p align="center">
@@ -270,7 +270,7 @@ return agent("Synthesize the verified findings", {
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。每个 Child Provider turn 必须在 45 秒内产生模型可见的 thinking、text、tool call 或完成事件，并在持续输出时按进展续期；空 stream start 与 transport heartbeat 不算进展。用户显式配置了更宽的 Pi `httpIdleTimeoutMs` 时沿用该上限。超时会 abort 当前 Child、保留已有 Transcript/usage/evidence，并让 sibling 与后续阶段继续结算。
 
 ---
 
@@ -306,13 +306,29 @@ OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程�
 
 ### Explicit Acceptance
 
-可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。支持 1–32 条验收条件；`description` 为人类可读说明（1–500 字符），可选的 `requiredEvidence` 为字符串数组（至多 16 个标签，每项至多 120 字符），子 Agent 必须在 `acceptance.criteria[].evidence` 中返回完全匹配的标签：
+
+```js
+acceptance: {
+  criteria: [
+    {
+      id: "tests",
+      description: "Focused tests pass.",
+      requiredEvidence: ["test-command"],
+    },
+  ],
+}
+```
+
+条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+
+未设置 `requiredEvidence` 的 criterion 是对 `description` 的自我声明，不是有证据约束的验收门禁；需要 evidence-backed gate 时，必须声明所需证据标签。
 
 ### Worktree Handoff
 
 Workflow 在清理隔离 checkout 前原子保存有界 Handoff Manifest：tracked binary patch、stat、branch/HEAD、untracked/ignored 清单与 cleanup receipt。状态不明就保留现场，不自动 merge、apply 或强删。
 
-设计细节见 [`docs/design/WORKFLOW_INVOCATION_GRAPH.md`](docs/design/WORKFLOW_INVOCATION_GRAPH.md)。
+设计细节见 [Workflow invocation graph](https://github.com/openpi-dev/openpi/blob/main/docs/design/WORKFLOW_INVOCATION_GRAPH.md)。
 
 ---
 
@@ -346,8 +362,8 @@ Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 
 - 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
 - Subagent 与 Workflow 活动时自动出现，空闲时不占空间；
-- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；
-- 折叠内容用 Pi 的 `app.tools.expand` 快捷键临时展开（默认 `Ctrl+O`），展开后直接恢复 Pi 原生参数、输出、错误、diff、耗时与 full-output 证据；
+- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`，默认均为 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；
+- 折叠内容用 Pi 的 `app.tools.expand` 快捷键临时展开（默认 `Ctrl+O`），展开后直接恢复 Pi 原生参数、输出、错误、diff、耗时与 full-output 证据；进入 Direct Subagent 或 Workflow child 详情页时会继承父会话的当前展开状态，详情页内切换只影响该页，不改变父会话；
 - Git 状态本地刷新；只有显式运行 `/pr` 才查询 GitHub PR。
 
 `fd` 与 `rg` 是结构化模型工具，不拼接 Shell。它们默认遵守 `.gitignore`，支持 Glob、类型、Smart Case、固定字符串与上下文。`git_show`、`git_diff`、`git_log` 以结构化参数提供只读提交、差异和历史检查，并禁用仓库配置的 external diff/textconv。两类工具的输出均限制为 50 KiB / 2000 行，完整截断内容最多私有保存 10 MiB，并在 Session Shutdown 时清理。
@@ -388,6 +404,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
@@ -402,7 +420,7 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems` 会在读取时迁移，但迁移后的配置不保证能被旧版 OpenPI 正确解释，因此不承诺配置文件的降级兼容性。
 
-一次 `/openpi-setup` episode 最多成功写入一次；成功后配置工具立即隐藏。若随后还要修改另一项，请重新执行 `/openpi-setup <自然语言请求>`，不要让模型重调已隐藏工具，也不要绕过入口直接编辑配置文件。
+一次 `/openpi-setup` episode 最多成功写入一次；成功后配置工具立即隐藏。若本轮没有成功写入，Runtime 会追加一条可见、持久且进入后续模型上下文的关闭凭据，明确 writer 已隐藏，后续修改必须重新执行 `/openpi-setup <自然语言请求>`。writer 只有在 OpenPI 能验证当前激活的是包自身定义时才可用；重复或来源不匹配会显式 fail closed，不会发布假的 setup-active 状态。不要让模型重调已隐藏工具，也不要绕过入口直接编辑配置文件。
 
 <details>
 <summary><strong>默认值</strong></summary>
@@ -414,7 +432,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
-| Subagent / Bash / Write/Edit | `full` / `compact` / `compact`                 |
+| Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
 | 主题                         | 保留用户现有选择                               |
@@ -426,7 +444,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 - Pi `0.84.1` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
-- GitHub 安装：`pi install git:github.com/tt-a1i/openpi`。
+- GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
 
 #### 开发运行时：区分 npm 与当前源码
 
@@ -445,7 +463,7 @@ pi list
 **2. 开发时让 Pi 直接加载当前 checkout**
 
 ```bash
-git clone https://github.com/tt-a1i/openpi.git ~/work/openpi
+git clone https://github.com/openpi-dev/openpi.git ~/work/openpi
 cd ~/work/openpi
 bun install --frozen-lockfile
 
@@ -522,7 +540,7 @@ pi install npm:pi-intercom
 
 Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 OpenPI 模型工具，首轮保持 Pi 原生 `read`、`bash`、`edit`、`write`。用户明确要求结构化搜索、Subagent、Workflow、后台进程或 Session Goal/Tasks 时，OpenPI 在 `before_agent_start` 直接加载对应能力组；明确询问 OpenPI capabilities/tools/features 时显示 `openpi_load_tools`。可通过 `/openpi-setup` 显式选择 `adaptive`：此时只让小型 `openpi_load_tools` 网关常驻，模型可在判断任务确实受益时自主加载一个能力组。该选择也授权模型启动该组内的昂贵工作，因此不作为默认值。句首「子代理了解下项目」这类带执行动作的表达会加载 Delegate；「子代理是什么」这类讨论、否定表达和条件句（例如 “If you delegate…”）不会被当成显式委派意图。能力组在当前 Session 内单调保持，避免反复增删工具破坏缓存。Delegate 一经加载便一次性开放完整、稳定的 Subagent 工具族；资源不存在时由工具执行层明确返回空状态或 fail-closed，而不再按实例生命周期改变模型接口。其他组内管理工具仍只在资源成功创建或状态确实存在后出现。Mode / Setup / Context 工具独立跟随实时状态显示和隐藏。Background、Subagent 与 Workflow 的 Skill 文件仍随包发布，但只在对应能力触发后提示读取，不常驻普通系统 Prompt。
 
-普通产品采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。OpenPI 只保留独立的工作区安全边界：阻止未授权删除 pre-existing 路径，并从实际文件状态识别本轮通过原生写入、文字重定向或 literal `mkdir -p` 创建的 scratch，避免误拦其清理。
+普通产品采用 Pi-native execution：保留 Pi 原生完整历史、工具输出上限、Session compaction、显式 Bash timeout 与 provider loop，不额外做固定事务投影、成功 Bash 二次裁剪、测试 timeout 改写、重复失败硬拦或恢复/轨迹提示。OpenPI 只保留一层工作区清理护栏：源码中可识别的 `rm` 只有在整条命令是直接、可静态验证的 literal `rm`，且目标都是工作区内相对路径时，才会进入 provenance 与确认流程；可识别的复合、嵌套或动态 target `rm` 会 fail closed，并提示改用独立的 literal `rm` 重试。单条 standalone 普通命令中可静态识别的 bare、single-quoted 或 double-quoted 参数、Bash comment，以及独占输入的单个非展开 heredoc 中的 `rm` 文本不受影响；复合命令、已知 command forwarder 和带后续命令的 heredoc 会保守阻止 source-visible `rm`，可拆成独立命令重试。Guard 会从实际文件状态识别本轮通过原生写入、文字重定向或 literal `mkdir -p` 创建的 scratch，避免误拦其清理；它不是任意程序文件系统行为的 sandbox，也不承诺识别运行时生成的命令名或其他程序内部的文件系统行为。
 
 | 工具                                                                                                     | 用途                           | 可见时机                         |
 | -------------------------------------------------------------------------------------------------------- | ------------------------------ | -------------------------------- |
@@ -633,7 +651,7 @@ bun run test
 
 npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm Registry 安装 OpenPI。
 
-测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [`docs/design/`](docs/design/)，问题请提交到 [GitHub Issues](https://github.com/tt-a1i/openpi/issues)。
+测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [docs/design/](https://github.com/openpi-dev/openpi/tree/main/docs/design/)，问题请提交到 [GitHub Issues](https://github.com/openpi-dev/openpi/issues)。
 
 ---
 

@@ -39,17 +39,19 @@ import {
   STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
 } from "./prompt.ts";
 import {
+  AgentProgressProjection,
+  type ProgressAssistantMessage,
+  transcriptFromMessages,
+} from "./progress-projection.ts";
+import {
   createReplayFilesystemBoundary,
   type ReplayFilesystemBoundaryOptions,
 } from "./replay-safety.ts";
-import { safeStringify, truncateUtf8 } from "./serialization.ts";
+import { truncateUtf8 } from "./serialization.ts";
 import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
-export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
-const TRANSCRIPT_ENTRY_MAX_BYTES = 16 * 1024;
-const TRANSCRIPT_TOTAL_MAX_BYTES = 256 * 1024;
-const TRANSCRIPT_MAX_ENTRIES = 200;
+export const MODEL_PROGRESS_TIMEOUT_MS = 45_000;
 
 export type WorkflowModel = NonNullable<ExtensionContext["model"]>;
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -110,8 +112,8 @@ export interface RunAgentOptions {
   replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions;
   /** Test-only override for the per-tool execution timeout. */
   toolCallTimeoutMs?: number;
-  /** Test-only override for the first assistant response-event timeout. */
-  firstResponseTimeoutMs?: number;
+  /** Test-only override for the per-provider-turn model-progress timeout. */
+  modelProgressTimeoutMs?: number;
   /** Test-only override for the end-to-end abort/shutdown deadline. */
   shutdownTimeoutMs?: number;
   /** Test seam for lifecycle races; production always uses createAgentSession. */
@@ -239,7 +241,9 @@ function makeStructuredOutputTool(
   });
 }
 
-type AssistantMessage = Extract<AgentMessage, { role: "assistant" }>;
+type AssistantMessage = ProgressAssistantMessage;
+
+export { transcriptFromMessages };
 
 export interface AssistantSettlement {
   stopReason: AssistantMessage["stopReason"];
@@ -275,28 +279,6 @@ export function agentFailureMessage(
   return settlement?.errorMessage ?? promptErrorMessage ?? "Agent failed";
 }
 
-function finalOutput(messages: AgentMessage[]): string {
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (msg.role !== "assistant") continue;
-    const text = msg.content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-    if (text) return text;
-  }
-  return "";
-}
-
-function safeJson(value: unknown): string {
-  return safeStringify(value, {
-    maxBytes: TRANSCRIPT_ENTRY_MAX_BYTES,
-    maxDepth: 12,
-    maxNodes: 2_000,
-  });
-}
-
 /** Record lifecycle timings without inferring completion from message timestamps. */
 export function recordToolExecutionTiming(
   timings: Map<string, ToolExecutionTiming>,
@@ -321,133 +303,6 @@ export function recordToolExecutionTiming(
   });
 }
 
-function toolMetadata(
-  toolCallId: string,
-  timings: ReadonlyMap<string, ToolExecutionTiming>,
-) {
-  const timing = timings.get(toolCallId);
-  return {
-    toolCallId: truncateUtf8(toolCallId, 1024),
-    ...(timing?.startedAt === undefined ? {} : { startedAt: timing.startedAt }),
-    ...(timing?.finishedAt === undefined
-      ? {}
-      : { finishedAt: timing.finishedAt }),
-    ...(timing?.durationMs === undefined
-      ? {}
-      : { durationMs: timing.durationMs }),
-  };
-}
-
-/** Convert pi messages into a compact, serializable transcript for the UI. */
-export function transcriptFromMessages(
-  messages: AgentMessage[],
-  toolTimings: ReadonlyMap<string, ToolExecutionTiming> = new Map(),
-): TranscriptEntry[] {
-  const entries: TranscriptEntry[] = [];
-  for (const message of messages) {
-    if (message.role === "user") {
-      const text =
-        typeof message.content === "string"
-          ? message.content
-          : message.content
-              .map((part) =>
-                part.type === "text" ? part.text : `[image: ${part.mimeType}]`,
-              )
-              .join("\n");
-      if (text.trim()) {
-        entries.push({ role: "user", text, timestamp: message.timestamp });
-      }
-      continue;
-    }
-
-    if (message.role === "assistant") {
-      for (const part of message.content) {
-        if (part.type === "text" && part.text.trim()) {
-          entries.push({
-            role: "assistant",
-            text: part.text,
-            timestamp: message.timestamp,
-          });
-        } else if (part.type === "thinking" && part.thinking.trim()) {
-          entries.push({
-            role: "thinking",
-            text: part.thinking,
-            timestamp: message.timestamp,
-          });
-        } else if (part.type === "toolCall") {
-          entries.push({
-            role: "tool",
-            name: part.name,
-            text: safeJson(part.arguments),
-            timestamp: message.timestamp,
-            ...toolMetadata(part.id, toolTimings),
-          });
-        }
-      }
-      continue;
-    }
-
-    if (message.role !== "toolResult") continue;
-    const text = message.content
-      .map((part) =>
-        part.type === "text" ? part.text : `[image: ${part.mimeType}]`,
-      )
-      .join("\n");
-    entries.push({
-      role: "toolResult",
-      name: message.toolName,
-      text,
-      isError: message.isError,
-      timestamp: message.timestamp,
-      ...toolMetadata(message.toolCallId, toolTimings),
-    });
-  }
-  const selected =
-    entries.length <= TRANSCRIPT_MAX_ENTRIES
-      ? entries
-      : [entries[0], ...entries.slice(-(TRANSCRIPT_MAX_ENTRIES - 1))];
-  const bounded: TranscriptEntry[] = [];
-  let totalBytes = 0;
-  for (const entry of selected) {
-    const remaining = TRANSCRIPT_TOTAL_MAX_BYTES - totalBytes;
-    if (remaining <= 0) break;
-    const text = truncateUtf8(
-      entry.text,
-      Math.min(TRANSCRIPT_ENTRY_MAX_BYTES, remaining),
-    );
-    totalBytes += Buffer.byteLength(text, "utf8");
-    bounded.push({
-      ...entry,
-      text:
-        text === entry.text ? text : `${text}\n[transcript entry truncated]`,
-    });
-  }
-  if (bounded.length < entries.length) {
-    bounded.push({
-      role: "toolResult",
-      name: "transcript",
-      text: `[transcript truncated: retained ${bounded.length} of ${entries.length} entries]`,
-    });
-  }
-  return bounded;
-}
-
-function computeUsage(messages: AgentMessage[]): AgentUsage {
-  const usage = emptyUsage();
-  for (const msg of messages) {
-    if (msg.role !== "assistant") continue;
-    usage.turns++;
-    const u = msg.usage;
-    if (!u) continue;
-    usage.input += u.input || 0;
-    usage.output += u.output || 0;
-    usage.cacheRead += u.cacheRead || 0;
-    usage.cacheWrite += u.cacheWrite || 0;
-    usage.cost += u.cost?.total || 0;
-  }
-  return usage;
-}
-
 function errorText(error: unknown): string {
   return (error instanceof Error ? error.message : String(error)).slice(
     0,
@@ -461,35 +316,82 @@ function formatTimeout(timeoutMs: number) {
     : `${timeoutMs} ms`;
 }
 
-/** Abort a provider call that opens but never emits its first assistant event. */
-export function createFirstResponseWatchdog(
-  onTimeout: () => Promise<unknown>,
+export function resolveModelProgressTimeoutMs(
+  settingsManager: SettingsManager,
+  override?: number,
+) {
+  if (override !== undefined) return override;
+  const configured =
+    settingsManager.getProjectSettings().httpIdleTimeoutMs ??
+    settingsManager.getGlobalSettings().httpIdleTimeoutMs;
+  return typeof configured === "number" && Number.isFinite(configured)
+    ? Math.max(MODEL_PROGRESS_TIMEOUT_MS, Math.floor(configured))
+    : MODEL_PROGRESS_TIMEOUT_MS;
+}
+
+/** Abort any provider turn that stops producing model-visible progress. */
+export function createModelProgressWatchdog(
+  onTimeout: (error: Error) => Promise<unknown>,
   options: { timeoutMs?: number; model?: string } = {},
 ) {
-  const timeoutMs = options.timeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
+  const timeoutMs = options.timeoutMs ?? MODEL_PROGRESS_TIMEOUT_MS;
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let activeTurn = false;
+  let closed = false;
+  let rejectTimeout!: (error: Error) => void;
   const timeout = new Promise<never>((_resolve, reject) => {
+    rejectTimeout = reject;
+  });
+
+  const clear = () => {
+    if (timer) clearTimeout(timer);
+    timer = undefined;
+  };
+  const schedule = () => {
+    clear();
+    if (!activeTurn || closed) return;
     // This timer owns the awaited watchdog outcome. Keep it referenced so a
     // short-lived Node 22 process cannot exit with the promise still pending.
     timer = setTimeout(() => {
       timer = undefined;
+      activeTurn = false;
+      closed = true;
       const model = options.model ? ` for ${options.model}` : "";
-      reject(
-        new Error(
-          `Agent received no assistant response event${model} within ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
-        ),
+      const error = new Error(
+        `Agent provider turn${model} produced no model-visible progress for ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
       );
-      void onTimeout().catch(() => {});
+      rejectTimeout(error);
+      try {
+        void onTimeout(error).catch(() => {});
+      } catch {
+        // The timeout result remains authoritative even if abort throws before
+        // returning its promise; bounded shutdown below gets another chance.
+      }
     }, timeoutMs);
-  });
-
+  };
+  const armTurn = () => {
+    if (closed) return;
+    activeTurn = true;
+    schedule();
+  };
+  const markProgress = () => {
+    if (!activeTurn || closed) return;
+    schedule();
+  };
+  const completeTurn = () => {
+    activeTurn = false;
+    clear();
+  };
   const cancel = () => {
-    if (timer) clearTimeout(timer);
-    timer = undefined;
+    closed = true;
+    activeTurn = false;
+    clear();
   };
 
   return {
-    markResponse: cancel,
+    armTurn,
+    markProgress,
+    completeTurn,
     cancel,
     async waitFor<T>(operation: Promise<T>) {
       try {
@@ -501,13 +403,24 @@ export function createFirstResponseWatchdog(
   };
 }
 
-function isAssistantResponseEvent(event: AgentSessionEvent) {
-  return (
-    (event.type === "message_start" ||
-      event.type === "message_update" ||
-      event.type === "message_end") &&
-    event.message.role === "assistant"
-  );
+function isModelVisibleProgress(event: AgentSessionEvent) {
+  if (event.type !== "message_update" || event.message.role !== "assistant") {
+    return false;
+  }
+  // Raw transport heartbeats never become AgentSession events. Empty stream,
+  // text, and thinking starts likewise cannot keep a provider turn alive.
+  const update = event.assistantMessageEvent;
+  if (
+    update.type === "text_delta" ||
+    update.type === "thinking_delta" ||
+    update.type === "toolcall_delta"
+  ) {
+    return update.delta.length > 0;
+  }
+  if (update.type === "text_end" || update.type === "thinking_end") {
+    return update.content.length > 0;
+  }
+  return update.type === "toolcall_start" || update.type === "toolcall_end";
 }
 
 export async function runAgent(
@@ -519,14 +432,21 @@ export async function runAgent(
   let session: AgentSession | undefined;
   let unsubscribeToolGuards: (() => void) | undefined;
   let aborted = false;
+  let terminalCause: "abort" | "model-progress-timeout" | undefined;
+  let modelProgressTimeoutMessage: string | undefined;
   let abortOperation: Promise<unknown> | undefined;
   let rejectForAbort: ((error: Error) => void) | undefined;
+  let rejectForProjectionFailure: ((error: Error) => void) | undefined;
   const abortRace = new Promise<never>((_resolve, reject) => {
     rejectForAbort = reject;
+  });
+  const projectionFailureRace = new Promise<never>((_resolve, reject) => {
+    rejectForProjectionFailure = reject;
   });
   // The same promise covers startup and prompting. Keep it observed even when
   // a pre-aborted run returns before either race is installed.
   void abortRace.catch(() => {});
+  void projectionFailureRace.catch(() => {});
   const abortError = () =>
     options.signal?.reason instanceof Error
       ? options.signal.reason
@@ -534,6 +454,7 @@ export async function runAgent(
   const onAbort = () => {
     if (aborted) return;
     aborted = true;
+    terminalCause ??= "abort";
     if (session) {
       try {
         abortOperation ??= session.abort();
@@ -650,8 +571,8 @@ export async function runAgent(
   let promptErrorMessage: string | undefined;
   const toolTimings = new Map<string, ToolExecutionTiming>();
 
-  const captureToolRenderData = () => {
-    for (const message of childSession.messages) {
+  const captureToolRenderData = (messages: readonly AgentMessage[]) => {
+    for (const message of messages) {
       if (message.role === "assistant") {
         for (const part of message.content) {
           if (part.type !== "toolCall") continue;
@@ -673,24 +594,27 @@ export async function runAgent(
     }
   };
 
-  const sync = () => {
-    // Operator reuse can restore earlier messages before this activation's
-    // event subscription starts. Rehydrate their native UI projection here.
-    captureToolRenderData();
-    const messages = childSession.messages;
-    usage = computeUsage(messages);
-
+  const refreshModel = (latestAssistant?: AssistantMessage) => {
     const sessionModel = childSession.model;
     modelId = sessionModel?.id ?? modelId;
     contextWindow = sessionModel?.contextWindow ?? contextWindow;
-    const context = childSession.getContextUsage();
-    if (
-      typeof context?.tokens === "number" &&
-      Number.isFinite(context.tokens) &&
-      context.tokens >= 0
-    ) {
-      usage.contextTokens = context.tokens;
+    if (!latestAssistant) return;
+    const responseMatchesSession =
+      !sessionModel ||
+      (latestAssistant.provider === sessionModel.provider &&
+        latestAssistant.model === sessionModel.id);
+    const reportedId = latestAssistant.responseModel ?? latestAssistant.model;
+    const reportedModel = responseMatchesSession
+      ? options.modelRegistry.find(latestAssistant.provider, reportedId)
+      : undefined;
+    if (reportedModel) {
+      modelId = reportedModel.id;
+      contextWindow = reportedModel.contextWindow;
     }
+  };
+
+  const sampleContextTokens = () => {
+    const context = childSession.getContextUsage();
     if (
       typeof context?.contextWindow === "number" &&
       Number.isFinite(context.contextWindow) &&
@@ -698,33 +622,75 @@ export async function runAgent(
     ) {
       contextWindow = context.contextWindow;
     }
-
-    for (let i = messages.length - 1; i >= 0; i--) {
-      const msg = messages[i];
-      if (msg.role !== "assistant") continue;
-      // Some gateways report a concrete fallback model. Prefer its registry
-      // metadata when available so capacity tracks the model that served the
-      // latest response rather than a hardcoded/configured guess.
-      const responseMatchesSession =
-        !sessionModel ||
-        (msg.provider === sessionModel.provider &&
-          msg.model === sessionModel.id);
-      const reportedId = msg.responseModel ?? msg.model;
-      const reportedModel = responseMatchesSession
-        ? options.modelRegistry.find(msg.provider, reportedId)
-        : undefined;
-      if (reportedModel) {
-        modelId = reportedModel.id;
-        contextWindow = reportedModel.contextWindow;
-      }
-      break;
+    if (
+      typeof context?.tokens === "number" &&
+      Number.isFinite(context.tokens) &&
+      context.tokens >= 0
+    ) {
+      return context.tokens;
     }
+    return context?.tokens === null ? null : undefined;
   };
 
-  let markFirstResponse = () => {};
-  let cancelFirstResponseWatchdog = () => {};
+  const projection = new AgentProgressProjection();
+  let lastProjection = projection.snapshot(toolTimings);
+
+  const snapshotProjection = () => {
+    const snapshot = projection.snapshot(toolTimings);
+    usage = snapshot.usage;
+    refreshModel(snapshot.latestAssistant);
+    lastProjection = snapshot;
+    return snapshot;
+  };
+
+  const reconcileProjection = () => {
+    projection.replace(childSession.messages, sampleContextTokens());
+    return snapshotProjection();
+  };
+
+  const emitProgress = () => {
+    const snapshot = snapshotProjection();
+    options.onProgress?.({
+      preview: snapshot.preview,
+      usage,
+      model: modelId,
+      contextWindow,
+      transcript: bindWorkflowToolRenderer(snapshot.transcript, toolRenderer),
+    });
+  };
+
+  let armModelProgress = () => {};
+  let markModelProgress = () => {};
+  let completeModelTurn = () => {};
+  let cancelModelProgressWatchdog = () => {};
+  let compactionReconcileQueued = false;
+  const queueCompactionReconcile = () => {
+    if (compactionReconcileQueued) return;
+    compactionReconcileQueued = true;
+    queueMicrotask(() => {
+      compactionReconcileQueued = false;
+      if (settled) return;
+      // Pi may synchronously remove a restored overflow assistant immediately
+      // after compaction_end. Read canonical state after that mutation.
+      try {
+        reconcileProjection();
+        emitProgress();
+      } catch (error) {
+        promptErrorMessage ??= `Failed to reconcile agent progress after compaction: ${errorText(error)}`;
+        rejectForProjectionFailure?.(new Error(promptErrorMessage));
+        try {
+          abortOperation ??= childSession.abort();
+          void abortOperation.catch(() => {});
+        } catch {
+          // The projection failure remains authoritative; bounded cleanup gets
+          // another chance to abort and dispose the child below.
+        }
+      }
+    });
+  };
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
+    if (event.type === "turn_start") armModelProgress();
     if (event.type === "tool_execution_start") {
       toolRenderer.start(
         event.toolCallId,
@@ -747,80 +713,103 @@ export async function runAgent(
         event.isError,
       );
     }
-    if (isAssistantResponseEvent(event)) markFirstResponse();
+    if (isModelVisibleProgress(event)) markModelProgress();
+    if (event.type === "message_end" && event.message.role === "assistant") {
+      completeModelTurn();
+    }
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
         assistantSettlement,
         event.message,
       );
+      // Pi publishes the finalized message before tool lifecycle delivery.
+      // Hydrate native rendering from this one message without reading history.
+      captureToolRenderData([event.message]);
+      projection.append(event.message);
     }
     if (
       event.type === "tool_execution_start" ||
       event.type === "tool_execution_end"
     ) {
       recordToolExecutionTiming(toolTimings, event);
-    } else if (
-      event.type !== "message_end" &&
-      event.type !== "compaction_end"
-    ) {
+    } else if (event.type === "compaction_end") {
+      queueCompactionReconcile();
+      return;
+    } else if (event.type !== "message_end") {
       return;
     }
-    sync();
-    const progressTranscript = bindWorkflowToolRenderer(
-      transcriptFromMessages(childSession.messages, toolTimings),
-      toolRenderer,
-    );
-    options.onProgress?.({
-      preview: finalOutput(childSession.messages),
-      usage,
-      model: modelId,
-      contextWindow,
-      transcript: progressTranscript,
-    });
+    emitProgress();
   });
 
   let output = "";
   let transcript: TranscriptEntry[] = [];
   let cleanupErrors: string[] = [];
   try {
+    // Operator reuse may restore messages before this activation subscribes.
+    // Hydrate both bounded projections once; ordinary progress never rescans it.
+    projection.replace(childSession.messages, sampleContextTokens());
+    captureToolRenderData(childSession.messages);
+    snapshotProjection();
     if (!aborted) {
-      const watchdog = createFirstResponseWatchdog(
-        () => {
+      const watchdog = createModelProgressWatchdog(
+        (error) => {
+          terminalCause ??= "model-progress-timeout";
+          if (terminalCause === "model-progress-timeout") {
+            modelProgressTimeoutMessage ??= error.message;
+          }
           abortOperation ??= childSession.abort();
           void abortOperation.catch(() => {});
           return abortOperation;
         },
         {
-          timeoutMs: options.firstResponseTimeoutMs,
+          timeoutMs: resolveModelProgressTimeoutMs(
+            options.settingsManager,
+            options.modelProgressTimeoutMs,
+          ),
           model: modelId,
         },
       );
-      markFirstResponse = watchdog.markResponse;
-      cancelFirstResponseWatchdog = watchdog.cancel;
+      armModelProgress = watchdog.armTurn;
+      markModelProgress = watchdog.markProgress;
+      completeModelTurn = watchdog.completeTurn;
+      cancelModelProgressWatchdog = watchdog.cancel;
       await Promise.race([
         watchdog.waitFor(
           childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
         ),
         abortRace,
+        projectionFailureRace,
       ]);
     }
   } catch (error) {
-    promptErrorMessage = errorText(error);
+    promptErrorMessage ??= errorText(error);
   } finally {
-    cancelFirstResponseWatchdog();
+    cancelModelProgressWatchdog();
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
     unsubscribe();
     unsubscribeToolGuards?.();
-    sync();
-    output = truncateUtf8(
-      finalOutput(childSession.messages),
-      AGENT_OUTPUT_MAX_BYTES,
-    );
-    transcript = bindWorkflowToolRenderer(
-      transcriptFromMessages(childSession.messages, toolTimings),
-      toolRenderer,
-    );
+    try {
+      const finalProjection = reconcileProjection();
+      output = truncateUtf8(finalProjection.preview, AGENT_OUTPUT_MAX_BYTES);
+      transcript = bindWorkflowToolRenderer(
+        finalProjection.transcript,
+        toolRenderer,
+      );
+    } catch (error) {
+      promptErrorMessage ??= `Failed to reconcile final agent progress: ${errorText(error)}`;
+      // A broken canonical accessor must not prevent owned-session cleanup.
+      // Preserve the last projection that was fully observed instead.
+      try {
+        output = truncateUtf8(lastProjection.preview, AGENT_OUTPUT_MAX_BYTES);
+        transcript = bindWorkflowToolRenderer(
+          lastProjection.transcript,
+          toolRenderer,
+        );
+      } catch (fallbackError) {
+        promptErrorMessage += `; failed to render last progress: ${errorText(fallbackError)}`;
+      }
+    }
     const cleanup = await shutdownAndDisposeChildSession(childSession, {
       abort: aborted || promptErrorMessage !== undefined,
       abortOperation,
@@ -834,7 +823,11 @@ export async function runAgent(
       ? `Cleanup failed: ${cleanupErrors.join("; ")}`
       : undefined;
 
-  if (aborted || assistantSettlement?.stopReason === "aborted") {
+  if (
+    terminalCause === "abort" ||
+    (terminalCause === undefined &&
+      assistantSettlement?.stopReason === "aborted")
+  ) {
     return {
       ok: false,
       output,
@@ -851,7 +844,9 @@ export async function runAgent(
   }
 
   const failureMessage =
-    agentFailureMessage(assistantSettlement, promptErrorMessage) ??
+    (terminalCause === "model-progress-timeout"
+      ? modelProgressTimeoutMessage
+      : agentFailureMessage(assistantSettlement, promptErrorMessage)) ??
     cleanupError;
   if (failureMessage !== undefined) {
     return {

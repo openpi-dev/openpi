@@ -5,6 +5,7 @@ import {
   type WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
 import { createWorkflowResultDelivery } from "../../../extensions/workflows/result-delivery.ts";
+import { projectWorkflowDetails } from "../../../extensions/workflows/retention.ts";
 
 function details(runId: string): WorkflowDetails {
   return {
@@ -34,6 +35,40 @@ function details(runId: string): WorkflowDetails {
     },
   };
 }
+
+test("bigint and cyclic results remain deliverable through a bounded projection", async () => {
+  const run = details("wf_non_json_delivery");
+  const cyclic: Record<string, unknown> = { count: 1n };
+  cyclic.self = cyclic;
+  run.result = cyclic;
+
+  const projection = projectWorkflowDetails(run, 128 * 1024);
+  assert.ok(projection);
+  const delivered: WorkflowDetails[] = [];
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    persist: () => {},
+    deliver: async (envelopes) => {
+      delivered.push(...envelopes.map((envelope) => envelope.details));
+      return envelopes.map((envelope) => ({
+        deliveryId: envelope.deliveryId,
+        delivered: true,
+      }));
+    },
+  });
+
+  delivery.defer({
+    deliveryId: projection.delivery!.id,
+    runId: projection.runId,
+    details: projection,
+  });
+  await delivery.parentSettled();
+
+  assert.equal(delivery.size(), 0);
+  assert.equal(delivered.length, 1);
+  assert.equal(delivered[0]?.result, "[result omitted from memory]");
+  assert.equal(delivered[0]?.delivery?.state, "delivered");
+});
 
 test("failed delivery stays pending and retries with the same per-run id", async () => {
   const run = details("wf_aa");
@@ -70,6 +105,43 @@ test("failed delivery stays pending and retries with the same per-run id", async
   assert.equal(run.delivery?.id, "workflow:wf_aa:terminal");
   assert.equal("lastError" in run.delivery!, false);
   assert.deepEqual(persisted, ["pending", "pending", "delivered"]);
+});
+
+test("initial persistence failure retains a detached envelope for retry", async () => {
+  const run = details("wf_initial_persist");
+  let failPersistence = true;
+  const calls: string[][] = [];
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    persist: (current) => {
+      if (failPersistence) throw new Error("disk unavailable");
+    },
+    deliver: async (envelopes) => {
+      calls.push(envelopes.map((entry) => entry.deliveryId));
+      return envelopes.map((entry) => ({
+        deliveryId: entry.deliveryId,
+        delivered: true,
+      }));
+    },
+  });
+
+  delivery.defer({
+    deliveryId: run.delivery!.id,
+    runId: run.runId,
+    details: run,
+  });
+  assert.equal(delivery.size(), 1);
+  assert.equal(run.delivery?.state, "pending");
+  assert.match(
+    run.delivery?.lastError ?? "",
+    /initial delivery persistence failed/i,
+  );
+
+  failPersistence = false;
+  await delivery.parentSettled();
+  assert.equal(delivery.size(), 0);
+  assert.equal(run.delivery?.state, "delivered");
+  assert.deepEqual(calls, [["workflow:wf_initial_persist:terminal"]]);
 });
 
 test("partial batch receipts retry only unacknowledged runs", async () => {

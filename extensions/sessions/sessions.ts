@@ -162,6 +162,30 @@ export function filterSessionInfos(
   );
 }
 
+/**
+ * Mirror pi-tui SelectList's centered viewport so background stats work is
+ * limited to rows the picker can actually render. Keep the formula locked by
+ * tests because SelectList does not expose its visible range.
+ */
+export function selectSessionStatsWindow(
+  sessions: readonly SessionInfoLike[],
+  selectedPath: string,
+  maxVisible: number,
+) {
+  if (sessions.length === 0) return [];
+  const visible = Math.max(1, Math.min(maxVisible, sessions.length));
+  const found = sessions.findIndex((session) => session.path === selectedPath);
+  const selectedIndex = found >= 0 ? found : 0;
+  const startIndex = Math.max(
+    0,
+    Math.min(
+      selectedIndex - Math.floor(visible / 2),
+      sessions.length - visible,
+    ),
+  );
+  return sessions.slice(startIndex, startIndex + visible);
+}
+
 export function getSessionPaneLayout(width: number): SessionPaneLayout {
   if (width < 80) {
     return { mode: "single", listWidth: width, previewWidth: 0 };
@@ -340,12 +364,21 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
 export function buildSessionPreview(
   session: SessionInfoLike,
   messages: PreviewMessageLike[],
-  options: { maxMessages?: number } = {},
+  options: {
+    maxMessages?: number;
+    totalMessages?: number;
+    truncatedBytes?: number;
+  } = {},
 ): SessionPreview {
   const maxMessages = options.maxMessages ?? 80;
   const blocks: PreviewBlock[] = [];
-  const omitted = Math.max(0, messages.length - maxMessages);
-  const visibleMessages = omitted > 0 ? messages.slice(-maxMessages) : messages;
+  const visibleMessages =
+    messages.length > maxMessages ? messages.slice(-maxMessages) : messages;
+  const totalMessages = Math.max(
+    visibleMessages.length,
+    options.totalMessages ?? messages.length,
+  );
+  const omitted = Math.max(0, totalMessages - visibleMessages.length);
 
   if (omitted > 0) {
     blocks.push({
@@ -353,12 +386,18 @@ export function buildSessionPreview(
       text: `… ${omitted} earlier messages omitted`,
     });
   }
+  if ((options.truncatedBytes ?? 0) > 0) {
+    blocks.push({
+      kind: "notice",
+      text: `… ${options.truncatedBytes} bytes of preview content omitted`,
+    });
+  }
 
   for (const message of visibleMessages) {
     blocks.push(...messageToBlocks(message));
   }
 
-  const messageCount = session.messageCount ?? messages.length;
+  const messageCount = session.messageCount ?? totalMessages;
   return {
     title: buildSessionLabel(session),
     subtitle: `${formatTimestamp(session.modified)} · ${messageCount} messages · ${cleanDisplayLine(session.cwd)}`,

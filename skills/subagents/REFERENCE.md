@@ -1,4 +1,4 @@
-# Agent types
+# Agent types reference
 
 An agent type is a reusable child-agent definition shared by
 `subagent_spawn` and Workflow `agent()`: a named preset that can set a child's
@@ -172,18 +172,18 @@ and are not treated as missing, so the child denylist stays authoritative.
 
 ## Implementation
 
-- `src/agent-types.ts` — built-ins, parsing, discovery, diagnostics, and model
+- `extensions/subagents/src/agent-types.ts` — built-ins, parsing, discovery, diagnostics, and model
   precedence helpers.
-- `../../shared/subagent-roles.ts` — one typed source for built-in role names.
-- `index.ts` — safe initial discovery, session-scoped roster refresh and
+- `extensions/shared/subagent-roles.ts` — one typed source for built-in role names.
+- `extensions/subagents/index.ts` — safe initial discovery, session-scoped roster refresh and
   re-registration, the `agent_type` parameter, and merging a type/config
   assignment into the spawn task.
-- `src/backends/pi.ts` — applies `appendSystemPrompt` and the tool allowlist to
+- `extensions/subagents/src/backends/pi.ts` — applies `appendSystemPrompt` and the tool allowlist to
   a direct subagent session.
-- `../../workflows/index.ts` and `../../workflows/runner.ts` — resolve the same
+- `extensions/workflows/index.ts` and `extensions/workflows/runner.ts` — resolve the same
   type for each Workflow call and enforce its prompt, model, effort, and tools.
-- `../../shared/child-session.ts` — `childToolPolicy(tools?)`, where the allowlist
+- `extensions/shared/child-session.ts` — `childToolPolicy(tools?)`, where the allowlist
   and denylist compose.
 
-Covered by `../../../tests/extensions/subagents/agent-types.test.ts`, including the trust gate and the
+Covered by `tests/extensions/subagents/agent-types.test.ts`, including the trust gate and the
 narrowing-only property.

@@ -1,11 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   CHILD_EXCLUDED_TOOL_NAMES,
   CHILD_SAFE_PACKAGE_TOOL_NAMES,
 } from "../../../extensions/shared/child-session.ts";
 import {
   DEFAULT_OPENPI_ACTIVE_TOOL_NAMES,
+  isOwnedToolActive,
+  isOwnedToolAvailable,
   loadOpenPiCapabilities,
   OPENPI_CAPABILITY_NAMES,
   OPENPI_TOOL_SURFACE,
@@ -90,6 +93,47 @@ test("owner patch fails closed on undeclared tools", () => {
     /does not own tool "workflow_status"/,
   );
   assert.equal(h.writes.length, 0);
+});
+
+test("owned-tool activity requires both visibility and matching provenance", () => {
+  const setupPath = fileURLToPath(
+    new URL("../../../extensions/setup/index.ts", import.meta.url),
+  );
+  let active = ["read", "configure_my_pi_setup"];
+  const sourceInfo = { path: setupPath, source: "extension" };
+  const pi = {
+    getActiveTools: () => [...active],
+    getAllTools: () => [
+      { name: "read" },
+      { name: "configure_my_pi_setup", sourceInfo },
+    ],
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+  };
+
+  assert.equal(isOwnedToolActive(pi, "setup", "configure_my_pi_setup"), true);
+  assert.equal(
+    isOwnedToolAvailable(pi, "setup", "configure_my_pi_setup"),
+    true,
+  );
+  active = ["read"];
+  assert.equal(isOwnedToolActive(pi, "setup", "configure_my_pi_setup"), false);
+  assert.equal(
+    isOwnedToolAvailable(pi, "setup", "configure_my_pi_setup"),
+    true,
+  );
+  active = ["read", "configure_my_pi_setup"];
+  sourceInfo.path = "<foreign:configure_my_pi_setup>";
+  assert.equal(isOwnedToolActive(pi, "setup", "configure_my_pi_setup"), false);
+  assert.equal(
+    isOwnedToolAvailable(pi, "setup", "configure_my_pi_setup"),
+    false,
+  );
+  assert.throws(
+    () => isOwnedToolActive(pi, "setup", "workflow"),
+    /setup does not own tool "workflow"/,
+  );
 });
 
 test("inline ownership fails open without hiding foreign tools", () => {

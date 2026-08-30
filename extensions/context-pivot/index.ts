@@ -11,6 +11,9 @@ import {
 
 export const MIN_CONTEXT_PIVOT_TOKENS = 30_000;
 const STATUS_KEY = "context-pivot";
+const NOTHING_TO_COMPACT_ERROR = "Nothing to compact (session too small)";
+const NO_DISCARDABLE_HISTORY_MESSAGE =
+  "Context pivot could not run: this session has no discardable history to compact. Continue in the current session, or use /sessions to choose another session; to begin cleanly, start a new Session in Pi.";
 
 interface PendingPivot {
   brief: string;
@@ -57,6 +60,13 @@ export function buildPivotSummary(brief: string): string {
   ].join("\n");
 }
 
+function formatContextPivotError(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message === NOTHING_TO_COMPACT_ERROR
+    ? NO_DISCARDABLE_HISTORY_MESSAGE
+    : `Context pivot failed: ${message}`;
+}
+
 function impossibleKeptId(entries: readonly SessionEntry[]) {
   return `${entries.at(-1)?.id ?? "context-pivot"}-context-pivot-cut`;
 }
@@ -73,7 +83,7 @@ function validateBrief(brief: string, ctx: ExtensionContext) {
   }
   if (tokens < MIN_CONTEXT_PIVOT_TOKENS) {
     throw new Error(
-      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or /handoff for a genuinely new session.`,
+      `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or use /sessions to browse or switch an existing session; start a new Session in Pi when a clean session is needed.`,
     );
   }
 }
@@ -127,7 +137,7 @@ export default function contextPivot(pi: ExtensionAPI) {
     name: "context_pivot",
     label: "Context Pivot",
     description:
-      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /handoff instead for a genuinely new session.",
+      "Deliberately replace a long, noisy active context with a concise brief for the next phase while staying in the same Pi session. Use once context is at least 30k tokens and the work is moving between phases such as research → implementation or implementation → review; below 30k it is rejected. Use /sessions to browse or switch an existing session; start a new Session in Pi when a genuinely new session is needed.",
     promptSnippet:
       "Compress a long current session into a clean brief before changing phase",
     promptGuidelines: [
@@ -176,11 +186,11 @@ export default function contextPivot(pi: ExtensionAPI) {
           onError: (error) => {
             if (pivotGeneration === generation) pending = undefined;
             clear();
+            const message = formatContextPivotError(error);
             if (ctx.hasUI) {
-              ctx.ui.notify(
-                `Context pivot failed: ${error instanceof Error ? error.message : String(error)}`,
-                "error",
-              );
+              ctx.ui.notify(message, "error");
+            } else {
+              console.error(message);
             }
           },
         });

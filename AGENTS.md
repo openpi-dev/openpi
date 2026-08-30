@@ -63,11 +63,20 @@ If those answers are unclear, investigate before adding surface area.
 - Preserve unrelated and uncommitted user work. Make the smallest scoped change that satisfies the request.
 - Follow existing patterns and tests before inventing a new abstraction.
 - Run `bun run check` and `bun run test` after making a change. If a relevant validation command does not exist, call that out and propose one.
+- When opening or updating a pull request, follow `.github/PULL_REQUEST_TEMPLATE.md` and complete its Problem, Value, Approach, Validation, and Impact sections.
 - Avoid explicit return types unless they are necessary. Prefer inference over repeatedly declaring types.
 - Treat `as any` as an absolute last resort; use real type safety.
 - Keep user-visible behavior, model-visible context, and persisted/runtime state tests separate when the distinction matters.
 - Runtime provenance: before diagnosing installed behavior, provider compatibility, a manual Pi smoke, or any UI result, read README section “开发运行时：区分 npm 与当前源码”. Prove both the checkout revision and the single OpenPI source reported by `pi list` before reasoning from source code.
 - Preserve ignored local evidence as user work. Never use `git clean -fdx`; ignored benchmark runs, logs, and harnesses may be the only local copy.
+
+### Knowledge and evidence
+
+- Use GitHub Issues for discussion and work tracking. Preserve a reusable conclusion in the appropriate `docs/` category and link the Issue and record both ways.
+- Keep facts, inferences, recommendations, unknowns, protocols, and validated results distinct. A research recommendation or complete-looking design is not a project constraint without an accepted Decision.
+- Formal Benchmark records must retain frozen source, model, task, and verifier identities; usage accounting; failure classification; limitations; and a verifiable evidence reference.
+- Before publishing or materially revising a governed record, read [`docs/README.md`](docs/README.md) and the relevant category index. Existing legacy documents are not silently reclassified or rewritten.
+- Preserve large or sensitive raw evidence outside the repository under a stable identity. Never bulk-add, move, overwrite, clean, or publish ignored Benchmark assets, credentials, or private Session data.
 
 ## Package configuration contract
 

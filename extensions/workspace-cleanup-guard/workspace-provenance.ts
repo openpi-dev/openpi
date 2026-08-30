@@ -32,6 +32,35 @@ interface ShellInspection {
 }
 
 const DYNAMIC_PATH = /[*?[$`]/u;
+const STANDALONE_CONTROL_CHARACTERS = ";&|<>(){}$`*?[]#";
+const COMMAND_FORWARDERS = new Set([
+  "!",
+  "alias",
+  "bash",
+  "builtin",
+  "chroot",
+  "command",
+  "dash",
+  "doas",
+  "env",
+  "eval",
+  "exec",
+  "find",
+  "hash",
+  "ksh",
+  "nice",
+  "nohup",
+  "sandbox-exec",
+  "setsid",
+  "sh",
+  "sudo",
+  "time",
+  "timeout",
+  "trap",
+  "watch",
+  "xargs",
+  "zsh",
+]);
 
 function splitShellSegments(command: string) {
   const segments: string[] = [];
@@ -127,86 +156,273 @@ function literalPath(value: string | undefined) {
   return value;
 }
 
-function inspectShell(command: string): ShellInspection {
-  const creations = new Set<string>();
-  const removals = new Set<string>();
-  let opaqueDestructiveCommand = false;
-  for (const segment of splitShellSegments(command)) {
-    const tokens = shellTokens(segment);
-    const nestedBash = tokens.findIndex(
-      (token, index) =>
-        token.split("/").at(-1) === "bash" && tokens[index + 1] === "-c",
-    );
-    if (nestedBash >= 0) {
-      const nestedCommand = tokens[nestedBash + 2];
-      if (nestedCommand) {
-        const nested: ShellInspection = inspectShell(nestedCommand);
-        for (const target of nested.creations) creations.add(target);
-        for (const target of nested.removals) removals.add(target);
-        opaqueDestructiveCommand ||= nested.opaqueDestructiveCommand;
+function standaloneShellTokens(command: string) {
+  const source = command.replace(/^[ \t]+|[ \t]+$/gu, "");
+  const tokens: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let tokenStarted = false;
+  const push = () => {
+    if (!tokenStarted) return;
+    tokens.push(current);
+    current = "";
+    tokenStarted = false;
+  };
+
+  for (const character of source) {
+    if (quote === "'") {
+      if (character === "'") quote = undefined;
+      else current += character;
+      continue;
+    }
+    if (quote === '"') {
+      if (escaped) {
+        if (character !== "\n") {
+          current += '$`"\\'.includes(character) ? character : `\\${character}`;
+        }
+        escaped = false;
+      } else if (character === '"') {
+        quote = undefined;
+      } else if (character === "\\") {
+        escaped = true;
+      } else if (character === "$" || character === "`") {
+        return undefined;
+      } else {
+        current += character;
       }
       continue;
     }
+    if (escaped) {
+      if (character === "\n" || character === "\r") return undefined;
+      current += character;
+      tokenStarted = true;
+      escaped = false;
+      continue;
+    }
+    if (character === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      quote = character;
+      tokenStarted = true;
+      continue;
+    }
+    if (character === "\n" || character === "\r") return undefined;
+    if (character === " " || character === "\t") {
+      push();
+      continue;
+    }
+    if (STANDALONE_CONTROL_CHARACTERS.includes(character)) return undefined;
+    current += character;
+    tokenStarted = true;
+  }
+  if (quote || escaped) return undefined;
+  push();
+  return tokens;
+}
+
+function directRmTargets(command: string) {
+  const tokens = standaloneShellTokens(command);
+  if (!tokens || tokens[0] !== "rm") return undefined;
+
+  const targets: string[] = [];
+  let afterOptions = false;
+  for (const token of tokens.slice(1)) {
+    if (!afterOptions && token === "--") {
+      afterOptions = true;
+      continue;
+    }
+    if (!afterOptions && token.startsWith("-")) continue;
+    if (!token || token.startsWith("~") || path.isAbsolute(token)) {
+      return undefined;
+    }
+    targets.push(token);
+  }
+  return targets.length > 0 ? targets : undefined;
+}
+
+function inspectCreations(command: string) {
+  const creations = new Set<string>();
+  for (const segment of splitShellSegments(command)) {
+    const tokens = shellTokens(segment);
     for (let index = 0; index < tokens.length; index += 1) {
       if (tokens[index] !== ">") continue;
       const target = literalPath(tokens[index + 1]);
       if (target) creations.add(target);
     }
 
-    const executable = tokens[0]?.split("/").at(-1);
-    if (executable === "mkdir") {
-      const targets: string[] = [];
-      let afterOptions = false;
-      let supported = true;
-      for (const token of tokens.slice(1)) {
-        if (!afterOptions && token === "--") {
-          afterOptions = true;
-          continue;
-        }
-        if (!afterOptions && (token === "-p" || token === "--parents")) {
-          continue;
-        }
-        if (!afterOptions && token.startsWith("-")) {
-          supported = false;
-          break;
-        }
-        const target = literalPath(token);
-        if (!target) {
-          supported = false;
-          break;
-        }
-        targets.push(target);
-      }
-      if (supported) {
-        for (const target of targets) creations.add(target);
-      }
-    }
-    if (executable !== "rm") continue;
-    let sawLiteral = false;
+    if (tokens[0]?.split("/").at(-1) !== "mkdir") continue;
+    const targets: string[] = [];
     let afterOptions = false;
+    let supported = true;
     for (const token of tokens.slice(1)) {
       if (!afterOptions && token === "--") {
         afterOptions = true;
         continue;
       }
-      if (!afterOptions && token.startsWith("-")) continue;
-      const target = literalPath(token);
-      if (!target) {
-        opaqueDestructiveCommand = true;
+      if (!afterOptions && (token === "-p" || token === "--parents")) {
         continue;
       }
-      sawLiteral = true;
-      removals.add(target);
+      if (!afterOptions && token.startsWith("-")) {
+        supported = false;
+        break;
+      }
+      const target = literalPath(token);
+      if (!target) {
+        supported = false;
+        break;
+      }
+      targets.push(target);
     }
-    if (!sawLiteral) opaqueDestructiveCommand = true;
+    if (supported) {
+      for (const target of targets) creations.add(target);
+    }
   }
-  if (/\brm\b/u.test(command) && removals.size === 0) {
-    opaqueDestructiveCommand = true;
+  return [...creations];
+}
+
+function containsRmReference(command: string) {
+  let decoded = "";
+  let quote: "'" | '"' | undefined;
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? "";
+    const next = command[index + 1] ?? "";
+    if (!quote && character === "$" && (next === "'" || next === '"')) {
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      if (next !== "\n") {
+        decoded +=
+          quote === '"' && !'$`"\\'.includes(next) ? `\\${next}` : next;
+      }
+      index += 1;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      if (!quote) quote = character;
+      else if (quote === character) quote = undefined;
+      else decoded += character;
+      continue;
+    }
+    decoded += character;
+  }
+  return /(^|[^A-Za-z0-9_.-])(?:\/[A-Za-z0-9_.-]+)*\/?rm(?=$|[^A-Za-z0-9_.-])/u.test(
+    decoded,
+  );
+}
+
+function stripShellComment(command: string) {
+  let quote: "'" | '"' | undefined;
+  let escaped = false;
+  let comment = false;
+  let source = "";
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index] ?? "";
+    if (comment) {
+      if (character === "\n") {
+        comment = false;
+        source += character;
+      }
+      continue;
+    }
+    if (escaped) {
+      escaped = false;
+      source += character;
+      continue;
+    }
+    if (character === "\\" && quote !== "'") {
+      escaped = true;
+      source += character;
+      continue;
+    }
+    if (character === "'" || character === '"') {
+      if (!quote) quote = character;
+      else if (quote === character) quote = undefined;
+      source += character;
+      continue;
+    }
+    if (
+      !quote &&
+      character === "#" &&
+      (index === 0 || /[\s;&|()]/u.test(command[index - 1] ?? ""))
+    ) {
+      comment = true;
+      continue;
+    }
+    source += character;
+  }
+  return source.trimEnd();
+}
+
+function heredocContainsExecutableRm(command: string) {
+  const lines = command.split("\n");
+  if (lines.length < 3) return undefined;
+  const header = lines[0] ?? "";
+  const match = /<<(-?)[ \t]*(['"]?)([A-Za-z_][A-Za-z0-9_]*)\2[ \t]*$/u.exec(
+    header,
+  );
+  if (!match) return undefined;
+  const stripTabs = match[1] === "-";
+  const delimiterQuoted = Boolean(match[2]);
+  const delimiter = match[3] ?? "";
+  const closing = lines.findIndex((line, index) => {
+    if (index === 0) return false;
+    return (stripTabs ? line.replace(/^\t+/u, "") : line) === delimiter;
+  });
+  if (closing < 0 || lines.slice(closing + 1).some((line) => line.trim())) {
+    return undefined;
+  }
+  if (containsRmReference(stripShellComment(header))) return true;
+  if (delimiterQuoted) return false;
+  const body = lines.slice(1, closing).join("\n");
+  return /\$\(|`/u.test(body) && containsRmReference(body);
+}
+
+function containsExecutableRmReference(command: string) {
+  const heredoc = heredocContainsExecutableRm(command);
+  if (heredoc !== undefined) return heredoc;
+
+  const source = stripShellComment(command);
+  if (!containsRmReference(source)) return false;
+  const tokens = standaloneShellTokens(source);
+  if (!tokens) return true;
+
+  const executableIndex = tokens.findIndex(
+    (token) => !/^[A-Za-z_][A-Za-z0-9_]*=/u.test(token),
+  );
+  const executable = tokens[executableIndex]?.split("/").at(-1) ?? "";
+  if (
+    executable === "command" &&
+    (tokens[executableIndex + 1] === "-v" ||
+      tokens[executableIndex + 1] === "-V")
+  ) {
+    return false;
+  }
+  return COMMAND_FORWARDERS.has(executable) || executable === "rm";
+}
+
+function inspectShell(command: string): ShellInspection {
+  const removals = directRmTargets(command);
+  if (removals) {
+    return {
+      creations: [],
+      removals,
+      opaqueDestructiveCommand: false,
+    };
+  }
+  if (!containsExecutableRmReference(command)) {
+    return {
+      creations: inspectCreations(command),
+      removals: [],
+      opaqueDestructiveCommand: false,
+    };
   }
   return {
-    creations: [...creations],
-    removals: [...removals],
-    opaqueDestructiveCommand,
+    creations: [],
+    removals: [],
+    opaqueDestructiveCommand: true,
   };
 }
 
@@ -215,7 +431,8 @@ function containedPath(cwd: string, candidate: string) {
   const relative = path.relative(cwd, absolute);
   if (
     relative === "" ||
-    relative.startsWith("..") ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
     path.isAbsolute(relative)
   ) {
     return undefined;
@@ -253,6 +470,13 @@ export function createWorkspaceCleanupGuard() {
     return { path: contained.absolute, existed, observeOnCommandError };
   };
 
+  const unverifiedCleanup = () => ({
+    kind: "block" as const,
+    protectedPaths: [],
+    reason:
+      "Blocked cleanup: OpenPI recognized a source-visible deletion outside its supported direct rm command grammar. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
+  });
+
   return {
     async beforeWrite(attempt: WriteAttempt) {
       const creation = await prepareCreation(attempt.cwd, attempt.path, false);
@@ -264,6 +488,15 @@ export function createWorkspaceCleanupGuard() {
 
     async before(attempt: BashAttempt) {
       const inspected = inspectShell(attempt.command);
+      if (inspected.opaqueDestructiveCommand) return unverifiedCleanup();
+
+      const containedRemovals = inspected.removals.map((candidate) =>
+        containedPath(attempt.cwd, candidate),
+      );
+      if (containedRemovals.some((candidate) => !candidate)) {
+        return unverifiedCleanup();
+      }
+
       const creations: PendingEffects["creations"] = [];
       for (const candidate of inspected.creations) {
         const creation = await prepareCreation(attempt.cwd, candidate, true);
@@ -272,8 +505,7 @@ export function createWorkspaceCleanupGuard() {
 
       const removals: string[] = [];
       const protectedPaths: string[] = [];
-      for (const candidate of inspected.removals) {
-        const contained = containedPath(attempt.cwd, candidate);
+      for (const contained of containedRemovals) {
         if (!contained) continue;
         const origin = origins.get(contained.absolute);
         const present = await exists(contained.absolute);
@@ -292,15 +524,11 @@ export function createWorkspaceCleanupGuard() {
           kind: "block" as const,
           protectedPaths,
           reason: `Blocked cleanup: ${protectedPaths.join(", ")} existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.`,
-          opaqueDestructiveCommand: inspected.opaqueDestructiveCommand,
         };
       }
 
       pending.set(attempt.id, { creations, removals });
-      return {
-        kind: "allow" as const,
-        opaqueDestructiveCommand: inspected.opaqueDestructiveCommand,
-      };
+      return { kind: "allow" as const };
     },
 
     async after(result: { id: string; isError: boolean }) {
