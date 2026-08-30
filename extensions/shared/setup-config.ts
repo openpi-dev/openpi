@@ -183,7 +183,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
     footerLines: DEFAULT_FOOTER_LINES,
-    subagentResultDisplay: "full",
+    subagentResultDisplay: "compact",
     bashToolDisplay: "compact",
     fileMutationDisplay: "compact",
   },
@@ -493,7 +493,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         ui.subagentResultDisplay as DetailDisplay,
       )
         ? (ui.subagentResultDisplay as DetailDisplay)
-        : "full",
+        : "compact",
       bashToolDisplay: DETAIL_DISPLAYS.includes(
         ui.bashToolDisplay as DetailDisplay,
       )

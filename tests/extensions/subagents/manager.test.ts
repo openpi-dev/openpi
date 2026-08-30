@@ -185,6 +185,7 @@ test("stub subagent completes and delivers a final result", async () => {
     const done = manager.view.get(snap.id);
     assert.ok(done);
     assert.equal(done.status, "done");
+    assert.equal(done.outcome, "completed");
     assert.match(
       done.finalText,
       /\[stub:pi\] completed: Say hello to the tests/,
@@ -216,6 +217,7 @@ test("FAIL: prompts settle as errors; unconsumed settles are delivered", async (
     );
     const failed = manager.view.get(snap.id);
     assert.equal(failed?.status, "error");
+    assert.equal(failed?.outcome, "failed");
     assert.match(failed?.errorText ?? "", /task failed/);
     assert.deepEqual(settled, [{ id: snap.id, consumed: false }]);
   });
@@ -225,13 +227,22 @@ test("cancel interrupts a running stub subagent", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(
       runtime,
-      manager.spawn("pi", task("Long running task")),
+      manager.spawn("pi", {
+        ...task("Long running task"),
+        worktree: {
+          path: "/repo/.git/pi-worktrees/impl-1",
+          branch: "pi/impl-1",
+          repoCwd: "/repo",
+        },
+      }),
     );
+    assert.equal(snap.worktreeBranch, "pi/impl-1");
     const report = await runTool(runtime, manager.cancel([snap.id]));
     assert.deepEqual(report, [
       { id: snap.id, title: "test", status: "error", cancelled: true },
     ]);
     assert.equal(manager.view.get(snap.id)?.errorText, "Run was aborted");
+    assert.equal(manager.view.get(snap.id)?.outcome, "interrupted");
   });
 });
 
