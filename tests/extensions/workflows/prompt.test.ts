@@ -2,9 +2,15 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import {
+  type AgentRecord,
+  emptyUsage,
+  type WorkflowDetails,
+} from "../../../extensions/workflows/model.ts";
+import {
   buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildProjectedWorkflowCompletionBatch,
+  buildProjectedWorkflowCompletionBatches,
   buildProjectedWorkflowResultMessage,
   buildWorkflowResultMessage,
   buildWorkflowStatusSummary,
@@ -13,11 +19,6 @@ import {
   WORKFLOW_STOP_TOOL_DESCRIPTION,
   WORKFLOW_TOOL_DESCRIPTION,
 } from "../../../extensions/workflows/prompt.ts";
-import {
-  emptyUsage,
-  type AgentRecord,
-  type WorkflowDetails,
-} from "../../../extensions/workflows/model.ts";
 
 test("background follow-up uses a sentence lead-in, not the old bracket form", () => {
   const msg = buildBackgroundWorkflowFollowUp({
@@ -75,7 +76,134 @@ test("completion batches share one bounded fair projection budget", () => {
       projected,
       new RegExp(`wf_${index.toString(16).padStart(4, "0")}`),
     );
+    assert.match(projected, new RegExp(`delivery-${index}(?:"|\\b)`));
   }
+});
+
+test("oversized completion batches split into bounded messages without losing delivery facts", () => {
+  const entries = Array.from({ length: 128 }, (_, index) => {
+    const details: WorkflowDetails = {
+      runId: `wf_large_${index.toString(16).padStart(4, "0")}`,
+      status: "completed",
+      background: true,
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+      result: { evidence: "x".repeat(8_000) },
+    };
+    return {
+      deliveryId: `delivery-large-${index}-${"d".repeat(600)}`,
+      details,
+      runDir: `/tmp/${details.runId}`,
+    };
+  });
+
+  const batches = buildProjectedWorkflowCompletionBatches(entries, {
+    tokens: 10_000,
+    contextWindow: 100_000,
+  });
+
+  assert.ok(batches.length > 1);
+  for (const batch of batches) {
+    assert.ok(Buffer.byteLength(batch.content, "utf8") <= 48 * 1024);
+  }
+  for (const entry of entries) {
+    assert.equal(
+      batches.filter((batch) =>
+        batch.content.includes(JSON.stringify(entry.deliveryId)),
+      ).length,
+      1,
+    );
+  }
+});
+
+test("completion batching keeps small and large deliveries grouped", () => {
+  const makeEntry = (index: number, evidenceLength = 200) => {
+    const details: WorkflowDetails = {
+      runId: `wf_grouped_${index}`,
+      status: "completed",
+      background: true,
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+      result: { evidence: "x".repeat(evidenceLength) },
+    };
+    return {
+      deliveryId: `delivery-grouped-${index}`,
+      details,
+      runDir: `/tmp/${details.runId}/${"r".repeat(600)}`,
+    };
+  };
+
+  const smallEntries = [0, 1, 2].map((index) => makeEntry(index));
+  const smallBatches = buildProjectedWorkflowCompletionBatches(smallEntries);
+  assert.equal(smallBatches.length, 1);
+  assert.deepEqual(
+    smallBatches[0]?.entries.map((entry) => entry.deliveryId),
+    smallEntries.map((entry) => entry.deliveryId),
+  );
+
+  const largeEntries = Array.from({ length: 128 }, (_, index) =>
+    makeEntry(index, 8_000),
+  );
+  const largeBatches = buildProjectedWorkflowCompletionBatches(largeEntries, {
+    tokens: 10_000,
+    contextWindow: 100_000,
+  });
+  assert.ok(largeBatches.length < largeEntries.length / 2);
+  for (const entry of largeEntries) {
+    assert.equal(
+      largeBatches.filter((batch) =>
+        batch.entries.some(
+          (candidate) => candidate.deliveryId === entry.deliveryId,
+        ),
+      ).length,
+      1,
+    );
+  }
+});
+
+test("model completion payload retains durable evidence independently of the renderer", () => {
+  const details: WorkflowDetails = {
+    runId: "wf_evidence",
+    name: "evidence",
+    status: "completed",
+    background: true,
+    startedAt: 0,
+    finishedAt: 1_000,
+    phases: [{ title: "inspect" }],
+    agents: [
+      {
+        index: 1,
+        label: "reviewer",
+        state: "done",
+        startedAt: 0,
+        finishedAt: 1_000,
+        preview: "",
+        usage: emptyUsage(),
+        transcript: [],
+      },
+    ],
+    logs: [{ at: 1, text: "durable diagnostic" }],
+    result: { verdict: "keep this result" },
+  };
+  const payload = buildProjectedWorkflowCompletionBatch([
+    {
+      deliveryId: "workflow:wf_evidence:terminal",
+      details,
+      runDir: "/tmp/wf_evidence",
+    },
+  ]);
+  assert.match(payload, /^Workflow completion delivery facts/);
+  assert.match(payload, /Background workflow "evidence"/);
+  assert.match(payload, /Run dir: \/tmp\/wf_evidence/);
+  assert.match(payload, /^Log:$/m);
+  assert.match(payload, /^Agents:$/m);
+  assert.match(payload, /keep this result/);
+  assert.match(payload, /Delivery id: workflow:wf_evidence:terminal/);
+  assert.match(payload, /duplicate|do not repeat it verbatim/i);
 });
 
 test("uncertain agents are never described as settled failures", () => {
@@ -291,7 +419,7 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
     new URL("../../../skills/workflows/EXAMPLES.md", import.meta.url),
     "utf8",
   );
-  assert.match(skill, /^---\nname: workflows\n/);
+  assert.match(skill, /^---\r?\nname: workflows\r?\n/);
   assert.match(skill, /Use when .*multi-phase/i);
   assert.match(reference, /operator/);
   assert.match(reference, /acceptance/);

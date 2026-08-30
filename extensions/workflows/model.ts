@@ -5,8 +5,8 @@
 
 import * as os from "node:os";
 import {
-  truncateHead,
   type ExtensionContext,
+  truncateHead,
 } from "@earendil-works/pi-coding-agent";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { spinnerFrame } from "../shared/spinner.ts";
@@ -141,6 +141,8 @@ export interface AgentRecord {
 export interface WorkflowLogEntry {
   at: number;
   text: string;
+  /** Runtime-authored evidence, distinct from free-form script narration. */
+  kind?: "pipeline-drop";
 }
 
 /** Metadata attached only to the bounded in-memory settled-run projection. */
@@ -189,6 +191,23 @@ export interface WorkflowDetails {
   error?: string;
   /** Present only on the session-memory projection, never canonical history. */
   memoryProjection?: WorkflowMemoryProjection;
+}
+
+/** Bounded tool-result projection; authoritative details remain in run artifacts. */
+export function compactWorkflowToolDetails(
+  details: WorkflowDetails,
+): WorkflowDetails {
+  return {
+    ...details,
+    ...(details.result !== undefined
+      ? {
+          result: JSON.parse(
+            safeStringify(details.result, { maxBytes: 64 * 1024 }),
+          ),
+        }
+      : {}),
+    agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
+  };
 }
 
 /**
@@ -352,11 +371,12 @@ export function appendLog(
   details: WorkflowDetails,
   text: string,
   at: number,
+  kind?: WorkflowLogEntry["kind"],
 ): void {
   const clean = sanitizeLine(text, MAX_LOG_TEXT);
   if (!clean) return;
   const logs = (details.logs ??= []);
-  logs.push({ at, text: clean });
+  logs.push({ at, text: clean, ...(kind ? { kind } : {}) });
   const excess = logs.length - MAX_LOG_ENTRIES;
   if (excess > 0) {
     logs.splice(0, excess);

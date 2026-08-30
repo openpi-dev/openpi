@@ -726,12 +726,20 @@ test("cancelled detached delivery preserves aborted status after artifact persis
     );
     assert.ok(delivered);
     const deliveredDetails = delivered.message.details as {
-      status?: unknown;
-      error?: unknown;
+      entries?: Array<{ status?: unknown; alerts?: unknown[] }>;
     };
-    assert.equal(deliveredDetails.status, "aborted");
-    assert.match(String(deliveredDetails.error), /Workflow was aborted/);
-    assert.match(String(deliveredDetails.error), /Artifact persistence failed/);
+    const deliveredEntry = deliveredDetails.entries?.[0];
+    assert.equal(deliveredEntry?.status, "aborted");
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Workflow was aborted"),
+      ),
+    );
+    assert.ok(
+      deliveredEntry?.alerts?.some((alert) =>
+        String(alert).includes("Artifact persistence failed"),
+      ),
+    );
   } finally {
     releasePrompt();
     __setWorkflowTestAgentSessionFactory(undefined);
@@ -1384,7 +1392,7 @@ test("extension retention stays bounded and reports evictions under settled-run 
     'export const meta = { name: "retention-pressure" };\n' +
     'const r = await agent("pressure fixture", { agent_type: "reviewer", label: "pressure-agent" });\n' +
     'log("pressure log: " + r.output);\n' +
-    'return { ok: r.ok, output: r.output };';
+    "return { ok: r.ok, output: r.output };";
 
   const runIds: string[] = [];
   try {

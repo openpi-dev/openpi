@@ -20,8 +20,8 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../shared/agent-session-page.ts";
-import { contextPercent } from "../shared/context-utilization.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
+import { contextPercent } from "../shared/context-utilization.ts";
 import {
   panelFrame,
   type ScreenHint,
@@ -428,6 +428,9 @@ export function normalizePersistedWorkflowDetails(
     logs.push({
       at: typeof entry.at === "number" ? entry.at : startedAt,
       text: sanitizeLine(entry.text, MAX_LOG_TEXT),
+      ...(entry.kind === "pipeline-drop"
+        ? { kind: "pipeline-drop" as const }
+        : {}),
     });
   }
 
@@ -583,7 +586,8 @@ export function loadRunEntries(
     const retainedDetails = retained.get(runId);
     const details = persisted ?? retainedDetails;
     if (!details) continue;
-    const fromRetention = persisted === undefined && retainedDetails !== undefined;
+    const fromRetention =
+      persisted === undefined && retainedDetails !== undefined;
     const touchedAt = Math.max(details.startedAt, details.finishedAt ?? 0);
     if (
       touchedAt < startedSince ||
@@ -727,6 +731,7 @@ export class WorkflowDashboard {
   private startedSince: number;
   private close: () => void;
   private onAbort?: (runId: string) => boolean;
+  private initialToolsExpanded: boolean;
 
   constructor(
     tui: TUI,
@@ -740,6 +745,7 @@ export class WorkflowDashboard {
     initialRunId?: string,
     onAbort?: (runId: string) => boolean,
     getRetained: () => ReadonlyMap<string, WorkflowDetails> = () => new Map(),
+    initialToolsExpanded = false,
   ) {
     this.tui = tui;
     this.theme = theme;
@@ -751,6 +757,7 @@ export class WorkflowDashboard {
     this.startedSince = startedSince;
     this.close = close;
     this.onAbort = onAbort;
+    this.initialToolsExpanded = initialToolsExpanded;
     this.refresh();
     if (initialRunId) {
       const resolution = resolveWorkflowRunTarget(
@@ -1049,6 +1056,7 @@ export class WorkflowDashboard {
           this.tui.requestRender();
         },
       },
+      { toolsExpanded: this.initialToolsExpanded },
     );
     this.tui.requestRender();
   }
@@ -1436,6 +1444,7 @@ export async function showWorkflowDashboard(
         initialRunId,
         onAbort,
         getRetained,
+        ctx.ui.getToolsExpanded(),
       );
       return dashboard;
     },
