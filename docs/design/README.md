@@ -11,3 +11,4 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`PI_COMMUNITY_PACKAGE_AUDIT_2026-08-09.md`](PI_COMMUNITY_PACKAGE_AUDIT_2026-08-09.md) — code-grounded comparison of leading community packages
 - [`OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md`](OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md) — Pi-native Workflow interface and lifecycle redesign with implementation evidence
 - [`WORKFLOW_INVOCATION_GRAPH.md`](WORKFLOW_INVOCATION_GRAPH.md) — durable invocation facts, same-run handoff refs, reusable operators, and derived graph semantics
+- [`CHILD_TOOL_ACTIVITY.md`](CHILD_TOOL_ACTIVITY.md) — shared compact and Pi-native expanded evidence projection for Direct Subagent and Workflow child transcripts

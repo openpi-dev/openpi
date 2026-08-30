@@ -49,6 +49,7 @@ import {
   hasActivity,
   unreadActivityCounts,
 } from "../shared/activity-status.ts";
+import { sanitizeText } from "../shared/agent-transcript.ts";
 import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
@@ -68,7 +69,7 @@ import {
   planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../shared/plan-mode-state.ts";
-import { loadSetupConfig } from "../shared/setup-config.ts";
+import { loadSetupConfig, type DetailDisplay } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -107,6 +108,7 @@ import {
 } from "./src/id-sequence.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
+  buildSubagentResultDisplayMessage,
   buildSubagentResultMessage,
   buildSubagentSendResult,
   buildSubagentSpawnResult,
@@ -120,10 +122,15 @@ import {
   SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
+  stripSubagentResultTransportInstruction,
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "./src/prompt.ts";
-import { persistResultArtifact, projectResult } from "./src/result-artifact.ts";
+import {
+  persistResultArtifact,
+  projectResult,
+  type ResultProjection,
+} from "./src/result-artifact.ts";
 import {
   allocateResultBudgets,
   type ParentContextUsage,
@@ -136,7 +143,7 @@ import {
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
-  buildWaitResultPreview,
+  renderWaitResultPreview,
   renderWaitResult,
   type WaitResultDetails,
 } from "./src/ui/wait-result.ts";
@@ -149,6 +156,8 @@ const WAIT_PER_AGENT_MAX_BYTES = 16 * 1024;
 const WAIT_MIN_RESULT_BYTES = 512;
 const RESULT_HEADROOM_SHARE = 0.5;
 const ESTIMATED_BYTES_PER_TOKEN = 4;
+const AUTOMATIC_BATCH_TRUNCATION_NOTICE =
+  "\n\n[Automatic subagent result batch truncated at the 48 KiB total limit.]";
 
 interface SpawnResultDetails {
   readonly id?: string;
@@ -169,12 +178,24 @@ interface SubagentResultDetails {
   readonly id?: string;
   readonly title?: string;
   readonly status?: SubagentSnapshot["status"];
+  readonly outcome?: SubagentSnapshot["outcome"];
+  readonly worktreeBranch?: string;
+  readonly elapsed?: string;
+  readonly artifactSaveFailed?: boolean;
+  readonly fullResultSaved?: boolean;
   readonly count?: number;
   readonly results?: ReadonlyArray<{
     readonly id: string;
     readonly title: string;
     readonly status: SubagentSnapshot["status"];
+    readonly outcome?: SubagentSnapshot["outcome"];
+    readonly worktreeBranch?: string;
+    readonly elapsed?: string;
+    readonly artifactSaveFailed?: boolean;
+    readonly fullResultSaved?: boolean;
   }>;
+  /** Display-only projection for the custom message renderer. */
+  readonly displayContent?: string;
 }
 
 interface SubagentResultEntryData {
@@ -216,12 +237,53 @@ export function truncatedOutput(
   }).text;
 }
 
+function projectSubagentOutput(
+  snap: SubagentSnapshot,
+  maxBytes: number,
+): ResultProjection {
+  const output = snap.finalText || "(no output)";
+  return projectResult(output, {
+    maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+    maxLines: Math.min(600, DEFAULT_MAX_LINES),
+    writeArtifact: (content) => persistResultArtifact(getAgentDir(), content),
+  });
+}
+
+type OutputProjection = Pick<
+  ResultProjection,
+  "text" | "artifactPath" | "artifactSaveFailed"
+>;
+
+function normalizeProjection(
+  output: string | OutputProjection,
+): OutputProjection {
+  return typeof output === "string" ? { text: output } : output;
+}
+
+function boundAutomaticResultBatch(content: string) {
+  const probe = truncateHead(content, {
+    maxBytes: AUTOMATIC_OUTPUT_MAX_BYTES,
+    maxLines: Number.MAX_SAFE_INTEGER,
+  });
+  if (!probe.truncated) return content;
+
+  const noticeBytes = Buffer.byteLength(
+    AUTOMATIC_BATCH_TRUNCATION_NOTICE,
+    "utf8",
+  );
+  const bounded = truncateHead(content, {
+    maxBytes: Math.max(0, AUTOMATIC_OUTPUT_MAX_BYTES - noticeBytes),
+    maxLines: Number.MAX_SAFE_INTEGER,
+  });
+  return `${bounded.content}${AUTOMATIC_BATCH_TRUNCATION_NOTICE}`;
+}
+
 export function createSubagentResultDispatcher(
   pi: ExtensionAPI,
   outputFor: (
     snap: SubagentSnapshot,
     maxBytes: number,
-  ) => string = truncatedOutput,
+  ) => string | OutputProjection = projectSubagentOutput,
   getContextUsage: () => ParentContextUsage | undefined = () => undefined,
 ) {
   return (snaps: readonly SubagentSnapshot[]) => {
@@ -242,7 +304,7 @@ export function createSubagentResultDispatcher(
       ) +
       Math.max(0, snaps.length - 1) * 2;
     const projectionBatchBytes = Math.max(
-      AUTOMATIC_MIN_RESULT_BYTES * snaps.length,
+      0,
       AUTOMATIC_OUTPUT_MAX_BYTES - wrapperBytes,
     );
     const allocation = allocateResultBudgets(
@@ -259,34 +321,73 @@ export function createSubagentResultDispatcher(
         fixedBytes: wrapperBytes,
       },
     );
-    const content = snaps
-      .map((snap, index) =>
-        buildSubagentResultMessage({
-          id: snap.id,
-          title: snap.title,
-          status: snap.status,
-          errorText: snap.errorText,
-          output: outputFor(snap, allocation.budgets[index]!),
-        }),
-      )
-      .join("\n\n");
+    const projections = snaps.map((snap, index) =>
+      normalizeProjection(outputFor(snap, allocation.budgets[index]!)),
+    );
+    const outputs = projections.map((projection) => projection.text);
+    const displayContent = boundAutomaticResultBatch(
+      snaps
+        .map((snap, index) =>
+          buildSubagentResultDisplayMessage({
+            id: snap.id,
+            title: snap.title,
+            status: snap.status,
+            errorText: snap.errorText,
+            output: outputs[index]!,
+          }),
+        )
+        .join("\n\n"),
+    );
+    const content = boundAutomaticResultBatch(
+      snaps
+        .map((snap, index) =>
+          buildSubagentResultMessage({
+            id: snap.id,
+            title: snap.title,
+            status: snap.status,
+            errorText: snap.errorText,
+            output: outputs[index]!,
+          }),
+        )
+        .join("\n\n"),
+    );
     const details: SubagentResultDetails =
       snaps.length === 1
         ? {
             id: snaps[0]!.id,
             title: snaps[0]!.title,
             status: snaps[0]!.status,
+            ...(snaps[0]!.outcome ? { outcome: snaps[0]!.outcome } : {}),
+            ...(snaps[0]!.worktreeBranch
+              ? { worktreeBranch: snaps[0]!.worktreeBranch }
+              : {}),
+            elapsed: formatElapsed(snaps[0]!),
+            ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
+            ...(projections[0]!.artifactSaveFailed
+              ? { artifactSaveFailed: true }
+              : {}),
           }
         : {
             count: snaps.length,
-            results: snaps.map((snap) => ({
+            results: snaps.map((snap, index) => ({
               id: snap.id,
               title: snap.title,
               status: snap.status,
+              ...(snap.outcome ? { outcome: snap.outcome } : {}),
+              ...(snap.worktreeBranch
+                ? { worktreeBranch: snap.worktreeBranch }
+                : {}),
+              elapsed: formatElapsed(snap),
+              ...(projections[index]!.artifactPath
+                ? { fullResultSaved: true }
+                : {}),
+              ...(projections[index]!.artifactSaveFailed
+                ? { artifactSaveFailed: true }
+                : {}),
             })),
           };
     pi.appendEntry<SubagentResultEntryData>("subagent-result", {
-      content,
+      content: displayContent,
       details,
     });
     pi.sendMessage(
@@ -294,7 +395,7 @@ export function createSubagentResultDispatcher(
         customType: "subagent-result",
         content,
         display: false,
-        details,
+        details: { ...details, displayContent },
       },
       { deliverAs: "followUp", triggerTurn: true },
     );
@@ -307,36 +408,52 @@ function renderSubagentResult(
   content: string,
   details: SubagentResultDetails,
   expanded: boolean,
+  resultDisplay: DetailDisplay,
   theme: SubagentResultTheme,
 ) {
-  if (!expanded && loadSetupConfig().ui.subagentResultDisplay === "compact") {
-    const results = details.results?.length
-      ? details.results
-      : details.id
-        ? [
-            {
-              id: details.id,
-              title: details.title,
-              status: details.status,
-            },
-          ]
-        : [];
-    return new Text(buildWaitResultPreview(content, { results }, theme), 0, 0);
+  const displayContent = sanitizeText(
+    details.displayContent ?? stripSubagentResultTransportInstruction(content),
+  );
+  const results = details.results?.length
+    ? details.results
+    : details.id
+      ? [
+          {
+            id: details.id,
+            title: details.title,
+            status: details.status,
+            outcome: details.outcome,
+            worktreeBranch: details.worktreeBranch,
+            elapsed: details.elapsed,
+            artifactSaveFailed: details.artifactSaveFailed,
+            fullResultSaved: details.fullResultSaved,
+          },
+        ]
+      : [];
+  if (!expanded && resultDisplay === "compact") {
+    return renderWaitResultPreview(displayContent, { results }, theme);
   }
 
-  const failed = details.status === "error";
+  const failed = results.some((result) => result.status === "error");
+  const batched = results.length > 1;
   const icon = failed ? theme.fg("error", "x") : theme.fg("success", "✓");
-  const header =
-    `${icon} ` +
-    theme.fg("accent", theme.bold(`subagent ${details.id ?? "?"}`)) +
-    theme.fg(
-      "muted",
-      ` · ${details.title ?? ""} · ${failed ? "failed" : "finished"}`,
-    );
+  const header = batched
+    ? `${icon} ${theme.fg("accent", theme.bold(`${results.length} subagents`))}${theme.fg("muted", ` · ${failed ? `${results.filter((result) => result.status === "error").length} failed` : "finished"}`)}`
+    : `${icon} ` +
+      theme.fg(
+        "accent",
+        theme.bold(`subagent ${sanitizeText(details.id ?? "?")}`),
+      ) +
+      theme.fg(
+        "muted",
+        ` · ${sanitizeText(details.title ?? "")} · ${failed ? "failed" : "finished"}${details.elapsed ? ` · ${sanitizeText(details.elapsed)}` : ""}`,
+      );
 
-  // Remove only the summary line. The following Error line (when present)
-  // is part of the actual result and must remain visible.
-  const body = content.split("\n").slice(1).join("\n").trim();
+  // Remove only the single-result summary line. Error lines and batched result
+  // summaries are part of the display projection and must remain visible.
+  const body = batched
+    ? displayContent.trim()
+    : displayContent.split("\n").slice(1).join("\n").trim();
   const md = new Markdown(body, 0, 0, getMarkdownTheme());
   const container = new Text(header, 0, 0);
   return {
@@ -351,7 +468,17 @@ function renderSubagentResult(
   };
 }
 
-export default function (pi: ExtensionAPI) {
+interface SubagentExtensionOptions {
+  readonly getResultDisplay?: () => DetailDisplay;
+}
+
+export default function (
+  pi: ExtensionAPI,
+  options: SubagentExtensionOptions = {},
+) {
+  const getResultDisplay =
+    options.getResultDisplay ??
+    (() => loadSetupConfig().ui.subagentResultDisplay);
   let runtime: SubagentRuntime | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
   let restoredIdCounters: SubagentIdCounters = {
@@ -377,7 +504,7 @@ export default function (pi: ExtensionAPI) {
   let dashboardOpen = false;
   const dispatchResults = createSubagentResultDispatcher(
     pi,
-    truncatedOutput,
+    projectSubagentOutput,
     () => sessionContext?.getContextUsage(),
   );
   const resultDelivery = createSubagentResultDelivery<SubagentSnapshot>({
@@ -1001,10 +1128,15 @@ export default function (pi: ExtensionAPI) {
         },
       );
       let resultIndex = 0;
+      const artifactSaveFailures = new Set<string>();
+      const fullResultsSaved = new Set<string>();
       const sections = entries.map((entry) => {
         if ("section" in entry) return entry.section;
         const outputBudget = allocation.budgets[resultIndex++]!;
-        return `${entry.header}\n\n${truncatedOutput(entry.snap, outputBudget)}`;
+        const projection = projectSubagentOutput(entry.snap, outputBudget);
+        if (projection.artifactSaveFailed) artifactSaveFailures.add(entry.id);
+        if (projection.artifactPath) fullResultsSaved.add(entry.id);
+        return `${entry.header}\n\n${projection.text}`;
       });
 
       const combined = sections.join("\n\n---\n\n");
@@ -1020,7 +1152,20 @@ export default function (pi: ExtensionAPI) {
         details: {
           results: ids.map((id) => {
             const snap = manager.view.get(id);
-            return { id, title: snap?.title, status: snap?.status };
+            return {
+              id,
+              title: snap?.title,
+              status: snap?.status,
+              ...(snap?.outcome ? { outcome: snap.outcome } : {}),
+              ...(snap?.worktreeBranch
+                ? { worktreeBranch: snap.worktreeBranch }
+                : {}),
+              ...(snap ? { elapsed: formatElapsed(snap) } : {}),
+              ...(fullResultsSaved.has(id) ? { fullResultSaved: true } : {}),
+              ...(artifactSaveFailures.has(id)
+                ? { artifactSaveFailed: true }
+                : {}),
+            };
           }),
         },
       };
@@ -1045,7 +1190,7 @@ export default function (pi: ExtensionAPI) {
       return renderWaitResult(
         content,
         result.details as WaitResultDetails | undefined,
-        expanded || loadSetupConfig().ui.subagentResultDisplay === "full",
+        expanded || getResultDisplay() === "full",
         theme,
       );
     },
@@ -1240,6 +1385,7 @@ export default function (pi: ExtensionAPI) {
         content,
         (message.details ?? {}) as SubagentResultDetails,
         expanded,
+        getResultDisplay(),
         theme,
       );
     },
@@ -1252,6 +1398,7 @@ export default function (pi: ExtensionAPI) {
         entry.data?.content ?? "",
         entry.data?.details ?? {},
         expanded,
+        getResultDisplay(),
         theme,
       ),
   );
@@ -1294,7 +1441,7 @@ export default function (pi: ExtensionAPI) {
         .filter(Boolean)
         .join("\n\n");
 
-      if (expanded || loadSetupConfig().ui.subagentResultDisplay === "full") {
+      if (expanded || getResultDisplay() === "full") {
         const md = new Markdown(body, 0, 0, getMarkdownTheme());
         const container = new Text(header, 0, 0);
         return {

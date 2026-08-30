@@ -1,8 +1,8 @@
-import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {
   allocateResultBudgets,
   type ParentContextUsage,
 } from "../shared/result-budget.ts";
+import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { projectText } from "../shared/text-projection.ts";
 import {
   countStates,
@@ -214,6 +214,16 @@ export function buildProjectedWorkflowCompletionBatch(
   }[],
   usage?: ParentContextUsage | null,
 ) {
+  const deliveryFacts = JSON.stringify(
+    entries.map(({ deliveryId, details, runDir }) => ({
+      deliveryId,
+      runId: details.runId,
+      evidence: shortenHome(runDir),
+    })),
+  );
+  const manifest =
+    "Workflow completion delivery facts (stable across retries; deduplicate by deliveryId):\n" +
+    deliveryFacts;
   const full = entries.map(({ deliveryId, details, runDir }) =>
     buildBackgroundWorkflowFollowUp({
       runId: details.runId,
@@ -223,18 +233,30 @@ export function buildProjectedWorkflowCompletionBatch(
     }),
   );
   const separatorBytes = Math.max(0, entries.length - 1) * 2;
+  const manifestSeparatorBytes = entries.length > 0 ? 2 : 0;
+  const fixedBytes =
+    Buffer.byteLength(manifest, "utf8") +
+    separatorBytes +
+    manifestSeparatorBytes;
+  const bodyBudget = 48 * 1024 - fixedBytes;
+  if (bodyBudget < 0) {
+    throw new Error(
+      "Workflow completion delivery facts exceed the transport payload limit",
+    );
+  }
   const allocation = allocateResultBudgets(
     full.map((message) => Buffer.byteLength(message, "utf8")),
     usage,
     {
-      maxBatchBytes: 48 * 1024 - separatorBytes,
+      maxBatchBytes: bodyBudget,
       maxResultBytes: 48 * 1024,
       minResultBytes: 1024,
       headroomShare: 0.25,
       estimatedBytesPerToken: 4,
+      fixedBytes,
     },
   );
-  return full
+  const projected = full
     .map((message, index) =>
       projectText(message, {
         maxBytes: allocation.budgets[index] ?? 1024,
@@ -243,6 +265,44 @@ export function buildProjectedWorkflowCompletionBatch(
       }),
     )
     .join("\n\n");
+  return projected ? `${manifest}\n\n${projected}` : manifest;
+}
+
+/** Split transport batches so every manifest and projected body fit together. */
+export function buildProjectedWorkflowCompletionBatches(
+  entries: readonly {
+    deliveryId: string;
+    details: WorkflowDetails;
+    runDir: string;
+  }[],
+  usage?: ParentContextUsage | null,
+) {
+  const batches: Array<{
+    entries: (typeof entries)[number][];
+    content: string;
+  }> = [];
+  let current: (typeof entries)[number][] = [];
+  for (const entry of entries) {
+    const candidate = [...current, entry];
+    try {
+      buildProjectedWorkflowCompletionBatch(candidate, usage);
+      current = candidate;
+    } catch (error) {
+      if (current.length === 0) throw error;
+      batches.push({
+        entries: current,
+        content: buildProjectedWorkflowCompletionBatch(current, usage),
+      });
+      current = [entry];
+    }
+  }
+  if (current.length > 0) {
+    batches.push({
+      entries: current,
+      content: buildProjectedWorkflowCompletionBatch(current, usage),
+    });
+  }
+  return batches;
 }
 
 /** Builds the background-launch result and tells the parent model how to inspect or stop the run. */

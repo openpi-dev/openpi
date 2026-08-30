@@ -164,8 +164,12 @@ function renderToolBlock(
   now: number,
   cwd?: string,
   toolRenderer?: AgentToolRenderer,
+  expanded = false,
 ) {
-  const native = toolRenderer?.renderTool({ toolId, name, cwd }, width);
+  const native = toolRenderer?.renderTool(
+    { toolId, name, cwd, expanded },
+    width,
+  );
   if (native) return native;
   const { args, fallback } = parseToolArgsPreview(argsPreview);
   return [
@@ -194,6 +198,7 @@ function renderAssistantItem(
   now: number,
   cwd?: string,
   toolRenderer?: AgentToolRenderer,
+  expanded = false,
 ) {
   const out = renderAssistantParts(item.parts, width);
   for (const part of item.parts) {
@@ -215,6 +220,7 @@ function renderAssistantItem(
           now,
           cwd,
           toolRenderer,
+          expanded,
         ),
       );
     }
@@ -230,6 +236,7 @@ function renderToolResultItem(
   now: number,
   cwd?: string,
   toolRenderer?: AgentToolRenderer,
+  expanded = false,
 ) {
   if (paired) return [];
   return renderToolBlock(
@@ -243,6 +250,7 @@ function renderToolResultItem(
     now,
     cwd,
     toolRenderer,
+    expanded,
   );
 }
 
@@ -294,6 +302,7 @@ function renderTranscriptItem(
   now: number,
   cwd?: string,
   toolRenderer?: AgentToolRenderer,
+  expanded = false,
 ) {
   if (item.kind === "user") return renderUserText(item.text, width);
   if (item.kind === "assistant") {
@@ -305,6 +314,7 @@ function renderTranscriptItem(
       now,
       cwd,
       toolRenderer,
+      expanded,
     );
   }
   return renderToolResultItem(
@@ -315,6 +325,7 @@ function renderTranscriptItem(
     now,
     cwd,
     toolRenderer,
+    expanded,
   );
 }
 
@@ -410,10 +421,11 @@ export class AgentTranscriptRenderer {
     document: AgentTranscriptDocument,
     width: number,
     theme: Theme,
-    options?: { readonly now?: number },
+    options?: { readonly now?: number; readonly expanded?: boolean },
   ) {
     const out: string[] = [];
     const now = options?.now ?? Date.now();
+    const expanded = options?.expanded === true;
     const liveTools = document.liveTools ?? [];
     if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
     const liveIds = new Set(liveTools.map((tool) => tool.toolId));
@@ -435,6 +447,7 @@ export class AgentTranscriptRenderer {
           now,
           document.cwd,
           document.toolRenderer,
+          expanded,
         );
       if (!cached && cacheable) {
         const widths = this.itemCache.get(item) ?? new Map<string, string[]>();
@@ -481,6 +494,7 @@ export class AgentTranscriptRenderer {
           now,
           document.cwd,
           document.toolRenderer,
+          expanded,
         ),
       );
     }
