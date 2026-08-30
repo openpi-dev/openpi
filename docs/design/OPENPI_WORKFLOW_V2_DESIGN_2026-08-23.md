@@ -6,7 +6,7 @@
 >
 > 依据：当前 OpenPI 源码、Issues #71/#74/#75/#90、Claude Code `2.1.241` 运行时合同访谈，以及三份相互独立的 interface 设计评审。
 >
-> 后续决定（2026-08-30）：Issue #132 / PR #139 将新调用策略收敛为 `wait`，同时为已发布的 `background` alias 保留迁移窗口。本文件保留 Workflow V2 落地时的历史合同与验证证据；当前行为以代码和当前用户文档为准，后续结果见文末 addendum。
+> 后续决定（2026-08-30）：Issue #132 / PR #139 先将新调用策略收敛为 `wait` 并保留兼容窗口；在 OpenPI 1.0.0 breaking release 中移除 workflow 调用参数 `background`。本文件保留 Workflow V2 落地时的历史合同与验证证据；当前行为以代码和当前用户文档为准，后续结果见文末 addendum。
 
 ## 结论
 
@@ -35,14 +35,14 @@ workflow_stop
 
 本轮没有把整个 2200 行 Workflow extension 塞进一个新的大类，而是按不变量拆成三个深 seam：
 
-- `coordinator.ts`：宿主默认值、`wait/background` 兼容解析，以及 wait/terminal 仲裁；
+- `coordinator.ts`：宿主默认值、`wait` 解析，以及 wait/terminal 仲裁；
 - `result-delivery.ts`：逐 run delivery identity、pending/receipt/retry/restore；
 - `shared/result-budget.ts` 与 `shared/text-projection.ts`：Subagent/Workflow 共用的公平预算与 head/tail 投影。
 
 已经落地：
 
 - TUI 默认 detached，print/无可靠投递宿主默认 wait；
-- `wait:true` 是唯一正向同步选择，`background` 仅为 deprecated inverse alias；
+- `wait:true` 是唯一正向同步选择；
 - 中断 wait 不取消 run，stop/shutdown 才拥有取消权；
 - terminal execution state 与 delivery state 正交持久化；
 - send failure 以同一 per-run id 重试，成功 sibling 不重发；
@@ -668,13 +668,13 @@ Lifecycle、delivery、Schema stability、dynamic capacity、fair projection 和
 
 ## 15. 后续合同变更（2026-08-30）
 
-Issue #132 / PR #139 将 `wait` 作为唯一推荐的新调用策略。由于 `background` 从 OpenPI v0.2.0 起就是已发布输入，本次继续把它作为 deprecated inverse alias 接受：`background: true` 对应 `wait: false`，`background: false` 对应 `wait: true`；真正删除只在另行公告的 breaking release 进行。除这一已发布兼容字段外，未知输入继续 fail closed。
+Issue #132 / PR #139 将 `wait` 作为唯一推荐的新调用策略，并在兼容窗口接受已发布的 `background` inverse alias。OpenPI 1.0.0 现在移除该调用字段；未知输入（包括旧 `background` 参数）由 `additionalProperties: false` fail closed。除调用 schema 外，历史 artifact 的兼容读取不受影响。
 
-Coordinator 在单一输入边界完成 legacy 映射，内部仍只产生 `inline | detached` 运行模式。`WorkflowDetails.background` 与 persisted artifact 中的同名字段继续记录实际 detached 状态，不记录调用时使用的是 `wait` 还是兼容 alias，也不改写历史 artifact。
+Coordinator 在单一输入边界解析 `wait`，内部仍只产生 `inline | detached` 运行模式。`WorkflowDetails.background` 与 persisted artifact 中的同名字段继续记录实际 detached 状态，不记录调用参数，也不改写历史 artifact。
 
 该后续变更的最终验证以 PR #139 exact-head review 为准，至少包括：
 
-- `wait`、legacy `background`、冲突输入、host delivery 能力和 wait interruption 的专项测试；
+- `wait`、未知输入拒绝、host delivery 能力和 wait interruption 的专项测试；
 - `bun run check`；
 - `bun run test`；
 - GitHub CI：Node 22.19.0、Node 24 与 Windows background-terminal suite。

@@ -99,7 +99,7 @@ function captureRenderers() {
   return { workflow, message };
 }
 
-test("workflow launch schema recommends wait while preserving only the published alias", () => {
+test("workflow launch schema exposes only wait", () => {
   const { workflow } = captureRenderers();
   const parameters = workflow.parameters as unknown as {
     properties?: Record<string, unknown>;
@@ -107,10 +107,7 @@ test("workflow launch schema recommends wait while preserving only the published
   };
 
   assert.ok(parameters.properties?.wait);
-  assert.deepEqual(
-    (parameters.properties?.background as { deprecated?: unknown })?.deprecated,
-    true,
-  );
+  assert.equal(parameters.properties?.background, undefined);
   assert.equal(parameters.additionalProperties, false);
 
   const toolCall = (args: Record<string, unknown>) => ({
@@ -125,9 +122,10 @@ test("workflow launch schema recommends wait while preserving only the published
     validateToolArguments(workflow, toolCall({ script, wait: false })),
     { script, wait: false },
   );
-  assert.deepEqual(
-    validateToolArguments(workflow, toolCall({ script, background: true })),
-    { script, background: true },
+  assert.throws(
+    () =>
+      validateToolArguments(workflow, toolCall({ script, background: true })),
+    /Invalid tool arguments|additional/i,
   );
   assert.throws(
     () => validateToolArguments(workflow, toolCall({ script, detached: true })),
@@ -161,12 +159,12 @@ test("workflow call rendering labels an explicit inline wait", () => {
   assert.match(component.render(100).join("\n"), /workflow inline \(wait\)/);
 });
 
-test("workflow call rendering gives legacy callers an actionable migration", () => {
+test("workflow call rendering leaves detached calls unlabelled", () => {
   const { workflow } = captureRenderers();
   assert.ok(workflow.renderCall);
   const args = {
     script: 'export const meta = { name: "legacy" }; return 1;',
-    background: true,
+    wait: false,
   };
 
   const component = workflow.renderCall(args, theme, {
@@ -184,9 +182,10 @@ test("workflow call rendering gives legacy callers an actionable migration", () 
     isError: false,
   });
 
-  assert.match(
+  assert.match(component.render(100).join("\n"), /workflow legacy/);
+  assert.doesNotMatch(
     component.render(100).join("\n"),
-    /workflow legacy \(deprecated: use wait: false\)/,
+    /deprecated|background/,
   );
 });
 

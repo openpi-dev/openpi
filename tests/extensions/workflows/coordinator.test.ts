@@ -10,43 +10,15 @@ test("interactive launch defaults detached while non-delivery hosts wait", () =>
   assert.equal(resolveWorkflowLaunchMode({}, false), "inline");
 });
 
-test("wait is authoritative and legacy background maps to its inverse", () => {
+test("wait selects inline or detached execution", () => {
   assert.equal(resolveWorkflowLaunchMode({ wait: true }, true), "inline");
   assert.equal(resolveWorkflowLaunchMode({ wait: false }, true), "detached");
-  assert.equal(
-    resolveWorkflowLaunchMode({ background: true }, true),
-    "detached",
-  );
-  assert.equal(
-    resolveWorkflowLaunchMode({ background: false }, true),
-    "inline",
-  );
-  assert.equal(
-    resolveWorkflowLaunchMode({ wait: true, background: false }, true),
-    "inline",
-  );
-  assert.equal(
-    resolveWorkflowLaunchMode({ wait: false, background: true }, true),
-    "detached",
-  );
 });
 
-test("conflicting aliases and unsupported detached delivery fail closed", () => {
-  assert.throws(
-    () => resolveWorkflowLaunchMode({ wait: true, background: true }, true),
-    /conflict.*background is the deprecated inverse of wait/i,
-  );
-  assert.throws(
-    () => resolveWorkflowLaunchMode({ wait: false, background: false }, true),
-    /conflict.*background is the deprecated inverse of wait/i,
-  );
+test("unsupported detached delivery fails closed", () => {
   assert.throws(
     () => resolveWorkflowLaunchMode({ wait: false }, false),
     /cannot deliver/,
-  );
-  assert.throws(
-    () => resolveWorkflowLaunchMode({ background: true }, false),
-    /cannot deliver.*wait: true/i,
   );
 });
 

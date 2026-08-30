@@ -562,12 +562,6 @@ const WorkflowParams = Type.Object(
         description: WORKFLOW_PARAMETER_DESCRIPTIONS.args,
       }),
     ),
-    background: Type.Optional(
-      Type.Boolean({
-        deprecated: true,
-        description: WORKFLOW_PARAMETER_DESCRIPTIONS.background,
-      }),
-    ),
     wait: Type.Optional(
       Type.Boolean({
         description: WORKFLOW_PARAMETER_DESCRIPTIONS.wait,
@@ -1234,7 +1228,7 @@ export default function workflows(
       const runDir = path.join(getAgentDir(), "workflows", runId);
       const canDeliverLater = ctx.hasUI && ctx.mode === "tui";
       const launchMode = resolveWorkflowLaunchMode(
-        { wait: params.wait, background: params.background },
+        { wait: params.wait },
         canDeliverLater,
       );
       const background = launchMode === "detached";
@@ -2324,9 +2318,7 @@ export default function workflows(
       let text =
         theme.fg("toolTitle", theme.bold("workflow ")) +
         theme.fg("accent", (meta as WorkflowMeta).name ?? "(script)");
-      if (args.background !== undefined) {
-        text += theme.fg("dim", ` (deprecated: use wait: ${!args.background})`);
-      } else if (args.wait === true) {
+      if (args.wait === true) {
         text += theme.fg("dim", " (wait)");
       }
       const description = (meta as WorkflowMeta).description;
