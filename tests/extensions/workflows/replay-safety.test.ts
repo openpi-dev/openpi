@@ -22,10 +22,26 @@ import {
   createReplayIdentity,
   createReplayWorkspaceGuard,
   isReplaySafeAgentCall,
+  repositoryFingerprint,
 } from "../../../extensions/workflows/replay-safety.ts";
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function recordingGit(commands: string[][]) {
+  // Mirrors boundedGit's spawn shape (fsmonitor disabled, 32 MiB cap, stderr
+  // ignored); the production deadline is intentionally not reproduced — the
+  // fixtures stay far below it.
+  return (cwd: string, args: readonly string[]) => {
+    commands.push([...args]);
+    return execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
+      cwd,
+      encoding: "utf8",
+      maxBuffer: 32 * 1024 * 1024,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  };
 }
 
 function repository() {
@@ -488,6 +504,90 @@ test("tracked and untracked symlinks disable replay", () => {
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
+  }
+});
+
+test("replay fingerprint never diffs a disqualifying repository", () => {
+  for (const disqualifier of [
+    "ignored",
+    "tracked-symlink",
+    "gitlink",
+  ] as const) {
+    const cwd = repository();
+    try {
+      if (disqualifier === "ignored") {
+        writeFileSync(path.join(cwd, ".gitignore"), "secret.txt\n");
+        git(cwd, "add", ".gitignore");
+        git(cwd, "commit", "-qm", "ignore secret");
+        writeFileSync(path.join(cwd, "secret.txt"), "one\n");
+      } else if (disqualifier === "gitlink") {
+        const sha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+          cwd,
+          encoding: "utf8",
+          input: "submodule commit",
+        }).trim();
+        git(
+          cwd,
+          "update-index",
+          "--add",
+          "--cacheinfo",
+          `160000,${sha},submodule-link`,
+        );
+        git(cwd, "commit", "-qm", "track gitlink");
+      } else {
+        // A tracked symlink entry without OS symlink privileges: stage the
+        // mode-120000 index entry directly from a hash object.
+        const sha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+          cwd,
+          encoding: "utf8",
+          input: "tracked.txt",
+        }).trim();
+        git(
+          cwd,
+          "update-index",
+          "--add",
+          "--cacheinfo",
+          `120000,${sha},observable-link`,
+        );
+        git(cwd, "commit", "-qm", "track symlink");
+      }
+      const commands: string[][] = [];
+      assert.throws(() => repositoryFingerprint(cwd, recordingGit(commands)));
+      assert.equal(
+        commands.some((command) => command[0] === "diff"),
+        false,
+        "a repository that can never replay must not pay for the worktree diff",
+      );
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
+  }
+});
+
+test("replay fingerprint orders cheap terminating checks before the worktree diff", () => {
+  const cwd = repository();
+  try {
+    const commands: string[][] = [];
+    const fingerprint = repositoryFingerprint(cwd, recordingGit(commands));
+    assert.ok(fingerprint);
+    assert.equal(fingerprint.root, realpathSync(cwd));
+    assert.deepEqual(commands, [
+      ["rev-parse", "--show-toplevel"],
+      [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+      ],
+      ["rev-parse", "--verify", "HEAD"],
+      ["ls-files", "-s", "-z"],
+      ["diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--"],
+      ["ls-files", "--others", "--exclude-standard", "-z"],
+    ]);
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
   }
 });
 
