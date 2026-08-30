@@ -77,8 +77,9 @@
   },
   "scripts": {
     "prepublishOnly": "bun run check && bun run test",
-    "check": "bun run check:config-contract && bun run check:discipline && bun run format:check && bun run lint && bun run typecheck",
+    "check": "bun run check:config-contract && bun run check:docs-contract && bun run check:discipline && bun run format:check && bun run lint && bun run typecheck",
     "check:config-contract": "node scripts/check-config-contract.mjs",
+    "check:docs-contract": "node scripts/check-docs-contract.mjs",
     "check:discipline": "node scripts/check-discipline-ledger.mjs",
     "prepare": "node scripts/prepare-effect-tsgo.mjs",
     "format": "biome format --write .",
