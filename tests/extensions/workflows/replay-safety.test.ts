@@ -507,7 +507,26 @@ test("tracked and untracked symlinks disable replay", () => {
   }
 });
 
-test("replay fingerprint never diffs a disqualifying repository", () => {
+test("replay fingerprint never diffs a repository with ignored files", () => {
+  const cwd = repository();
+  try {
+    writeFileSync(path.join(cwd, ".gitignore"), "secret.txt\n");
+    git(cwd, "add", ".gitignore");
+    git(cwd, "commit", "-qm", "ignore secret");
+    writeFileSync(path.join(cwd, "secret.txt"), "one\n");
+    const commands: string[][] = [];
+    assert.throws(() => repositoryFingerprint(cwd, recordingGit(commands)));
+    assert.equal(
+      commands.some((command) => command[0] === "diff"),
+      false,
+      "an already-ignored repository must not pay for the worktree diff",
+    );
+  } finally {
+    rmSync(cwd, { recursive: true, force: true });
+  }
+});
+
+test("post-diff gates catch disqualifiers created while the diff runs", () => {
   for (const disqualifier of [
     "ignored",
     "tracked-symlink",
@@ -519,52 +538,43 @@ test("replay fingerprint never diffs a disqualifying repository", () => {
         writeFileSync(path.join(cwd, ".gitignore"), "secret.txt\n");
         git(cwd, "add", ".gitignore");
         git(cwd, "commit", "-qm", "ignore secret");
-        writeFileSync(path.join(cwd, "secret.txt"), "one\n");
-      } else if (disqualifier === "gitlink") {
-        const sha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
-          cwd,
-          encoding: "utf8",
-          input: "submodule commit",
-        }).trim();
-        git(
-          cwd,
-          "update-index",
-          "--add",
-          "--cacheinfo",
-          `160000,${sha},submodule-link`,
-        );
-        git(cwd, "commit", "-qm", "track gitlink");
-      } else {
-        // A tracked symlink entry without OS symlink privileges: stage the
-        // mode-120000 index entry directly from a hash object.
-        const sha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
-          cwd,
-          encoding: "utf8",
-          input: "tracked.txt",
-        }).trim();
-        git(
-          cwd,
-          "update-index",
-          "--add",
-          "--cacheinfo",
-          `120000,${sha},observable-link`,
-        );
-        git(cwd, "commit", "-qm", "track symlink");
       }
       const commands: string[][] = [];
-      assert.throws(() => repositoryFingerprint(cwd, recordingGit(commands)));
-      assert.equal(
-        commands.some((command) => command[0] === "diff"),
-        false,
-        "a repository that can never replay must not pay for the worktree diff",
-      );
+      const recordedGit = recordingGit(commands);
+      let injected = false;
+      const runGit = (gitCwd: string, args: readonly string[]) => {
+        if (!injected && args[0] === "diff") {
+          injected = true;
+          if (disqualifier === "ignored") {
+            writeFileSync(path.join(cwd, "secret.txt"), "one\n");
+          } else {
+            const sha = execFileSync("git", ["hash-object", "-w", "--stdin"], {
+              cwd,
+              encoding: "utf8",
+              input:
+                disqualifier === "gitlink" ? "submodule commit" : "tracked.txt",
+            }).trim();
+            git(
+              cwd,
+              "update-index",
+              "--add",
+              "--cacheinfo",
+              `${disqualifier === "gitlink" ? "160000" : "120000"},${sha},observable-link`,
+            );
+          }
+        }
+        return recordedGit(gitCwd, args);
+      };
+
+      assert.throws(() => repositoryFingerprint(cwd, runGit));
+      assert.equal(injected, true);
     } finally {
       rmSync(cwd, { recursive: true, force: true });
     }
   }
 });
 
-test("replay fingerprint orders cheap terminating checks before the worktree diff", () => {
+test("replay fingerprint keeps the early ignored gate and post-diff safety gates", () => {
   const cwd = repository();
   try {
     const commands: string[][] = [];
@@ -582,8 +592,16 @@ test("replay fingerprint orders cheap terminating checks before the worktree dif
         "-z",
       ],
       ["rev-parse", "--verify", "HEAD"],
-      ["ls-files", "-s", "-z"],
       ["diff", "--no-ext-diff", "--no-textconv", "--binary", "HEAD", "--"],
+      ["ls-files", "-s", "-z"],
+      [
+        "ls-files",
+        "--others",
+        "--ignored",
+        "--exclude-standard",
+        "--directory",
+        "-z",
+      ],
       ["ls-files", "--others", "--exclude-standard", "-z"],
     ]);
   } finally {

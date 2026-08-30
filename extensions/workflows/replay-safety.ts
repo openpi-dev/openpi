@@ -425,7 +425,7 @@ function canonicalPath(value: string) {
 
 function deadlineBoundGitRunner() {
   // One budget per fingerprint call: every git invocation shares a single
-  // deadline, so reordering a fixed command set cannot change any outcome.
+  // deadline.
   const deadline = Date.now() + REPLAY_IDENTITY_TIMEOUT_MS;
   return (gitCwd: string, args: readonly string[]) =>
     boundedGit(gitCwd, args, deadline);
@@ -441,21 +441,33 @@ export function repositoryFingerprint(
   const root = canonicalPath(
     runGit(cwd, ["rev-parse", "--show-toplevel"]).trim(),
   );
-  // Ignored files are observable to a read-capable child but are commonly too
-  // large or secret-bearing to hash (node_modules, .env, build output). A
-  // complete identity cannot pretend they do not exist, so disable replay.
-  const ignoredOutput = runGit(root, [
-    "ls-files",
-    "--others",
-    "--ignored",
-    "--exclude-standard",
-    "--directory",
-    "-z",
-  ]);
-  if (ignoredOutput.length > 0) {
-    throw new Error("ignored files make the replay identity incomplete");
-  }
+  const assertNoIgnoredFiles = () => {
+    // Ignored files are observable to a read-capable child but are commonly
+    // too large or secret-bearing to hash (node_modules, .env, build output).
+    // A complete identity cannot pretend they do not exist, so disable replay.
+    const ignoredOutput = runGit(root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "-z",
+    ]);
+    if (ignoredOutput.length > 0) {
+      throw new Error("ignored files make the replay identity incomplete");
+    }
+  };
+  // The common disqualifying case exits before the expensive binary diff.
+  assertNoIgnoredFiles();
   const head = runGit(root, ["rev-parse", "--verify", "HEAD"]).trim();
+  const diff = runGit(root, [
+    "diff",
+    "--no-ext-diff",
+    "--no-textconv",
+    "--binary",
+    "HEAD",
+    "--",
+  ]);
   const trackedModes = runGit(root, ["ls-files", "-s", "-z"]);
   // Tracked symlinks can expose changing content outside Git, while gitlinks
   // can expose submodule state absent from the parent diff. Neither has a
@@ -469,14 +481,10 @@ export function repositoryFingerprint(
   ) {
     throw new Error("symlinks and gitlinks make replay identity incomplete");
   }
-  const diff = runGit(root, [
-    "diff",
-    "--no-ext-diff",
-    "--no-textconv",
-    "--binary",
-    "HEAD",
-    "--",
-  ]);
+  // Preserve the original post-diff safety observation: an ignored file can
+  // appear while the synchronous diff is running, including from another
+  // process. The early check is only an optimization, never the final gate.
+  assertNoIgnoredFiles();
   const untrackedOutput = runGit(root, [
     "ls-files",
     "--others",
