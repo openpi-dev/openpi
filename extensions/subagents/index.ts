@@ -70,11 +70,16 @@ import {
   planModeAllowsDeclaredTools,
   planModeChildTools,
 } from "../shared/plan-mode-state.ts";
-import { loadSetupConfig, type DetailDisplay } from "../shared/setup-config.ts";
+import {
+  allocateResultBudgets,
+  type ParentContextUsage,
+} from "../shared/result-budget.ts";
+import { type DetailDisplay, loadSetupConfig } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import { registerWebCapability } from "../shared/web-observer-registry.ts";
 import {
   createWorktree,
   formatWorktreeCleanupWarning,
@@ -83,12 +88,11 @@ import {
 } from "../shared/worktree.ts";
 import {
   normalizeSubagentTitle,
+  SubagentStripWidget,
   selectSubagentStripEntry,
   subagentStripEntryKey,
-  SubagentStripWidget,
 } from "./navigation.ts";
 import {
-  type AgentType,
   formatAgentTypeDiagnostics,
   loadAgentTypes,
   roleModelForAgentType,
@@ -123,19 +127,15 @@ import {
   SUBAGENT_SEND_TOOL_DESCRIPTION,
   SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PROMPT_SNIPPET,
-  stripSubagentResultTransportInstruction,
   SUBAGENT_WAIT_PARAMETER_DESCRIPTIONS,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
+  stripSubagentResultTransportInstruction,
 } from "./src/prompt.ts";
 import {
   persistResultArtifact,
   projectResult,
   type ResultProjection,
 } from "./src/result-artifact.ts";
-import {
-  allocateResultBudgets,
-  type ParentContextUsage,
-} from "../shared/result-budget.ts";
 import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
@@ -144,8 +144,8 @@ import {
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
-  renderWaitResultPreview,
   renderWaitResult,
+  renderWaitResultPreview,
   type WaitResultDetails,
 } from "./src/ui/wait-result.ts";
 
@@ -498,6 +498,7 @@ export default function (
   const statusWriter = createStatusWriter("subagents");
   const widgetKey = "subagent-navigation";
   let navigationManager: SubagentManagerShape | undefined;
+  let unregisterWebCapability: (() => void) | undefined;
   let widgetVisible = false;
   let widgetEntryKey: string | undefined;
   let requestWidgetRender: (() => void) | undefined;
@@ -535,6 +536,12 @@ export default function (
       .runPromise(SubagentManager)
       .then((manager) => {
         navigationManager = manager;
+        unregisterWebCapability?.();
+        unregisterWebCapability = registerWebCapability({
+          kind: "subagents",
+          snapshot: () => manager.view.list(),
+          subscribe: (listener) => manager.view.subscribe(listener),
+        });
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
@@ -729,6 +736,8 @@ export default function (
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
     try {
       ui?.setStatus("subagents", undefined);
       sessionContext?.ui.setWidget(widgetKey, undefined);

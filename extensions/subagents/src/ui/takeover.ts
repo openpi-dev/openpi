@@ -14,11 +14,7 @@ import type {
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../../../shared/agent-session-page.ts";
-import {
-  hintLine,
-  panelFrame,
-  type ScreenHint,
-} from "../../../shared/screen-chrome.ts";
+import { hintLine, panelFrame } from "../../../shared/screen-chrome.ts";
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
 import { formatContextUtilization } from "../../../shared/context-utilization.ts";

@@ -2,7 +2,6 @@ import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  type AgentSession,
   DefaultPackageManager,
   DefaultResourceLoader,
   getAgentDir,

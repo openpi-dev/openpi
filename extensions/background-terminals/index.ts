@@ -32,6 +32,7 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import { registerWebCapability } from "../shared/web-observer-registry.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import {
   MAX_RUNNING,
@@ -96,6 +97,7 @@ export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
   let managerPromise: Promise<TerminalManagerShape> | undefined;
   let managerForHooks: TerminalManagerShape | undefined;
+  let unregisterWebCapability: (() => void) | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
@@ -120,6 +122,12 @@ export default function (pi: ExtensionAPI) {
       .runPromise(TerminalManager)
       .then((manager) => {
         managerForHooks = manager;
+        unregisterWebCapability?.();
+        unregisterWebCapability = registerWebCapability({
+          kind: "background-terminals",
+          snapshot: () => manager.view.list(),
+          subscribe: (listener) => manager.view.subscribe(listener),
+        });
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateWidget(manager));
@@ -314,6 +322,8 @@ export default function (pi: ExtensionAPI) {
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
     managerPromise = undefined;
     managerForHooks = undefined;
     await closing?.dispose();

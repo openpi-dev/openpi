@@ -13,6 +13,7 @@ const manifest = JSON.parse(
   private?: boolean;
   license?: string;
   keywords?: string[];
+  bin?: Record<string, string>;
   files?: string[];
   publishConfig?: { access?: string };
   packageManager?: string;
@@ -59,6 +60,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   assert.ok(manifest.keywords?.includes("pi-package"));
   assert.equal(manifest.publishConfig?.access, "public");
   assert.equal(manifest.packageManager, "bun@1.3.14");
+  assert.deepEqual(manifest.bin, { openpi: "./bin/openpi.js" });
   assert.equal(manifest.devDependencies?.["@biomejs/biome"], "2.5.8");
   assert.equal(manifest.devDependencies?.prettier, undefined);
   assert.equal(
@@ -84,6 +86,8 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png",
   );
   assert.deepEqual(manifest.files, [
+    "bin",
+    "web",
     "extensions",
     "!extensions/**/*.test.ts",
     "!extensions/**/*.spec.ts",

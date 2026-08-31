@@ -66,6 +66,10 @@ import {
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
 import {
+  notifyWebCapabilities,
+  registerWebCapability,
+} from "../shared/web-observer-registry.ts";
+import {
   createWorktree,
   reclaimWorktree,
   type Worktree,
@@ -138,7 +142,6 @@ import {
   countStates,
   createUsageReader,
   emptyUsage,
-  evictOldestSettledRuns,
   formatElapsed,
   formatUsage,
   isWorkflowRunId,
@@ -158,16 +161,15 @@ import {
 import {
   WorkflowNavigationEditor,
   type WorkflowStripEntry,
-  workflowStripEntryKey,
   WorkflowStripState,
   WorkflowStripWidget,
+  workflowStripEntryKey,
 } from "./navigation.ts";
 import {
   normalizeWorkflowOperatorKey,
   WorkflowOperatorRegistry,
 } from "./operator.ts";
 import {
-  buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildProjectedWorkflowCompletionBatches,
   buildProjectedWorkflowResultMessage,
@@ -194,17 +196,17 @@ import {
   type WorkflowCompletionEnvelope,
 } from "./result-delivery.ts";
 import {
+  createWorkflowSettledRunRetention,
+  projectWorkflowDetails,
+  type WorkflowSettledRunRetentionOptions,
+} from "./retention.ts";
+import {
   createWorkflowResources,
   runAgent,
   type ThinkingLevel,
   type WorkflowAgentSessionFactory,
   type WorkflowModel,
 } from "./runner.ts";
-import {
-  createWorkflowSettledRunRetention,
-  projectWorkflowDetails,
-  type WorkflowSettledRunRetentionOptions,
-} from "./retention.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { writeFileAtomic } from "./serialization.ts";
 import {
@@ -805,6 +807,7 @@ export default function workflows(
 ) {
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
+  let unregisterWebCapability: (() => void) | undefined;
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
@@ -966,6 +969,7 @@ export default function workflows(
   };
 
   const updateIndicator = () => {
+    notifyWebCapabilities();
     const ctx = lastContext;
     if (!ctx) return;
     try {
@@ -1054,6 +1058,17 @@ export default function workflows(
   };
 
   pi.on("session_start", (_event, ctx) => {
+    unregisterWebCapability?.();
+    unregisterWebCapability = registerWebCapability({
+      kind: "workflows",
+      snapshot: () => [
+        ...activeDetails().values(),
+        ...settledRuns
+          .entriesArray()
+          .filter(([runId]) => !activeRuns.has(runId))
+          .map(([, details]) => details),
+      ],
+    });
     registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;
     agentTypes = loadAgentTypes({
@@ -1122,6 +1137,8 @@ export default function workflows(
       // UI may already be disposed.
     }
     statusWriter.reset();
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
     lastContext = undefined;
     widgetVisible = false;
     widgetEntryKey = undefined;
