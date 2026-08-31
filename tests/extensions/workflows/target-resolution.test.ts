@@ -43,6 +43,13 @@ test("run target resolution prefers exact ids and bounds ambiguous or missing er
     runId: "wf_01a",
   });
 
+  const caseCollision = resolveWorkflowRunTarget("Wf_AbCd", [
+    "wf_abcd",
+    "wf_ABCD",
+  ]);
+  assert.equal(caseCollision.ok, false);
+  assert.match(caseCollision.error, /ambiguous/i);
+
   const ambiguous = resolveWorkflowRunTarget("a", candidates);
   assert.equal(ambiguous.ok, false);
   assert.match(ambiguous.error, /ambiguous/i);
