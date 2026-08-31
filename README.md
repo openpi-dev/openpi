@@ -86,7 +86,7 @@ OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 
 > `/plan` 是一个运行时安全例外：进入或恢复 Plan Mode 时会为当前 Session 自动加载 `search` 组，让只读调研直接使用结构化 Git 工具。
 > 在交互输入框中，保留词 `Subagent` / `Workflow`，以及已被识别的中文能力请求，会使用 Claude Code 风格的薰衣草紫显示；浅色终端自动使用更深的紫色以维持可读性。变色表示提交后会加载对应能力。因为英文名称本身就是授权词，讨论中写出它们也会开闸；条件句和否定句仍保持普通显示，Suggestion 幽灵文字也要在用户接受进输入框后才参与识别。
 
-当前 Session 中由 Pi 加载的 Skill 可以显式嵌入普通输入，例如 `用 $qfei-code-review 审查这个 PR`。OpenPI 保留这条原始用户消息，并把对应 `SKILL.md` 正文作为隐藏的模型上下文加载；同一条输入中的重复引用只加载一次，未知 Skill、`\$escaped`、以及 `abc$embedded` 形式保持原样。解析只使用 Pi 为当前模型轮提供的 Skill 集合，不扫描目录或维护第二套注册表。
+当前 Session 中由 Pi 加载的 Skill 可以显式嵌入普通输入。例如，当前已加载名为 `code-review` 的 Skill 时，可以输入 `用 $code-review 审查这个 PR`。OpenPI 保留这条原始用户消息，并把对应 `SKILL.md` 正文作为隐藏的模型上下文加载；同一条输入中的重复引用只加载一次，未知 Skill、`\$escaped`、以及 `abc$embedded` 形式保持原样。解析只使用 Pi 为当前模型轮提供的 Skill 集合，不扫描目录或维护第二套注册表。
 
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
