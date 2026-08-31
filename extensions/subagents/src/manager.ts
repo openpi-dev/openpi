@@ -136,6 +136,7 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
+  finalTextTruncated?: boolean;
   resultArtifact?: ResultArtifactRef;
   turns: number;
 }
@@ -149,6 +150,8 @@ interface Entry {
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  /** Generation of the terminal result currently eligible for persistence. */
+  persistenceGeneration: number;
   /** First-response watchdog timer for the active (or just-armed) run. */
   watchdogTimer?: ReturnType<typeof setTimeout>;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
@@ -175,7 +178,10 @@ export interface SubagentReadModel {
    */
   getResult?(
     id: string,
-  ): Pick<SubagentSnapshot, "finalText" | "resultArtifact"> | undefined;
+  ): Pick<
+    SubagentSnapshot,
+    "finalText" | "finalTextTruncated" | "resultArtifact"
+  > | undefined;
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
   /** Any-change notification (footer status, dashboard). */
@@ -304,8 +310,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         enforceSnapshotBudget();
         return true;
       } catch {
-        // Read-model projection is optional at runtime. Lifecycle state must
-        // still settle even if a plugin returns an unrepresentable value.
+        // Never expose a projection from an older lifecycle state after a
+        // failed rebuild; readers fall back to the canonical snapshot.
+        for (const entry of entries.values()) entry.projection = undefined;
         return false;
       }
     };
@@ -467,24 +474,29 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
      */
     const persistExactResult = (entry: Entry, text: string) => {
       if (!text || !config.persistResultArtifact) return;
-      try {
-        const artifact = config.persistResultArtifact(text);
-        if (!resultArtifactRefMatchesContent(artifact, text)) return;
-
-        // `resultArtifact` is deliberately retained as a compact, path-free
-        // reference. Check that it fits before retaining it, so a malformed
-        // callback result cannot make the following settlement projection
-        // throw.
-        const previous = entry.snapshot.resultArtifact;
-        entry.snapshot.resultArtifact = artifact;
-        const fits = tryEnforceSnapshotBudget();
-        entry.snapshot.resultArtifact = previous;
-        if (!fits) return;
-        entry.snapshot.resultArtifact = artifact;
-      } catch {
-        // The bounded in-memory result remains available when the cache is
-        // full, inaccessible, colliding, or cannot be cleaned.
-      }
+      const generation = entry.persistenceGeneration;
+      // Artifact persistence is optional recovery work. Schedule it only
+      // after settlement has notified waiters and hooks, so a slow or broken
+      // writer can never hold the lifecycle path or a concurrency slot.
+      setTimeout(() => {
+        try {
+          const artifact = config.persistResultArtifact!(text);
+          if (!resultArtifactRefMatchesContent(artifact, text)) return;
+          if (
+            entry.snapshot.status === "running" ||
+            entry.persistenceGeneration !== generation
+          )
+            return;
+          entry.snapshot.resultArtifact = artifact;
+          if (!tryEnforceSnapshotBudget()) {
+            entry.snapshot.resultArtifact = undefined;
+            return;
+          }
+          notify(entry.snapshot.id);
+        } catch {
+          // Recovery is best effort and must not alter terminal state.
+        }
+      }, 0);
     };
 
     const settle = (entry: Entry, outcome: RunOutcome) => {
@@ -509,6 +521,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText;
+          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
@@ -519,6 +532,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.errorText = bounded(outcome.errorText);
           // Never let a failed run report the previous run's successful output.
           s.finalText = outcome.partialText ?? "";
+          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
@@ -528,6 +542,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
           s.finalText = outcome.partialText ?? "";
+          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
@@ -603,6 +618,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.settledAt = undefined;
           s.errorText = undefined;
           s.resultArtifact = undefined;
+          s.finalTextTruncated = undefined;
           armWatchdog(entry);
           break;
         case "RunSettled":
@@ -784,6 +800,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             session,
             scope,
             liveToolMap: new Map(),
+            persistenceGeneration: 0,
           };
           yield* registerEntry(id, entry);
           // The run is live from the caller's perspective before RunStarted
@@ -939,6 +956,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // both pass the check in that window. Cleared by RunStarted/settle,
           // or here when the backend rejects the send.
           entry.restarting = true;
+          entry.persistenceGeneration++;
           // A backend that accepts the send but never starts the run would
           // hold the slot forever; guard the restart window the same way the
           // spawn path guards its pre-RunStarted window.
@@ -1001,6 +1019,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         return snapshot
           ? {
               finalText: snapshot.finalText,
+              ...(snapshot.finalTextTruncated
+                ? { finalTextTruncated: true }
+                : {}),
               ...(snapshot.resultArtifact
                 ? { resultArtifact: snapshot.resultArtifact }
                 : {}),

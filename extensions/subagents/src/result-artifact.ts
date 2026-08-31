@@ -188,7 +188,11 @@ export function isResultArtifactRef(
     return false;
   }
   const candidate = value as Record<string, unknown>;
+  const keys = Object.keys(candidate);
   return (
+    keys.length === 2 &&
+    keys.includes("version") &&
+    keys.includes("digest") &&
     candidate.version === 1 &&
     typeof candidate.digest === "string" &&
     RESULT_ARTIFACT_DIGEST.test(candidate.digest)
@@ -352,6 +356,11 @@ function cacheLimits(
   const maxBytes = options?.maxBytes ?? MAX_RESULT_ARTIFACT_BYTES;
   if (!Number.isSafeInteger(maxFiles) || maxFiles <= 0) {
     throw new Error("maxFiles must be a positive safe integer");
+  }
+  if (maxFiles > MAX_RESULT_ARTIFACT_FILES) {
+    throw new Error(
+      `maxFiles must not exceed ${MAX_RESULT_ARTIFACT_FILES} files`,
+    );
   }
   if (!Number.isSafeInteger(maxBytes) || maxBytes <= 0) {
     throw new Error("maxBytes must be a positive safe integer");
@@ -1021,10 +1030,14 @@ export function resolveExactResultText(options: {
   readonly artifactText: string | undefined;
   readonly retainedFinalText: string | undefined;
   readonly resultIsCanonical: boolean;
+  readonly finalTextTruncated?: boolean;
   readonly omittedFinalTextBytes: number;
 }): string | undefined {
   if (options.artifactText !== undefined) return options.artifactText;
-  if (options.resultIsCanonical || options.omittedFinalTextBytes <= 0) {
+  if (
+    !options.finalTextTruncated &&
+    (options.resultIsCanonical || options.omittedFinalTextBytes <= 0)
+  ) {
     return options.retainedFinalText ?? "";
   }
   return undefined;

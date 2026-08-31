@@ -255,6 +255,8 @@ export interface SubagentSnapshot {
   readonly queued: ReadonlyArray<QueuedMessage>;
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
+  /** True when finalText is only a bounded retained prefix. */
+  readonly finalTextTruncated?: boolean;
   /** Content-addressed exact result, when the bounded projection omitted text. */
   readonly resultArtifact?: ResultArtifactRef;
   /** Count of finalized assistant messages (for subagent_check). */

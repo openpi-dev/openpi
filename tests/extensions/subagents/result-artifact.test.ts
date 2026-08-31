@@ -18,6 +18,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   MAX_RESULT_ARTIFACT_BYTES,
+  MAX_RESULT_ARTIFACT_FILES,
   pageResultText,
   persistResultArtifact,
   projectResult,
@@ -342,6 +343,17 @@ test("custom cache limits reject zero, negative, and over-cap maxBytes", {
   }
 });
 
+test("artifact references reject path-bearing extra fields", () => {
+  const digest = createHash("sha256").update("content", "utf8").digest("hex");
+  assert.equal(
+    resultArtifactRefMatchesContent(
+      { version: 1, digest, path: "C:/secret/cache/result.txt" },
+      "content",
+    ),
+    false,
+  );
+});
+
 test("custom cache limits cannot exceed the reader limit", {
   skip: skipWindowsArtifactCache,
 }, async () => {
@@ -349,6 +361,14 @@ test("custom cache limits cannot exceed the reader limit", {
     path.join(tmpdir(), "openpi-result-limit-validation-"),
   );
   try {
+    assert.throws(
+      () =>
+        persistResultArtifact(agentDir, "small", {
+          maxFiles: MAX_RESULT_ARTIFACT_FILES + 1,
+          maxBytes: 32,
+        }),
+      /maxFiles must not exceed 64 files/,
+    );
     assert.throws(
       () =>
         persistResultArtifact(agentDir, "small", {
@@ -707,6 +727,16 @@ test("exact result paging is 0-based and never treats a projection as canonical"
       omittedFinalTextBytes: 100,
     }),
     "canonical retained",
+  );
+  assert.equal(
+    resolveExactResultText({
+      artifactText: undefined,
+      retainedFinalText: "truncated prefix",
+      resultIsCanonical: true,
+      finalTextTruncated: true,
+      omittedFinalTextBytes: 100,
+    }),
+    undefined,
   );
   assert.equal(
     resolveExactResultText({

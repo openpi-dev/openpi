@@ -250,8 +250,9 @@ function exactResultText(snap: SubagentSnapshot): string | undefined {
 
 function resultText(snap: SubagentSnapshot): string {
   const artifact = exactResultText(snap);
-  // Retention and best-effort writes can make a prior recovery path disappear.
-  // A cache miss must degrade to the retained result, never suppress delivery.
+  // A retained prefix is not an exact-result measurement source. Keep batch
+  // budgeting conservative until the protected artifact is readable.
+  if (artifact === undefined && snap.finalTextTruncated) return "";
   return artifact !== undefined
     ? artifact || "(no output)"
     : snap.finalText || "(no output)";
@@ -259,13 +260,21 @@ function resultText(snap: SubagentSnapshot): string {
 
 function withCanonicalResult(
   snap: SubagentSnapshot,
-  result: Pick<SubagentSnapshot, "finalText" | "resultArtifact"> | undefined,
+  result:
+    | Pick<
+        SubagentSnapshot,
+        "finalText" | "finalTextTruncated" | "resultArtifact"
+      >
+    | undefined,
 ) {
   if (!result) return { snap, resultIsCanonical: false };
   return {
     snap: {
       ...snap,
       finalText: result.finalText,
+      ...(result.finalTextTruncated
+        ? { finalTextTruncated: true }
+        : { finalTextTruncated: undefined }),
       resultArtifact: result.resultArtifact,
     },
     resultIsCanonical: true,
@@ -314,17 +323,20 @@ export function truncatedOutput(
   resultOptions: { readonly resultIsCanonical?: boolean } = {},
 ): ResultProjection {
   const artifact = exactResultText(snap);
+  const finalTextWasOmitted =
+    snap.finalTextTruncated === true ||
+    (!resultOptions.resultIsCanonical &&
+      (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0);
   const output =
     artifact !== undefined
       ? artifact || "(no output)"
-      : snap.finalText || "(no output)";
+      : finalTextWasOmitted
+        ? "[exact subagent result unavailable]"
+        : snap.finalText || "(no output)";
   // A projected finalText is not authoritative. Do not create a second
   // artifact containing only that projection when the original artifact is
   // unavailable. A cache miss with a complete retained result can safely
   // repopulate the cache on demand.
-  const finalTextWasOmitted =
-    !resultOptions.resultIsCanonical &&
-    (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0;
   const artifactAvailable = artifact !== undefined;
   const persist = artifactAvailable
     ? () => undefined
@@ -1543,8 +1555,14 @@ export default function (
         artifactText: artifact,
         retainedFinalText: canonical.snap.finalText,
         resultIsCanonical: canonical.resultIsCanonical,
+        finalTextTruncated: canonical.snap.finalTextTruncated,
         omittedFinalTextBytes:
-          canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
+          canonical.snap.finalTextTruncated
+            ? Math.max(
+                1,
+                canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
+              )
+            : canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
       });
       if (exact === undefined) {
         throw new Error(

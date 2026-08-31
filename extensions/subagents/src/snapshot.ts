@@ -442,6 +442,7 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
     liveTools: liveTools.tools,
     queued: queued.queued,
     finalText: finalText.text,
+    ...(snapshot.finalTextTruncated ? { finalTextTruncated: true } : {}),
     ...(resultArtifact ? { resultArtifact } : {}),
     turns: snapshot.turns,
   };

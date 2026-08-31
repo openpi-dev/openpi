@@ -140,6 +140,36 @@ test("automatic result projection keeps both ends and persists the exact final a
   assert.doesNotMatch(text, /\/tmp\/subagent-final\.txt/);
 });
 
+test("a truncated retained result is never presented as exact", () => {
+  const projected = truncatedOutput(
+    {
+      id: "sa-unavailable",
+      origin: "model",
+      backend: "pi",
+      title: "inspect",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: `head-only-prefix${"x".repeat(1 * 1024 * 1024)}TAIL-SENTINEL`,
+      finalTextTruncated: true,
+      turns: 1,
+    },
+    4096,
+  );
+
+  assert.match(projected.text, /exact subagent result unavailable/);
+  assert.doesNotMatch(projected.text, /head-only-prefix/);
+  assert.doesNotMatch(projected.text, /TAIL-SENTINEL/);
+});
+
 test("an evicted exact-result artifact falls back to the retained result", () => {
   const text = truncatedOutput(
     {

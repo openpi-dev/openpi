@@ -226,6 +226,8 @@ test("terminal text is persisted before the bounded settlement snapshot", async 
       );
       await runTool(runtime, manager.waitFor([snap.id]));
       assert.equal(settlementObserved, true);
+      assert.equal(manager.view.get(snap.id)?.status, "done");
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       assert.match(persisted ?? "", /Persist this exact result/);
     },
     {
@@ -270,6 +272,7 @@ test("artifact cache failures cannot block settlement, waiters, or result delive
       assert.equal(done?.status, "done");
       assert.equal(done?.resultArtifact, undefined);
       assert.ok(notifications.includes("done"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
       assert.equal(writerCalls, 1);
       assert.deepEqual(
         settled.map(({ status, resultArtifact }) => ({
