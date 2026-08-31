@@ -16,3 +16,4 @@ Start from [`TEMPLATE.md`](TEMPLATE.md).
 ## Records
 
 - [`0001-documentation-and-evidence-governance.md`](0001-documentation-and-evidence-governance.md) — repository knowledge categories, evidence states, and publication boundaries.
+- [`0002-native-skill-lifecycle.md`](0002-native-skill-lifecycle.md) — use Pi's native Skill loading and Session lifecycle without an OpenPI body-recovery layer.
