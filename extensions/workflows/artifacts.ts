@@ -6,6 +6,7 @@ import {
   type JournalEntry,
   parseJournal,
   type WorkflowJournal,
+  type WorkflowJournalAccumulator,
 } from "./journal.ts";
 import {
   refreshWorkflowGraph,
@@ -29,6 +30,10 @@ export const WORKFLOW_CHECKPOINT_INTERVAL_MS = 500;
 const ENTRY_TRUNCATION_MARKER = "\n[entry truncated]";
 const TRANSCRIPT_TRUNCATION_MARKER =
   "[artifact transcript truncated: older entries omitted]";
+
+type WorkflowJournalSource =
+  | readonly JournalEntry[]
+  | WorkflowJournalAccumulator;
 
 function textBytes(text: string) {
   return Buffer.byteLength(text, "utf8");
@@ -158,7 +163,7 @@ export function persistWorkflowAgentResult(
 export function persistWorkflowJson(
   runDir: string,
   details: WorkflowDetails,
-  journal?: readonly JournalEntry[],
+  journal?: WorkflowJournalSource,
 ) {
   refreshWorkflowGraph(details);
   const transcripts = Object.fromEntries(
@@ -183,15 +188,20 @@ export function persistWorkflowJson(
   );
   // Written alongside the rest so it inherits atomic write, 500ms coalescing,
   // and the final flush. Only present once a call has actually succeeded.
-  // boundedJournal has already brought this under the cap, and plain
-  // JSON.stringify is deliberate: safeStringify would swap an over-cap value
-  // for a preview stub, silently turning the journal into something unusable.
-  if (journal && journal.length > 0) {
-    writeRunFile(
-      runDir,
-      JOURNAL_FILE,
-      JSON.stringify(boundedJournal(journal).journal, null, 2),
-    );
+  // Accumulators already enforce the cap incrementally and can assemble the
+  // canonical JSON from their cached entry fragments. Plain arrays retain the
+  // compatibility path through boundedJournal; plain JSON.stringify is
+  // deliberate because safeStringify would swap an over-cap value for a
+  // preview stub, silently turning the journal into something unusable.
+  if (
+    journal &&
+    (journal.length > 0 || ("toJson" in journal && journal.dropped > 0))
+  ) {
+    const content =
+      "toJson" in journal
+        ? journal.toJson()
+        : JSON.stringify(boundedJournal(journal).journal, null, 2);
+    writeRunFile(runDir, JOURNAL_FILE, content);
   }
   if (details.result !== undefined) {
     writeRunFile(
@@ -243,10 +253,10 @@ export function createWorkflowPersistence(
     persist?: (
       runDir: string,
       details: WorkflowDetails,
-      journal?: readonly JournalEntry[],
+      journal?: WorkflowJournalSource,
     ) => void;
-    /** Read at write time so callers only have to append to their own array. */
-    journal?: () => readonly JournalEntry[];
+    /** Read at write time so callers only have to append to their journal. */
+    journal?: () => WorkflowJournalSource;
   } = {},
 ) {
   const intervalMs = Math.max(
