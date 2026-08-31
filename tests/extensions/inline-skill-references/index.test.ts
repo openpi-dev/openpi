@@ -66,6 +66,10 @@ test("accepts only start-of-input or horizontal-whitespace boundaries", () => {
     "$reviewer",
     "$review_thing",
     "$review技能",
+    "$review𠮷",
+    "$review𝔞",
+    "$review\u0301",
+    "line one\r\n$review",
   ]) {
     assert.deepEqual(referencedSkills(prompt, available), [], prompt);
   }

@@ -88,6 +88,8 @@ OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 
 
 当前 Session 中由 Pi 加载的 Skill 可以显式嵌入普通输入。例如，当前已加载名为 `code-review` 的 Skill 时，可以输入 `用 $code-review 审查这个 PR`。OpenPI 保留这条原始用户消息，并把对应 `SKILL.md` 正文作为隐藏的模型上下文加载；同一条输入中的重复引用只加载一次，未知 Skill、`\$escaped`、以及 `abc$embedded` 形式保持原样。解析只使用 Pi 为当前模型轮提供的 Skill 集合，不扫描目录或维护第二套注册表。
 
+TUI 中在输入开头或空格、Tab 后键入 `$` 可补全当前已加载的 Skill；Tab 只插入引用，不提交消息。换行本身不是引用边界；原生 `/skill:name` 和 `@path` 补全保持不变。引用展开也适用于运行中追加的消息。隐藏正文只在当前 Agent Run 内有效，重试和自动压缩后复用同一份快照，运行结束后清除；正文不写入 Session 历史，超大的 Skill 仍可能占满模型上下文。
+
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 

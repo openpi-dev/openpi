@@ -4,9 +4,13 @@ import {
   type AgentSession,
   type ExtensionAPI,
   parseSkillBlock,
+  type SessionEntry,
+  sessionEntryToContextMessages,
   type Skill,
   stripFrontmatter,
 } from "@earendil-works/pi-coding-agent";
+import { registerInlineSkillAutocomplete } from "./autocomplete.ts";
+import { startsAtReferenceBoundary } from "./syntax.ts";
 
 // Consume the complete identifier after `$` before looking it up. This is
 // intentionally broader than the currently valid Pi Skill names: an input such
@@ -28,27 +32,19 @@ interface InlineSkillProjection {
   readonly sourceText: string;
   readonly sourceTimestamp: number;
   readonly message: InlineSkillMessage;
-}
-
-function startsAtReferenceBoundary(prompt: string, index: number) {
-  // The public syntax accepts only start-of-input or horizontal ASCII
-  // whitespace. Do not generalize this to `\s`: a newline before `$name` is
-  // deliberately not an invocation boundary, and a preceding backslash keeps
-  // `\$name` literal because the `$` is then not at a valid boundary.
-  if (index === 0) return true;
-  const previous = prompt[index - 1];
-  return previous === " " || previous === "\t";
+  readonly compaction?: {
+    readonly summary: string;
+    readonly timestamp: number;
+  };
 }
 
 function readReferenceName(prompt: string, dollarIndex: number) {
   // Read the maximal candidate before resolving it. Exact-name lookup later
   // ensures `$reviewer` cannot accidentally invoke a Skill named `review`.
   let end = dollarIndex + 1;
-  while (
-    end < prompt.length &&
-    INLINE_SKILL_REFERENCE_CHARACTER.test(prompt[end] ?? "")
-  ) {
-    end += 1;
+  for (const character of prompt.slice(end)) {
+    if (!INLINE_SKILL_REFERENCE_CHARACTER.test(character)) break;
+    end += character.length;
   }
   return { name: prompt.slice(dollarIndex + 1, end), end };
 }
@@ -158,11 +154,11 @@ function isProjectionSource(
   );
 }
 
-export function injectInlineSkillReferences(
+function projectionSourceIndexes(
   messages: readonly AgentMessage[],
   projections: readonly InlineSkillProjection[],
 ) {
-  const insertions = new Map<number, InlineSkillMessage>();
+  const indexes = new Map<InlineSkillProjection, number>();
   let beforeIndex = messages.length;
   // Match both lists newest-first with a monotonically decreasing cursor. This
   // correlates repeated prompts with the current run's newest submissions,
@@ -176,10 +172,67 @@ export function injectInlineSkillReferences(
     const projection = projections[projectionIndex];
     for (let index = beforeIndex - 1; index >= 0; index -= 1) {
       if (!isProjectionSource(messages[index], projection)) continue;
-      insertions.set(index, projection.message);
+      indexes.set(projection, index);
       beforeIndex = index;
       break;
     }
+  }
+  return indexes;
+}
+
+// Called only at Pi's successful compaction boundary, not on an arbitrary
+// missing context message. Entry IDs prove which original submissions were
+// actually removed; newest-first matching keeps identical submissions distinct.
+export function reanchorCompactedSkillReferences(
+  projections: readonly InlineSkillProjection[],
+  branch: readonly SessionEntry[],
+  contextEntries: readonly SessionEntry[],
+) {
+  const compaction = contextEntries.find(
+    (entry) => entry.type === "compaction",
+  );
+  const summary = compaction && sessionEntryToContextMessages(compaction)[0];
+  if (summary?.role !== "compactionSummary") return projections;
+  const sources = branch.filter((entry) => entry.type === "message");
+  const indexes = projectionSourceIndexes(
+    sources.map((entry) => entry.message),
+    projections,
+  );
+  const keptIds = new Set(contextEntries.map((entry) => entry.id));
+  return projections.map((projection) => {
+    const index = indexes.get(projection);
+    if (index === undefined || keptIds.has(sources[index]!.id))
+      return projection;
+    return {
+      ...projection,
+      compaction: { summary: summary.summary, timestamp: summary.timestamp },
+    };
+  });
+}
+
+export function injectInlineSkillReferences(
+  messages: readonly AgentMessage[],
+  projections: readonly InlineSkillProjection[],
+) {
+  const indexes = projectionSourceIndexes(
+    messages,
+    projections.filter((projection) => !projection.compaction),
+  );
+  const insertions = new Map<number, InlineSkillMessage[]>();
+  for (const projection of projections) {
+    const anchor = projection.compaction;
+    const index = anchor
+      ? messages.findIndex(
+          (message) =>
+            message.role === "compactionSummary" &&
+            message.timestamp === anchor.timestamp &&
+            message.summary === anchor.summary,
+        )
+      : indexes.get(projection);
+    if (index === undefined || index < 0) continue;
+    const atIndex = insertions.get(index) ?? [];
+    atIndex.push(projection.message);
+    insertions.set(index, atIndex);
   }
 
   // A context may omit a queued source message while Pi is transitioning. In
@@ -194,17 +247,18 @@ export function injectInlineSkillReferences(
     // allowed to mutate the array they receive. Clone every insertion so they
     // never receive the stored run projection itself; otherwise a mutation in
     // one provider call would silently alter instructions in subsequent calls.
-    if (insertion) next.push(structuredClone(insertion));
+    if (insertion) next.push(...structuredClone(insertion));
   }
   return next;
 }
 
 export default function inlineSkillReferences(pi: ExtensionAPI) {
+  registerInlineSkillAutocomplete(pi);
   // Both collections are scoped to one agent run. currentSkills is Pi's
   // authoritative discovery snapshot; activeProjections contains only messages
   // actually submitted during that run.
   let currentSkills: readonly Skill[] = [];
-  let activeProjections: InlineSkillProjection[] = [];
+  let activeProjections: readonly InlineSkillProjection[] = [];
 
   const reset = () => {
     currentSkills = [];
@@ -229,7 +283,17 @@ export default function inlineSkillReferences(pi: ExtensionAPI) {
       event.message,
       currentSkills,
     );
-    if (projection) activeProjections.push(projection);
+    if (projection) activeProjections = [...activeProjections, projection];
+  });
+
+  pi.on("session_compact", (_event, ctx) => {
+    // Read Pi's actual retained entries, not event.compactionEntry: equal
+    // summary text can make older Pi versions report a previous entry there.
+    activeProjections = reanchorCompactedSkillReferences(
+      activeProjections,
+      ctx.sessionManager.getBranch(),
+      ctx.sessionManager.buildContextEntries(),
+    );
   });
 
   pi.on("context", (event) => {
