@@ -13,12 +13,13 @@ Before opening a pull request, run the checks documented in the guide and use th
 
 The repository enforces LF line endings for text files through the root `.gitattributes` file. This keeps checkouts identical on Windows, macOS, and Linux regardless of a user's global `core.autocrlf` setting.
 
-After pulling this policy into an existing checkout, first confirm that the worktree is clean, then re-check out tracked files so Git applies the attributes:
+Pulling this policy into an existing checkout can leave CRLF files unchanged, even when `git status` is clean. To get an LF checkout, keep the existing directory intact and clone into a new, unused directory from its parent directory:
 
 ```bash
-git status --short
-git restore --source=HEAD --worktree -- .
-git ls-files --eol
+git clone https://github.com/openpi-dev/openpi.git openpi-lf
+git -C openpi-lf ls-files --eol
 ```
 
-The final command should report `w/lf` for tracked text files. If the worktree is not clean, commit or stash the changes before running the restore command.
+The cloned revision must include this policy. The final command should report `w/lf` for tracked text files with line endings; files without line endings can report `w/none`, and binary files are excluded from this policy.
+
+A fresh clone only includes commits available on the remote. It does not copy unpushed commits, uncommitted changes, untracked files, or ignored files such as local configuration and evidence. Keep the old checkout until you have deliberately transferred any local work you need.
