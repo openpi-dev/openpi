@@ -14,6 +14,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { fauxAssistantMessage, fauxProvider } from "@earendil-works/pi-ai";
 import inlineSkillReferences, {
+  injectInlineSkillReferences,
   referencedSkills,
 } from "../../../extensions/inline-skill-references/index.ts";
 
@@ -83,12 +84,20 @@ interface SessionResult {
   readonly messages: Awaited<
     ReturnType<typeof createAgentSession>
   >["session"]["messages"];
-  readonly providerMessages: unknown;
+  readonly providerMessages: unknown[];
   readonly errors: ExtensionError[];
 }
 
 async function runSession(
-  options: { prompt?: string; removeSkillBeforePrompt?: boolean } = {},
+  options: {
+    prompt?: string;
+    removeSkillBeforePrompt?: boolean;
+    queued?: {
+      behavior: "steer" | "followUp";
+      direct: boolean;
+      prompt: string;
+    };
+  } = {},
 ) {
   const root = await mkdtemp(path.join(tmpdir(), "openpi-inline-skills-"));
   const cwd = path.join(root, "workspace");
@@ -130,12 +139,12 @@ async function runSession(
     provider: `openpi-inline-skills-${path.basename(root)}`,
     models: [{ id: "fixture", name: "Fixture", reasoning: false }],
   });
-  provider.setResponses([
-    (context) => {
+  provider.setResponses(
+    Array.from({ length: options.queued ? 2 : 1 }, () => (context) => {
       snapshots.push(structuredClone(context.messages));
       return fauxAssistantMessage("Done.");
-    },
-  ]);
+    }),
+  );
 
   const settingsManager = SettingsManager.inMemory(undefined, {
     projectTrusted: false,
@@ -169,13 +178,32 @@ async function runSession(
       onError: (error) => errors.push(error),
     });
     if (options.removeSkillBeforePrompt) await unlink(skillPath);
+    let queued: Promise<void> | undefined;
+    let didQueue = false;
+    const queuedInput = options.queued;
+    const unsubscribe = queuedInput
+      ? session.subscribe((event) => {
+          if (event.type !== "turn_start" || didQueue) return;
+          didQueue = true;
+          queued = queuedInput.direct
+            ? session[queuedInput.behavior](queuedInput.prompt)
+            : session.prompt(queuedInput.prompt, {
+                streamingBehavior: queuedInput.behavior,
+              });
+        })
+      : undefined;
     await session.prompt(
-      options.prompt ?? "Please use $review, then report the result.",
+      options.prompt ??
+        (options.queued
+          ? "Start the run."
+          : "Please use $review, then report the result."),
     );
+    await queued;
     await session.waitForIdle();
+    unsubscribe?.();
     return {
       messages: structuredClone(session.messages),
-      providerMessages: snapshots[0],
+      providerMessages: snapshots,
       errors,
     } satisfies SessionResult;
   } finally {
@@ -187,11 +215,6 @@ async function runSession(
 test("keeps raw user text visible and adds frontmatter-free hidden model context", async () => {
   const result = await runSession();
   const user = result.messages.find(({ role }) => role === "user");
-  const hidden = result.messages.find(
-    (message) =>
-      message.role === "custom" &&
-      message.customType === "openpi-inline-skill-references",
-  );
 
   assert.equal(user?.role, "user");
   assert.deepEqual(user.content, [
@@ -200,20 +223,68 @@ test("keeps raw user text visible and adds frontmatter-free hidden model context
       text: "Please use $review, then report the result.",
     },
   ]);
-  assert.equal(hidden?.role, "custom");
-  assert.equal(hidden.display, false);
-  assert.match(String(hidden.content), /<skill name="review"/);
-  assert.match(
-    String(hidden.content),
-    /Follow the review body, not the frontmatter\./,
+  assert.equal(
+    result.messages.some(
+      (message) =>
+        message.role === "custom" &&
+        message.customType === "openpi-inline-skill-references",
+    ),
+    false,
   );
-  assert.doesNotMatch(String(hidden.content), /disable-model-invocation/);
-  assert.doesNotMatch(String(hidden.content), /<skill name="other"/);
 
-  const modelContext = JSON.stringify(result.providerMessages);
+  const modelContext = JSON.stringify(result.providerMessages[0]);
   assert.match(modelContext, /Please use \$review, then report the result\./);
   assert.match(modelContext, /<skill name=\\"review\\"/);
+  assert.match(modelContext, /Follow the review body, not the frontmatter\./);
+  assert.doesNotMatch(modelContext, /disable-model-invocation/);
+  assert.doesNotMatch(modelContext, /<skill name=\\"other\\"/);
   assert.equal(result.errors.length, 0);
+});
+
+test("projects one hidden custom message without changing its source messages", async () => {
+  const messages = [
+    {
+      role: "user" as const,
+      content: [{ type: "text" as const, text: "Use $review" }],
+      timestamp: 1,
+    },
+  ];
+  const available = skill("review");
+  const root = await mkdtemp(path.join(tmpdir(), "openpi-inline-projection-"));
+  const filePath = path.join(root, "SKILL.md");
+  await writeFile(filePath, "---\nname: review\n---\nReview body.\n");
+
+  try {
+    const projected = await injectInlineSkillReferences(messages, [
+      { ...available, filePath, baseDir: root },
+    ]);
+    assert.equal(projected?.length, 2);
+    assert.equal(projected?.[1]?.role, "custom");
+    if (projected?.[1]?.role === "custom") {
+      assert.equal(projected[1].display, false);
+      assert.match(String(projected[1].content), /Review body\./);
+    }
+    assert.equal(messages.length, 1);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("expands streaming prompts and direct queued Session inputs", async () => {
+  for (const queued of [
+    { behavior: "steer" as const, direct: false },
+    { behavior: "followUp" as const, direct: false },
+    { behavior: "steer" as const, direct: true },
+    { behavior: "followUp" as const, direct: true },
+  ]) {
+    const prompt = `Please use $review through ${queued.behavior}.`;
+    const result = await runSession({ queued: { ...queued, prompt } });
+    const modelContext = JSON.stringify(result.providerMessages.at(-1));
+
+    assert.match(modelContext, new RegExp(prompt.replace("$", "\\$")));
+    assert.match(modelContext, /<skill name=\\"review\\"/);
+    assert.equal(result.errors.length, 0);
+  }
 });
 
 test("does not reinterpret native slash Skill expansion as user references", async () => {
@@ -223,7 +294,7 @@ test("does not reinterpret native slash Skill expansion as user references", asy
     result.messages.some(({ role }) => role === "custom"),
     false,
   );
-  const modelContext = JSON.stringify(result.providerMessages);
+  const modelContext = JSON.stringify(result.providerMessages[0]);
   assert.match(modelContext, /<skill name=\\"review\\"/);
   assert.doesNotMatch(modelContext, /<skill name=\\"other\\"/);
   assert.equal(result.errors.length, 0);
@@ -237,13 +308,13 @@ test("surfaces Skill read failures and injects no false loaded context", async (
     false,
   );
   assert.equal(result.errors.length, 1);
-  assert.equal(result.errors[0]?.event, "before_agent_start");
+  assert.equal(result.errors[0]?.event, "context");
   assert.match(
     result.errors[0]?.error ?? "",
     /Failed to load inline Skill "review"/,
   );
   assert.doesNotMatch(
-    JSON.stringify(result.providerMessages),
+    JSON.stringify(result.providerMessages[0]),
     /<skill name=\\"review\\"/,
   );
 });

@@ -1,11 +1,17 @@
 import { readFile } from "node:fs/promises";
+import { contentText } from "@earendil-works/pi-ai";
 import {
+  type AgentSession,
   type ExtensionAPI,
+  parseSkillBlock,
   type Skill,
   stripFrontmatter,
 } from "@earendil-works/pi-coding-agent";
 
 const INLINE_SKILL_REFERENCE_CHARACTER = /[\p{L}\p{M}\p{N}_-]/u;
+const INLINE_SKILL_MESSAGE_TYPE = "openpi-inline-skill-references";
+
+type AgentMessage = AgentSession["messages"][number];
 
 function startsAtReferenceBoundary(prompt: string, index: number) {
   if (index === 0) return true;
@@ -63,37 +69,79 @@ async function loadSkillEnvelope(skill: Skill) {
   }
 }
 
-export default function inlineSkillReferences(pi: ExtensionAPI) {
-  let pendingPrompt: string | undefined;
+function referenceText(message: AgentMessage) {
+  if (message.role !== "user") return;
+  const text = contentText(message.content, "");
+  const nativeSkill = parseSkillBlock(text);
+  return nativeSkill ? (nativeSkill.userMessage ?? "") : text;
+}
 
-  pi.on("input", (event) => {
-    if (!event.streamingBehavior) pendingPrompt = event.text;
-    return { action: "continue" };
-  });
+function alreadyHasInlineSkillMessage(message: AgentMessage | undefined) {
+  return (
+    message?.role === "custom" &&
+    message.customType === INLINE_SKILL_MESSAGE_TYPE
+  );
+}
 
-  pi.on("before_agent_start", async (event) => {
-    const prompt = pendingPrompt;
-    pendingPrompt = undefined;
-    if (prompt === undefined) return;
-    const skills = referencedSkills(
-      prompt,
-      event.systemPromptOptions.skills ?? [],
-    );
-    if (skills.length === 0) return;
+export async function injectInlineSkillReferences(
+  messages: readonly AgentMessage[],
+  skills: readonly Skill[],
+) {
+  const next: AgentMessage[] = [];
+  const loads = new Map<Skill, Promise<string>>();
+  let changed = false;
+
+  for (let index = 0; index < messages.length; index += 1) {
+    const message = messages[index];
+    next.push(message);
+    const prompt = referenceText(message);
+    if (
+      prompt === undefined ||
+      alreadyHasInlineSkillMessage(messages[index + 1])
+    ) {
+      continue;
+    }
+
+    const referenced = referencedSkills(prompt, skills);
+    if (referenced.length === 0) continue;
 
     const envelopes: string[] = [];
-    for (const skill of skills) {
-      envelopes.push(await loadSkillEnvelope(skill));
+    for (const skill of referenced) {
+      let load = loads.get(skill);
+      if (!load) {
+        load = loadSkillEnvelope(skill);
+        loads.set(skill, load);
+      }
+      envelopes.push(await load);
     }
-    return {
-      message: {
-        customType: "openpi-inline-skill-references",
-        content: envelopes.join("\n\n"),
-        display: false,
-        details: {
-          skills: skills.map(({ name, filePath }) => ({ name, filePath })),
-        },
+    next.push({
+      role: "custom",
+      customType: INLINE_SKILL_MESSAGE_TYPE,
+      content: envelopes.join("\n\n"),
+      display: false,
+      details: {
+        skills: referenced.map(({ name, filePath }) => ({ name, filePath })),
       },
-    };
+      timestamp: message.timestamp,
+    });
+    changed = true;
+  }
+
+  return changed ? next : undefined;
+}
+
+export default function inlineSkillReferences(pi: ExtensionAPI) {
+  let currentSkills: readonly Skill[] = [];
+
+  pi.on("before_agent_start", (event) => {
+    currentSkills = event.systemPromptOptions.skills ?? [];
+  });
+
+  pi.on("context", async (event) => {
+    const messages = await injectInlineSkillReferences(
+      event.messages,
+      currentSkills,
+    );
+    if (messages) return { messages };
   });
 }
