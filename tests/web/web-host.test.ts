@@ -99,6 +99,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /id="workspace-menu"/);
     assert.match(pageHtml, /Rename workspace/);
     assert.match(pageHtml, /Remove from sidebar/);
+    assert.match(pageHtml, /id="theme-picker-trigger"/);
+    assert.match(pageHtml, /data-theme-value="dark"/);
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
@@ -132,11 +134,41 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /visibleUngroupedSessions/);
     assert.match(appSource, /workspaceDeleteConfirm/);
     assert.match(appSource, /workspace-delete-dialog/);
+    assert.match(appSource, /message-copy/);
+    assert.match(appSource, /messageActionsMarkup/);
+    assert.match(appSource, /turn-tick/);
+    assert.match(appSource, /turn-rail/);
+    assert.match(appSource, /scrollIntoView/);
+    assert.match(appSource, /activity-card/);
+    assert.match(appSource, /familyToolCallCard/);
+    assert.match(appSource, /toolLineMarkup/);
+    assert.match(appSource, /toolCallSummary/);
+    assert.match(appSource, /groupRows/);
+    assert.match(appSource, /tool-group/);
+    assert.match(appSource, /thinkingLineMarkup/);
+    assert.match(appSource, /data-thinking-start/);
+    assert.match(appSource, /applyTheme/);
+    assert.match(appSource, /data-theme-value/);
+    assert.match(appSource, /message-edit-input/);
+    assert.match(appSource, /enterMessageEdit/);
+    assert.match(appSource, /renderActivityBar/);
+    assert.match(appSource, /runtime_changed/);
+    assert.match(appSource, /resultsByCallId/);
+    assert.match(appSource, /pinnedToBottom/);
+    assert.match(appSource, /behavior: "instant"/);
+    assert.match(appSource, /customType/);
+    assert.match(appSource, /subagent-result/);
+    assert.match(appSource, /workflow-result/);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
     assert.equal(marked.status, 200);
     assert.match(marked.headers.get("content-type") || "", /javascript/);
     assert.match(await marked.text(), /marked v18/);
+
+    const favicon = await fetch(`${launched.origin}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.headers.get("content-type") || "", /image\/svg\+xml/);
+    assert.match(await favicon.text(), /<svg/);
 
     const styles = await fetch(`${launched.origin}/styles.css`);
     assert.equal(styles.status, 200);
@@ -160,7 +192,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.workspace-picker-row \{[^}]*width: min\(780px, 100%\)/,
+      /\.workspace-picker-row \{[^}]*width: min\(840px, 100%\)/,
     );
     assert.match(
       stylesSource,
@@ -177,7 +209,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.composer-hint \{ display: none; \}/);
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \{ width: min\(780px, calc\(100% - 48px\)\); \}/,
+      /\.message-row\.assistant \{ width: min\(840px, calc\(100% - 48px\)\); \}/,
     );
     assert.match(
       stylesSource,
@@ -185,20 +217,29 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \.message-details \{ width: min\(760px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
+      /\.message-row\.assistant \.message-details \{ width: min\(820px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
     );
     assert.match(
       stylesSource,
-      /\.message-row\.detail-only \{ padding: 12px 0; \}/,
+      /\.message-row\.detail-only \{ padding: 2px 0; \}/,
     );
     assert.match(
       stylesSource,
       /\.message-row\.detail-only \.message-details \{ margin: 0 auto; \}/,
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
+    assert.match(stylesSource, /\.message-actions \{/);
+    assert.match(stylesSource, /\.turn-rail \{/);
+    assert.match(stylesSource, /\.turn-tick-label \{/);
+    assert.match(stylesSource, /\.activity-card \{/);
+    assert.match(stylesSource, /\.activity-chip \{/);
+    assert.match(stylesSource, /html\[data-theme="dark"\] body/);
+    assert.match(stylesSource, /\.tool-icon \{/);
+    assert.match(stylesSource, /\.tool-line\.error/);
+    assert.match(stylesSource, /\.tool-group \{/);
     assert.match(
       stylesSource,
-      /\.landing-brand \.pixel-mark i:nth-child\(9\) \{ top: 27px; \}/,
+      /\.landing-brand \.pixel-mark i:nth-child\(9\) \{ top: 22px; left: 44px; \}/,
     );
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);

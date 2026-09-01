@@ -52,12 +52,17 @@ export interface WebLiveMessage {
   toolName?: string;
   content: string;
   parts?: WebMessagePart[];
+  toolCallId?: string;
+  isError?: boolean;
+  customType?: string;
+  display?: boolean;
+  details?: unknown;
 }
 
 type WebMessagePart =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "toolCall"; name: string; arguments: string };
+  | { type: "toolCall"; id?: string; name: string; arguments: string };
 
 export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
@@ -78,6 +83,20 @@ export function boundedText(value: string): string {
   return value.length > WEB_MAX_TEXT
     ? `${value.slice(0, WEB_MAX_TEXT)}\n[truncated]`
     : value;
+}
+
+const WEB_MAX_DETAILS_BYTES = 24 * 1024;
+
+/** Keep structured tool details only when they serialize small and clean. */
+export function boundedDetails(value: unknown): unknown {
+  if (value === undefined || value === null) return undefined;
+  try {
+    const serialized = JSON.stringify(value);
+    if (serialized.length > WEB_MAX_DETAILS_BYTES) return undefined;
+    return JSON.parse(serialized);
+  } catch {
+    return undefined;
+  }
 }
 
 function messageText(message: Record<string, unknown>): string {
@@ -122,6 +141,7 @@ function messageParts(message: Record<string, unknown>): WebMessagePart[] {
       }
       parts.push({
         type: "toolCall",
+        ...(typeof typed.id === "string" ? { id: typed.id } : {}),
         name: typeof typed.name === "string" ? typed.name : "tool",
         arguments: boundedText(argumentsText),
       });
@@ -136,11 +156,17 @@ export function projectMessage(message: unknown): WebLiveMessage {
       ? (message as Record<string, unknown>)
       : {};
   const parts = messageParts(value);
+  const details = boundedDetails(value.details);
   return {
     role: typeof value.role === "string" ? value.role : undefined,
     toolName: typeof value.toolName === "string" ? value.toolName : undefined,
     content: messageText(value),
     ...(parts.length > 0 ? { parts } : {}),
+    ...(typeof value.toolCallId === "string" ? { toolCallId: value.toolCallId } : {}),
+    ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
+    ...(typeof value.customType === "string" ? { customType: value.customType } : {}),
+    ...(typeof value.display === "boolean" ? { display: value.display } : {}),
+    ...(details !== undefined ? { details } : {}),
   };
 }
 
