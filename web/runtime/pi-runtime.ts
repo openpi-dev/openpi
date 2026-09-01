@@ -197,12 +197,14 @@ export class PiWebRuntime implements WebRuntimeController {
     this.inFlightRuntimes.add(agentRuntime);
     await new Promise<void>((resolveAdmission, rejectAdmission) => {
       let admitted = false;
+      let preflightReported = false;
       const operation = session.prompt(content, {
         ...(session.isStreaming
           ? { streamingBehavior: "followUp" as const }
           : {}),
         source: "rpc",
         preflightResult: (accepted) => {
+          preflightReported = true;
           admitted = accepted;
           releaseAdmission();
           if (trace) {
@@ -235,7 +237,11 @@ export class PiWebRuntime implements WebRuntimeController {
               }
             }
           }
-          if (!admitted) resolveAdmission();
+          if (!preflightReported) {
+            rejectAdmission(
+              new Error("Prompt settled without preflight admission evidence"),
+            );
+          }
         },
         (error) => {
           releaseAdmission();
@@ -249,8 +255,9 @@ export class PiWebRuntime implements WebRuntimeController {
             });
             if (promptTrace) this.removePromptTrace(promptTrace);
           }
-          if (!admitted) rejectAdmission(error);
-          else this.emit("prompt_failed", { error: errorText(error) });
+          if (!preflightReported) rejectAdmission(error);
+          else if (admitted)
+            this.emit("prompt_failed", { error: errorText(error) });
         },
       );
     });

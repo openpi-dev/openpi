@@ -121,6 +121,18 @@ test("prompt admission rejects a negative Pi preflight result", async () => {
   );
 });
 
+test("prompt admission fails closed without preflight evidence", async () => {
+  const session: PromptSession = {
+    isStreaming: false,
+    sessionManager: { getSessionId: () => "session-a" },
+    prompt: async () => {},
+  };
+  await assert.rejects(
+    sendPrompt.call(promptHarness(session), "hello", undefined, "session-a"),
+    /without preflight admission evidence/,
+  );
+});
+
 test("a queued prompt fails closed when its requested runtime is replaced", async () => {
   let releaseFirst!: (accepted: boolean) => void;
   let markFirstStarted!: () => void;
