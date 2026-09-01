@@ -240,13 +240,15 @@ export class AgentSessionPage implements Component, Focusable {
     const errorRows = state.errorText ? 1 : 0;
     const bodyHeight = Math.max(1, height - chromeRows);
     const transcriptCapacity = Math.max(1, bodyHeight - errorRows);
-    const transcript = this.renderer.render(state.document, width, this.theme, {
+    // Resolve the row count first so the viewport can settle its anchor, then
+    // render only the rows this frame actually shows.
+    const frame = this.renderer.beginFrame(state.document, width, this.theme, {
       now,
       expanded: this.toolsExpanded,
     });
-    this.rowCount = transcript.length;
+    this.rowCount = frame.rowCount;
     this.viewportSize = transcriptCapacity;
-    this.viewport.reconcile(transcript.length, transcriptCapacity);
+    this.viewport.reconcile(frame.rowCount, transcriptCapacity);
 
     const lines = [
       this.rule(
@@ -267,10 +269,7 @@ export class AgentSessionPage implements Component, Focusable {
         ),
       );
     }
-    const visible = transcript.slice(
-      this.viewport.scrollTop,
-      this.viewport.scrollTop + transcriptCapacity,
-    );
+    const visible = frame.rows(this.viewport.scrollTop, transcriptCapacity);
     if (visible.length === 0) {
       body.push(this.theme.fg("dim", state.emptyText ?? "waiting for output…"));
     } else {
@@ -287,7 +286,7 @@ export class AgentSessionPage implements Component, Focusable {
           ? ""
           : this.theme.fg(
               "dim",
-              `↓ ${this.viewport.linesBelow(transcript.length, transcriptCapacity)}`,
+              `↓ ${this.viewport.linesBelow(frame.rowCount, transcriptCapacity)}`,
             ),
       ),
     );
