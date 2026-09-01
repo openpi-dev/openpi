@@ -16,11 +16,11 @@ import {
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
+import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import type {
   Theme,
   WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
-import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { safeStringify } from "../../../extensions/workflows/serialization.ts";
 
 // runsDir() resolves against getAgentDir(), which reads this env var.
@@ -59,6 +59,20 @@ function writeRun(
       phases: [],
     }),
   );
+}
+
+function retainedRun(runId: string, startedAt: number): WorkflowDetails {
+  return {
+    runId,
+    sessionId: SESSION,
+    name: runId,
+    background: false,
+    status: "completed",
+    startedAt,
+    finishedAt: startedAt + 1_000,
+    agents: [],
+    phases: [],
+  };
 }
 
 test("persisted nonterminal invocation facts are projected as uncertain", () => {
@@ -352,6 +366,44 @@ test("the dashboard reports the current request, not the session's history", () 
   );
 });
 
+test("retained projections keep a settled run visible when disk state is unreadable", () => {
+  const runId = "wf_fa11bac";
+  const details = retainedRun(runId, 6_000);
+  writeRun(runId, details.startedAt, details.finishedAt);
+  writeFileSync(join(agentDir, "workflows", runId, "workflow.json"), "{");
+
+  const entry = loadRunEntries(
+    new Map(),
+    SESSION,
+    new Set(),
+    0,
+    new Map([[runId, details]]),
+  ).find((candidate) => candidate.runId === runId);
+
+  assert.ok(entry);
+  assert.equal(entry.live, false);
+  assert.equal(entry.details, details);
+});
+
+test("retained projections without session metadata keep current-session runs visible", () => {
+  const runId = "wf_retained_minimal";
+  const details = retainedRun(runId, 7_000);
+  delete details.sessionId;
+  writeRun(runId, details.startedAt, details.finishedAt);
+  writeFileSync(join(agentDir, "workflows", runId, "workflow.json"), "{");
+
+  const entry = loadRunEntries(
+    new Map(),
+    SESSION,
+    new Set(),
+    0,
+    new Map([[runId, details]]),
+  ).find((candidate) => candidate.runId === runId);
+
+  assert.ok(entry);
+  assert.equal(entry.live, false);
+  assert.equal(entry.details, details);
+});
 test("restored run directories require a generated safe id", () => {
   writeRun("wf_\u001b]52;c;clipboard\u0007", 9_000);
   const runIds = loadRunEntries(new Map(), SESSION, new Set()).map(
@@ -852,7 +904,7 @@ test("narrator lines survive the disk round trip and are re-sanitized", () => {
       phases: [],
       agents: [],
       logs: [
-        { at: 1, text: "round 1: 3 found" },
+        { at: 1, text: "round 1: 3 found", kind: "pipeline-drop" },
         { at: 2, text: "round 2:\u001b[31m red\u001b[0m\nsecond row" },
         { at: 3 },
         "not an entry",
@@ -865,6 +917,7 @@ test("narrator lines survive the disk round trip and are re-sanitized", () => {
   )?.details;
   assert.equal(details?.logs?.length, 2);
   assert.equal(details?.logs?.[0]?.text, "round 1: 3 found");
+  assert.equal(details?.logs?.[0]?.kind, "pipeline-drop");
   assert.ok(
     !/[\u0000-\u001f\u007f-\u009f]/.test(details?.logs?.[1]?.text ?? ""),
   );

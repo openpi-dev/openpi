@@ -3,23 +3,21 @@ export interface WorkflowLaunchPolicyInput {
   background?: boolean;
 }
 
-export interface WorkflowLaunchPolicy {
-  wait: boolean;
-  detached: boolean;
-}
-
-/** Resolve legacy/background and host capability without silently changing semantics. */
-export function resolveWorkflowLaunchPolicy(
+/**
+ * Resolve the caller's launch preference to one positive runtime mode.
+ * `background` remains only as the published inverse compatibility alias.
+ */
+export function resolveWorkflowLaunchMode(
   input: WorkflowLaunchPolicyInput,
   canDeliverLater: boolean,
-): WorkflowLaunchPolicy {
+) {
   if (
     input.wait !== undefined &&
     input.background !== undefined &&
     input.wait === input.background
   ) {
     throw new Error(
-      "wait and background conflict: background is the deprecated inverse of wait",
+      "wait and background conflict: background is the deprecated inverse of wait; remove background and provide only wait",
     );
   }
   const wait =
@@ -30,7 +28,7 @@ export function resolveWorkflowLaunchPolicy(
       "This host cannot deliver a workflow result later; use wait: true",
     );
   }
-  return { wait, detached: !wait };
+  return wait ? "inline" : "detached";
 }
 
 /**

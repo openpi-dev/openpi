@@ -93,6 +93,9 @@ function appendTranscript(snapshot: MutableSnapshot, item: TranscriptItem) {
       snapshot.transcript.length - MAX_TRANSCRIPT_ITEMS,
     );
   }
+  // Monotonic version so UI projections can detect transcript changes by
+  // O(1) comparison instead of scanning the mutable array.
+  snapshot.transcriptVersion++;
 }
 
 // --- Internal state -----------------------------------------------------------
@@ -106,12 +109,16 @@ interface MutableSnapshot {
   prompt: string;
   cwd: string;
   status: SubagentStatus;
+  outcome?: SubagentSnapshot["outcome"];
+  worktreeBranch?: string;
   createdAt: number;
   settledAt?: number;
   errorText?: string;
   meta: SubagentMeta;
   usage: { tokens?: number; contextWindow?: number };
   transcript: TranscriptItem[];
+  /** Bumped on every transcript mutation; UI caches key on this. */
+  transcriptVersion: number;
   liveAssistant?: { text: string; thinking: string };
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
@@ -340,11 +347,13 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       switch (outcome._tag) {
         case "Completed":
           s.status = "done";
+          s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
           break;
         case "Failed":
           s.status = "error";
+          s.outcome = "failed";
           s.errorText = bounded(outcome.errorText);
           // Never let a failed run report the previous run's successful output.
           s.finalText = (outcome.partialText ?? "").slice(
@@ -354,6 +363,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           break;
         case "Interrupted":
           s.status = "error";
+          s.outcome = "interrupted";
           s.errorText = "Run was aborted";
           s.finalText = (outcome.partialText ?? "").slice(
             0,
@@ -420,6 +430,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         case "RunStarted":
           entry.restarting = false;
           s.status = "running";
+          s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
           armWatchdog(entry);
@@ -581,10 +592,14 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
               prompt: task.prompt,
               cwd: task.cwd,
               status: "running",
+              ...(task.worktree
+                ? { worktreeBranch: task.worktree.branch }
+                : {}),
               createdAt: Date.now(),
               meta,
               usage: { contextWindow: meta.contextWindow },
               transcript: [],
+              transcriptVersion: 0,
               liveTools: [],
               queued: [],
               finalText: "",

@@ -86,6 +86,10 @@ OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 
 > `/plan` 是一个运行时安全例外：进入或恢复 Plan Mode 时会为当前 Session 自动加载 `search` 组，让只读调研直接使用结构化 Git 工具。
 > 在交互输入框中，保留词 `Subagent` / `Workflow`，以及已被识别的中文能力请求，会使用 Claude Code 风格的薰衣草紫显示；浅色终端自动使用更深的紫色以维持可读性。变色表示提交后会加载对应能力。因为英文名称本身就是授权词，讨论中写出它们也会开闸；条件句和否定句仍保持普通显示，Suggestion 幽灵文字也要在用户接受进输入框后才参与识别。
 
+Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `read` 读取；用户明确调用时，在输入开头使用 `/skill:code-review 审查这个 PR`（前提是 Pi 已加载该 Skill）。候选补全、正文展开和运行中追加输入均由 Pi 处理。OpenPI 不提供专门的 `$skill` 语法或独立的 Skill 加载通道。
+
+Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
+
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 
@@ -322,11 +326,13 @@ acceptance: {
 
 条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
 
+未设置 `requiredEvidence` 的 criterion 是对 `description` 的自我声明，不是有证据约束的验收门禁；需要 evidence-backed gate 时，必须声明所需证据标签。
+
 ### Worktree Handoff
 
 Workflow 在清理隔离 checkout 前原子保存有界 Handoff Manifest：tracked binary patch、stat、branch/HEAD、untracked/ignored 清单与 cleanup receipt。状态不明就保留现场，不自动 merge、apply 或强删。
 
-设计细节见 [`docs/design/WORKFLOW_INVOCATION_GRAPH.md`](docs/design/WORKFLOW_INVOCATION_GRAPH.md)。
+设计细节见 [Workflow invocation graph](https://github.com/openpi-dev/openpi/blob/main/docs/design/WORKFLOW_INVOCATION_GRAPH.md)。
 
 ---
 
@@ -360,8 +366,8 @@ Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 
 - 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
 - Subagent 与 Workflow 活动时自动出现，空闲时不占空间；
-- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；
-- 折叠内容用 Pi 的 `app.tools.expand` 快捷键临时展开（默认 `Ctrl+O`），展开后直接恢复 Pi 原生参数、输出、错误、diff、耗时与 full-output 证据；
+- Bash、Write/Edit 与 Subagent 结果可独立选择 `full` 或 `compact`，默认均为 `compact`；普通 `read`、`grep`、`find`、`ls` 以及 compact Bash/Write/Edit 默认显示一行语义活动摘要，包含目标、状态与关键规模；Nerd Font 可为读取、终端、编辑、搜索和目录动作显示 Codex 风格线框图标，未安装时动词与全部信息仍保持可读；
+- 折叠内容用 Pi 的 `app.tools.expand` 快捷键临时展开（默认 `Ctrl+O`），展开后直接恢复 Pi 原生参数、输出、错误、diff、耗时与 full-output 证据；进入 Direct Subagent 或 Workflow child 详情页时会继承父会话的当前展开状态，详情页内切换只影响该页，不改变父会话；
 - Git 状态本地刷新；只有显式运行 `/pr` 才查询 GitHub PR。
 
 `fd` 与 `rg` 是结构化模型工具，不拼接 Shell。它们默认遵守 `.gitignore`，支持 Glob、类型、Smart Case、固定字符串与上下文。`git_show`、`git_diff`、`git_log` 以结构化参数提供只读提交、差异和历史检查，并禁用仓库配置的 external diff/textconv。两类工具的输出均限制为 50 KiB / 2000 行，完整截断内容最多私有保存 10 MiB，并在 Session Shutdown 时清理。
@@ -402,6 +408,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
@@ -428,7 +436,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
-| Subagent / Bash / Write/Edit | `full` / `compact` / `compact`                 |
+| Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
 | 主题                         | 保留用户现有选择                               |
@@ -647,7 +655,7 @@ bun run test
 
 npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm Registry 安装 OpenPI。
 
-测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [`docs/design/`](docs/design/)，问题请提交到 [GitHub Issues](https://github.com/openpi-dev/openpi/issues)。
+测试覆盖进程树终止与竞态、Subagent 生命周期与工具边界、Workflow Sandbox / Ledger / Graph / Replay / Acceptance、Worktree 数据保全、Session 状态恢复、配置迁移和 TUI 渲染。设计记录见 [docs/design/](https://github.com/openpi-dev/openpi/tree/main/docs/design/)，问题请提交到 [GitHub Issues](https://github.com/openpi-dev/openpi/issues)。
 
 ---
 

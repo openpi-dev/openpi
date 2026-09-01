@@ -31,6 +31,7 @@ export const REASONING_EFFORTS = [
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 
 export type SubagentStatus = "running" | "done" | "error";
+export type SubagentOutcome = "completed" | "failed" | "interrupted";
 
 /** Parent-session context resolved by the tool layer and passed opaquely. */
 export interface ParentContext {
@@ -215,12 +216,16 @@ export interface SubagentSnapshot {
   readonly prompt: string;
   readonly cwd: string;
   readonly status: SubagentStatus;
+  readonly outcome?: SubagentOutcome;
+  readonly worktreeBranch?: string;
   readonly createdAt: number;
   readonly settledAt?: number;
   readonly errorText?: string;
   readonly meta: SubagentMeta;
   readonly usage: { readonly tokens?: number; readonly contextWindow?: number };
   readonly transcript: ReadonlyArray<TranscriptItem>;
+  /** Monotonic version bumped on every transcript mutation (see manager). */
+  readonly transcriptVersion: number;
   /** Streaming assistant buffers, cleared when the finalized message lands. */
   readonly liveAssistant?: { readonly text: string; readonly thinking: string };
   readonly liveTools: ReadonlyArray<LiveToolState>;

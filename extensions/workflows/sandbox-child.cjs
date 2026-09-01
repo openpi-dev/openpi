@@ -164,7 +164,17 @@ const BOOTSTRAP = String.raw`
         }
         return value;
       } catch (error) {
-        log("pipeline: item " + index + " dropped — " + ((error && error.message) || String(error)));
+        callHost(
+          "log",
+          JSON.stringify({
+            text:
+              "pipeline: item " +
+              index +
+              " dropped — " +
+              ((error && error.message) || String(error)),
+            kind: "pipeline-drop",
+          }),
+        );
         return null;
       }
     });

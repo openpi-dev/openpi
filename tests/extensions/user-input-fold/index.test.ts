@@ -158,6 +158,21 @@ test("CRLF messages fold without losing their line endings", () => {
   );
 });
 
+test("LF and CRLF fenced messages fold with the same semantics", () => {
+  const lf = [
+    "intro",
+    "```js",
+    ...Array.from({ length: 30 }, (_, i) => `console.log(${i});`),
+    "```",
+    "outro",
+  ].join("\n");
+  const crlf = lf.replaceAll("\n", "\r\n");
+  const normalizeNewlines = (text: string) => text.replaceAll("\r\n", "\n");
+
+  assert.equal(normalizeNewlines(foldUserMessage(crlf)), foldUserMessage(lf));
+  assert.ok(foldUserMessage(crlf).includes("```\r\n"));
+});
+
 test("trailing newlines neither fold short messages nor pad the count", () => {
   assert.equal(foldUserMessage("hello\n"), "hello\n");
   assert.equal(foldUserMessage("hello\n\n"), "hello\n\n");

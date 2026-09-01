@@ -41,6 +41,7 @@ function snapshot(overrides: Partial<SubagentSnapshot> = {}): SubagentSnapshot {
     createdAt: 0,
     meta: { backend: "pi" },
     usage: {},
+    transcriptVersion: 0,
     transcript: [],
     liveTools: [],
     queued: [],

@@ -81,8 +81,14 @@ export function parseCronCommand(raw: string): ParsedCronCommand {
       error: `Minimum interval is ${MIN_INTERVAL_MS / 1000}s (the scheduler polls about that often).`,
     };
   }
-  const prompt = schedule[3].trim().slice(0, CRON_PROMPT_MAX_CHARS);
+  const prompt = schedule[3].trim();
   if (!prompt) return { action: "help", error: "Provide a prompt to run." };
+  if (prompt.length > CRON_PROMPT_MAX_CHARS) {
+    return {
+      action: "help",
+      error: `Prompt is too long. Maximum is ${CRON_PROMPT_MAX_CHARS} characters.`,
+    };
+  }
   return {
     action: "add",
     intervalMs,

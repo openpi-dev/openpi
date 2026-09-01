@@ -13,6 +13,11 @@ import {
   type SessionShutdownEvent,
   SettingsManager,
 } from "@earendil-works/pi-coding-agent";
+import {
+  OPENPI_OWNER_SOURCE_PATHS,
+  OPENPI_TOOL_SURFACE,
+  type OpenPiToolOwner,
+} from "./tool-surface.ts";
 
 export const CHILD_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -471,6 +476,42 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "context_pivot",
 ] as const;
 
+const PARENT_ONLY_OPENPI_EXTENSION_PATHS = new Set(
+  (Object.keys(OPENPI_TOOL_SURFACE) as OpenPiToolOwner[])
+    .filter((owner) => {
+      const { entry, deferred } = OPENPI_TOOL_SURFACE[owner];
+      const toolNames = [...entry, ...deferred];
+      return (
+        toolNames.length > 0 &&
+        toolNames.every((name) =>
+          CHILD_EXCLUDED_TOOL_NAMES.includes(name as never),
+        )
+      );
+    })
+    .map((owner) => canonicalExistingPath(OPENPI_OWNER_SOURCE_PATHS[owner]))
+    .filter(
+      (extensionPath): extensionPath is string => extensionPath !== undefined,
+    ),
+);
+
+function isVerifiedParentOnlyOpenPiExtension(extension: {
+  path: string;
+  resolvedPath: string;
+  sourceInfo: { path: string };
+}) {
+  return [
+    extension.path,
+    extension.resolvedPath,
+    extension.sourceInfo.path,
+  ].some((candidate) => {
+    const canonicalPath = canonicalExistingPath(candidate);
+    return (
+      canonicalPath !== undefined &&
+      PARENT_ONLY_OPENPI_EXTENSION_PATHS.has(canonicalPath)
+    );
+  });
+}
+
 /**
  * Fresh SDK options avoid turning the denylist into an accidental allowlist.
  *
@@ -517,7 +558,15 @@ export async function createChildResources(options: ChildResourceOptions) {
     cwd: options.cwd,
     agentDir,
     settingsManager,
-    extensionsOverride: excludeOpenPiGitInfoExtension,
+    extensionsOverride(base) {
+      const withoutGitInfo = excludeOpenPiGitInfoExtension(base);
+      return {
+        ...withoutGitInfo,
+        extensions: withoutGitInfo.extensions.filter(
+          (extension) => !isVerifiedParentOnlyOpenPiExtension(extension),
+        ),
+      };
+    },
     ...(options.appendSystemPrompt
       ? { appendSystemPrompt: options.appendSystemPrompt }
       : {}),

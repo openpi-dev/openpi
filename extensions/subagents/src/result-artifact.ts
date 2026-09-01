@@ -20,6 +20,7 @@ export interface ResultProjection {
   readonly text: string;
   readonly truncated: boolean;
   readonly artifactPath?: string;
+  readonly artifactSaveFailed?: boolean;
 }
 
 function sliceStartToUtf8Bytes(content: string, maxBytes: number) {
@@ -96,11 +97,13 @@ export function projectResult(
   const tailLines = Math.max(1, options.maxLines - headLines);
 
   let artifactPath: string | undefined;
+  let artifactSaveFailed = false;
   try {
     artifactPath = options.writeArtifact(content);
   } catch {
     // Delivery is more important than the optional recovery cache. The footer
     // below stays explicit so a failed write never advertises a false path.
+    artifactSaveFailed = true;
   }
 
   let bodyBudget = options.maxBytes;
@@ -138,5 +141,6 @@ export function projectResult(
     text,
     truncated: true,
     ...(artifactPath ? { artifactPath } : {}),
+    ...(artifactSaveFailed ? { artifactSaveFailed: true } : {}),
   };
 }
