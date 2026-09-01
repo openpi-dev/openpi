@@ -968,13 +968,17 @@ export class WorkflowDashboard {
 
   private refresh() {
     const selected = this.entries[this.listIndex]?.runId;
+    const pinnedRunId =
+      this.view === "list"
+        ? this.initialRunId
+        : (this.current?.runId ?? this.initialRunId);
     const projection = loadRunEntryProjection(
       this.getActive(),
       this.sessionId,
       this.referencedRunIds,
       this.startedSince,
       this.getRetained(),
-      { initialRunId: this.initialRunId },
+      { initialRunId: pinnedRunId },
     );
     this.entries = projection.entries;
     this.omittedRuns = projection.omittedRuns;
@@ -1018,12 +1022,14 @@ export class WorkflowDashboard {
   private enterEntry(entry: RunEntry, directly: boolean) {
     const details = entry.live
       ? entry.details
-      : (readPersistedWorkflowDetails(entry.runId, {
-          hydrateArtifacts: true,
-        }) ?? entry.details);
+      : recoverStaleWorkflowDetails(
+          readPersistedWorkflowDetails(entry.runId, {
+            hydrateArtifacts: true,
+          }) ?? entry.details,
+        );
     this.current = {
       ...entry,
-      details: recoverStaleWorkflowDetails(details),
+      details,
     };
     this.openedDirectly = directly;
     const groups = phaseGroups(this.current.details, true);
