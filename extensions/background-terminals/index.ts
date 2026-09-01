@@ -122,12 +122,19 @@ export default function (pi: ExtensionAPI) {
       .runPromise(TerminalManager)
       .then((manager) => {
         managerForHooks = manager;
+        const sessionId =
+          typeof sessionContext?.sessionManager?.getSessionId === "function"
+            ? sessionContext.sessionManager.getSessionId()
+            : undefined;
         unregisterWebCapability?.();
-        unregisterWebCapability = registerWebCapability({
-          kind: "background-terminals",
-          snapshot: () => manager.view.list(),
-          subscribe: (listener) => manager.view.subscribe(listener),
-        });
+        if (sessionId) {
+          unregisterWebCapability = registerWebCapability({
+            kind: "background-terminals",
+            sessionId,
+            snapshot: () => manager.view.list(),
+            subscribe: (listener) => manager.view.subscribe(listener),
+          });
+        }
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateWidget(manager));

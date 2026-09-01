@@ -536,12 +536,19 @@ export default function (
       .runPromise(SubagentManager)
       .then((manager) => {
         navigationManager = manager;
+        const sessionId =
+          typeof sessionContext?.sessionManager?.getSessionId === "function"
+            ? sessionContext.sessionManager.getSessionId()
+            : undefined;
         unregisterWebCapability?.();
-        unregisterWebCapability = registerWebCapability({
-          kind: "subagents",
-          snapshot: () => manager.view.list(),
-          subscribe: (listener) => manager.view.subscribe(listener),
-        });
+        if (sessionId) {
+          unregisterWebCapability = registerWebCapability({
+            kind: "subagents",
+            sessionId,
+            snapshot: () => manager.view.list(),
+            subscribe: (listener) => manager.view.subscribe(listener),
+          });
+        }
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));

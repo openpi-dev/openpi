@@ -1,6 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { projectMessage } from "../../web/protocol/types.ts";
+import {
+  projectMessage,
+  WEB_MAX_PARTS,
+} from "../../web/protocol/types.ts";
 
 test("message projection does not create phantom text for detail-only messages", () => {
   const projected = projectMessage({
@@ -24,6 +27,17 @@ test("message projection keeps text parts separated without phantom blank lines"
     ],
   });
   assert.equal(projected.content, "visible");
+});
+
+test("message projection caps structured parts", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    content: Array.from({ length: WEB_MAX_PARTS + 20 }, (_, index) => ({
+      type: "text",
+      text: String(index),
+    })),
+  });
+  assert.equal(projected.parts?.length, WEB_MAX_PARTS);
 });
 
 test("message projection keeps tool call ids", () => {

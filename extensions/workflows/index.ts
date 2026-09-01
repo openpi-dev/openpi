@@ -1061,6 +1061,7 @@ export default function workflows(
     unregisterWebCapability?.();
     unregisterWebCapability = registerWebCapability({
       kind: "workflows",
+      sessionId: ctx.sessionManager.getSessionId(),
       snapshot: () => [
         ...activeDetails().values(),
         ...settledRuns

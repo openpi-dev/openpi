@@ -6,11 +6,24 @@ import {
   boundedText,
   projectEntry,
   WEB_MAX_ENTRIES,
+  WEB_MAX_SESSIONS,
   type WebSessionProjection,
   type WebSessionSummary,
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
 import type { WebRuntimeController } from "../runtime/types.ts";
+
+function boundedBranch(manager: SessionManager, limit: number) {
+  const entries = [];
+  let entryId = manager.getLeafId();
+  while (entryId && entries.length < limit) {
+    const entry = manager.getEntry(entryId);
+    if (!entry) break;
+    entries.push(entry);
+    entryId = entry.parentId;
+  }
+  return entries.reverse();
+}
 
 export class PiWebAdapter {
   private readonly runtime: WebRuntimeController;
@@ -233,6 +246,7 @@ export class PiWebAdapter {
     );
     const projected = sessions
       .sort((left, right) => right.modified.getTime() - left.modified.getTime())
+      .slice(0, WEB_MAX_SESSIONS)
       .map((session) => ({
         id: session.id,
         path: session.path,
@@ -248,7 +262,7 @@ export class PiWebAdapter {
     const currentId = this.runtime.sessionManager.getSessionId();
     if (projected.some((session) => session.id === currentId)) return projected;
 
-    const entries = this.runtime.sessionManager.getBranch();
+    const entries = boundedBranch(this.runtime.sessionManager, WEB_MAX_ENTRIES);
     const firstUser = entries
       .map((entry) => projectEntry(entry))
       .find((entry) => entry.message?.role === "user")?.message?.content;
@@ -268,7 +282,7 @@ export class PiWebAdapter {
       ...(this.archivedSessions.has(resolve(this.runtime.sessionManager.getSessionFile() ?? `current:${currentId}`)) ? { archived: true } : {}),
       ...(this.ungroupedSessions.has(resolve(this.runtime.sessionManager.getSessionFile() ?? `current:${currentId}`)) ? { ungrouped: true } : {}),
     });
-    return projected;
+    return projected.slice(0, WEB_MAX_SESSIONS);
   }
 
   async getSnapshot(selectedPath?: string) {
@@ -312,7 +326,9 @@ export class PiWebAdapter {
         status: this.runtime.isIdle()
           ? ("idle" as const)
           : ("running" as const),
-        capabilities: webCapabilitySnapshot(),
+        capabilities: webCapabilitySnapshot(
+          this.runtime.sessionManager.getSessionId(),
+        ),
       },
     };
   }
@@ -342,10 +358,9 @@ export class PiWebAdapter {
       id: summary.id,
       path: summary.path,
       cwd: summary.cwd,
-      entries: manager
-        .getBranch()
-        .slice(-WEB_MAX_ENTRIES)
-        .map((entry) => projectEntry(entry)),
+      entries: boundedBranch(manager, WEB_MAX_ENTRIES).map((entry) =>
+        projectEntry(entry),
+      ),
     };
   }
 }

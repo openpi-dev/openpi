@@ -5,32 +5,39 @@ export type WebCapabilityKind =
 
 export interface WebCapabilityProvider {
   readonly kind: WebCapabilityKind;
+  /** Owning Pi Session; unbound providers must never enter a Web snapshot. */
+  readonly sessionId: string;
   readonly snapshot: () => unknown;
   readonly subscribe?: (listener: () => void) => () => void;
 }
 
-const providers = new Map<WebCapabilityKind, WebCapabilityProvider>();
-const listeners = new Map<() => void, Map<WebCapabilityKind, () => void>>();
+const providers = new Map<string, WebCapabilityProvider>();
+const providerKey = (
+  provider: Pick<WebCapabilityProvider, "kind" | "sessionId">,
+) => `${provider.sessionId}:${provider.kind}`;
+const listeners = new Map<() => void, Map<string, () => void>>();
 
 function connect(provider: WebCapabilityProvider, listener: () => void) {
   const subscriptions = listeners.get(listener);
-  subscriptions?.get(provider.kind)?.();
+  const key = providerKey(provider);
+  subscriptions?.get(key)?.();
   const unsubscribe = provider.subscribe?.(listener);
-  if (unsubscribe) subscriptions?.set(provider.kind, unsubscribe);
+  if (unsubscribe) subscriptions?.set(key, unsubscribe);
 }
 
 export function registerWebCapability(provider: WebCapabilityProvider) {
-  providers.set(provider.kind, provider);
+  const key = providerKey(provider);
+  providers.set(key, provider);
   for (const listener of listeners.keys()) {
     connect(provider, listener);
     listener();
   }
   return () => {
-    if (providers.get(provider.kind) !== provider) return;
-    providers.delete(provider.kind);
+    if (providers.get(key) !== provider) return;
+    providers.delete(key);
     for (const [listener, subscriptions] of listeners) {
-      subscriptions.get(provider.kind)?.();
-      subscriptions.delete(provider.kind);
+      subscriptions.get(key)?.();
+      subscriptions.delete(key);
       listener();
     }
   };
@@ -46,9 +53,11 @@ export function subscribeWebCapabilities(listener: () => void) {
   };
 }
 
-export function webCapabilitySnapshot() {
+export function webCapabilitySnapshot(sessionId: string) {
   return Object.fromEntries(
-    [...providers].map(([kind, provider]) => [kind, provider.snapshot()]),
+    [...providers.values()]
+      .filter((provider) => provider.sessionId === sessionId)
+      .map((provider) => [provider.kind, provider.snapshot()]),
   );
 }
 

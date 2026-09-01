@@ -14,12 +14,13 @@ import type {
 test("serves workspaces through a runtime isolated from terminal sessions", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-host-"));
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-import-"));
-  const unregister = registerWebCapability({
-    kind: "workflows",
-    snapshot: () => [{ runId: "wf-test", status: "running" }],
-  });
   let runtimeCwd = cwd;
   let sessionManager = SessionManager.inMemory(cwd);
+  const unregister = registerWebCapability({
+    kind: "workflows",
+    sessionId: sessionManager.getSessionId(),
+    snapshot: () => [{ runId: "wf-test", status: "running" }],
+  });
   const prompts: string[] = [];
   let newSessions = 0;
   let disposed = false;

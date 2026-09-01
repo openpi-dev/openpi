@@ -4,6 +4,11 @@ export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
 export const WEB_MAX_TEXT = 12_000;
 export const WEB_MAX_ENTRIES = 250;
+export const WEB_MAX_SESSIONS = 200;
+export const WEB_MAX_PARTS = 64;
+export const WEB_MAX_EVENT_BYTES = 64 * 1024;
+export const WEB_MAX_SSE_CLIENTS = 16;
+export const WEB_MAX_SSE_QUEUE_BYTES = 256 * 1024;
 
 export interface WebEvent {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
@@ -103,17 +108,16 @@ function messageText(message: Record<string, unknown>): string {
   const content = message.content;
   if (typeof content === "string") return boundedText(content);
   if (Array.isArray(content)) {
-    return boundedText(
-      content
-        .flatMap((part) => {
-          if (typeof part !== "object" || part === null) return [];
-          const typed = part as { text?: unknown; type?: unknown };
-          return typeof typed.text === "string"
-            ? [typed.text]
-            : [];
-        })
-        .join("\n"),
-    );
+    let text = "";
+    for (const part of content) {
+      if (typeof part !== "object" || part === null) continue;
+      const typed = part as { text?: unknown };
+      if (typeof typed.text !== "string") continue;
+      if (text) text += "\n";
+      text += typed.text;
+      if (text.length >= WEB_MAX_TEXT) break;
+    }
+    return boundedText(text);
   }
   return boundedText(String(message.output ?? message.summary ?? ""));
 }
@@ -122,6 +126,7 @@ function messageParts(message: Record<string, unknown>): WebMessagePart[] {
   if (!Array.isArray(message.content)) return [];
   const parts: WebMessagePart[] = [];
   for (const part of message.content) {
+    if (parts.length >= WEB_MAX_PARTS) break;
     if (typeof part !== "object" || part === null) continue;
     const typed = part as Record<string, unknown>;
     if (typed.type === "text" && typeof typed.text === "string") {
