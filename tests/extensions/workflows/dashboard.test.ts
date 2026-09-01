@@ -280,6 +280,69 @@ test("stale pre-V2 runs gain a stable delivery identity while terminal legacy ru
   assert.equal(terminal.delivery, undefined);
 });
 
+test("opening a live run does not recover or mutate canonical details", () => {
+  const runId = "wf_deadface";
+  const startedAt = Date.now();
+  const details: WorkflowDetails = {
+    runId,
+    sessionId: SESSION,
+    name: "live run",
+    background: true,
+    status: "running",
+    startedAt,
+    phases: [{ title: "work" }],
+    currentPhase: "work",
+    agents: [
+      {
+        index: 1,
+        label: "worker",
+        phase: "work",
+        state: "running",
+        startedAt,
+        preview: "working",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [],
+      },
+    ],
+  };
+  const active = new Map([[runId, details]]);
+  const dashboard = new WorkflowDashboard(
+    { terminal: { rows: 20 }, requestRender() {} } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches: () => false,
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => active,
+    SESSION,
+    new Set(),
+    startedAt,
+    () => {},
+  );
+
+  try {
+    dashboard.handleInput("l");
+    assert.equal(details.status, "running");
+    assert.equal(details.finishedAt, undefined);
+    assert.equal(details.error, undefined);
+    assert.equal(details.delivery, undefined);
+    assert.equal(details.agents[0]?.state, "running");
+    assert.equal(details.agents[0]?.finishedAt, undefined);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
 test("persisted usage is normalized to finite nonnegative numbers", () => {
   const details = normalizePersistedWorkflowDetails("wf_usage", {
     status: "completed",
@@ -686,6 +749,130 @@ test("dashboard exposes omitted history in its list projection", () => {
   } finally {
     dashboard.dispose();
     for (const runId of runIds)
+      rmSync(join(agentDir, "workflows", runId), {
+        recursive: true,
+        force: true,
+      });
+  }
+});
+
+test("the open live detail stays pinned and hydrates after it settles", async () => {
+  const currentRunId = "wf_deadbeef";
+  const startedAt = Date.now() + 70_000;
+  const historyRunIds = Array.from(
+    { length: 32 },
+    (_, index) => `wf_${(index + 1).toString(16).padStart(8, "0")}`,
+  );
+  for (const [index, runId] of historyRunIds.entries())
+    writeRun(runId, startedAt + index + 1);
+
+  const liveDetails: WorkflowDetails = {
+    runId: currentRunId,
+    sessionId: SESSION,
+    name: "live current",
+    background: true,
+    status: "running",
+    startedAt,
+    phases: [{ title: "work" }],
+    currentPhase: "work",
+    agents: [
+      {
+        index: 1,
+        label: "worker",
+        phase: "work",
+        state: "running",
+        startedAt,
+        preview: "live preview",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [{ role: "assistant", text: "live transcript" }],
+      },
+    ],
+  };
+  const active = new Map([[currentRunId, liveDetails]]);
+  const dashboard = new WorkflowDashboard(
+    { terminal: { rows: 30 }, requestRender() {} } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches: () => false,
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => active,
+    SESSION,
+    new Set(),
+    startedAt,
+    () => {},
+  );
+  const currentDir = join(agentDir, "workflows", currentRunId);
+
+  try {
+    dashboard.handleInput("G");
+    dashboard.handleInput("l");
+
+    active.delete(currentRunId);
+    mkdirSync(currentDir, { recursive: true });
+    writeFileSync(
+      join(currentDir, "workflow.json"),
+      JSON.stringify({
+        runId: currentRunId,
+        sessionId: SESSION,
+        name: "live current",
+        status: "completed",
+        startedAt,
+        finishedAt: startedAt + 1_000,
+        phases: [{ title: "work" }],
+        agents: [
+          {
+            index: 1,
+            label: "worker",
+            phase: "work",
+            state: "done",
+            startedAt,
+            finishedAt: startedAt + 900,
+            preview: "settled preview",
+            usage: {
+              input: 0,
+              output: 0,
+              cacheRead: 0,
+              cacheWrite: 0,
+              cost: 0,
+              turns: 1,
+            },
+          },
+        ],
+        transcriptArtifact: "transcripts.json",
+      }),
+    );
+    writeFileSync(
+      join(currentDir, "transcripts.json"),
+      JSON.stringify({
+        1: [{ role: "assistant", text: "hydrated transcript" }],
+      }),
+    );
+
+    // The live dashboard refresh timer observes the settlement. The current
+    // run is older than the 32 newer history entries and would otherwise be
+    // omitted from the bounded projection.
+    await new Promise((resolve) =>
+      setTimeout(resolve, SPINNER_INTERVAL_MS * 2 + 20),
+    );
+    dashboard.handleInput("l");
+    dashboard.handleInput("l");
+    const transcript = dashboard.render(120).join("\n");
+    assert.match(transcript, /hydrated transcript/);
+  } finally {
+    dashboard.dispose();
+    rmSync(currentDir, { recursive: true, force: true });
+    for (const runId of historyRunIds)
       rmSync(join(agentDir, "workflows", runId), {
         recursive: true,
         force: true,
