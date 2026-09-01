@@ -16,7 +16,11 @@ const runs = join(agentDir, "workflows");
 mkdirSync(join(runs, "wf_1a2b3c4d5e6f"), { recursive: true });
 mkdirSync(join(runs, "wf_ffeeddcc5e6f"), { recursive: true });
 mkdirSync(join(runs, "4d5e6f"), { recursive: true });
-mkdirSync(join(runs, "wf_\u001b]52;c;clipboard\u0007bad0"), {
+const invalidRunId =
+  process.platform === "win32"
+    ? "wf_not-generated-bad0"
+    : "wf_\u001b]52;c;clipboard\u0007bad0";
+mkdirSync(join(runs, invalidRunId), {
   recursive: true,
 });
 
