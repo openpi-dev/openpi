@@ -120,8 +120,8 @@ import {
 } from "./invocation-ledger.ts";
 import {
   agentCallKey,
+  createJournalAccumulator,
   createReplayCache,
-  type JournalEntry,
   type ReplayCache,
 } from "./journal.ts";
 import {
@@ -1261,7 +1261,7 @@ export default function workflows(
       // Resume: replay cached results for calls whose content is unchanged.
       // A missing or unreadable source degrades to a normal full run — resume
       // is an optimization and must not become a new way to fail.
-      const journalEntries: JournalEntry[] = [];
+      const journal = createJournalAccumulator();
       let replay: ReplayCache | undefined;
       if (params.resume_from_run_id) {
         const source = resolveRunDir(params.resume_from_run_id);
@@ -1281,7 +1281,7 @@ export default function workflows(
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details, {
-        journal: () => journalEntries,
+        journal: () => journal,
         ...(workflowLifecycleTestHooks?.persistWorkflow
           ? { persist: workflowLifecycleTestHooks.persistWorkflow }
           : {}),
@@ -1846,7 +1846,7 @@ export default function workflows(
           emit();
           // Re-journal so a chain of resumes keeps working: run C resuming from
           // B still finds what B replayed from A.
-          journalEntries.push(cached);
+          journal.append(cached);
           replayLease.end();
           return {
             ok: true,
@@ -2090,7 +2090,7 @@ export default function workflows(
                 !replayBoundaryViolated &&
                 replayLease.canJournal()
               ) {
-                journalEntries.push({
+                journal.append({
                   key: completedKey,
                   output: outcome.output,
                   ...(outcome.structured !== undefined

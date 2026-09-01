@@ -8,11 +8,12 @@ import { test } from "node:test";
 import {
   agentCallKey,
   boundedJournal,
+  createJournalAccumulator,
   createReplayCache,
   JOURNAL_MAX_BYTES,
   JOURNAL_VERSION,
-  parseJournal,
   type JournalEntry,
+  parseJournal,
 } from "../../../extensions/workflows/journal.ts";
 import {
   runWorkflowSandbox,
@@ -194,6 +195,71 @@ test("a bounded journal round-trips back into a working cache", () => {
   assert.ok(reparsed && reparsed.entries.length > 0, "must survive the trip");
   const cache = createReplayCache(reparsed);
   assert.equal(cache.take("k63")?.output, big);
+});
+
+test("an incremental journal accumulator matches canonical JSON and byte accounting", () => {
+  const entries: JournalEntry[] = [
+    {
+      key: "你好",
+      output: "结果🙂",
+      structured: { verdict: "accepted", evidence: ["a", "b"] },
+    },
+    { key: "plain", output: "second" },
+  ];
+  const accumulator = createJournalAccumulator();
+  for (const entry of entries) accumulator.append(entry);
+
+  const expected = JSON.stringify(
+    { version: JOURNAL_VERSION, entries },
+    null,
+    2,
+  );
+  assert.deepEqual(accumulator.toJournal(), {
+    version: JOURNAL_VERSION,
+    entries,
+  });
+  assert.equal(accumulator.toJson(), expected);
+  assert.equal(accumulator.bytes, Buffer.byteLength(expected, "utf8"));
+  assert.equal(accumulator.dropped, 0);
+});
+
+test("an incremental accumulator evicts oldest entries with a cursor", () => {
+  const entries: JournalEntry[] = Array.from({ length: 200 }, (_, index) => ({
+    key: `k${index}`,
+    output: "x".repeat(128),
+  }));
+  const expectedEntries = entries.slice(-8);
+  const maxBytes = Buffer.byteLength(
+    JSON.stringify(
+      { version: JOURNAL_VERSION, entries: expectedEntries },
+      null,
+      2,
+    ),
+    "utf8",
+  );
+  const accumulator = createJournalAccumulator(maxBytes);
+  for (const entry of entries) accumulator.append(entry);
+
+  assert.deepEqual(accumulator.toJournal().entries, expectedEntries);
+  assert.equal(accumulator.dropped, entries.length - expectedEntries.length);
+  assert.equal(
+    accumulator.bytes,
+    Buffer.byteLength(accumulator.toJson(), "utf8"),
+  );
+  assert.ok(accumulator.bytes <= maxBytes);
+});
+
+test("a single oversized entry is dropped without exceeding the budget", () => {
+  const accumulator = createJournalAccumulator(1024);
+  accumulator.append({ key: "too-big", output: "x".repeat(4 * 1024) });
+
+  assert.equal(accumulator.length, 0);
+  assert.equal(accumulator.dropped, 1);
+  assert.equal(
+    accumulator.toJson(),
+    JSON.stringify({ version: JOURNAL_VERSION, entries: [] }, null, 2),
+  );
+  assert.ok(accumulator.bytes <= 1024);
 });
 
 // --- End-to-end through the real sandbox ----------------------------------

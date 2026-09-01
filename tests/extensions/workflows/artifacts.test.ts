@@ -17,7 +17,10 @@ import {
   persistWorkflowJson,
   persistWorkflowTerminalState,
 } from "../../../extensions/workflows/artifacts.ts";
-import { JOURNAL_MAX_BYTES } from "../../../extensions/workflows/journal.ts";
+import {
+  createJournalAccumulator,
+  JOURNAL_MAX_BYTES,
+} from "../../../extensions/workflows/journal.ts";
 import {
   emptyUsage,
   type TranscriptEntry,
@@ -170,6 +173,48 @@ test("oversized replay journals fail closed before parsing", () => {
     );
 
     assert.equal(loadJournal(directory), undefined);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("workflow persistence writes an accumulator's complete canonical journal", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-journal-write-"));
+  try {
+    const details = workflowDetails();
+    const journal = createJournalAccumulator();
+    journal.append({ key: "你好", output: "结果🙂" });
+    journal.append({ key: "second", output: "complete" });
+
+    persistWorkflowJson(directory, details, journal);
+
+    const written = readFileSync(join(directory, "journal.json"), "utf8");
+    assert.equal(written, journal.toJson());
+    assert.deepEqual(JSON.parse(written), {
+      version: 2,
+      entries: [
+        { key: "你好", output: "结果🙂" },
+        { key: "second", output: "complete" },
+      ],
+    });
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("workflow persistence keeps an empty journal artifact after all entries are evicted", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-empty-journal-"));
+  try {
+    const details = workflowDetails();
+    const journal = createJournalAccumulator(1024);
+    journal.append({ key: "too-big", output: "x".repeat(4 * 1024) });
+
+    persistWorkflowJson(directory, details, journal);
+
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(directory, "journal.json"), "utf8")),
+      { version: 2, entries: [] },
+    );
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }

@@ -85,6 +85,7 @@
     "format:check": "biome format .",
     "lint": "biome lint . --error-on-warnings",
     "typecheck": "tsc --noEmit",
+    "benchmark:workflow-journal": "node --experimental-strip-types --expose-gc benchmarks/workflow-journal.ts",
     "benchmark:workflow-child-startup": "node --experimental-strip-types scripts/benchmark-workflow-child-startup.mjs",
     "test": "node scripts/run-tests.mjs",
     "provenance": "node scripts/provenance.mjs"
