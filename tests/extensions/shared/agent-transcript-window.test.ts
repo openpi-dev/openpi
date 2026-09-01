@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { stripVTControlCharacters } from "node:util";
 
@@ -335,6 +336,12 @@ test("cwd participates in the cache key", () => {
   // Absolute paths are relativized against cwd, so the same item renders
   // differently per child. A key without cwd would serve one child's row to
   // another. Reuse ONE renderer so a stale key would surface.
+  //
+  // Built with path.resolve so these are absolute on the host platform:
+  // a hardcoded "D:/..." is absolute on Windows but not on Linux, where
+  // relativization would then never happen and the test would pass vacuously.
+  const childCwd = resolve("child-cwd");
+  const otherCwd = resolve("other-cwd");
   const items = [
     {
       kind: "assistant" as const,
@@ -343,19 +350,21 @@ test("cwd participates in the cache key", () => {
           type: "toolCall",
           toolId: "c1",
           name: "read",
-          argsPreview: JSON.stringify({ path: "D:/works/openpi/deep/file.ts" }),
+          argsPreview: JSON.stringify({
+            path: join(childCwd, "deep", "file.ts"),
+          }),
         } as never,
       ],
     },
   ];
   const renderer = new AgentTranscriptRenderer();
-  const inRepo = frame({ items, cwd: "D:/works/openpi" }, renderer);
+  const inRepo = frame({ items, cwd: childCwd }, renderer);
   const inRepoRows = plain(inRepo.rows(0, inRepo.rowCount)).join("\n");
-  const outside = frame({ items, cwd: "C:/other" }, renderer);
+  const outside = frame({ items, cwd: otherCwd }, renderer);
   const outsideRows = plain(outside.rows(0, outside.rowCount)).join("\n");
 
   assert.notEqual(inRepoRows, outsideRows, "cwd must change the rendered path");
-  const cold = frame({ items, cwd: "C:/other" });
+  const cold = frame({ items, cwd: otherCwd });
   assert.equal(
     outsideRows,
     plain(cold.rows(0, cold.rowCount)).join("\n"),
