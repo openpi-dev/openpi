@@ -14,6 +14,7 @@ export interface WebRuntimeController {
   sendPrompt(
     content: string,
     trace?: { commandId: string; sessionId: string },
+    expectedSessionId?: string,
   ): Promise<void>;
   newSession(workspacePath: string): Promise<{ cancelled: boolean }>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;

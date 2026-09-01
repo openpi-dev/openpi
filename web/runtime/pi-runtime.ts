@@ -142,17 +142,38 @@ export class PiWebRuntime implements WebRuntimeController {
   async sendPrompt(
     content: string,
     trace?: { commandId: string; sessionId: string },
+    expectedSessionId?: string,
   ) {
     this.assertActive();
+    const requestedRuntime = this.runtime;
+    const requestedSession = requestedRuntime.session;
+    const requestedSessionId = requestedSession.sessionManager.getSessionId();
+    if (
+      expectedSessionId !== undefined &&
+      expectedSessionId !== requestedSessionId
+    ) {
+      throw new Error("Web session is no longer active");
+    }
     const previousAdmission = this.promptAdmission;
     let releaseAdmission: () => void = () => undefined;
     this.promptAdmission = new Promise<void>((resolveAdmission) => {
       releaseAdmission = resolveAdmission;
     });
     await previousAdmission.catch(() => undefined);
-    this.assertActive();
-    const agentRuntime = this.runtime;
-    const session = this.runtime.session;
+    try {
+      this.assertActive();
+      if (
+        this.runtime !== requestedRuntime ||
+        requestedSession.sessionManager.getSessionId() !== requestedSessionId
+      ) {
+        throw new Error("Web session changed before prompt admission");
+      }
+    } catch (error) {
+      releaseAdmission();
+      throw error;
+    }
+    const agentRuntime = requestedRuntime;
+    const session = requestedSession;
     const startedAt = performance.now();
     const queued = session.isStreaming;
     const promptTrace: PromptTrace | undefined = trace
@@ -182,7 +203,7 @@ export class PiWebRuntime implements WebRuntimeController {
           : {}),
         source: "rpc",
         preflightResult: (accepted) => {
-          admitted = true;
+          admitted = accepted;
           releaseAdmission();
           if (trace) {
             traceWeb(accepted ? "prompt_preflight_accepted" : "prompt_preflight_rejected", {
