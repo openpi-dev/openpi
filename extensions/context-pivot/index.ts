@@ -3,11 +3,6 @@ import type {
   ExtensionContext,
   SessionEntry,
 } from "@earendil-works/pi-coding-agent";
-import {
-  DEFAULT_COMPACTION_SETTINGS,
-  findCutPoint,
-  sessionEntryToContextMessages,
-} from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import {
   OPENPI_TOOL_SURFACE,
@@ -53,57 +48,6 @@ export function estimateContextTokens(
   return (usage.contextWindow * usage.percent) / 100;
 }
 
-/**
- * Mirror Pi's native compaction eligibility check without starting a
- * summarization request. Pi exposes the cut-point calculation but not the
- * complete preparation helper at runtime, so keep this small adapter aligned
- * with the native boundary rules and retain the native error callback as the
- * final race-safe guard.
- */
-export function hasDiscardableHistory(
-  entries: readonly SessionEntry[] | null | undefined,
-) {
-  if (!entries || entries.length === 0) return false;
-  try {
-    const branch = [...entries];
-    if (branch.at(-1)?.type === "compaction") return false;
-
-    let boundaryStart = 0;
-    for (let index = branch.length - 1; index >= 0; index -= 1) {
-      const entry = branch[index];
-      if (entry.type !== "compaction") continue;
-      const firstKeptEntryIndex = branch.findIndex(
-        (candidate) => candidate.id === entry.firstKeptEntryId,
-      );
-      boundaryStart =
-        firstKeptEntryIndex >= 0 ? firstKeptEntryIndex : index + 1;
-      break;
-    }
-
-    const cutPoint = findCutPoint(
-      branch,
-      boundaryStart,
-      branch.length,
-      DEFAULT_COMPACTION_SETTINGS.keepRecentTokens,
-    );
-    if (!branch[cutPoint.firstKeptEntryIndex]?.id) return false;
-    const historyEnd = cutPoint.isSplitTurn
-      ? cutPoint.turnStartIndex
-      : cutPoint.firstKeptEntryIndex;
-    const hasHistory = branch
-      .slice(boundaryStart, historyEnd)
-      .some((entry) => sessionEntryToContextMessages(entry).length > 0);
-    const hasTurnPrefix = cutPoint.isSplitTurn
-      ? branch
-          .slice(cutPoint.turnStartIndex, cutPoint.firstKeptEntryIndex)
-          .some((entry) => sessionEntryToContextMessages(entry).length > 0)
-      : false;
-    return hasHistory || hasTurnPrefix;
-  } catch {
-    return false;
-  }
-}
-
 export function buildPivotSummary(brief: string): string {
   return [
     "## Context Pivot — Continue in a Clean Context",
@@ -142,9 +86,6 @@ function validateBrief(brief: string, ctx: ExtensionContext) {
       `Context is only ${Math.round(tokens).toLocaleString()} tokens; use context_pivot once context reaches at least ${MIN_CONTEXT_PIVOT_TOKENS.toLocaleString()} tokens, or use /sessions to browse or switch an existing session; start a new Session in Pi when a clean session is needed.`,
     );
   }
-  if (!hasDiscardableHistory(ctx.sessionManager.getBranch())) {
-    throw new Error(NO_DISCARDABLE_HISTORY_MESSAGE);
-  }
 }
 
 export default function contextPivot(pi: ExtensionAPI) {
@@ -153,11 +94,8 @@ export default function contextPivot(pi: ExtensionAPI) {
   let compacting = false;
   const setVisibleForContext = (ctx?: ExtensionContext) => {
     const tokens = ctx ? estimateContextTokens(ctx.getContextUsage()) : null;
-    const canCompact = ctx
-      ? hasDiscardableHistory(ctx.sessionManager.getBranch())
-      : false;
     patchOwnedTools(pi, "context", {
-      ...(tokens !== null && tokens >= MIN_CONTEXT_PIVOT_TOKENS && canCompact
+      ...(tokens !== null && tokens >= MIN_CONTEXT_PIVOT_TOKENS
         ? { enable: OPENPI_TOOL_SURFACE.context.deferred }
         : { disable: OPENPI_TOOL_SURFACE.context.deferred }),
     });
@@ -291,15 +229,6 @@ export default function contextPivot(pi: ExtensionAPI) {
               : `Context is only ${Math.round(tokens).toLocaleString()} tokens; a pivot is not useful yet.`,
             "warning",
           );
-        }
-        return;
-      }
-      if (!hasDiscardableHistory(ctx.sessionManager.getBranch())) {
-        const message = NO_DISCARDABLE_HISTORY_MESSAGE;
-        if (ctx.hasUI) {
-          ctx.ui.notify(message, "warning");
-        } else {
-          console.error(message);
         }
         return;
       }
