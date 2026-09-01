@@ -244,7 +244,11 @@ const SNAPSHOT = {
 };
 
 async function renderApp(
-  options: { eventRecords?: string[]; snapshot?: typeof SNAPSHOT } = {},
+  options: {
+    eventRecords?: string[];
+    snapshot?: typeof SNAPSHOT;
+    storageValues?: Record<string, string>;
+  } = {},
 ) {
   const elements = new Map<string, ElementStub>();
   const shell = makeElement("shell");
@@ -261,7 +265,7 @@ async function renderApp(
     documentElement: makeElement("html"),
     body: makeElement("body"),
   };
-  const stored = new Map<string, string>();
+  const stored = new Map(Object.entries(options.storageValues ?? {}));
   const storage = {
     getItem: (key: string) => stored.get(key) ?? null,
     setItem: (key: string, value: string) => stored.set(key, value),
@@ -883,4 +887,15 @@ test("app.js renders the landing state for an empty selection", async () => {
   const conversation = elements.get("conversation");
   assert.ok(conversation);
   assert.ok(conversation.innerHTML.length > 0);
+});
+
+test("snapshot archive state remains authoritative over legacy browser storage", async () => {
+  const { elements } = await renderApp({
+    storageValues: {
+      "openpi.archived-sessions": JSON.stringify(["/tmp/s1.jsonl"]),
+    },
+  });
+  const workspaces = elements.get("workspaces");
+  assert.ok(workspaces);
+  assert.match(workspaces.innerHTML, /demo/);
 });
