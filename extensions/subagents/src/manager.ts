@@ -178,10 +178,12 @@ export interface SubagentReadModel {
    */
   getResult?(
     id: string,
-  ): Pick<
-    SubagentSnapshot,
-    "finalText" | "finalTextTruncated" | "resultArtifact"
-  > | undefined;
+  ):
+    | Pick<
+        SubagentSnapshot,
+        "finalText" | "finalTextTruncated" | "resultArtifact"
+      >
+    | undefined;
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
   /** Any-change notification (footer status, dashboard). */
@@ -521,7 +523,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText;
-          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
@@ -532,7 +536,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.errorText = bounded(outcome.errorText);
           // Never let a failed run report the previous run's successful output.
           s.finalText = outcome.partialText ?? "";
-          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
@@ -542,7 +548,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
           s.finalText = outcome.partialText ?? "";
-          s.finalTextTruncated = Buffer.byteLength(s.finalText, "utf8") > MAX_RETAINED_FINAL_TEXT_BYTES;
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
           persistExactResult(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;

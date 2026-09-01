@@ -32,12 +32,10 @@ export function truncateUtf8Head(value: string, maxBytes: number) {
   const bytes = Buffer.from(value, "utf8");
   if (bytes.length <= maxBytes) return value;
   let end = maxBytes;
-  while (end > 0) {
-    const candidate = bytes.subarray(0, end).toString("utf8");
-    if (byteLength(candidate) === end) return candidate;
+  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
     end--;
   }
-  return "";
+  return bytes.subarray(0, end).toString("utf8");
 }
 
 /** Return a valid UTF-8 suffix without splitting a code point. */
@@ -46,12 +44,10 @@ export function truncateUtf8Tail(value: string, maxBytes: number) {
   const bytes = Buffer.from(value, "utf8");
   if (bytes.length <= maxBytes) return value;
   let start = bytes.length - maxBytes;
-  while (start < bytes.length) {
-    const candidate = bytes.subarray(start).toString("utf8");
-    if (byteLength(candidate) === bytes.length - start) return candidate;
+  while (start < bytes.length && (bytes[start] & 0xc0) === 0x80) {
     start++;
   }
-  return "";
+  return bytes.subarray(start).toString("utf8");
 }
 
 /** Trim by serialized UTF-8 bytes while retaining both ends of long text. */

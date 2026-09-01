@@ -57,13 +57,7 @@ const RESULT_CACHE_OWNER_NAME =
 const RESULT_CACHE_RECOVERY_NAME =
   /^\.retention-lock\.recovery\.[0-9a-f-]{36}$/iu;
 const RESULT_ARTIFACT_TEMP_NAME = /^\.[a-f0-9]{64}\.[0-9a-f-]{36}\.tmp$/u;
-const SUPPORTED_DESCRIPTOR_PLATFORMS = new Set([
-  "linux",
-  "darwin",
-  "freebsd",
-  "openbsd",
-  "netbsd",
-]);
+const SUPPORTED_DESCRIPTOR_PLATFORMS = new Set(["linux"]);
 const UNSUPPORTED_CACHE_PLATFORM_ERROR =
   "Result artifact cache is unavailable because Node cannot provide safe handle-relative no-follow operations";
 
@@ -247,14 +241,6 @@ function assertCachePlatformSupported() {
 
 function descriptorRelativePath(fd: number, fallback: string) {
   if (process.platform === "linux") return `/proc/self/fd/${fd}`;
-  if (
-    process.platform === "darwin" ||
-    process.platform === "freebsd" ||
-    process.platform === "openbsd" ||
-    process.platform === "netbsd"
-  ) {
-    return `/dev/fd/${fd}`;
-  }
   return fallback;
 }
 
@@ -1016,12 +1002,10 @@ export interface ResultPage {
   readonly totalLines: number;
   readonly hasMore: boolean;
   readonly truncated: boolean;
+  readonly byteOffset?: number;
+  readonly nextByteOffset?: number;
 }
 
-/**
- * Page an already-resolved exact result by 0-based line offset. This never
- * accepts a filesystem path; callers must supply canonical or artifact text.
- */
 /**
  * Resolve the exact settled text for model-facing paging. Artifact bytes win;
  * retained canonical finalText is next. A truncated projection is never used.
@@ -1043,29 +1027,122 @@ export function resolveExactResultText(options: {
   return undefined;
 }
 
+function utf8PageEnd(bytes: Buffer, start: number, budget: number) {
+  let end = Math.min(bytes.length, start + budget);
+  while (end > start && end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
+    end--;
+  }
+  return end;
+}
+
+function boundedBytePage(bytes: Buffer, start: number, maxBytes: number) {
+  let end = utf8PageEnd(bytes, start, maxBytes);
+  if (end === start) {
+    throw new Error(
+      "maxBytes is too small to return the next complete UTF-8 code point.",
+    );
+  }
+
+  const noticeFor = (next: number) => `\n[page truncated; next ${next}]`;
+  const notice = noticeFor(end);
+  const contentBudget = maxBytes - byteLength(notice);
+  if (contentBudget > 0) {
+    const noticedEnd = utf8PageEnd(bytes, start, contentBudget);
+    if (noticedEnd > start) {
+      end = noticedEnd;
+      return {
+        text: `${bytes.subarray(start, end).toString("utf8")}${noticeFor(end)}`,
+        end,
+      };
+    }
+  }
+
+  // Tiny budgets may not fit a notice. The structured nextByteOffset remains
+  // authoritative, while the text still makes forward progress.
+  return { text: bytes.subarray(start, end).toString("utf8"), end };
+}
+
+/**
+ * Page exact result text either by line offset or by an absolute UTF-8 byte
+ * cursor. The byte cursor is used to continue a line split by the byte cap.
+ */
 export function pageResultText(
   content: string,
   options: {
     readonly offset?: number;
     readonly limit?: number;
+    readonly byteOffset?: number;
     readonly maxBytes?: number;
   } = {},
 ): ResultPage {
-  const offset =
-    Number.isSafeInteger(options.offset) && (options.offset as number) >= 0
-      ? Math.floor(options.offset as number)
-      : 0;
+  if (options.offset !== undefined && options.byteOffset !== undefined) {
+    throw new Error("Specify either offset or byteOffset, not both.");
+  }
+
+  const maxBytes =
+    Number.isSafeInteger(options.maxBytes) && (options.maxBytes as number) >= 0
+      ? Math.min(MAX_RESULT_PAGE_BYTES, options.maxBytes as number)
+      : MAX_RESULT_PAGE_BYTES;
   const requested =
     Number.isSafeInteger(options.limit) && (options.limit as number) >= 1
       ? Math.floor(options.limit as number)
       : MAX_RESULT_PAGE_LINES;
   const limit = Math.min(MAX_RESULT_PAGE_LINES, requested);
-  const maxBytes =
-    Number.isSafeInteger(options.maxBytes) && (options.maxBytes as number) >= 0
-      ? Math.floor(options.maxBytes as number)
-      : MAX_RESULT_PAGE_BYTES;
   const lines = content.split("\n");
   const totalLines = lines.length;
+  const bytes = Buffer.from(content, "utf8");
+
+  if (options.byteOffset !== undefined) {
+    const cursor = options.byteOffset;
+    if (!Number.isSafeInteger(cursor) || cursor < 0 || cursor > bytes.length) {
+      throw new Error(
+        "byteOffset must be a non-negative safe integer within the result.",
+      );
+    }
+    if (cursor < bytes.length && (bytes[cursor] & 0xc0) === 0x80) {
+      throw new Error("byteOffset must be at a UTF-8 code-point boundary.");
+    }
+    if (cursor === bytes.length) {
+      return {
+        text: "",
+        offset: 0,
+        limit,
+        totalLines,
+        hasMore: false,
+        truncated: false,
+        byteOffset: cursor,
+      };
+    }
+
+    const end = utf8PageEnd(bytes, cursor, maxBytes);
+    if (end === bytes.length) {
+      return {
+        text: bytes.subarray(cursor).toString("utf8"),
+        offset: 0,
+        limit,
+        totalLines,
+        hasMore: false,
+        truncated: false,
+        byteOffset: cursor,
+      };
+    }
+    const page = boundedBytePage(bytes, cursor, maxBytes);
+    return {
+      text: page.text,
+      offset: 0,
+      limit,
+      totalLines,
+      hasMore: true,
+      truncated: true,
+      byteOffset: cursor,
+      nextByteOffset: page.end,
+    };
+  }
+
+  const offset =
+    Number.isSafeInteger(options.offset) && (options.offset as number) >= 0
+      ? Math.floor(options.offset as number)
+      : 0;
   if (offset >= totalLines) {
     return {
       text: `No result lines at offset ${offset}.`,
@@ -1076,6 +1153,7 @@ export function pageResultText(
       truncated: false,
     };
   }
+
   const page = lines.slice(offset, offset + limit).join("\n");
   if (byteLength(page) <= maxBytes) {
     return {
@@ -1087,18 +1165,19 @@ export function pageResultText(
       truncated: false,
     };
   }
-  const suffix = `\n[page truncated at ${maxBytes} bytes; reduce the requested range]`;
-  const prefix = truncateHead(page, {
-    maxBytes: Math.max(0, maxBytes - byteLength(suffix)),
-    maxLines: limit,
-  }).content;
+
+  const pageStartByte =
+    byteLength(lines.slice(0, offset).join("\n")) + (offset > 0 ? 1 : 0);
+  const bounded = boundedBytePage(Buffer.from(page, "utf8"), 0, maxBytes);
   return {
-    text: `${prefix}${suffix}`,
+    text: bounded.text,
     offset,
     limit,
     totalLines,
     hasMore: true,
     truncated: true,
+    byteOffset: pageStartByte,
+    nextByteOffset: pageStartByte + bounded.end,
   };
 }
 

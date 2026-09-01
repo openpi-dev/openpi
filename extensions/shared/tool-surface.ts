@@ -29,6 +29,7 @@ export const OPENPI_TOOL_SURFACE = {
       "subagent_send",
       "subagent_check",
       "subagent_list",
+      "subagent_result",
     ],
     deferred: [],
   },

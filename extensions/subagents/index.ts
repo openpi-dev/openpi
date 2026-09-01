@@ -1525,6 +1525,12 @@ export default function (
           description: SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS.limit,
         }),
       ),
+      byteOffset: Type.Optional(
+        Type.Integer({
+          minimum: 0,
+          description: SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS.byteOffset,
+        }),
+      ),
     }),
     async execute(_toolCallId, params) {
       const manager = await getManager();
@@ -1556,13 +1562,9 @@ export default function (
         retainedFinalText: canonical.snap.finalText,
         resultIsCanonical: canonical.resultIsCanonical,
         finalTextTruncated: canonical.snap.finalTextTruncated,
-        omittedFinalTextBytes:
-          canonical.snap.finalTextTruncated
-            ? Math.max(
-                1,
-                canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
-              )
-            : canonical.snap.snapshot?.omitted.finalTextBytes ?? 0,
+        omittedFinalTextBytes: canonical.snap.finalTextTruncated
+          ? Math.max(1, canonical.snap.snapshot?.omitted.finalTextBytes ?? 0)
+          : (canonical.snap.snapshot?.omitted.finalTextBytes ?? 0),
       });
       if (exact === undefined) {
         throw new Error(
@@ -1572,6 +1574,7 @@ export default function (
       const page = pageResultText(exact, {
         offset: params.offset,
         limit: params.limit,
+        byteOffset: params.byteOffset,
         maxBytes: MAX_RESULT_PAGE_BYTES,
       });
       return {
@@ -1582,6 +1585,12 @@ export default function (
           limit: page.limit,
           totalLines: page.totalLines,
           hasMore: page.hasMore,
+          ...(page.nextByteOffset !== undefined
+            ? { nextByteOffset: page.nextByteOffset }
+            : {}),
+          ...(page.byteOffset !== undefined
+            ? { byteOffset: page.byteOffset }
+            : {}),
           ...(artifact !== undefined ? { exactResultAvailable: true } : {}),
         },
       };

@@ -28,9 +28,9 @@ import {
   resultArtifactRefMatchesContent,
 } from "../../../extensions/subagents/src/result-artifact.ts";
 
-const skipWindowsArtifactCache =
-  process.platform === "win32"
-    ? "artifact cache requires descriptor-relative no-follow filesystem APIs"
+const skipUnsupportedArtifactCache =
+  process.platform !== "linux"
+    ? "artifact cache requires Linux descriptor-relative no-follow filesystem APIs"
     : false;
 
 test("short results pass through without creating an artifact", () => {
@@ -226,7 +226,7 @@ test("artifact failure is explicit and never advertises a false path", () => {
 });
 
 test("content-addressed artifacts are exact, private, and reusable", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-artifact-"),
@@ -257,7 +257,7 @@ test("content-addressed artifacts are exact, private, and reusable", {
 });
 
 test("artifact retention evicts the oldest owned files under count and byte caps", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-retention-"),
@@ -300,7 +300,7 @@ test("artifact retention evicts the oldest owned files under count and byte caps
 });
 
 test("an artifact too large for the cache leaves no partial file and later writes recover", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-oversized-"),
@@ -320,7 +320,7 @@ test("an artifact too large for the cache leaves no partial file and later write
 });
 
 test("custom cache limits reject zero, negative, and over-cap maxBytes", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-tiny-limit-"),
@@ -355,7 +355,7 @@ test("artifact references reject path-bearing extra fields", () => {
 });
 
 test("custom cache limits cannot exceed the reader limit", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-limit-validation-"),
@@ -389,7 +389,7 @@ test("custom cache limits cannot exceed the reader limit", {
 });
 
 test("stale crash metadata is reclaimed under the cache lock", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-stale-metadata-"),
@@ -423,7 +423,7 @@ test("stale crash metadata is reclaimed under the cache lock", {
 });
 
 test("artifact persistence refuses a symlinked cache component", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async (t) => {
   const agentDir = await mkdtemp(path.join(tmpdir(), "openpi-result-symlink-"));
   const outside = await mkdtemp(path.join(tmpdir(), "openpi-result-outside-"));
@@ -473,7 +473,7 @@ test("artifact references cannot read an external digest-named file", async () =
 });
 
 test("cache lock contention fails closed without bypassing retention", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-lock-contention-"),
@@ -496,7 +496,7 @@ test("cache lock contention fails closed without bypassing retention", {
 });
 
 test("a live lock owner is never stolen by age and stays fail-closed", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-live-lock-"),
@@ -541,7 +541,7 @@ test("a live lock owner is never stolen by age and stays fail-closed", {
 });
 
 test("a lock left by a dead owner is reclaimed only after ownership checks", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-stale-lock-"),
@@ -592,7 +592,7 @@ test("a lock left by a dead owner is reclaimed only after ownership checks", {
 });
 
 test("cooperating processes keep retention caps under concurrent writes", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-concurrent-retention-"),
@@ -657,7 +657,7 @@ test("cooperating processes keep retention caps under concurrent writes", {
 });
 
 test("artifact persistence refuses an existing file with the wrong content", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-collision-"),
@@ -709,6 +709,36 @@ test("exact result paging is 0-based and never treats a projection as canonical"
   const truncated = pageResultText("x".repeat(200), { maxBytes: 40, limit: 1 });
   assert.equal(truncated.truncated, true);
   assert.match(truncated.text, /page truncated/);
+  assert.ok((truncated.nextByteOffset ?? 0) > 0);
+  assert.ok(Buffer.byteLength(truncated.text, "utf8") <= 40);
+
+  const longLine = `${"a".repeat(20 * 1024)}SENTINEL`;
+  let cursor = 0;
+  let recovered = "";
+  for (let i = 0; i < 30; i++) {
+    const page = pageResultText(longLine, {
+      byteOffset: cursor,
+      maxBytes: 1024,
+    });
+    assert.ok(Buffer.byteLength(page.text, "utf8") <= 1024);
+    assert.equal(page.text.includes("�"), false);
+    recovered += page.text.replace(/\n\[page truncated; next \d+\]$/u, "");
+    if (!page.hasMore) break;
+    assert.ok(
+      page.nextByteOffset !== undefined && page.nextByteOffset > cursor,
+    );
+    cursor = page.nextByteOffset;
+  }
+  assert.match(recovered, /SENTINEL$/);
+  assert.equal(pageResultText(longLine, { byteOffset: cursor }).hasMore, false);
+  assert.throws(
+    () => pageResultText("a😀b", { byteOffset: 2 }),
+    /code-point boundary/,
+  );
+  assert.throws(
+    () => pageResultText("abc", { offset: 0, byteOffset: 0 }),
+    /either offset or byteOffset/,
+  );
 
   assert.equal(
     resolveExactResultText({
@@ -750,7 +780,7 @@ test("exact result paging is 0-based and never treats a projection as canonical"
 });
 
 test("uncertain recovery entries are never relinked as the published lock", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-poisoned-lock-"),
@@ -781,7 +811,7 @@ test("uncertain recovery entries are never relinked as the published lock", {
 });
 
 test("stale metadata cleanup skips symlink and unknown entries", {
-  skip: skipWindowsArtifactCache,
+  skip: skipUnsupportedArtifactCache,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-skip-unknown-"),
@@ -809,8 +839,8 @@ test("stale metadata cleanup skips symlink and unknown entries", {
   }
 });
 
-test("Windows artifact cache fails closed before touching the filesystem", {
-  skip: process.platform !== "win32" ? "Windows-only" : false,
+test("non-Linux artifact cache fails closed before touching the filesystem", {
+  skip: process.platform === "linux" ? "non-Linux-only" : false,
 }, async () => {
   const agentDir = await mkdtemp(
     path.join(tmpdir(), "openpi-result-windows-disabled-"),

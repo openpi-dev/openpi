@@ -283,13 +283,15 @@ export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
 
 /** Describes bounded, path-free reads of a settled exact result. */
 export const SUBAGENT_RESULT_TOOL_DESCRIPTION =
-  "Read a bounded page of a settled subagent's exact final result by subagent id. This is the protected recovery path for omitted output; use offset and limit to continue through a long result. It never accepts or returns a filesystem path.";
+  "Read a bounded page of a settled subagent's exact final result by id. Use offset/limit for lines, or byteOffset to continue a split long line; byteOffset is a UTF-8 boundary and cannot be combined with offset. It never accepts or returns a filesystem path.";
 
 /** Model-facing schema descriptions for exact result paging. */
 export const SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS = {
   id: 'Subagent id to read, e.g. "sa-1"',
   offset: "Zero-based line offset in the exact final result.",
   limit: "Maximum number of lines to return, from 1 through 200.",
+  byteOffset:
+    "UTF-8 byte cursor for continuing a split line; use the returned nextByteOffset.",
 };
 
 /** Describes listing all tracked running and settled subagents. */

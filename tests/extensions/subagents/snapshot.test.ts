@@ -43,6 +43,19 @@ function snapshot(id: string, overrides: Partial<SubagentSnapshot> = {}) {
 }
 
 test("UTF-8 head and tail truncation never split a multibyte character", () => {
+  const emoji = "😀";
+  assert.deepEqual(
+    [1, 2, 3, 4].map((n) => truncateUtf8Head(emoji, n)),
+    ["", "", "", emoji],
+  );
+  for (let n = 0; n <= 6; n++) {
+    assert.equal(truncateUtf8Head(`a${emoji}b`, n).includes("�"), false);
+    assert.equal(truncateUtf8Tail(`a${emoji}b`, n).includes("�"), false);
+  }
+  assert.equal(
+    truncateUtf8Head(`${"a".repeat(4093)}${emoji}`, 4096),
+    "a".repeat(4093),
+  );
   const value = "开头" + "中".repeat(20) + "结尾";
   for (const limit of [1, 2, 3, 4, 7, 11, 23]) {
     const head = truncateUtf8Head(value, limit);
