@@ -53,7 +53,9 @@ export class PiWebAdapter {
       "workspace-state.json",
     );
     this.archiveFile = join(runtime.sessionDirectory, "archived-sessions.json");
-    this.importedWorkspaces.add(resolve(runtime.cwd));
+    if (runtime.workspaceSelected === true) {
+      this.importedWorkspaces.add(resolve(runtime.cwd));
+    }
   }
 
   private async ensureWorkspaceStateLoaded() {
@@ -94,9 +96,9 @@ export class PiWebAdapter {
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-        this.restoreInitialWorkspace = this.hiddenWorkspaces.has(
-          resolve(this.runtime.cwd),
-        );
+        this.restoreInitialWorkspace =
+          this.runtime.workspaceSelected === true &&
+          this.hiddenWorkspaces.has(resolve(this.runtime.cwd));
         this.workspaceStateLoaded = true;
       })();
     }
@@ -352,7 +354,10 @@ export class PiWebAdapter {
         ...(this.archivedSessions.has(resolve(session.path)) ? { archived: true } : {}),
         ...(this.ungroupedSessions.has(resolve(session.path)) ? { ungrouped: true } : {}),
       }));
-    if (!projected.some((session) => session.id === currentId)) {
+    if (
+      this.runtime.workspaceSelected === true &&
+      !projected.some((session) => session.id === currentId)
+    ) {
       const entries = this.runtime.sessionManager.getBranch();
       let firstUser = "";
       let messageCount = 0;
@@ -409,7 +414,10 @@ export class PiWebAdapter {
       omitted: Math.max(
         0,
         allSessions.length +
-          (allSessions.some((session) => session.id === currentId) ? 0 : 1) -
+          (allSessions.some((session) => session.id === currentId) ||
+          this.runtime.workspaceSelected !== true
+            ? 0
+            : 1) -
           projected.length,
       ),
     };
@@ -438,7 +446,8 @@ export class PiWebAdapter {
       .map((path) => ({
         path,
         name: (this.workspaceNames.get(path) ?? basename(path)) || path,
-        current: path === currentCwd,
+        current:
+          this.runtime.workspaceSelected === true && path === currentCwd,
       }))
       .sort((left, right) =>
         left.current === right.current
@@ -470,7 +479,9 @@ export class PiWebAdapter {
       label: boundedText(model.label, WEB_MAX_SESSION_PREVIEW),
     }));
     const snapshot = {
-      currentSessionId: this.runtime.sessionManager.getSessionId(),
+      ...(this.runtime.workspaceSelected === true
+        ? { currentSessionId: this.runtime.sessionManager.getSessionId() }
+        : {}),
       workspaces,
       sessions,
       models,
@@ -500,7 +511,7 @@ export class PiWebAdapter {
   }
 
   private fitSnapshot(snapshot: {
-    currentSessionId: string;
+    currentSessionId?: string;
     workspaces: WebWorkspaceSummary[];
     sessions: WebSessionSummary[];
     selectedSession?: WebSessionProjection;
@@ -619,7 +630,9 @@ export class PiWebAdapter {
   ) {
     const sessions = knownSessions ?? (await this.listSessions());
     return new Set([
-      resolve(this.runtime.cwd),
+      ...(this.runtime.workspaceSelected === true
+        ? [resolve(this.runtime.cwd)]
+        : []),
       ...(workspaceState?.importedWorkspaces ?? this.importedWorkspaces),
       ...sessions.map((session) => session.cwd),
     ]);

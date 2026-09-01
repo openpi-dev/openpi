@@ -55,6 +55,10 @@ test("installed CLI loads TypeScript Web modules through its package loader", as
       "export async function openBrowser(): Promise<boolean> { return false; }\n",
     );
     await writeFile(
+      join(packageRoot, "web", "host", "terminal-status.ts"),
+      "export function formatWebReadyScreen(options: { origin: string; url: string }): string { return `ready ${options.origin} ${options.url}`; }\n",
+    );
+    await writeFile(
       join(packageRoot, "web", "host", "web-host.ts"),
       `import { readFile } from "node:fs/promises";
 import { MARKED_BROWSER_URL } from "./static-assets.ts";
@@ -85,6 +89,11 @@ export class WebHost {
       `import { writeFile } from "node:fs/promises";
 
 export class PiWebRuntime {
+  static async createWithoutWorkspace(): Promise<{ cwd: string; dispose(): Promise<void> }> {
+    const marker = process.env.OPENPI_CLI_NO_WORKSPACE_MARKER;
+    if (marker) await writeFile(marker, "unbound");
+    return PiWebRuntime.create("/web-owned-bootstrap");
+  }
   static async create(cwd: string): Promise<{ cwd: string; dispose(): Promise<void> }> {
     return {
       cwd,
@@ -107,7 +116,25 @@ export class PiWebRuntime {
       temporaryRoot,
       "--no-open",
     ]);
-    assert.match(stdout, /running at http:\/\/127\.0\.0\.1:12345/u);
+    assert.match(stdout, /ready http:\/\/127\.0\.0\.1:12345/u);
+
+    const noWorkspaceMarker = join(temporaryRoot, "no-workspace");
+    await execFileAsync(
+      process.execPath,
+      [
+        join(packageRoot, "bin", "openpi.js"),
+        "web",
+        "--no-workspace",
+        "--no-open",
+      ],
+      {
+        env: {
+          ...process.env,
+          OPENPI_CLI_NO_WORKSPACE_MARKER: noWorkspaceMarker,
+        },
+      },
+    );
+    assert.equal(await readFile(noWorkspaceMarker, "utf8"), "unbound");
 
     const disposeMarker = join(temporaryRoot, "runtime-disposed");
     await assert.rejects(
@@ -170,7 +197,7 @@ export class PiWebRuntime {
         5_000,
       );
       const waitForReady = () => {
-        if (signalOutput.includes("running at http://127.0.0.1:12345")) {
+        if (signalOutput.includes("ready http://127.0.0.1:12345")) {
           clearTimeout(timeout);
           resolve();
           return;

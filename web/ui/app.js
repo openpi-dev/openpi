@@ -477,11 +477,16 @@ function renderConversation() {
 function updateComposer() {
   const selected = state.snapshot?.selectedSession;
   const active = selected?.id === state.snapshot?.currentSessionId;
+  const newSessionDraft =
+    Boolean(state.selectedWorkspace) &&
+    !selected &&
+    !state.snapshot?.currentSessionId;
+  const canCompose = active || newSessionDraft;
   $("prompt-input").disabled =
-    state.sessionSwitching || (!active && Boolean(state.selectedWorkspace));
+    state.sessionSwitching || (!canCompose && Boolean(state.selectedWorkspace));
   $("send-prompt").disabled =
     state.sessionSwitching ||
-    !active ||
+    !canCompose ||
     !state.selectedWorkspace ||
     state.promptAdmissionPending;
   const modelPicker = $("model-picker");
@@ -522,7 +527,7 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent = active
+  $("composer-hint").textContent = canCompose
     ? state.snapshot.runtime.status === "running" || state.liveRunning
       ? t("queuedHint")
       : t("enterHint")
@@ -574,11 +579,15 @@ async function refreshSnapshot({
       epoch !== state.sessionEpoch ||
       generation !== state.snapshotGeneration
     ) return false;
-    const current = snapshot.sessions.find(
-      (session) => session.id === snapshot.currentSessionId,
-    );
-    const selectedIsCurrent =
-      snapshot.selectedSession?.id === snapshot.currentSessionId;
+    const hasCurrentSession = typeof snapshot.currentSessionId === "string";
+    const current = hasCurrentSession
+      ? snapshot.sessions.find(
+          (session) => session.id === snapshot.currentSessionId,
+        )
+      : undefined;
+    const selectedIsCurrent = hasCurrentSession
+      ? snapshot.selectedSession?.id === snapshot.currentSessionId
+      : snapshot.selectedSession === undefined;
     const requestedExists =
       !requestedPath ||
       snapshot.sessions.some((session) => session.path === requestedPath);
@@ -611,9 +620,14 @@ async function refreshSnapshot({
     const availableWorkspaces = state.snapshot.workspaces;
     const selectedSessionWorkspace = state.snapshot.selectedSession?.cwd;
     const activeWorkspace = availableWorkspaces.find((workspace) => workspace.current)?.path;
+    const retainedWorkspace = availableWorkspaces.some(
+      (workspace) => workspace.path === state.selectedWorkspace,
+    )
+      ? state.selectedWorkspace
+      : undefined;
     const readyWorkspace = availableWorkspaces.some((workspace) => workspace.path === selectedSessionWorkspace)
       ? selectedSessionWorkspace
-      : activeWorkspace;
+      : activeWorkspace ?? retainedWorkspace;
     setWorkspaceReady(readyWorkspace);
     state.selectedPath = current?.path || snapshot.selectedSession?.path || null;
     renderWorkspaces();
@@ -702,16 +716,19 @@ function scheduleSnapshotRefresh(delay = 160) {
 async function sendPrompt() {
   if (!state.selectedWorkspace) {
     await chooseWorkspace();
-    return;
   }
   const content = $("prompt-input").value.trim();
-  const sessionId = state.snapshot?.selectedSession?.id;
   if (
     !content ||
-    !sessionId ||
+    !state.selectedWorkspace ||
     state.sessionSwitching ||
     state.promptAdmissionPending
   ) return;
+  if (!state.snapshot?.selectedSession?.id) {
+    await createSession(state.selectedWorkspace);
+  }
+  const sessionId = state.snapshot?.selectedSession?.id;
+  if (!sessionId || state.sessionSwitching || state.promptAdmissionPending) return;
   const epoch = state.sessionEpoch;
   const admissionToken = ++state.promptAdmissionSequence;
   const optimisticKey = `optimistic-${Date.now()}`;

@@ -25,12 +25,14 @@ if (args.includes("--help") || args.includes("-h")) {
 }
 const command = args[0] === "web" ? args.slice(1) : args;
 const noOpen = command.includes("--no-open");
+const noWorkspace = command.includes("--no-workspace");
 const portIndex = command.indexOf("--port");
 const portText = portIndex >= 0 ? command[portIndex + 1] : undefined;
 const workspaceArgs = [];
 for (let index = 0; index < command.length; index++) {
   const value = command[index];
   if (value === "--no-open") continue;
+  if (value === "--no-workspace") continue;
   if (value === "--port") {
     index++;
     continue;
@@ -51,6 +53,10 @@ if (workspaceArgs.length > 1) {
   console.error("Usage: openpi web [workspace]");
   process.exit(1);
 }
+if (noWorkspace && workspaceArgs.length > 0) {
+  console.error("--no-workspace cannot be combined with a workspace");
+  process.exit(1);
+}
 
 let host;
 let runtime;
@@ -62,20 +68,22 @@ const stop = () => {
 
 try {
   const jiti = createJiti(import.meta.url);
-  const [browserModule, hostModule, runtimeModule, traceModule] =
+  const [browserModule, hostModule, runtimeModule, statusModule, traceModule] =
     await Promise.all([
       jiti.import("../web/host/browser-launcher.ts"),
       jiti.import("../web/host/web-host.ts"),
       jiti.import("../web/runtime/pi-runtime.ts"),
+      jiti.import("../web/host/terminal-status.ts"),
       jiti.import("../web/trace.ts"),
     ]);
   const { openBrowser } = browserModule;
   const { WebHost } = hostModule;
   const { PiWebRuntime } = runtimeModule;
+  const { formatWebReadyScreen } = statusModule;
   const { traceWeb } = traceModule;
-  runtime = await PiWebRuntime.create(
-    resolve(workspaceArgs[0] ?? process.cwd()),
-  );
+  runtime = noWorkspace
+    ? await PiWebRuntime.createWithoutWorkspace()
+    : await PiWebRuntime.create(resolve(workspaceArgs[0] ?? process.cwd()));
   host = new WebHost({
     runtime,
     ...(port === undefined ? {} : { port }),
@@ -87,10 +95,18 @@ try {
       : {}),
   });
   await host.start();
-  traceWeb("web_started", { cwd: runtime.cwd, origin: host.origin });
+  traceWeb("web_started", {
+    ...(runtime.workspaceSelected === true ? { cwd: runtime.cwd } : {}),
+    origin: host.origin,
+  });
   const opened = noOpen ? false : await openBrowser(host.url);
-  console.log(`OpenPI Web Workbench is running at ${host.origin}`);
-  if (!opened) console.log(`Open this URL in a browser: ${host.url}`);
+  console.log(
+    formatWebReadyScreen({
+      origin: host.origin,
+      url: host.url,
+      opened,
+    }),
+  );
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {

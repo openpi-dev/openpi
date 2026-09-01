@@ -40,6 +40,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   let disposed = false;
   const listeners = new Set<(event: WebRuntimeEvent) => void>();
   const runtime: WebRuntimeController = {
+    workspaceSelected: true,
     sessionDirectory: cwd,
     get cwd() {
       return runtimeCwd;
@@ -513,6 +514,88 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
+test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-host-"));
+  const bootstrap = join(root, ".bootstrap-workspace");
+  const sessionManager = SessionManager.inMemory(bootstrap);
+  let prompts = 0;
+  let disposed = false;
+  const events: Array<{ type: string; detail?: Record<string, unknown> }> = [];
+  const runtime: WebRuntimeController = {
+    cwd: bootstrap,
+    workspaceSelected: false,
+    sessionDirectory: root,
+    sessionManager,
+    isIdle: () => true,
+    sendPrompt: async () => {
+      prompts++;
+    },
+    newSession: async () => ({ cancelled: false }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("workspace required");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {
+      disposed = true;
+    },
+  };
+  const host = new WebHost({
+    runtime,
+    onEvent: (type, detail) => events.push({ type, detail }),
+  });
+
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = {
+      Authorization: `Bearer ${token}`,
+      "Content-Type": "application/json",
+    };
+
+    const snapshotResponse = await fetch(`${launched.origin}/api/snapshot`, {
+      headers,
+    });
+    assert.equal(snapshotResponse.status, 200);
+    const snapshot = (await snapshotResponse.json()) as {
+      currentSessionId?: string;
+      selectedSession?: unknown;
+      workspaces: unknown[];
+      sessions: unknown[];
+    };
+    assert.equal(snapshot.currentSessionId, undefined);
+    assert.equal(snapshot.selectedSession, undefined);
+    assert.deepEqual(snapshot.workspaces, []);
+    assert.deepEqual(snapshot.sessions, []);
+
+    const prompt = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        content: "must not run",
+      }),
+    });
+    assert.equal(prompt.status, 409);
+    assert.deepEqual(await prompt.json(), {
+      code: "WORKSPACE_REQUIRED",
+      error: "Choose a workspace before using the Web runtime",
+    });
+    assert.equal(prompts, 0);
+
+    const started = events.find((event) => event.type === "web_host_started");
+    assert.ok(started);
+    assert.equal("cwd" in (started.detail ?? {}), false);
+  } finally {
+    await host.stop();
+    assert.equal(disposed, true);
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("returns accepted only after Pi admits the prompt", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-"));
   const sessionManager = SessionManager.inMemory(cwd);
@@ -523,6 +606,7 @@ test("returns accepted only after Pi admits the prompt", async () => {
   let promptStarted = false;
   let disposed = false;
   const runtime: WebRuntimeController = {
+    workspaceSelected: true,
     sessionDirectory: cwd,
     cwd,
     sessionManager,
@@ -585,6 +669,7 @@ function testRuntime(
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
+    workspaceSelected: true,
     sessionDirectory: cwd,
     cwd,
     sessionManager,

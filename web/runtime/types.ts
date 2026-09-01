@@ -9,7 +9,8 @@ export interface WebRuntimeEvent {
 export type WebRuntimeRequestErrorCode =
   | "MODEL_NOT_AVAILABLE"
   | "SESSION_CONFLICT"
-  | "PROMPT_REJECTED";
+  | "PROMPT_REJECTED"
+  | "WORKSPACE_REQUIRED";
 
 export class WebRuntimeRequestError extends Error {
   readonly code: WebRuntimeRequestErrorCode;
@@ -48,6 +49,8 @@ export interface WebSessionCreationResult {
 
 export interface WebRuntimeController {
   readonly cwd: string;
+  /** Runtime authority: false until a real Web workspace and Session are active. */
+  readonly workspaceSelected: boolean;
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
   isIdle(): boolean;

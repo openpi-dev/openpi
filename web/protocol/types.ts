@@ -105,7 +105,8 @@ export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
   generatedAt: string;
   cursor: number;
-  currentSessionId: string;
+  /** Absent until the browser selects or creates a real Web Session. */
+  currentSessionId?: string;
   workspaces: WebWorkspaceSummary[];
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;

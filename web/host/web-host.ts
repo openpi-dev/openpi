@@ -141,7 +141,9 @@ export class WebHost {
     this.port = address.port;
     this.publish("web_host_started", {
       port: this.port,
-      cwd: this.runtime.cwd,
+      ...(this.runtime.workspaceSelected === true
+        ? { cwd: this.runtime.cwd }
+        : {}),
       mode: "local-workbench",
     });
   }
@@ -447,6 +449,12 @@ export class WebHost {
           error: "provider, modelId, and sessionId are required",
         });
       }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using the Web runtime",
+        });
+      }
       try {
         const model = await this.runtime.setModel(body.provider, body.modelId, {
           expectedSessionId: body.sessionId,
@@ -476,6 +484,12 @@ export class WebHost {
       if (!content || content.length > 12_000) {
         return this.json(response, 400, {
           error: "prompt must be 1-12000 characters",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using the Web runtime",
         });
       }
       if (

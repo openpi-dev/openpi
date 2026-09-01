@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import test from "node:test";
@@ -18,6 +25,7 @@ function runtimeFor(
 ): WebRuntimeController {
   return {
     cwd,
+    workspaceSelected: true,
     sessionDirectory,
     sessionManager,
     isIdle: () => true,
@@ -108,6 +116,49 @@ test("snapshot pins current and selected sessions while bounding the projection"
     assert.equal(snapshot.truncation.sessionsOmitted, 5);
     assert.equal(snapshot.truncation.truncated, true);
     assert.ok(snapshot.truncation.bytes <= WEB_MAX_SNAPSHOT_BYTES);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("an unbound Web runtime never projects its bootstrap cwd as a workspace or Session", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-"));
+  const bootstrap = join(root, ".bootstrap-workspace");
+  const imported = join(root, "chosen-workspace");
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await Promise.all([
+      mkdir(bootstrap, { recursive: true }),
+      mkdir(imported, { recursive: true }),
+      mkdir(sessionDirectory, { recursive: true }),
+    ]);
+    const current = SessionManager.inMemory(bootstrap);
+    const runtime = Object.assign(
+      runtimeFor(bootstrap, sessionDirectory, current),
+      { workspaceSelected: false as const },
+    );
+    const adapter = new PiWebAdapter(runtime);
+
+    const initial = await adapter.getSnapshot();
+    assert.deepEqual(initial.workspaces, []);
+    assert.deepEqual(initial.sessions, []);
+    assert.equal(initial.currentSessionId, undefined);
+    assert.equal(initial.selectedSession, undefined);
+
+    await adapter.importWorkspace(imported);
+    const afterImport = await adapter.getSnapshot();
+    const canonicalImported = await realpath(imported);
+    const canonicalBootstrap = await realpath(bootstrap);
+    assert.deepEqual(
+      afterImport.workspaces.map((workspace) => workspace.path),
+      [canonicalImported],
+    );
+    assert.equal(
+      afterImport.workspaces.some(
+        (workspace) => workspace.path === canonicalBootstrap,
+      ),
+      false,
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

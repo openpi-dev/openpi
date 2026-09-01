@@ -1,4 +1,4 @@
-import { realpath, stat } from "node:fs/promises";
+import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import {
   type AgentSession,
@@ -35,6 +35,7 @@ import {
 } from "./web-host-lease.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
+const BOOTSTRAP_WORKSPACE_DIRECTORY = ".bootstrap-workspace";
 
 type PromptTrace = {
   commandId: string;
@@ -83,36 +84,61 @@ export class PiWebRuntime implements WebRuntimeController {
   private readonly webHostLease: WebHostLease;
   private disposed = false;
   private disposePromise?: Promise<void>;
+  private hasSelectedWorkspace: boolean;
 
   private constructor(
     runtime: AgentSessionRuntime,
     webSessionDirectory: string,
     dispatcherLease: HttpDispatcherLease,
     webHostLease: WebHostLease,
+    workspaceSelected: boolean,
   ) {
     this.runtime = runtime;
     this.webSessionDirectory = webSessionDirectory;
     this.dispatcherLease = dispatcherLease;
     this.webHostLease = webHostLease;
+    this.hasSelectedWorkspace = workspaceSelected;
   }
 
   static async create(cwd: string) {
     const canonicalCwd = await canonicalDirectory(cwd);
+    return PiWebRuntime.createForWorkspace(canonicalCwd, true);
+  }
+
+  static async createWithoutWorkspace() {
+    const webSessionDirectory = join(getAgentDir(), "web-sessions");
+    await mkdir(webSessionDirectory, { recursive: true, mode: 0o700 });
+    const bootstrapDirectory = join(
+      webSessionDirectory,
+      BOOTSTRAP_WORKSPACE_DIRECTORY,
+    );
+    await mkdir(bootstrapDirectory, { recursive: true, mode: 0o700 });
+    const canonicalCwd = await canonicalDirectory(bootstrapDirectory);
+    return PiWebRuntime.createForWorkspace(canonicalCwd, false);
+  }
+
+  private static async createForWorkspace(
+    canonicalCwd: string,
+    workspaceSelected: boolean,
+  ) {
     const webSessionDirectory = join(getAgentDir(), "web-sessions");
     const webHostLease = await acquireWebHostLease(webSessionDirectory);
     let runtime: PiWebRuntime | undefined;
     try {
       const created = await PiWebRuntime.createRuntime(
         canonicalCwd,
-        SessionManager.create(canonicalCwd, webSessionDirectory),
+        workspaceSelected
+          ? SessionManager.create(canonicalCwd, webSessionDirectory)
+          : SessionManager.inMemory(canonicalCwd),
       );
       runtime = new PiWebRuntime(
         created.runtime,
         webSessionDirectory,
         created.dispatcherLease,
         webHostLease,
+        workspaceSelected,
       );
-      await runtime.startRuntimeSession();
+      if (workspaceSelected) await runtime.startRuntimeSession();
       return runtime;
     } catch (error) {
       try {
@@ -130,6 +156,10 @@ export class PiWebRuntime implements WebRuntimeController {
 
   get cwd() {
     return this.runtime.cwd;
+  }
+
+  get workspaceSelected() {
+    return this.hasSelectedWorkspace;
   }
 
   get sessionDirectory() {
@@ -180,6 +210,7 @@ export class PiWebRuntime implements WebRuntimeController {
     options?: WebModelSelectionOptions,
   ) {
     this.assertActive();
+    this.assertWorkspaceSelected();
     const agentRuntime = this.runtime;
     if (
       options?.expectedSessionId !== undefined &&
@@ -236,6 +267,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
+    this.assertWorkspaceSelected();
     const agentRuntime = this.runtime;
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
@@ -440,6 +472,7 @@ export class PiWebRuntime implements WebRuntimeController {
       this.dispatcherLease,
     );
     await this.activateCandidate(replacement.runtime);
+    this.hasSelectedWorkspace = true;
     const sessionPath = this.runtime.session.sessionManager.getSessionFile();
     this.emit("session_switched", {
       ...(options?.commandId ? { commandId: options.commandId } : {}),
@@ -468,6 +501,7 @@ export class PiWebRuntime implements WebRuntimeController {
     );
     if (retained) {
       await this.promoteRetainedRuntime(retained);
+      this.hasSelectedWorkspace = true;
       this.emit("session_switched", { sessionPath });
       return { cancelled: false };
     }
@@ -483,6 +517,7 @@ export class PiWebRuntime implements WebRuntimeController {
       this.dispatcherLease,
     );
     await this.activateCandidate(replacement.runtime);
+    this.hasSelectedWorkspace = true;
     this.emit("session_switched", { sessionPath });
     return { cancelled: false };
   }
@@ -930,6 +965,15 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private assertActive() {
     if (this.disposed) throw new Error("Web runtime is stopped");
+  }
+
+  private assertWorkspaceSelected() {
+    if (this.hasSelectedWorkspace) return;
+    throw new WebRuntimeRequestError(
+      "Choose a workspace before using the Web runtime",
+      "WORKSPACE_REQUIRED",
+      409,
+    );
   }
 
   private assertActiveRuntime(runtime: AgentSessionRuntime) {

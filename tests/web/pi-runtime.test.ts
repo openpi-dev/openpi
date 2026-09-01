@@ -85,6 +85,7 @@ type PromptRuntimeHarness = {
   promptAdmission: Promise<void>;
   pendingPromptTraces: Trace[];
   disposed: boolean;
+  hasSelectedWorkspace: boolean;
   dispatcherLease: { release: () => Promise<void> };
   webHostLease: { release: () => Promise<void> };
   sendPrompt: PiWebRuntime["sendPrompt"];
@@ -205,6 +206,21 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   return harness;
 }
 
+test("an unbound runtime rejects prompts before touching its bootstrap Session", async () => {
+  const session = promptSession("bootstrap-session");
+  const runtime = promptHarness(session);
+  runtime.hasSelectedWorkspace = false;
+
+  await assert.rejects(
+    runtime.sendPrompt("must not run"),
+    (error: unknown) =>
+      error instanceof WebRuntimeRequestError &&
+      error.code === "WORKSPACE_REQUIRED" &&
+      error.statusCode === 409,
+  );
+  assert.equal(session.calls.length, 0);
+});
+
 function promptHarness(session: ReturnType<typeof promptSession>) {
   const harness = Object.create(
     PiWebRuntime.prototype,
@@ -222,6 +238,7 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   harness.promptAdmission = Promise.resolve();
   harness.pendingPromptTraces = [];
   harness.disposed = false;
+  harness.hasSelectedWorkspace = true;
   harness.dispatcherLease = { release: async () => undefined };
   harness.webHostLease = { release: async () => undefined };
   return harness;
@@ -367,6 +384,7 @@ test("model selection and Session activation are serialized", async () => {
     runtimeDisposalPromises: WeakMap<typeof runtimeA, Promise<void>>;
     controllerMutation: Promise<void>;
     disposed: boolean;
+    hasSelectedWorkspace: boolean;
     setModel: PiWebRuntime["setModel"];
     switchSession: PiWebRuntime["switchSession"];
     switchActiveSession: (path: string) => Promise<{ cancelled: false }>;
@@ -381,6 +399,7 @@ test("model selection and Session activation are serialized", async () => {
   harness.runtimeDisposalPromises = new WeakMap();
   harness.controllerMutation = Promise.resolve();
   harness.disposed = false;
+  harness.hasSelectedWorkspace = true;
   harness.switchActiveSession = async () => {
     harness.runtime = runtimeB;
     return { cancelled: false };
@@ -447,6 +466,7 @@ test("a delayed model selection cannot target a newly activated Session", async 
     runtimeOperations: Set<Promise<void>>;
     controllerMutation: Promise<void>;
     disposed: boolean;
+    hasSelectedWorkspace: boolean;
     setModel: PiWebRuntime["setModel"];
     switchSession: PiWebRuntime["switchSession"];
     switchActiveSession: (path: string) => Promise<{ cancelled: false }>;
@@ -455,6 +475,7 @@ test("a delayed model selection cannot target a newly activated Session", async 
   harness.runtimeOperations = new Set();
   harness.controllerMutation = Promise.resolve();
   harness.disposed = false;
+  harness.hasSelectedWorkspace = true;
   harness.switchActiveSession = async () => {
     switchStarted.resolve();
     await allowSwitch.promise;

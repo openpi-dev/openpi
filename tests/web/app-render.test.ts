@@ -21,6 +21,10 @@ interface ElementStub {
 }
 
 function makeElement(id: string): ElementStub {
+  const listeners = new Map<
+    string,
+    Array<(event: Record<string, unknown>) => void>
+  >();
   return {
     id,
     innerHTML: "",
@@ -36,7 +40,15 @@ function makeElement(id: string): ElementStub {
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
     setAttribute() {},
     getAttribute: () => null,
-    addEventListener() {},
+    addEventListener(
+      type: string,
+      listener: (event: Record<string, unknown>) => void,
+    ) {
+      listeners.set(type, [...(listeners.get(type) ?? []), listener]);
+    },
+    dispatch(type: string, event: Record<string, unknown> = {}) {
+      for (const listener of listeners.get(type) ?? []) listener(event);
+    },
     querySelector: () => null,
     querySelectorAll: () => [],
     closest: () => null,
@@ -243,10 +255,18 @@ const SNAPSHOT = {
   },
 };
 
+type SnapshotFixture = Omit<
+  typeof SNAPSHOT,
+  "currentSessionId" | "selectedSession"
+> & {
+  currentSessionId?: string;
+  selectedSession?: typeof SNAPSHOT.selectedSession;
+};
+
 async function renderApp(
   options: {
     eventRecords?: string[];
-    snapshot?: typeof SNAPSHOT;
+    snapshot?: SnapshotFixture;
     storageValues?: Record<string, string>;
   } = {},
 ) {
@@ -370,6 +390,10 @@ async function renderApp(
     createSession: vm.runInContext("createSession", context as vm.Context) as (
       workspacePath: string,
     ) => Promise<void>,
+    chooseWorkspace: vm.runInContext(
+      "chooseWorkspace",
+      context as vm.Context,
+    ) as () => Promise<void>,
     selectModel: vm.runInContext("selectModel", context as vm.Context) as (
       value: string,
     ) => Promise<void>,
@@ -887,6 +911,76 @@ test("app.js renders the landing state for an empty selection", async () => {
   const conversation = elements.get("conversation");
   assert.ok(conversation);
   assert.ok(conversation.innerHTML.length > 0);
+});
+
+test("app.js accepts an unbound snapshot and preserves a chosen workspace through Session creation", async () => {
+  const unbound = structuredClone(SNAPSHOT) as SnapshotFixture;
+  delete unbound.currentSessionId;
+  delete unbound.selectedSession;
+  unbound.workspaces = [];
+  unbound.sessions = [];
+  const app = await renderApp({ snapshot: unbound });
+
+  assert.equal(app.state.selectedWorkspace, null);
+  assert.equal(app.state.selectedPath, null);
+  assert.equal(app.elements.get("prompt-input")?.readOnly, true);
+
+  const chosenPath = "/tmp/chosen-workspace";
+  const chosen = structuredClone(unbound);
+  chosen.workspaces = [{ path: chosenPath, name: "chosen", current: false }];
+  const activated = structuredClone(SNAPSHOT);
+  activated.workspaces[0] = {
+    path: chosenPath,
+    name: "chosen",
+    current: true,
+  };
+  activated.sessions[0].cwd = chosenPath;
+  activated.selectedSession.cwd = chosenPath;
+  let currentSnapshot: SnapshotFixture = chosen;
+  let sessionCreations = 0;
+  const prompts: Array<{ sessionId: string; content: string }> = [];
+  app.context.fetch = async (url: unknown, options?: { body?: string }) => {
+    if (String(url) === "/api/workspaces/select") {
+      return response({ cancelled: false, path: chosenPath });
+    }
+    if (String(url) === "/api/sessions") {
+      sessionCreations++;
+      currentSnapshot = activated;
+      return response({ cancelled: false, sessionPath: "/tmp/s1.jsonl" });
+    }
+    if (String(url) === "/api/prompt") {
+      prompts.push(JSON.parse(options?.body || "{}"));
+      return response({ id: "first-prompt", accepted: true });
+    }
+    if (String(url).startsWith("/api/snapshot")) {
+      return response(currentSnapshot);
+    }
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+
+  await app.chooseWorkspace();
+  assert.equal(app.state.selectedWorkspace, chosenPath);
+  assert.equal(app.elements.get("prompt-input")?.readOnly, false);
+  assert.equal(app.elements.get("prompt-input")?.disabled, false);
+  assert.equal(app.elements.get("send-prompt")?.disabled, false);
+
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "first task";
+  const composer = app.elements.get("composer");
+  assert.ok(composer);
+  (composer.dispatch as (type: string, event: Record<string, unknown>) => void)(
+    "submit",
+    { preventDefault() {} },
+  );
+  while (prompts.length === 0) {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  }
+  assert.equal(sessionCreations, 1);
+  assert.deepEqual(prompts, [{ sessionId: "s1", content: "first task" }]);
+  assert.equal(app.state.selectedWorkspace, chosenPath);
+  assert.equal(app.state.selectedPath, "/tmp/s1.jsonl");
+  assert.equal(input.value, "");
 });
 
 test("snapshot archive state remains authoritative over legacy browser storage", async () => {
