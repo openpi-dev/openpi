@@ -43,6 +43,8 @@ const state = {
   liveRunning: false,
   livePhase: "idle",
   liveRetry: null,
+  lastEventSequence: 0,
+  resyncRequired: false,
   thinkingStarts: {},
   thinkingDurations: {},
   query: "",
@@ -105,8 +107,8 @@ const translations = {
     thinkingActive: "Thinking...",
     thinkingDone: "Thinking",
     noOutput: "no output",
-    editMessage: "Edit message",
-    confirmEdit: "OK",
+    editMessage: "Resend as new message",
+    confirmEdit: "Send",
     theme: "Theme",
     themePi: "PI Grid",
     themeWhite: "Clean White",
@@ -158,8 +160,8 @@ const translations = {
     thinkingActive: "思考中...",
     thinkingDone: "思考过程",
     noOutput: "无输出",
-    editMessage: "编辑消息",
-    confirmEdit: "确定",
+    editMessage: "作为新消息发送",
+    confirmEdit: "发送",
     theme: "主题",
     themePi: "PI 网格",
     themeWhite: "简洁白",
@@ -575,13 +577,22 @@ function parseToolArguments(raw) {
 }
 
 /** Card status: merged tool result wins; a family call without one is running. */
-function cardStatus(result, content) {
+function canonicalActivityStatus(value) {
+  if (value === "running") return "running";
+  if (value === "done" || value === "completed") return "done";
+  if (value === "error" || value === "failed" || value === "aborted" || value === "killed" || value === "timed_out") return "error";
+  if (value === "uncertain") return "warn";
+  return "unknown";
+}
+
+function cardStatus(result) {
   if (!result) return "running";
-  if (result.isError) return "error";
-  const text = typeof content === "string" ? content : result.content || "";
-  if (/fail|error|aborted/i.test(text)) return "error";
-  if (/uncertain/i.test(text)) return "warn";
-  return "done";
+  if (result.isError === true) return "error";
+  const details = result.details && typeof result.details === "object" ? result.details : null;
+  const status = canonicalActivityStatus(details?.status);
+  if (status !== "unknown") return status;
+  if (result.isError === false) return "done";
+  return "unknown";
 }
 
 /** Rich cards for the two headline capabilities instead of a generic tool row. */
@@ -625,17 +636,20 @@ function familyToolResultCard(message) {
   const toolName = message.toolName || "";
   const family = toolName.startsWith("subagent") ? "subagent" : toolName.startsWith("workflow") ? "workflow" : "";
   if (!family) return "";
-  const content = message.content || "completed";
-  const status = /fail|error|aborted/i.test(content) ? "error" : /uncertain/i.test(content) ? "warn" : "done";
-  const title = `${toolName.replace(/_/g, " ")} · ${compactSummary(content)}`;
-  return activityCardMarkup(family, title, undefined, content, status);
+  const content = message.content || "";
+  const status = canonicalActivityStatus(message.details?.status);
+  const resolvedStatus = status === "unknown"
+    ? (message.isError === true ? "error" : message.isError === false ? "done" : "unknown")
+    : status;
+  const title = `${toolName.replace(/_/g, " ")}${content ? ` · ${compactSummary(content)}` : ""}`;
+  return activityCardMarkup(family, title, undefined, content, resolvedStatus);
 }
 
 /** Background delivery messages (subagent-result / workflow-result). */
 function customMessageMarkup(message) {
   const details = message.details && typeof message.details === "object" ? message.details : {};
   if (message.customType === "subagent-result") {
-    const status = details.status === "done" || /finished/i.test(message.content) ? "done" : "error";
+    const status = canonicalActivityStatus(details.status);
     const meta = [details.id, details.outcome, details.elapsed].filter(Boolean).join(" · ");
     const card = activityCardMarkup("subagent", `Subagent ${details.id || ""} · ${details.title || "result"}`, meta || undefined, message.content, status);
     return `<article class="message-row assistant detail-only">
@@ -644,8 +658,16 @@ function customMessageMarkup(message) {
   }
   if (message.customType === "workflow-result") {
     const entries = Array.isArray(details.entries) ? details.entries : [];
-    const failed = entries.filter((item) => item && item.status !== "completed").length;
-    const status = failed > 0 ? "error" : "done";
+    const entryStatuses = entries.map((item) => canonicalActivityStatus(item?.status));
+    const status = entryStatuses.some((item) => item === "error")
+      ? "error"
+      : entryStatuses.some((item) => item === "warn")
+        ? "warn"
+        : entryStatuses.length > 0 && entryStatuses.every((item) => item === "done")
+          ? "done"
+          : entryStatuses.some((item) => item === "running")
+            ? "running"
+            : "unknown";
     const title = entries.length > 1
       ? `Workflow results · ${entries.length} runs`
       : `Workflow ${entries[0]?.runId || "result"} · ${entries[0]?.status || "delivered"}`;
@@ -843,10 +865,13 @@ function landingMarkup() {
 const ACTIVITY_CHIP_LIMIT = 5;
 
 function activityChipMarkup(kind, status, text) {
+  const glyph = ACTIVITY_STATUS_GLYPHS[status === "completed" || status === "done" ? "done" : status];
   const indicator =
     status === "running"
       ? `<i class="activity-chip-dot" aria-hidden="true"></i>`
-      : `<i class="activity-chip-glyph" aria-hidden="true">${ACTIVITY_STATUS_GLYPHS[status === "completed" ? "done" : status] || "✓"}</i>`;
+      : glyph
+        ? `<i class="activity-chip-glyph" aria-hidden="true">${glyph}</i>`
+        : "";
   return `<span class="activity-chip ${kind} ${status}">${indicator}<span class="activity-chip-text">${escapeHtml(text)}</span></span>`;
 }
 
@@ -857,17 +882,17 @@ function activityBarMarkup() {
   const chips = [];
   for (const run of workflows) {
     const agents = Array.isArray(run.agents) ? run.agents : [];
-    const settled = agents.filter((agent) => agent.state === "done" || agent.state === "error" || agent.state === "uncertain").length;
+    const settled = agents.filter((agent) => agent.state !== "running").length;
     const progress = agents.length > 0 ? ` · ${settled}/${agents.length} agents` : "";
     const phase = run.status === "running" && run.currentPhase ? ` · ${run.currentPhase}` : "";
     const elapsed = run.status === "running" ? formatElapsedMs(run.startedAt) : formatElapsedMs(run.startedAt, run.finishedAt);
-    const status = run.status === "running" ? "running" : run.status === "completed" ? "completed" : run.status === "uncertain" ? "warn" : "error";
+    const status = canonicalActivityStatus(run.status);
     const label = `${run.name || run.runId || "workflow"}${run.status === "running" ? phase + progress : progress}${elapsed ? ` · ${elapsed}` : ""}`;
     chips.push({ status, markup: activityChipMarkup("workflow", status, label) });
   }
   for (const snap of subagents) {
     const elapsed = formatElapsedMs(snap.createdAt, snap.settledAt);
-    const status = snap.status === "running" ? "running" : snap.status === "error" ? "error" : "completed";
+    const status = canonicalActivityStatus(snap.status);
     chips.push({ status, markup: activityChipMarkup("subagent", status, `${snap.title || snap.id}${elapsed ? ` · ${elapsed}` : ""}`) });
   }
   chips.sort((a, b) => (a.status === "running" ? 0 : 1) - (b.status === "running" ? 0 : 1));
@@ -894,6 +919,7 @@ function renderConversation() {
     return;
   }
   const summary = snapshot?.sessions.find((session) => session.path === state.selectedPath);
+  const isCurrentSession = Boolean(selected && snapshot && selected.id === snapshot.currentSessionId);
   const persistedEntries = selected?.entries || [];
   const persistedMessageKeys = new Set(
     persistedEntries.map((entry) => `${entry.message?.role || ""}:${entry.message?.content || ""}`),
@@ -943,7 +969,7 @@ function renderConversation() {
     // Thinking duration: live entries time it precisely; persisted entries
     // fall back to the gap since the previous entry's timestamp.
     const context = {};
-    if (index === lastUserIndex) context.showEdit = true;
+    if (isCurrentSession && index === lastUserIndex) context.showEdit = true;
     const hasThinking = Array.isArray(entry.message?.parts) && entry.message.parts.some((part) => part.type === "thinking");
     if (hasThinking) {
       const startMs = entry.key ? state.thinkingStarts[entry.key] : undefined;
@@ -981,7 +1007,6 @@ function renderConversation() {
   }
 
   $("session-header").innerHTML = `<strong>${escapeHtml(sessionTitle(summary))}</strong><small>${escapeHtml(selected.cwd)}</small>`;
-  const isCurrentSession = selected.id === snapshot.currentSessionId;
   const isRunning = isCurrentSession && (snapshot.runtime.status === "running" || state.liveRunning);
   const runningLabel = state.liveRetry
     ? `${t("modelRetrying")} (${state.liveRetry.attempt}/${state.liveRetry.maxAttempts})`
@@ -1089,6 +1114,8 @@ async function refreshSnapshot() {
       ? `?path=${encodeURIComponent(state.selectedPath)}`
       : "";
     state.snapshot = await api(`/api/snapshot${suffix}`);
+    state.lastEventSequence = state.snapshot.cursor || 0;
+    state.resyncRequired = false;
     const availableWorkspaces = state.snapshot.workspaces;
     const selectedSessionWorkspace = state.snapshot.selectedSession?.cwd;
     const activeWorkspace = availableWorkspaces.find((workspace) => workspace.current)?.path;
@@ -1373,7 +1400,19 @@ async function chooseWorkspace() {
 
 async function connectEvents() {
   try {
-    const response = await fetch("/events", { headers: headers() });
+    const cursor = state.lastEventSequence || 0;
+    const response = await fetch(`/events?cursor=${encodeURIComponent(cursor)}`, {
+      headers: { ...headers(), "Last-Event-ID": String(cursor) },
+    });
+    if (response.status === 409) {
+      const body = await response.json().catch(() => ({}));
+      if (body.code === "RESYNC_REQUIRED" || body.error === "RESYNC_REQUIRED") {
+        state.resyncRequired = true;
+        await refreshSnapshot();
+        setTimeout(connectEvents, 0);
+        return;
+      }
+    }
     if (!response.ok || !response.body) throw new Error("event connection failed");
     $("connection-state").textContent = "Connected";
     $("connection-state").classList.remove("reconnecting");
@@ -1391,6 +1430,14 @@ async function connectEvents() {
         if (!line) continue;
         try {
           const event = JSON.parse(line.slice(6));
+          const sequence = Number(event.sequence);
+          if (!Number.isSafeInteger(sequence) || sequence <= state.lastEventSequence) continue;
+          if (sequence > state.lastEventSequence + 1) {
+            state.resyncRequired = true;
+            await refreshSnapshot();
+            continue;
+          }
+          state.lastEventSequence = sequence;
           if (event.type === "session_start" || event.type === "session_switched") {
             state.liveMessages = [];
             state.liveRunning = false;
@@ -1478,6 +1525,7 @@ async function connectEvents() {
         } catch {}
       }
     }
+    throw new Error("event stream closed");
   } catch {
     $("connection-state").textContent = "Reconnecting";
     $("connection-state").classList.add("reconnecting");
@@ -1769,5 +1817,4 @@ document.addEventListener("pointerdown", (event) => {
 
 applyLanguage();
 applyTheme();
-refreshSnapshot();
-connectEvents();
+void refreshSnapshot().then(() => connectEvents());

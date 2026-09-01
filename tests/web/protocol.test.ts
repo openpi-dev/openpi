@@ -1,9 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import {
-  projectMessage,
-  WEB_MAX_PARTS,
-} from "../../web/protocol/types.ts";
+import { projectMessage, WEB_MAX_PARTS } from "../../web/protocol/types.ts";
 
 test("message projection does not create phantom text for detail-only messages", () => {
   const projected = projectMessage({
@@ -76,6 +73,15 @@ test("message projection drops oversized details", () => {
     content: "done",
     isError: false,
     details: { blob: "x".repeat(64 * 1024) },
+  });
+  assert.equal(projected.details, undefined);
+});
+
+test("message projection bounds details by UTF-8 bytes", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    content: [],
+    details: { value: "界".repeat(9_000) },
   });
   assert.equal(projected.details, undefined);
 });

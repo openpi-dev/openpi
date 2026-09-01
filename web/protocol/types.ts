@@ -97,7 +97,8 @@ export function boundedDetails(value: unknown): unknown {
   if (value === undefined || value === null) return undefined;
   try {
     const serialized = JSON.stringify(value);
-    if (serialized.length > WEB_MAX_DETAILS_BYTES) return undefined;
+    if (new TextEncoder().encode(serialized).byteLength > WEB_MAX_DETAILS_BYTES)
+      return undefined;
     return JSON.parse(serialized);
   } catch {
     return undefined;

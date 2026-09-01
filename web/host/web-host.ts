@@ -12,7 +12,10 @@ import { promisify } from "node:util";
 import { subscribeWebCapabilities } from "../../extensions/shared/web-observer-registry.ts";
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
+  WEB_MAX_EVENT_BYTES,
   WEB_MAX_EVENTS,
+  WEB_MAX_SSE_CLIENTS,
+  WEB_MAX_SSE_QUEUE_BYTES,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebSnapshot,
@@ -24,6 +27,14 @@ const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../ui/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
 const execFileAsync = promisify(execFile);
+
+type EventClient = {
+  response: ServerResponse;
+  queue: string[];
+  queuedBytes: number;
+  flushing: boolean;
+  closed: boolean;
+};
 
 export interface WebHostOptions {
   runtime: WebRuntimeController;
@@ -37,7 +48,7 @@ export class WebHost {
   private readonly server: Server;
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
-  private readonly clients = new Set<ServerResponse>();
+  private readonly clients = new Map<ServerResponse, EventClient>();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
   private port = 0;
@@ -100,17 +111,21 @@ export class WebHost {
   }
 
   publish(type: string, detail?: Record<string, unknown>) {
-    const event: WebEvent = {
+    let event: WebEvent = {
       protocolVersion: WEB_PROTOCOL_VERSION,
       sequence: ++this.sequence,
       type,
       timestamp: new Date().toISOString(),
       ...(detail ? { detail } : {}),
     };
+    let frame = this.eventFrame(event);
+    if (Buffer.byteLength(frame, "utf8") > WEB_MAX_EVENT_BYTES) {
+      event = { ...event, detail: { truncated: true } };
+      frame = this.eventFrame(event);
+    }
     this.events.push(event);
     if (this.events.length > WEB_MAX_EVENTS) this.events.shift();
-    for (const client of this.clients)
-      client.write(`data: ${JSON.stringify(event)}\n\n`);
+    for (const client of this.clients.values()) this.enqueue(client, frame);
     this.onEvent?.(type, detail);
     traceWeb("sse_event", {
       type,
@@ -124,7 +139,7 @@ export class WebHost {
     this.stopped = true;
     this.unsubscribeCapabilities();
     this.unsubscribeRuntime();
-    for (const client of this.clients) client.end();
+    for (const client of this.clients.values()) this.closeClient(client);
     this.clients.clear();
     if (this.server.listening) {
       await new Promise<void>((resolve) => this.server.close(() => resolve()));
@@ -299,30 +314,37 @@ export class WebHost {
         sessionId: body.sessionId,
         chars: content.length,
       });
-      this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
-      void this.runtime
-        .sendPrompt(content, {
+      try {
+        await this.runtime.sendPrompt(
+          content,
+          { commandId, sessionId: String(body.sessionId) },
+          String(body.sessionId),
+        );
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        traceWeb("prompt_dispatch_failed", {
           commandId,
-          sessionId: String(body.sessionId),
-        })
-        .then(() => {
-          traceWeb("prompt_admission_finished", {
-            commandId,
-            elapsedMs: elapsed(requestStarted),
-          });
-        })
-        .catch((error: unknown) => {
-          traceWeb("prompt_dispatch_failed", {
-            commandId,
-            elapsedMs: elapsed(requestStarted),
-            error: error instanceof Error ? error.message : String(error),
-          });
+          elapsedMs: elapsed(requestStarted),
+          error: message,
+        });
         this.publish("prompt_failed", {
           commandId,
           sessionId: body.sessionId,
-          error: error instanceof Error ? error.message : String(error),
+          error: message,
         });
+        return this.json(response, 409, {
+          id: commandId,
+          accepted: false,
+          state: "rejected",
+          error: message,
+          cursor: this.sequence,
         });
+      }
+      this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
+      traceWeb("prompt_admission_finished", {
+        commandId,
+        elapsedMs: elapsed(requestStarted),
+      });
       traceWeb("prompt_response_sent", {
         commandId,
         sessionId: body.sessionId,
@@ -338,7 +360,8 @@ export class WebHost {
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
-    if (url.pathname === "/events") return this.eventsStream(request, response);
+    if (url.pathname === "/events")
+      return this.eventsStream(request, response, url);
     if (url.pathname === "/api/sessions")
       return this.json(response, 200, {
         sessions: await this.adapter.listSessions(),
@@ -436,17 +459,113 @@ export class WebHost {
     );
   }
 
-  private eventsStream(request: IncomingMessage, response: ServerResponse) {
+  private eventsStream(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ) {
+    if (this.clients.size >= WEB_MAX_SSE_CLIENTS) {
+      this.json(response, 429, { error: "too many event clients" });
+      return;
+    }
+    const rawCursor = request.headers["last-event-id"] ?? url.searchParams.get("cursor");
+    const cursorText = Array.isArray(rawCursor) ? rawCursor[0] : rawCursor;
+    let cursor: number | undefined;
+    if (cursorText !== undefined && cursorText !== null && cursorText !== "") {
+      if (!/^\d+$/.test(cursorText)) {
+        this.json(response, 400, { error: "cursor must be a non-negative integer" });
+        return;
+      }
+      cursor = Number(cursorText);
+      if (!Number.isSafeInteger(cursor)) {
+        this.json(response, 400, { error: "cursor is out of range" });
+        return;
+      }
+    }
+    const oldest = this.events[0]?.sequence ?? this.sequence + 1;
+    if (
+      cursor !== undefined &&
+      (cursor > this.sequence || cursor < oldest - 1)
+    ) {
+      this.json(response, 409, {
+        error: "RESYNC_REQUIRED",
+        code: "RESYNC_REQUIRED",
+        cursor: this.sequence,
+      });
+      return;
+    }
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    response.write(": connected\n\n");
-    for (const event of this.events)
-      response.write(`data: ${JSON.stringify(event)}\n\n`);
-    this.clients.add(response);
-    request.on("close", () => this.clients.delete(response));
+    const client: EventClient = {
+      response,
+      queue: [],
+      queuedBytes: 0,
+      flushing: false,
+      closed: false,
+    };
+    this.clients.set(response, client);
+    this.enqueue(client, ": connected\n\n");
+    const replay =
+      cursor === undefined
+        ? []
+        : this.events.filter((event) => event.sequence > cursor);
+    for (const event of replay) this.enqueue(client, this.eventFrame(event));
+    request.on("close", () => this.closeClient(client));
+    response.on("close", () => this.closeClient(client));
+  }
+
+  private eventFrame(event: WebEvent) {
+    return `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`;
+  }
+
+  private enqueue(client: EventClient, frame: string) {
+    if (client.closed) return;
+    const bytes = Buffer.byteLength(frame, "utf8");
+    if (
+      bytes > WEB_MAX_SSE_QUEUE_BYTES ||
+      client.queuedBytes + bytes > WEB_MAX_SSE_QUEUE_BYTES
+    ) {
+      this.closeClient(client);
+      return;
+    }
+    client.queue.push(frame);
+    client.queuedBytes += bytes;
+    this.flushClient(client);
+  }
+
+  private flushClient(client: EventClient) {
+    if (client.closed || client.flushing) return;
+    client.flushing = true;
+    while (client.queue.length > 0 && !client.closed) {
+      const frame = client.queue.shift()!;
+      client.queuedBytes -= Buffer.byteLength(frame, "utf8");
+      try {
+        if (!client.response.write(frame)) {
+          client.response.once("drain", () => {
+            client.flushing = false;
+            this.flushClient(client);
+          });
+          return;
+        }
+      } catch {
+        this.closeClient(client);
+        return;
+      }
+    }
+    client.flushing = false;
+  }
+
+  private closeClient(client: EventClient) {
+    if (client.closed) return;
+    client.closed = true;
+    client.queue.length = 0;
+    client.queuedBytes = 0;
+    if (this.clients.get(client.response) === client)
+      this.clients.delete(client.response);
+    if (!client.response.writableEnded) client.response.end();
   }
 
   private json(response: ServerResponse, status: number, value: unknown) {

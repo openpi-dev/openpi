@@ -819,7 +819,7 @@ body.sidebar-collapsed .settings-button { width: 36px; justify-content: center; 
 .activity-chip-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .activity-chip-dot { width: 7px; height: 7px; flex: 0 0 auto; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 0 rgba(40, 103, 178, .35); animation: conversation-pulse 1.5s ease-out infinite; }
 .activity-chip-glyph { flex: 0 0 auto; font-style: normal; font-weight: 650; }
-.activity-chip.completed .activity-chip-glyph { color: var(--healthy); }
+.activity-chip.completed .activity-chip-glyph, .activity-chip.done .activity-chip-glyph { color: var(--healthy); }
 .activity-chip.error .activity-chip-glyph { color: var(--error); }
 .activity-chip.warn .activity-chip-glyph { color: #9a6700; }
 .activity-chip.more { color: var(--subtle); }

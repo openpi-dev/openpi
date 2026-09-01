@@ -278,8 +278,8 @@ The first command endpoint accepts a bounded text prompt only when its Session i
 First slice defaults:
 
 - bind only to `127.0.0.1`;
-- use a high-entropy, expiring token;
-- keep the token in the fragment for bootstrap, then exchange it for an in-memory browser credential;
+- use a high-entropy process-lifetime token;
+- keep the token in the fragment for bootstrap; the browser sends it as an in-memory Bearer credential and it is never persisted;
 - require `Authorization: Bearer` for API and event requests;
 - validate exact Host and an allowlisted Origin;
 - never use a user-provided Session path without resolving it through the Session index;

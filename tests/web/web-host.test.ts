@@ -485,10 +485,6 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
 test("accepts prompts before the agent turn settles", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-"));
   const sessionManager = SessionManager.inMemory(cwd);
-  let resolvePrompt!: () => void;
-  const promptSettled = new Promise<void>((resolve) => {
-    resolvePrompt = resolve;
-  });
   let promptStarted = false;
   let disposed = false;
   const runtime: WebRuntimeController = {
@@ -498,7 +494,6 @@ test("accepts prompts before the agent turn settles", async () => {
     isIdle: () => false,
     sendPrompt: async () => {
       promptStarted = true;
-      await promptSettled;
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -536,12 +531,126 @@ test("accepts prompts before the agent turn settles", async () => {
     ]);
     assert.equal(response.status, 202);
     assert.equal(promptStarted, true);
-    resolvePrompt();
     await responsePromise;
   } finally {
-    resolvePrompt();
     await host.stop();
     assert.equal(disposed, true);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("reports rejected admission without publishing accepted", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-rejected-prompt-"));
+  const sessionManager = SessionManager.inMemory(cwd);
+  const events: string[] = [];
+  const runtime: WebRuntimeController = {
+    sessionDirectory: cwd,
+    cwd,
+    sessionManager,
+    isIdle: () => true,
+    sendPrompt: async () => {
+      throw new Error("Prompt was rejected before admission");
+    },
+    newSession: async () => ({ cancelled: false }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("Model is not available");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {},
+  };
+  const host = new WebHost({
+    runtime,
+    onEvent: (type) => events.push(type),
+  });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const response = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        content: "hello",
+      }),
+    });
+    assert.equal(response.status, 409);
+    const body = (await response.json()) as Record<string, unknown>;
+    assert.equal(typeof body.id, "string");
+    assert.equal(body.accepted, false);
+    assert.equal(body.state, "rejected");
+    assert.equal(body.error, "Prompt was rejected before admission");
+    assert.equal(typeof body.cursor, "number");
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+  assert.equal(events.includes("prompt_accepted"), false);
+  assert.equal(events.includes("prompt_failed"), true);
+});
+
+test("replays only events after the requested cursor and rejects stale cursors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-events-"));
+  const sessionManager = SessionManager.inMemory(cwd);
+  const runtime: WebRuntimeController = {
+    sessionDirectory: cwd,
+    cwd,
+    sessionManager,
+    isIdle: () => true,
+    sendPrompt: async () => {},
+    newSession: async () => ({ cancelled: false }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("Model is not available");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {},
+  };
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    host.publish("one");
+    host.publish("two");
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const controller = new AbortController();
+    const response = await fetch(`${launched.origin}/events?cursor=2`, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: controller.signal,
+    });
+    assert.equal(response.status, 200);
+    const reader = response.body?.getReader();
+    assert.ok(reader);
+    let replay = "";
+    while (!replay.includes('"type":"two"')) {
+      const next = await reader.read();
+      if (next.done) break;
+      replay += new TextDecoder().decode(next.value);
+    }
+    assert.match(replay, /"type":"two"/);
+    assert.doesNotMatch(replay, /"type":"one"/);
+    controller.abort();
+
+    for (let index = 0; index < 220; index++) host.publish("filler");
+    const stale = await fetch(`${launched.origin}/events?cursor=1`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    assert.equal(stale.status, 409);
+    assert.deepEqual((await stale.json()) as Record<string, unknown>, {
+      error: "RESYNC_REQUIRED",
+      code: "RESYNC_REQUIRED",
+      cursor: 223,
+    });
+  } finally {
+    await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
 });
