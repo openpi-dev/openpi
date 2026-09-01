@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { getGlobalDispatcher } from "undici";
+import * as undici from "undici";
 import {
   configureHttpDispatcher,
   DEFAULT_HTTP_IDLE_TIMEOUT_MS,
 } from "../../web/http-dispatcher.ts";
 
 test("configures the Web dispatcher with the requested idle timeout", async () => {
+  const original = undici.getGlobalDispatcher();
   const leases = [
     configureHttpDispatcher(),
     configureHttpDispatcher(0),
@@ -14,8 +15,8 @@ test("configures the Web dispatcher with the requested idle timeout", async () =
   ];
   try {
     assert.equal(leases[0].timeoutMs, DEFAULT_HTTP_IDLE_TIMEOUT_MS);
-    assert.equal(leases[1].timeoutMs, DEFAULT_HTTP_IDLE_TIMEOUT_MS);
-    assert.equal(leases[2].timeoutMs, DEFAULT_HTTP_IDLE_TIMEOUT_MS);
+    assert.equal(leases[1].timeoutMs, 0);
+    assert.equal(leases[2].timeoutMs, 12);
     assert.throws(
       () => configureHttpDispatcher(-1),
       /Invalid HTTP idle timeout/,
@@ -23,12 +24,7 @@ test("configures the Web dispatcher with the requested idle timeout", async () =
   } finally {
     await Promise.all(leases.map((lease) => lease.release()));
   }
-  const replacement = configureHttpDispatcher(12.9);
-  try {
-    assert.equal(replacement.timeoutMs, 12);
-  } finally {
-    await replacement.release();
-  }
+  assert.equal(undici.getGlobalDispatcher(), original);
 });
 
 test("dispatcher leases release idempotently", async () => {
@@ -37,16 +33,15 @@ test("dispatcher leases release idempotently", async () => {
   await lease.release();
 });
 
-test("one runtime lease cannot close the shared dispatcher", async () => {
-  const first = configureHttpDispatcher();
-  const dispatcher = getGlobalDispatcher();
-  const second = configureHttpDispatcher();
-  try {
-    assert.equal(getGlobalDispatcher(), dispatcher);
-    await second.release();
-    assert.equal(getGlobalDispatcher(), dispatcher);
-  } finally {
-    await first.release();
-    await second.release();
-  }
+test("dispatcher leases restore the dispatcher they replaced", async () => {
+  const original = undici.getGlobalDispatcher();
+  const outer = configureHttpDispatcher(100);
+  const outerDispatcher = undici.getGlobalDispatcher();
+  const inner = configureHttpDispatcher(200);
+  assert.notEqual(undici.getGlobalDispatcher(), outerDispatcher);
+
+  await inner.release();
+  assert.equal(undici.getGlobalDispatcher(), outerDispatcher);
+  await outer.release();
+  assert.equal(undici.getGlobalDispatcher(), original);
 });

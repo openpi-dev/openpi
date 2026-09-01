@@ -60,6 +60,40 @@ jobs:
             --extension "$package/extensions/file-search/index.ts" \
             --extension "$package/extensions/git-info/index.ts" \
             </dev/null
+      - name: Smoke-test packed standalone Web CLI
+        run: |
+          root="$(mktemp -d)"
+          server_pid=""
+          cleanup() {
+            if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
+              kill -TERM "$server_pid"
+              wait "$server_pid"
+            fi
+            rm -rf "$root"
+          }
+          trap cleanup EXIT
+          mkdir "$root/app" "$root/workspace"
+          printf '{"private":true}\n' >"$root/app/package.json"
+          npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
+          tarballs=("$root"/*.tgz)
+          test "${#tarballs[@]}" -eq 1
+          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
+          OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            "$root/app/node_modules/.bin/openpi" web "$root/workspace" --port 0 --no-open \
+            >"$root/host.log" 2>&1 &
+          server_pid=$!
+          for _ in {1..100}; do
+            grep -q '^OpenPI Web Workbench is running at ' "$root/host.log" && break
+            kill -0 "$server_pid"
+            sleep 0.1
+          done
+          origin="$(sed -n 's/^OpenPI Web Workbench is running at //p' "$root/host.log" | tail -n 1)"
+          test -n "$origin"
+          curl --fail --silent --show-error --output "$root/marked.js" "$origin/marked.js"
+          grep -q 'marked v18' "$root/marked.js"
+          kill -TERM "$server_pid"
+          wait "$server_pid"
+          server_pid=""
 
   windows-background-terminals:
     name: Background terminals (Windows)

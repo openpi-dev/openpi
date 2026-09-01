@@ -2,9 +2,10 @@
 
 Status: draft implementation architecture
 Created: 2026-08-30
-Verified: 2026-08-30
-Applicable source boundary: current checkout standalone `bin/openpi.js` and `web/` implementation
-Source issue: https://github.com/openpi-dev/openpi/issues/76
+Verified: 2026-09-01
+Applicable source boundary: PR #326 standalone `bin/openpi.js` and `web/` implementation
+Source issues: https://github.com/openpi-dev/openpi/issues/76 and https://github.com/openpi-dev/openpi/issues/325
+Implementation PR: https://github.com/openpi-dev/openpi/pull/326
 Related research: https://github.com/openpi-dev/openpi/issues/166
 
 This document defines the current implementation direction and visual design for OpenPI Web. It is a design record, not an adopted runtime constraint. The first vertical implementation lives outside `extensions/`: `bin/openpi.js` starts a standalone process and `web/` owns its Pi SDK runtime, local host, protocol adapter, and browser assets.
@@ -18,7 +19,7 @@ The browser consumes projections and sends typed commands to its process-local P
 - Session files, branches, compaction, resume, and Session lifecycle;
 - provider, model, thinking level, Skills, project trust, and ordinary tools;
 - tool execution, approval, cancellation, and model-loop state;
-- OpenPI capability runtimes such as Subagents, Workflows, Tasks, Goals, and Background Terminals.
+- OpenPI capability runtimes. The first slice projects Subagents, Workflows, and Background Terminals; Tasks, Goals, and broader coverage remain deferred.
 
 The Web Host owns only browser connectivity, controller serialization, bounded derived indexes, protocol sequencing, and cleanup. It must never infer completion from a label, a missing event, a disconnected browser, or a rendered status.
 
@@ -28,12 +29,13 @@ The Web Host owns only browser connectivity, controller serialization, bounded d
 
 - `openpi [workspace]` starts a loopback-only host in a standalone process and opens the browser.
 - A browser can inspect projects and Sessions visible to the Web process's Pi authority.
-- A selected Session has a bounded, compaction-aware snapshot.
+- A selected Session has a bounded projection of Pi's current branch.
 - New runtime events are delivered incrementally and have a monotonic cursor.
 - Refresh and reconnect can recover from a snapshot plus cursor.
-- The browser can submit a bounded text prompt only to the active Web `AgentSession` through `session.prompt`; historical Sessions remain read-only.
+- Selecting a Session activates it in the Web-owned runtime. The browser can submit a bounded text prompt only when the request still matches that active `AgentSession`, through `session.prompt`.
 - Known Session `cwd` values form the workspace index, and an operator may add a validated local directory to the host-lifetime index.
 - Stopping the Web process aborts its active turn, closes runtime resources, the host, and client connections.
+- One package-owned process lease protects the shared Web Session and metadata directory; a second live Host fails closed, while a dead owner's lease can be recovered only after its PID and OS process-start identity no longer match. The nonce identifies the exact published owner during release and recovery. Candidate, released, and stale safety directories live in the private `.openpi-web-host.artifacts/` container so their bounded accounting never scans, limits, or deletes ordinary Pi Session files.
 - Starting, switching, reloading, or stopping an interactive terminal Pi Session has no effect on the Web runtime, and Web commands have no route into that terminal Session.
 - Without the `openpi` process, no Web server, timer, network connection, model call, tool, prompt, or schema exists.
 
@@ -45,7 +47,9 @@ The Web Host owns only browser connectivity, controller serialization, bounded d
 - remote, LAN, public, or relay access;
 - file mutation and arbitrary file serving;
 - Session fork and bulk operations;
-- model/provider configuration writes;
+- separate read-only browsing of a non-active Session, detailed compaction summaries, and custom-entry state;
+- Tasks and Goals capability projection;
+- provider credentials, provider configuration, and arbitrary Settings writes; model selection for the current Web Session uses Pi's native `session.setModel` and updates Pi's normal default-model preference;
 - multi-user identity and collaboration;
 - a second database or a second Session store.
 
@@ -70,9 +74,11 @@ Pi Runtime and OpenPI extensions
   canonical Session and execution facts
 ```
 
-The adapter is the only module allowed to translate Pi events into Web protocol records. The frontend must not parse JSONL Session files, read the filesystem, or reconstruct runtime state from display text.
+The runtime and adapter modules form the only Pi-to-Web projection boundary: `PiWebRuntime` translates live Pi events, while `PiWebAdapter` reads bounded Session and capability snapshots. `PiWebRuntime` also owns the single-process lease for the shared Web Session directory, preventing cross-process lost updates without adding another database or daemon. The frontend must not parse JSONL Session files, read the filesystem, or reconstruct runtime state from display text.
 
-## 4. Proposed Repository Layout
+## 4. Future Repository Layout
+
+The following split is an architectural direction, not a claim about files already present in PR #326. The current slice keeps routing, authentication, cursors, queue bounds, and security headers inside the small Host until a real separation reduces complexity.
 
 ```text
 bin/
@@ -97,10 +103,10 @@ web/
     session-index.ts          # bounded derived Session index
     snapshot.ts               # Session snapshot projection
     event-projector.ts        # Pi lifecycle -> Web events
-    capability-projections.ts# Goal/Tasks/Subagent/Workflow projections
+    capability-projections.ts# capability projections as they are added
   security/
     path-policy.ts            # workspace and session path boundary checks
-    redaction.ts              # output/path/secret redaction policy
+    redaction.ts              # deferred remote-sharing policy, if required
   ui/
     package.json              # frontend build boundary, if shipped separately
     src/
@@ -170,20 +176,24 @@ browser request
   -> serve bootstrap or projected data
 
 Web new Session / workspace switch
-  -> replace only the Web-owned AgentSessionRuntime
-  -> abort and dispose the outgoing Web Session
-  -> bind the replacement headlessly
+  -> prepare and bind the replacement Web-owned AgentSessionRuntime atomically
+  -> keep an outgoing runtime while an in-flight request captured for that Session settles
+  -> dispose the outgoing runtime after its prompt operations settle
   -> retain the loopback host and browser connection
 
 Web SIGINT / SIGTERM / startup failure
   -> stop accepting requests
   -> close SSE clients
   -> unsubscribe runtime and capability listeners
+  -> drain every admitted Session and metadata mutation
   -> abort and dispose the Web runtime
-  -> close the server and clear in-memory indexes
+  -> release the exact Web Host process lease
+  -> finish server closure and clear in-memory indexes
 ```
 
-The Host is associated with exactly one Web-owned runtime controller. It never receives an `ExtensionContext`, `ExtensionAPI`, `pi.sendUserMessage`, or terminal Session replacement callback. Web Sessions are persisted under the separate `~/.pi/agent/web-sessions` directory, so interactive terminal Pi processes and the Web process do not enumerate or mutate each other's Session store. They may still use the same Provider credentials and trusted project resources.
+The Host is associated with exactly one Web-owned runtime controller. It never receives an `ExtensionContext`, `ExtensionAPI`, `pi.sendUserMessage`, or terminal Session replacement callback. Web Sessions are persisted under the separate `~/.pi/agent/web-sessions` directory, so interactive terminal Pi processes and the Web process do not enumerate or mutate each other's Session store. One live Host owns that directory at a time; it can manage multiple workspaces. They may still use the same Provider credentials and trusted project resources.
+
+Stale-owner recovery retains a nonce-scoped tombstone as a safety fence against a paused contender acting on an obsolete observation. The artifact container is fail-closed at 128 package-owned entries, with at most 64 stale tombstones. OpenPI never deletes these fences automatically: after verifying that no Web Host can still depend on them, an operator may remove obsolete `candidate-*`, `released-*`, or `stale-*` entries from `.openpi-web-host.artifacts/`. This bound applies only to lease artifacts; Pi Session discovery remains complete and is not claimed to have bounded filesystem cost.
 
 ## 6. Protocol Shape
 
@@ -208,29 +218,17 @@ interface WebSnapshot {
 }
 ```
 
-`SessionProjection` contains a bounded branch projection, not raw Session JSONL. Every message, tool call, tool result, custom entry, and compaction marker must have a stable kind and source identity. Raw arguments and outputs are opt-in expanded fields with independent limits.
+`SessionProjection` contains a bounded projection of Pi's current branch, not raw Session JSONL. The first slice preserves stable identity for projected messages, tool calls, and tool results. Detailed compaction summaries and custom-entry state are deferred rather than reconstructed in the browser.
 
 ### Event
 
 ```ts
 interface WebEvent {
   protocolVersion: 1;
-  cursor: number;
-  epoch: number;
-  id: string;
-  type:
-    | "session.started"
-    | "session.changed"
-    | "agent.started"
-    | "agent.settled"
-    | "message.updated"
-    | "tool.started"
-    | "tool.updated"
-    | "tool.ended"
-    | "capability.changed"
-    | "host.stopped";
+  sequence: number;
+  type: string;
   timestamp: string;
-  payload: unknown;
+  detail?: Record<string, unknown>;
 }
 ```
 
@@ -265,30 +263,33 @@ The first command endpoint accepts a bounded text prompt only when its Session i
 ## 7. Adapter and Projection Rules
 
 - `SessionManager` is the source for Session listing and branch reads.
-- The adapter owns all bounds: maximum Sessions, entries, message bytes, output bytes, queue bytes, and replay age.
-- Snapshot generation is compaction-aware and branch-aware.
+- The protocol projection owns Session, entry, message, output, and snapshot limits; the Host owns event-count, response, client-count, and connection-buffer limits.
+- Snapshot generation reads Pi's compaction-aware current branch. The first slice does not separately render compaction summaries or custom-entry state.
 - Tool output is represented as evidence with `toolCallId`, `toolName`, phase, error state, and bounded content.
-- Goal, Tasks, Subagent, Workflow, and Background Terminal data are separate projections with explicit provenance; they are not flattened into transcript text.
+- Subagent, Workflow, and Background Terminal data are separate bounded projections with explicit provenance; Tasks, Goals, and deeper capability inspection are deferred.
+- Capability providers and the Host share a versioned process-global registry keyed by the Pi `SessionManager` object. This preserves one lifecycle even when Pi's managed package path and the standalone npm CLI path load separate ESM copies of the same OpenPI version; it is not persistent storage.
 - A projection can be stale or uncertain. It must expose that fact instead of upgrading it to `done`.
-- Redaction happens before data leaves the adapter. The frontend cannot opt out of redaction by requesting raw entries.
-- Event listeners are attached only while the host is running and are removed during every shutdown path.
+- The first loopback-only slice does not rewrite Pi transcript content with a second redaction policy. It prevents automatic remote Markdown image loading and applies response bounds and browser security headers; remote sharing requires a separate threat model.
+- Event listeners are attached when the Host is constructed immediately before listening and are removed during shutdown.
+
+These limits apply to Web protocol output and to message/capability projection work. Pi's native `SessionManager.listAll()` still performs its own complete Session discovery, and the small package-owned workspace/archive metadata files are loaded as complete sets before their Web projections are capped. PR #326 deliberately does not add a second Session index or persistence control plane, so it does not claim that those source-discovery costs are internally bounded.
 
 ## 8. Security Boundary
 
 First slice defaults:
 
 - bind only to `127.0.0.1`;
-- use a high-entropy process-lifetime token;
-- keep the token in the fragment for bootstrap; the browser sends it as an in-memory Bearer credential and it is never persisted;
+- use a high-entropy capability token whose lifetime is the Web Host process;
+- deliver the token in the fragment, copy it into tab-scoped `sessionStorage`, and immediately remove it from the visible URL;
 - require `Authorization: Bearer` for API and event requests;
 - validate exact Host and an allowlisted Origin;
 - never use a user-provided Session path without resolving it through the Session index;
 - never serve arbitrary filesystem paths;
-- allow POST only for the bounded active-Session prompt and validated host-lifetime workspace import routes;
+- expose authenticated mutations for Session create/select/rename/archive, workspace import/rename/remove, active-Session prompt admission, and Pi-native model selection; no route serves arbitrary files, edits transcript history, changes provider credentials, or configures remote access;
 - enforce response and connection queue limits;
 - shut down all connections with the Pi Session lifecycle.
 
-The browser URL is a transport convenience, not a durable identity. Do not log it, persist it in Session data, or treat possession of a copied URL as a future collaboration identity.
+The browser URL is a transport convenience, not a durable identity. `openpi --no-open` (or a failed browser launch) prints it once to startup stdout so the local operator can open it; that output is secret-bearing and should stay in a trusted terminal or protected temporary log. CI uses an explicit fixed test token. Do not persist a real URL in Session data, publish captured startup output, or treat possession of a copied URL as a future collaboration identity.
 
 ## 9. Frontend Information Architecture
 
@@ -298,29 +299,26 @@ The first screen is the working surface, not a marketing landing page.
 
 ```text
 +----------------------+---------------------------------------------+
-| workspace switcher   | session title      model/status   settings  |
+| workspace switcher   | session title          connection status   |
 | search sessions      +---------------------------------------------+
-| project groups       |                               | activity |
-| session rows         |       conversation / run trace | drawer   |
-|                      |                               |          |
-|                      +-------------------------------+----------+
-|                      | context / tools / task status              |
+| workspace groups     |       conversation / tool evidence         |
+| session rows         |       bounded runtime activity              |
+|                      |                                             |
 |                      +---------------------------------------------+
-|                      | prompt composer                           |
+|                      | model selector / prompt composer            |
+|                      +---------------------------------------------+
 +----------------------+---------------------------------------------+
 ```
 
-- Left rail: project and Session navigation, search, create affordance reserved for a later phase.
-- Center: chronological conversation and execution evidence.
-- Right rail: collapsible activity inspector for running tools, Subagents, Workflows, Tasks, Goals, and Background Terminals.
-- Bottom composer: enabled only when the selected Session is the active Web Session; historical Sessions display an explicit read-only state.
+- Left rail: workspace and Session navigation, search, Session creation, and workspace import.
+- Center: chronological conversation, tool evidence, and the first bounded activity projections.
+- Bottom composer: model selection and prompt admission for the Session activated in the Web-owned runtime; the request includes that Session id.
 
 ### Mobile
 
 - Header contains current Session and connection status.
 - Session rail becomes a drawer.
-- Activity inspector becomes a bottom sheet.
-- Conversation remains the primary full-width surface.
+- Conversation and its bounded activity rows remain the primary full-width surface.
 - Composer remains visible and is disabled when the selected Session is not active.
 
 ## 10. Visual Direction
@@ -385,39 +383,39 @@ The frontend should be organized around data contracts rather than one large tra
 
 Each component receives typed projected data and must not inspect raw Pi messages or infer state from CSS classes.
 
-## 12. Delivery Phases
+## 12. Delivery Status
 
-### Phase A: architecture and adapter contract
+### Delivered in PR #326: architecture and adapter contract
 
-- Split the current prototype into host, protocol, adapter, and UI asset boundaries.
-- Add protocol types and bounded projection tests.
-- Keep HTTP snapshot + SSE, with narrowly typed POST routes for active-Session prompts and host-lifetime workspace import.
-- Add reconnect/resync behavior.
+- Host, protocol, adapter, runtime controller, and UI assets have separate boundaries.
+- Protocol types and bounded projection tests cover Sessions, messages, capabilities, snapshots, events, and connection queues.
+- Authenticated HTTP mutations cover Session create/select/rename/archive, workspace import/rename/remove, active-Session prompt admission, and Pi-native model selection.
+- Snapshot plus cursor-based SSE provide bounded replay and explicit resync behavior.
 
-### Phase B: usable observer UI
+### Delivered in PR #326: first usable UI
 
-- Introduce a real React/TypeScript/Vite frontend boundary, subject to package dependency review.
-- Implement Session rail, transcript viewport, tool evidence, connection state, and responsive layout.
-- Add visual regression or browser smoke coverage at desktop and mobile widths.
+- Keep the first slice as separate dependency-light HTML, CSS, and browser JavaScript assets; a React migration is not required for this protocol boundary.
+- Session rail, transcript and tool evidence, connection state, model picker, composer, and a responsive narrow-screen layout are present.
+- Manual acceptance from a freshly packed CLI covers desktop and a 390x844 viewport. CI currently verifies packed Host startup and static assets, not browser viewports; automated visual regression remains future work.
 
-### Phase C: capability inspector
+### Delivered in PR #326: minimal capability activity
 
-- Project Tasks, Goals, Subagents, Workflows, and Background Terminals through independent adapters.
-- Show real lifecycle states and evidence, not labels derived from UI state.
+- Subagents, Workflows, and Background Terminals use scoped bounded projections with canonical structured lifecycle fields.
+- Tasks, Goals, transcripts, logs, and deeper capability inspection remain deferred.
 
-### Phase D: controlled local commands
+### Delivered in PR #326: controlled local mutations
 
-- Define controller ownership and typed receipts.
-- Add prompt and interrupt only after stale command, cancellation, shutdown, and TUI conflict behavior are tested.
-- Reuse Pi user/host authority; do not expose unrestricted model tools through the browser.
+- The Web-owned Pi runtime controller serializes Session and model mutations and returns typed request failures.
+- Prompt admission is bound to the active Web Session and reports admission separately from settlement.
+- Session/workspace metadata mutations remain package-owned projections; unrestricted model tools and interrupt control are not exposed.
 
-### Phase E: optional network research
+### Deferred: optional network research
 
 - Separate Issue and threat model.
 - Do not expand loopback design into LAN/public access by adding a flag alone.
 - Evaluate observer-only sharing before any remote write capability.
 
-## 13. Acceptance Criteria for the Next Implementation PR
+## 13. Acceptance Criteria for PR #326
 
 - The HTML, CSS, and browser JavaScript are separate assets under `web/ui/`.
 - No Web entrypoint exists under `extensions/`, and no `/web` command is registered.
@@ -429,7 +427,7 @@ Each component receives typed projected data and must not inspect raw Pi message
 - Web commands cannot target a non-active Session; prompt admission uses the Web runtime's active Session authority.
 - Web prompt and Session commands have no reference or callback path to an interactive terminal runtime.
 - No Web resources exist before the standalone `openpi` process starts.
-- Desktop and mobile layouts are validated in a real browser.
+- Desktop and 390x844 layouts have a manual real-browser acceptance receipt; automated viewport coverage remains deferred.
 
 ## 14. Sources and Evidence
 

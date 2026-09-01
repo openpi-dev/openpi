@@ -5,9 +5,14 @@ export const DEFAULT_HTTP_IDLE_TIMEOUT_MS = 300_000;
 const DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS = 2_000;
 const originalGlobalFetch = globalThis.fetch;
 let installedGlobalFetch: typeof globalThis.fetch | undefined;
-let sharedDispatcher: undici.Dispatcher | undefined;
-let sharedDispatcherTimeoutMs: number | undefined;
-let sharedDispatcherRefs = 0;
+
+type ManagedDispatcher = {
+  dispatcher: undici.Dispatcher;
+  previous: undici.Dispatcher;
+  released: boolean;
+};
+
+const managedDispatchers = new WeakMap<undici.Dispatcher, ManagedDispatcher>();
 
 export interface HttpDispatcherLease {
   timeoutMs: number;
@@ -74,26 +79,22 @@ export function configureHttpDispatcher(
   if (normalizedTimeoutMs === undefined) {
     throw new Error(`Invalid HTTP idle timeout: ${String(timeoutMs)}`);
   }
-  const dispatcher =
-    sharedDispatcher ??
-    withErrorListener(
-      new undici.EnvHttpProxyAgent({
-        allowH2: false,
-        bodyTimeout: normalizedTimeoutMs,
-        connect: {
-          autoSelectFamilyAttemptTimeout: DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
-        },
-        headersTimeout: normalizedTimeoutMs,
-        clientFactory: createClient,
-        factory: createOriginDispatcher,
-      }),
-    );
-  if (!sharedDispatcher) {
-    sharedDispatcher = dispatcher;
-    sharedDispatcherTimeoutMs = normalizedTimeoutMs;
-    undici.setGlobalDispatcher(dispatcher);
-  }
-  sharedDispatcherRefs += 1;
+  const previous = undici.getGlobalDispatcher();
+  const dispatcher = withErrorListener(
+    new undici.EnvHttpProxyAgent({
+      allowH2: false,
+      bodyTimeout: normalizedTimeoutMs,
+      connect: {
+        autoSelectFamilyAttemptTimeout: DEFAULT_AUTO_SELECT_FAMILY_ATTEMPT_TIMEOUT_MS,
+      },
+      headersTimeout: normalizedTimeoutMs,
+      clientFactory: createClient,
+      factory: createOriginDispatcher,
+    }),
+  );
+  const managed = { dispatcher, previous, released: false };
+  managedDispatchers.set(dispatcher, managed);
+  undici.setGlobalDispatcher(dispatcher);
   const shouldInstallGlobals =
     installedGlobalFetch === undefined
       ? globalThis.fetch === originalGlobalFetch
@@ -104,16 +105,20 @@ export function configureHttpDispatcher(
   }
   let released = false;
   return {
-    // The dispatcher is process-owned; one runtime cannot close another's client.
-    timeoutMs: sharedDispatcherTimeoutMs ?? normalizedTimeoutMs,
+    timeoutMs: normalizedTimeoutMs,
     async release() {
       if (released) return;
       released = true;
-      if (sharedDispatcher !== dispatcher) return;
-      sharedDispatcherRefs = Math.max(0, sharedDispatcherRefs - 1);
-      if (sharedDispatcherRefs > 0) return;
-      sharedDispatcher = undefined;
-      sharedDispatcherTimeoutMs = undefined;
+      managed.released = true;
+      if (undici.getGlobalDispatcher() === dispatcher) {
+        let replacement = managed.previous;
+        let replaced = managedDispatchers.get(replacement);
+        while (replaced?.released) {
+          replacement = replaced.previous;
+          replaced = managedDispatchers.get(replacement);
+        }
+        undici.setGlobalDispatcher(replacement);
+      }
       await dispatcher.close();
     },
   };

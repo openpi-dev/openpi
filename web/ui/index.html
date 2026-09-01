@@ -5,7 +5,6 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <title>OpenPI</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/marked.js"></script>
     <script src="/app.js" defer></script>
@@ -75,10 +74,6 @@
           </form>
         </dialog>
 
-        <button id="open-settings" class="settings-button" type="button" data-i18n-aria="settings" data-i18n-title="settings">
-          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1.73-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1.73-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg>
-          <span data-i18n="settings">Settings</span>
-        </button>
       </aside>
 
       <main class="conversation-shell landing">
@@ -96,15 +91,12 @@
         <section id="conversation" class="conversation" aria-label="Conversation">
           <div class="landing-welcome">
             <div class="landing-brand">
-              <strong><span class="brand-word">Open</span><span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
+              <strong>Open<span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
             </div>
           </div>
         </section>
 
-        <nav id="turn-rail" class="turn-rail" aria-label="Conversation turns" hidden></nav>
-
         <div class="composer-dock">
-          <div id="activity-bar" class="activity-bar" hidden></div>
           <div class="workspace-picker-row">
             <button id="select-workspace" class="workspace-picker" type="button" data-i18n-aria="selectWorkspace">
               <svg class="workspace-symbol icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path></svg>
@@ -143,45 +135,5 @@
       </dialog>
     </div>
     <button class="sidebar-scrim" type="button" aria-label="Close sidebar"></button>
-    <dialog id="settings-dialog" class="settings-dialog">
-      <div class="settings-header">
-        <strong data-i18n="settings">Settings</strong>
-        <button id="close-settings" class="settings-close" type="button" data-i18n-aria="closeSettings" data-i18n-title="close">×</button>
-      </div>
-      <div class="settings-body">
-        <nav class="settings-nav" aria-label="Settings sections">
-          <button class="settings-nav-item active" type="button"><svg class="settings-nav-icon icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1.73-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.38a2 2 0 0 0-.73-2.73l-.15-.09a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1.73-1.73V4a2 2 0 0 0-2-2z"></path><circle cx="12" cy="12" r="3"></circle></svg><span data-i18n="generalSettings">General settings</span></button>
-        </nav>
-        <section class="settings-content">
-          <div class="settings-row settings-row-first">
-            <div><strong data-i18n="language">Language</strong></div>
-            <div class="language-picker">
-              <button id="language-picker-trigger" class="language-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Language">
-                <span id="language-picker-value">English</span>
-                <svg class="language-picker-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
-              </button>
-              <div id="language-menu" class="language-menu" role="listbox" hidden>
-                <button type="button" role="option" data-language="zh">中文<span class="language-check">✓</span></button>
-                <button type="button" role="option" data-language="en">English<span class="language-check">✓</span></button>
-              </div>
-            </div>
-          </div>
-          <div class="settings-row">
-            <div><strong data-i18n="theme">Theme</strong></div>
-            <div class="language-picker">
-              <button id="theme-picker-trigger" class="language-picker-trigger" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Theme">
-                <span id="theme-picker-value">PI</span>
-                <svg class="language-picker-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
-              </button>
-              <div id="theme-menu" class="language-menu" role="listbox" hidden>
-                <button type="button" role="option" data-theme-value="pi"><span data-i18n="themePi">PI Grid</span><span class="language-check">✓</span></button>
-                <button type="button" role="option" data-theme-value="white"><span data-i18n="themeWhite">Clean White</span><span class="language-check">✓</span></button>
-                <button type="button" role="option" data-theme-value="dark"><span data-i18n="themeDark">Midnight</span><span class="language-check">✓</span></button>
-              </div>
-            </div>
-          </div>
-        </section>
-      </div>
-    </dialog>
   </body>
 </html>

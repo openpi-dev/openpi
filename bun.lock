@@ -8,6 +8,7 @@
         "@effect/platform-node": "^4.0.0-beta.99",
         "acorn": "^8.17.0",
         "effect": "^4.0.0-beta.99",
+        "jiti": "2.7.0",
         "marked": "^18.0.5",
         "undici": "8.9.0",
       },

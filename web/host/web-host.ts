@@ -12,29 +12,30 @@ import { promisify } from "node:util";
 import { subscribeWebCapabilities } from "../../extensions/shared/web-observer-registry.ts";
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
+  jsonByteLength,
   WEB_MAX_EVENT_BYTES,
   WEB_MAX_EVENTS,
-  WEB_MAX_SSE_CLIENTS,
-  WEB_MAX_SSE_QUEUE_BYTES,
+  WEB_MAX_SNAPSHOT_BYTES,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebSnapshot,
 } from "../protocol/types.ts";
-import type { WebRuntimeController } from "../runtime/types.ts";
+import {
+  WebRuntimeRequestError,
+  type WebRuntimeController,
+} from "../runtime/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
+import { MARKED_BROWSER_URL } from "./static-assets.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../ui/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
+const MAX_SSE_CLIENTS = 8;
+const MAX_SSE_BUFFER_BYTES = 256 * 1024;
+const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
+const SERVER_CLOSE_DRAIN_MS = 500;
+const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const execFileAsync = promisify(execFile);
-
-type EventClient = {
-  response: ServerResponse;
-  queue: string[];
-  queuedBytes: number;
-  flushing: boolean;
-  closed: boolean;
-};
 
 export interface WebHostOptions {
   runtime: WebRuntimeController;
@@ -42,13 +43,15 @@ export interface WebHostOptions {
   port?: number;
   token?: string;
   allowedOrigins?: readonly string[];
+  directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
+  shutdownTimeoutMs?: number;
 }
 
 export class WebHost {
   private readonly server: Server;
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
-  private readonly clients = new Map<ServerResponse, EventClient>();
+  private readonly clients = new Set<ServerResponse>();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
   private port = 0;
@@ -56,9 +59,17 @@ export class WebHost {
   private readonly requestedPort: number;
   private readonly onEvent?: WebHostOptions["onEvent"];
   private readonly allowedOrigins: ReadonlySet<string>;
+  private readonly directoryChooser: NonNullable<
+    WebHostOptions["directoryChooser"]
+  >;
+  private readonly shutdownTimeoutMs: number;
   private readonly unsubscribeCapabilities: () => void;
   private readonly unsubscribeRuntime: () => void;
-  private stopped = false;
+  private readonly chooserAbort = new AbortController();
+  private readonly leaseSensitiveRequests = new Set<Promise<void>>();
+  private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
+  private stopping = false;
+  private stopPromise?: Promise<void>;
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
@@ -69,24 +80,57 @@ export class WebHost {
     if (this.token.length !== 32)
       throw new Error("Web host token must be 64 hexadecimal characters");
     this.allowedOrigins = new Set(options.allowedOrigins ?? []);
+    this.directoryChooser =
+      options.directoryChooser ?? (() => this.chooseDirectory());
+    this.shutdownTimeoutMs =
+      options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
+    if (
+      !Number.isSafeInteger(this.shutdownTimeoutMs) ||
+      this.shutdownTimeoutMs <= 0
+    ) {
+      throw new Error("Web host shutdown timeout must be a positive integer");
+    }
     this.adapter = new PiWebAdapter(options.runtime);
     this.onEvent = options.onEvent;
-    this.unsubscribeCapabilities = subscribeWebCapabilities(() =>
-      this.publish("runtime_changed"),
-    );
+    this.unsubscribeCapabilities = subscribeWebCapabilities((scope) => {
+      if (scope === this.runtime.sessionManager) this.publish("runtime_changed");
+    });
     this.unsubscribeRuntime = this.runtime.subscribe(({ type, detail }) =>
       this.publish(type, detail),
     );
     this.server = createServer((request, response) => {
-      void this.handle(request, response).catch((error: unknown) => {
-        this.json(response, 500, {
-          error: error instanceof Error ? error.message : "request failed",
+      const leaseSensitive = this.isLeaseSensitiveMutation(request);
+      if (this.stopping && leaseSensitive) {
+        request.resume();
+        response.setHeader("Connection", "close");
+        this.json(response, 503, {
+          code: "HOST_STOPPING",
+          error: "Web host is stopping",
         });
-      });
+        response.once("finish", () => request.socket.destroy());
+        return;
+      }
+      const operation = this.dispatchRequest(request, response);
+      if (leaseSensitive) {
+        this.leaseSensitiveRequests.add(operation);
+        this.leaseSensitiveMessages.add(request);
+        void operation.then(
+          () => {
+            this.leaseSensitiveRequests.delete(operation);
+            this.leaseSensitiveMessages.delete(request);
+          },
+          () => {
+            this.leaseSensitiveRequests.delete(operation);
+            this.leaseSensitiveMessages.delete(request);
+          },
+        );
+      }
+      void operation;
     });
   }
 
   async start() {
+    await this.adapter.initialize();
     await new Promise<void>((resolve, reject) => {
       this.server.once("error", reject);
       this.server.listen(this.requestedPort, HOST, () => resolve());
@@ -118,33 +162,127 @@ export class WebHost {
       timestamp: new Date().toISOString(),
       ...(detail ? { detail } : {}),
     };
-    let frame = this.eventFrame(event);
-    if (Buffer.byteLength(frame, "utf8") > WEB_MAX_EVENT_BYTES) {
-      event = { ...event, detail: { truncated: true } };
-      frame = this.eventFrame(event);
+    let serialized = JSON.stringify(event);
+    if (Buffer.byteLength(serialized) > WEB_MAX_EVENT_BYTES) {
+      event = {
+        protocolVersion: WEB_PROTOCOL_VERSION,
+        sequence: event.sequence,
+        type: "state_invalidated",
+        timestamp: event.timestamp,
+        detail: { reason: "event_too_large", originalType: type },
+      };
+      serialized = JSON.stringify(event);
     }
     this.events.push(event);
     if (this.events.length > WEB_MAX_EVENTS) this.events.shift();
-    for (const client of this.clients.values()) this.enqueue(client, frame);
-    this.onEvent?.(type, detail);
+    const record = `id: ${event.sequence}\ndata: ${serialized}\n\n`;
+    for (const client of this.clients) {
+      if (
+        client.destroyed ||
+        client.writableEnded ||
+        client.writableLength > MAX_SSE_BUFFER_BYTES ||
+        !client.write(record)
+      ) {
+        this.clients.delete(client);
+        client.destroy();
+      }
+    }
+    this.onEvent?.(event.type, event.detail);
     traceWeb("sse_event", {
-      type,
+      type: event.type,
       sequence: event.sequence,
-      detailKeys: detail ? Object.keys(detail) : [],
+      detailKeys: event.detail ? Object.keys(event.detail) : [],
     });
   }
 
-  async stop() {
-    if (this.stopped) return;
-    this.stopped = true;
-    this.unsubscribeCapabilities();
-    this.unsubscribeRuntime();
-    for (const client of this.clients.values()) this.closeClient(client);
-    this.clients.clear();
-    if (this.server.listening) {
-      await new Promise<void>((resolve) => this.server.close(() => resolve()));
+  stop() {
+    if (this.stopPromise) return this.stopPromise;
+    this.stopping = true;
+    this.stopPromise = (async () => {
+      this.unsubscribeCapabilities();
+      this.unsubscribeRuntime();
+      this.chooserAbort.abort();
+      for (const client of this.clients) client.end();
+      this.clients.clear();
+      const closeServer = this.server.listening
+        ? new Promise<void>((resolve) => {
+            const forceClose = setTimeout(
+              () => {
+                for (const request of this.leaseSensitiveMessages) {
+                  request.destroy();
+                }
+                this.server.closeAllConnections();
+              },
+              SERVER_CLOSE_DRAIN_MS,
+            );
+            forceClose.unref();
+            this.server.close(() => {
+              clearTimeout(forceClose);
+              resolve();
+            });
+            this.server.closeIdleConnections();
+          })
+        : Promise.resolve();
+      const disposeRuntime = (async () => {
+        await this.drainLeaseSensitiveRequests();
+        await this.runtime.dispose();
+      })();
+      const cleanup = Promise.all([disposeRuntime, closeServer]).then(
+        () => undefined,
+      );
+      void cleanup.catch(() => undefined);
+      await new Promise<void>((resolve, reject) => {
+        const timeout = setTimeout(
+          () =>
+            reject(
+              new Error(
+                `Web runtime cleanup did not settle within ${this.shutdownTimeoutMs} ms; cleanup state is uncertain`,
+              ),
+            ),
+          this.shutdownTimeoutMs,
+        );
+        void cleanup.then(
+          () => {
+            clearTimeout(timeout);
+            resolve();
+          },
+          (error) => {
+            clearTimeout(timeout);
+            reject(error);
+          },
+        );
+      });
+    })();
+    return this.stopPromise;
+  }
+
+  private async dispatchRequest(
+    request: IncomingMessage,
+    response: ServerResponse,
+  ) {
+    try {
+      await this.handle(request, response);
+    } catch (error) {
+      if (response.destroyed || response.writableEnded) return;
+      this.json(response, 500, {
+        error: error instanceof Error ? error.message : "request failed",
+      });
     }
-    await this.runtime.dispose();
+  }
+
+  private isLeaseSensitiveMutation(request: IncomingMessage) {
+    if (request.method === "GET" || request.method === "HEAD") return false;
+    const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
+    if (pathname === "/api/prompt") return false;
+    return pathname.startsWith("/api/workspaces") ||
+      pathname.startsWith("/api/sessions") ||
+      pathname === "/api/model";
+  }
+
+  private async drainLeaseSensitiveRequests() {
+    while (this.leaseSensitiveRequests.size > 0) {
+      await Promise.allSettled([...this.leaseSensitiveRequests]);
+    }
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse) {
@@ -164,6 +302,9 @@ export class WebHost {
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
+        "Content-Security-Policy":
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+        "Referrer-Policy": "no-referrer",
       });
       response.end(body);
       return;
@@ -171,8 +312,7 @@ export class WebHost {
     if (
       url.pathname === "/styles.css" ||
       url.pathname === "/app.js" ||
-      url.pathname === "/marked.js" ||
-      url.pathname === "/favicon.svg"
+      url.pathname === "/marked.js"
     ) {
       if (request.method !== "GET")
         return this.json(response, 405, {
@@ -181,15 +321,13 @@ export class WebHost {
       const file = url.pathname.slice(1);
       const body = await readFile(
         file === "marked.js"
-          ? new URL("../../node_modules/marked/lib/marked.umd.js", import.meta.url)
+          ? MARKED_BROWSER_URL
           : new URL(file, UI_ROOT),
       );
       response.writeHead(200, {
         "Content-Type": file.endsWith(".css")
           ? "text/css; charset=utf-8"
-          : file.endsWith(".svg")
-            ? "image/svg+xml; charset=utf-8"
-            : "text/javascript; charset=utf-8",
+          : "text/javascript; charset=utf-8",
         "Cache-Control": "no-store",
       });
       response.end(body);
@@ -201,7 +339,7 @@ export class WebHost {
       url.pathname === "/api/workspaces/select" &&
       request.method === "POST"
     ) {
-      const path = await this.chooseDirectory();
+      const path = await this.directoryChooser(this.chooserAbort.signal);
       if (!path) return this.json(response, 200, { cancelled: true });
       const importedPath = await this.adapter.importWorkspace(path);
       this.publish("workspace_imported", { path: importedPath });
@@ -241,17 +379,31 @@ export class WebHost {
     }
     if (url.pathname === "/api/sessions" && request.method === "POST") {
       const body = await this.readJson(request);
-      if (typeof body.workspacePath !== "string") {
+      if (
+        typeof body.workspacePath !== "string" ||
+        typeof body.commandId !== "string" ||
+        body.commandId.length === 0 ||
+        body.commandId.length > 128
+      ) {
         return this.json(response, 400, {
-          error: "workspace path is required",
+          error: "workspace path and bounded commandId are required",
         });
       }
       const workspacePath = await this.adapter.requireWorkspace(
         body.workspacePath,
       );
-      const result = await this.runtime.newSession(workspacePath);
-      this.publish("session_created", { workspacePath });
-      return this.json(response, 201, result);
+      const result = await this.runtime.newSession(workspacePath, {
+        commandId: body.commandId,
+      });
+      this.publish("session_created", {
+        workspacePath,
+        commandId: body.commandId,
+        ...(result.sessionPath ? { sessionPath: result.sessionPath } : {}),
+      });
+      return this.json(response, 201, {
+        ...result,
+        commandId: body.commandId,
+      });
     }
     if (url.pathname === "/api/sessions" && request.method === "PATCH") {
       const body = await this.readJson(request);
@@ -286,12 +438,35 @@ export class WebHost {
     }
     if (url.pathname === "/api/model" && request.method === "POST") {
       const body = await this.readJson(request);
-      if (typeof body.provider !== "string" || typeof body.modelId !== "string") {
-        return this.json(response, 400, { error: "provider and modelId are required" });
+      if (
+        typeof body.provider !== "string" ||
+        typeof body.modelId !== "string" ||
+        typeof body.sessionId !== "string"
+      ) {
+        return this.json(response, 400, {
+          error: "provider, modelId, and sessionId are required",
+        });
       }
-      const model = await this.runtime.setModel(body.provider, body.modelId);
-      this.publish("model_selected", { provider: model.provider, modelId: model.id });
-      return this.json(response, 200, model);
+      try {
+        const model = await this.runtime.setModel(body.provider, body.modelId, {
+          expectedSessionId: body.sessionId,
+        });
+        this.publish("model_selected", {
+          provider: model.provider,
+          modelId: model.id,
+        });
+        return this.json(response, 200, model);
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(
+          error,
+          "MODEL_SELECTION_FAILED",
+          "model selection failed",
+        );
+        return this.json(response, failure.status, {
+          code: failure.code,
+          error: failure.error,
+        });
+      }
     }
     if (url.pathname === "/api/prompt" && request.method === "POST") {
       const requestStarted = performance.now();
@@ -303,8 +478,12 @@ export class WebHost {
           error: "prompt must be 1-12000 characters",
         });
       }
-      if (body.sessionId !== this.runtime.sessionManager.getSessionId()) {
+      if (
+        typeof body.sessionId !== "string" ||
+        body.sessionId !== this.runtime.sessionManager.getSessionId()
+      ) {
         return this.json(response, 409, {
+          code: "SESSION_CONFLICT",
           error: "Only the active Web session accepts messages",
         });
       }
@@ -315,36 +494,27 @@ export class WebHost {
         chars: content.length,
       });
       try {
-        await this.runtime.sendPrompt(
-          content,
-          { commandId, sessionId: String(body.sessionId) },
-          String(body.sessionId),
-        );
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        traceWeb("prompt_dispatch_failed", {
+        await this.runtime.sendPrompt(content, {
+          commandId,
+          expectedSessionId: body.sessionId,
+        });
+        traceWeb("prompt_admission_finished", {
           commandId,
           elapsedMs: elapsed(requestStarted),
-          error: message,
         });
-        this.publish("prompt_failed", {
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error);
+        traceWeb("prompt_admission_failed", {
           commandId,
-          sessionId: body.sessionId,
-          error: message,
+          elapsedMs: elapsed(requestStarted),
+          error: failure.error,
         });
-        return this.json(response, 409, {
-          id: commandId,
-          accepted: false,
-          state: "rejected",
-          error: message,
-          cursor: this.sequence,
+        return this.json(response, failure.status, {
+          code: failure.code,
+          error: failure.error,
         });
       }
       this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
-      traceWeb("prompt_admission_finished", {
-        commandId,
-        elapsedMs: elapsed(requestStarted),
-      });
       traceWeb("prompt_response_sent", {
         commandId,
         sessionId: body.sessionId,
@@ -360,24 +530,35 @@ export class WebHost {
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
-    if (url.pathname === "/events")
-      return this.eventsStream(request, response, url);
-    if (url.pathname === "/api/sessions")
+    if (url.pathname === "/events") return this.eventsStream(request, response);
+    if (url.pathname === "/api/sessions") {
+      const projection = await this.adapter.listSessionProjection();
       return this.json(response, 200, {
-        sessions: await this.adapter.listSessions(),
+        sessions: projection.sessions,
+        truncation: {
+          truncated: projection.omitted > 0,
+          sessionsOmitted: projection.omitted,
+        },
       });
+    }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
     if (url.pathname === "/api/snapshot") {
+      const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
         url.searchParams.get("path") ?? undefined,
       );
       const snapshot: WebSnapshot = {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
-        cursor: this.sequence,
+        cursor,
         ...projection,
       };
+      let finalBytes = jsonByteLength(snapshot);
+      while (snapshot.truncation.bytes !== finalBytes) {
+        snapshot.truncation.bytes = finalBytes;
+        finalBytes = jsonByteLength(snapshot);
+      }
       return this.json(response, 200, snapshot);
     }
     if (url.pathname === "/api/session") {
@@ -397,27 +578,35 @@ export class WebHost {
   private async chooseDirectory() {
     try {
       if (process.platform === "darwin") {
-        const { stdout } = await execFileAsync("osascript", [
-          "-e",
-          'tell application "System Events" to activate',
-          "-e",
-          'POSIX path of (choose folder with prompt "Choose a workspace")',
-        ]);
+        const { stdout } = await execFileAsync(
+          "osascript",
+          [
+            "-e",
+            'tell application "System Events" to activate',
+            "-e",
+            'POSIX path of (choose folder with prompt "Choose a workspace")',
+          ],
+          { signal: this.chooserAbort.signal },
+        );
         return stdout.trim() || undefined;
       }
       if (process.platform === "win32") {
-        const { stdout } = await execFileAsync("powershell.exe", [
-          "-NoProfile",
-          "-Command",
-          "$dialog = New-Object -ComObject Shell.Application; $folder = $dialog.BrowseForFolder(0, 'Choose a workspace', 0); if ($folder) { $folder.Self.Path }",
-        ]);
+        const { stdout } = await execFileAsync(
+          "powershell.exe",
+          [
+            "-NoProfile",
+            "-Command",
+            "$dialog = New-Object -ComObject Shell.Application; $folder = $dialog.BrowseForFolder(0, 'Choose a workspace', 0); if ($folder) { $folder.Self.Path }",
+          ],
+          { signal: this.chooserAbort.signal },
+        );
         return stdout.trim() || undefined;
       }
-      const { stdout } = await execFileAsync("zenity", [
-        "--file-selection",
-        "--directory",
-        "--title=Choose a workspace",
-      ]);
+      const { stdout } = await execFileAsync(
+        "zenity",
+        ["--file-selection", "--directory", "--title=Choose a workspace"],
+        { signal: this.chooserAbort.signal },
+      );
       return stdout.trim() || undefined;
     } catch {
       return undefined;
@@ -459,117 +648,123 @@ export class WebHost {
     );
   }
 
-  private eventsStream(
-    request: IncomingMessage,
-    response: ServerResponse,
-    url: URL,
-  ) {
-    if (this.clients.size >= WEB_MAX_SSE_CLIENTS) {
-      this.json(response, 429, { error: "too many event clients" });
-      return;
-    }
-    const rawCursor = request.headers["last-event-id"] ?? url.searchParams.get("cursor");
-    const cursorText = Array.isArray(rawCursor) ? rawCursor[0] : rawCursor;
-    let cursor: number | undefined;
-    if (cursorText !== undefined && cursorText !== null && cursorText !== "") {
-      if (!/^\d+$/.test(cursorText)) {
-        this.json(response, 400, { error: "cursor must be a non-negative integer" });
-        return;
-      }
-      cursor = Number(cursorText);
-      if (!Number.isSafeInteger(cursor)) {
-        this.json(response, 400, { error: "cursor is out of range" });
-        return;
-      }
-    }
-    const oldest = this.events[0]?.sequence ?? this.sequence + 1;
-    if (
-      cursor !== undefined &&
-      (cursor > this.sequence || cursor < oldest - 1)
-    ) {
-      this.json(response, 409, {
-        error: "RESYNC_REQUIRED",
-        code: "RESYNC_REQUIRED",
-        cursor: this.sequence,
+  private eventsStream(request: IncomingMessage, response: ServerResponse) {
+    const url = new URL(request.url ?? "/events", `http://${HOST}`);
+    const queryCursor = this.parseCursor(url.searchParams.get("cursor"));
+    const headerValue = request.headers["last-event-id"];
+    const headerCursor = this.parseCursor(
+      Array.isArray(headerValue) ? headerValue[0] : headerValue,
+    );
+    if (queryCursor.invalid || headerCursor.invalid) {
+      return this.json(response, 400, {
+        code: "INVALID_CURSOR",
+        error: "cursor must be a non-negative integer",
       });
-      return;
+    }
+    if (
+      queryCursor.value !== undefined &&
+      headerCursor.value !== undefined &&
+      queryCursor.value !== headerCursor.value
+    ) {
+      return this.json(response, 400, {
+        code: "CURSOR_MISMATCH",
+        error: "cursor and Last-Event-ID must match",
+      });
+    }
+    const cursor = queryCursor.value ?? headerCursor.value;
+    const oldestCursor = this.events[0]?.sequence
+      ? this.events[0].sequence - 1
+      : this.sequence;
+    if (
+      cursor === undefined ||
+      cursor < oldestCursor ||
+      cursor > this.sequence
+    ) {
+      return this.json(response, 409, {
+        code: "RESYNC_REQUIRED",
+        error: "event history is not available for this cursor",
+        cursor: this.sequence,
+        oldestCursor,
+      });
+    }
+    if (this.clients.size >= MAX_SSE_CLIENTS) {
+      return this.json(response, 503, {
+        code: "SSE_CLIENT_LIMIT",
+        error: "too many event clients",
+      });
+    }
+    const replay = this.events
+      .filter((event) => event.sequence > cursor)
+      .map(
+        (event) =>
+          `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`,
+      );
+    const replayBytes = replay.reduce(
+      (bytes, record) => bytes + Buffer.byteLength(record),
+      Buffer.byteLength(": connected\n\n"),
+    );
+    if (replayBytes > MAX_SSE_REPLAY_BYTES) {
+      return this.json(response, 409, {
+        code: "RESYNC_REQUIRED",
+        error: "event replay exceeds the bounded transport budget",
+        cursor: this.sequence,
+        oldestCursor,
+      });
     }
     response.writeHead(200, {
       "Content-Type": "text/event-stream; charset=utf-8",
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    const client: EventClient = {
-      response,
-      queue: [],
-      queuedBytes: 0,
-      flushing: false,
-      closed: false,
+    response.write(": connected\n\n");
+    // The complete replay is bounded before headers. A false return only means
+    // Node buffered the write; finishing this synchronous replay preserves
+    // ordering without treating normal backpressure as a broken client.
+    for (const record of replay) response.write(record);
+    this.clients.add(response);
+    response.on("close", () => this.clients.delete(response));
+  }
+
+  private parseCursor(value: string | undefined | null) {
+    if (value === undefined || value === null || value === "") {
+      return { invalid: false, value: undefined };
+    }
+    if (!/^\d+$/.test(value)) return { invalid: true, value: undefined };
+    const parsed = Number(value);
+    return Number.isSafeInteger(parsed)
+      ? { invalid: false, value: parsed }
+      : { invalid: true, value: undefined };
+  }
+
+  private runtimeRequestFailure(
+    error: unknown,
+    fallbackCode = "PROMPT_ADMISSION_FAILED",
+    fallbackMessage = "prompt admission failed",
+  ) {
+    if (error instanceof WebRuntimeRequestError) {
+      return {
+        status: error.statusCode,
+        code: error.code,
+        error: error.message,
+      };
+    }
+    return {
+      status: 500,
+      code: fallbackCode,
+      error: error instanceof Error ? error.message : fallbackMessage,
     };
-    this.clients.set(response, client);
-    this.enqueue(client, ": connected\n\n");
-    const replay =
-      cursor === undefined
-        ? []
-        : this.events.filter((event) => event.sequence > cursor);
-    for (const event of replay) this.enqueue(client, this.eventFrame(event));
-    request.on("close", () => this.closeClient(client));
-    response.on("close", () => this.closeClient(client));
-  }
-
-  private eventFrame(event: WebEvent) {
-    return `id: ${event.sequence}\ndata: ${JSON.stringify(event)}\n\n`;
-  }
-
-  private enqueue(client: EventClient, frame: string) {
-    if (client.closed) return;
-    const bytes = Buffer.byteLength(frame, "utf8");
-    if (
-      bytes > WEB_MAX_SSE_QUEUE_BYTES ||
-      client.queuedBytes + bytes > WEB_MAX_SSE_QUEUE_BYTES
-    ) {
-      this.closeClient(client);
-      return;
-    }
-    client.queue.push(frame);
-    client.queuedBytes += bytes;
-    this.flushClient(client);
-  }
-
-  private flushClient(client: EventClient) {
-    if (client.closed || client.flushing) return;
-    client.flushing = true;
-    while (client.queue.length > 0 && !client.closed) {
-      const frame = client.queue.shift()!;
-      client.queuedBytes -= Buffer.byteLength(frame, "utf8");
-      try {
-        if (!client.response.write(frame)) {
-          client.response.once("drain", () => {
-            client.flushing = false;
-            this.flushClient(client);
-          });
-          return;
-        }
-      } catch {
-        this.closeClient(client);
-        return;
-      }
-    }
-    client.flushing = false;
-  }
-
-  private closeClient(client: EventClient) {
-    if (client.closed) return;
-    client.closed = true;
-    client.queue.length = 0;
-    client.queuedBytes = 0;
-    if (this.clients.get(client.response) === client)
-      this.clients.delete(client.response);
-    if (!client.response.writableEnded) client.response.end();
   }
 
   private json(response: ServerResponse, status: number, value: unknown) {
-    const body = JSON.stringify(value);
+    let body = JSON.stringify(value);
+    if (Buffer.byteLength(body) > WEB_MAX_SNAPSHOT_BYTES) {
+      status = 500;
+      body = JSON.stringify({
+        code: "RESPONSE_TOO_LARGE",
+        error: "response exceeded the Web protocol byte limit",
+        maxBytes: WEB_MAX_SNAPSHOT_BYTES,
+      });
+    }
     response.writeHead(status, {
       "Content-Type": "application/json; charset=utf-8",
       "Cache-Control": "no-store",

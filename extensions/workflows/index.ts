@@ -67,7 +67,9 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   notifyWebCapabilities,
+  projectWorkflowCapability,
   registerWebCapability,
+  type WebCapabilityScope,
 } from "../shared/web-observer-registry.ts";
 import {
   createWorktree,
@@ -808,6 +810,7 @@ export default function workflows(
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
   let unregisterWebCapability: (() => void) | undefined;
+  let webCapabilityScope: WebCapabilityScope | undefined;
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
@@ -969,7 +972,7 @@ export default function workflows(
   };
 
   const updateIndicator = () => {
-    notifyWebCapabilities();
+    if (webCapabilityScope) notifyWebCapabilities(webCapabilityScope);
     const ctx = lastContext;
     if (!ctx) return;
     try {
@@ -1059,16 +1062,18 @@ export default function workflows(
 
   pi.on("session_start", (_event, ctx) => {
     unregisterWebCapability?.();
-    unregisterWebCapability = registerWebCapability({
+    const scope = ctx.sessionManager;
+    webCapabilityScope = scope;
+    unregisterWebCapability = registerWebCapability(scope, {
       kind: "workflows",
-      sessionId: ctx.sessionManager.getSessionId(),
-      snapshot: () => [
-        ...activeDetails().values(),
-        ...settledRuns
-          .entriesArray()
-          .filter(([runId]) => !activeRuns.has(runId))
-          .map(([, details]) => details),
-      ],
+      snapshot: () =>
+        projectWorkflowCapability([
+          ...activeDetails().values(),
+          ...settledRuns
+            .entriesArray()
+            .filter(([runId]) => !activeRuns.has(runId))
+            .map(([, details]) => details),
+        ]),
     });
     registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;
@@ -1140,6 +1145,7 @@ export default function workflows(
     statusWriter.reset();
     unregisterWebCapability?.();
     unregisterWebCapability = undefined;
+    webCapabilityScope = undefined;
     lastContext = undefined;
     widgetVisible = false;
     widgetEntryKey = undefined;

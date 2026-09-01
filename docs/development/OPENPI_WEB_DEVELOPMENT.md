@@ -15,7 +15,7 @@
 
 - `web/ui/` 只负责浏览器状态、渲染和交互，不读取 Session 文件或本地文件系统。
 - `web/protocol/` 定义浏览器与 Host 之间的投影类型和协议版本。
-- `web/adapter/` 是 Pi 事件到 Web 投影的唯一翻译边界。
+- `web/runtime/` 与 `web/adapter/` 共同构成 Pi 到 Web 投影的边界；Host 只负责协议排序、连接和命令分派。
 - `web/host/` 负责 loopback HTTP、SSE、token、请求边界和静态资源白名单。
 - `web/runtime/` 独占 Web 进程的 Pi Session 生命周期。
 - `bin/openpi.js` 是正式运行入口；`scripts/dev-web.mjs` 只用于本地开发编排。
@@ -46,6 +46,10 @@ bun run dev:web -- /absolute/path/to/workspace
 ```
 
 脚本会启动一个真实的 `PiWebRuntime`/`WebHost` 和一个 Vite UI 服务，自动打开带 token 的浏览器地址。开发 Host 仍然只监听 `127.0.0.1`，Vite 代理不会改变鉴权或 SSE 协议。
+
+正式 CLI 与开发后端共享同一个 Web Host owner lease。同一 `PI_CODING_AGENT_DIR` 下已有 Host 时，第二个进程会拒绝启动；先正常停止现有 Host，不要手工删除仍由匹配 PID 和进程启动身份持有的租约文件。
+
+异常进程恢复会在 Web Session 目录的 `.openpi-web-host.artifacts/` 中保留安全围栏。只有确认没有存活或暂停的 Web Host 仍依赖这些记录后，才可人工删除其中过期的 `candidate-*`、`released-*` 或 `stale-*` 目录。OpenPI 不会自动删除围栏；达到 128 个租约产物或 64 个 stale 围栏时会 fail closed，并在错误信息中给出该目录。普通 Session 文件不占用这个预算。
 
 `dev:web` 和 `dev:web:backend` 默认会在启动它们的终端输出 Web 诊断日志；设置 `OPENPI_WEB_DEBUG=0` 可关闭。正式运行 `openpi web` 默认关闭日志，排查时设置 `OPENPI_WEB_DEBUG=1`。
 
@@ -110,7 +114,7 @@ bun run test
 node --test --experimental-strip-types tests/web/*.test.ts
 ```
 
-涉及运行时或 UI 的改动，必须在已启动的真实 Web 环境中手工验证目标路径：工作区切换、历史会话继续对话、归档/重命名、模型选择、Markdown、流式运行状态和刷新恢复。记录 checkout HEAD、`pi list` 唯一 OpenPI 来源、专项测试、完整门禁和未执行的层级。
+涉及运行时或 UI 的改动，必须在已启动的真实 Web 环境中手工验证目标路径：工作区切换、活动会话对话、非活动会话的 prompt 禁用、归档/重命名、模型选择、Markdown、流式运行状态和刷新恢复。记录 checkout HEAD、`pi list` 唯一 OpenPI 来源、专项测试、完整门禁和未执行的层级。
 
 ## 提交前检查
 

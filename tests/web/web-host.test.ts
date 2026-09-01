@@ -1,14 +1,17 @@
 import assert from "node:assert/strict";
+import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerWebCapability } from "../../extensions/shared/web-observer-registry.ts";
 import { WebHost } from "../../web/host/web-host.ts";
-import type {
-  WebRuntimeController,
-  WebRuntimeEvent,
+import {
+  type WebRuntimeController,
+  type WebRuntimeEvent,
+  WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 
 test("serves workspaces through a runtime isolated from terminal sessions", async () => {
@@ -16,12 +19,23 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-import-"));
   let runtimeCwd = cwd;
   let sessionManager = SessionManager.inMemory(cwd);
-  const unregister = registerWebCapability({
+  const unregister = registerWebCapability(sessionManager, {
     kind: "workflows",
-    sessionId: sessionManager.getSessionId(),
-    snapshot: () => [{ runId: "wf-test", status: "running" }],
+    snapshot: () => ({
+      items: [
+        {
+          runId: "wf-test",
+          status: "running",
+          startedAt: 1,
+          agents: { total: 1, running: 1, done: 0, error: 0, uncertain: 0 },
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    }),
   });
   const prompts: string[] = [];
+  const creationCommandIds: string[] = [];
   let newSessions = 0;
   let disposed = false;
   const listeners = new Set<(event: WebRuntimeEvent) => void>();
@@ -37,17 +51,25 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     sendPrompt: async (content) => {
       prompts.push(content);
     },
-    newSession: async (workspacePath) => {
+    newSession: async (workspacePath, options) => {
       newSessions++;
+      if (options?.commandId) creationCommandIds.push(options.commandId);
       runtimeCwd = workspacePath;
       sessionManager = SessionManager.inMemory(workspacePath);
       for (const listener of listeners) listener({ type: "session_start" });
-      return { cancelled: false };
+      return {
+        cancelled: false,
+        ...(options?.commandId ? { commandId: options.commandId } : {}),
+      };
     },
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
     setModel: async () => {
-      throw new Error("Model is not available");
+      throw new WebRuntimeRequestError(
+        "Model is not available",
+        "MODEL_NOT_AVAILABLE",
+        400,
+      );
     },
     subscribe(listener) {
       listeners.add(listener);
@@ -71,6 +93,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
 
     const page = await fetch(`${launched.origin}/`);
     assert.equal(page.status, 200);
+    assert.match(
+      page.headers.get("content-security-policy") || "",
+      /img-src 'self' data:/u,
+    );
+    assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
     assert.match(pageHtml, /<script src="\/marked\.js"><\/script>/);
     assert.match(pageHtml, /<script src="\/app\.js" defer><\/script>/);
@@ -100,8 +127,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /id="workspace-menu"/);
     assert.match(pageHtml, /Rename workspace/);
     assert.match(pageHtml, /Remove from sidebar/);
-    assert.match(pageHtml, /id="theme-picker-trigger"/);
-    assert.match(pageHtml, /data-theme-value="dark"/);
+    assert.doesNotMatch(pageHtml, /theme-picker-trigger|data-theme-value/);
+    assert.doesNotMatch(pageHtml, /settings-dialog|language-picker/u);
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
@@ -135,41 +162,22 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /visibleUngroupedSessions/);
     assert.match(appSource, /workspaceDeleteConfirm/);
     assert.match(appSource, /workspace-delete-dialog/);
-    assert.match(appSource, /message-copy/);
-    assert.match(appSource, /messageActionsMarkup/);
-    assert.match(appSource, /turn-tick/);
-    assert.match(appSource, /turn-rail/);
-    assert.match(appSource, /scrollIntoView/);
-    assert.match(appSource, /activity-card/);
-    assert.match(appSource, /familyToolCallCard/);
-    assert.match(appSource, /toolLineMarkup/);
-    assert.match(appSource, /toolCallSummary/);
-    assert.match(appSource, /groupRows/);
-    assert.match(appSource, /tool-group/);
-    assert.match(appSource, /thinkingLineMarkup/);
-    assert.match(appSource, /data-thinking-start/);
-    assert.match(appSource, /applyTheme/);
-    assert.match(appSource, /data-theme-value/);
-    assert.match(appSource, /message-edit-input/);
-    assert.match(appSource, /enterMessageEdit/);
-    assert.match(appSource, /renderActivityBar/);
+    assert.match(appSource, /runtime-activity/);
     assert.match(appSource, /runtime_changed/);
-    assert.match(appSource, /resultsByCallId/);
-    assert.match(appSource, /pinnedToBottom/);
-    assert.match(appSource, /behavior: "instant"/);
-    assert.match(appSource, /customType/);
-    assert.match(appSource, /subagent-result/);
-    assert.match(appSource, /workflow-result/);
+    assert.match(appSource, /sessionStorage\.setItem/);
+    assert.match(appSource, /history\.replaceState/);
+    assert.match(appSource, /\/events\?cursor=/);
+    assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
+    assert.doesNotMatch(
+      appSource,
+      /applyTheme|message-edit-input|enterMessageEdit/,
+    );
+    assert.doesNotMatch(appSource, /language-picker|open-settings/u);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
     assert.equal(marked.status, 200);
     assert.match(marked.headers.get("content-type") || "", /javascript/);
     assert.match(await marked.text(), /marked v18/);
-
-    const favicon = await fetch(`${launched.origin}/favicon.svg`);
-    assert.equal(favicon.status, 200);
-    assert.match(favicon.headers.get("content-type") || "", /image\/svg\+xml/);
-    assert.match(await favicon.text(), /<svg/);
 
     const styles = await fetch(`${launched.origin}/styles.css`);
     assert.equal(styles.status, 200);
@@ -193,7 +201,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.workspace-picker-row \{[^}]*width: min\(840px, 100%\)/,
+      /\.workspace-picker-row \{[^}]*width: min\(780px, 100%\)/,
     );
     assert.match(
       stylesSource,
@@ -210,7 +218,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.composer-hint \{ display: none; \}/);
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \{ width: min\(840px, calc\(100% - 48px\)\); \}/,
+      /\.message-row\.assistant \{ width: min\(780px, calc\(100% - 48px\)\); \}/,
     );
     assert.match(
       stylesSource,
@@ -218,30 +226,19 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \.message-details \{ width: min\(820px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
+      /\.message-row\.assistant \.message-details \{ width: min\(760px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
     );
     assert.match(
       stylesSource,
-      /\.message-row\.detail-only \{ padding: 2px 0; \}/,
+      /\.message-row\.detail-only \{ padding: 12px 0; \}/,
     );
     assert.match(
       stylesSource,
       /\.message-row\.detail-only \.message-details \{ margin: 0 auto; \}/,
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
-    assert.match(stylesSource, /\.message-actions \{/);
-    assert.match(stylesSource, /\.turn-rail \{/);
-    assert.match(stylesSource, /\.turn-tick-label \{/);
-    assert.match(stylesSource, /\.activity-card \{/);
-    assert.match(stylesSource, /\.activity-chip \{/);
-    assert.match(stylesSource, /html\[data-theme="dark"\] body/);
-    assert.match(stylesSource, /\.tool-icon \{/);
-    assert.match(stylesSource, /\.tool-line\.error/);
-    assert.match(stylesSource, /\.tool-group \{/);
-    assert.match(
-      stylesSource,
-      /\.landing-brand \.pixel-mark i:nth-child\(9\) \{ top: 22px; left: 44px; \}/,
-    );
+    assert.match(stylesSource, /\.runtime-activity \{/);
+    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
@@ -268,18 +265,46 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     assert.equal(modelsResponse.status, 200);
     assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const unavailableModel = await fetch(`${launched.origin}/api/model`, {
+      method: "POST",
+      headers: authorized,
+      body: JSON.stringify({
+        provider: "missing",
+        modelId: "missing",
+        sessionId: sessionManager.getSessionId(),
+      }),
+    });
+    assert.equal(unavailableModel.status, 400);
+    assert.deepEqual(await unavailableModel.json(), {
+      code: "MODEL_NOT_AVAILABLE",
+      error: "Model is not available",
+    });
     assert.equal(snapshot.runtime.status, "running");
     assert.ok(snapshot.workspaces.some((workspace) => workspace.path === cwd));
-    assert.deepEqual(snapshot.runtime.capabilities.workflows, [
-      { runId: "wf-test", status: "running" },
-    ]);
+    assert.deepEqual(snapshot.runtime.capabilities.workflows, {
+      items: [
+        {
+          runId: "wf-test",
+          status: "running",
+          startedAt: 1,
+          agents: { total: 1, running: 1, done: 0, error: 0, uncertain: 0 },
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    });
 
     const sessionsResponse = await fetch(`${launched.origin}/api/sessions`, {
       headers: authorized,
     });
     const listedSessions = (await sessionsResponse.json()) as {
       sessions: Array<{ path: string }>;
+      truncation: { truncated: boolean; sessionsOmitted: number };
     };
+    assert.deepEqual(listedSessions.truncation, {
+      truncated: false,
+      sessionsOmitted: 0,
+    });
     const currentSessionPath = listedSessions.sessions[0]?.path;
     assert.ok(currentSessionPath);
     const sessionRename = await fetch(`${launched.origin}/api/sessions`, {
@@ -393,19 +418,25 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const importedSession = await fetch(`${launched.origin}/api/sessions`, {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({ workspacePath: importedWorkspace.path }),
+      body: JSON.stringify({
+        workspacePath: importedWorkspace.path,
+        commandId: "create-imported",
+      }),
     });
     assert.equal(importedSession.status, 201);
+    assert.equal((await importedSession.json()).commandId, "create-imported");
     assert.equal(runtimeCwd, importedWorkspace.path);
 
     const newSession = await fetch(`${launched.origin}/api/sessions`, {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({ workspacePath: cwd }),
+      body: JSON.stringify({ workspacePath: cwd, commandId: "create-current" }),
     });
     assert.equal(newSession.status, 201);
+    assert.equal((await newSession.json()).commandId, "create-current");
     assert.equal(runtimeCwd, cwd);
     assert.equal(newSessions, 2);
+    assert.deepEqual(creationCommandIds, ["create-imported", "create-current"]);
 
     const removeActive = await fetch(
       `${launched.origin}/api/workspaces?path=${encodeURIComponent(cwd)}`,
@@ -482,9 +513,13 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
-test("accepts prompts before the agent turn settles", async () => {
+test("returns accepted only after Pi admits the prompt", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-"));
   const sessionManager = SessionManager.inMemory(cwd);
+  let resolvePrompt!: () => void;
+  const promptAdmitted = new Promise<void>((resolve) => {
+    resolvePrompt = resolve;
+  });
   let promptStarted = false;
   let disposed = false;
   const runtime: WebRuntimeController = {
@@ -494,6 +529,7 @@ test("accepts prompts before the agent turn settles", async () => {
     isIdle: () => false,
     sendPrompt: async () => {
       promptStarted = true;
+      await promptAdmitted;
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -523,34 +559,37 @@ test("accepts prompts before the agent turn settles", async () => {
         content: "hello",
       }),
     });
-    const response = await Promise.race([
-      responsePromise,
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error("prompt endpoint blocked")), 500),
-      ),
-    ]);
-    assert.equal(response.status, 202);
+    await new Promise((resolve) => setTimeout(resolve, 30));
     assert.equal(promptStarted, true);
-    await responsePromise;
+    let responded = false;
+    void responsePromise.then(() => {
+      responded = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(responded, false);
+    resolvePrompt();
+    const response = await responsePromise;
+    assert.equal(response.status, 202);
+    assert.equal((await response.json()).accepted, true);
   } finally {
+    resolvePrompt();
     await host.stop();
     assert.equal(disposed, true);
     await rm(cwd, { recursive: true, force: true });
   }
 });
 
-test("reports rejected admission without publishing accepted", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-rejected-prompt-"));
+function testRuntime(
+  cwd: string,
+  sendPrompt: WebRuntimeController["sendPrompt"] = async () => {},
+) {
   const sessionManager = SessionManager.inMemory(cwd);
-  const events: string[] = [];
   const runtime: WebRuntimeController = {
     sessionDirectory: cwd,
     cwd,
     sessionManager,
     isIdle: () => true,
-    sendPrompt: async () => {
-      throw new Error("Prompt was rejected before admission");
-    },
+    sendPrompt,
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
@@ -560,96 +599,647 @@ test("reports rejected admission without publishing accepted", async () => {
     subscribe: () => () => {},
     dispose: async () => {},
   };
-  const host = new WebHost({
-    runtime,
-    onEvent: (type) => events.push(type),
+  return runtime;
+}
+
+async function startTestHost(runtime: WebRuntimeController) {
+  const host = new WebHost({ runtime });
+  await host.start();
+  const launched = new URL(host.url);
+  const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+  assert.ok(token);
+  const headers = { Authorization: `Bearer ${token}` };
+  return { host, launched, headers };
+}
+
+test("adapter initialization fails before the Host starts listening", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-startup-failure-"));
+  const runtime = testRuntime(cwd);
+  const host = new WebHost({ runtime });
+  const adapter = (
+    host as unknown as { adapter: { initialize(): Promise<void> } }
+  ).adapter;
+  adapter.initialize = async () => {
+    throw new Error("metadata initialization failed");
+  };
+  try {
+    await assert.rejects(host.start(), /metadata initialization failed/u);
+    assert.equal(
+      (host as unknown as { server: { listening: boolean } }).server.listening,
+      false,
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+async function readEventRecords(response: Response, count: number) {
+  assert.ok(response.body);
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const records: Array<{
+    id: number;
+    event: { sequence: number; type: string };
+  }> = [];
+  while (records.length < count) {
+    const chunk = await reader.read();
+    assert.equal(chunk.done, false);
+    buffer += decoder.decode(chunk.value, { stream: true });
+    const frames = buffer.split("\n\n");
+    buffer = frames.pop() ?? "";
+    for (const frame of frames) {
+      const id = frame
+        .split("\n")
+        .find((line) => line.startsWith("id: "))
+        ?.slice(4);
+      const data = frame
+        .split("\n")
+        .find((line) => line.startsWith("data: "))
+        ?.slice(6);
+      if (!id || !data) continue;
+      records.push({
+        id: Number(id),
+        event: JSON.parse(data) as { sequence: number; type: string },
+      });
+    }
+  }
+  await reader.cancel();
+  return records.slice(0, count);
+}
+
+test("rejects prompt admission with the runtime's typed receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-reject-"));
+  const rejection = new WebRuntimeRequestError(
+    "Pi rejected this prompt",
+    "PROMPT_REJECTED",
+    422,
+  );
+  const runtime = testRuntime(cwd, async () => {
+    throw rejection;
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const response = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "reject me",
+      }),
+    });
+    assert.equal(response.status, 422);
+    assert.deepEqual(await response.json(), {
+      code: "PROMPT_REJECTED",
+      error: "Pi rejected this prompt",
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("replays only events after an exact SSE cursor with event ids", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    host.publish("first");
+    host.publish("second");
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const records = await readEventRecords(response, 2);
+    assert.deepEqual(
+      records.map(({ id, event }) => [id, event.sequence, event.type]),
+      [
+        [snapshot.cursor + 1, snapshot.cursor + 1, "first"],
+        [snapshot.cursor + 2, snapshot.cursor + 2, "second"],
+      ],
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("replays a bounded burst larger than Node's write high-water mark", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-burst-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    for (let index = 0; index < 8; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const records = await readEventRecords(response, 8);
+    assert.deepEqual(
+      records.map(({ event }) => event.type),
+      Array.from({ length: 8 }, () => "burst"),
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("requires resync before SSE headers when replay exceeds its byte budget", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-budget-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    for (let index = 0; index < 13; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers },
+    );
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "RESYNC_REQUIRED");
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("requires resync for missing, future, or expired SSE cursors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-cursor-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const missing = await fetch(`${launched.origin}/events`, { headers });
+    assert.equal(missing.status, 409);
+    assert.equal((await missing.json()).code, "RESYNC_REQUIRED");
+
+    const future = await fetch(`${launched.origin}/events?cursor=999999`, {
+      headers,
+    });
+    assert.equal(future.status, 409);
+
+    for (let index = 0; index < 205; index++)
+      host.publish("advance", { index });
+    const expired = await fetch(`${launched.origin}/events?cursor=0`, {
+      headers,
+    });
+    assert.equal(expired.status, 409);
+    const body = (await expired.json()) as {
+      code: string;
+      oldestCursor: number;
+    };
+    assert.equal(body.code, "RESYNC_REQUIRED");
+    assert.ok(body.oldestCursor > 0);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("accepts Last-Event-ID and rejects cursor disagreement", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-last-id-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    host.publish("after-snapshot");
+    const replay = await fetch(`${launched.origin}/events`, {
+      headers: { ...headers, "Last-Event-ID": String(snapshot.cursor) },
+    });
+    assert.equal(replay.status, 200);
+    assert.equal(
+      (await readEventRecords(replay, 1))[0]?.event.type,
+      "after-snapshot",
+    );
+
+    const mismatch = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      {
+        headers: {
+          ...headers,
+          "Last-Event-ID": String(snapshot.cursor + 1),
+        },
+      },
+    );
+    assert.equal(mismatch.status, 400);
+    assert.equal((await mismatch.json()).code, "CURSOR_MISMATCH");
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("bounds SSE clients and replaces oversized events with invalidation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-bounds-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const clients: Response[] = [];
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    for (let index = 0; index < 8; index++) {
+      const response = await fetch(
+        `${launched.origin}/events?cursor=${snapshot.cursor}`,
+        { headers },
+      );
+      assert.equal(response.status, 200);
+      clients.push(response);
+    }
+    const ninth = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers },
+    );
+    assert.equal(ninth.status, 503);
+    assert.equal((await ninth.json()).code, "SSE_CLIENT_LIMIT");
+
+    const first = clients.shift();
+    assert.ok(first);
+    const firstRecord = readEventRecords(first, 1);
+    host.publish("huge", { value: "x".repeat(80 * 1024) });
+    assert.equal((await firstRecord)[0]?.event.type, "state_invalidated");
+  } finally {
+    for (const response of clients)
+      await response.body?.cancel().catch(() => {});
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("concurrent stop callers await the same runtime disposal", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-"));
+  let releaseDispose!: () => void;
+  const disposeBarrier = new Promise<void>((resolve) => {
+    releaseDispose = resolve;
+  });
+  let disposeCalls = 0;
+  const runtime = testRuntime(cwd);
+  runtime.dispose = async () => {
+    disposeCalls++;
+    await disposeBarrier;
+  };
+  const { host } = await startTestHost(runtime);
+  try {
+    const first = host.stop();
+    const second = host.stop();
+    let secondSettled = false;
+    void second.then(() => {
+      secondSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(disposeCalls, 1);
+    assert.equal(secondSettled, false);
+    releaseDispose();
+    await Promise.all([first, second]);
+    assert.equal(disposeCalls, 1);
+  } finally {
+    releaseDispose();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop waits for lease-sensitive HTTP mutations before runtime disposal", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-mutation-"));
+  const runtime = testRuntime(cwd);
+  let disposeCalls = 0;
+  runtime.dispose = async () => {
+    disposeCalls++;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  let mutationStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    mutationStarted = resolve;
+  });
+  let releaseMutation!: () => void;
+  const mutationBarrier = new Promise<void>((resolve) => {
+    releaseMutation = resolve;
+  });
+  const adapter = (
+    host as unknown as {
+      adapter: { renameWorkspace(path: string, name: string): Promise<string> };
+    }
+  ).adapter;
+  adapter.renameWorkspace = async (_path, name) => {
+    mutationStarted();
+    await mutationBarrier;
+    return name;
+  };
+  try {
+    const request = fetch(`${launched.origin}/api/workspaces`, {
+      method: "PATCH",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: cwd, name: "renamed" }),
+    });
+    await started;
+    const stopping = host.stop();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(disposeCalls, 0);
+
+    releaseMutation();
+    await stopping;
+    assert.equal(disposeCalls, 1);
+    assert.equal((await request).status, 200);
+  } finally {
+    releaseMutation();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop reports uncertain without releasing runtime authority past a mutation", async () => {
+  const cwd = await mkdtemp(
+    join(tmpdir(), "openpi-web-stop-mutation-timeout-"),
+  );
+  const runtime = testRuntime(cwd);
+  let disposeCalls = 0;
+  runtime.dispose = async () => {
+    disposeCalls++;
+  };
+  const host = new WebHost({ runtime, shutdownTimeoutMs: 30 });
+  let releaseMutation!: () => void;
+  const mutationBarrier = new Promise<void>((resolve) => {
+    releaseMutation = resolve;
+  });
+  let mutationStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    mutationStarted = resolve;
   });
   try {
     await host.start();
     const launched = new URL(host.url);
     const token = new URLSearchParams(launched.hash.slice(1)).get("token");
     assert.ok(token);
-    const response = await fetch(`${launched.origin}/api/prompt`, {
-      method: "POST",
+    const adapter = (
+      host as unknown as {
+        adapter: {
+          renameWorkspace(path: string, name: string): Promise<string>;
+        };
+      }
+    ).adapter;
+    adapter.renameWorkspace = async (_path, name) => {
+      mutationStarted();
+      await mutationBarrier;
+      return name;
+    };
+    const request = fetch(`${launched.origin}/api/workspaces`, {
+      method: "PATCH",
       headers: {
         Authorization: `Bearer ${token}`,
         "Content-Type": "application/json",
       },
-      body: JSON.stringify({
-        sessionId: sessionManager.getSessionId(),
-        content: "hello",
-      }),
+      body: JSON.stringify({ path: cwd, name: "renamed" }),
     });
-    assert.equal(response.status, 409);
-    const body = (await response.json()) as Record<string, unknown>;
-    assert.equal(typeof body.id, "string");
-    assert.equal(body.accepted, false);
-    assert.equal(body.state, "rejected");
-    assert.equal(body.error, "Prompt was rejected before admission");
-    assert.equal(typeof body.cursor, "number");
+    await started;
+    const startedAt = Date.now();
+    await assert.rejects(host.stop(), /cleanup did not settle within 30 ms/u);
+    assert.ok(Date.now() - startedAt < 250);
+    assert.equal(disposeCalls, 0);
+
+    releaseMutation();
+    assert.equal((await request).status, 200);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    assert.equal(disposeCalls, 1);
+  } finally {
+    releaseMutation();
+    await host.stop().catch(() => undefined);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop rejects a late keepalive mutation before it enters the drain", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-keepalive-"));
+  let promptStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    promptStarted = resolve;
+  });
+  let releasePrompt!: () => void;
+  const promptBarrier = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  let releaseDispose!: () => void;
+  const disposeBarrier = new Promise<void>((resolve) => {
+    releaseDispose = resolve;
+  });
+  const runtime = testRuntime(cwd, async () => {
+    promptStarted();
+    await promptBarrier;
+  });
+  runtime.dispose = async () => {
+    releasePrompt();
+    await disposeBarrier;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  let renameCalls = 0;
+  const adapter = (
+    host as unknown as {
+      adapter: { renameWorkspace(path: string, name: string): Promise<string> };
+    }
+  ).adapter;
+  adapter.renameWorkspace = async (_path, name) => {
+    renameCalls++;
+    return name;
+  };
+  const socket = createConnection({
+    host: launched.hostname,
+    port: Number(launched.port),
+  });
+  socket.setEncoding("utf8");
+  socket.on("error", () => undefined);
+  let output = "";
+  let lateResponseSeen!: () => void;
+  const lateResponse = new Promise<void>((resolve) => {
+    lateResponseSeen = resolve;
+  });
+  socket.on("data", (chunk) => {
+    output += chunk;
+    if (output.includes("HTTP/1.1 503")) lateResponseSeen();
+  });
+  try {
+    await once(socket, "connect");
+    const promptBody = JSON.stringify({
+      sessionId: runtime.sessionManager.getSessionId(),
+      content: "hold the first request",
+    });
+    socket.write(
+      `POST /api/prompt HTTP/1.1\r\nHost: ${launched.host}\r\nAuthorization: ${headers.Authorization}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(promptBody)}\r\nConnection: keep-alive\r\n\r\n${promptBody}`,
+    );
+    await started;
+
+    const stopping = host.stop();
+    const renameBody = JSON.stringify({ path: cwd, name: "too late" });
+    socket.write(
+      `PATCH /api/workspaces HTTP/1.1\r\nHost: ${launched.host}\r\nAuthorization: ${headers.Authorization}\r\nContent-Type: application/json\r\nContent-Length: ${Buffer.byteLength(renameBody)}\r\nConnection: keep-alive\r\n\r\n${renameBody}`,
+    );
+    await Promise.race([
+      lateResponse,
+      new Promise<never>((_resolve, reject) =>
+        setTimeout(() => reject(new Error("late 503 was not observed")), 2_000),
+      ),
+    ]);
+
+    assert.match(output, /HTTP\/1\.1 202/u);
+    assert.match(output, /HTTP\/1\.1 503/u);
+    assert.match(output, /HOST_STOPPING/u);
+    assert.equal(renameCalls, 0);
+    releaseDispose();
+    await stopping;
+  } finally {
+    releasePrompt();
+    releaseDispose();
+    socket.destroy();
+    await host.stop().catch(() => undefined);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop reports uncertain cleanup when runtime disposal never settles", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-timeout-"));
+  const runtime = testRuntime(cwd);
+  runtime.dispose = () => new Promise(() => undefined);
+  const host = new WebHost({ runtime, shutdownTimeoutMs: 30 });
+  try {
+    await host.start();
+    const startedAt = Date.now();
+    await assert.rejects(
+      host.stop(),
+      /cleanup did not settle within 30 ms; cleanup state is uncertain/u,
+    );
+    assert.ok(Date.now() - startedAt < 500);
+    await assert.rejects(
+      host.stop(),
+      /cleanup did not settle within 30 ms; cleanup state is uncertain/u,
+    );
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop aborts an open workspace picker", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-picker-"));
+  let chooserStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    chooserStarted = resolve;
+  });
+  let chooserAborted = false;
+  const runtime = testRuntime(cwd);
+  const host = new WebHost({
+    runtime,
+    directoryChooser: (signal) =>
+      new Promise((resolve) => {
+        chooserStarted();
+        signal.addEventListener(
+          "abort",
+          () => {
+            chooserAborted = true;
+            resolve(undefined);
+          },
+          { once: true },
+        );
+      }),
+  });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const pickerRequest = fetch(`${launched.origin}/api/workspaces/select`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    await started;
+
+    await host.stop();
+
+    assert.equal(chooserAborted, true);
+    assert.equal((await pickerRequest).status, 200);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
-  assert.equal(events.includes("prompt_accepted"), false);
-  assert.equal(events.includes("prompt_failed"), true);
 });
 
-test("replays only events after the requested cursor and rejects stale cursors", async () => {
-  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-events-"));
-  const sessionManager = SessionManager.inMemory(cwd);
-  const runtime: WebRuntimeController = {
-    sessionDirectory: cwd,
-    cwd,
-    sessionManager,
-    isIdle: () => true,
-    sendPrompt: async () => {},
-    newSession: async () => ({ cancelled: false }),
-    switchSession: async () => ({ cancelled: false }),
-    listModels: () => [],
-    setModel: async () => {
-      throw new Error("Model is not available");
-    },
-    subscribe: () => () => {},
-    dispose: async () => {},
-  };
-  const host = new WebHost({ runtime });
+test("stop bounds an authenticated incomplete HTTP request", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-http-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const socket = createConnection({
+    host: launched.hostname,
+    port: Number(launched.port),
+  });
+  socket.on("error", () => undefined);
   try {
-    await host.start();
-    host.publish("one");
-    host.publish("two");
-    const launched = new URL(host.url);
-    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
-    assert.ok(token);
-    const controller = new AbortController();
-    const response = await fetch(`${launched.origin}/events?cursor=2`, {
-      headers: { Authorization: `Bearer ${token}` },
-      signal: controller.signal,
-    });
-    assert.equal(response.status, 200);
-    const reader = response.body?.getReader();
-    assert.ok(reader);
-    let replay = "";
-    while (!replay.includes('"type":"two"')) {
-      const next = await reader.read();
-      if (next.done) break;
-      replay += new TextDecoder().decode(next.value);
-    }
-    assert.match(replay, /"type":"two"/);
-    assert.doesNotMatch(replay, /"type":"one"/);
-    controller.abort();
+    await once(socket, "connect");
+    socket.write(
+      `POST /api/workspaces HTTP/1.1\r\nHost: ${launched.host}\r\nAuthorization: ${headers.Authorization}\r\nContent-Type: application/json\r\nContent-Length: 4096\r\n\r\n{"path":"`,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 20));
 
-    for (let index = 0; index < 220; index++) host.publish("filler");
-    const stale = await fetch(`${launched.origin}/events?cursor=1`, {
-      headers: { Authorization: `Bearer ${token}` },
-    });
-    assert.equal(stale.status, 409);
-    assert.deepEqual((await stale.json()) as Record<string, unknown>, {
-      error: "RESYNC_REQUIRED",
-      code: "RESYNC_REQUIRED",
-      cursor: 223,
-    });
+    const startedAt = Date.now();
+    let timeout: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      host.stop(),
+      new Promise<never>((_resolve, reject) => {
+        timeout = setTimeout(
+          () => reject(new Error("host stop did not finish")),
+          2_000,
+        );
+      }),
+    ]);
+    clearTimeout(timeout);
+    assert.ok(Date.now() - startedAt < 1_500);
   } finally {
+    socket.destroy();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop disposes the runtime before waiting for an in-flight prompt request", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-stop-prompt-"));
+  let promptStarted!: () => void;
+  const started = new Promise<void>((resolve) => {
+    promptStarted = resolve;
+  });
+  let releasePrompt!: () => void;
+  const pendingPrompt = new Promise<void>((resolve) => {
+    releasePrompt = resolve;
+  });
+  let disposeCalls = 0;
+  const runtime = testRuntime(cwd, async () => {
+    promptStarted();
+    await pendingPrompt;
+  });
+  runtime.dispose = async () => {
+    disposeCalls++;
+    releasePrompt();
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const response = fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "pending during shutdown",
+      }),
+    });
+    await started;
+    await host.stop();
+    assert.equal(disposeCalls, 1);
+    assert.equal((await response).status, 202);
+  } finally {
+    releasePrompt();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }

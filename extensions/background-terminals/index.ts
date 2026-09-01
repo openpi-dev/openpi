@@ -32,7 +32,10 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
-import { registerWebCapability } from "../shared/web-observer-registry.ts";
+import {
+  projectBackgroundTerminalCapability,
+  registerWebCapability,
+} from "../shared/web-observer-registry.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import {
   MAX_RUNNING,
@@ -118,23 +121,21 @@ export default function (pi: ExtensionAPI) {
 
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
+    const scope = sessionContext?.sessionManager;
     managerPromise ??= getRuntime()
       .runPromise(TerminalManager)
       .then((manager) => {
         managerForHooks = manager;
-        const sessionId =
-          typeof sessionContext?.sessionManager?.getSessionId === "function"
-            ? sessionContext.sessionManager.getSessionId()
-            : undefined;
         unregisterWebCapability?.();
-        if (sessionId) {
-          unregisterWebCapability = registerWebCapability({
-            kind: "background-terminals",
-            sessionId,
-            snapshot: () => manager.view.list(),
-            subscribe: (listener) => manager.view.subscribe(listener),
-          });
-        }
+        unregisterWebCapability =
+          scope && sessionContext?.sessionManager === scope
+            ? registerWebCapability(scope, {
+                kind: "background-terminals",
+                snapshot: () =>
+                  projectBackgroundTerminalCapability(manager.view.list()),
+                subscribe: (listener) => manager.view.subscribe(listener),
+              })
+            : undefined;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateWidget(manager));

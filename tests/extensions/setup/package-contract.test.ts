@@ -48,6 +48,10 @@ test("the manifest enforces the documented Node floor", () => {
   assert.equal(manifest.engines?.node, ">=22.19.0");
 });
 
+test("the standalone CLI ships its TypeScript module loader", () => {
+  assert.equal(manifest.dependencies?.jiti, "2.7.0");
+});
+
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
   assert.equal(manifest.dependencies?.["pi-intercom"], undefined);
   assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);

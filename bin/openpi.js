@@ -1,10 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from "node:path";
-import { openBrowser } from "../web/host/browser-launcher.ts";
-import { WebHost } from "../web/host/web-host.ts";
-import { PiWebRuntime } from "../web/runtime/pi-runtime.ts";
-import { traceWeb } from "../web/trace.ts";
+import { createJiti } from "jiti";
 
 function printHelp() {
   console.log(`OpenPI Web Workbench
@@ -56,14 +53,27 @@ if (workspaceArgs.length > 1) {
 }
 
 let host;
+let runtime;
 let stopping;
 const stop = () => {
-  stopping ??= host?.stop() ?? Promise.resolve();
+  stopping ??= host?.stop() ?? runtime?.dispose() ?? Promise.resolve();
   return stopping;
 };
 
 try {
-  const runtime = await PiWebRuntime.create(
+  const jiti = createJiti(import.meta.url);
+  const [browserModule, hostModule, runtimeModule, traceModule] =
+    await Promise.all([
+      jiti.import("../web/host/browser-launcher.ts"),
+      jiti.import("../web/host/web-host.ts"),
+      jiti.import("../web/runtime/pi-runtime.ts"),
+      jiti.import("../web/trace.ts"),
+    ]);
+  const { openBrowser } = browserModule;
+  const { WebHost } = hostModule;
+  const { PiWebRuntime } = runtimeModule;
+  const { traceWeb } = traceModule;
+  runtime = await PiWebRuntime.create(
     resolve(workspaceArgs[0] ?? process.cwd()),
   );
   host = new WebHost({
@@ -84,13 +94,31 @@ try {
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
-      void stop().finally(() => process.exit(0));
+      void stop().then(
+        () => process.exit(0),
+        (error) => {
+          console.error(
+            `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          process.exit(1);
+        },
+      );
     });
   }
 } catch (error) {
-  await stop();
+  let cleanupError;
+  try {
+    await stop();
+  } catch (caught) {
+    cleanupError = caught;
+  }
   console.error(
     `Failed to start OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
   );
+  if (cleanupError) {
+    console.error(
+      `Failed to clean up OpenPI Web Workbench: ${cleanupError instanceof Error ? cleanupError.message : String(cleanupError)}`,
+    );
+  }
   process.exit(1);
 }
