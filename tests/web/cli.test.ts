@@ -116,7 +116,14 @@ export class PiWebRuntime {
       temporaryRoot,
       "--no-open",
     ]);
-    assert.match(stdout, /ready http:\/\/127\.0\.0\.1:12345/u);
+    assert.match(
+      stdout,
+      /^OpenPI Web Workbench is running at http:\/\/127\.0\.0\.1:12345$/mu,
+    );
+    assert.match(
+      stdout,
+      /^Open this URL in a browser: http:\/\/127\.0\.0\.1:12345\/#token=test$/mu,
+    );
 
     const noWorkspaceMarker = join(temporaryRoot, "no-workspace");
     await execFileAsync(
@@ -197,7 +204,11 @@ export class PiWebRuntime {
         5_000,
       );
       const waitForReady = () => {
-        if (signalOutput.includes("ready http://127.0.0.1:12345")) {
+        if (
+          signalOutput.includes(
+            "OpenPI Web Workbench is running at http://127.0.0.1:12345",
+          )
+        ) {
           clearTimeout(timeout);
           resolve();
           return;

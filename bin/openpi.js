@@ -100,13 +100,18 @@ try {
     origin: host.origin,
   });
   const opened = noOpen ? false : await openBrowser(host.url);
-  console.log(
-    formatWebReadyScreen({
-      origin: host.origin,
-      url: host.url,
-      opened,
-    }),
-  );
+  if (noWorkspace) {
+    console.log(
+      formatWebReadyScreen({
+        origin: host.origin,
+        url: host.url,
+        opened,
+      }),
+    );
+  } else {
+    console.log(`OpenPI Web Workbench is running at ${host.origin}`);
+    if (!opened) console.log(`Open this URL in a browser: ${host.url}`);
+  }
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
     process.once(signal, () => {
