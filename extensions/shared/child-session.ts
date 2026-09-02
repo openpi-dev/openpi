@@ -173,9 +173,6 @@ function packageSourceValue(source: PackageSource) {
 
 const CHILD_DISABLED_OPENPI_EXTENSION =
   "-extensions/git-info/index.ts" as const;
-const OPENPI_GIT_INFO_EXTENSION_PATH = realpathSync.native(
-  fileURLToPath(new URL("../git-info/index.ts", import.meta.url)),
-);
 
 function canonicalExistingPath(value: string) {
   try {
@@ -185,15 +182,38 @@ function canonicalExistingPath(value: string) {
   }
 }
 
+/**
+ * ENOENT means git-info is truly absent (trimmed fork, partial install):
+ * nothing to exclude. Any other failure (permissions, symlink loops) means we
+ * cannot verify the Git-polling extension is present, so fail closed instead
+ * of running a child with an unverifiable extension.
+ */
+export function resolveGitInfoPathOrThrow(
+  resolve: (value: string) => string = realpathSync.native,
+): string | undefined {
+  try {
+    return resolve(
+      fileURLToPath(new URL("../git-info/index.ts", import.meta.url)),
+    );
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return undefined;
+    throw error;
+  }
+}
+
 function excludeOpenPiGitInfoExtension(
   resources: LoadExtensionsResult,
+  resolve: (value: string) => string = realpathSync.native,
 ): LoadExtensionsResult {
+  const gitInfoPath = resolveGitInfoPathOrThrow(resolve);
+  // undefined = absent (ENOENT): nothing to exclude. Non-ENOENT failures
+  // throw from resolveGitInfoPathOrThrow and fail child creation upstream.
+  if (gitInfoPath === undefined) return resources;
   return {
     ...resources,
     extensions: resources.extensions.filter(
       (extension) =>
-        canonicalExistingPath(extension.resolvedPath) !==
-        OPENPI_GIT_INFO_EXTENSION_PATH,
+        canonicalExistingPath(extension.resolvedPath) !== gitInfoPath,
     ),
   };
 }
