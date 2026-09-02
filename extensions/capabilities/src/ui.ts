@@ -1,5 +1,5 @@
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
-import type { EditorComponent } from "@earendil-works/pi-tui";
+import { getCapabilities, type EditorComponent } from "@earendil-works/pi-tui";
 import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
@@ -17,6 +17,8 @@ const DARK_SHIMMER_BASE: Rgb = [177, 119, 233];
 const DARK_SHIMMER_HIGHLIGHT: Rgb = [255, 232, 255];
 const LIGHT_SHIMMER_BASE: Rgb = [91, 48, 173];
 const LIGHT_SHIMMER_HIGHLIGHT: Rgb = [205, 171, 255];
+const DARK_STATIC_PURPLE: Rgb = [210, 168, 255];
+const LIGHT_STATIC_PURPLE: Rgb = [130, 80, 223];
 
 /** Keep editor animation cadence aligned with the package's other TUI motion. */
 export const CAPABILITY_SHIMMER_INTERVAL_MS = 120;
@@ -24,8 +26,32 @@ export const CAPABILITY_SHIMMER_INTERVAL_MS = 120;
 interface CapabilityKeywordColorOptions {
   readonly colorMode: "truecolor" | "256color";
   readonly light: boolean;
+  readonly animated?: boolean;
   /** A normalized position in the shimmer cycle. Defaults to the first frame. */
   readonly phase?: number;
+}
+
+interface CapabilityShimmerTerminal {
+  readonly isTTY?: boolean;
+  readonly term?: string;
+  readonly trueColor: boolean;
+}
+
+/**
+ * Dynamic color updates need an interactive terminal with a known color
+ * capability. A 256-color terminal remains eligible; color mode alone is not
+ * used as the animation decision.
+ */
+export function supportsDynamicCapabilityShimmer(
+  terminal: CapabilityShimmerTerminal = {
+    isTTY: process.stdout.isTTY,
+    term: process.env.TERM,
+    trueColor: getCapabilities().trueColor,
+  },
+) {
+  const term = terminal.term?.toLowerCase();
+  if (terminal.isTTY === false || term === "dumb") return false;
+  return terminal.trueColor || term?.includes("256color") === true;
 }
 
 export function isLightNamedTheme(name: string | undefined) {
@@ -63,11 +89,23 @@ function ansi256Foreground(light: boolean, intensity: number) {
   return `\u001b[38;5;${intensity > 0.8 ? 225 : intensity > 0.5 ? 189 : 183}m`;
 }
 
+function staticPurpleForeground(
+  light: boolean,
+  colorMode: CapabilityKeywordColorOptions["colorMode"],
+) {
+  return colorMode === "truecolor"
+    ? truecolorForeground(light ? LIGHT_STATIC_PURPLE : DARK_STATIC_PURPLE)
+    : ansi256Foreground(light, 0.2);
+}
+
 /** Claude-style purple shimmer. The light variant preserves readable contrast. */
 export function colorCapabilityKeyword(
   text: string,
   options: CapabilityKeywordColorOptions,
 ) {
+  if (options.animated === false) {
+    return `${staticPurpleForeground(options.light, options.colorMode)}${text}${FOREGROUND_RESET}`;
+  }
   const phase = (((options.phase ?? 0) % 1) + 1) % 1;
   const characters = [...text];
   const base = options.light ? LIGHT_SHIMMER_BASE : DARK_SHIMMER_BASE;

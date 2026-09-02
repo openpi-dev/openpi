@@ -13,6 +13,7 @@ import {
   colorCapabilityKeyword,
   highlightCapabilityNames,
   isLightNamedTheme,
+  supportsDynamicCapabilityShimmer,
 } from "../../../extensions/capabilities/src/ui.ts";
 
 function stripSgr(value: string) {
@@ -77,6 +78,52 @@ test("renders a moving purple shimmer with a contrast-safe light variant", () =>
   assert.equal(capabilityShimmerPhase(0), 0);
   assert.equal(capabilityShimmerPhase(1_400), 0);
   assert.equal(capabilityShimmerPhase(700), 0.5);
+});
+
+test("static purple fallback ignores shimmer phase", () => {
+  const staticFrame = colorCapabilityKeyword("subagent", {
+    animated: false,
+    colorMode: "truecolor",
+    light: false,
+    phase: 0,
+  });
+  const staticNextFrame = colorCapabilityKeyword("subagent", {
+    animated: false,
+    colorMode: "truecolor",
+    light: false,
+    phase: 0.5,
+  });
+
+  assert.equal(staticFrame, staticNextFrame);
+  assert.match(staticFrame, /\u001b\[38;2;210;168;255m/gu);
+  assert.equal(stripSgr(staticFrame), "subagent");
+});
+
+test("dynamic shimmer support is independent of selected color mode", () => {
+  assert.equal(
+    supportsDynamicCapabilityShimmer({
+      isTTY: true,
+      term: "xterm-256color",
+      trueColor: false,
+    }),
+    true,
+  );
+  assert.equal(
+    supportsDynamicCapabilityShimmer({
+      isTTY: true,
+      term: "dumb",
+      trueColor: true,
+    }),
+    false,
+  );
+  assert.equal(
+    supportsDynamicCapabilityShimmer({
+      isTTY: false,
+      term: "xterm-256color",
+      trueColor: true,
+    }),
+    false,
+  );
 });
 
 test("highlights capability names only when shared intent authorizes them", () => {

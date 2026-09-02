@@ -30,6 +30,7 @@ import {
   capabilityShimmerPhase,
   colorCapabilityKeyword,
   isLightNamedTheme,
+  supportsDynamicCapabilityShimmer,
 } from "./src/ui.ts";
 
 const CapabilitySchema = Type.Unsafe<OpenPiCapability>({
@@ -79,6 +80,7 @@ function skillGuidance(capabilities: readonly OpenPiCapability[]) {
 interface CapabilityExtensionDependencies {
   readonly loadConfig: () => Pick<MyPiSetupConfig, "capabilities">;
   readonly sourcePath?: string;
+  readonly supportsDynamicShimmer?: () => boolean;
 }
 
 export function createCapabilitiesExtension(
@@ -101,7 +103,9 @@ export function createCapabilitiesExtension(
     const startShimmer = (
       editor: CapabilityIntentHighlightEditor,
       requestRender: () => void,
+      enabled: boolean,
     ) => {
+      if (!enabled) return;
       shimmerEditor = editor;
       requestShimmerRender = requestRender;
       shimmerTimer ??= setInterval(() => {
@@ -123,6 +127,9 @@ export function createCapabilitiesExtension(
 
     pi.on("session_start", (_event, ctx) => {
       stopShimmer();
+      const animateShimmer =
+        dependencies.supportsDynamicShimmer?.() ??
+        supportsDynamicCapabilityShimmer();
       resetOpenPiToolSurface(
         pi,
         dependencies.sourcePath
@@ -141,10 +148,11 @@ export function createCapabilitiesExtension(
               colorCapabilityKeyword(text, {
                 colorMode: ctx.ui.theme.getColorMode(),
                 light: isLightNamedTheme(ctx.ui.theme.name),
-                phase: capabilityShimmerPhase(),
+                animated: animateShimmer,
+                ...(animateShimmer ? { phase: capabilityShimmerPhase() } : {}),
               }),
           );
-          startShimmer(editor, () => tui.requestRender());
+          startShimmer(editor, () => tui.requestRender(), animateShimmer);
           return editor;
         },
       });
