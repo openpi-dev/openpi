@@ -4,11 +4,12 @@ import {
   mkdtemp,
   readFile,
   realpath,
+  rename,
   rm,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
@@ -224,9 +225,118 @@ test("first archive mutation preserves previously persisted archive metadata", a
     const persisted = JSON.parse(
       await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
     ) as string[];
-    assert.deepEqual(
-      new Set(persisted),
-      new Set([existing, resolve(currentPath)]),
+    assert.deepEqual(new Set(persisted), new Set([existing, currentPath]));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("removing the current workspace keeps its unpersisted session ungrouped after it persists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-remove-workspace-"));
+  const sessionDirectory = join(root, "sessions");
+  const stash = join(root, "stash");
+  try {
+    await Promise.all([
+      mkdir(sessionDirectory, { recursive: true }),
+      mkdir(stash, { recursive: true }),
+    ]);
+    const persisted = SessionManager.create(root, sessionDirectory);
+    persistSession(persisted, "persisted", 1);
+    const persistedPath = persisted.getSessionFile();
+    assert.ok(persistedPath);
+    const persistedId = persisted.getSessionId();
+    const stashedPath = join(stash, basename(persistedPath));
+    await rename(persistedPath, stashedPath);
+    let currentFile: string | null = null;
+    const current = {
+      getSessionId: () => persistedId,
+      getSessionFile: () => currentFile,
+      getBranch: () => [],
+      getSessionName: () => undefined,
+    } as unknown as SessionManager;
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+
+    await adapter.removeWorkspace(root);
+
+    const state = JSON.parse(
+      await readFile(join(sessionDirectory, "workspace-state.json"), "utf8"),
+    ) as { ungroupedSessions: string[] };
+    assert.deepEqual(state.ungroupedSessions, [`current:${persistedId}`]);
+    assert.equal(
+      (await adapter.getSnapshot()).sessions.find(
+        (session) => session.id === persistedId,
+      )?.ungrouped,
+      true,
+    );
+
+    await rename(stashedPath, persistedPath);
+    currentFile = persistedPath;
+
+    const snapshot = await adapter.getSnapshot();
+    assert.equal(
+      snapshot.sessions.find((session) => session.id === persistedId)
+        ?.ungrouped,
+      true,
+    );
+    assert.equal(
+      (await adapter.requireSession(persistedPath)).cwd,
+      resolve(root),
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("archiving an unpersisted session preserves the mark after it persists", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archive-persist-"));
+  const sessionDirectory = join(root, "sessions");
+  const stash = join(root, "stash");
+  try {
+    await Promise.all([
+      mkdir(sessionDirectory, { recursive: true }),
+      mkdir(stash, { recursive: true }),
+    ]);
+    const persisted = SessionManager.create(root, sessionDirectory);
+    persistSession(persisted, "persisted", 1);
+    const persistedPath = persisted.getSessionFile();
+    assert.ok(persistedPath);
+    const persistedId = persisted.getSessionId();
+    const stashedPath = join(stash, basename(persistedPath));
+    await rename(persistedPath, stashedPath);
+    let currentFile: string | null = null;
+    const current = {
+      getSessionId: () => persistedId,
+      getSessionFile: () => currentFile,
+      getBranch: () => [],
+      getSessionName: () => undefined,
+    } as unknown as SessionManager;
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+
+    await adapter.archiveSession(`current:${persistedId}`);
+
+    const marks = JSON.parse(
+      await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
+    ) as string[];
+    assert.deepEqual(marks, [`current:${persistedId}`]);
+    assert.equal(
+      (await adapter.getSnapshot()).sessions.find(
+        (session) => session.id === persistedId,
+      )?.archived,
+      true,
+    );
+
+    await rename(stashedPath, persistedPath);
+    currentFile = persistedPath;
+
+    assert.equal(
+      (await adapter.getSnapshot()).sessions.find(
+        (session) => session.id === persistedId,
+      )?.archived,
+      true,
     );
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -375,7 +485,7 @@ test("archive transactions roll back a failed mutation before the next mutation 
     const persisted = JSON.parse(
       await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
     ) as string[];
-    assert.deepEqual(persisted, [resolve(currentPath)]);
+    assert.deepEqual(persisted, [currentPath]);
     assert.equal(
       (await adapter.getSnapshot()).sessions.find(
         (session) => session.id === current.getSessionId(),

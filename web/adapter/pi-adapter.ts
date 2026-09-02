@@ -27,6 +27,18 @@ type WorkspaceStateSnapshot = {
   restoreInitialWorkspace: boolean;
 };
 
+// An unpersisted active session is keyed by the synthetic `current:<sessionId>`
+// marker instead of a file path. Synthetic keys must round-trip verbatim:
+// resolving one against the process cwd both pollutes persisted state and
+// breaks lookups once the session gains a real file.
+function isSyntheticSessionKey(path: string) {
+  return path.startsWith("current:");
+}
+
+function sessionKey(path: string) {
+  return isSyntheticSessionKey(path) ? path : resolve(path);
+}
+
 export class PiWebAdapter {
   private readonly runtime: WebRuntimeController;
   private readonly importedWorkspaces = new Set<string>();
@@ -88,7 +100,7 @@ export class PiWebAdapter {
             this.hiddenWorkspaces.add(resolve(path));
           }
           for (const path of state.ungroupedSessions) {
-            this.ungroupedSessions.add(resolve(path));
+            this.ungroupedSessions.add(sessionKey(path));
           }
           for (const [path, name] of Object.entries(state.workspaceNames)) {
             this.workspaceNames.set(resolve(path), name as string);
@@ -144,7 +156,7 @@ export class PiWebAdapter {
           ) {
             throw new Error("Archive metadata must be an array of paths");
           }
-          for (const path of parsed) this.archivedSessions.add(resolve(path));
+          for (const path of parsed) this.archivedSessions.add(sessionKey(path));
         } catch (error) {
           if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
@@ -280,7 +292,7 @@ export class PiWebAdapter {
     await this.ensureArchivesLoaded();
     await this.enqueueArchiveMutation(async (draft) => {
       const session = await this.requireSession(path);
-      draft.add(resolve(session.path));
+      draft.add(sessionKey(session.path));
     });
   }
 
@@ -295,14 +307,14 @@ export class PiWebAdapter {
       const sessions = await SessionManager.listAll(this.runtime.sessionDirectory);
       for (const session of sessions) {
         if (resolve(session.cwd) === canonical) {
-          draft.ungroupedSessions.add(resolve(session.path));
+          draft.ungroupedSessions.add(sessionKey(session.path));
         }
       }
       if (resolve(this.runtime.cwd) === canonical) {
         const currentPath =
           this.runtime.sessionManager.getSessionFile() ??
           `current:${this.runtime.sessionManager.getSessionId()}`;
-        draft.ungroupedSessions.add(resolve(currentPath));
+        draft.ungroupedSessions.add(sessionKey(currentPath));
       }
       draft.importedWorkspaces.delete(canonical);
       draft.workspaceNames.delete(canonical);
@@ -351,8 +363,12 @@ export class PiWebAdapter {
           session.firstMessage,
           WEB_MAX_SESSION_PREVIEW,
         ),
-        ...(this.archivedSessions.has(resolve(session.path)) ? { archived: true } : {}),
-        ...(this.ungroupedSessions.has(resolve(session.path)) ? { ungrouped: true } : {}),
+        ...(this.hasSessionMark(this.archivedSessions, session.path, session.id)
+          ? { archived: true }
+          : {}),
+        ...(this.hasSessionMark(this.ungroupedSessions, session.path, session.id)
+          ? { ungrouped: true }
+          : {}),
       }));
     if (
       this.runtime.workspaceSelected === true &&
@@ -390,10 +406,10 @@ export class PiWebAdapter {
         created: now,
         messageCount,
         firstMessage: boundedText(firstUser, WEB_MAX_SESSION_PREVIEW),
-        ...(this.archivedSessions.has(resolve(currentPath))
+        ...(this.hasSessionMark(this.archivedSessions, currentPath, currentId)
           ? { archived: true }
           : {}),
-        ...(this.ungroupedSessions.has(resolve(currentPath))
+        ...(this.hasSessionMark(this.ungroupedSessions, currentPath, currentId)
           ? { ungrouped: true }
           : {}),
       });
@@ -596,6 +612,18 @@ export class PiWebAdapter {
       snapshot.truncation.modelsOmitted++;
     }
     snapshot.truncation.truncated = true;
+  }
+
+  // Marks recorded while a session was unpersisted are stored under the
+  // synthetic `current:<id>` key; match either the resolved file path (marks
+  // recorded after persistence) or the synthetic key so marks survive the
+  // session gaining a real file.
+  private hasSessionMark(
+    marks: ReadonlySet<string>,
+    path: string,
+    id: string,
+  ) {
+    return marks.has(sessionKey(path)) || marks.has(`current:${id}`);
   }
 
   private captureWorkspaceState(): WorkspaceStateSnapshot {
