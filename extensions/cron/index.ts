@@ -17,6 +17,9 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   advanceDeliveredJobs,
+  CRON_DELIVERY_MAX_BYTES,
+  CRON_DELIVERY_MAX_JOBS,
+  CRON_MAX_JOBS,
   type CronJob,
   dueJobs,
   formatInterval,
@@ -41,6 +44,48 @@ const SYSTEM_RUNTIME: CronRuntime = {
   },
 };
 
+function deliveryMessage(due: readonly CronJob[]) {
+  const jobs = due.map((job) => ({
+    id: job.id,
+    prompt: job.prompt,
+    recurring: job.intervalMs !== undefined,
+  }));
+  return due.length === 1
+    ? {
+        customType: "cron-fire",
+        content: `[cron ${jobs[0]!.id} · ${jobs[0]!.recurring ? "recurring" : "once"}]\n${jobs[0]!.prompt}`,
+        display: true,
+        details: jobs[0]!,
+      }
+    : {
+        customType: "cron-fire",
+        content: `${due.length} scheduled prompts are due:\n\n${jobs
+          .map(
+            (job) =>
+              `[cron ${job.id} · ${job.recurring ? "recurring" : "once"}]\n${job.prompt}`,
+          )
+          .join("\n\n")}`,
+        display: true,
+        details: { count: jobs.length, jobs },
+      };
+}
+
+function dueDeliveryBatch(due: readonly CronJob[]) {
+  const selected: CronJob[] = [];
+  for (const job of due.slice(0, CRON_DELIVERY_MAX_JOBS)) {
+    const candidate = [...selected, job];
+    const message = deliveryMessage(candidate);
+    if (
+      new TextEncoder().encode(message.content).byteLength >
+      CRON_DELIVERY_MAX_BYTES
+    ) {
+      break;
+    }
+    selected.push(job);
+  }
+  return selected;
+}
+
 export default function cron(
   pi: ExtensionAPI,
   runtime: CronRuntime = SYSTEM_RUNTIME,
@@ -58,30 +103,7 @@ export default function cron(
   const fire = (due: readonly CronJob[]) => {
     if (due.length === 0) return true;
     try {
-      const jobs = due.map((job) => ({
-        id: job.id,
-        prompt: job.prompt,
-        recurring: job.intervalMs !== undefined,
-      }));
-      const message =
-        due.length === 1
-          ? {
-              customType: "cron-fire",
-              content: `[cron ${jobs[0]!.id} · ${jobs[0]!.recurring ? "recurring" : "once"}]\n${jobs[0]!.prompt}`,
-              display: true,
-              details: jobs[0],
-            }
-          : {
-              customType: "cron-fire",
-              content: `${due.length} scheduled prompts are due:\n\n${jobs
-                .map(
-                  (job) =>
-                    `[cron ${job.id} · ${job.recurring ? "recurring" : "once"}]\n${job.prompt}`,
-                )
-                .join("\n\n")}`,
-              display: true,
-              details: { count: jobs.length, jobs },
-            };
+      const message = deliveryMessage(due);
       pi.sendMessage<
         | { id: number; prompt: string; recurring: boolean }
         | {
@@ -109,9 +131,11 @@ export default function cron(
     const now = runtime.now();
     const due = dueJobs(jobs, now);
     if (due.length === 0) return;
+    const batch = dueDeliveryBatch(due);
+    if (batch.length === 0) return;
     const deliveredIds = new Set<number>();
-    if (fire(due)) {
-      for (const job of due) deliveredIds.add(job.id);
+    if (fire(batch)) {
+      for (const job of batch) deliveredIds.add(job.id);
     }
     jobs = advanceDeliveredJobs(jobs, deliveredIds, runtime.now());
     if (jobs.length === 0) stopTicker();
@@ -170,12 +194,29 @@ export default function cron(
         return;
       }
 
+      if (jobs.length >= CRON_MAX_JOBS) {
+        ctx.ui.notify(
+          `A session can have at most ${CRON_MAX_JOBS} scheduled prompts. Remove one before adding another.`,
+          "warning",
+        );
+        return;
+      }
+
       const intervalMs = parsed.intervalMs!;
+      const now = runtime.now();
+      const nextRunAt = now + intervalMs;
+      if (!Number.isSafeInteger(now) || !Number.isSafeInteger(nextRunAt)) {
+        ctx.ui.notify(
+          "Scheduled time is too far in the future. Use a shorter duration.",
+          "warning",
+        );
+        return;
+      }
       const job: CronJob = {
         id: nextId++,
         prompt: parsed.prompt!,
         ...(parsed.oneShot ? {} : { intervalMs }),
-        nextRunAt: runtime.now() + intervalMs,
+        nextRunAt,
       };
       jobs.push(job);
       startTicker();
