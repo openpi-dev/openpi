@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
   <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
+  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.4+" src="https://img.shields.io/badge/Pi-0.84.4%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
@@ -445,7 +445,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 
 ### 安装要求与来源
 
-- Pi `0.84.1` 或更新版本；
+- Pi `0.84.4` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
