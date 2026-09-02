@@ -128,11 +128,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /id="workspace-menu"/);
     assert.match(pageHtml, /Rename workspace/);
     assert.match(pageHtml, /Remove from sidebar/);
-    assert.match(pageHtml, /id="theme-picker-trigger"/);
-    assert.match(pageHtml, /data-theme-value="dark"/);
-    assert.match(pageHtml, /id="settings-dialog"/);
-    assert.match(pageHtml, /id="language-picker-trigger"/);
-    assert.match(pageHtml, /id="open-settings"/);
+    // Settings persistence/entry is deferred to #350 (canonical config contract).
+    assert.doesNotMatch(
+      pageHtml,
+      /settings-dialog|open-settings|theme-picker|language-picker/,
+    );
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
@@ -194,9 +194,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
     assert.doesNotMatch(appSource, /openpi\.archived-sessions/);
-    assert.match(appSource, /applyTheme/);
-    assert.match(appSource, /data-theme-value/);
-    assert.match(appSource, /language-picker|open-settings/u);
+    assert.doesNotMatch(appSource, /applyTheme|data-theme-value|open-settings/);
+    assert.doesNotMatch(appSource, /openpi\.language|openpi\.web\.theme/);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
     assert.equal(marked.status, 200);
@@ -276,10 +275,21 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.tool-line\.error/);
     assert.match(stylesSource, /\.tool-group \{/);
     assert.match(stylesSource, /\.thinking-line/);
-    assert.match(stylesSource, /html\[data-theme="dark"\] body/);
-    assert.match(stylesSource, /html\[data-theme="white"\] body/);
+    assert.doesNotMatch(
+      stylesSource,
+      /html\[data-theme=|settings-dialog|language-picker/,
+    );
     assert.match(stylesSource, /@keyframes pixel-nudge/);
-    assert.match(stylesSource, /\.settings-dialog \{/);
+    // Narrow-screen regression: the off-canvas sidebar must not keep a
+    // backdrop-filter, or Chromium blurs the whole page backdrop (#352 P1).
+    assert.match(
+      stylesSource,
+      /@media \(max-width: 760px\) \{[\s\S]*?\.session-sidebar \{[^}]*backdrop-filter: none;/,
+    );
+    assert.match(
+      stylesSource,
+      /@media \(max-width: 760px\) \{[\s\S]*?\.session-sidebar::before \{ display: none; \}/,
+    );
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);

@@ -34,15 +34,7 @@ const state = {
   thinkingDurations: {},
   query: "",
   selectedWorkspace: null,
-  language: (() => {
-    try { return localStorage.getItem("openpi.language") === "zh" ? "zh" : "en"; } catch { return "en"; }
-  })(),
-  theme: (() => {
-    try {
-      const saved = localStorage.getItem("openpi.web.theme");
-      return ["pi", "white", "dark"].includes(saved) ? saved : "pi";
-    } catch { return "pi"; }
-  })(),
+  language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
 };
 
 const translations = {
@@ -51,11 +43,6 @@ const translations = {
     untitledSession: "New session",
     workspaces: "Workspaces",
     addWorkspace: "Add workspace",
-    settings: "Settings",
-    close: "Close",
-    closeSettings: "Close settings",
-    generalSettings: "General settings",
-    language: "Language",
     selectWorkspace: "Select workspace",
     describeTask: "Describe a task",
     chooseWorkspaceHint: "Choose a workspace and describe the work",
@@ -95,21 +82,12 @@ const translations = {
     noOutput: "no output",
     editMessage: "Edit message",
     confirmEdit: "OK",
-    theme: "Theme",
-    themePi: "PI Grid",
-    themeWhite: "Clean White",
-    themeDark: "Midnight",
   },
   zh: {
     newSession: "新建会话",
     untitledSession: "新会话",
     workspaces: "工作区",
     addWorkspace: "添加工作区",
-    settings: "设置",
-    close: "关闭",
-    closeSettings: "关闭设置",
-    generalSettings: "通用设置",
-    language: "语言",
     selectWorkspace: "选择工作区",
     describeTask: "描述任务",
     chooseWorkspaceHint: "选择工作区并描述任务",
@@ -149,10 +127,6 @@ const translations = {
     noOutput: "无输出",
     editMessage: "编辑消息",
     confirmEdit: "确定",
-    theme: "主题",
-    themePi: "PI 网格",
-    themeWhite: "简洁白",
-    themeDark: "暗夜黑",
   },
 };
 const t = (key) => translations[state.language][key] || translations.en[key] || key;
@@ -164,27 +138,11 @@ function applyLanguage() {
   document.querySelectorAll("[data-i18n-title]").forEach((element) => { element.title = t(element.dataset.i18nTitle); });
   const search = $("search");
   if (search) search.placeholder = t("searchPlaceholder");
-  const picker = $("language-picker-value");
-  if (picker) picker.textContent = state.language === "zh" ? "中文" : "English";
-  document.querySelectorAll("#language-menu [data-language]").forEach((option) => {
-    option.setAttribute("aria-selected", option.dataset.language === state.language ? "true" : "false");
-  });
   renderWorkspacePicker();
   if (state.snapshot) {
     renderWorkspaces();
     renderConversation();
   }
-}
-
-const THEME_KEYS = { pi: "themePi", white: "themeWhite", dark: "themeDark" };
-
-function applyTheme() {
-  document.documentElement.dataset.theme = state.theme;
-  const value = $("theme-picker-value");
-  if (value) value.textContent = t(THEME_KEYS[state.theme] || "themePi");
-  document.querySelectorAll("#theme-menu [data-theme-value]").forEach((option) => {
-    option.setAttribute("aria-selected", option.dataset.themeValue === state.theme ? "true" : "false");
-  });
 }
 
 const $ = (id) => document.getElementById(id);
@@ -2041,58 +1999,5 @@ $("prompt-input")?.addEventListener("keydown", (event) => {
   }
 });
 
-$("open-settings")?.addEventListener("click", () => $("settings-dialog")?.showModal());
-$("close-settings")?.addEventListener("click", () => $("settings-dialog")?.close());
-$("settings-dialog")?.addEventListener("click", (event) => {
-  if (event.target === event.currentTarget) event.currentTarget.close();
-});
-$("language-picker-trigger")?.addEventListener("click", () => {
-  const menu = $("language-menu");
-  const trigger = $("language-picker-trigger");
-  if (!menu || !trigger) return;
-  menu.hidden = !menu.hidden;
-  trigger.setAttribute("aria-expanded", String(!menu.hidden));
-});
-document.querySelectorAll("#language-menu [data-language]").forEach((option) => {
-  option.addEventListener("click", () => {
-    state.language = option.dataset.language === "zh" ? "zh" : "en";
-    try { localStorage.setItem("openpi.language", state.language); } catch {}
-    applyLanguage();
-    renderConversation();
-    $("language-menu").hidden = true;
-    $("language-picker-trigger")?.setAttribute("aria-expanded", "false");
-  });
-});
-$("theme-picker-trigger")?.addEventListener("click", () => {
-  const menu = $("theme-menu");
-  const trigger = $("theme-picker-trigger");
-  if (!menu || !trigger) return;
-  menu.hidden = !menu.hidden;
-  trigger.setAttribute("aria-expanded", String(!menu.hidden));
-});
-document.querySelectorAll("#theme-menu [data-theme-value]").forEach((option) => {
-  option.addEventListener("click", () => {
-    state.theme = option.dataset.themeValue in THEME_KEYS ? option.dataset.themeValue : "pi";
-    try { localStorage.setItem("openpi.web.theme", state.theme); } catch {}
-    applyTheme();
-    $("theme-menu").hidden = true;
-    $("theme-picker-trigger")?.setAttribute("aria-expanded", "false");
-  });
-});
-document.addEventListener("pointerdown", (event) => {
-  const picker = document.querySelector(".language-picker");
-  if (picker && !picker.contains(event.target)) {
-    $("language-menu").hidden = true;
-    $("language-picker-trigger")?.setAttribute("aria-expanded", "false");
-  }
-  const themeTrigger = $("theme-picker-trigger");
-  const themeMenu = $("theme-menu");
-  if (themeMenu && !themeMenu.hidden && event.target instanceof Element && !themeMenu.contains(event.target) && event.target !== themeTrigger && !themeTrigger?.contains(event.target)) {
-    themeMenu.hidden = true;
-    themeTrigger?.setAttribute("aria-expanded", "false");
-  }
-});
-
 applyLanguage();
-applyTheme();
 void connectEvents();
