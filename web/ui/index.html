@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light" />
+    <title>OpenPI</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script src="/marked.js"></script>
+    <script src="/app.js" defer></script>
+  </head>
+  <body>
+    <div class="app-shell">
+      <aside class="session-sidebar" aria-label="Session navigation">
+        <div class="sidebar-brand">
+          <strong><span class="brand-word">Open</span><span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
+          <button id="collapse-sidebar" class="collapse-button" type="button" aria-label="Collapse sidebar" title="Collapse sidebar">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect width="18" height="18" x="3" y="3" rx="2"></rect><path d="M9 3v18"></path></svg>
+          </button>
+        </div>
+
+        <button class="new-session-button" type="button" data-i18n-aria="newSession" data-i18n-title="newSession">
+          <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"></circle><path d="M8 12h8M12 8v8"></path></svg>
+          <span data-i18n="newSession">New session</span>
+        </button>
+
+        <div class="workspace-heading">
+          <span class="workspace-heading-label" data-i18n="workspaces">Workspaces</span>
+          <div class="session-search">
+            <span class="visually-hidden" data-i18n="searchConversations">Search conversations</span>
+            <svg class="session-search-icon icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.5 4.5"></path></svg>
+            <input id="search" type="search" data-i18n-aria="searchConversations" placeholder="搜索会话..." autocomplete="off" />
+            <button id="search-clear" class="session-search-clear" type="button" data-i18n-aria="closeSearch" data-i18n-title="closeSearch">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"></path></svg>
+            </button>
+          </div>
+          <div class="workspace-actions">
+            <button id="search-toggle" class="icon-button" type="button" data-i18n-aria="searchConversations" data-i18n-title="searchConversations">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="10.8" cy="10.8" r="6.8"></circle><path d="m16 16 4.5 4.5"></path></svg>
+            </button>
+            <button id="import-workspace" class="icon-button" type="button" aria-label="Add workspace" title="Add workspace" data-i18n-aria="addWorkspace" data-i18n-title="addWorkspace">
+              <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 10v6M9 13h6"></path><path d="M22 18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4a2 2 0 0 1 1.6.8l1.8 2.4H20a2 2 0 0 1 2 2z"></path></svg>
+            </button>
+          </div>
+        </div>
+
+        <div id="workspaces" class="workspace-tree" role="tree" data-empty="No sessions">No sessions</div>
+        <dialog id="workspace-menu" class="workspace-menu">
+          <button type="button" data-action="rename">Rename workspace</button>
+          <button type="button" data-action="delete" class="danger-action">Remove from sidebar</button>
+        </dialog>
+        <dialog id="workspace-rename-dialog" class="workspace-rename-dialog">
+          <form method="dialog" id="workspace-rename-form">
+            <strong>Rename workspace</strong>
+            <input id="workspace-name-input" type="text" maxlength="80" autocomplete="off" aria-label="Workspace name" />
+            <div class="dialog-actions">
+              <button type="submit" value="cancel">Cancel</button>
+              <button id="save-workspace-name" type="submit" value="save">Save</button>
+            </div>
+          </form>
+        </dialog>
+        <dialog id="session-menu" class="workspace-menu">
+          <button type="button" data-action="rename" data-i18n="renameConversation">Rename conversation</button>
+          <button type="button" data-action="archive" data-i18n="archiveConversation">Archive conversation</button>
+        </dialog>
+        <dialog id="session-rename-dialog" class="workspace-rename-dialog">
+          <form method="dialog" id="session-rename-form">
+            <strong data-i18n="renameConversation">Rename conversation</strong>
+            <input id="session-name-input" type="text" maxlength="80" autocomplete="off" data-i18n-aria="conversationName" aria-label="Conversation name" />
+            <div class="dialog-actions">
+              <button type="submit" value="cancel">Cancel</button>
+              <button id="save-session-name" type="submit" value="save">Save</button>
+            </div>
+          </form>
+        </dialog>
+
+      </aside>
+
+      <main class="conversation-shell landing">
+        <header class="workbench-header">
+          <button id="mobile-sidebar" class="mobile-sidebar-button" type="button" aria-label="Open sidebar" title="Open sidebar">
+            <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h16M4 18h16"></path></svg>
+          </button>
+          <div id="session-header" class="session-header">
+            <strong data-i18n="newSession">New session</strong>
+            <small data-i18n="chooseWorkspaceHint">Choose a workspace and describe the work</small>
+          </div>
+          <span id="connection-state" class="connection-state" aria-live="polite">Connecting</span>
+        </header>
+
+        <section id="conversation" class="conversation" aria-label="Conversation">
+          <div class="landing-welcome">
+            <div class="landing-brand">
+              <strong>Open<span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
+            </div>
+          </div>
+        </section>
+
+        <div class="composer-dock">
+          <div class="workspace-picker-row">
+            <button id="select-workspace" class="workspace-picker" type="button" data-i18n-aria="selectWorkspace">
+              <svg class="workspace-symbol icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path></svg>
+              <span id="selected-workspace" data-i18n="selectWorkspace">Select workspace</span>
+              <svg class="context-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m8 10 4 4 4-4"></path></svg>
+            </button>
+            <div id="workspace-picker-menu" class="workspace-picker-menu" hidden role="listbox"></div>
+          </div>
+          <form id="composer" class="composer dormant">
+            <textarea id="prompt-input" rows="1" readonly data-i18n-placeholder="promptStart" data-i18n-aria="describeTask" placeholder="Describe a task to start with this workspace"></textarea>
+            <div class="composer-toolbar">
+              <div class="model-picker-wrap">
+                <button id="model-picker" class="model-picker" type="button" aria-haspopup="listbox" aria-expanded="false" aria-label="Select model" disabled>
+                  <span id="model-picker-value" class="model-picker-value">Loading models...</span>
+                  <svg class="model-picker-chevron icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m7 10 5 5 5-5"></path></svg>
+                </button>
+                <div id="model-menu" class="model-menu" role="listbox" hidden></div>
+              </div>
+              <button id="send-prompt" class="send-button" type="submit" aria-label="Send" title="Send">
+                <svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 19V5"></path><path d="m6 11 6-6 6 6"></path></svg>
+              </button>
+            </div>
+            <div id="composer-hint" class="composer-hint" aria-live="polite"></div>
+          </form>
+        </div>
+      </main>
+      <dialog id="workspace-delete-dialog" class="workspace-delete-dialog">
+        <form method="dialog" id="workspace-delete-form">
+          <strong data-i18n="deleteWorkspace">删除工作区</strong>
+          <p id="workspace-delete-message"></p>
+          <div class="dialog-actions">
+            <button type="submit" value="cancel" data-i18n="cancel">取消</button>
+            <button type="submit" value="delete" class="danger-action" data-i18n="deleteWorkspace">删除工作区</button>
+          </div>
+        </form>
+      </dialog>
+    </div>
+    <button class="sidebar-scrim" type="button" aria-label="Close sidebar"></button>
+  </body>
+</html>

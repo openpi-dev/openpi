@@ -12,3 +12,6 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md`](OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md) — Pi-native Workflow interface and lifecycle redesign with implementation evidence
 - [`WORKFLOW_INVOCATION_GRAPH.md`](WORKFLOW_INVOCATION_GRAPH.md) — durable invocation facts, same-run handoff refs, reusable operators, and derived graph semantics
 - [`CHILD_TOOL_ACTIVITY.md`](CHILD_TOOL_ACTIVITY.md) — shared compact and Pi-native expanded evidence projection for Direct Subagent and Workflow child transcripts
+- [`OPENPI_WEB_ARCHITECTURE.md`](OPENPI_WEB_ARCHITECTURE.md) — draft architecture, protocol boundaries, delivery phases, and visual direction for the local Web workbench
+
+开发与热更新流程见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](../development/OPENPI_WEB_DEVELOPMENT.md)。

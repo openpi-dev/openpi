@@ -113,7 +113,7 @@ test("initial persistence failure retains a detached envelope for retry", async 
   const calls: string[][] = [];
   const delivery = createWorkflowResultDelivery({
     isIdle: () => false,
-    persist: (current) => {
+    persist: () => {
       if (failPersistence) throw new Error("disk unavailable");
     },
     deliver: async (envelopes) => {

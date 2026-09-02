@@ -523,11 +523,35 @@ pi install npm:pi-intercom
 
 安装、配置和升级均由 Pi 与 pi-intercom 自身负责；OpenPI 不写入或迁移已有 intercom 偏好。跨顶层 Session 可使用 pi-intercom，OpenPI 父子委派继续使用 `subagent_*` 与 Workflow 原生结果通道。
 
+### 独立 Web 工作台
+
+Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的 Pi `AgentSessionRuntime`、独立 `~/.pi/agent/web-sessions` 持久化目录和生命周期；浏览器发送消息、新建 Session 或切换工作区，不会写入或切换任何已经运行的终端 Pi Session，Web Session 也不会出现在终端的默认 Session 列表中。在侧栏选择 Session 会把它激活为 Web 进程的当前 Pi Session；Prompt 只会投递到请求时仍匹配的活动 Web Session。独立的只读历史浏览不属于首版范围。
+
+同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
+
+Host 仅监听 loopback。启动链接中的高熵 token 属于本次 Web Host 进程，浏览器会从 URL fragment 取出后保存到当前标签页的 `sessionStorage`，并立即清除地址栏 fragment；关闭 Host 后该 token 失效。这不是远程身份或长期登录机制。
+
+发布包提供 `openpi` 可执行文件。需要同时使用终端扩展和 Web 时，安装同一版本的 Pi package 与 CLI：
+
+```bash
+pi install npm:@tt-a1i/openpi
+npm install --global @tt-a1i/openpi
+openpi web                    # 使用当前目录启动 Web
+openpi web /path/to/repo      # 指定初始工作区
+```
+
+两处应保持同一 OpenPI 版本。Pi 的 managed package 与全局 CLI 即使位于不同物理路径，同一 Web 进程内也通过带版本的共享 registry 按 Pi `SessionManager` 身份连接 capability 投影；它不保存第二份状态，也不兼容任意混装版本。
+
+已经在 Pi 中安装 OpenPI 时，也可以直接执行 `/web`。它通过 Pi 官方的交互式终端 seam 暂停当前 TUI，运行当前 package 内完全相同的 `openpi web` 子进程，并在 `Ctrl+C` 停止 Web 后恢复原来的终端 Session。运行期间终端只归 Web 子进程使用；父 Pi 不读取按键，也不会把当前 Session id、消息、上下文或工作目录传给浏览器。Web 会恢复它自己的已有 Session 和工作区；没有可用项时，由用户在浏览器中添加或选择，不会把启动 `/web` 时的终端目录自动注册为 Web 工作区。选择前的内部引导态不暴露 Session、不绑定 extension 生命周期，也不接受 Prompt 或模型变更。选择工作区后发送第一条消息会先创建真实 Web Session，再向它投递。
+
+Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
+
 ### 命令速查
 
 | 命令                       | 作用                                           |
 | -------------------------- | ---------------------------------------------- |
 | `/openpi-setup [自然语言]` | 查看或修改 OpenPI 自有配置                     |
+| `/web`                     | 前台运行独立 Web 工作台；`Ctrl+C` 后返回 Pi    |
 | `/ps`                      | 查看、跟踪与终止后台终端                       |
 | `/subagents` / `/btw`      | 管理 Subagent / 在旁路 Context 中提问；仅 TUI  |
 | `/workflows`               | 查看阶段、Agent、Graph 与产物；可停止运行      |
@@ -639,9 +663,13 @@ extensions/
 ├── ui-customization/      # Header、Footer、Terminal title
 └── shared/                # Child policy、配置、Worktree、终端清洗
 
+bin/openpi.js              # 独立 Web CLI 入口
+web/                       # Web Host、Pi Runtime Adapter、协议与浏览器 UI
 skills/                    # Background terminal、Subagent 与 Workflow 指南
 themes/                    # github-dark-default
 ```
+
+Web 日常开发、前后端边界、Vite HMR 和后端自动重启说明见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](docs/development/OPENPI_WEB_DEVELOPMENT.md)。正式运行仍使用 `openpi web [workspace]`；Vite 只用于本地 UI 开发。
 
 开发工具链使用 Bun `1.3.14` 管理依赖和脚本，Biome 负责 TypeScript / JavaScript / JSON 格式与基础 lint；产品运行时仍是 Node，测试仍由 `node:test` 与 Vitest 执行：
 
