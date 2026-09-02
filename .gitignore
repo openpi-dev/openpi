@@ -4,8 +4,9 @@ node_modules/
 # Local linked worktrees
 /.worktrees/
 
-# Downloaded/generated executables
-bin/
+# Downloaded/generated executables (the Web CLI entrypoint is source)
+/bin/*
+!/bin/openpi.js
 
 # Pi runtime and private state
 /sessions/

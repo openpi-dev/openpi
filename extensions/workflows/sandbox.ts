@@ -19,6 +19,11 @@ const MAX_LOG_MESSAGE_BYTES = 8 * 1024;
  * bypasses the controller entirely.
  */
 export const AGENT_CALL_BACKSTOP_MARGIN = 8;
+/**
+ * Maximum synchronous execution time allowed between async agent boundaries.
+ * Non-yielding code (e.g. while(true){}) after await is terminated by this timeout.
+ */
+const SANDBOX_SYNC_TIMEOUT_MS = 1_000;
 
 export interface SandboxAgentOptions {
   agent_type?: unknown;
@@ -192,6 +197,28 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     const activeAgentRequests = new Map<number, AbortController>();
     let requestCount = 0;
     let finished = false;
+    let executionSeq = 0;
+    let executionWatchdog: NodeJS.Timeout | undefined;
+
+    const armWatchdog = (timeoutMs = SANDBOX_SYNC_TIMEOUT_MS) => {
+      if (finished) return 0;
+      if (executionWatchdog) clearTimeout(executionWatchdog);
+      const currentSeq = ++executionSeq;
+      executionWatchdog = setTimeout(() => {
+        if (finished || currentSeq !== executionSeq) return;
+        finish(new Error("Script execution timed out"));
+      }, timeoutMs);
+      executionWatchdog.unref?.();
+      return currentSeq;
+    };
+
+    const disarmWatchdog = (seq?: number) => {
+      if (seq !== undefined && seq !== executionSeq) return;
+      if (executionWatchdog) {
+        clearTimeout(executionWatchdog);
+        executionWatchdog = undefined;
+      }
+    };
 
     // The child parses this and falls back to zeros if it is ever unusable, so
     // a broken snapshot degrades `usage()` to a zero reading instead of
@@ -205,6 +232,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
     };
 
     const cleanup = () => {
+      disarmWatchdog();
       for (const abortController of activeAgentRequests.values()) {
         abortController.abort(new Error("Workflow stopped"));
       }
@@ -296,6 +324,12 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         }
         return;
       }
+      if (raw.kind === "idle") {
+        if (typeof raw.seq === "number") {
+          disarmWatchdog(raw.seq);
+        }
+        return;
+      }
       if (raw.kind === "agent") {
         if (
           typeof raw.payloadJson !== "string" ||
@@ -348,10 +382,12 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
               error: "Agent result exceeded the workflow IPC output limit",
             });
           }
+          const seq = armWatchdog();
           child.send({
             token,
             kind: "agentResult",
             id,
+            seq,
             resultJson,
             usageJson: usageJson(),
           });
@@ -398,6 +434,10 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
       finish(new Error("Workflow sandbox sent an unknown IPC message"));
     });
 
+    // Arm the synchronous execution watchdog for the initial script invocation
+    // (covers non-yielding code before and after initial microtask yields).
+    const initSeq = armWatchdog();
+
     child.send(
       {
         kind: "init",
@@ -406,6 +446,7 @@ export function runWorkflowSandbox(options: RunWorkflowSandboxOptions) {
         argsJson,
         maxConcurrency: options.maxConcurrency,
         usageJson: usageJson(),
+        seq: initSeq,
       },
       (error) => {
         if (error) finish(error);

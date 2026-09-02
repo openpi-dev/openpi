@@ -13,7 +13,7 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSession,
   DefaultPackageManager,
@@ -34,6 +34,7 @@ import {
   createChildResources,
   type DisposableChildSession,
   effectiveChildToolAllowlist,
+  resolveGitInfoPathOrThrow,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
 } from "../../../extensions/shared/child-session.ts";
@@ -1469,4 +1470,32 @@ test("every registered package tool is classified child-safe or excluded (fail-c
       `excluded tool "${name}" is no longer registered; remove it from CHILD_EXCLUDED_TOOL_NAMES`,
     );
   }
+});
+
+test("git-info exclusion: ENOENT degrades, other errors fail closed", async () => {
+  const enoent: NodeJS.ErrnoException = new Error("no such file");
+  enoent.code = "ENOENT";
+  // Absent (ENOENT) -> undefined, so nothing is excluded.
+  assert.equal(
+    resolveGitInfoPathOrThrow(() => {
+      throw enoent;
+    }),
+    undefined,
+  );
+  // Present -> the real path is returned for exclusion matching.
+  assert.equal(
+    resolveGitInfoPathOrThrow(() => "/repo/extensions/git-info/index.ts"),
+    "/repo/extensions/git-info/index.ts",
+  );
+  // Unverifiable (non-ENOENT) -> must throw, not silently degrade.
+  const eacces: NodeJS.ErrnoException = new Error("permission denied");
+  eacces.code = "EACCES";
+  assert.throws(
+    () =>
+      resolveGitInfoPathOrThrow(() => {
+        throw eacces;
+      }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
+    "non-ENOENT realpath failures must fail closed",
+  );
 });

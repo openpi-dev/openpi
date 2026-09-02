@@ -25,6 +25,36 @@ function run(
   });
 }
 
+async function runWithTimeout(
+  source: string,
+  overrides: Partial<Parameters<typeof runWorkflowSandbox>[0]> = {},
+  timeoutMs = 4000,
+) {
+  const abort = new AbortController();
+  const timer = setTimeout(() => {
+    abort.abort(new Error(`Test deadline of ${timeoutMs}ms exceeded`));
+  }, timeoutMs);
+  timer.unref?.();
+  try {
+    return await runWorkflowSandbox({
+      source,
+      args: undefined,
+      cwd: process.cwd(),
+      signal: overrides.signal ?? abort.signal,
+      onAgent: async (prompt) => ({ ok: true, output: `reply:${prompt}` }),
+      onPhase: () => {},
+      onLog: () => {},
+      usageSnapshot: () => ({ total: 0 }),
+      maxConcurrency: 8,
+      maxAgentCalls: 128,
+      ...overrides,
+    });
+  } finally {
+    clearTimeout(timer);
+    abort.abort();
+  }
+}
+
 test("sandbox exposes only workflow capabilities and validates results", async () => {
   const phases: string[] = [];
   let active = 0;
@@ -201,7 +231,102 @@ test("sandbox source cannot escape the host accounting wrapper", async () => {
 });
 
 test("sandbox VM still rejects non-yielding synchronous code", async () => {
-  await assert.rejects(run(`while (true) {}`), /timed out/);
+  await assert.rejects(runWithTimeout(`while (true) {}`), /timed out/);
+});
+
+test("sandbox rejects non-yielding synchronous code after await Promise.resolve()", async () => {
+  await assert.rejects(
+    runWithTimeout(`await Promise.resolve(); while (true) {}`),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code after chained microtasks", async () => {
+  await assert.rejects(
+    runWithTimeout(
+      `await Promise.resolve().then(() => Promise.resolve()); while (true) {}`,
+    ),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code after await agent()", async () => {
+  await assert.rejects(
+    runWithTimeout(`await agent("step"); while (true) {}`, {
+      onAgent: async () => ({ ok: true, output: "done" }),
+    }),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code between sequential agent calls", async () => {
+  let firstCallSettled = false;
+  await assert.rejects(
+    runWithTimeout(
+      `await agent("first"); while (true) {}; await agent("second");`,
+      {
+        onAgent: async () => {
+          firstCallSettled = true;
+          return { ok: true, output: "first-done" };
+        },
+      },
+    ),
+    /timed out/,
+  );
+  assert.equal(firstCallSettled, true);
+});
+
+test("sandbox rejects non-yielding synchronous code after parallel agent calls", async () => {
+  await assert.rejects(
+    runWithTimeout(
+      `await parallel([() => agent("p1"), () => agent("p2")]); while (true) {}`,
+      {
+        onAgent: async (prompt) => ({ ok: true, output: `${prompt}-done` }),
+      },
+    ),
+    /timed out/,
+  );
+});
+
+test("sandbox rejects non-yielding synchronous code in interleaved parallel branch while another agent is pending", async () => {
+  let fastCalled = false;
+  let slowCalled = false;
+
+  await assert.rejects(
+    runWithTimeout(
+      `
+        await parallel([
+          async () => {
+            await agent("fast");
+            while (true) {}
+          },
+          async () => {
+            await agent("slow");
+            return "slow-done";
+          },
+        ]);
+      `,
+      {
+        onAgent: async (prompt) => {
+          if (prompt === "fast") {
+            fastCalled = true;
+            return { ok: true, output: "fast-ok" };
+          }
+          if (prompt === "slow") {
+            slowCalled = true;
+            await new Promise((resolve) => setTimeout(resolve, 2000));
+            return { ok: true, output: "slow-ok" };
+          }
+          return { ok: true, output: "unknown" };
+        },
+      },
+      4000,
+    ),
+    /timed out/,
+  );
+
+  assert.equal(fastCalled, true);
+  assert.equal(slowCalled, true);
 });
 
 test("workflow sandbox imposes no fixed whole-agent wall timer", async () => {

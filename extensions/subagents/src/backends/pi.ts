@@ -24,7 +24,11 @@ import {
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import { resolveAgentModel } from "../agent-types.ts";
-import type { SubagentBackend, SubagentSession } from "../backend.ts";
+import type {
+  SubagentBackend,
+  SubagentCleanupReceipt,
+  SubagentSession,
+} from "../backend.ts";
 import type {
   SpawnTask,
   SubagentEvent,
@@ -40,16 +44,33 @@ import {
   createChildResources,
   shutdownAndDisposeChildSession,
 } from "../../../shared/child-session.ts";
-import { reclaimWorktree } from "../../../shared/worktree.ts";
+import {
+  formatWorktreeCleanupWarning,
+  reclaimWorktree,
+} from "../../../shared/worktree.ts";
 import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
 
 const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
+const PARTIAL_TEXT_MAX_LENGTH = 128 * 1_024;
 
 // --- Model + effort resolution -----------------------------------------------
 
 type ThinkingLevel = NonNullable<
   NonNullable<Parameters<typeof createAgentSession>[0]>["thinkingLevel"]
 >;
+
+export type PiAgentSessionFactory = (
+  options: Parameters<typeof createAgentSession>[0],
+) => Promise<{ session: AgentSession }>;
+
+export interface PiBackendOptions {
+  /** Test seam for production-adapter lifecycle coverage. */
+  readonly sessionFactory?: PiAgentSessionFactory;
+  /** Test-only override for bounded child shutdown. */
+  readonly shutdownTimeoutMs?: number;
+  /** Test seam for observing whether unsafe worktree reclamation is attempted. */
+  readonly worktreeCleanup?: typeof reclaimWorktree;
+}
 
 // --- Event translation ----------------------------------------------------------
 
@@ -71,20 +92,12 @@ function lastAssistantMessage(
   return undefined;
 }
 
-/** Final assistant text output (last assistant message with text), v1 semantics. */
-function finalOutput(session: AgentSession): string {
-  const messages = session.messages;
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const msg = messages[i];
-    if (messageRole(msg) !== "assistant") continue;
-    const text = (msg as AssistantMessage).content
-      .filter((part) => part.type === "text")
-      .map((part) => part.text)
-      .join("\n")
-      .trim();
-    if (text) return text;
-  }
-  return "";
+function assistantText(message: AssistantMessage) {
+  return message.content
+    .filter((part) => part.type === "text")
+    .map((part) => part.text)
+    .join("\n")
+    .trim();
 }
 
 function safeJson(value: unknown): string | undefined {
@@ -166,6 +179,7 @@ function boundedError(error: unknown) {
 
 const makePiSession = (
   task: SpawnTask,
+  options: PiBackendOptions,
 ): Effect.Effect<SubagentSession, SpawnError, Scope.Scope> =>
   Effect.gen(function* () {
     const registry = task.parent.modelRegistry;
@@ -193,7 +207,9 @@ const makePiSession = (
             ? { appendSystemPrompt: [...task.appendSystemPrompt] }
             : {}),
         });
-        const { session } = await createAgentSession({
+        const { session } = await (
+          options.sessionFactory ?? createAgentSession
+        )({
           cwd: task.cwd,
           sessionManager: SessionManager.create(task.cwd),
           settingsManager,
@@ -208,7 +224,9 @@ const makePiSession = (
         try {
           await bindChildSessionExtensions(session, task.tools);
         } catch (error) {
-          await shutdownAndDisposeChildSession(session);
+          await shutdownAndDisposeChildSession(session, {
+            timeoutMs: options.shutdownTimeoutMs,
+          });
           throw error;
         }
         return session;
@@ -216,14 +234,35 @@ const makePiSession = (
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
 
+    interface ActivePrompt {
+      cancelled: boolean;
+      lifecycleStarted: boolean;
+      lifecycleSettled: boolean;
+      promptSettled: boolean;
+      promptError?: string;
+      lastAssistant?: AssistantMessage;
+      finalText: string;
+      liveText: string;
+      partialTextAtCancel?: string;
+      promise: Promise<void>;
+    }
+
+    interface PendingRestart {
+      cancelled: boolean;
+      terminalEmitted: boolean;
+    }
+
     const state = {
       closed: false,
-      /** prompt() rejection for the active run; folded into RunSettled. */
-      runError: undefined as string | undefined,
       /** One terminal event per run: lifecycle, prompt-rejection, and abort
        * fallbacks can all race to settle; the first wins. */
       settled: false,
+      /** Pi events have no run identity, so the exact prompt Promise is the
+       * only safe lease for deciding when another run may start. */
+      activePrompt: undefined as ActivePrompt | undefined,
+      pendingRestart: undefined as PendingRestart | undefined,
     };
+    let cleanupReceipt: SubagentCleanupReceipt | undefined;
 
     const events = yield* Queue.make<SubagentEvent, Cause.Done>();
     const emit = (event: SubagentEvent) => {
@@ -271,20 +310,13 @@ const makePiSession = (
       });
     };
 
-    const settle = () => {
-      if (state.settled) return;
+    const settle = (prompt = state.activePrompt) => {
+      if (!prompt || state.activePrompt !== prompt || state.settled) return;
       state.settled = true;
-      const last = lastAssistantMessage(session);
-      const partialText = finalOutput(session) || undefined;
-      if (last?.stopReason === "aborted") {
-        emit({
-          _tag: "RunSettled",
-          outcome: { _tag: "Interrupted", partialText },
-        });
-        return;
-      }
+      const last = prompt.lastAssistant;
+      const partialText = prompt.liveText || prompt.finalText || undefined;
       const errorText =
-        state.runError ??
+        prompt.promptError ??
         (last?.stopReason === "error"
           ? (last.errorMessage ?? "Run failed")
           : undefined);
@@ -299,24 +331,86 @@ const makePiSession = (
         });
         return;
       }
+      if (last?.stopReason === "aborted") {
+        emit({
+          _tag: "RunSettled",
+          outcome: { _tag: "Interrupted", partialText },
+        });
+        return;
+      }
       emit({
         _tag: "RunSettled",
-        outcome: { _tag: "Completed", finalText: finalOutput(session) },
+        outcome: {
+          _tag: "Completed",
+          finalText: prompt.finalText,
+        },
       });
+    };
+
+    /**
+     * A Pi lifecycle event is evidence, not the lease itself. The exact
+     * prompt() Promise must also settle before a terminal outcome is trusted;
+     * otherwise agent_settled can publish Completed and hide a later reject.
+     */
+    const maybeSettle = (prompt: ActivePrompt) => {
+      if (
+        state.closed ||
+        state.activePrompt !== prompt ||
+        prompt.cancelled ||
+        state.settled ||
+        !prompt.promptSettled
+      ) {
+        return;
+      }
+      if (prompt.promptError !== undefined) {
+        settle(prompt);
+      } else if (!prompt.lifecycleStarted) {
+        prompt.promptError =
+          "Pi prompt completed without lifecycle events; no agent response was observed.";
+        settle(prompt);
+      } else if (!prompt.lifecycleSettled) {
+        prompt.promptError =
+          "Pi prompt completed without an agent_settled lifecycle event.";
+        settle(prompt);
+      } else {
+        settle(prompt);
+      }
+      if (state.activePrompt === prompt && prompt.promptSettled) {
+        state.activePrompt = undefined;
+      }
     };
 
     const handleEvent = (event: AgentSessionEvent) => {
       if (state.closed) return;
+      const activePrompt = state.activePrompt;
+      if (!activePrompt) return;
+      if (activePrompt.cancelled) {
+        if (event.type === "agent_start") {
+          // abort() can return during Pi's preflight while prompt() remains
+          // pending. If that preflight later enters the agent lifecycle,
+          // abort again before it can reach a provider or tool. Never reopen
+          // the event gate: native events carry no generation identity.
+          try {
+            void session.abort().catch(() => undefined);
+          } catch {
+            // The original interrupt still owns bounded cleanup.
+          }
+        }
+        return;
+      }
       switch (event.type) {
         case "agent_start":
           // Extensions may register tools between runs; guard new ones too.
           toolTimeout.apply(session);
-          state.settled = false;
+          activePrompt.lifecycleStarted = true;
           emit({ _tag: "RunStarted" });
           break;
         case "message_update": {
           const streamEvent = event.assistantMessageEvent;
           if (streamEvent.type === "text_delta") {
+            activePrompt.liveText = (
+              activePrompt.liveText + streamEvent.delta
+            ).slice(-PARTIAL_TEXT_MAX_LENGTH);
             emit({
               _tag: "AssistantDelta",
               kind: "text",
@@ -337,9 +431,14 @@ const makePiSession = (
             const text = userText(event.message as Message);
             if (text.trim()) emit({ _tag: "UserMessage", text });
           } else if (role === "assistant") {
+            const assistant = event.message as AssistantMessage;
+            activePrompt.lastAssistant = assistant;
+            const text = assistantText(assistant);
+            if (text) activePrompt.finalText = text;
+            activePrompt.liveText = "";
             emit({
               _tag: "AssistantMessage",
-              parts: assistantParts(event.message as AssistantMessage),
+              parts: assistantParts(assistant),
             });
             emitUsage();
             emit({ _tag: "MetaChanged", meta: currentMeta() });
@@ -405,7 +504,8 @@ const makePiSession = (
           });
           break;
         case "agent_settled":
-          settle();
+          activePrompt.lifecycleSettled = true;
+          maybeSettle(activePrompt);
           break;
       }
     };
@@ -420,17 +520,61 @@ const makePiSession = (
         } catch {
           // Continue with abort/dispose.
         }
-        await shutdownAndDisposeChildSession(session, {
+        const shutdown = await shutdownAndDisposeChildSession(session, {
           abort: true,
-          timeoutMs: CHILD_SHUTDOWN_TIMEOUT_MS,
+          timeoutMs: options.shutdownTimeoutMs ?? CHILD_SHUTDOWN_TIMEOUT_MS,
         });
-        // A direct child can run multiple turns, so its worktree lives until
-        // this session scope closes. Cleanup is fail-closed and shares a hard
-        // deadline; unknown/dirty/ignored/detached work is preserved.
-        if (task.worktree) {
-          await reclaimWorktree(task.worktree.repoCwd, task.worktree, {
-            timeoutMs: DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS,
-          }).catch(() => {});
+        const promptQuiescent =
+          state.activePrompt === undefined || state.activePrompt.promptSettled;
+        const cleanupMessages = [...shutdown.errors];
+        let cleanupUncertain =
+          shutdown.errors.length > 0 || shutdown.timedOut || !promptQuiescent;
+        if (shutdown.timedOut)
+          cleanupMessages.push("cleanup deadline exceeded");
+        if (!promptQuiescent) {
+          cleanupMessages.push(
+            "active prompt did not quiesce before session shutdown",
+          );
+        }
+
+        // A preflight hook can outlive abort() and continue touching the child
+        // cwd. Never reclaim a worktree until both the prompt and session
+        // cleanup have reached a known-safe terminal state.
+        if (
+          task.worktree &&
+          promptQuiescent &&
+          shutdown.ok &&
+          !shutdown.timedOut
+        ) {
+          try {
+            const cleanup = await (options.worktreeCleanup ?? reclaimWorktree)(
+              task.worktree.repoCwd,
+              task.worktree,
+              {
+                timeoutMs: DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS,
+              },
+            );
+            const warning = formatWorktreeCleanupWarning(
+              cleanup,
+              task.worktree.path,
+            );
+            if (warning) cleanupMessages.push(`worktree cleanup: ${warning}`);
+          } catch (error) {
+            cleanupUncertain = true;
+            cleanupMessages.push(
+              `worktree cleanup failed: ${boundedError(error)}; checkout preserved at ${task.worktree.path}`,
+            );
+          }
+        } else if (task.worktree) {
+          cleanupMessages.push(
+            `worktree cleanup skipped; checkout preserved at ${task.worktree.path}`,
+          );
+        }
+        if (cleanupMessages.length > 0) {
+          cleanupReceipt = {
+            uncertain: cleanupUncertain,
+            message: `${cleanupUncertain ? "Subagent cleanup is uncertain" : "Subagent cleanup"}: ${cleanupMessages.join("; ")}`,
+          };
         }
         Queue.endUnsafe(events);
       }),
@@ -438,15 +582,63 @@ const makePiSession = (
 
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
-      state.runError = undefined;
+      if (state.activePrompt) {
+        throw new Error(
+          "Cannot start a Pi prompt while another prompt is active.",
+        );
+      }
+      const activePrompt: ActivePrompt = {
+        cancelled: false,
+        lifecycleStarted: false,
+        lifecycleSettled: false,
+        promptSettled: false,
+        finalText: "",
+        liveText: "",
+        promise: Promise.resolve(),
+      };
+      state.activePrompt = activePrompt;
       state.settled = false;
       emit({ _tag: "RunStarted" });
-      void session.prompt(text).catch((error) => {
-        state.runError = boundedError(error);
-        // Preflight failures may never start the agent lifecycle, so no
-        // agent_settled will arrive for them.
-        if (!session.isStreaming) settle();
-      });
+      let prompt: Promise<void>;
+      try {
+        prompt = session.prompt(text, {
+          preflightResult: (accepted) => {
+            if (accepted && (activePrompt.cancelled || state.closed)) {
+              // This callback runs immediately before Pi enters
+              // _runAgentPrompt. Throwing here is the only synchronous seam
+              // that prevents a cancelled preflight from reviving after the
+              // adapter subscription and worktree ownership are gone.
+              throw new Error(
+                "Subagent prompt was cancelled during preflight.",
+              );
+            }
+          },
+        });
+      } catch (error) {
+        prompt = Promise.reject(error);
+      }
+      activePrompt.promise = prompt
+        .then(
+          () => undefined,
+          (error) => {
+            if (
+              !state.closed &&
+              state.activePrompt === activePrompt &&
+              !activePrompt.cancelled
+            ) {
+              activePrompt.promptError = boundedError(error);
+            }
+          },
+        )
+        .finally(() => {
+          activePrompt.promptSettled = true;
+          maybeSettle(activePrompt);
+          if (state.activePrompt === activePrompt) {
+            if (activePrompt.cancelled || state.settled) {
+              state.activePrompt = undefined;
+            }
+          }
+        });
     };
 
     // Session naming is best-effort.
@@ -465,6 +657,7 @@ const makePiSession = (
 
     return {
       toolRenderer,
+      cleanupReceipt: () => cleanupReceipt,
       meta: Effect.sync(currentMeta),
       events: Stream.fromQueue(events),
       send: (text) =>
@@ -472,7 +665,21 @@ const makePiSession = (
           if (state.closed) {
             return new SendError({ message: "Subagent session is closed." });
           }
-          if (session.isStreaming) {
+          const pendingRestart = state.pendingRestart;
+          if (pendingRestart) {
+            return new SendError({
+              message: pendingRestart.cancelled
+                ? "Subagent cancellation is still in progress."
+                : "A subagent restart is already pending.",
+            });
+          }
+          const activePrompt = state.activePrompt;
+          if (activePrompt?.cancelled) {
+            return new SendError({
+              message: "Subagent cancellation is still in progress.",
+            });
+          }
+          if (activePrompt && session.isStreaming) {
             // Steer the active run via the SDK's queue; queue_update events
             // render it, message_end(user) lands it in the transcript. A
             // rejected steer is a real send failure, not a diagnostic.
@@ -481,34 +688,115 @@ const makePiSession = (
               catch: (error) => new SendError({ message: boundedError(error) }),
             }).pipe(Effect.asVoid);
           }
+          if (
+            activePrompt &&
+            !activePrompt.lifecycleSettled &&
+            !activePrompt.promptSettled
+          ) {
+            return new SendError({
+              message:
+                "Subagent prompt is still starting; wait for it to run or settle before sending.",
+            });
+          }
+          if (activePrompt) {
+            // Pi emits agent_settled before prompt() resolves. Preserve the
+            // same-session restart contract while closing that microtask gap
+            // without ever overlapping two native prompts.
+            const restart: PendingRestart = {
+              cancelled: false,
+              terminalEmitted: false,
+            };
+            state.pendingRestart = restart;
+            return Effect.tryPromise({
+              try: async (signal) => {
+                const cancelPendingRestart = () => {
+                  restart.cancelled = true;
+                  if (state.pendingRestart === restart) {
+                    state.pendingRestart = undefined;
+                  }
+                };
+                signal.addEventListener("abort", cancelPendingRestart, {
+                  once: true,
+                });
+                if (signal.aborted) cancelPendingRestart();
+                try {
+                  await activePrompt.promise;
+                  if (state.closed) {
+                    throw new Error("Subagent session is closed.");
+                  }
+                  if (restart.cancelled) {
+                    // interrupt emits the terminal event for this accepted
+                    // restart. Resolve the send without starting a prompt so
+                    // the manager keeps its restarting marker until that
+                    // terminal event is folded.
+                    return;
+                  }
+                  state.pendingRestart = undefined;
+                  startRun(text);
+                } finally {
+                  signal.removeEventListener("abort", cancelPendingRestart);
+                  if (state.pendingRestart === restart) {
+                    state.pendingRestart = undefined;
+                  }
+                }
+              },
+              catch: (error) => new SendError({ message: boundedError(error) }),
+            }).pipe(Effect.asVoid);
+          }
           return Effect.sync(() => startRun(text));
         }),
       interrupt: Effect.promise(async () => {
         if (state.closed) return;
+        const pendingRestart = state.pendingRestart;
+        if (pendingRestart) pendingRestart.cancelled = true;
+        const activePrompt = state.activePrompt;
+        if (activePrompt) {
+          activePrompt.cancelled = true;
+          activePrompt.partialTextAtCancel = pendingRestart
+            ? undefined
+            : activePrompt.liveText || activePrompt.finalText || undefined;
+        }
         try {
           session.clearQueue();
         } catch {
           // Abort regardless.
         }
         await session.abort().catch(() => undefined);
-        // Only resolve once streaming has actually stopped: reporting the
-        // interrupt as complete while the run keeps working would let the
-        // manager settle a run that is still mutating the workspace. The
-        // manager bounds this effect at 5s and force-disposes on timeout.
-        while (!state.closed && session.isStreaming) {
-          await new Promise((resolve) => setTimeout(resolve, 50));
-        }
-        // No streaming run means no agent_settled will arrive; emit the
-        // terminal event (once) so the run cannot look running forever.
-        if (!state.closed && !state.settled) {
+        // isStreaming is false during Pi preflight, so it cannot prove the
+        // invocation is quiescent. Wait for the exact prompt Promise instead;
+        // the manager bounds this effect at 5s and force-disposes on timeout.
+        await activePrompt?.promise;
+        if (
+          !state.closed &&
+          pendingRestart &&
+          !pendingRestart.terminalEmitted
+        ) {
+          pendingRestart.terminalEmitted = true;
+          if (state.pendingRestart === pendingRestart) {
+            state.pendingRestart = undefined;
+          }
           state.settled = true;
           emit({ _tag: "RunSettled", outcome: { _tag: "Interrupted" } });
+          return;
+        }
+        if (!state.closed && !state.settled) {
+          state.settled = true;
+          emit({
+            _tag: "RunSettled",
+            outcome: {
+              _tag: "Interrupted",
+              partialText: activePrompt?.partialTextAtCancel,
+            },
+          });
         }
       }),
     } satisfies SubagentSession;
   });
 
-export const piBackend: SubagentBackend = {
-  name: "pi",
-  spawn: makePiSession,
-};
+export const makePiBackend = (options: PiBackendOptions = {}) =>
+  ({
+    name: "pi",
+    spawn: (task) => makePiSession(task, options),
+  }) satisfies SubagentBackend;
+
+export const piBackend = makePiBackend();

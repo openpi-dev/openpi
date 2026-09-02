@@ -309,7 +309,20 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     };
 
     const closeEntryScope = (entry: Entry) =>
-      Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
+      Scope.close(entry.scope, Exit.void).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            const receipt = entry.session.cleanupReceipt?.();
+            if (!receipt?.uncertain) return;
+            const current = entry.snapshot.errorText;
+            entry.snapshot.errorText = current
+              ? `${current}; ${receipt.message}`
+              : receipt.message;
+            notify(entry.snapshot.id);
+          }),
+        ),
+        Effect.ignore,
+      );
 
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
