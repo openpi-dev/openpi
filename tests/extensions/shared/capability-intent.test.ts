@@ -6,10 +6,7 @@ import {
 } from "../../../extensions/shared/capability-intent.ts";
 
 test("classifies explicit capability intent across English, Chinese, and mixed phrases", () => {
-  assert.deepEqual(capabilitiesRequestedByPrompt("subagent, workflow"), [
-    "delegate",
-    "workflow",
-  ]);
+  assert.deepEqual(capabilitiesRequestedByPrompt("subagent, workflow"), []);
   assert.deepEqual(
     capabilitiesRequestedByPrompt("用 Subagent 并行检查这三个模块"),
     ["delegate"],
@@ -31,10 +28,19 @@ test("classifies explicit capability intent across English, Chinese, and mixed p
   );
 });
 
-test("reserved English capability words authorize the matching groups", () => {
+test("English references without an imperative stay inert", () => {
   assert.deepEqual(
     capabilitiesRequestedByPrompt("Compare Subagent and Workflow"),
-    ["delegate", "workflow"],
+    [],
+  );
+  for (const prompt of [
+    "git checkout -b subagent-matching",
+    "Please review the subagent.ts implementation",
+    "讨论 workflow 和 subagent 的区别",
+  ]) assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
+  assert.deepEqual(
+    capabilitiesRequestedByPrompt("Use a subagent to review this change"),
+    ["delegate"],
   );
 });
 
