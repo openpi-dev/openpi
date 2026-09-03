@@ -10,6 +10,7 @@
  * - supports interrupt (RunSettled Interrupted -> status "error", matching v1);
  * - fails the run when the prompt starts with "FAIL:", and refuses to spawn
  *   at all when it starts with "SPAWNFAIL:" (error-path testing);
+ * - refuses a steer when the message starts with "SENDFAIL:";
  * - hangs the run after RunStarted without any assistant event when the
  * prompt starts with "HANG:" (first-response watchdog testing);
  * - appends every event to a JSONL "session file" in tmpdir so the
@@ -259,6 +260,17 @@ const makeStubSession = (
         if (state.closed) {
           return yield* new SendError({
             message: "Subagent session is closed.",
+          });
+        }
+        if (text.trimStart().startsWith("SENDFAIL-DELAY:")) {
+          yield* Effect.sleep(Duration.millis(20));
+          return yield* new SendError({
+            message: "stub refused to send",
+          });
+        }
+        if (text.trimStart().startsWith("SENDFAIL:")) {
+          return yield* new SendError({
+            message: "stub refused to send",
           });
         }
         state.pending.push(text);

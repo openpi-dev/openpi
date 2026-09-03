@@ -79,6 +79,25 @@ test("wait result preview exposes artifact save failures", () => {
   assert.match(preview, /artifact not saved/);
 });
 
+test("wait result preview exposes pending artifact persistence", () => {
+  const preview = buildWaitResultPreview(
+    "exact result is still being saved",
+    {
+      results: [
+        {
+          id: "sa-1",
+          title: "review",
+          status: "done",
+          artifactPending: true,
+        },
+      ],
+    },
+    theme,
+  );
+
+  assert.match(preview, /1 artifact pending/);
+  assert.match(preview, /artifact pending/);
+});
 test("narrow wait result preview keeps artifact warning understandable", () => {
   const rendered = renderWaitResultPreview(
     "partial result",

@@ -779,6 +779,36 @@ test("exact result paging is 0-based and never treats a projection as canonical"
   );
 });
 
+test("line paging hands off an oversized Unicode line to byte paging", () => {
+  const content = `first\n${"开".repeat(10 * 1024)}\nlast`;
+  const first = pageResultText(content, {
+    offset: 1,
+    limit: 1,
+    maxBytes: 256,
+  });
+  assert.equal(first.offset, 1);
+  assert.equal(first.truncated, true);
+  assert.ok(first.nextByteOffset !== undefined);
+
+  let cursor = first.nextByteOffset;
+  let recovered = first.text.replace(/\n\[page truncated; next \d+\]$/u, "");
+  for (let attempt = 0; attempt < 200; attempt++) {
+    const page = pageResultText(content, {
+      byteOffset: cursor,
+      maxBytes: 256,
+    });
+    recovered += page.text.replace(/\n\[page truncated; next \d+\]$/u, "");
+    if (!page.hasMore) break;
+    assert.ok(
+      page.nextByteOffset !== undefined && page.nextByteOffset > cursor,
+    );
+    cursor = page.nextByteOffset;
+  }
+
+  assert.equal(recovered, content.slice("first\n".length));
+  assert.equal(recovered.includes("�"), false);
+});
+
 test("uncertain recovery entries are never relinked as the published lock", {
   skip: skipUnsupportedArtifactCache,
 }, async () => {

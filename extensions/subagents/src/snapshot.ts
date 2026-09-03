@@ -28,11 +28,15 @@ function byteLength(value: string) {
 
 /** Return a valid UTF-8 prefix without splitting a code point. */
 export function truncateUtf8Head(value: string, maxBytes: number) {
-  if (maxBytes <= 0) return "";
+  const budget = Math.floor(maxBytes);
+  if (!Number.isFinite(budget) || budget <= 0) return "";
   const bytes = Buffer.from(value, "utf8");
-  if (bytes.length <= maxBytes) return value;
-  let end = maxBytes;
-  while (end > 0 && end < bytes.length && (bytes[end] & 0xc0) === 0x80) {
+  if (bytes.length <= budget) return value;
+  let end = Math.min(budget, bytes.length);
+  // When the budget ends in the middle of a code point, the byte immediately
+  // after the candidate is a continuation byte. Walk back to the boundary;
+  // this preserves a code point whose final byte is exactly at the budget.
+  while (end > 0 && end < bytes.length && (bytes[end]! & 0xc0) === 0x80) {
     end--;
   }
   return bytes.subarray(0, end).toString("utf8");
@@ -350,7 +354,18 @@ interface BuildOptions {
   readonly includeDisplay: boolean;
 }
 
-function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
+export interface SubagentProjectionStatus {
+  readonly projectionStale?: boolean;
+  readonly projectionError?: string;
+}
+
+const MAX_PROJECTION_ERROR_BYTES = 512;
+
+function buildCandidate(
+  snapshot: SubagentSnapshot,
+  options: BuildOptions,
+  projectionStatus: SubagentProjectionStatus = {},
+) {
   const title = trimText(snapshot.title, options.coreBytes);
   const prompt = trimText(snapshot.prompt, options.promptBytes);
   const cwd = trimText(snapshot.cwd, options.coreBytes);
@@ -440,6 +455,8 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
     finalText: finalText.text,
     ...(snapshot.finalTextTruncated ? { finalTextTruncated: true } : {}),
     ...(resultArtifact ? { resultArtifact } : {}),
+    ...(snapshot.resultArtifactPending ? { resultArtifactPending: true } : {}),
+    ...(snapshot.artifactSaveFailed ? { artifactSaveFailed: true } : {}),
     turns: snapshot.turns,
   };
 
@@ -483,6 +500,8 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
     explicitOmittedBytes,
     Math.max(0, jsonBytes(sourceForMeasurement) - jsonBytes(candidate)),
   );
+  const projectionStale = projectionStatus.projectionStale;
+  const projectionError = projectionStatus.projectionError;
   const metadata = {
     maxBytes: 0,
     bytes: 0,
@@ -490,9 +509,20 @@ function buildCandidate(snapshot: SubagentSnapshot, options: BuildOptions) {
       omittedBytes > 0 ||
       omitted.transcriptItems > 0 ||
       omitted.liveTools > 0 ||
-      omitted.queued > 0,
+      omitted.queued > 0 ||
+      projectionStale === true ||
+      projectionError !== undefined,
     omittedBytes,
     omitted,
+    ...(projectionStale ? { projectionStale: true } : {}),
+    ...(projectionError
+      ? {
+          projectionError: truncateUtf8Head(
+            projectionError,
+            Math.min(MAX_PROJECTION_ERROR_BYTES, options.coreBytes),
+          ),
+        }
+      : {}),
   } satisfies Omit<SubagentSnapshotProjection, "maxBytes" | "bytes"> & {
     maxBytes: number;
     bytes: number;
@@ -525,6 +555,7 @@ function finishCandidate(
 export function projectSubagentSnapshot(
   snapshot: SubagentSnapshot,
   maxBytes = DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
+  projectionStatus: SubagentProjectionStatus = {},
 ): SubagentSnapshot | undefined {
   const cap = Math.floor(maxBytes);
   if (!Number.isFinite(cap) || cap <= 0) return undefined;
@@ -573,11 +604,127 @@ export function projectSubagentSnapshot(
   ];
 
   for (const options of levels) {
-    const built = buildCandidate(snapshot, options);
+    const built = buildCandidate(snapshot, options, projectionStatus);
     const candidate = finishCandidate(built.candidate, built.metadata, cap);
     if (candidate) return candidate as unknown as SubagentSnapshot;
   }
   return undefined;
+}
+
+/**
+ * Build the smallest useful bounded read-model entry when normal projection
+ * cannot fit. This keeps identity and current lifecycle facts discoverable
+ * without exposing canonical transcript data.
+ */
+function projectUnavailableSubagentSnapshot(
+  snapshot: SubagentSnapshot,
+  maxBytes: number,
+  projectionError: string,
+) {
+  const cap = Math.floor(maxBytes);
+  for (const textBytes of [128, 32, 1, 0]) {
+    const candidate: SubagentSnapshot = {
+      // The id is the lookup key and must never be truncated.
+      id: snapshot.id,
+      origin: snapshot.origin,
+      backend: snapshot.backend,
+      title: truncateUtf8Head(snapshot.title, textBytes),
+      prompt: truncateUtf8Head(snapshot.prompt, textBytes),
+      cwd: truncateUtf8Head(snapshot.cwd, textBytes),
+      status: snapshot.status,
+      ...(snapshot.outcome ? { outcome: snapshot.outcome } : {}),
+      createdAt: snapshot.createdAt,
+      ...(snapshot.settledAt !== undefined
+        ? { settledAt: snapshot.settledAt }
+        : {}),
+      meta: { backend: snapshot.backend },
+      usage: {},
+      transcriptVersion: snapshot.transcriptVersion,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "",
+      ...(snapshot.resultArtifact
+        ? { resultArtifact: snapshot.resultArtifact }
+        : {}),
+      ...(snapshot.resultArtifactPending
+        ? { resultArtifactPending: true }
+        : {}),
+      ...(snapshot.artifactSaveFailed ? { artifactSaveFailed: true } : {}),
+      turns: snapshot.turns,
+      projectionUnavailable: true,
+      projectionError: truncateUtf8Head(projectionError, 32),
+    };
+    if (jsonBytes(candidate) <= cap) return candidate;
+  }
+  return undefined;
+}
+
+/**
+ * Rebuild a bounded fail-closed read model after the aggregate projection
+ * fails. Previous values are used only for display-heavy fields; canonical
+ * identity, lifecycle, and terminal-result facts come from `snapshots`.
+ */
+export function projectSubagentSnapshotsFromPrevious(
+  snapshots: ReadonlyArray<SubagentSnapshot>,
+  previous: ReadonlyArray<SubagentSnapshot | undefined>,
+  maxBytes = DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
+  projectionError: string,
+): ReadonlyArray<SubagentSnapshot> | undefined {
+  const cap = Math.floor(maxBytes);
+  if (!Number.isFinite(cap) || cap <= 0) return undefined;
+  if (snapshots.length === 0) return [];
+
+  const wrapperBytes = 2 + Math.max(0, snapshots.length - 1);
+  const perEntry = Math.floor((cap - wrapperBytes) / snapshots.length);
+  if (perEntry <= 0) return undefined;
+  const previousById = new Map(
+    previous.flatMap((snapshot) =>
+      snapshot ? [[snapshot.id, snapshot] as const] : [],
+    ),
+  );
+  const projected = snapshots.map((current) => {
+    const prior = previousById.get(current.id);
+    const source: SubagentSnapshot = prior
+      ? {
+          ...prior,
+          // Keep the previous bounded display fields, but overlay the latest
+          // low-cost facts so stale state cannot masquerade as current.
+          id: current.id,
+          origin: current.origin,
+          backend: current.backend,
+          title: current.title,
+          prompt: current.prompt,
+          cwd: current.cwd,
+          status: current.status,
+          outcome: current.outcome,
+          worktreeBranch: current.worktreeBranch,
+          createdAt: current.createdAt,
+          settledAt: current.settledAt,
+          errorText: current.errorText,
+          meta: current.meta,
+          usage: current.usage,
+          transcriptVersion: current.transcriptVersion,
+          finalText: current.finalText,
+          finalTextTruncated: current.finalTextTruncated,
+          resultArtifact: current.resultArtifact,
+          resultArtifactPending: current.resultArtifactPending,
+          artifactSaveFailed: current.artifactSaveFailed,
+          turns: current.turns,
+          snapshot: undefined,
+        }
+      : current;
+    return (
+      projectSubagentSnapshot(source, perEntry, {
+        projectionStale: true,
+        projectionError,
+      }) ??
+      projectUnavailableSubagentSnapshot(current, perEntry, projectionError)
+    );
+  });
+  if (projected.some((snapshot) => snapshot === undefined)) return undefined;
+  const result = projected as SubagentSnapshot[];
+  return jsonBytes(result) <= cap ? result : undefined;
 }
 
 /** Measure the exact JSON UTF-8 size of one snapshot projection. */

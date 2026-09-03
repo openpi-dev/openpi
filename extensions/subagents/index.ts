@@ -112,7 +112,11 @@ import {
   type SubagentIdCounters,
   subagentIdWatermark,
 } from "./src/id-sequence.ts";
-import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
+import {
+  SubagentManager,
+  type SubagentManagerConfig,
+  type SubagentManagerShape,
+} from "./src/manager.ts";
 import {
   buildSubagentResultDisplayMessage,
   buildSubagentResultMessage,
@@ -192,6 +196,7 @@ interface SubagentResultDetails {
   readonly worktreeBranch?: string;
   readonly elapsed?: string;
   readonly artifactSaveFailed?: boolean;
+  readonly artifactPending?: boolean;
   readonly fullResultSaved?: boolean;
   readonly count?: number;
   readonly projection?: SubagentProjectionDetails;
@@ -203,6 +208,7 @@ interface SubagentResultDetails {
     readonly worktreeBranch?: string;
     readonly elapsed?: string;
     readonly artifactSaveFailed?: boolean;
+    readonly artifactPending?: boolean;
     readonly fullResultSaved?: boolean;
     readonly projection?: SubagentProjectionDetails;
   }>;
@@ -215,6 +221,9 @@ interface SubagentProjectionDetails {
   readonly omittedBytes: number;
   readonly omitted: NonNullable<SubagentSnapshot["snapshot"]>["omitted"];
   readonly exactResultAvailable?: boolean;
+  readonly projectionUnavailable?: boolean;
+  readonly projectionStale?: boolean;
+  readonly projectionError?: string;
 }
 
 interface SubagentResultEntryData {
@@ -263,7 +272,11 @@ function withCanonicalResult(
   result:
     | Pick<
         SubagentSnapshot,
-        "finalText" | "finalTextTruncated" | "resultArtifact"
+        | "finalText"
+        | "finalTextTruncated"
+        | "resultArtifact"
+        | "resultArtifactPending"
+        | "artifactSaveFailed"
       >
     | undefined,
 ) {
@@ -276,6 +289,8 @@ function withCanonicalResult(
         ? { finalTextTruncated: true }
         : { finalTextTruncated: undefined }),
       resultArtifact: result.resultArtifact,
+      resultArtifactPending: result.resultArtifactPending,
+      artifactSaveFailed: result.artifactSaveFailed,
     },
     resultIsCanonical: true,
   };
@@ -284,6 +299,24 @@ function withCanonicalResult(
 function projectionDetails(
   snap: SubagentSnapshot,
 ): SubagentProjectionDetails | undefined {
+  if (snap.projectionUnavailable) {
+    return {
+      truncated: true,
+      omittedBytes: 0,
+      omitted: {
+        transcriptItems: 0,
+        liveTools: 0,
+        queued: 0,
+        liveAssistantBytes: 0,
+        finalTextBytes: 0,
+        promptBytes: 0,
+      },
+      projectionUnavailable: true,
+      ...(snap.projectionError
+        ? { projectionError: snap.projectionError }
+        : {}),
+    };
+  }
   const projection = snap.snapshot;
   if (!projection?.truncated) return undefined;
   const exactResultAvailable = exactResultText(snap) !== undefined;
@@ -292,10 +325,17 @@ function projectionDetails(
     omittedBytes: projection.omittedBytes,
     omitted: projection.omitted,
     ...(exactResultAvailable ? { exactResultAvailable: true } : {}),
+    ...(projection.projectionStale ? { projectionStale: true } : {}),
+    ...(projection.projectionError
+      ? { projectionError: projection.projectionError }
+      : {}),
   };
 }
 
 function projectionNotice(snap: SubagentSnapshot): string | undefined {
+  if (snap.projectionUnavailable) {
+    return `bounded projection unavailable${snap.projectionError ? `; ${snap.projectionError}` : ""}`;
+  }
   const projection = snap.snapshot;
   if (!projection?.truncated) return undefined;
   const omitted = [
@@ -312,7 +352,11 @@ function projectionNotice(snap: SubagentSnapshot): string | undefined {
   ].filter((value): value is string => value !== undefined);
   const detail = omitted.length > 0 ? omitted.join(", ") : "display data";
   const hasExactArtifact = exactResultText(snap) !== undefined;
-  return `snapshot truncated: ${detail} omitted${hasExactArtifact ? "; exact result artifact available" : ""}`;
+  const stale = projection.projectionStale ? "; projection stale" : "";
+  const error = projection.projectionError
+    ? `; projection error: ${projection.projectionError}`
+    : "";
+  return `snapshot truncated: ${detail} omitted${hasExactArtifact ? "; exact result artifact available" : ""}${stale}${error}`;
 }
 
 export function truncatedOutput(
@@ -327,6 +371,22 @@ export function truncatedOutput(
     snap.finalTextTruncated === true ||
     (!resultOptions.resultIsCanonical &&
       (snap.snapshot?.omitted.finalTextBytes ?? 0) > 0);
+  const artifactPending =
+    snap.resultArtifactPending === true && artifact === undefined;
+  if (artifactPending) {
+    const retry = truncateHead(
+      `Exact subagent result is still being saved; retry subagent_result(id=${JSON.stringify(snap.id)}).`,
+      {
+        maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
+        maxLines: 1,
+      },
+    );
+    return {
+      text: retry.content,
+      truncated: false,
+      artifactPending: true,
+    };
+  }
   const output =
     artifact !== undefined
       ? artifact || "(no output)"
@@ -345,18 +405,19 @@ export function truncatedOutput(
       : () => {
           throw new Error("The exact subagent result artifact is unavailable");
         };
-  return projectResult(output, {
+  const result = projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
     recoveryId: snap.id,
     artifactAvailable,
     writeArtifact: persist,
   });
+  return artifactPending ? { ...result, artifactPending: true } : result;
 }
 
 type OutputProjection = Pick<
   ResultProjection,
-  "text" | "artifactPersisted" | "artifactSaveFailed"
+  "text" | "artifactPersisted" | "artifactSaveFailed" | "artifactPending"
 >;
 
 function normalizeProjection(
@@ -473,6 +534,9 @@ export function createSubagentResultDispatcher(
               ...(projections[0]!.artifactSaveFailed
                 ? { artifactSaveFailed: true }
                 : {}),
+              ...(projections[0]!.artifactPending
+                ? { artifactPending: true }
+                : {}),
               ...(projection ? { projection } : {}),
             };
           })()
@@ -494,6 +558,9 @@ export function createSubagentResultDispatcher(
                   : {}),
                 ...(projections[index]!.artifactSaveFailed
                   ? { artifactSaveFailed: true }
+                  : {}),
+                ...(projections[index]!.artifactPending
+                  ? { artifactPending: true }
                   : {}),
                 ...(projection ? { projection } : {}),
               };
@@ -539,6 +606,7 @@ function renderSubagentResult(
             worktreeBranch: details.worktreeBranch,
             elapsed: details.elapsed,
             artifactSaveFailed: details.artifactSaveFailed,
+            artifactPending: details.artifactPending,
             fullResultSaved: details.fullResultSaved,
           },
         ]
@@ -583,6 +651,8 @@ function renderSubagentResult(
 
 interface SubagentExtensionOptions {
   readonly getResultDisplay?: () => DetailDisplay;
+  /** Internal test seam for exercising handlers with a bounded snapshot cap. */
+  readonly __testManagerConfig?: SubagentManagerConfig;
 }
 
 export default function (
@@ -634,6 +704,7 @@ export default function (
 
   const getRuntime = () =>
     (runtime ??= createSubagentRuntime({
+      ...options.__testManagerConfig,
       initialModelCounter: restoredIdCounters.modelCounter,
       initialBtwCounter: restoredIdCounters.btwCounter,
       persistResultArtifact: (content) =>
@@ -1254,6 +1325,7 @@ export default function (
       );
       let resultIndex = 0;
       const artifactSaveFailures = new Set<string>();
+      const artifactPending = new Set<string>();
       const fullResultsSaved = new Set<string>();
       const sections = entries.map((entry) => {
         if ("section" in entry) return entry.section;
@@ -1265,6 +1337,7 @@ export default function (
           { resultIsCanonical: entry.resultIsCanonical },
         );
         if (projection.artifactSaveFailed) artifactSaveFailures.add(entry.id);
+        if (projection.artifactPending) artifactPending.add(entry.id);
         if (projection.artifactPersisted) fullResultsSaved.add(entry.id);
         return `${entry.header}\n\n${projection.text}`;
       });
@@ -1296,6 +1369,7 @@ export default function (
               ...(artifactSaveFailures.has(id)
                 ? { artifactSaveFailed: true }
                 : {}),
+              ...(artifactPending.has(id) ? { artifactPending: true } : {}),
               ...(projection ? { projection } : {}),
             };
           }),
@@ -1567,6 +1641,16 @@ export default function (
           : (canonical.snap.snapshot?.omitted.finalTextBytes ?? 0),
       });
       if (exact === undefined) {
+        if (canonical.snap.resultArtifactPending) {
+          throw new Error(
+            `Exact result for ${snap.id} is still being saved; retry subagent_result(id=${JSON.stringify(snap.id)}).`,
+          );
+        }
+        if (canonical.snap.artifactSaveFailed) {
+          throw new Error(
+            `Exact result for ${snap.id} is unavailable because artifact persistence failed; the bounded projection is not a recovery source.`,
+          );
+        }
         throw new Error(
           `Exact result for ${snap.id} is unavailable; the bounded projection is not a recovery source.`,
         );
@@ -1592,6 +1676,12 @@ export default function (
             ? { byteOffset: page.byteOffset }
             : {}),
           ...(artifact !== undefined ? { exactResultAvailable: true } : {}),
+          ...(canonical.snap.resultArtifactPending
+            ? { artifactPending: true }
+            : {}),
+          ...(canonical.snap.artifactSaveFailed
+            ? { artifactSaveFailed: true }
+            : {}),
         },
       };
     },

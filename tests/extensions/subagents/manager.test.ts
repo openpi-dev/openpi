@@ -206,18 +206,25 @@ test("stub subagent completes and delivers a final result", async () => {
   });
 });
 
-test("terminal text is persisted before the bounded settlement snapshot", async () => {
+test("terminal settlement publishes before exact-result persistence completes", async () => {
   let persisted: string | undefined;
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  let writerFinishedResolve: (() => void) | undefined;
+  const writerFinished = new Promise<void>((resolve) => {
+    writerFinishedResolve = resolve;
+  });
   let settlementObserved = false;
   await withManager(
     async (manager, runtime) => {
       manager.view.setOnSettled((snap) => {
         settlementObserved = true;
-        assert.deepEqual(
-          snap.resultArtifact,
-          resultArtifactRef(persisted ?? ""),
-        );
-        assert.equal(persisted, snap.finalText);
+        assert.equal(snap.resultArtifact, undefined);
+        assert.equal(snap.resultArtifactPending, true);
+        assert.match(snap.finalText, /Persist this exact result/);
       });
 
       const snap = await runTool(
@@ -227,12 +234,42 @@ test("terminal text is persisted before the bounded settlement snapshot", async 
       await runTool(runtime, manager.waitFor([snap.id]));
       assert.equal(settlementObserved, true);
       assert.equal(manager.view.get(snap.id)?.status, "done");
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+      await writerStarted;
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, true);
+      assert.equal(persisted, undefined);
+
+      const persistenceFinished = new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timer = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for artifact persistence"));
+        }, STATUS_WAIT_TIMEOUT_MS);
+        const observe = () => {
+          const current = manager.view.get(snap.id);
+          if (current?.resultArtifactPending || !current?.resultArtifact)
+            return;
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        };
+        unsubscribe = manager.view.subscribeTo(snap.id, observe);
+        observe();
+      });
+      releaseWriter?.();
+      await writerFinished;
+      await persistenceFinished;
       assert.match(persisted ?? "", /Persist this exact result/);
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, undefined);
     },
     {
-      persistResultArtifact: (content) => {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
         persisted = content;
+        writerFinishedResolve?.();
         return resultArtifactRef(content);
       },
     },
@@ -299,6 +336,55 @@ test("artifact cache failures cannot block settlement, waiters, or result delive
   );
 });
 
+test("dispose stops manager-owned persistence without waiting for an uncancellable writer", async () => {
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  let writerFinishedResolve: (() => void) | undefined;
+  const writerFinished = new Promise<void>((resolve) => {
+    writerFinishedResolve = resolve;
+  });
+
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("dispose during exact persistence")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+      await writerStarted;
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, true);
+
+      const disposeStarted = Date.now();
+      await Promise.race([
+        runtime.runPromise(manager.disposeAll),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("disposeAll waited for the writer")),
+            1_000,
+          ),
+        ),
+      ]);
+      assert.ok(Date.now() - disposeStarted < 1_000);
+      assert.equal(manager.view.size(), 0);
+
+      releaseWriter?.();
+      await writerFinished;
+    },
+    {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
+        writerFinishedResolve?.();
+        return resultArtifactRef(content);
+      },
+    },
+  );
+});
 test("an unrepresentable artifact reference cannot block settlement", async () => {
   await withManager(
     async (manager, runtime) => {
@@ -400,6 +486,93 @@ test("bounded projections leave the takeover snapshot intact", async () => {
       await runTool(runtime, manager.waitFor([snap.id]));
     },
     { maxSnapshotBytes: 4_096 },
+  );
+});
+
+test("manager keeps a bounded stale projection when a rebuild fails", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("projection failure fallback")),
+      );
+      const full = manager.view.getFull?.(snap.id);
+      assert.ok(full);
+      Object.assign(full, { snapshot: { omitted: undefined } });
+
+      await runTool(runtime, manager.cancel([snap.id]));
+      await new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timer = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for stale projection"));
+        }, STATUS_WAIT_TIMEOUT_MS);
+        const observe = () => {
+          const projection = manager.view.get(snap.id)?.snapshot;
+          if (!projection?.projectionStale) return;
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        };
+        unsubscribe = manager.view.subscribeTo(snap.id, observe);
+        observe();
+      });
+
+      const projected = manager.view.get(snap.id);
+      assert.ok(projected);
+      assert.equal(projected.snapshot?.projectionStale, true);
+      assert.match(
+        projected.snapshot?.projectionError ?? "",
+        /cannot read|undefined/,
+      );
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(manager.view.list()), "utf8") <= 4_096,
+      );
+      assert.equal(manager.view.getFull?.(snap.id), full);
+    },
+    { maxSnapshotBytes: 4_096 },
+  );
+});
+test("an unavailable projection keeps the settled subagent discoverable", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("projection minimum budget")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+
+      const projected = manager.view.get(snap.id);
+      assert.ok(
+        projected,
+        "an existing entry must not disappear from view.get",
+      );
+      assert.equal(projected.id, snap.id);
+      assert.equal(projected.status, "done");
+      assert.equal(manager.view.list().length, 1);
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(manager.view.list()), "utf8") <= 442,
+      );
+    },
+    { maxSnapshotBytes: 442 },
+  );
+});
+
+test("a failed aggregate-cap spawn preserves existing projections", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const first = await runTool(
+        runtime,
+        manager.spawn("pi", task("keep existing projection")),
+      );
+      await assert.rejects(
+        runTool(runtime, manager.spawn("pi", task("cannot fit another entry"))),
+        /minimum identity budget/,
+      );
+      assert.equal(manager.view.get(first.id)?.id, first.id);
+      assert.equal(manager.view.list().length, 1);
+    },
+    { maxSnapshotBytes: 442 },
   );
 });
 
@@ -681,6 +854,90 @@ test("restarting a settled subagent settles again so its result re-delivers", as
   });
 });
 
+test("a rejected restart converges after the previous writer finishes first", async () => {
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      await writerStarted;
+
+      const restart = runTool(
+        runtime,
+        manager.send(snap.id, "SENDFAIL-DELAY: reject restart after writer"),
+      );
+      releaseWriter?.();
+      await assert.rejects(restart, /stub refused to send/);
+
+      await waitForManagerStatus(
+        manager,
+        snap.id,
+        "clear persistence state after rejected restart",
+        (status) => status === "done",
+      );
+      const after = manager.view.get(snap.id);
+      assert.equal(after?.status, "done");
+      assert.equal(after?.resultArtifactPending, undefined);
+      assert.equal(after?.artifactSaveFailed, undefined);
+      assert.match(after?.finalText ?? "", /First/);
+    },
+    {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
+        return resultArtifactRef(content);
+      },
+    },
+  );
+});
+
+test("a rejected idle restart preserves the previous terminal artifact", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+
+      const first = manager.view.get(snap.id);
+      assert.equal(first?.status, "done");
+      const firstArtifact = await new Promise<ResultArtifactRef>(
+        (resolve, reject) => {
+          let unsubscribe = () => {};
+          const timer = setTimeout(() => {
+            unsubscribe();
+            reject(new Error("Timed out waiting for the first artifact"));
+          }, STATUS_WAIT_TIMEOUT_MS);
+          const observe = () => {
+            const artifact = manager.view.get(snap.id)?.resultArtifact;
+            if (!artifact) return;
+            clearTimeout(timer);
+            unsubscribe();
+            resolve(artifact);
+          };
+          unsubscribe = manager.view.subscribeTo(snap.id, observe);
+          observe();
+        },
+      );
+
+      await assert.rejects(
+        runTool(runtime, manager.send(snap.id, "SENDFAIL: reject restart")),
+        /stub refused to send/,
+      );
+      const after = manager.view.get(snap.id);
+      assert.equal(after?.status, "done");
+      assert.deepEqual(after?.resultArtifact, firstArtifact);
+      assert.equal(after?.resultArtifactPending, undefined);
+      assert.equal(after?.artifactSaveFailed, undefined);
+      assert.equal(after?.finalText, first?.finalText);
+    },
+    { persistResultArtifact: (content) => resultArtifactRef(content) },
+  );
+});
 test("send steers an idle subagent into another turn", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

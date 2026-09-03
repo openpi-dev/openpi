@@ -15,7 +15,9 @@ import subagents, {
   createSubagentResultDispatcher,
   truncatedOutput,
 } from "../../../extensions/subagents/index.ts";
+import { __setSubagentTestBackends } from "../../../extensions/subagents/src/runtime.ts";
 import type { ResultArtifactRef } from "../../../extensions/subagents/src/domain.ts";
+import { makeStubBackend } from "../../support/subagents-stub.ts";
 import { projectResult } from "../../../extensions/subagents/src/result-artifact.ts";
 
 initTheme("dark", false);
@@ -140,6 +142,76 @@ test("automatic result projection keeps both ends and persists the exact final a
   assert.doesNotMatch(text, /\/tmp\/subagent-final\.txt/);
 });
 
+test("a pending exact-result artifact never invokes the result-delivery writer", () => {
+  let writerCalls = 0;
+  const projected = truncatedOutput(
+    {
+      id: "sa-pending",
+      origin: "model",
+      backend: "pi",
+      title: "inspect",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcript: [],
+      transcriptVersion: 0,
+      liveTools: [],
+      queued: [],
+      finalText: `retained prefix ${"x".repeat(32 * 1024)}`,
+      resultArtifactPending: true,
+      turns: 1,
+    },
+    4096,
+    () => {
+      writerCalls++;
+      throw new Error("writer must not run while persistence is pending");
+    },
+  );
+
+  assert.equal(writerCalls, 0);
+  assert.equal(projected.artifactPending, true);
+  assert.equal(projected.artifactPersisted, undefined);
+  assert.match(projected.text, /still being saved/);
+  assert.match(projected.text, /subagent_result\(id="sa-pending"/);
+  assert.doesNotMatch(projected.text, /retained prefix/);
+});
+
+test("a truncated pending exact-result artifact is reported as retryable", () => {
+  const projected = truncatedOutput(
+    {
+      id: "sa-pending-truncated",
+      origin: "model",
+      backend: "pi",
+      title: "inspect",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcript: [],
+      transcriptVersion: 0,
+      liveTools: [],
+      queued: [],
+      finalText: "retained prefix",
+      finalTextTruncated: true,
+      resultArtifactPending: true,
+      turns: 1,
+    },
+    4096,
+  );
+
+  assert.equal(projected.artifactPending, true);
+  assert.match(projected.text, /still being saved/);
+  assert.match(projected.text, /subagent_result\(id="sa-pending-truncated"/);
+  assert.doesNotMatch(projected.text, /retained prefix/);
+});
+
 test("a truncated retained result is never presented as exact", () => {
   const projected = truncatedOutput(
     {
@@ -251,6 +323,50 @@ test("a canonical fallback rehydrates a projected result after artifact eviction
   assert.match(text, /FINAL-VERDICT/);
   assert.match(text, /subagent_result\(id="sa-canonical"/);
   assert.doesNotMatch(text, /recovered-subagent-result/);
+});
+
+test("automatic result details expose unavailable bounded projections", () => {
+  let details: Record<string, unknown> | undefined;
+  const pi = {
+    appendEntry(
+      _customType: string,
+      data: { details: Record<string, unknown> },
+    ) {
+      details = data.details;
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const dispatch = createSubagentResultDispatcher(pi, () => ({
+    text: "bounded result unavailable",
+  }));
+
+  dispatch([
+    {
+      id: "sa-unavailable",
+      origin: "model",
+      backend: "pi",
+      title: "projection test",
+      prompt: "inspect",
+      cwd: process.cwd(),
+      status: "done",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "canonical result",
+      turns: 1,
+      projectionUnavailable: true,
+      projectionError: "bounded projection rebuild failed",
+    },
+  ]);
+
+  const projection = (details?.projection ?? {}) as Record<string, unknown>;
+  assert.equal(projection.projectionUnavailable, true);
+  assert.equal(projection.projectionError, "bounded projection rebuild failed");
 });
 
 test("automatic projection carries artifact save failures into result details", () => {
@@ -682,6 +798,91 @@ test("the compact result renderer shows artifact save failures", () => {
 
   assert.ok(component);
   assert.match(component.render(120).join("\n"), /artifact not saved/);
+});
+
+test("extension handlers preserve an unavailable projection entry", async () => {
+  __setSubagentTestBackends([
+    makeStubBackend({
+      backend: "pi",
+      defaultModelLabel: "stub/sonnet",
+      contextWindow: 200_000,
+      toolName: "Bash",
+      cadenceMs: 1,
+    }),
+  ]);
+  const tools = new Map<
+    string,
+    { execute: (...args: unknown[]) => Promise<unknown> }
+  >();
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const pi = {
+    on(event: string, handler: (...args: unknown[]) => unknown) {
+      handlers.set(event, handler);
+    },
+    events: { on() {} },
+    registerTool(tool: {
+      name: string;
+      execute: (...args: unknown[]) => Promise<unknown>;
+    }) {
+      tools.set(tool.name, tool);
+    },
+    getActiveTools: () => [],
+    setActiveTools() {},
+    getThinkingLevel: () => "medium",
+    appendEntry() {},
+    registerMessageRenderer() {},
+    registerEntryRenderer() {},
+    registerCommand() {},
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    cwd: process.cwd(),
+    hasUI: false,
+    isIdle: () => true,
+    getContextUsage: () => undefined,
+    isProjectTrusted: () => false,
+    sessionManager: emptySessionManager,
+  } as unknown as ExtensionContext;
+  const signal = new AbortController().signal;
+  const invoke = (name: string, params: unknown) =>
+    tools.get(name)!.execute(`call-${name}`, params, signal, undefined, ctx);
+
+  try {
+    subagents(pi, { __testManagerConfig: { maxSnapshotBytes: 442 } });
+    await handlers.get("session_start")?.({}, ctx);
+
+    const spawned = (await invoke("subagent_spawn", {
+      prompt: "handler projection test",
+      name: "handler cap",
+    })) as { details: { id: string } };
+    const id = spawned.details.id;
+
+    const listed = (await invoke("subagent_list", {})) as {
+      content: Array<{ text: string }>;
+      details: { subagents: Array<{ id: string; projection?: unknown }> };
+    };
+    assert.match(
+      listed.content[0]?.text ?? "",
+      /bounded projection unavailable/,
+    );
+    assert.equal(listed.details.subagents[0]?.id, id);
+    assert.ok(listed.details.subagents[0]?.projection);
+
+    const checked = (await invoke("subagent_check", { id })) as {
+      content: Array<{ text: string }>;
+      details: { projection?: { projectionUnavailable?: boolean } };
+    };
+    assert.match(
+      checked.content[0]?.text ?? "",
+      /bounded projection unavailable/,
+    );
+    assert.equal(checked.details.projection?.projectionUnavailable, true);
+
+    await invoke("subagent_wait", { ids: [id] });
+    await assert.doesNotReject(() => invoke("subagent_result", { id }));
+  } finally {
+    await handlers.get("session_shutdown")?.();
+    __setSubagentTestBackends(undefined);
+  }
 });
 
 test("session start preserves the complete registered subagent family", () => {

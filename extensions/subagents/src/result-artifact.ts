@@ -93,6 +93,8 @@ export interface ResultProjection {
   readonly artifactPersisted?: boolean;
   /** True when this projection attempted and failed to persist an artifact. */
   readonly artifactSaveFailed?: boolean;
+  /** True when the owning manager is still persisting the exact result. */
+  readonly artifactPending?: boolean;
 }
 
 interface ResultArtifactLimits {

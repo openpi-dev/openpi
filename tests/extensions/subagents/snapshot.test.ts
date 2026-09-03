@@ -9,6 +9,7 @@ import {
   measureSubagentSnapshotsBytes,
   projectSubagentSnapshot,
   projectSubagentSnapshots,
+  projectSubagentSnapshotsFromPrevious,
   truncateUtf8Head,
   truncateUtf8Tail,
 } from "../../../extensions/subagents/src/snapshot.ts";
@@ -152,6 +153,48 @@ test("artifact references remain exact while display text is projected", () => {
   assert.ok(projected);
   assert.deepEqual(projected.resultArtifact, artifactRef);
   assert.equal(projected.snapshot?.truncated, true);
+});
+
+test("projection rebuild failures keep bounded stale display data and current terminal facts", () => {
+  const previous = projectSubagentSnapshot(
+    snapshot("stale", {
+      status: "running",
+      outcome: undefined,
+      transcript: [{ kind: "user", text: "old activity" }],
+      finalText: "old display result",
+      transcriptVersion: 1,
+    }),
+    4096,
+  );
+  assert.ok(previous);
+  const current = snapshot("stale", {
+    status: "error",
+    outcome: "failed",
+    errorText: "new terminal error",
+    transcript: [
+      { kind: "user", text: "old activity" },
+      { kind: "user", text: "new activity" },
+    ],
+    finalText: "new terminal result",
+    transcriptVersion: 2,
+  });
+  const fallback = projectSubagentSnapshotsFromPrevious(
+    [current],
+    [previous],
+    4096,
+    "projection rebuild failed",
+  );
+  assert.ok(fallback);
+  assert.equal(fallback[0]?.status, "error");
+  assert.equal(fallback[0]?.outcome, "failed");
+  assert.equal(fallback[0]?.errorText, "new terminal error");
+  assert.equal(fallback[0]?.transcriptVersion, 2);
+  assert.equal(fallback[0]?.snapshot?.projectionStale, true);
+  assert.equal(
+    fallback[0]?.snapshot?.projectionError,
+    "projection rebuild failed",
+  );
+  assert.ok(measureSubagentSnapshotsBytes(fallback) <= 4096);
 });
 
 test("projection fails when the minimum identity cannot fit", () => {

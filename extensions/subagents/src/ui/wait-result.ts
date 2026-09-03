@@ -20,6 +20,7 @@ export interface WaitResultItem {
   readonly worktreeBranch?: string;
   readonly elapsed?: string;
   readonly artifactSaveFailed?: boolean;
+  readonly artifactPending?: boolean;
   readonly fullResultSaved?: boolean;
 }
 
@@ -67,6 +68,9 @@ export function buildWaitResultPreview(
   const artifactFailures = results.filter(
     (result) => result.artifactSaveFailed,
   ).length;
+  const artifactPending = results.filter(
+    (result) => result.artifactPending,
+  ).length;
   const exceptions = [
     failed > 0 ? theme.fg("error", `${failed} failed`) : "",
     uncertain > 0 ? theme.fg("warning", `${uncertain} uncertain`) : "",
@@ -88,6 +92,12 @@ export function buildWaitResultPreview(
           "warning",
           ` · ${artifactFailures} artifact${artifactFailures === 1 ? "" : "s"} not saved`,
         )
+      : "") +
+    (artifactPending > 0
+      ? theme.fg(
+          "warning",
+          ` · ${artifactPending} artifact${artifactPending === 1 ? "" : "s"} pending`,
+        )
       : "");
   const lines = [header];
   const statusRows = selectStatusRows(results);
@@ -107,6 +117,7 @@ export function buildWaitResultPreview(
     const elapsed = result.elapsed ? singleLine(result.elapsed) : "";
     const notices = [
       result.artifactSaveFailed ? "artifact not saved" : "",
+      result.artifactPending ? "artifact pending" : "",
       result.worktreeBranch
         ? `worktree handoff · ${singleLine(result.worktreeBranch)}`
         : "",

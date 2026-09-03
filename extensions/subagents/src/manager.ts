@@ -21,6 +21,7 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberSet,
   Layer,
   Result,
   Scope,
@@ -52,6 +53,7 @@ import { resultArtifactRefMatchesContent } from "./result-artifact.ts";
 import {
   DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
   projectSubagentSnapshots,
+  projectSubagentSnapshotsFromPrevious,
   truncateUtf8Head,
   truncateUtf8Tail,
 } from "./snapshot.ts";
@@ -138,6 +140,8 @@ interface MutableSnapshot {
   finalText: string;
   finalTextTruncated?: boolean;
   resultArtifact?: ResultArtifactRef;
+  resultArtifactPending?: boolean;
+  artifactSaveFailed?: boolean;
   turns: number;
 }
 
@@ -152,6 +156,14 @@ interface Entry {
   liveToolMap: Map<string, LiveToolState>;
   /** Generation of the terminal result currently eligible for persistence. */
   persistenceGeneration: number;
+  /** Number of manager-owned persistence jobs not yet finalized. */
+  persistencePending: number;
+  /** Generation whose writer owns the terminal pending/error flags. */
+  persistenceCurrentGeneration?: number;
+  /** Terminal generations with an outstanding writer. */
+  persistenceJobs: Set<number>;
+  /** True when no bounded projection can currently represent this entry. */
+  projectionUnavailable?: boolean;
   /** First-response watchdog timer for the active (or just-armed) run. */
   watchdogTimer?: ReturnType<typeof setTimeout>;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
@@ -181,7 +193,11 @@ export interface SubagentReadModel {
   ):
     | Pick<
         SubagentSnapshot,
-        "finalText" | "finalTextTruncated" | "resultArtifact"
+        | "finalText"
+        | "finalTextTruncated"
+        | "resultArtifact"
+        | "resultArtifactPending"
+        | "artifactSaveFailed"
       >
     | undefined;
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
@@ -262,6 +278,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     // Detached forker for sync contexts (read-model commands, pruning) that
     // preserves the manager's services instead of using the global runtime.
     const runDetached = Effect.runForkWith(yield* Effect.context());
+    // Optional persistence is manager-owned work. FiberSet makes shutdown
+    // interrupt and observe pending writers; it does not make synchronous file
+    // operations preemptible or non-blocking on the event loop.
+    const persistenceFibers = yield* FiberSet.make();
+    const runPersistence = yield* FiberSet.runtime(persistenceFibers)();
 
     const entries = new Map<string, Entry>();
     const waitInterest = new Map<string, number>();
@@ -304,18 +325,47 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         // Projection is disposable. Never write it back into the event-folding
         // snapshot: takeover can then render the retained transcript in full.
         entry.projection = snapshot;
+        entry.projectionUnavailable = false;
       }
     };
+
+    const projectionFailureText = (error: unknown) =>
+      bounded(error instanceof Error ? error.message : String(error)) ||
+      "bounded projection rebuild failed";
 
     const tryEnforceSnapshotBudget = () => {
       try {
         enforceSnapshotBudget();
         return true;
-      } catch {
-        // Never expose a projection from an older lifecycle state after a
-        // failed rebuild; readers fall back to the canonical snapshot.
-        for (const entry of entries.values()) entry.projection = undefined;
-        return false;
+      } catch (error) {
+        // Keep a bounded stale read model and overlay current lifecycle/result
+        // facts. Falling back to canonical state would make a cap failure
+        // return an unbounded response.
+        const current = [...entries.values()].map(
+          (entry) => entry.snapshot as SubagentSnapshot,
+        );
+        const previous = [...entries.values()].map((entry) => entry.projection);
+        const fallback = projectSubagentSnapshotsFromPrevious(
+          current,
+          previous,
+          maxSnapshotBytes,
+          projectionFailureText(error),
+        );
+        if (!fallback) return false;
+        const byId = new Map(
+          fallback.map((snapshot) => [snapshot.id, snapshot] as const),
+        );
+        for (const entry of entries.values()) {
+          const snapshot = byId.get(entry.snapshot.id);
+          if (!snapshot) {
+            entry.projection = undefined;
+            entry.projectionUnavailable = true;
+          } else {
+            entry.projection = snapshot;
+            entry.projectionUnavailable = false;
+          }
+        }
+        return true;
       }
     };
 
@@ -343,6 +393,9 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           }
         : undefined,
     });
+
+    const readProjection = (entry: Entry) =>
+      entry.projectionUnavailable ? undefined : entry.projection;
 
     const notify = (id?: string) => {
       const waiters = changeWaiters;
@@ -436,7 +489,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       Effect.try({
         try: () => {
           entries.set(id, entry);
-          enforceSnapshotBudget();
+          if (!tryEnforceSnapshotBudget()) {
+            throw new Error(
+              `Subagent snapshot aggregate exceeds the configured ${maxSnapshotBytes}-byte minimum identity budget`,
+            );
+          }
         },
         catch: (error) =>
           new SpawnError({
@@ -454,7 +511,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
       const candidates = [...entries.values()]
-        .filter((e) => !isBusy(e) && !waitInterest.has(e.snapshot.id))
+        .filter(
+          (e) =>
+            !isBusy(e) &&
+            !waitInterest.has(e.snapshot.id) &&
+            e.persistencePending === 0,
+        )
         .sort(
           (a, b) =>
             (a.snapshot.settledAt ?? a.snapshot.createdAt) -
@@ -470,35 +532,74 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     };
 
     /**
-     * Persist an optional exact-result recovery artifact. Filesystem failures
-     * must never prevent terminal state, waiters, or delivery hooks from
-     * observing settlement.
+     * Reserve optional exact-result recovery work before terminal notification.
+     * The returned starter is called only after the terminal state is published.
      */
-    const persistExactResult = (entry: Entry, text: string) => {
-      if (!text || !config.persistResultArtifact) return;
+    const prepareExactResultPersistence = (
+      entry: Entry,
+      text: string,
+    ): (() => void) | undefined => {
+      if (!text || !config.persistResultArtifact || disposed) return undefined;
       const generation = entry.persistenceGeneration;
-      // Artifact persistence is optional recovery work. Schedule it only
-      // after settlement has notified waiters and hooks, so a slow or broken
-      // writer can never hold the lifecycle path or a concurrency slot.
-      setTimeout(() => {
-        try {
-          const artifact = config.persistResultArtifact!(text);
-          if (!resultArtifactRefMatchesContent(artifact, text)) return;
+      if (entry.persistenceJobs.has(generation)) return undefined;
+      entry.persistenceJobs.add(generation);
+      entry.persistencePending++;
+      entry.persistenceCurrentGeneration = generation;
+      entry.snapshot.resultArtifactPending = true;
+      entry.snapshot.artifactSaveFailed = undefined;
+
+      return () => {
+        let saved = false;
+        const currentTerminalRun = () =>
+          !disposed &&
+          entries.get(entry.snapshot.id) === entry &&
+          entry.persistenceGeneration === generation &&
+          entry.snapshot.status !== "running";
+        const persistence = Effect.gen(function* () {
+          // FiberSet owns this job. The yield keeps synchronous writer startup
+          // off the settlement stack, while the writer's event-loop caveat is
+          // explicit in the manager comment above.
+          yield* Effect.yieldNow;
+          if (!currentTerminalRun()) return;
+          const result = yield* Effect.tryPromise(() =>
+            Promise.resolve().then(() => config.persistResultArtifact!(text)),
+          ).pipe(Effect.result);
+          if (Result.isFailure(result)) return;
           if (
-            entry.snapshot.status === "running" ||
-            entry.persistenceGeneration !== generation
+            !resultArtifactRefMatchesContent(result.success, text) ||
+            !currentTerminalRun()
           )
             return;
-          entry.snapshot.resultArtifact = artifact;
-          if (!tryEnforceSnapshotBudget()) {
-            entry.snapshot.resultArtifact = undefined;
-            return;
-          }
+          entry.snapshot.resultArtifact = result.success;
+          entry.snapshot.artifactSaveFailed = undefined;
+          saved = true;
+          tryEnforceSnapshotBudget();
           notify(entry.snapshot.id);
-        } catch {
-          // Recovery is best effort and must not alter terminal state.
-        }
-      }, 0);
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              entry.persistencePending = Math.max(
+                0,
+                entry.persistencePending - 1,
+              );
+              entry.persistenceJobs.delete(generation);
+              const currentJob =
+                entry.persistenceCurrentGeneration === generation;
+              if (currentJob) entry.persistenceCurrentGeneration = undefined;
+              if (currentTerminalRun() && currentJob) {
+                entry.snapshot.resultArtifactPending = undefined;
+                if (!saved && !entry.snapshot.resultArtifact) {
+                  entry.snapshot.artifactSaveFailed = true;
+                }
+                tryEnforceSnapshotBudget();
+                notify(entry.snapshot.id);
+              }
+              pruneSettled();
+            }),
+          ),
+        );
+        runPersistence(persistence);
+      };
     };
 
     const settle = (entry: Entry, outcome: RunOutcome) => {
@@ -510,23 +611,28 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         if (!wasRestarting) return;
         // A cancel can clear a queued restart before RunStarted reaches the
         // manager. Its RunSettled still belongs to the new run, not the old
-        // settled snapshot, so promote the lifecycle before applying it.
+        entry.persistenceGeneration++;
+        entry.persistenceCurrentGeneration = undefined;
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
         s.resultArtifact = undefined;
       }
       s.settledAt = Date.now();
+      let startPersistence: (() => void) | undefined;
       switch (outcome._tag) {
         case "Completed": {
           s.status = "done";
           s.outcome = "completed";
           s.errorText = undefined;
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
           s.finalText = outcome.finalText;
           s.finalTextTruncated =
             Buffer.byteLength(s.finalText, "utf8") >
             MAX_RETAINED_FINAL_TEXT_BYTES;
-          persistExactResult(entry, s.finalText);
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
         }
@@ -534,12 +640,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.status = "error";
           s.outcome = "failed";
           s.errorText = bounded(outcome.errorText);
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
           // Never let a failed run report the previous run's successful output.
           s.finalText = outcome.partialText ?? "";
           s.finalTextTruncated =
             Buffer.byteLength(s.finalText, "utf8") >
             MAX_RETAINED_FINAL_TEXT_BYTES;
-          persistExactResult(entry, s.finalText);
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
         }
@@ -547,11 +656,14 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.status = "error";
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
           s.finalText = outcome.partialText ?? "";
           s.finalTextTruncated =
             Buffer.byteLength(s.finalText, "utf8") >
             MAX_RETAINED_FINAL_TEXT_BYTES;
-          persistExactResult(entry, s.finalText);
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
           s.finalText = boundedFinalText(s.finalText);
           break;
         }
@@ -561,12 +673,8 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       s.liveTools = [];
       s.queued = [];
       const consumed = (waitInterest.get(s.id) ?? 0) > 0;
-      if (!tryEnforceSnapshotBudget()) {
-        // An artifact reference is optional. Retrying without it keeps a
-        // malformed callback result from suppressing settlement notification.
-        s.resultArtifact = undefined;
-        tryEnforceSnapshotBudget();
-      }
+      // Projection failure is independent from canonical terminal state.
+      tryEnforceSnapshotBudget();
       const settledSnapshot = cloneSnapshot(s);
       notify(s.id);
       try {
@@ -575,6 +683,8 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       } catch {
         // The parent session may be unavailable; settlement stays final.
       }
+      // Start persistence only after terminal observers and waiters have run.
+      startPersistence?.();
       pruneSettled();
     };
 
@@ -621,11 +731,15 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       switch (event._tag) {
         case "RunStarted":
           entry.restarting = false;
+          entry.persistenceGeneration++;
+          entry.persistenceCurrentGeneration = undefined;
           s.status = "running";
           s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
           s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
           s.finalTextTruncated = undefined;
           armWatchdog(entry);
           break;
@@ -809,6 +923,8 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             scope,
             liveToolMap: new Map(),
             persistenceGeneration: 0,
+            persistencePending: 0,
+            persistenceJobs: new Set(),
           };
           yield* registerEntry(id, entry);
           // The run is live from the caller's perspective before RunStarted
@@ -835,7 +951,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           entry.pump = yield* Scope.provide(Effect.forkScoped(pump), scope);
 
           notify(id);
-          return (entry.projection ?? entry.snapshot) as SubagentSnapshot;
+          return entry.projection as SubagentSnapshot;
         });
 
         return yield* doSpawn.pipe(
@@ -964,7 +1080,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // both pass the check in that window. Cleared by RunStarted/settle,
           // or here when the backend rejects the send.
           entry.restarting = true;
-          entry.persistenceGeneration++;
+          // Keep the persistence generation unchanged until RunStarted proves
+          // that a new run exists. This lets the previous terminal writer
+          // finish if the restart send is rejected, while RunStarted still
+          // invalidates it before an accepted new run can settle.
+          // Keep the previous terminal result until RunStarted proves that a
+          // new run exists. If send is rejected, the old result remains valid.
           // A backend that accepts the send but never starts the run would
           // hold the slot forever; guard the restart window the same way the
           // spawn path guards its pre-RunStarted window.
@@ -973,6 +1094,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             Effect.onError(() =>
               Effect.sync(() => {
                 entry.restarting = false;
+                clearWatchdog(entry);
                 notify(entry.snapshot.id);
               }),
             ),
@@ -982,9 +1104,24 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       });
 
     const disposeAll = Effect.gen(function* () {
+      if (disposed) return;
       disposed = true;
       const all = [...entries.values()];
-      for (const entry of all) clearWatchdog(entry);
+      for (const entry of all) {
+        clearWatchdog(entry);
+        entry.persistenceGeneration++;
+        entry.persistenceCurrentGeneration = undefined;
+      }
+      // Stop manager-owned persistence before removing entries. The disposed
+      // flag and generation bump make any completion callback fail closed.
+      yield* FiberSet.clear(persistenceFibers).pipe(
+        Effect.timeout(STOP_TIMEOUT_MS),
+        Effect.ignore,
+      );
+      yield* FiberSet.awaitEmpty(persistenceFibers).pipe(
+        Effect.timeout(STOP_TIMEOUT_MS),
+        Effect.ignore,
+      );
       entries.clear();
       yield* Effect.forEach(
         all,
@@ -1011,14 +1148,13 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
 
     const view: SubagentReadModel = {
       list: () =>
-        [...entries.values()].map(
-          (entry) => (entry.projection ?? entry.snapshot) as SubagentSnapshot,
-        ),
+        [...entries.values()].flatMap((entry) => {
+          const projection = readProjection(entry);
+          return projection ? [projection] : [];
+        }),
       get: (id) => {
         const entry = entries.get(id);
-        return entry
-          ? ((entry.projection ?? entry.snapshot) as SubagentSnapshot)
-          : undefined;
+        return entry ? readProjection(entry) : undefined;
       },
       getFull: (id) =>
         entries.get(id)?.snapshot as SubagentSnapshot | undefined,
@@ -1032,6 +1168,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
                 : {}),
               ...(snapshot.resultArtifact
                 ? { resultArtifact: snapshot.resultArtifact }
+                : {}),
+              ...(snapshot.resultArtifactPending
+                ? { resultArtifactPending: true }
+                : {}),
+              ...(snapshot.artifactSaveFailed
+                ? { artifactSaveFailed: true }
                 : {}),
             }
           : undefined;
@@ -1081,14 +1223,13 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       get: (id) =>
         Effect.sync(() => {
           const entry = entries.get(id);
-          return entry
-            ? ((entry.projection ?? entry.snapshot) as SubagentSnapshot)
-            : undefined;
+          return entry ? readProjection(entry) : undefined;
         }),
       list: Effect.sync(() =>
-        [...entries.values()].map(
-          (entry) => (entry.projection ?? entry.snapshot) as SubagentSnapshot,
-        ),
+        [...entries.values()].flatMap((entry) => {
+          const projection = readProjection(entry);
+          return projection ? [projection] : [];
+        }),
       ),
       disposeAll,
       view,
@@ -1101,7 +1242,9 @@ export interface SubagentManagerConfig {
   /** Aggregate UTF-8 budget for all live/settled read-model snapshots. */
   maxSnapshotBytes?: number;
   /** Persist an exact terminal result before the in-memory projection is cut. */
-  persistResultArtifact?: (content: string) => ResultArtifactRef;
+  persistResultArtifact?: (
+    content: string,
+  ) => ResultArtifactRef | PromiseLike<ResultArtifactRef>;
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;
