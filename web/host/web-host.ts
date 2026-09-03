@@ -541,6 +541,28 @@ export class WebHost {
         cursor: this.sequence,
       });
     }
+    if (url.pathname === "/api/prompt/cancel" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (typeof body.sessionId !== "string" || body.sessionId !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CONFLICT",
+          error: "Only the active Web session accepts cancellation",
+        });
+      }
+      try {
+        if (!this.runtime.interruptTurn) {
+          return this.json(response, 501, {
+            code: "PROMPT_CANCEL_FAILED",
+            error: "Turn cancellation is unavailable",
+          });
+        }
+        const result = await this.runtime.interruptTurn({ expectedSessionId: body.sessionId });
+        return this.json(response, 200, result);
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "PROMPT_CANCEL_FAILED", "prompt cancellation failed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
+    }
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
