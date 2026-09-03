@@ -27,8 +27,8 @@ interface RegisteredCommand {
   handler: (args: string, ctx: ExtensionContext) => Promise<void>;
 }
 
-test("automatic refresh stays local until /pr explicitly requests GitHub data", async () => {
-  const root = mkdtempSync(join(tmpdir(), "git-info-explicit-pr-"));
+test("automatic refresh with a spaced fixture path stays local until /pr explicitly requests GitHub data", async () => {
+  const root = mkdtempSync(join(tmpdir(), "git info explicit pr-"));
   const bin = join(root, "bin");
   const callLog = join(root, "gh-calls.log");
   mkdirSync(bin);
@@ -101,7 +101,7 @@ printf '%s\\n' '{"number":42,"url":"https://example.test/pr/42","state":"OPEN","
   if (isWindows) {
     process.env.NODE_OPTIONS = [
       previousNodeOptions,
-      `--require=${commandRunner}`,
+      `--require=${JSON.stringify(commandRunner)}`,
     ]
       .filter(Boolean)
       .join(" ");
