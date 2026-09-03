@@ -284,6 +284,14 @@ export class PiWebAdapter {
     });
   }
 
+  async unarchiveSession(path: string) {
+    await this.ensureArchivesLoaded();
+    await this.enqueueArchiveMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      draft.delete(resolve(session.path));
+    });
+  }
+
   async removeWorkspace(path: string) {
     await this.ensureWorkspaceStateLoaded();
     const canonical = resolve(path);
