@@ -86,6 +86,17 @@ export class PiWebRuntime implements WebRuntimeController {
   private disposePromise?: Promise<void>;
   private hasSelectedWorkspace: boolean;
 
+  get projectTrustState() {
+    if (!this.hasSelectedWorkspace) return "unknown" as const;
+    try {
+      return this.runtime.session.settingsManager.isProjectTrusted()
+        ? ("trusted" as const)
+        : ("untrusted" as const);
+    } catch {
+      return "unknown" as const;
+    }
+  }
+
   private constructor(
     runtime: AgentSessionRuntime,
     webSessionDirectory: string,

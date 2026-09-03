@@ -490,6 +490,7 @@ export class PiWebAdapter {
         status: this.runtime.isIdle()
           ? ("idle" as const)
           : ("running" as const),
+        trust: this.runtime.projectTrustState ?? "unknown",
         capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
       },
       truncation: {
