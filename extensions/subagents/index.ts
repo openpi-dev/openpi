@@ -81,6 +81,10 @@ import {
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
 import {
+  projectSubagentCapability,
+  registerWebCapability,
+} from "../shared/web-observer-registry.ts";
+import {
   createWorktree,
   formatWorktreeCleanupWarning,
   reclaimWorktree,
@@ -93,7 +97,6 @@ import {
   subagentStripEntryKey,
 } from "./navigation.ts";
 import {
-  type AgentType,
   formatAgentTypeDiagnostics,
   loadAgentTypes,
   roleModelForAgentType,
@@ -680,6 +683,7 @@ export default function (
   const statusWriter = createStatusWriter("subagents");
   const widgetKey = "subagent-navigation";
   let navigationManager: SubagentManagerShape | undefined;
+  let unregisterWebCapability: (() => void) | undefined;
   let widgetVisible = false;
   let widgetEntryKey: string | undefined;
   let requestWidgetRender: (() => void) | undefined;
@@ -716,10 +720,20 @@ export default function (
 
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
+    const scope = sessionContext?.sessionManager;
     managerPromise ??= getRuntime()
       .runPromise(SubagentManager)
       .then((manager) => {
         navigationManager = manager;
+        unregisterWebCapability?.();
+        unregisterWebCapability =
+          scope && sessionContext?.sessionManager === scope
+            ? registerWebCapability(scope, {
+                kind: "subagents",
+                snapshot: () => projectSubagentCapability(manager.view.list()),
+                subscribe: (listener) => manager.view.subscribe(listener),
+              })
+            : undefined;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateStatus(manager));
@@ -914,6 +928,8 @@ export default function (
     resultDelivery.clear();
     unsubStatus?.();
     unsubStatus = undefined;
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
     try {
       ui?.setStatus("subagents", undefined);
       sessionContext?.ui.setWidget(widgetKey, undefined);

@@ -22,6 +22,9 @@ const UNITS: Record<string, number> = {
 
 export const MIN_INTERVAL_MS = 30_000;
 export const CRON_PROMPT_MAX_CHARS = 2_000;
+export const CRON_MAX_JOBS = 64;
+export const CRON_DELIVERY_MAX_JOBS = 16;
+export const CRON_DELIVERY_MAX_BYTES = 48 * 1024;
 
 /**
  * Parse a duration like `30s`, `5m`, `2h`. Deliberately a small duration
@@ -33,7 +36,8 @@ export function parseDuration(text: string): number | undefined {
   if (!match) return undefined;
   const value = Number(match[1]);
   if (!Number.isFinite(value) || value <= 0) return undefined;
-  return value * UNITS[match[2].toLowerCase()];
+  const durationMs = value * UNITS[match[2].toLowerCase()];
+  return Number.isSafeInteger(durationMs) ? durationMs : undefined;
 }
 
 export interface ParsedCronCommand {
