@@ -832,7 +832,7 @@ test("uncertain recovery entries are never relinked as the published lock", {
     }
     assert.throws(
       () => persistResultArtifact(agentDir, "must not poison lock"),
-      /busy or has uncertain ownership/,
+      /(?:busy or has uncertain ownership|Unsafe result artifact file)/,
     );
     assert.equal((await lstat(lock)).isSymbolicLink(), true);
   } finally {

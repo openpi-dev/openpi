@@ -476,6 +476,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             entry.snapshot.errorText = current
               ? `${current}; ${receipt.message}`
               : receipt.message;
+            tryEnforceSnapshotBudget();
             notify(entry.snapshot.id);
           }),
         ),
@@ -994,11 +995,13 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const abortEntry = (entry: Entry) =>
       Effect.gen(function* () {
         if (!isBusy(entry)) return;
+        const startedAt = Date.now();
         const graceful = yield* entry.session.interrupt.pipe(
           Effect.timeout(STOP_TIMEOUT_MS),
           Effect.result,
         );
-        if (Result.isFailure(graceful)) {
+        const abortDeadlineExceeded = Date.now() - startedAt >= STOP_TIMEOUT_MS;
+        if (Result.isFailure(graceful) || abortDeadlineExceeded) {
           // Settle before closing the scope so the pump's stream-ended
           // fallback ("Backend event stream ended unexpectedly") cannot win
           // the race and report the wrong terminal reason.
@@ -1006,6 +1009,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             settle(entry, { _tag: "Interrupted" });
             entry.snapshot.errorText =
               "Abort deadline exceeded; session was force-disposed";
+            tryEnforceSnapshotBudget();
             notify(entry.snapshot.id);
           });
           // Bound the close like disposeAll does: a stuck backend finalizer
