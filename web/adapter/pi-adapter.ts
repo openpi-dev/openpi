@@ -511,6 +511,22 @@ export class PiWebAdapter {
     return snapshot;
   }
 
+  async searchSessions(query: string, includeArchived = false) {
+    const normalized = query.trim().toLocaleLowerCase();
+    if (!normalized || normalized.length > 200) return [];
+    const projection = await this.listSessionProjection();
+    return projection.sessions
+      .filter((session) => includeArchived || session.archived !== true)
+      .filter((session) =>
+        [session.name, session.firstMessage, session.cwd]
+          .filter((value): value is string => typeof value === "string")
+          .join("\n")
+          .toLocaleLowerCase()
+          .includes(normalized),
+      )
+      .slice(0, 100);
+  }
+
   private fitSnapshot(snapshot: {
     currentSessionId?: string;
     workspaces: WebWorkspaceSummary[];
