@@ -590,18 +590,15 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     });
     assert.equal(prompts, 0);
 
-    const cancellation = await fetch(
-      `${launched.origin}/api/turns/cancel`,
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          sessionId: sessionManager.getSessionId(),
-          commandId: "command-a",
-          epoch: 1,
-        }),
-      },
-    );
+    const cancellation = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        commandId: "command-a",
+        epoch: 1,
+      }),
+    });
     assert.equal(cancellation.status, 409);
     assert.equal((await cancellation.json()).code, "WORKSPACE_REQUIRED");
 
