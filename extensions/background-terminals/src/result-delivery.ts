@@ -1,44 +1,64 @@
 import type { ConsumableResultDeliveryQueue } from "../../shared/result-delivery.ts";
+import {
+  type CompletionOwner,
+  createCompletionInbox,
+} from "../../shared/completion-inbox.ts";
 
 /**
- * Deferred one-shot delivery map (same semantics as subagents'): a settled
- * terminal's result is held here until it is either drained into a follow-up
- * message or consumed by a tool call (bg_kill / bg_status) that already
- * returned the settlement itself. Keyed by id, so double delivery is
- * structurally impossible — whoever drains first wins.
+ * Deferred one-shot delivery adapter (same semantics as subagents'): a
+ * settled terminal's result is held in the shared inbox until it is either
+ * drained into a follow-up message or consumed by a tool call (bg_kill /
+ * bg_status) that already returned the settlement itself. Stable ids make
+ * double delivery structurally impossible — whoever claims first wins.
  */
-export function createDeferredResultDelivery<T extends { id: string }>() {
-  const pending = new Map<string, T>();
+export function createDeferredResultDelivery<T extends { id: string }>(
+  options: { readonly owner?: () => CompletionOwner | undefined } = {},
+) {
+  const inbox = createCompletionInbox<T>();
+  const owner = options.owner ?? (() => ({ sessionId: "test", epoch: 0 }));
 
   const queue = {
     defer(result: T) {
-      pending.set(result.id, result);
-      return pending.size;
+      const currentOwner = owner();
+      inbox.defer(
+        {
+          deliveryId: `background:${result.id}`,
+          owner: currentOwner ?? { sessionId: "unowned", epoch: 0 },
+          producer: "background",
+          producerId: result.id,
+          terminalRef: { kind: "terminal-snapshot", id: result.id },
+          wake: "producer-policy",
+          payload: result,
+        },
+        currentOwner,
+      );
+      return inbox.size();
     },
     consume(ids: Iterable<string>) {
-      for (const id of ids) pending.delete(id);
+      inbox.consume("background", ids);
     },
     drain(maxResults = Number.POSITIVE_INFINITY) {
-      const results: T[] = [];
-      for (const [id, result] of pending) {
-        if (results.length >= maxResults) break;
-        results.push(result);
-        pending.delete(id);
-      }
-      return results;
+      return inbox
+        .claim(owner(), maxResults)
+        .map((envelope) => envelope.payload);
     },
     restore(results: readonly T[]) {
-      const current = [...pending.values()];
-      pending.clear();
-      for (const result of results) pending.set(result.id, result);
-      for (const result of current) pending.set(result.id, result);
+      inbox.retryClaimed(
+        "background",
+        results.map((result) => result.id),
+        owner(),
+      );
+    },
+    acknowledge(results: readonly T[]) {
+      inbox.acknowledge(results.map((result) => `background:${result.id}`));
     },
     size() {
-      return pending.size;
+      return inbox.size();
     },
     clear() {
-      pending.clear();
+      inbox.clear();
     },
+    inspectDeadLetters: inbox.inspectDeadLetters,
   };
   return queue satisfies ConsumableResultDeliveryQueue<T>;
 }

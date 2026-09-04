@@ -197,6 +197,65 @@ test("stale held inline completion restores as pending", () => {
   assert.equal(delivery.size(), 1);
 });
 
+test("a restored workflow completion cannot enter another Session", () => {
+  const run = details("wf_stale_owner");
+  run.sessionId = "session-1";
+  run.delivery = {
+    ...run.delivery!,
+    ownerSessionId: "session-1",
+    ownerEpoch: 0,
+    state: "pending",
+  };
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    owner: () => ({ sessionId: "session-2", epoch: 0 }),
+    persist: () => {},
+    deliver: async () => [],
+  });
+
+  assert.equal(
+    delivery.restore({
+      deliveryId: run.delivery.id,
+      runId: run.runId,
+      details: run,
+    }),
+    false,
+  );
+  assert.equal(delivery.size(), 0);
+  assert.equal(delivery.inspectDeadLetters()[0]?.failure, "stale-owner");
+  assert.equal(run.delivery.state, "pending");
+});
+
+test("same-Session restore explicitly revives a pending completion", () => {
+  const run = details("wf_revived_owner");
+  run.sessionId = "session-1";
+  run.delivery = {
+    ...run.delivery!,
+    ownerSessionId: "session-1",
+    ownerEpoch: 2,
+    state: "pending",
+  };
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    owner: () => ({ sessionId: "session-1", epoch: 8 }),
+    persist: () => {},
+    deliver: async () => [],
+  });
+
+  assert.equal(
+    delivery.restore({
+      deliveryId: run.delivery.id,
+      runId: run.runId,
+      details: run,
+    }),
+    true,
+  );
+  assert.equal(run.delivery.ownerEpoch, 8);
+  assert.equal(run.delivery.state, "pending");
+  assert.equal(delivery.size(), 1);
+  assert.deepEqual(delivery.inspectDeadLetters(), []);
+});
+
 test("a receipt persistence failure retains the same delivery for at-least-once recovery", async () => {
   const run = details("wf_receipt");
   const delivery = createWorkflowResultDelivery({

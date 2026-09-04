@@ -60,6 +60,7 @@ import {
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -514,6 +515,10 @@ export default function (
   );
   const resultDelivery = createSubagentResultDelivery<SubagentSnapshot>({
     isIdle: () => sessionContext?.isIdle() === true,
+    owner: () =>
+      sessionContext
+        ? completionOwnerFor(sessionContext.sessionManager)
+        : undefined,
     // Every unconsumed fire-and-forget result must reach the parent. The
     // delivery coordinator batches results that settled while it was busy.
     deliver: dispatchResults,
