@@ -9,7 +9,10 @@ import {
 } from "node:http";
 import { URL } from "node:url";
 import { promisify } from "node:util";
-import { subscribeWebCapabilities } from "../../extensions/shared/web-observer-registry.ts";
+import {
+  subscribeWebCapabilities,
+  webCapabilitySnapshot,
+} from "../../extensions/shared/web-observer-registry.ts";
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
@@ -557,6 +560,11 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/capabilities")
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
+      });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
