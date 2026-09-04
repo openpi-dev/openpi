@@ -89,6 +89,52 @@ test("subagent results render before the hidden wake-up message", () => {
   ]);
 });
 
+test("automatic delivery exposes structured data and its canonical artifact", () => {
+  let entry: { content: string; details: Record<string, unknown> } | undefined;
+  const pi = {
+    appendEntry(
+      _customType: string,
+      data: { content: string; details: Record<string, unknown> },
+    ) {
+      entry = data;
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const dispatch = createSubagentResultDispatcher(pi);
+  dispatch([
+    {
+      id: "sa-structured",
+      origin: "model",
+      backend: "pi",
+      title: "structured review",
+      prompt: "review",
+      cwd: process.cwd(),
+      status: "done",
+      outcome: "completed",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "",
+      structuredResult: {
+        value: { verdict: "pass" },
+        json: '{"verdict":"pass"}',
+        byteLength: 18,
+        artifactPath: "/tmp/structured.json",
+      },
+      turns: 1,
+    },
+  ]);
+
+  assert.match(entry?.content ?? "", /\{"verdict":"pass"\}/);
+  assert.deepEqual(entry?.details.structured, { verdict: "pass" });
+  assert.equal(entry?.details.structuredArtifactPath, "/tmp/structured.json");
+});
+
 test("automatic result projection keeps both ends and persists the exact final answer", () => {
   const finalText = `BEGIN\n${"evidence\n".repeat(100)}FINAL-VERDICT`;
   let persisted = "";

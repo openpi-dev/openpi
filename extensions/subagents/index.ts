@@ -169,6 +169,7 @@ interface SpawnResultDetails {
   readonly harness?: string;
   readonly model?: string;
   readonly agentType?: string;
+  readonly structured?: boolean;
 }
 
 interface SubagentFinishedData {
@@ -187,6 +188,8 @@ interface SubagentResultDetails {
   readonly elapsed?: string;
   readonly artifactSaveFailed?: boolean;
   readonly fullResultSaved?: boolean;
+  readonly structured?: unknown;
+  readonly structuredArtifactPath?: string;
   readonly count?: number;
   readonly results?: ReadonlyArray<{
     readonly id: string;
@@ -197,6 +200,8 @@ interface SubagentResultDetails {
     readonly elapsed?: string;
     readonly artifactSaveFailed?: boolean;
     readonly fullResultSaved?: boolean;
+    readonly structured?: unknown;
+    readonly structuredArtifactPath?: string;
   }>;
   /** Display-only projection for the custom message renderer. */
   readonly displayContent?: string;
@@ -227,13 +232,17 @@ function describeSubagent(snap: SubagentSnapshot) {
   return `${snap.id} [${snap.status}] "${snap.title}" (${details.join(", ")})`;
 }
 
+function subagentResultContent(snap: SubagentSnapshot) {
+  return snap.structuredResult?.json ?? (snap.finalText || "(no output)");
+}
+
 export function truncatedOutput(
   snap: SubagentSnapshot,
   maxBytes = SUBAGENT_OUTPUT_MAX_BYTES,
   writeArtifact: (content: string) => string = (content) =>
     persistResultArtifact(getAgentDir(), content),
 ): string {
-  const output = snap.finalText || "(no output)";
+  const output = subagentResultContent(snap);
   return projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
@@ -245,7 +254,7 @@ function projectSubagentOutput(
   snap: SubagentSnapshot,
   maxBytes: number,
 ): ResultProjection {
-  const output = snap.finalText || "(no output)";
+  const output = subagentResultContent(snap);
   return projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
@@ -313,7 +322,7 @@ export function createSubagentResultDispatcher(
     );
     const allocation = allocateResultBudgets(
       snaps.map((snap) =>
-        Buffer.byteLength(snap.finalText || "(no output)", "utf8"),
+        Buffer.byteLength(subagentResultContent(snap), "utf8"),
       ),
       getContextUsage(),
       {
@@ -370,6 +379,13 @@ export function createSubagentResultDispatcher(
             ...(projections[0]!.artifactSaveFailed
               ? { artifactSaveFailed: true }
               : {}),
+            ...(snaps[0]!.structuredResult
+              ? {
+                  structured: snaps[0]!.structuredResult.value,
+                  structuredArtifactPath:
+                    snaps[0]!.structuredResult.artifactPath,
+                }
+              : {}),
           }
         : {
             count: snaps.length,
@@ -387,6 +403,12 @@ export function createSubagentResultDispatcher(
                 : {}),
               ...(projections[index]!.artifactSaveFailed
                 ? { artifactSaveFailed: true }
+                : {}),
+              ...(snap.structuredResult
+                ? {
+                    structured: snap.structuredResult.value,
+                    structuredArtifactPath: snap.structuredResult.artifactPath,
+                  }
                 : {}),
             })),
           };
@@ -931,6 +953,9 @@ export default function (
         ...(agentType?.body ? { appendSystemPrompt: [agentType.body] } : {}),
         ...(childTools ? { tools: childTools } : {}),
         ...(agentType ? { agentTypeName: agentType.name } : {}),
+        ...(params.output_schema !== undefined
+          ? { outputSchema: params.output_schema }
+          : {}),
         ...(worktree ? { worktree: { ...worktree, repoCwd: cwd } } : {}),
         parent: {
           parentCwd: ctx.cwd,
@@ -1000,6 +1025,9 @@ export default function (
               ...(worktree ? { worktreeBranch: worktree.branch } : {}),
               ...(agentType ? { agentTypeName: agentType.name } : {}),
               ...(childTools ? { tools: childTools } : {}),
+              ...(params.output_schema !== undefined
+                ? { structured: true }
+                : {}),
             }),
           },
         ],
@@ -1010,6 +1038,7 @@ export default function (
           harness,
           model: snap.meta.modelLabel,
           ...(agentType ? { agentType: agentType.name } : {}),
+          ...(params.output_schema !== undefined ? { structured: true } : {}),
         },
       };
     },
@@ -1132,7 +1161,7 @@ export default function (
       );
       const allocation = allocateResultBudgets(
         resultEntries.map(({ snap }) =>
-          Buffer.byteLength(snap.finalText || "(no output)", "utf8"),
+          Buffer.byteLength(subagentResultContent(snap), "utf8"),
         ),
         ctx.getContextUsage(),
         {
@@ -1181,6 +1210,12 @@ export default function (
               ...(fullResultsSaved.has(id) ? { fullResultSaved: true } : {}),
               ...(artifactSaveFailures.has(id)
                 ? { artifactSaveFailed: true }
+                : {}),
+              ...(snap?.structuredResult
+                ? {
+                    structured: snap.structuredResult.value,
+                    structuredArtifactPath: snap.structuredResult.artifactPath,
+                  }
                 : {}),
             };
           }),

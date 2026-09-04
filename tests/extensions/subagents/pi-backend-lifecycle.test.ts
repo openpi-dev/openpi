@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type {
   AgentSession,
   CreateAgentSessionOptions,
+  ExtensionContext,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
@@ -140,7 +144,7 @@ function createManagerRuntime(
 async function spawnDirect(
   backend: SubagentBackend,
   spawnTask: SpawnTask,
-  drive: (session: SubagentSession) => void,
+  drive: (session: SubagentSession) => void | Promise<void>,
 ) {
   const events: SubagentEvent[] = [];
   const firstSettlement = deferred<void>();
@@ -156,7 +160,7 @@ async function spawnDirect(
             }),
           ),
         );
-        drive(session);
+        yield* Effect.promise(() => Promise.resolve(drive(session)));
         yield* Effect.promise(() => firstSettlement.promise);
       }),
     ),
@@ -255,6 +259,98 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
   assert.equal(harness.calls.clearQueues, 1);
   assert.equal(harness.calls.aborts, 1);
   assert.equal(harness.calls.disposals, 1);
+});
+
+test("a direct subagent validates, persists, and delivers structured output", async () => {
+  const agentDir = await mkdtemp(
+    path.join(tmpdir(), "openpi-structured-child-"),
+  );
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const fixtures = harnessFactory();
+    const backend = makePiBackend({
+      sessionFactory: fixtures.factory,
+      shutdownTimeoutMs: 50,
+    });
+    const events = await spawnDirect(
+      backend,
+      task("return a verdict", {
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+          additionalProperties: false,
+        },
+      }),
+      async () => {
+        const creation = fixtures.creations[0];
+        const harness = fixtures.harnesses[0];
+        assert.ok(creation);
+        assert.ok(harness);
+        assert.deepEqual(creation.tools, ["read", "structured_output"]);
+        assert.equal(creation.customTools?.length, 1);
+        await creation.customTools?.[0]?.execute(
+          "structured",
+          { verdict: "pass" },
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        );
+        harness.setStreaming(true);
+        harness.emit({ type: "agent_start" });
+        harness.emitAssistant("");
+        harness.setStreaming(false);
+        harness.emit({ type: "agent_settled" });
+        harness.resolvePrompt();
+      },
+    );
+    const settled = events.find((event) => event._tag === "RunSettled");
+    assert.equal(settled?._tag, "RunSettled");
+    if (settled?._tag !== "RunSettled") return;
+    assert.equal(settled.outcome._tag, "Completed");
+    if (settled.outcome._tag !== "Completed") return;
+    assert.deepEqual(settled.outcome.structuredResult?.value, {
+      verdict: "pass",
+    });
+    const artifactPath = settled.outcome.structuredResult?.artifactPath;
+    assert.ok(artifactPath);
+    assert.equal(await readFile(artifactPath, "utf8"), '{"verdict":"pass"}');
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("a direct structured subagent fails when it never submits", async () => {
+  const fixtures = harnessFactory();
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const events = await spawnDirect(
+    backend,
+    task("forget structured output", {
+      outputSchema: { type: "object", additionalProperties: true },
+    }),
+    () => {
+      const harness = fixtures.harnesses[0];
+      assert.ok(harness);
+      harness.setStreaming(true);
+      harness.emit({ type: "agent_start" });
+      harness.emitAssistant("plain text only");
+      harness.setStreaming(false);
+      harness.emit({ type: "agent_settled" });
+      harness.resolvePrompt();
+    },
+  );
+  const settled = events.find((event) => event._tag === "RunSettled");
+  assert.equal(settled?._tag, "RunSettled");
+  if (settled?._tag !== "RunSettled") return;
+  assert.equal(settled.outcome._tag, "Failed");
+  if (settled.outcome._tag !== "Failed") return;
+  assert.match(settled.outcome.errorText, /without calling structured_output/);
 });
 
 test("prompt rejection wins over an earlier agent_settled event", async () => {

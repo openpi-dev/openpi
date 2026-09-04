@@ -12,6 +12,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   persistResultArtifact,
+  persistStructuredResultArtifact,
   projectResult,
 } from "../../../extensions/subagents/src/result-artifact.ts";
 
@@ -141,6 +142,23 @@ test("content-addressed artifacts are exact, private, and reusable", async () =>
     assert.equal(await readFile(first, "utf8"), content);
     assert.equal((await lstat(first)).mode & 0o777, 0o600);
     assert.equal(path.basename(first).length, 68);
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("structured artifacts use an immutable JSON identity", async () => {
+  const agentDir = await mkdtemp(
+    path.join(tmpdir(), "openpi-structured-result-artifact-"),
+  );
+  try {
+    const content = '{"verdict":"pass"}';
+    const first = persistStructuredResultArtifact(agentDir, content);
+    const second = persistStructuredResultArtifact(agentDir, content);
+    assert.equal(first, second);
+    assert.match(first, /\.json$/);
+    assert.equal(await readFile(first, "utf8"), content);
+    assert.equal((await lstat(first)).mode & 0o777, 0o600);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }

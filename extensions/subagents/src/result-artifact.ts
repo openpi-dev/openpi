@@ -77,6 +77,38 @@ export function persistResultArtifact(agentDir: string, content: string) {
   return artifactPath;
 }
 
+/** Persist one complete validated structured value under a JSON identity. */
+export function persistStructuredResultArtifact(
+  agentDir: string,
+  content: string,
+) {
+  let directory = path.resolve(agentDir);
+  for (const segment of RESULT_ARTIFACT_DIR) {
+    directory = ensureDirectory(directory, segment);
+  }
+
+  const digest = createHash("sha256").update(content).digest("hex");
+  const artifactPath = path.join(directory, `${digest}.json`);
+  try {
+    writeFileSync(artifactPath, content, {
+      encoding: "utf8",
+      flag: "wx",
+      mode: 0o600,
+    });
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    const stat = lstatSync(artifactPath);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      readFileSync(artifactPath, "utf8") !== content
+    ) {
+      throw new Error(`Structured result artifact collision: ${artifactPath}`);
+    }
+  }
+  return artifactPath;
+}
+
 /**
  * Build the single model-visible projection used by automatic delivery and
  * explicit waits. Short answers pass through byte-for-byte. Long answers keep
