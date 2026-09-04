@@ -697,6 +697,46 @@ async function startTestHost(runtime: WebRuntimeController) {
   return { host, launched, headers };
 }
 
+test("quiet SSE clients receive heartbeats without advancing the event cursor", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-heartbeat-"));
+  const host = new WebHost({
+    runtime: testRuntime(cwd),
+    sseHeartbeatMs: 10,
+  });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}` };
+    const before = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${before.cursor}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    assert.ok(response.body);
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let received = "";
+    while (!received.includes(": heartbeat\n\n")) {
+      const chunk = await reader.read();
+      assert.equal(chunk.done, false);
+      received += decoder.decode(chunk.value, { stream: true });
+    }
+    const after = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    assert.equal(after.cursor, before.cursor);
+    await reader.cancel();
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("adapter initialization fails before the Host starts listening", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-startup-failure-"));
   const runtime = testRuntime(cwd);

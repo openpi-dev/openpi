@@ -33,6 +33,7 @@ const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
+const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const execFileAsync = promisify(execFile);
@@ -45,6 +46,7 @@ export interface WebHostOptions {
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
   shutdownTimeoutMs?: number;
+  sseHeartbeatMs?: number;
 }
 
 export class WebHost {
@@ -52,6 +54,10 @@ export class WebHost {
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
+  private readonly clientHeartbeats = new Map<
+    ServerResponse,
+    ReturnType<typeof setInterval>
+  >();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
   private port = 0;
@@ -63,6 +69,7 @@ export class WebHost {
     WebHostOptions["directoryChooser"]
   >;
   private readonly shutdownTimeoutMs: number;
+  private readonly sseHeartbeatMs: number;
   private readonly unsubscribeCapabilities: () => void;
   private readonly unsubscribeRuntime: () => void;
   private readonly chooserAbort = new AbortController();
@@ -89,6 +96,14 @@ export class WebHost {
       this.shutdownTimeoutMs <= 0
     ) {
       throw new Error("Web host shutdown timeout must be a positive integer");
+    }
+    this.sseHeartbeatMs =
+      options.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+    if (
+      !Number.isSafeInteger(this.sseHeartbeatMs) ||
+      this.sseHeartbeatMs <= 0
+    ) {
+      throw new Error("SSE heartbeat interval must be a positive integer");
     }
     this.adapter = new PiWebAdapter(options.runtime);
     this.onEvent = options.onEvent;
@@ -185,8 +200,7 @@ export class WebHost {
         client.writableLength > MAX_SSE_BUFFER_BYTES ||
         !client.write(record)
       ) {
-        this.clients.delete(client);
-        client.destroy();
+        this.removeSseClient(client, "destroy");
       }
     }
     this.onEvent?.(event.type, event.detail);
@@ -204,8 +218,7 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
-      for (const client of this.clients) client.end();
-      this.clients.clear();
+      for (const client of [...this.clients]) this.removeSseClient(client, "end");
       const closeServer = this.server.listening
         ? new Promise<void>((resolve) => {
             const forceClose = setTimeout(
@@ -736,7 +749,31 @@ export class WebHost {
     // ordering without treating normal backpressure as a broken client.
     for (const record of replay) response.write(record);
     this.clients.add(response);
-    response.on("close", () => this.clients.delete(response));
+    const heartbeat = setInterval(() => {
+      if (
+        response.destroyed ||
+        response.writableEnded ||
+        response.writableLength > MAX_SSE_BUFFER_BYTES ||
+        !response.write(": heartbeat\n\n")
+      ) {
+        this.removeSseClient(response, "destroy");
+      }
+    }, this.sseHeartbeatMs);
+    heartbeat.unref();
+    this.clientHeartbeats.set(response, heartbeat);
+    response.on("close", () => this.removeSseClient(response));
+  }
+
+  private removeSseClient(
+    response: ServerResponse,
+    close?: "destroy" | "end",
+  ) {
+    this.clients.delete(response);
+    const heartbeat = this.clientHeartbeats.get(response);
+    if (heartbeat) clearInterval(heartbeat);
+    this.clientHeartbeats.delete(response);
+    if (close === "destroy" && !response.destroyed) response.destroy();
+    else if (close === "end" && !response.writableEnded) response.end();
   }
 
   private parseCursor(value: string | undefined | null) {

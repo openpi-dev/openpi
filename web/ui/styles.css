@@ -507,7 +507,9 @@ body.sidebar-collapsed .icon-button { width: 36px; height: 36px; }
 .send-button:disabled { background: var(--warm-accent-disabled); color: var(--subtle); }
 .send-button svg { width: 17px; height: 17px; stroke-width: 2; }
 .composer-hint { display: none; }
+.composer-hint.status, .composer-hint.error, .composer-hint.connection { display: block; margin: 7px 2px 0; color: var(--muted); font-size: 11px; line-height: 1.35; }
 .composer-hint.error { color: var(--error); }
+.composer-hint.connection { color: #9a6700; }
 .sidebar-scrim { display: none; }
 
 @media (max-width: 760px) {
@@ -550,6 +552,8 @@ body.sidebar-collapsed .icon-button { width: 36px; height: 36px; }
   .app-shell, .session-sidebar, .workspace-chevron { transition: none; }
   .conversation { scroll-behavior: auto; }
 }
+
+.composer-hint.status, .composer-hint.error, .composer-hint.connection { display: block; }
 
 /* The conversation view should start with the actual messages. On narrow
    screens keep only the sidebar trigger as an overlay so navigation remains

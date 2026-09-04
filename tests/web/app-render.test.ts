@@ -348,6 +348,7 @@ async function renderApp(
     URL,
     TextDecoder,
     TextEncoder,
+    AbortController,
     Element: class Element {},
   };
   context.window = {
@@ -401,6 +402,17 @@ async function renderApp(
       "sendPrompt",
       context as vm.Context,
     ) as () => Promise<void>,
+    api: vm.runInContext("api", context as vm.Context) as (
+      path: string,
+      options?: Record<string, unknown>,
+    ) => Promise<unknown>,
+    readEventChunk: vm.runInContext(
+      "readEventChunk",
+      context as vm.Context,
+    ) as (
+      reader: { read(): Promise<unknown> },
+      timeoutMs?: number,
+    ) => Promise<unknown>,
     updateComposer: vm.runInContext(
       "updateComposer",
       context as vm.Context,
@@ -461,6 +473,49 @@ test("app.js resnapshots on an SSE cursor gap", async () => {
   assert.equal(app.eventFetches(), 1);
   assert.ok(app.snapshotFetches() >= 2);
   assert.ok(app.readerCancellations() >= 1);
+});
+
+test("app.js uses quiet-stream heartbeats for bounded snapshot recovery", async () => {
+  const heartbeat = ": heartbeat\n\n";
+  const app = await renderApp({
+    eventRecords: [heartbeat.repeat(4)],
+  });
+  assert.equal(app.eventFetches(), 1);
+  assert.ok(app.snapshotFetches() >= 2);
+  assert.equal(app.state.cursor, SNAPSHOT.cursor);
+});
+
+test("app.js bounds API waits and explains duplicate prompt admission", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (
+    _url: unknown,
+    options?: { signal?: AbortSignal },
+  ) =>
+    new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+  await assert.rejects(
+    app.api("/api/stuck", { timeoutMs: 5, timeoutMessage: "bounded timeout" }),
+    /bounded timeout/u,
+  );
+  await assert.rejects(
+    app.readEventChunk({ read: () => new Promise(() => {}) }, 5),
+    /event stream stalled/u,
+  );
+
+  app.state.promptAdmissionPending = true;
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "another message";
+  await app.sendPrompt();
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "OpenPI is still accepting the previous message.",
+  );
 });
 
 test("app.js invalidates snapshots for cross-tab session metadata events", async () => {

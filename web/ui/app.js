@@ -30,6 +30,7 @@ const state = {
   snapshotGeneration: 0,
   livePhase: "idle",
   liveRetry: null,
+  composerFeedback: null,
   query: "",
   selectedWorkspace: null,
   language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
@@ -67,6 +68,10 @@ const translations = {
     enterHint: "Enter to send, Shift+Enter for a new line.",
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
+    admissionPendingHint: "OpenPI is still accepting the previous message.",
+    admissionTimeout: "Prompt admission timed out. Your draft was restored; try again.",
+    requestTimeout: "The Web request timed out.",
+    reconnectingHint: "Live updates were interrupted. Reconnecting and checking canonical state...",
     modelRunning: "Working...",
     modelPreparing: "Preparing task...",
     modelRetrying: "Retrying model request...",
@@ -103,6 +108,10 @@ const translations = {
     enterHint: "按 Enter 发送，Shift+Enter 换行。",
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
+    admissionPendingHint: "OpenPI 仍在接收上一条消息，请稍候。",
+    admissionTimeout: "消息接收超时，草稿已恢复，请重试。",
+    requestTimeout: "Web 请求已超时。",
+    reconnectingHint: "实时更新已中断，正在重连并核对权威状态……",
     modelRunning: "正在运行...",
     modelPreparing: "正在准备任务...",
     modelRetrying: "模型请求重试中...",
@@ -127,6 +136,10 @@ function applyLanguage() {
 
 const $ = (id) => document.getElementById(id);
 const tokenStorageKey = "openpi.web.token";
+const DEFAULT_API_TIMEOUT_MS = 15_000;
+const PROMPT_ADMISSION_TIMEOUT_MS = 30_000;
+const SSE_STALE_TIMEOUT_MS = 45_000;
+const HEARTBEATS_PER_SNAPSHOT = 4;
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
 if (fragmentToken) {
@@ -139,6 +152,21 @@ const headers = (json = false) => ({
   Authorization: `Bearer ${token}`,
   ...(json ? { "Content-Type": "application/json" } : {}),
 });
+
+function setComposerFeedback(message, kind = "status") {
+  state.composerFeedback = message ? { message, kind } : null;
+  const hint = $("composer-hint");
+  if (!hint) return;
+  hint.textContent = message || "";
+  for (const candidate of ["status", "error", "connection"]) {
+    hint.classList.toggle(candidate, candidate === kind && Boolean(message));
+  }
+}
+
+function clearComposerFeedback(kind) {
+  if (kind && state.composerFeedback?.kind !== kind) return;
+  setComposerFeedback("");
+}
 const escapeHtml = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -196,13 +224,37 @@ function renderMarkdown(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { ...headers(Boolean(options.body)), ...options.headers },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
-  return body;
+  const {
+    timeoutMs = DEFAULT_API_TIMEOUT_MS,
+    timeoutMessage = t("requestTimeout"),
+    ...requestOptions
+  } = options;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  timer.unref?.();
+  try {
+    const response = await fetch(path, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        ...headers(Boolean(requestOptions.body)),
+        ...requestOptions.headers,
+      },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok)
+      throw new Error(body.error || `Request failed (${response.status})`);
+    return body;
+  } catch (error) {
+    if (timedOut) throw new Error(timeoutMessage);
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function sessionTitle(session) {
@@ -527,11 +579,17 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent = canCompose
+  const defaultHint = canCompose
     ? state.snapshot.runtime.status === "running" || state.liveRunning
       ? t("queuedHint")
       : t("enterHint")
     : t("activeOnlyHint");
+  const feedback = state.composerFeedback;
+  const hint = $("composer-hint");
+  hint.textContent = feedback?.message || defaultHint;
+  for (const candidate of ["status", "error", "connection"]) {
+    hint.classList.toggle(candidate, feedback?.kind === candidate);
+  }
 }
 
 async function selectModel(value) {
@@ -640,8 +698,7 @@ async function refreshSnapshot({
     ) return false;
     $("connection-state").textContent = "Unavailable";
     $("connection-state").classList.add("reconnecting");
-    $("composer-hint").textContent = error.message;
-    $("composer-hint").classList.add("error");
+    setComposerFeedback(error.message, "error");
     return false;
   }
 }
@@ -718,11 +775,14 @@ async function sendPrompt() {
     await chooseWorkspace();
   }
   const content = $("prompt-input").value.trim();
+  if (state.promptAdmissionPending) {
+    setComposerFeedback(t("admissionPendingHint"));
+    return;
+  }
   if (
     !content ||
     !state.selectedWorkspace ||
-    state.sessionSwitching ||
-    state.promptAdmissionPending
+    state.sessionSwitching
   ) return;
   if (!state.snapshot?.selectedSession?.id) {
     await createSession(state.selectedWorkspace);
@@ -738,12 +798,14 @@ async function sendPrompt() {
   ].slice(-8);
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
+  clearComposerFeedback();
   renderConversation();
-  $("composer-hint").classList.remove("error");
   try {
     const receipt = await api("/api/prompt", {
       method: "POST",
       body: JSON.stringify({ sessionId, content }),
+      timeoutMs: PROMPT_ADMISSION_TIMEOUT_MS,
+      timeoutMessage: t("admissionTimeout"),
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
@@ -751,7 +813,7 @@ async function sendPrompt() {
     state.livePhase = alreadySettled ? "idle" : "preparing";
     $("prompt-input").value = "";
     resizePrompt();
-    $("composer-hint").textContent = t("acceptedHint");
+    setComposerFeedback(t("acceptedHint"));
     scheduleSnapshotRefresh(120);
   } catch (error) {
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
@@ -761,8 +823,7 @@ async function sendPrompt() {
     state.liveMessages = state.liveMessages.filter(
       (entry) => entry.key !== optimisticKey,
     );
-    $("composer-hint").textContent = error.message;
-    $("composer-hint").classList.add("error");
+    setComposerFeedback(error.message, "error");
   } finally {
     if (epoch === state.sessionEpoch && state.promptAdmissionToken === admissionToken) {
       state.promptAdmissionPending = false;
@@ -897,8 +958,7 @@ async function createSession(workspacePath) {
 }
 
 function showNotice(message) {
-  $("composer-hint").textContent = message;
-  $("composer-hint").classList.add("error");
+  setComposerFeedback(message, "error");
 }
 
 function openWorkspaceMenu(path, anchor) {
@@ -1193,17 +1253,27 @@ async function connectEvents() {
       if (!response.ok || !response.body) throw new Error("event connection failed");
       $("connection-state").textContent = "Connected";
       $("connection-state").classList.remove("reconnecting");
+      clearComposerFeedback("connection");
       reconnectDelay = 500;
       reader = response.body.getReader();
       const decoder = new TextDecoder();
       let buffer = "";
+      let heartbeatCount = 0;
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readEventChunk(reader);
         if (done) throw new Error("event connection closed");
         buffer += decoder.decode(value, { stream: true });
         const records = buffer.split("\n\n");
         buffer = records.pop() || "";
         for (const record of records) {
+          if (record.split("\n").some((item) => item === ": heartbeat")) {
+            heartbeatCount++;
+            if (heartbeatCount >= HEARTBEATS_PER_SNAPSHOT) {
+              heartbeatCount = 0;
+              scheduleSnapshotRefresh(0);
+            }
+            continue;
+          }
           const line = record.split("\n").find((item) => item.startsWith("data: "));
           if (!line) continue;
           const event = JSON.parse(line.slice(6));
@@ -1224,11 +1294,30 @@ async function connectEvents() {
         ? false
         : await refreshSnapshot({ resetCursor: true });
       if (!recovered) resetLiveState();
+      setComposerFeedback(t("reconnectingHint"), "connection");
       await new Promise((resolve) => setTimeout(resolve, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, 5_000);
     } finally {
       await reader?.cancel().catch(() => undefined);
     }
+  }
+}
+
+async function readEventChunk(reader, timeoutMs = SSE_STALE_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error("event stream stalled")),
+          timeoutMs,
+        );
+        timer.unref?.();
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
   }
 }
 
@@ -1384,7 +1473,11 @@ $("composer")?.addEventListener("submit", (event) => {
   if (state.selectedWorkspace) void sendPrompt();
   else void chooseWorkspace();
 });
-$("prompt-input")?.addEventListener("input", resizePrompt);
+$("prompt-input")?.addEventListener("input", () => {
+  if (!state.promptAdmissionPending) clearComposerFeedback();
+  resizePrompt();
+  updateComposer();
+});
 $("prompt-input")?.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) {
