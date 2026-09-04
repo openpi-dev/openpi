@@ -235,7 +235,6 @@ async function api(path, options = {}) {
     timedOut = true;
     controller.abort();
   }, timeoutMs);
-  timer.unref?.();
   try {
     const response = await fetch(path, {
       ...requestOptions,
@@ -1313,7 +1312,6 @@ async function readEventChunk(reader, timeoutMs = SSE_STALE_TIMEOUT_MS) {
           () => reject(new Error("event stream stalled")),
           timeoutMs,
         );
-        timer.unref?.();
       }),
     ]);
   } finally {
