@@ -8,6 +8,10 @@ import type {
 import type { Usage } from "@earendil-works/pi-ai";
 import modelInfo from "../../../extensions/model-info/index.ts";
 import {
+  CACHE_DIAGNOSTICS_CHANNEL,
+  type CacheTurnObservation,
+} from "../../../extensions/model-info/cache-diagnostics.ts";
+import {
   MODEL_INFO_CHANNEL,
   REFRESH_CHANNEL,
   type ModelInfoState,
@@ -131,6 +135,7 @@ class ModelInfoHarness {
   >();
   readonly listeners = new Map<string, Set<(value: unknown) => void>>();
   readonly publications: ModelInfoState[] = [];
+  readonly cacheObservations: CacheTurnObservation[] = [];
   readonly manager: InstrumentedSessionManager;
   contextTokens = 100;
   private model = {
@@ -171,6 +176,9 @@ class ModelInfoHarness {
           if (channel === MODEL_INFO_CHANNEL) {
             this.publications.push(value as ModelInfoState);
           }
+          if (channel === CACHE_DIAGNOSTICS_CHANNEL) {
+            this.cacheObservations.push(value as CacheTurnObservation);
+          }
           for (const listener of this.listeners.get(channel) ?? []) {
             listener(value);
           }
@@ -206,6 +214,24 @@ class ModelInfoHarness {
     await this.emit("model_select", { model });
   }
 }
+
+test("emits per-turn cache observations without adding them to dashboard state", async () => {
+  const harness = new ModelInfoHarness([]);
+  await harness.emit("session_start");
+  await harness.emit("before_agent_start", {
+    systemPrompt: "system",
+    systemPromptOptions: { cwd: "/repo", selectedTools: ["read"] },
+  });
+  await harness.emit("turn_end", {
+    turnIndex: 0,
+    message: assistant("assistant", null, usage({ input: 120 })).message,
+    toolResults: [],
+  });
+
+  assert.equal(harness.cacheObservations.length, 1);
+  assert.equal(harness.cacheObservations[0]?.kind, "first-turn");
+  assert.equal("cacheDiagnostic" in harness.state, false);
+});
 
 test("synchronizes initial history and waits for turn_end before counting an assistant message", async () => {
   const initialUsage = usage({
