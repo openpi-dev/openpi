@@ -261,6 +261,59 @@ test("automatic delivery reports real artifact save failures", async () => {
   }
 });
 
+test("automatic delivery publishes an owner-bound ref after the artifact exists", async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "openpi-artifact-ref-"));
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = directory;
+  try {
+    let entryDetails: Record<string, unknown> | undefined;
+    const pi = {
+      appendEntry(
+        _customType: string,
+        data: { details: Record<string, unknown> },
+      ) {
+        entryDetails = data.details;
+      },
+      sendMessage() {},
+    } as unknown as ExtensionAPI;
+    createSubagentResultDispatcher(pi)([
+      {
+        id: "sa-resource",
+        origin: "model",
+        backend: "pi",
+        title: "resource test",
+        prompt: "inspect",
+        cwd: process.cwd(),
+        status: "done",
+        createdAt: 1,
+        settledAt: 2,
+        meta: { backend: "pi" },
+        usage: {},
+        transcriptVersion: 0,
+        transcript: [],
+        liveTools: [],
+        queued: [],
+        finalText: "x".repeat(40 * 1024),
+        turns: 1,
+      },
+    ]);
+
+    const resource = entryDetails?.resource as
+      | {
+          owner?: { kind?: unknown; id?: unknown };
+          resource?: { path?: unknown };
+        }
+      | undefined;
+    assert.equal(resource?.owner?.kind, "subagent");
+    assert.equal(resource?.owner?.id, "sa-resource");
+    assert.equal(typeof resource?.resource?.path, "string");
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
 test("automatic result delivery shrinks a batch against authoritative parent headroom", () => {
   const budgets: number[] = [];
   const pi = {

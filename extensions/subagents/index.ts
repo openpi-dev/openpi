@@ -74,6 +74,10 @@ import {
   allocateResultBudgets,
   type ParentContextUsage,
 } from "../shared/result-budget.ts";
+import {
+  createOwnerFileResourceRef,
+  type OpenPiResourceRef,
+} from "../shared/resource-reference.ts";
 import { type DetailDisplay, loadSetupConfig } from "../shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
@@ -187,6 +191,7 @@ interface SubagentResultDetails {
   readonly elapsed?: string;
   readonly artifactSaveFailed?: boolean;
   readonly fullResultSaved?: boolean;
+  readonly resource?: OpenPiResourceRef;
   readonly count?: number;
   readonly results?: ReadonlyArray<{
     readonly id: string;
@@ -197,6 +202,7 @@ interface SubagentResultDetails {
     readonly elapsed?: string;
     readonly artifactSaveFailed?: boolean;
     readonly fullResultSaved?: boolean;
+    readonly resource?: OpenPiResourceRef;
   }>;
   /** Display-only projection for the custom message renderer. */
   readonly displayContent?: string;
@@ -244,19 +250,42 @@ export function truncatedOutput(
 function projectSubagentOutput(
   snap: SubagentSnapshot,
   maxBytes: number,
-): ResultProjection {
+): ResultProjection & { readonly resource?: OpenPiResourceRef } {
   const output = snap.finalText || "(no output)";
-  return projectResult(output, {
+  const projection = projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
     writeArtifact: (content) => persistResultArtifact(getAgentDir(), content),
   });
+  if (!projection.artifactPath) return projection;
+  try {
+    return {
+      ...projection,
+      resource: createOwnerFileResourceRef({
+        owner: {
+          kind: "subagent",
+          id: snap.id,
+          generation: String(snap.settledAt ?? snap.createdAt),
+        },
+        resourceId: "final-result",
+        root: path.dirname(projection.artifactPath),
+        file: projection.artifactPath,
+        mediaType: "text/plain; charset=utf-8",
+        completeness: "complete-owner-value",
+        sourceCoverage: "manager-bounded-final",
+        lifetime: "session-cache",
+        expectedByteLength: Buffer.byteLength(output, "utf8"),
+      }),
+    };
+  } catch {
+    return projection;
+  }
 }
 
 type OutputProjection = Pick<
   ResultProjection,
   "text" | "artifactPath" | "artifactSaveFailed"
->;
+> & { readonly resource?: OpenPiResourceRef };
 
 function normalizeProjection(
   output: string | OutputProjection,
@@ -367,6 +396,9 @@ export function createSubagentResultDispatcher(
               : {}),
             elapsed: formatElapsed(snaps[0]!),
             ...(projections[0]!.artifactPath ? { fullResultSaved: true } : {}),
+            ...(projections[0]!.resource
+              ? { resource: projections[0]!.resource }
+              : {}),
             ...(projections[0]!.artifactSaveFailed
               ? { artifactSaveFailed: true }
               : {}),
@@ -384,6 +416,9 @@ export function createSubagentResultDispatcher(
               elapsed: formatElapsed(snap),
               ...(projections[index]!.artifactPath
                 ? { fullResultSaved: true }
+                : {}),
+              ...(projections[index]!.resource
+                ? { resource: projections[index]!.resource }
                 : {}),
               ...(projections[index]!.artifactSaveFailed
                 ? { artifactSaveFailed: true }
@@ -1147,12 +1182,14 @@ export default function (
       let resultIndex = 0;
       const artifactSaveFailures = new Set<string>();
       const fullResultsSaved = new Set<string>();
+      const resources = new Map<string, OpenPiResourceRef>();
       const sections = entries.map((entry) => {
         if ("section" in entry) return entry.section;
         const outputBudget = allocation.budgets[resultIndex++]!;
         const projection = projectSubagentOutput(entry.snap, outputBudget);
         if (projection.artifactSaveFailed) artifactSaveFailures.add(entry.id);
         if (projection.artifactPath) fullResultsSaved.add(entry.id);
+        if (projection.resource) resources.set(entry.id, projection.resource);
         return `${entry.header}\n\n${projection.text}`;
       });
 
@@ -1179,6 +1216,7 @@ export default function (
                 : {}),
               ...(snap ? { elapsed: formatElapsed(snap) } : {}),
               ...(fullResultsSaved.has(id) ? { fullResultSaved: true } : {}),
+              ...(resources.has(id) ? { resource: resources.get(id) } : {}),
               ...(artifactSaveFailures.has(id)
                 ? { artifactSaveFailed: true }
                 : {}),

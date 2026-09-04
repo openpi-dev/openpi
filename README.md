@@ -334,6 +334,12 @@ Workflow 在清理隔离 checkout 前原子保存有界 Handoff Manifest：track
 
 设计细节见 [Workflow invocation graph](https://github.com/openpi-dev/openpi/blob/main/docs/design/WORKFLOW_INVOCATION_GRAPH.md)。
 
+### Owner-bound resource references
+
+当 Direct Subagent 的有界 manager final、Workflow 的 result/transcript/agent result，或 Background Terminal 的完整 spill 已真实落盘时，结果 details 可附带 versioned resource reference。引用明确记录 producer owner、generation、revision、media type、byte length、相对于哪个 owner value 的完整性以及 owner-specific lifetime；它只是恢复 metadata，不是读取授权，也不会延长制品生命周期。
+
+解析仍由对应 extension 在自己的 root、generation 与 Pi Trust/tool boundary 内完成。owner mismatch、stale generation、owner lost、unauthorized、目录穿越、symlink substitution、missing 与 revision drift 是可区分的 fail-closed 结果。OpenPI 不增加全局 URI/router、统一 artifact store 或新的常驻 read/search tool；Pi 原生 `read` 仍是实际读取机制。
+
 ---
 
 ## 连续工作，而不是堆 Context

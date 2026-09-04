@@ -37,6 +37,7 @@ import {
   registerWebCapability,
 } from "../shared/web-observer-registry.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
+import { createOwnerFileResourceRef } from "../shared/resource-reference.ts";
 import {
   MAX_RUNNING,
   TerminalManager,
@@ -88,6 +89,35 @@ import {
 
 const WIDGET_KEY = "background-terminals";
 const IDLE_RESULT_BATCH_MS = 200;
+
+export function terminalResourceRefs(snap: TerminalSnapshot) {
+  if (snap.status === "running") return [];
+  return (["stdout", "stderr"] as const).flatMap((stream) => {
+    const view = snap[stream];
+    if (!view.spillPath) return [];
+    try {
+      return [
+        createOwnerFileResourceRef({
+          owner: {
+            kind: "background",
+            id: snap.id,
+            generation: String(snap.createdAt),
+          },
+          resourceId: stream,
+          root: path.dirname(view.spillPath),
+          file: view.spillPath,
+          mediaType: "text/plain; charset=utf-8",
+          completeness: "complete-owner-value",
+          sourceCoverage: "process-stream",
+          lifetime: "session-temporary",
+          expectedByteLength: view.totalBytes,
+        }),
+      ];
+    } catch {
+      return [];
+    }
+  });
+}
 
 interface WatchToolDetails {
   id: string;
@@ -214,6 +244,7 @@ export default function (pi: ExtensionAPI) {
                   status: snaps[0]!.status,
                   exitCode: snaps[0]!.exitCode,
                   signal: snaps[0]!.signal,
+                  resources: terminalResourceRefs(snaps[0]!),
                 }
               : {
                   count: snaps.length,
@@ -223,6 +254,7 @@ export default function (pi: ExtensionAPI) {
                     status: snap.status,
                     exitCode: snap.exitCode,
                     signal: snap.signal,
+                    resources: terminalResourceRefs(snap),
                   })),
                 },
         },
@@ -463,6 +495,7 @@ export default function (pi: ExtensionAPI) {
           exitCode: snap.exitCode,
           signal: snap.signal,
           timeoutAt: snap.timeoutAt,
+          resources: terminalResourceRefs(snap),
         },
       };
     },
@@ -542,12 +575,16 @@ export default function (pi: ExtensionAPI) {
       return {
         content: [{ type: "text", text: buildKillReport(report) }],
         details: {
-          results: report.map((entry) => ({
-            id: entry.id,
-            title: entry.title,
-            status: entry.status,
-            killed: entry.killed,
-          })),
+          results: report.map((entry) => {
+            const snap = manager.view.get(entry.id);
+            return {
+              id: entry.id,
+              title: entry.title,
+              status: entry.status,
+              killed: entry.killed,
+              resources: snap ? terminalResourceRefs(snap) : [],
+            };
+          }),
         },
       };
     },
