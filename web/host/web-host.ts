@@ -557,6 +557,11 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/thinking")
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        ...(this.runtime.getThinkingState?.() ?? { level: "unknown", available: [] }),
+      });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
