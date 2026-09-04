@@ -123,7 +123,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 工作面       | 已包含的能力                                                                                              |
 | ------------ | --------------------------------------------------------------------------------------------------------- |
 | 执行         | Background Terminal、Pi-native Subagent、Dynamic Workflow、隔离 Worktree                                  |
-| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Acceptance Ledger、Safe Replay、派生 Graph |
+| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Safe Replay、派生 Graph |
 | 连续性       | Tasks、Goal、Plan Mode、Context Pivot、Session Browser、Session-scoped Cron                               |
 | 自定义 Agent | `explorer` / `implementer` / `reviewer` / `advisor`，支持全局与项目角色文件、独立模型与 effort            |
 | 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
@@ -270,7 +270,7 @@ return agent("Synthesize the verified findings", {
 | `phase()`    | 标记当前阶段                                                               |
 | `log()`      | 向实时界面与最终报告追加一行进度                                           |
 | `usage()`    | 读取累计 Token、缓存、成本及本轮并发/调用余量；Token 是 lower bound，不是预算器 |
-| `agent()`    | 启动 Pi Agent；支持 role、schema、acceptance、inputs、operator 与 worktree |
+| `agent()`    | 启动 Pi Agent；支持 role、schema、inputs、operator 与 worktree |
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
@@ -308,9 +308,11 @@ OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程�
 
 `operator: "name"` 在同一 Run 内复用一个内存 Child Session，并把同名 activation 串行化。首个 activation 固定 model、role/tool surface、effort、structured mode 与 cwd。Operator 不与 per-call Worktree 或 Replay 混用，也不承诺跨重启持久记忆。
 
-### Explicit Acceptance
+### Deprecated Acceptance compatibility
 
-可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。支持 1–32 条验收条件；`description` 为人类可读说明（1–500 字符），可选的 `requiredEvidence` 为字符串数组（至多 16 个标签，每项至多 120 字符），子 Agent 必须在 `acceptance.criteria[].evidence` 中返回完全匹配的标签：
+`acceptance` 自 OpenPI 0.5 起弃用，并计划在 1.0 删除。兼容期仍读取旧 DSL、journal 与 artifact，但 ledger 只是执行任务的同一个模型所写的 `model-self-attestation`，不是 runtime-observed evidence，也不再决定 `agent().ok`；`ok` 只表示 child execution 与结果制品是否成功。
+
+新 Workflow 应使用普通 `schema` 返回判断材料，由父模型结合退出码、测试结果、文件指纹和 tool receipts 等真实运行时事实综合判断。旧的可选 `acceptance: { criteria: [...] }` 仍可要求同一个 Agent 返回 ledger：
 
 ```js
 acceptance: {
@@ -324,7 +326,7 @@ acceptance: {
 }
 ```
 
-条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+条件缺失、格式错误或被拒绝时，原始输出与 ledger 仍保留并明确标注 authority/deprecation；它们不会把成功执行改成失败，也不会把失败执行改成成功。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
 
 未设置 `requiredEvidence` 的 criterion 是对 `description` 的自我声明，不是有证据约束的验收门禁；需要 evidence-backed gate 时，必须声明所需证据标签。
 

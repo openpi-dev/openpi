@@ -123,7 +123,7 @@ export interface AgentRecord {
   usage: AgentUsage;
   /** Replayed from a prior run's journal instead of actually executed. */
   replayed?: boolean;
-  /** Explicit caller-supplied acceptance result; never inferred from role/task. */
+  /** Deprecated child self-attestation; never runtime-observed evidence. */
   acceptance?: AcceptanceLedger;
   /** Branch of the isolated worktree this agent ran in, when it holds commits. */
   worktreeBranch?: string;
