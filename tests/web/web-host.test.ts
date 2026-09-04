@@ -194,6 +194,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.workbench-header \{\s*display: none;\s*\}/);
     assert.match(
       stylesSource,
+      /@media \(max-width: 760px\) \{\s*\.workbench-header \{[^}]*backdrop-filter: none;[^}]*-webkit-backdrop-filter: none;/,
+    );
+    assert.match(
+      stylesSource,
       /\.composer\.dormant \{[^}]*border-style: dashed/,
     );
     assert.match(
