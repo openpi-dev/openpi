@@ -6,6 +6,7 @@
 - Source boundary: implementation commit `cd60a15`, based on `72fbba5`
 - Affected Pi primitive: the OpenPI Workflow extension's run-directory persistence; Pi Sessions, messages, providers, and child lifecycle remain unchanged
 - Related Issue: [#110](https://github.com/openpi-dev/openpi/issues/110)
+- Related PR: [#386](https://github.com/openpi-dev/openpi/pull/386)
 - Related Decision: [0001 — documentation and evidence governance](../decisions/0001-documentation-and-evidence-governance.md)
 - Supersedes: none
 
