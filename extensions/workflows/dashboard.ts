@@ -31,6 +31,7 @@ import {
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
+import { recoverPendingWorkflowCommit } from "./artifacts.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
 import {
   classifyInterruptedInvocation,
@@ -143,6 +144,7 @@ export function readPersistedWorkflowDetails(
   runId: string,
   options: ReadPersistedRunOptions = {},
 ): WorkflowDetails | undefined {
+  recoverPendingWorkflowCommit(path.join(runsDir(), runId));
   let details: WorkflowDetails | undefined;
   try {
     const raw: unknown = JSON.parse(
