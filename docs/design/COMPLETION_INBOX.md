@@ -5,7 +5,7 @@
 - Verified: 2026-09-04
 - Source boundary: OpenPI implementation and tests in the pull request that closes issue #160
 - Related issue: https://github.com/openpi-dev/openpi/issues/160
-- Related pull request: pending publication of this implementation branch
+- Related pull request: https://github.com/openpi-dev/openpi/pull/382
 - Supersedes: the three producer-local consumption maps, not their execution state machines
 
 ## Boundary
