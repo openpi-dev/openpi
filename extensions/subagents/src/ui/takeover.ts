@@ -14,11 +14,15 @@ import type {
 import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../../../shared/agent-session-page.ts";
-import { hintLine, panelFrame } from "../../../shared/screen-chrome.ts";
+import { formatContextUtilization } from "../../../shared/context-utilization.ts";
+import {
+  hintLine,
+  panelFrame,
+  type ScreenHint,
+} from "../../../shared/screen-chrome.ts";
+import { SPINNER_INTERVAL_MS, spinnerFrame } from "../../../shared/spinner.ts";
 import { sanitizeTerminalText } from "../../../shared/terminal-text.ts";
 import { formatElapsed, type SubagentSnapshot } from "../domain.ts";
-import { formatContextUtilization } from "../../../shared/context-utilization.ts";
-import { SPINNER_INTERVAL_MS, spinnerFrame } from "../../../shared/spinner.ts";
 import type { SubagentReadModel } from "../manager.ts";
 import { subagentTranscriptDocument } from "./transcript.ts";
 
@@ -72,7 +76,7 @@ export async function openSubagentTakeover(
   id: string,
   options?: TakeoverOptions,
 ) {
-  if (!view.get(id)) return;
+  if (!(view.getFull?.(id) ?? view.get(id))) return;
   const takeoverOptions: TakeoverOptions = {
     ...options,
     toolsExpanded: ctx.ui.getToolsExpanded(),
@@ -423,7 +427,9 @@ export class TakeoverView implements Component, Focusable {
       keybindings,
       {
         getState: () => {
-          const snap = view.get(id);
+          // Takeover is the explicit rehydrate path for the bounded dashboard
+          // projection. It can inspect the retained event-folding snapshot.
+          const snap = view.getFull?.(id) ?? view.get(id);
           if (!snap) return undefined;
           return {
             id: snap.id,
@@ -448,10 +454,10 @@ export class TakeoverView implements Component, Focusable {
       { toolsExpanded: options?.toolsExpanded },
     );
     this.unsubscribe = view.subscribeTo(id, () => {
-      this.refreshTicker(view.get(id), tui);
+      this.refreshTicker(view.getFull?.(id) ?? view.get(id), tui);
       this.scheduleRender(tui);
     });
-    this.refreshTicker(view.get(id), tui);
+    this.refreshTicker(view.getFull?.(id) ?? view.get(id), tui);
   }
 
   private refreshTicker(snap: SubagentSnapshot | undefined, tui: TUI) {

@@ -21,22 +21,24 @@ import {
   Effect,
   Exit,
   Fiber,
+  FiberSet,
   Layer,
   Result,
   Scope,
   Stream,
 } from "effect";
-import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
+import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
   LiveToolState,
+  ResultArtifactRef,
   RunOutcome,
   SpawnTask,
   SubagentEvent,
-  SubagentOrigin,
   SubagentMeta,
+  SubagentOrigin,
   SubagentSnapshot,
   SubagentStatus,
   TranscriptItem,
@@ -47,6 +49,14 @@ import {
   SendError,
   SpawnError,
 } from "./domain.ts";
+import { resultArtifactRefMatchesContent } from "./result-artifact.ts";
+import {
+  DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES,
+  projectSubagentSnapshots,
+  projectSubagentSnapshotsFromPrevious,
+  truncateUtf8Head,
+  truncateUtf8Tail,
+} from "./snapshot.ts";
 
 /** Model-spawned subagents get their own pool so a user aside cannot starve it. */
 export const MAX_RUNNING = 4;
@@ -70,11 +80,16 @@ export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
 const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
-const FINAL_TEXT_MAX_LENGTH = 1_024 * 1_024;
 const MAX_TRANSCRIPT_ITEMS = 512;
+const MAX_QUEUE_MESSAGES = 128;
+const MAX_RETAINED_FINAL_TEXT_BYTES = 1 * 1024 * 1024;
 
 function bounded(text: string) {
-  return text.slice(0, ERROR_TEXT_MAX_LENGTH);
+  return truncateUtf8Head(text, ERROR_TEXT_MAX_LENGTH);
+}
+
+function boundedFinalText(text: string) {
+  return truncateUtf8Head(text, MAX_RETAINED_FINAL_TEXT_BYTES);
 }
 
 function formatWatchdogTimeout(ms: number) {
@@ -82,7 +97,7 @@ function formatWatchdogTimeout(ms: number) {
 }
 
 function boundedTranscriptText(text: string) {
-  return text.slice(0, TRANSCRIPT_TEXT_MAX_LENGTH);
+  return truncateUtf8Head(text, TRANSCRIPT_TEXT_MAX_LENGTH);
 }
 
 function appendTranscript(snapshot: MutableSnapshot, item: TranscriptItem) {
@@ -123,15 +138,32 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
+  finalTextTruncated?: boolean;
+  resultArtifact?: ResultArtifactRef;
+  resultArtifactPending?: boolean;
+  artifactSaveFailed?: boolean;
   turns: number;
 }
 
 interface Entry {
+  /** Canonical state used to fold backend events and rehydrate takeover UI. */
   snapshot: MutableSnapshot;
+  /** Detached aggregate-bounded projection for ordinary readers and tools. */
+  projection?: SubagentSnapshot;
   session: SubagentSession;
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
+  /** Generation of the terminal result currently eligible for persistence. */
+  persistenceGeneration: number;
+  /** Number of manager-owned persistence jobs not yet finalized. */
+  persistencePending: number;
+  /** Generation whose writer owns the terminal pending/error flags. */
+  persistenceCurrentGeneration?: number;
+  /** Terminal generations with an outstanding writer. */
+  persistenceJobs: Set<number>;
+  /** True when no bounded projection can currently represent this entry. */
+  projectionUnavailable?: boolean;
   /** First-response watchdog timer for the active (or just-armed) run. */
   watchdogTimer?: ReturnType<typeof setTimeout>;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
@@ -141,11 +173,33 @@ interface Entry {
 
 // --- Read model ----------------------------------------------------------------
 
-/** Synchronous bridge for the TUI. Snapshots are live objects; do not mutate. */
+/** Synchronous bridge for bounded readers and the local takeover UI. */
 export interface SubagentReadModel {
+  /** Aggregate-bounded projection for dashboards and model-facing tools. */
   list(): ReadonlyArray<SubagentSnapshot>;
+  /** Aggregate-bounded projection for dashboards and model-facing tools. */
   get(id: string): SubagentSnapshot | undefined;
-  /** Native tool projection retained by the live child session, when present. */
+  /**
+   * Complete retained state for the local takeover UI. It is deliberately not
+   * used by model-facing tools, which consume the bounded projection above.
+   */
+  getFull?(id: string): SubagentSnapshot | undefined;
+  /**
+   * Canonical terminal-result fields for delivery only. This intentionally
+   * excludes transcript-like state from model-facing tool responses.
+   */
+  getResult?(
+    id: string,
+  ):
+    | Pick<
+        SubagentSnapshot,
+        | "finalText"
+        | "finalTextTruncated"
+        | "resultArtifact"
+        | "resultArtifactPending"
+        | "artifactSaveFailed"
+      >
+    | undefined;
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
   /** Any-change notification (footer status, dashboard). */
@@ -215,10 +269,20 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
   Effect.gen(function* () {
     const firstResponseTimeoutMs =
       config.firstResponseTimeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
+    const maxSnapshotBytes =
+      config.maxSnapshotBytes ?? DEFAULT_SUBAGENT_SNAPSHOT_MAX_BYTES;
+    if (!Number.isSafeInteger(maxSnapshotBytes) || maxSnapshotBytes <= 0) {
+      throw new Error("maxSnapshotBytes must be a positive safe integer");
+    }
     const registry = yield* BackendRegistry;
     // Detached forker for sync contexts (read-model commands, pruning) that
     // preserves the manager's services instead of using the global runtime.
     const runDetached = Effect.runForkWith(yield* Effect.context());
+    // Optional persistence is manager-owned work. FiberSet makes shutdown
+    // interrupt and observe pending writers; it does not make synchronous file
+    // operations preemptible or non-blocking on the event loop.
+    const persistenceFibers = yield* FiberSet.make();
+    const runPersistence = yield* FiberSet.runtime(persistenceFibers)();
 
     const entries = new Map<string, Entry>();
     const waitInterest = new Map<string, number>();
@@ -238,6 +302,100 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     let onSettled:
       | ((snap: SubagentSnapshot, consumed: boolean) => void)
       | undefined;
+
+    /** Keep the manager's read-model projection under one aggregate byte bound. */
+    const enforceSnapshotBudget = () => {
+      if (entries.size === 0) return;
+      const current = [...entries.values()].map(
+        (entry) => entry.snapshot as SubagentSnapshot,
+      );
+      const projected = projectSubagentSnapshots(current, maxSnapshotBytes);
+      if (!projected) {
+        throw new Error(
+          `Subagent snapshot aggregate exceeds the configured ${maxSnapshotBytes}-byte minimum identity budget`,
+        );
+      }
+      const projectedById = new Map(
+        projected.map((snapshot) => [snapshot.id, snapshot] as const),
+      );
+      for (const entry of entries.values()) {
+        const snapshot = projectedById.get(entry.snapshot.id);
+        if (!snapshot)
+          throw new Error("Projected subagent identity disappeared");
+        // Projection is disposable. Never write it back into the event-folding
+        // snapshot: takeover can then render the retained transcript in full.
+        entry.projection = snapshot;
+        entry.projectionUnavailable = false;
+      }
+    };
+
+    const projectionFailureText = (error: unknown) =>
+      bounded(error instanceof Error ? error.message : String(error)) ||
+      "bounded projection rebuild failed";
+
+    const tryEnforceSnapshotBudget = () => {
+      try {
+        enforceSnapshotBudget();
+        return true;
+      } catch (error) {
+        // Keep a bounded stale read model and overlay current lifecycle/result
+        // facts. Falling back to canonical state would make a cap failure
+        // return an unbounded response.
+        const current = [...entries.values()].map(
+          (entry) => entry.snapshot as SubagentSnapshot,
+        );
+        const previous = [...entries.values()].map((entry) => entry.projection);
+        const fallback = projectSubagentSnapshotsFromPrevious(
+          current,
+          previous,
+          maxSnapshotBytes,
+          projectionFailureText(error),
+        );
+        if (!fallback) return false;
+        const byId = new Map(
+          fallback.map((snapshot) => [snapshot.id, snapshot] as const),
+        );
+        for (const entry of entries.values()) {
+          const snapshot = byId.get(entry.snapshot.id);
+          if (!snapshot) {
+            entry.projection = undefined;
+            entry.projectionUnavailable = true;
+          } else {
+            entry.projection = snapshot;
+            entry.projectionUnavailable = false;
+          }
+        }
+        return true;
+      }
+    };
+
+    const cloneSnapshot = (
+      snapshot: SubagentSnapshot,
+      projection?: SubagentSnapshot["snapshot"],
+    ): SubagentSnapshot => ({
+      ...snapshot,
+      meta: { ...snapshot.meta },
+      usage: { ...snapshot.usage },
+      transcript: snapshot.transcript.map((item) =>
+        item.kind === "assistant"
+          ? { ...item, parts: item.parts.map((part) => ({ ...part })) }
+          : { ...item },
+      ),
+      liveAssistant: snapshot.liveAssistant
+        ? { ...snapshot.liveAssistant }
+        : undefined,
+      liveTools: snapshot.liveTools.map((tool) => ({ ...tool })),
+      queued: snapshot.queued.map((message) => ({ ...message })),
+      snapshot: projection
+        ? {
+            ...projection,
+            omitted: { ...projection.omitted },
+          }
+        : undefined,
+    });
+
+    const readProjection = (entry: Entry) =>
+      entry.projectionUnavailable ? undefined : entry.projection;
 
     const notify = (id?: string) => {
       const waiters = changeWaiters;
@@ -318,16 +476,48 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             entry.snapshot.errorText = current
               ? `${current}; ${receipt.message}`
               : receipt.message;
+            tryEnforceSnapshotBudget();
             notify(entry.snapshot.id);
           }),
         ),
         Effect.ignore,
       );
 
+    const registerEntry = (
+      id: string,
+      entry: Entry,
+    ): Effect.Effect<void, SpawnError> =>
+      Effect.try({
+        try: () => {
+          entries.set(id, entry);
+          if (!tryEnforceSnapshotBudget()) {
+            throw new Error(
+              `Subagent snapshot aggregate exceeds the configured ${maxSnapshotBytes}-byte minimum identity budget`,
+            );
+          }
+        },
+        catch: (error) =>
+          new SpawnError({
+            message: error instanceof Error ? error.message : String(error),
+          }),
+      }).pipe(
+        Effect.catch((error: SpawnError) =>
+          Effect.sync(() => entries.delete(id)).pipe(
+            Effect.andThen(closeEntryScope(entry)),
+            Effect.andThen(Effect.fail(error)),
+          ),
+        ),
+      );
+
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
       const candidates = [...entries.values()]
-        .filter((e) => !isBusy(e) && !waitInterest.has(e.snapshot.id))
+        .filter(
+          (e) =>
+            !isBusy(e) &&
+            !waitInterest.has(e.snapshot.id) &&
+            e.persistencePending === 0,
+        )
         .sort(
           (a, b) =>
             (a.snapshot.settledAt ?? a.snapshot.createdAt) -
@@ -342,6 +532,77 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       }
     };
 
+    /**
+     * Reserve optional exact-result recovery work before terminal notification.
+     * The returned starter is called only after the terminal state is published.
+     */
+    const prepareExactResultPersistence = (
+      entry: Entry,
+      text: string,
+    ): (() => void) | undefined => {
+      if (!text || !config.persistResultArtifact || disposed) return undefined;
+      const generation = entry.persistenceGeneration;
+      if (entry.persistenceJobs.has(generation)) return undefined;
+      entry.persistenceJobs.add(generation);
+      entry.persistencePending++;
+      entry.persistenceCurrentGeneration = generation;
+      entry.snapshot.resultArtifactPending = true;
+      entry.snapshot.artifactSaveFailed = undefined;
+
+      return () => {
+        let saved = false;
+        const currentTerminalRun = () =>
+          !disposed &&
+          entries.get(entry.snapshot.id) === entry &&
+          entry.persistenceGeneration === generation &&
+          entry.snapshot.status !== "running";
+        const persistence = Effect.gen(function* () {
+          // FiberSet owns this job. The yield keeps synchronous writer startup
+          // off the settlement stack, while the writer's event-loop caveat is
+          // explicit in the manager comment above.
+          yield* Effect.yieldNow;
+          if (!currentTerminalRun()) return;
+          const result = yield* Effect.tryPromise(() =>
+            Promise.resolve().then(() => config.persistResultArtifact!(text)),
+          ).pipe(Effect.result);
+          if (Result.isFailure(result)) return;
+          if (
+            !resultArtifactRefMatchesContent(result.success, text) ||
+            !currentTerminalRun()
+          )
+            return;
+          entry.snapshot.resultArtifact = result.success;
+          entry.snapshot.artifactSaveFailed = undefined;
+          saved = true;
+          tryEnforceSnapshotBudget();
+          notify(entry.snapshot.id);
+        }).pipe(
+          Effect.ensuring(
+            Effect.sync(() => {
+              entry.persistencePending = Math.max(
+                0,
+                entry.persistencePending - 1,
+              );
+              entry.persistenceJobs.delete(generation);
+              const currentJob =
+                entry.persistenceCurrentGeneration === generation;
+              if (currentJob) entry.persistenceCurrentGeneration = undefined;
+              if (currentTerminalRun() && currentJob) {
+                entry.snapshot.resultArtifactPending = undefined;
+                if (!saved && !entry.snapshot.resultArtifact) {
+                  entry.snapshot.artifactSaveFailed = true;
+                }
+                tryEnforceSnapshotBudget();
+                notify(entry.snapshot.id);
+              }
+              pruneSettled();
+            }),
+          ),
+        );
+        runPersistence(persistence);
+      };
+    };
+
     const settle = (entry: Entry, outcome: RunOutcome) => {
       clearWatchdog(entry);
       const s = entry.snapshot;
@@ -351,51 +612,80 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         if (!wasRestarting) return;
         // A cancel can clear a queued restart before RunStarted reaches the
         // manager. Its RunSettled still belongs to the new run, not the old
-        // settled snapshot, so promote the lifecycle before applying it.
+        entry.persistenceGeneration++;
+        entry.persistenceCurrentGeneration = undefined;
         s.status = "running";
         s.settledAt = undefined;
         s.errorText = undefined;
+        s.resultArtifact = undefined;
       }
       s.settledAt = Date.now();
+      let startPersistence: (() => void) | undefined;
       switch (outcome._tag) {
-        case "Completed":
+        case "Completed": {
           s.status = "done";
           s.outcome = "completed";
           s.errorText = undefined;
-          s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
+          s.finalText = outcome.finalText;
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
-        case "Failed":
+        }
+        case "Failed": {
           s.status = "error";
           s.outcome = "failed";
           s.errorText = bounded(outcome.errorText);
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
           // Never let a failed run report the previous run's successful output.
-          s.finalText = (outcome.partialText ?? "").slice(
-            0,
-            FINAL_TEXT_MAX_LENGTH,
-          );
+          s.finalText = outcome.partialText ?? "";
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
-        case "Interrupted":
+        }
+        case "Interrupted": {
           s.status = "error";
           s.outcome = "interrupted";
           s.errorText = "Run was aborted";
-          s.finalText = (outcome.partialText ?? "").slice(
-            0,
-            FINAL_TEXT_MAX_LENGTH,
-          );
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
+          s.finalText = outcome.partialText ?? "";
+          s.finalTextTruncated =
+            Buffer.byteLength(s.finalText, "utf8") >
+            MAX_RETAINED_FINAL_TEXT_BYTES;
+          startPersistence = prepareExactResultPersistence(entry, s.finalText);
+          s.finalText = boundedFinalText(s.finalText);
           break;
+        }
       }
       s.liveAssistant = undefined;
       entry.liveToolMap.clear();
       s.liveTools = [];
       s.queued = [];
       const consumed = (waitInterest.get(s.id) ?? 0) > 0;
+      // Projection failure is independent from canonical terminal state.
+      tryEnforceSnapshotBudget();
+      const settledSnapshot = cloneSnapshot(s);
       notify(s.id);
       try {
         // During teardown, don't queue results into a shutting-down session.
-        if (!disposed) onSettled?.(s, consumed);
+        if (!disposed) onSettled?.(settledSnapshot, consumed);
       } catch {
         // The parent session may be unavailable; settlement stays final.
       }
+      // Start persistence only after terminal observers and waiters have run.
+      startPersistence?.();
       pruneSettled();
     };
 
@@ -442,10 +732,16 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       switch (event._tag) {
         case "RunStarted":
           entry.restarting = false;
+          entry.persistenceGeneration++;
+          entry.persistenceCurrentGeneration = undefined;
           s.status = "running";
           s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
+          s.resultArtifact = undefined;
+          s.resultArtifactPending = undefined;
+          s.artifactSaveFailed = undefined;
+          s.finalTextTruncated = undefined;
           armWatchdog(entry);
           break;
         case "RunSettled":
@@ -464,14 +760,16 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             event.kind === "text"
               ? {
                   ...live,
-                  text: (live.text + event.delta).slice(
-                    -LIVE_ASSISTANT_MAX_LENGTH,
+                  text: truncateUtf8Tail(
+                    live.text + event.delta,
+                    LIVE_ASSISTANT_MAX_LENGTH,
                   ),
                 }
               : {
                   ...live,
-                  thinking: (live.thinking + event.delta).slice(
-                    -LIVE_ASSISTANT_MAX_LENGTH,
+                  thinking: truncateUtf8Tail(
+                    live.thinking + event.delta,
+                    LIVE_ASSISTANT_MAX_LENGTH,
                   ),
                 };
           break;
@@ -497,7 +795,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         case "ToolStart":
           entry.liveToolMap.set(event.toolId, {
             toolId: event.toolId,
-            name: event.name,
+            name: boundedTranscriptText(event.name),
             argsPreview: event.argsPreview
               ? boundedTranscriptText(event.argsPreview)
               : undefined,
@@ -523,7 +821,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           appendTranscript(s, {
             kind: "toolResult",
             toolId: event.toolId,
-            name: event.name,
+            name: boundedTranscriptText(event.name),
             isError: event.isError,
             outputPreview: event.outputPreview
               ? boundedTranscriptText(event.outputPreview)
@@ -531,7 +829,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           });
           break;
         case "QueueChanged":
-          s.queued = event.queued;
+          s.queued = event.queued.slice(-MAX_QUEUE_MESSAGES).map((message) => ({
+            kind: message.kind,
+            text: boundedTranscriptText(message.text),
+          }));
           break;
         case "UsageChanged":
           s.usage = {
@@ -546,6 +847,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.errorText = bounded(event.message);
           break;
       }
+      tryEnforceSnapshotBudget();
       notify(s.id);
     };
 
@@ -621,8 +923,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             session,
             scope,
             liveToolMap: new Map(),
+            persistenceGeneration: 0,
+            persistencePending: 0,
+            persistenceJobs: new Set(),
           };
-          entries.set(id, entry);
+          yield* registerEntry(id, entry);
           // The run is live from the caller's perspective before RunStarted
           // reaches the pump; guard that window too.
           armWatchdog(entry);
@@ -647,7 +952,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           entry.pump = yield* Scope.provide(Effect.forkScoped(pump), scope);
 
           notify(id);
-          return entry.snapshot as SubagentSnapshot;
+          return entry.projection as SubagentSnapshot;
         });
 
         return yield* doSpawn.pipe(
@@ -690,11 +995,13 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const abortEntry = (entry: Entry) =>
       Effect.gen(function* () {
         if (!isBusy(entry)) return;
+        const startedAt = Date.now();
         const graceful = yield* entry.session.interrupt.pipe(
           Effect.timeout(STOP_TIMEOUT_MS),
           Effect.result,
         );
-        if (Result.isFailure(graceful)) {
+        const abortDeadlineExceeded = Date.now() - startedAt >= STOP_TIMEOUT_MS;
+        if (Result.isFailure(graceful) || abortDeadlineExceeded) {
           // Settle before closing the scope so the pump's stream-ended
           // fallback ("Backend event stream ended unexpectedly") cannot win
           // the race and report the wrong terminal reason.
@@ -702,6 +1009,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             settle(entry, { _tag: "Interrupted" });
             entry.snapshot.errorText =
               "Abort deadline exceeded; session was force-disposed";
+            tryEnforceSnapshotBudget();
             notify(entry.snapshot.id);
           });
           // Bound the close like disposeAll does: a stuck backend finalizer
@@ -776,6 +1084,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // both pass the check in that window. Cleared by RunStarted/settle,
           // or here when the backend rejects the send.
           entry.restarting = true;
+          // Keep the persistence generation unchanged until RunStarted proves
+          // that a new run exists. This lets the previous terminal writer
+          // finish if the restart send is rejected, while RunStarted still
+          // invalidates it before an accepted new run can settle.
+          // Keep the previous terminal result until RunStarted proves that a
+          // new run exists. If send is rejected, the old result remains valid.
           // A backend that accepts the send but never starts the run would
           // hold the slot forever; guard the restart window the same way the
           // spawn path guards its pre-RunStarted window.
@@ -784,6 +1098,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             Effect.onError(() =>
               Effect.sync(() => {
                 entry.restarting = false;
+                clearWatchdog(entry);
                 notify(entry.snapshot.id);
               }),
             ),
@@ -793,9 +1108,24 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       });
 
     const disposeAll = Effect.gen(function* () {
+      if (disposed) return;
       disposed = true;
       const all = [...entries.values()];
-      for (const entry of all) clearWatchdog(entry);
+      for (const entry of all) {
+        clearWatchdog(entry);
+        entry.persistenceGeneration++;
+        entry.persistenceCurrentGeneration = undefined;
+      }
+      // Stop manager-owned persistence before removing entries. The disposed
+      // flag and generation bump make any completion callback fail closed.
+      yield* FiberSet.clear(persistenceFibers).pipe(
+        Effect.timeout(STOP_TIMEOUT_MS),
+        Effect.ignore,
+      );
+      yield* FiberSet.awaitEmpty(persistenceFibers).pipe(
+        Effect.timeout(STOP_TIMEOUT_MS),
+        Effect.ignore,
+      );
       entries.clear();
       yield* Effect.forEach(
         all,
@@ -821,8 +1151,37 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     });
 
     const view: SubagentReadModel = {
-      list: () => [...entries.values()].map((entry) => entry.snapshot),
-      get: (id) => entries.get(id)?.snapshot,
+      list: () =>
+        [...entries.values()].flatMap((entry) => {
+          const projection = readProjection(entry);
+          return projection ? [projection] : [];
+        }),
+      get: (id) => {
+        const entry = entries.get(id);
+        return entry ? readProjection(entry) : undefined;
+      },
+      getFull: (id) =>
+        entries.get(id)?.snapshot as SubagentSnapshot | undefined,
+      getResult: (id) => {
+        const snapshot = entries.get(id)?.snapshot;
+        return snapshot
+          ? {
+              finalText: snapshot.finalText,
+              ...(snapshot.finalTextTruncated
+                ? { finalTextTruncated: true }
+                : {}),
+              ...(snapshot.resultArtifact
+                ? { resultArtifact: snapshot.resultArtifact }
+                : {}),
+              ...(snapshot.resultArtifactPending
+                ? { resultArtifactPending: true }
+                : {}),
+              ...(snapshot.artifactSaveFailed
+                ? { artifactSaveFailed: true }
+                : {}),
+            }
+          : undefined;
+      },
       getToolRenderer: (id) => entries.get(id)?.session.toolRenderer,
       size: () => entries.size,
       subscribe: (listener) => {
@@ -865,8 +1224,17 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       waitFor,
       cancel,
       send,
-      get: (id) => Effect.sync(() => entries.get(id)?.snapshot),
-      list: Effect.sync(() => [...entries.values()].map((e) => e.snapshot)),
+      get: (id) =>
+        Effect.sync(() => {
+          const entry = entries.get(id);
+          return entry ? readProjection(entry) : undefined;
+        }),
+      list: Effect.sync(() =>
+        [...entries.values()].flatMap((entry) => {
+          const projection = readProjection(entry);
+          return projection ? [projection] : [];
+        }),
+      ),
       disposeAll,
       view,
     });
@@ -875,6 +1243,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
 export interface SubagentManagerConfig {
   /** Test-only override for the first-response watchdog timeout. */
   firstResponseTimeoutMs?: number;
+  /** Aggregate UTF-8 budget for all live/settled read-model snapshots. */
+  maxSnapshotBytes?: number;
+  /** Persist an exact terminal result before the in-memory projection is cut. */
+  persistResultArtifact?: (
+    content: string,
+  ) => ResultArtifactRef | PromiseLike<ResultArtifactRef>;
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;

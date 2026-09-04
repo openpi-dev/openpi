@@ -229,7 +229,7 @@ export function buildSubagentSpawnResult(options: {
   return (
     `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}\n` +
     `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
-    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
+    `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_result pages a settled exact result by id, subagent_list shows all.`
   );
 }
 
@@ -279,6 +279,19 @@ export const SUBAGENT_CHECK_TOOL_DESCRIPTION =
 /** Model-facing schema description for the subagent id to inspect. */
 export const SUBAGENT_CHECK_PARAMETER_DESCRIPTIONS = {
   id: "Subagent id",
+};
+
+/** Describes bounded, path-free reads of a settled exact result. */
+export const SUBAGENT_RESULT_TOOL_DESCRIPTION =
+  "Read a bounded page of a settled subagent's exact final result by id. Use offset/limit for lines, or byteOffset to continue a split long line; byteOffset is a UTF-8 boundary and cannot be combined with offset. It never accepts or returns a filesystem path.";
+
+/** Model-facing schema descriptions for exact result paging. */
+export const SUBAGENT_RESULT_PARAMETER_DESCRIPTIONS = {
+  id: 'Subagent id to read, e.g. "sa-1"',
+  offset: "Zero-based line offset in the exact final result.",
+  limit: "Maximum number of lines to return, from 1 through 200.",
+  byteOffset:
+    "UTF-8 byte cursor for continuing a split line; use the returned nextByteOffset.",
 };
 
 /** Describes listing all tracked running and settled subagents. */

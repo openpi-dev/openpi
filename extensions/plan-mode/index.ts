@@ -189,6 +189,7 @@ export const PLAN_SAFE_TOOLS = new Set([
   "subagent_check",
   "subagent_list",
   "subagent_wait",
+  "subagent_result",
   "workflow_status",
   // Delegated investigation. Exploring several subsystems in parallel without
   // dragging the noise into the main context is one of the most useful things

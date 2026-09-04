@@ -465,6 +465,7 @@ export const CHILD_EXCLUDED_TOOL_NAMES = [
   "subagent_send",
   "subagent_check",
   "subagent_list",
+  "subagent_result",
   // workflows — children cannot recursively orchestrate or manage runs
   "workflow",
   "workflow_stop",

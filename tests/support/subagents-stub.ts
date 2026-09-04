@@ -10,6 +10,7 @@
  * - supports interrupt (RunSettled Interrupted -> status "error", matching v1);
  * - fails the run when the prompt starts with "FAIL:", and refuses to spawn
  *   at all when it starts with "SPAWNFAIL:" (error-path testing);
+ * - refuses a steer when the message starts with "SENDFAIL:";
  * - hangs the run after RunStarted without any assistant event when the
  * prompt starts with "HANG:" (first-response watchdog testing);
  * - appends every event to a JSONL "session file" in tmpdir so the
@@ -147,26 +148,33 @@ const makeStubSession = (
             { type: "toolCall", toolId, name: profile.toolName, argsPreview },
           ],
         });
-        yield* emit({
-          _tag: "ToolStart",
-          toolId,
-          name: profile.toolName,
-          argsPreview,
-        });
+        const toolIds = userText.trimStart().startsWith("MANYTOOLS:")
+          ? Array.from({ length: 130 }, (_, index) => `${toolId}-${index}`)
+          : [toolId];
+        for (const activeToolId of toolIds) {
+          yield* emit({
+            _tag: "ToolStart",
+            toolId: activeToolId,
+            name: profile.toolName,
+            argsPreview,
+          });
+        }
         yield* pause;
         yield* emit({
           _tag: "ToolUpdate",
-          toolId,
+          toolId: toolIds[0]!,
           outputPreview: "src docs package.json",
         });
         yield* pause;
-        yield* emit({
-          _tag: "ToolEnd",
-          toolId,
-          name: profile.toolName,
-          isError: false,
-          outputPreview: "src docs package.json",
-        });
+        for (const activeToolId of toolIds) {
+          yield* emit({
+            _tag: "ToolEnd",
+            toolId: activeToolId,
+            name: profile.toolName,
+            isError: false,
+            outputPreview: "src docs package.json",
+          });
+        }
         yield* emit({
           _tag: "UsageChanged",
           tokens: Math.min(profile.contextWindow, 2400 * (turn + 1)),
@@ -252,6 +260,17 @@ const makeStubSession = (
         if (state.closed) {
           return yield* new SendError({
             message: "Subagent session is closed.",
+          });
+        }
+        if (text.trimStart().startsWith("SENDFAIL-DELAY:")) {
+          yield* Effect.sleep(Duration.millis(20));
+          return yield* new SendError({
+            message: "stub refused to send",
+          });
+        }
+        if (text.trimStart().startsWith("SENDFAIL:")) {
+          return yield* new SendError({
+            message: "stub refused to send",
           });
         }
         state.pending.push(text);

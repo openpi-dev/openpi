@@ -139,6 +139,33 @@ export interface QueuedMessage {
   readonly kind: "steer" | "follow-up";
 }
 
+/** Path-free identity of an exact terminal-result cache entry. */
+export interface ResultArtifactRef {
+  readonly version: 1;
+  /** Lowercase SHA-256 digest of the UTF-8 artifact content. */
+  readonly digest: string;
+}
+
+/** Why a live snapshot does not contain the complete child conversation. */
+export interface SubagentSnapshotProjection {
+  readonly maxBytes: number;
+  readonly bytes: number;
+  readonly truncated: boolean;
+  readonly omittedBytes: number;
+  readonly omitted: {
+    readonly transcriptItems: number;
+    readonly liveTools: number;
+    readonly queued: number;
+    readonly liveAssistantBytes: number;
+    readonly finalTextBytes: number;
+    readonly promptBytes: number;
+  };
+  /** True when this bounded view is the last committed projection after a rebuild failure. */
+  readonly projectionStale?: boolean;
+  /** Bounded diagnostic for a failed projection rebuild. */
+  readonly projectionError?: string;
+}
+
 // --- Events ------------------------------------------------------------------
 
 export type RunOutcome =
@@ -232,8 +259,22 @@ export interface SubagentSnapshot {
   readonly queued: ReadonlyArray<QueuedMessage>;
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
+  /** True when finalText is only a bounded retained prefix. */
+  readonly finalTextTruncated?: boolean;
+  /** Content-addressed exact result, when the bounded projection omitted text. */
+  readonly resultArtifact?: ResultArtifactRef;
+  /** True while manager-owned exact-result persistence is still running. */
+  readonly resultArtifactPending?: boolean;
+  /** True when optional exact-result persistence failed for this terminal run. */
+  readonly artifactSaveFailed?: boolean;
+  /** True when no bounded display projection could be built for this entry. */
+  readonly projectionUnavailable?: boolean;
+  /** Bounded diagnostic for an unavailable display projection. */
+  readonly projectionError?: string;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
+  /** Aggregate UTF-8 budget metadata for this in-memory projection. */
+  readonly snapshot?: SubagentSnapshotProjection;
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */

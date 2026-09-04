@@ -6,28 +6,30 @@
  */
 
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import test from "node:test";
 import { Effect, Layer, ManagedRuntime } from "effect";
 import {
   BackendRegistry,
   type SubagentBackend,
 } from "../../../extensions/subagents/src/backend.ts";
-import { makeStubBackend } from "../../support/subagents-stub.ts";
 import type {
   BackendName,
   ParentContext,
+  ResultArtifactRef,
   SpawnTask,
   SubagentStatus,
 } from "../../../extensions/subagents/src/domain.ts";
 import {
-  makeSubagentManagerLayer,
   MAX_RUNNING,
   MAX_RUNNING_BTW,
+  makeSubagentManagerLayer,
   SubagentManager,
   type SubagentManagerConfig,
   type SubagentManagerShape,
 } from "../../../extensions/subagents/src/manager.ts";
 import { runTool } from "../../../extensions/subagents/src/runtime.ts";
+import { makeStubBackend } from "../../support/subagents-stub.ts";
 
 const STATUS_WAIT_TIMEOUT_MS = 5_000;
 
@@ -127,6 +129,13 @@ const parent: ParentContext = {
   projectTrusted: false,
 };
 
+function resultArtifactRef(content: string): ResultArtifactRef {
+  return {
+    version: 1,
+    digest: createHash("sha256").update(content, "utf8").digest("hex"),
+  };
+}
+
 function task(prompt: string): SpawnTask {
   return { prompt, title: "test", cwd: process.cwd(), parent };
 }
@@ -195,6 +204,414 @@ test("stub subagent completes and delivers a final result", async () => {
     // The waitFor marked the settle as consumed.
     assert.deepEqual(settled, [{ id: snap.id, consumed: true }]);
   });
+});
+
+test("terminal settlement publishes before exact-result persistence completes", async () => {
+  let persisted: string | undefined;
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  let writerFinishedResolve: (() => void) | undefined;
+  const writerFinished = new Promise<void>((resolve) => {
+    writerFinishedResolve = resolve;
+  });
+  let settlementObserved = false;
+  await withManager(
+    async (manager, runtime) => {
+      manager.view.setOnSettled((snap) => {
+        settlementObserved = true;
+        assert.equal(snap.resultArtifact, undefined);
+        assert.equal(snap.resultArtifactPending, true);
+        assert.match(snap.finalText, /Persist this exact result/);
+      });
+
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("Persist this exact result")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+      assert.equal(settlementObserved, true);
+      assert.equal(manager.view.get(snap.id)?.status, "done");
+
+      await writerStarted;
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, true);
+      assert.equal(persisted, undefined);
+
+      const persistenceFinished = new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timer = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for artifact persistence"));
+        }, STATUS_WAIT_TIMEOUT_MS);
+        const observe = () => {
+          const current = manager.view.get(snap.id);
+          if (current?.resultArtifactPending || !current?.resultArtifact)
+            return;
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        };
+        unsubscribe = manager.view.subscribeTo(snap.id, observe);
+        observe();
+      });
+      releaseWriter?.();
+      await writerFinished;
+      await persistenceFinished;
+      assert.match(persisted ?? "", /Persist this exact result/);
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, undefined);
+    },
+    {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
+        persisted = content;
+        writerFinishedResolve?.();
+        return resultArtifactRef(content);
+      },
+    },
+  );
+});
+
+test("artifact cache failures cannot block settlement, waiters, or result delivery", async () => {
+  let writerCalls = 0;
+  await withManager(
+    async (manager, runtime) => {
+      const settled: Array<{
+        status: SubagentStatus;
+        resultArtifact?: ResultArtifactRef;
+        finalText: string;
+      }> = [];
+      manager.view.setOnSettled((snap) => {
+        settled.push({
+          status: snap.status,
+          resultArtifact: snap.resultArtifact,
+          finalText: snap.finalText,
+        });
+      });
+
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("deliver despite cache failure")),
+      );
+      const notifications: SubagentStatus[] = [];
+      const unsubscribe = manager.view.subscribeTo(snap.id, () => {
+        const status = manager.view.get(snap.id)?.status;
+        if (status) notifications.push(status);
+      });
+      await runTool(runtime, manager.waitFor([snap.id]));
+      unsubscribe();
+
+      const done = manager.view.get(snap.id);
+      assert.equal(done?.status, "done");
+      assert.equal(done?.resultArtifact, undefined);
+      assert.ok(notifications.includes("done"));
+      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      assert.equal(writerCalls, 1);
+      assert.deepEqual(
+        settled.map(({ status, resultArtifact }) => ({
+          status,
+          resultArtifact,
+        })),
+        [{ status: "done", resultArtifact: undefined }],
+      );
+      assert.match(settled[0]?.finalText ?? "", /cache failure/);
+
+      // The terminal event still releases capacity for a new run.
+      const fresh = await runTool(
+        runtime,
+        manager.spawn("pi", task("next run")),
+      );
+      assert.equal(fresh.status, "running");
+    },
+    {
+      persistResultArtifact: () => {
+        writerCalls++;
+        throw new Error("result cache cleanup failed");
+      },
+    },
+  );
+});
+
+test("dispose stops manager-owned persistence without waiting for an uncancellable writer", async () => {
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  let writerFinishedResolve: (() => void) | undefined;
+  const writerFinished = new Promise<void>((resolve) => {
+    writerFinishedResolve = resolve;
+  });
+
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("dispose during exact persistence")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+      await writerStarted;
+      assert.equal(manager.view.get(snap.id)?.resultArtifactPending, true);
+
+      const disposeStarted = Date.now();
+      await Promise.race([
+        runtime.runPromise(manager.disposeAll),
+        new Promise<never>((_, reject) =>
+          setTimeout(
+            () => reject(new Error("disposeAll waited for the writer")),
+            1_000,
+          ),
+        ),
+      ]);
+      assert.ok(Date.now() - disposeStarted < 1_000);
+      assert.equal(manager.view.size(), 0);
+
+      releaseWriter?.();
+      await writerFinished;
+    },
+    {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
+        writerFinishedResolve?.();
+        return resultArtifactRef(content);
+      },
+    },
+  );
+});
+test("an unrepresentable artifact reference cannot block settlement", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const settled: SubagentStatus[] = [];
+      manager.view.setOnSettled((snap) => settled.push(snap.status));
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("deliver despite an oversized artifact path")),
+      );
+
+      await runTool(runtime, manager.waitFor([snap.id]));
+      const done = manager.view.get(snap.id);
+      assert.equal(done?.status, "done");
+      assert.equal(done?.resultArtifact, undefined);
+      assert.deepEqual(settled, ["done"]);
+    },
+    {
+      maxSnapshotBytes: 4_096,
+      persistResultArtifact: () =>
+        ({
+          version: 1,
+          digest: "x".repeat(16 * 1024),
+        }) as unknown as ResultArtifactRef,
+    },
+  );
+});
+
+test("a valid-looking artifact reference must match the settled text", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const settled: Array<{ status: SubagentStatus; finalText: string }> = [];
+      manager.view.setOnSettled((snap) =>
+        settled.push({ status: snap.status, finalText: snap.finalText }),
+      );
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("reject a mismatched artifact reference")),
+      );
+      const notifications: SubagentStatus[] = [];
+      const unsubscribe = manager.view.subscribeTo(snap.id, () => {
+        const status = manager.view.get(snap.id)?.status;
+        if (status) notifications.push(status);
+      });
+      await runTool(runtime, manager.waitFor([snap.id]));
+      unsubscribe();
+      const done = manager.view.get(snap.id);
+      assert.equal(done?.status, "done");
+      assert.equal(done?.resultArtifact, undefined);
+      assert.match(done?.finalText ?? "", /mismatched artifact reference/);
+      assert.ok(notifications.includes("done"));
+      assert.equal(settled[0]?.status, "done");
+      assert.match(
+        settled[0]?.finalText ?? "",
+        /mismatched artifact reference/,
+      );
+      const fresh = await runTool(
+        runtime,
+        manager.spawn("pi", task("slot released after wrong digest")),
+      );
+      assert.equal(fresh.status, "running");
+    },
+    {
+      persistResultArtifact: () => resultArtifactRef("different content"),
+    },
+  );
+});
+
+test("bounded projections leave the takeover snapshot intact", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("MANYTOOLS: keep all takeover activity")),
+      );
+      await new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timer = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for takeover activity"));
+        }, STATUS_WAIT_TIMEOUT_MS);
+        const observe = () => {
+          if ((manager.view.getFull?.(snap.id)?.liveTools.length ?? 0) < 130)
+            return;
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        };
+        unsubscribe = manager.view.subscribeTo(snap.id, observe);
+        observe();
+      });
+
+      const projected = manager.view.get(snap.id);
+      const full = manager.view.getFull?.(snap.id);
+      assert.ok(projected?.snapshot?.truncated);
+      assert.ok(full);
+      assert.equal(full.liveTools.length, 130);
+      assert.ok(projected.liveTools.length < full.liveTools.length);
+
+      await runTool(runtime, manager.waitFor([snap.id]));
+    },
+    { maxSnapshotBytes: 4_096 },
+  );
+});
+
+test("manager keeps a bounded stale projection when a rebuild fails", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("projection failure fallback")),
+      );
+      const full = manager.view.getFull?.(snap.id);
+      assert.ok(full);
+      Object.assign(full, { snapshot: { omitted: undefined } });
+
+      await runTool(runtime, manager.cancel([snap.id]));
+      await new Promise<void>((resolve, reject) => {
+        let unsubscribe = () => {};
+        const timer = setTimeout(() => {
+          unsubscribe();
+          reject(new Error("Timed out waiting for stale projection"));
+        }, STATUS_WAIT_TIMEOUT_MS);
+        const observe = () => {
+          const projection = manager.view.get(snap.id)?.snapshot;
+          if (!projection?.projectionStale) return;
+          clearTimeout(timer);
+          unsubscribe();
+          resolve();
+        };
+        unsubscribe = manager.view.subscribeTo(snap.id, observe);
+        observe();
+      });
+
+      const projected = manager.view.get(snap.id);
+      assert.ok(projected);
+      assert.equal(projected.snapshot?.projectionStale, true);
+      assert.match(
+        projected.snapshot?.projectionError ?? "",
+        /cannot read|undefined/,
+      );
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(manager.view.list()), "utf8") <= 4_096,
+      );
+      assert.equal(manager.view.getFull?.(snap.id), full);
+    },
+    { maxSnapshotBytes: 4_096 },
+  );
+});
+test("an unavailable projection keeps the settled subagent discoverable", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(
+        runtime,
+        manager.spawn("pi", task("projection minimum budget")),
+      );
+      await runTool(runtime, manager.waitFor([snap.id]));
+
+      const projected = manager.view.get(snap.id);
+      assert.ok(
+        projected,
+        "an existing entry must not disappear from view.get",
+      );
+      assert.equal(projected.id, snap.id);
+      assert.equal(projected.status, "done");
+      assert.equal(manager.view.list().length, 1);
+      assert.ok(
+        Buffer.byteLength(JSON.stringify(manager.view.list()), "utf8") <= 442,
+      );
+    },
+    { maxSnapshotBytes: 442 },
+  );
+});
+
+test("a failed aggregate-cap spawn preserves existing projections", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const first = await runTool(
+        runtime,
+        manager.spawn("pi", task("keep existing projection")),
+      );
+      await assert.rejects(
+        runTool(runtime, manager.spawn("pi", task("cannot fit another entry"))),
+        /minimum identity budget/,
+      );
+      assert.equal(manager.view.get(first.id)?.id, first.id);
+      assert.equal(manager.view.list().length, 1);
+    },
+    { maxSnapshotBytes: 442 },
+  );
+});
+
+test("activity projection never drops raw active tool ids", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("MANYTOOLS: preserve active tool ids")),
+    );
+    await new Promise<void>((resolve, reject) => {
+      let unsubscribe = () => {};
+      const timer = setTimeout(() => {
+        unsubscribe();
+        reject(new Error("Timed out waiting for all active tools"));
+      }, STATUS_WAIT_TIMEOUT_MS);
+      const observe = () => {
+        if ((manager.view.get(snap.id)?.liveTools.length ?? 0) < 130) return;
+        clearTimeout(timer);
+        unsubscribe();
+        resolve();
+      };
+      unsubscribe = manager.view.subscribeTo(snap.id, observe);
+      observe();
+    });
+    await runTool(runtime, manager.waitFor([snap.id]));
+  });
+});
+
+test("an impossible snapshot cap rejects spawn without retaining the entry", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      await assert.rejects(
+        runTool(runtime, manager.spawn("pi", task("Too little room"))),
+        /minimum identity budget/,
+      );
+      assert.equal(manager.view.size(), 0);
+    },
+    { maxSnapshotBytes: 32 },
+  );
 });
 
 test("FAIL: prompts settle as errors; unconsumed settles are delivered", async () => {
@@ -437,6 +854,90 @@ test("restarting a settled subagent settles again so its result re-delivers", as
   });
 });
 
+test("a rejected restart converges after the previous writer finishes first", async () => {
+  let releaseWriter: (() => void) | undefined;
+  let writerStartedResolve: (() => void) | undefined;
+  const writerStarted = new Promise<void>((resolve) => {
+    writerStartedResolve = resolve;
+  });
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+      await writerStarted;
+
+      const restart = runTool(
+        runtime,
+        manager.send(snap.id, "SENDFAIL-DELAY: reject restart after writer"),
+      );
+      releaseWriter?.();
+      await assert.rejects(restart, /stub refused to send/);
+
+      await waitForManagerStatus(
+        manager,
+        snap.id,
+        "clear persistence state after rejected restart",
+        (status) => status === "done",
+      );
+      const after = manager.view.get(snap.id);
+      assert.equal(after?.status, "done");
+      assert.equal(after?.resultArtifactPending, undefined);
+      assert.equal(after?.artifactSaveFailed, undefined);
+      assert.match(after?.finalText ?? "", /First/);
+    },
+    {
+      persistResultArtifact: async (content) => {
+        writerStartedResolve?.();
+        await new Promise<void>((resolve) => {
+          releaseWriter = resolve;
+        });
+        return resultArtifactRef(content);
+      },
+    },
+  );
+});
+
+test("a rejected idle restart preserves the previous terminal artifact", async () => {
+  await withManager(
+    async (manager, runtime) => {
+      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
+      await runTool(runtime, manager.waitFor([snap.id]));
+
+      const first = manager.view.get(snap.id);
+      assert.equal(first?.status, "done");
+      const firstArtifact = await new Promise<ResultArtifactRef>(
+        (resolve, reject) => {
+          let unsubscribe = () => {};
+          const timer = setTimeout(() => {
+            unsubscribe();
+            reject(new Error("Timed out waiting for the first artifact"));
+          }, STATUS_WAIT_TIMEOUT_MS);
+          const observe = () => {
+            const artifact = manager.view.get(snap.id)?.resultArtifact;
+            if (!artifact) return;
+            clearTimeout(timer);
+            unsubscribe();
+            resolve(artifact);
+          };
+          unsubscribe = manager.view.subscribeTo(snap.id, observe);
+          observe();
+        },
+      );
+
+      await assert.rejects(
+        runTool(runtime, manager.send(snap.id, "SENDFAIL: reject restart")),
+        /stub refused to send/,
+      );
+      const after = manager.view.get(snap.id);
+      assert.equal(after?.status, "done");
+      assert.deepEqual(after?.resultArtifact, firstArtifact);
+      assert.equal(after?.resultArtifactPending, undefined);
+      assert.equal(after?.artifactSaveFailed, undefined);
+      assert.equal(after?.finalText, first?.finalText);
+    },
+    { persistResultArtifact: (content) => resultArtifactRef(content) },
+  );
+});
 test("send steers an idle subagent into another turn", async () => {
   await withManager(async (manager, runtime) => {
     const snap = await runTool(

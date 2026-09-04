@@ -63,6 +63,7 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_send",
     "subagent_check",
     "subagent_list",
+    "subagent_result",
   ]);
 
   h.pi.setActiveTools([...h.active(), "late_third_party_tool"]);
@@ -78,6 +79,7 @@ test("owner patch starts from the latest tool list and preserves foreign tools",
     "subagent_send",
     "subagent_check",
     "subagent_list",
+    "subagent_result",
     "late_third_party_tool",
     "subagent_wait",
   ]);
@@ -234,6 +236,7 @@ test("catalog defines the compact parent entry surface and every managed name on
     "subagent_send",
     "subagent_check",
     "subagent_list",
+    "subagent_result",
   ]);
   assert.deepEqual(OPENPI_TOOL_SURFACE.subagents.deferred, []);
 });
