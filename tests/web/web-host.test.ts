@@ -93,6 +93,25 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       sessionTrusted: false,
       refreshRequired: false,
     }),
+    listProviderAuth: () => ({
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
+    }),
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -252,6 +271,30 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       projectResources: true,
       sessionTrusted: false,
       refreshRequired: false,
+    });
+    const providerAuthResponse = await fetch(
+      `${launched.origin}/api/providers/auth-status`,
+      { headers: authorized },
+    );
+    assert.equal(providerAuthResponse.status, 200);
+    assert.deepEqual(await providerAuthResponse.json(), {
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
     });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
