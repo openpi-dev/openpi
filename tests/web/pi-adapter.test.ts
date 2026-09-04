@@ -233,6 +233,76 @@ test("first archive mutation preserves previously persisted archive metadata", a
   }
 });
 
+test("archived Session listing is queryable, cursor-bounded, and stale-safe", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-archived-list-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.inMemory(root);
+    const alphaOne = SessionManager.create(root, sessionDirectory);
+    persistSession(alphaOne, "alpha first", 1);
+    alphaOne.appendSessionInfo("Alpha One");
+    const alphaTwo = SessionManager.create(root, sessionDirectory);
+    persistSession(alphaTwo, "alpha second", 2);
+    alphaTwo.appendSessionInfo("Alpha Two");
+    const beta = SessionManager.create(root, sessionDirectory);
+    persistSession(beta, "beta only", 3);
+    beta.appendSessionInfo("Beta");
+    const paths = [
+      alphaOne.getSessionFile(),
+      alphaTwo.getSessionFile(),
+      beta.getSessionFile(),
+    ];
+    assert.ok(paths.every((path) => path !== undefined));
+
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    for (const path of paths) await adapter.archiveSession(path!);
+
+    const first = await adapter.listArchivedSessions({
+      query: "ALPHA",
+      limit: 1,
+    });
+    assert.equal(first.status, "ok");
+    if (first.status !== "ok") return;
+    assert.equal(first.sessions.length, 1);
+    assert.equal(first.sessions[0]?.archived, true);
+    assert.ok(first.nextCursor);
+    assert.equal(first.truncation.matchesOmitted, 1);
+
+    const second = await adapter.listArchivedSessions({
+      query: "alpha",
+      limit: 1,
+      cursor: first.nextCursor,
+    });
+    assert.equal(second.status, "ok");
+    if (second.status !== "ok") return;
+    assert.equal(second.sessions.length, 1);
+    assert.equal(second.nextCursor, undefined);
+    assert.deepEqual(
+      new Set([...first.sessions, ...second.sessions].map((item) => item.id)),
+      new Set([alphaOne.getSessionId(), alphaTwo.getSessionId()]),
+    );
+
+    assert.deepEqual(
+      await adapter.listArchivedSessions({
+        cursor: first.nextCursor,
+        query: "different-query",
+      }),
+      { status: "stale_cursor" },
+    );
+    assert.deepEqual(
+      await adapter.listArchivedSessions({ cursor: "not-a-valid-cursor" }),
+      { status: "invalid" },
+    );
+    assert.deepEqual(await adapter.listArchivedSessions({ limit: 51 }), {
+      status: "invalid",
+    });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("corrupt package metadata fails closed without overwriting it", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-corrupt-state-"));
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-corrupt-import-"));

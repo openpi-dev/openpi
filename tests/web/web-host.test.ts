@@ -306,6 +306,30 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       truncated: false,
       sessionsOmitted: 0,
     });
+    const archivedSessionsResponse = await fetch(
+      `${launched.origin}/api/sessions/archived?limit=10&q=current`,
+      { headers: authorized },
+    );
+    assert.equal(archivedSessionsResponse.status, 200);
+    assert.deepEqual(await archivedSessionsResponse.json(), {
+      sessions: [],
+      truncation: {
+        truncated: false,
+        matchesOmitted: 0,
+        recordsUnscanned: 0,
+        maxPageSize: 50,
+        maxScanned: 5_000,
+      },
+    });
+    const invalidArchiveQuery = await fetch(
+      `${launched.origin}/api/sessions/archived?limit=51`,
+      { headers: authorized },
+    );
+    assert.equal(invalidArchiveQuery.status, 400);
+    assert.deepEqual(await invalidArchiveQuery.json(), {
+      code: "INVALID_ARCHIVED_SESSION_QUERY",
+      error: "archived Session limit must be a bounded positive integer",
+    });
     const currentSessionPath = listedSessions.sessions[0]?.path;
     assert.ok(currentSessionPath);
     const sessionRename = await fetch(`${launched.origin}/api/sessions`, {
