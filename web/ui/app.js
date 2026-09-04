@@ -390,8 +390,17 @@ function messageMarkup(entry) {
   }
   if (message.role === "toolResult") {
     const toolName = message.toolName || "tool";
+    const kind = /(?:read|cat|file)/iu.test(toolName)
+      ? "file"
+      : /diff/iu.test(toolName)
+        ? "diff"
+        : /test/iu.test(toolName)
+          ? "test"
+          : /(?:bash|terminal|exec)/iu.test(toolName)
+            ? "terminal"
+            : "generic";
     const summary = compactSummary(message.content || "completed");
-    return `<article class="message-row assistant detail-only">
+    return `<article class="message-row assistant detail-only tool-kind-${kind}">
       <div class="message-content"><details class="message-details tool-details">
         <summary><span class="details-mark" aria-hidden="true"></span><span class="details-title">${escapeHtml(toolName)} · ${escapeHtml(summary)}</span></summary>
         <div class="details-body tool-evidence">${escapeHtml(message.content || "completed")}</div>
