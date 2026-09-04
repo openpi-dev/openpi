@@ -130,6 +130,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
+| 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（仅聊天，不执行 Cursor 原生工具）                   |
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -646,6 +647,7 @@ Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件
 
 ```text
 extensions/
+├── ai-providers/          # Antigravity 与实验性 Cursor OAuth 模型 Provider
 ├── setup/                 # /openpi-setup 与受限配置工具
 ├── capabilities/          # 最小能力发现入口与 Session 工具面加载
 ├── background-terminals/  # 长进程、日志、/ps
@@ -691,6 +693,6 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 
 本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
 
-`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+`extensions/ai-providers/` 的部分协议实现改编自 [oh-my-pi](https://github.com/can1357/oh-my-pi)；`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 本项目以 MIT 许可证发布（见 [`LICENSE`](LICENSE)）；`THIRD_PARTY_NOTICES.md` 记录第三方来源与各自许可。
