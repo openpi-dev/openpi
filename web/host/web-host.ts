@@ -276,6 +276,7 @@ export class WebHost {
     if (request.method === "GET" || request.method === "HEAD") return false;
     const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
     if (pathname === "/api/prompt") return false;
+    if (pathname === "/api/turns/cancel") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname === "/api/model";
@@ -538,6 +539,50 @@ export class WebHost {
         id: commandId,
         accepted: true,
         state: "accepted",
+        cursor: this.sequence,
+      });
+    }
+    if (url.pathname === "/api/turns/cancel" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (
+        typeof body.sessionId !== "string" ||
+        body.sessionId.length === 0 ||
+        body.sessionId.length > 128 ||
+        typeof body.commandId !== "string" ||
+        body.commandId.length === 0 ||
+        body.commandId.length > 128 ||
+        typeof body.epoch !== "number" ||
+        !Number.isSafeInteger(body.epoch) ||
+        body.epoch <= 0
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_TURN",
+          error: "bounded sessionId, commandId, and positive turn epoch are required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using the Web runtime",
+        });
+      }
+      const result = await this.runtime.cancelTurn({
+        sessionId: body.sessionId,
+        commandId: body.commandId,
+        epoch: body.epoch,
+      });
+      traceWeb("turn_cancel_receipt", { ...result });
+      const status =
+        result.state === "accepted"
+          ? 202
+          : result.state === "already-settled"
+            ? 200
+            : result.state === "failed"
+              ? 500
+              : 409;
+      return this.json(response, status, {
+        ...result,
+        accepted: result.state === "accepted",
         cursor: this.sequence,
       });
     }

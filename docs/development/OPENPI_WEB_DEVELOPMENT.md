@@ -51,6 +51,14 @@ bun run dev:web -- /absolute/path/to/workspace
 
 异常进程恢复会在 Web Session 目录的 `.openpi-web-host.artifacts/` 中保留安全围栏。只有确认没有存活或暂停的 Web Host 仍依赖这些记录后，才可人工删除其中过期的 `candidate-*`、`released-*` 或 `stale-*` 目录。OpenPI 不会自动删除围栏；达到 128 个租约产物或 64 个 stale 围栏时会 fail closed，并在错误信息中给出该目录。普通 Session 文件不占用这个预算。
 
+## 活动回合取消协议
+
+Web 的 Stop 只取消当前活动的 provider 回合，不等同于停止 Host，也不会清空已经排队的 follow-up。取消请求必须回传当前快照或 `turn_started` 事件给出的 `sessionId`、`commandId` 和 `epoch`；Runtime 在自己的串行 mutation 边界内重新核对三者，再调用 Pi 原生 `AgentSession.abort()`。
+
+Host 返回 `accepted`、`already-settled`、`stale-session`、`stale-turn` 或 `failed` 的明确收据。浏览器不会因点击按钮而乐观结束运行态；只有 Pi 消息的 `stopReason: "aborted"` 投影成 `turn_settled(outcome: "cancelled")` 后才显示取消终态。活动回合身份也包含在快照中，因此刷新和 SSE 重连仍能恢复正确的 Stop 控件。多客户端的旧请求不能取消更新的回合，重复请求则按已终结回合幂等返回。
+
+这个边界源自 [Issue #342](https://github.com/openpi-dev/openpi/issues/342)。Host disposal 仍由独立生命周期处理；全局暂停属于其他设计范围。
+
 `dev:web` 和 `dev:web:backend` 默认会在启动它们的终端输出 Web 诊断日志；设置 `OPENPI_WEB_DEBUG=0` 可关闭。正式运行 `openpi web` 默认关闭日志，排查时设置 `OPENPI_WEB_DEBUG=1`。
 
 ## 对话无响应排查

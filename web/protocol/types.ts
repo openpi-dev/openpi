@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
+import type { WebActiveTurn } from "../runtime/types.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -113,6 +114,7 @@ export interface WebSnapshot {
   models: WebModelSummary[];
   runtime: {
     status: "idle" | "running" | "unknown";
+    activeTurn?: WebActiveTurn;
     capabilities: WebCapabilitySnapshot;
   };
   truncation: WebSnapshotTruncation;

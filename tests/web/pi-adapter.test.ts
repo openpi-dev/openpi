@@ -29,6 +29,8 @@ function runtimeFor(
     sessionDirectory,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {},
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),

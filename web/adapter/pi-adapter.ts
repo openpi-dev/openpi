@@ -490,6 +490,9 @@ export class PiWebAdapter {
         status: this.runtime.isIdle()
           ? ("idle" as const)
           : ("running" as const),
+        ...(this.runtime.getActiveTurn()
+          ? { activeTurn: this.runtime.getActiveTurn() }
+          : {}),
         capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
       },
       truncation: {

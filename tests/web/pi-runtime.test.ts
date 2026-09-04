@@ -17,6 +17,9 @@ type Trace = {
   startedAt: number;
   started: boolean;
   queued: boolean;
+  userMessageObserved?: boolean;
+  epoch?: number;
+  outcome?: "completed" | "cancelled" | "failed";
 };
 
 type RuntimeHarness = {
@@ -26,6 +29,9 @@ type RuntimeHarness = {
   liveMessageSequence: number;
   liveMessageKey?: string;
   listeners: Set<(event: WebRuntimeEvent) => void>;
+  nextTurnEpoch: number;
+  terminalTurnKeys: Set<string>;
+  turnSettlementWaiters: Map<string, Set<(settlement: unknown) => void>>;
 };
 
 function deferred() {
@@ -84,11 +90,17 @@ type PromptRuntimeHarness = {
   runtimeDisposalPromises: WeakMap<FakeAgentRuntime, Promise<void>>;
   promptAdmission: Promise<void>;
   pendingPromptTraces: Trace[];
+  activePromptTrace?: Trace;
+  nextTurnEpoch: number;
+  terminalTurnKeys: Set<string>;
+  turnSettlementWaiters: Map<string, Set<(settlement: unknown) => void>>;
+  controllerMutation: Promise<void>;
   disposed: boolean;
   hasSelectedWorkspace: boolean;
   dispatcherLease: { release: () => Promise<void> };
   webHostLease: { release: () => Promise<void> };
   sendPrompt: PiWebRuntime["sendPrompt"];
+  cancelTurn: PiWebRuntime["cancelTurn"];
   subscribe: PiWebRuntime["subscribe"];
   dispose: PiWebRuntime["dispose"];
 };
@@ -237,6 +249,10 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   harness.runtimeDisposalPromises = new WeakMap();
   harness.promptAdmission = Promise.resolve();
   harness.pendingPromptTraces = [];
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.controllerMutation = Promise.resolve();
   harness.disposed = false;
   harness.hasSelectedWorkspace = true;
   harness.dispatcherLease = { release: async () => undefined };
@@ -554,6 +570,108 @@ test("later prompt failures retain their command and Session correlation", async
       error: "provider failed",
     },
   });
+});
+
+test("turn cancellation is bound, canonical, and idempotent", async () => {
+  const session = promptSession("session-a");
+  let aborts = 0;
+  session.abort = async () => {
+    aborts += 1;
+  };
+  const runtime = promptHarness(session);
+  const trace: Trace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 7,
+    outcome: "cancelled",
+  };
+  runtime.activePromptTrace = trace;
+  const settlePromptTrace = (
+    PiWebRuntime.prototype as unknown as {
+      settlePromptTrace(this: PromptRuntimeHarness, trace: Trace): void;
+    }
+  ).settlePromptTrace;
+
+  const cancellation = runtime.cancelTurn({
+    sessionId: "session-a",
+    commandId: "command-a",
+    epoch: 7,
+  });
+  await Promise.resolve();
+  settlePromptTrace.call(runtime, trace);
+
+  assert.deepEqual(await cancellation, {
+    sessionId: "session-a",
+    commandId: "command-a",
+    epoch: 7,
+    state: "accepted",
+  });
+  assert.equal(aborts, 1);
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-a",
+        commandId: "command-a",
+        epoch: 7,
+      })
+    ).state,
+    "already-settled",
+  );
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-a",
+        commandId: "command-a",
+        epoch: 8,
+      })
+    ).state,
+    "stale-turn",
+  );
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-b",
+        commandId: "command-a",
+        epoch: 7,
+      })
+    ).state,
+    "stale-session",
+  );
+  assert.equal(aborts, 1);
+});
+
+test("turn cancellation reports native abort failures", async () => {
+  const session = promptSession("session-a");
+  session.abort = async () => {
+    throw new Error("abort failed");
+  };
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 1,
+  };
+
+  assert.deepEqual(
+    await runtime.cancelTurn({
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+    }),
+    {
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+      state: "failed",
+      error: "abort failed",
+    },
+  );
 });
 
 test("retained Session cleanup waits for all of its prompt operations", async () => {
@@ -910,12 +1028,17 @@ test("runtime creation failure releases the Web Host lease", async () => {
 });
 
 test("prompt traces advance with queued user messages", () => {
-  const session = {};
+  const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
   harness.liveMessageSequence = 0;
   harness.listeners = new Set();
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
   harness.activePromptTrace = {
     commandId: "first",
     sessionId: "session",
@@ -941,12 +1064,62 @@ test("prompt traces advance with queued user messages", () => {
     message: { role: "user", content: [{ type: "text", text }] },
   });
 
+  projectEvent.call(harness, session, { type: "agent_start" });
   projectEvent.call(harness, session, userMessage("first"));
   assert.equal(harness.activePromptTrace?.commandId, "first");
   assert.equal(harness.activePromptTrace?.started, true);
 
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "aborted",
+      timestamp: 3,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    },
+  });
+
   projectEvent.call(harness, session, userMessage("second"));
   assert.equal(harness.activePromptTrace?.commandId, "second");
   assert.equal(harness.activePromptTrace?.started, true);
+  assert.equal(harness.activePromptTrace?.epoch, 2);
   assert.equal(harness.pendingPromptTraces.length, 0);
+  assert.deepEqual(
+    events
+      .filter((event) => event.type.startsWith("turn_"))
+      .map((event) => ({ type: event.type, detail: event.detail })),
+    [
+      {
+        type: "turn_started",
+        detail: { sessionId: "session", commandId: "first", epoch: 1 },
+      },
+      {
+        type: "turn_settled",
+        detail: {
+          sessionId: "session",
+          commandId: "first",
+          epoch: 1,
+          outcome: "cancelled",
+        },
+      },
+      {
+        type: "turn_started",
+        detail: { sessionId: "session", commandId: "second", epoch: 2 },
+      },
+    ],
+  );
 });
