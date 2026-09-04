@@ -34,6 +34,39 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       truncated: false,
     }),
   });
+  const unregisterTerminalDetails = registerWebCapability(sessionManager, {
+    kind: "background-terminals",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) =>
+      id === "bt-test"
+        ? {
+            kind: "background-terminals",
+            id,
+            title: "server",
+            command: "run-server",
+            cwd,
+            status: "running",
+            createdAt: 1,
+            stdout: {
+              text: "ready",
+              totalBytes: 5,
+              retainedBytes: 5,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            stderr: {
+              text: "",
+              totalBytes: 0,
+              retainedBytes: 0,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            truncated: false,
+          }
+        : undefined,
+  });
   const prompts: string[] = [];
   const creationCommandIds: string[] = [];
   let newSessions = 0;
@@ -266,6 +299,46 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     assert.equal(modelsResponse.status, 200);
     assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const terminalDetailResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+      { headers: authorized },
+    );
+    assert.equal(terminalDetailResponse.status, 200);
+    assert.deepEqual((await terminalDetailResponse.json()).detail, {
+      kind: "background-terminals",
+      id: "bt-test",
+      title: "server",
+      command: "run-server",
+      cwd,
+      status: "running",
+      createdAt: 1,
+      stdout: {
+        text: "ready",
+        totalBytes: 5,
+        retainedBytes: 5,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      stderr: {
+        text: "",
+        totalBytes: 0,
+        retainedBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      truncated: false,
+    });
+    const staleTerminalResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-missing`,
+      { headers: authorized },
+    );
+    assert.equal(staleTerminalResponse.status, 404);
+    assert.deepEqual(await staleTerminalResponse.json(), {
+      code: "CAPABILITY_NOT_FOUND",
+      error: "capability resource was not found in the active Session",
+    });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
       headers: authorized,
@@ -507,6 +580,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   } finally {
     await host.stop();
     assert.equal(disposed, true);
+    unregisterTerminalDetails();
     unregister();
     await Promise.all(
       [cwd, imported].map((path) => rm(path, { recursive: true, force: true })),
