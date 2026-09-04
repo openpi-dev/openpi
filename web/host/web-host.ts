@@ -565,6 +565,14 @@ export class WebHost {
         sessionId: this.runtime.sessionManager.getSessionId(),
         capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
       });
+    if (url.pathname === "/api/diagnostics")
+      return this.json(response, 200, {
+        node: process.version,
+        cwd: this.runtime.cwd,
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        workspaceSelected: this.runtime.workspaceSelected,
+        models: this.runtime.listModels().filter((model) => model.current),
+      });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
