@@ -557,6 +557,16 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/search") {
+      const query = url.searchParams.get("q") ?? "";
+      const includeArchived = url.searchParams.get("archived") === "true";
+      const offset = Number(url.searchParams.get("offset") ?? "0");
+      const limit = Number(url.searchParams.get("limit") ?? "100");
+      if (query.length > 200 || !Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1 || limit > 100)
+        return this.json(response, 400, { error: "bounded search parameters required" });
+      const sessions = await this.adapter.searchSessions(query, includeArchived, offset, limit);
+      return this.json(response, 200, { query, sessions, nextOffset: sessions.length === limit ? offset + limit : null });
+    }
     if (url.pathname === "/api/thinking")
       return this.json(response, 200, {
         sessionId: this.runtime.sessionManager.getSessionId(),
