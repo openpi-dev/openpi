@@ -65,6 +65,15 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     },
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    getProjectTrustStatus: () => ({
+      source: "pi-project-trust",
+      workspace: runtimeCwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    }),
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -266,6 +275,19 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     assert.equal(modelsResponse.status, 200);
     assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const trustResponse = await fetch(`${launched.origin}/api/trust`, {
+      headers: authorized,
+    });
+    assert.equal(trustResponse.status, 200);
+    assert.deepEqual(await trustResponse.json(), {
+      source: "pi-project-trust",
+      workspace: cwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
       headers: authorized,
