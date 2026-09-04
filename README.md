@@ -408,12 +408,14 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup Web 主题跟随系统
+/openpi-setup Web 使用深色主题
 /openpi-setup Footer 两行：cwd flex model / context cost flex git
 /openpi-setup Bash 展开，Write/Edit 保持紧凑
 /openpi-setup 编辑后自动跑 npm run format
@@ -434,12 +436,12 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
+| Web 主题                    | `system`；可选 `light` / `dark`                 |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
-| 主题                         | 保留用户现有选择                               |
 
 </details>
 

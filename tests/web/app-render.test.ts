@@ -65,6 +65,7 @@ const SNAPSHOT = {
   protocolVersion: 1,
   generatedAt: new Date().toISOString(),
   cursor: 1,
+  preferences: { theme: "dark" as const },
   currentSessionId: "s1",
   workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
   sessions: [
@@ -357,6 +358,7 @@ async function renderApp(
     clearInterval,
     setTimeout,
     clearTimeout,
+    matchMedia: () => ({ matches: false, addEventListener() {} }),
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -382,6 +384,7 @@ async function renderApp(
     snapshotFetches: () => snapshotFetches,
     readerCancellations: () => readerCancellations,
     context,
+    documentElement: documentStub.documentElement,
     state: vm.runInContext("state", context as vm.Context) as typeof SNAPSHOT &
       Record<string, unknown>,
     selectSession: vm.runInContext("selectSession", context as vm.Context) as (
@@ -434,7 +437,8 @@ function deferred<T>() {
 }
 
 test("app.js renders a full session without runtime errors", async () => {
-  const { elements } = await renderApp();
+  const { documentElement, elements } = await renderApp();
+  assert.equal(documentElement.dataset.theme, "dark");
   const conversation = elements.get("conversation");
   assert.ok(conversation, "conversation element exists");
   assert.match(conversation.innerHTML, /message-row user/);
