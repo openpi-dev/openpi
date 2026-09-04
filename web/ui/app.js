@@ -214,6 +214,12 @@ function compactSummary(value, limit = 96) {
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
+function applyPromptAcceptedState(alreadySettled) {
+  state.liveRunning = !alreadySettled;
+  if (alreadySettled) state.livePhase = "idle";
+  else if (state.livePhase !== "running") state.livePhase = "preparing";
+}
+
 function relativeTime(value) {
   const elapsed = Date.now() - new Date(value).getTime();
   if (elapsed < 60_000) return "now";
@@ -747,8 +753,7 @@ async function sendPrompt() {
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
     $("prompt-input").value = "";
     resizePrompt();
     $("composer-hint").textContent = t("acceptedHint");
@@ -1066,8 +1071,7 @@ function applyRuntimeEvent(event) {
     scheduleSnapshotRefresh();
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_start") {
