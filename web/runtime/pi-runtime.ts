@@ -38,6 +38,7 @@ import {
 } from "./web-host-lease.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
+const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
 const BOOTSTRAP_WORKSPACE_DIRECTORY = ".bootstrap-workspace";
 
 type PromptTrace = {
@@ -140,6 +141,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const webSessionDirectory = join(getAgentDir(), "web-sessions");
     const webHostLease = await acquireWebHostLease(webSessionDirectory);
     let runtime: PiWebRuntime | undefined;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const created = await PiWebRuntime.createRuntime(
         canonicalCwd,
@@ -229,12 +231,28 @@ export class PiWebRuntime implements WebRuntimeController {
       waiters.add(resolveSettlement);
       this.turnSettlementWaiters.set(key, waiters);
     });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const abortOperation = this.runtime.session.abort();
       const abortFailure = new Promise<never>((_, reject) => {
         void abortOperation.catch(reject);
       });
-      const terminal = await Promise.race([settlement, abortFailure]);
+      const settlementTimeout = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () =>
+            reject(
+              new Error(
+                "Cancellation did not settle within the bounded wait window",
+              ),
+            ),
+          TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS,
+        );
+      });
+      const terminal = await Promise.race([
+        settlement,
+        abortFailure,
+        settlementTimeout,
+      ]);
       return {
         ...options,
         state:
@@ -250,6 +268,7 @@ export class PiWebRuntime implements WebRuntimeController {
     } catch (error) {
       return { ...options, state: "failed", error: errorText(error) };
     } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
       const waiters = this.turnSettlementWaiters.get(key);
       if (waiters && ownWaiter) {
         waiters.delete(ownWaiter);
