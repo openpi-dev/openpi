@@ -4,6 +4,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   open,
   readFile,
   realpath,
@@ -17,7 +18,13 @@ export interface WebAttachmentStagingLimits {
   readonly maxTotalBytes: number;
   readonly maxStagedBytes: number;
   readonly maxSettledReceipts: number;
+  /** Age after which an abandoned store root is removed at startup. */
+  readonly stagingTtlMs?: number;
 }
+
+const DEFAULT_STAGING_TTL_MS = 60 * 60 * 1000;
+const MAX_ATTACHMENT_NAME_BYTES = 256;
+const MAX_ATTACHMENT_MIME_BYTES = 256;
 
 export interface WebAttachmentBinding {
   readonly workspace: string;
@@ -66,7 +73,8 @@ export type WebAttachmentStagingErrorCode =
   | "ATTACHMENT_LIMIT"
   | "BYTE_LIMIT"
   | "STORE_LIMIT"
-  | "STORE_CLOSED";
+  | "STORE_CLOSED"
+  | "INVALID_PAYLOAD";
 
 export class WebAttachmentStagingError extends Error {
   readonly code: WebAttachmentStagingErrorCode;
@@ -110,6 +118,15 @@ function validateLimits(limits: WebAttachmentStagingLimits) {
   assertPositiveInteger(limits.maxTotalBytes, "maxTotalBytes");
   assertPositiveInteger(limits.maxStagedBytes, "maxStagedBytes");
   assertPositiveInteger(limits.maxSettledReceipts, "maxSettledReceipts");
+  if (
+    limits.stagingTtlMs !== undefined &&
+    (!Number.isSafeInteger(limits.stagingTtlMs) || limits.stagingTtlMs <= 0)
+  ) {
+    throw new WebAttachmentStagingError(
+      "INVALID_LIMITS",
+      "stagingTtlMs must be a positive integer",
+    );
+  }
   if (limits.maxAttachmentBytes > limits.maxTotalBytes) {
     throw new WebAttachmentStagingError(
       "INVALID_LIMITS",
@@ -183,6 +200,23 @@ export class WebAttachmentStagingStore {
     validateLimits(limits);
     await mkdir(parentDirectory, { recursive: true, mode: 0o700 });
     const parent = await realpath(parentDirectory);
+    const ttl = limits.stagingTtlMs ?? DEFAULT_STAGING_TTL_MS;
+    const now = Date.now();
+    for (const entry of await readdir(parent)) {
+      if (!entry.startsWith(".openpi-web-attachments-")) continue;
+      const candidate = join(parent, entry);
+      try {
+        const candidateStat = await lstat(candidate);
+        if (
+          candidateStat.isDirectory() &&
+          now - candidateStat.mtimeMs > ttl
+        ) {
+          await rm(candidate, { recursive: true, force: true });
+        }
+      } catch {
+        // Another process may have reclaimed the abandoned root already.
+      }
+    }
     const directory = await mkdtemp(join(parent, ".openpi-web-attachments-"));
     await chmod(directory, 0o700);
     return new WebAttachmentStagingStore(directory, limits);
@@ -337,6 +371,17 @@ export class WebAttachmentStagingStore {
     }
     let totalBytes = 0;
     for (const payload of payloads) {
+      if (
+        typeof payload.name !== "string" ||
+        Buffer.byteLength(payload.name, "utf8") > MAX_ATTACHMENT_NAME_BYTES ||
+        typeof payload.mime !== "string" ||
+        Buffer.byteLength(payload.mime, "utf8") > MAX_ATTACHMENT_MIME_BYTES
+      ) {
+        throw new WebAttachmentStagingError(
+          "INVALID_PAYLOAD",
+          "attachment name and mime metadata must be bounded strings",
+        );
+      }
       if (payload.bytes.byteLength > this.limits.maxAttachmentBytes) {
         throw new WebAttachmentStagingError(
           "BYTE_LIMIT",

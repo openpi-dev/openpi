@@ -1,20 +1,22 @@
 import assert from "node:assert/strict";
 import {
   lstat,
+  mkdir,
   mkdtemp,
   readdir,
   readFile,
   rm,
   symlink,
+  utimes,
 } from "node:fs/promises";
-import { join } from "node:path";
 import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 import {
-  WebAttachmentStagingError,
-  WebAttachmentStagingStore,
   type WebAttachmentBinding,
+  WebAttachmentStagingError,
   type WebAttachmentStagingLimits,
+  WebAttachmentStagingStore,
 } from "../../web/runtime/attachment-staging.ts";
 
 const limits: WebAttachmentStagingLimits = {
@@ -23,6 +25,7 @@ const limits: WebAttachmentStagingLimits = {
   maxTotalBytes: 12,
   maxStagedBytes: 16,
   maxSettledReceipts: 2,
+  stagingTtlMs: 60 * 60 * 1000,
 };
 
 const binding: WebAttachmentBinding = {
@@ -160,6 +163,40 @@ test("enforces count, per-file, aggregate, and store-wide byte bounds", async ()
     );
   } finally {
     await value.cleanup();
+  }
+});
+
+test("bounds display metadata and removes abandoned roots at startup", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "openpi-attachment-ttl-"));
+  try {
+    const abandoned = join(parent, ".openpi-web-attachments-abandoned");
+    await mkdir(abandoned, { recursive: true });
+    const old = new Date(Date.now() - 10_000);
+    await utimes(abandoned, old, old);
+    const store = await WebAttachmentStagingStore.create(parent, {
+      ...limits,
+      stagingTtlMs: 1_000,
+    });
+    await assert.rejects(
+      store.stage(binding, [
+        { name: "n".repeat(257), mime: "text/plain", bytes: Buffer.from("x") },
+      ]),
+      (error) =>
+        error instanceof WebAttachmentStagingError &&
+        error.code === "INVALID_PAYLOAD",
+    );
+    await assert.rejects(
+      store.stage(binding, [
+        { name: "safe", mime: "m".repeat(257), bytes: Buffer.from("x") },
+      ]),
+      (error) =>
+        error instanceof WebAttachmentStagingError &&
+        error.code === "INVALID_PAYLOAD",
+    );
+    await assert.rejects(lstat(abandoned));
+    await store.dispose();
+  } finally {
+    await rm(parent, { recursive: true, force: true });
   }
 });
 
