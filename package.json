@@ -1,6 +1,6 @@
 {
   "name": "@tt-a1i/openpi",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "description": "OpenPI — a Pi-native multi-agent workbench with background execution, isolated subagents, replay-safe workflows, goals, tasks, and observable TUI",
   "license": "MIT",
   "author": "tt-a1i",
@@ -55,6 +55,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-beta.99",
+    "@earendil-works/pi-server": "0.85.0",
     "acorn": "^8.17.0",
     "effect": "^4.0.0-beta.99",
     "jiti": "2.7.0",

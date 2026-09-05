@@ -40,8 +40,35 @@ type Segment =
   | { kind: "prose"; lines: string[] }
   | { kind: "code"; open: string; content: string[]; close: string };
 
-const FENCE_OPEN = /^ {0,3}`{3,}/;
-const FENCE_CLOSE = /^ {0,3}`{3,}[ \t]*\r?$/;
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+
+/**
+ * Parse an opening code fence (CommonMark §4.5): which character it uses and
+ * how long it is. A backtick fence's info string may not contain backticks.
+ */
+function openFence(line: string) {
+  const match = FENCE_OPEN.exec(line);
+  if (!match) return undefined;
+  const fence = match[1];
+  if (fence[0] === "`" && line.slice(match[0].length).includes("`")) {
+    return undefined;
+  }
+  return { char: fence[0], length: fence.length };
+}
+
+/**
+ * A closing fence must use the same character as the opening fence and be at
+ * least as long: a ``` line does not close a ```` block, and backticks never
+ * close a tilde block.
+ */
+function isCloseFence(line: string, open: { char: string; length: number }) {
+  const match = /^ {0,3}(`{3,}|~{3,})[ \t]*\r?$/.exec(line);
+  return (
+    match !== null &&
+    match[1][0] === open.char &&
+    match[1].length >= open.length
+  );
+}
 
 function countLines(markdown: string) {
   const parts = markdown.split("\n");
@@ -60,7 +87,8 @@ function parseSegments(lines: string[]): Segment[] {
   let prose: string[] = [];
   let i = 0;
   while (i < lines.length) {
-    if (!FENCE_OPEN.test(lines[i])) {
+    const fence = openFence(lines[i]);
+    if (!fence) {
       prose.push(lines[i]);
       i += 1;
       continue;
@@ -74,13 +102,21 @@ function parseSegments(lines: string[]): Segment[] {
     let close: string | undefined;
     let j = i + 1;
     while (j < lines.length && close === undefined) {
-      if (FENCE_CLOSE.test(lines[j])) close = lines[j];
+      if (isCloseFence(lines[j], fence)) close = lines[j];
       else content.push(lines[j]);
       j += 1;
     }
     if (close === undefined) {
-      // Unterminated fence: fold the whole message conservatively as text.
-      return [{ kind: "prose", lines }];
+      // Unterminated fence: the block runs to the end of the message. Keep it
+      // as a code block with a synthesized closing fence so a folded preview
+      // never leaks an unclosed fence into the TUI.
+      segments.push({
+        kind: "code",
+        open,
+        content,
+        close: fence.char.repeat(fence.length),
+      });
+      return segments;
     }
     segments.push({ kind: "code", open, content, close });
     i = j;

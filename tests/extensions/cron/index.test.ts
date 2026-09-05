@@ -5,7 +5,12 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import cron from "../../../extensions/cron/index.ts";
-import { CRON_PROMPT_MAX_CHARS } from "../../../extensions/cron/schedule.ts";
+import {
+  CRON_DELIVERY_MAX_BYTES,
+  CRON_DELIVERY_MAX_JOBS,
+  CRON_MAX_JOBS,
+  CRON_PROMPT_MAX_CHARS,
+} from "../../../extensions/cron/schedule.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 type CommandHandler = (args: string, ctx: ExtensionContext) => Promise<void>;
@@ -85,6 +90,7 @@ function harness() {
       assert.ok(tick, "scheduler must be running");
       tick();
     },
+    polling: () => tick !== undefined,
     stopped: () => stopped,
   };
 }
@@ -211,4 +217,111 @@ test("cron does not create a job when the prompt exceeds the limit", async () =>
   await h.run("list");
   assert.equal(h.notifications.at(-1), "No scheduled prompts in this session.");
   assert.equal(h.messages.length, 0);
+});
+
+test("cron rejects an absolute due time that is not safely representable", async () => {
+  const h = harness();
+  await h.emit("session_start");
+  h.setNow(Number.MAX_SAFE_INTEGER - 29_999);
+
+  await h.run("in 30s never fire");
+
+  assert.match(h.notifications.at(-1) ?? "", /too far in the future/i);
+  assert.equal(h.polling(), false);
+  await h.run("list");
+  assert.equal(h.notifications.at(-1), "No scheduled prompts in this session.");
+});
+
+test("cron rejects jobs beyond the per-session limit", async () => {
+  const h = harness();
+  await h.emit("session_start");
+
+  for (let index = 1; index <= CRON_MAX_JOBS; index++) {
+    await h.run(`in 30s job ${index}`);
+  }
+  await h.run("in 30s one too many");
+
+  assert.match(
+    h.notifications.at(-1) ?? "",
+    new RegExp(`at most ${CRON_MAX_JOBS}`, "i"),
+  );
+  h.setNow(30_000);
+  while (h.polling()) h.poll();
+  const delivered = h.messages.flatMap((entry) => {
+    const details = (entry.message as { details: unknown }).details;
+    return "jobs" in (details as object)
+      ? (details as { jobs: Array<{ id: number }> }).jobs
+      : [details as { id: number }];
+  });
+  assert.equal(delivered.length, CRON_MAX_JOBS);
+  assert.deepEqual(
+    delivered.map((job) => job.id),
+    Array.from({ length: CRON_MAX_JOBS }, (_, index) => index + 1),
+  );
+});
+
+test("cron bounds each due batch by job count and keeps the rest pending", async () => {
+  const h = harness();
+  await h.emit("session_start");
+
+  for (let index = 1; index <= CRON_DELIVERY_MAX_JOBS + 1; index++) {
+    await h.run(`in 30s job ${index}`);
+  }
+  h.setNow(30_000);
+  h.poll();
+
+  const firstDetails = (
+    h.messages[0]?.message as {
+      details: { count: number; jobs: Array<{ id: number }> };
+    }
+  ).details;
+  assert.equal(firstDetails.count, CRON_DELIVERY_MAX_JOBS);
+  assert.deepEqual(
+    firstDetails.jobs.map((job) => job.id),
+    Array.from({ length: CRON_DELIVERY_MAX_JOBS }, (_, index) => index + 1),
+  );
+  await h.run("list");
+  assert.match(h.notifications.at(-1) ?? "", /17\. once/);
+
+  h.poll();
+  assert.deepEqual(
+    (h.messages[1]?.message as { details: { id: number } }).details,
+    {
+      id: CRON_DELIVERY_MAX_JOBS + 1,
+      prompt: `job ${CRON_DELIVERY_MAX_JOBS + 1}`,
+      recurring: false,
+    },
+  );
+});
+
+test("cron bounds model-visible due batches by UTF-8 bytes", async () => {
+  const h = harness();
+  await h.emit("session_start");
+  const prompt = "界".repeat(CRON_PROMPT_MAX_CHARS);
+
+  for (let index = 0; index < CRON_DELIVERY_MAX_JOBS; index++) {
+    await h.run(`in 30s ${prompt}`);
+  }
+  h.setNow(30_000);
+  h.poll();
+
+  const first = h.messages[0]?.message as {
+    content: string;
+    details: { count: number };
+  };
+  assert.ok(
+    Buffer.byteLength(first.content, "utf8") <= CRON_DELIVERY_MAX_BYTES,
+  );
+  assert.ok(first.details.count < CRON_DELIVERY_MAX_JOBS);
+  await h.run("list");
+  assert.notEqual(
+    h.notifications.at(-1),
+    "No scheduled prompts in this session.",
+  );
+
+  while (h.polling()) h.poll();
+  for (const entry of h.messages) {
+    const content = (entry.message as { content: string }).content;
+    assert.ok(Buffer.byteLength(content, "utf8") <= CRON_DELIVERY_MAX_BYTES);
+  }
 });
