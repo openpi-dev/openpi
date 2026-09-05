@@ -61,6 +61,7 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
+  getThinkingState?(): { level: string; available: readonly string[] };
   setModel(
     provider: string,
     modelId: string,

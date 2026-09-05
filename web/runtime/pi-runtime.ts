@@ -265,6 +265,11 @@ export class PiWebRuntime implements WebRuntimeController {
     return () => this.listeners.delete(listener);
   }
 
+  getThinkingState() {
+    const session = this.runtime.session;
+    return { level: session.thinkingLevel, available: session.getAvailableThinkingLevels() };
+  }
+
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
