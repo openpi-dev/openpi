@@ -760,7 +760,7 @@ test("dispose waits for pending candidate creation and cleans it before releasin
   };
 
   try {
-    const sessionChange = harness.newSession("/tmp");
+    const sessionChange = harness.newSession(process.cwd());
     await createEntered.promise;
     const disposal = harness.dispose();
     await new Promise<void>((resolve) => setImmediate(resolve));
@@ -806,7 +806,7 @@ test("new session projects its command id and activated session path", async () 
   });
 
   try {
-    const result = await harness.newSession("/tmp", {
+    const result = await harness.newSession(process.cwd(), {
       commandId: "create-command",
     });
 
@@ -851,7 +851,7 @@ test("dispose also waits for a pending switched-session candidate", async () => 
   const originalCreateRuntime = runtimeConstructor.createRuntime;
   const originalOpen = SessionManager.open;
   SessionManager.open = (() => ({
-    getCwd: () => "/tmp",
+    getCwd: () => process.cwd(),
   })) as unknown as typeof SessionManager.open;
   runtimeConstructor.createRuntime = async () => {
     createEntered.resolve();

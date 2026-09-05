@@ -230,7 +230,9 @@ function buildOperatorReport(
               : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${state}` +
-          (agent.acceptance ? ` · acceptance ${agent.acceptance.status}` : "") +
+          (agent.acceptance
+            ? ` · deprecated model self-attestation ${agent.acceptance.status}`
+            : "") +
           (agent.error ? ` — ${agent.error}` : ""),
       );
     }
