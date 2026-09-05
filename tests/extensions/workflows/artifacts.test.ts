@@ -164,6 +164,48 @@ test("agent result artifacts are complete or fail without leaving a file", () =>
   }
 });
 
+test("terminal workflow persistence publishes refs with honest completeness", () => {
+  const directory = mkdtempSync(join(tmpdir(), "pi-workflow-refs-"));
+  try {
+    const details = workflowDetails();
+    details.status = "completed";
+    details.finishedAt = 2;
+    details.result = { answer: "bounded result" };
+    details.agents.push({
+      index: 1,
+      label: "fixture",
+      state: "done",
+      startedAt: 1,
+      finishedAt: 2,
+      preview: "done",
+      usage: emptyUsage(),
+      resultArtifact: persistWorkflowAgentResult(directory, 1, {
+        output: "coordinator value",
+      }),
+      transcript: [],
+    });
+
+    persistWorkflowJson(directory, details);
+    const persisted = JSON.parse(
+      readFileSync(join(directory, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(persisted.resourceRefs?.length, 3);
+    assert.equal(
+      persisted.resourceRefs?.find(
+        (ref) => ref.resource.id === "agent-1-result",
+      )?.resource.completeness,
+      "complete-owner-value",
+    );
+    assert.equal(
+      persisted.resourceRefs?.find((ref) => ref.resource.id === "final-result")
+        ?.resource.completeness,
+      "partial-owner-value",
+    );
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("oversized replay journals fail closed before parsing", () => {
   const directory = mkdtempSync(join(tmpdir(), "pi-workflow-journal-read-"));
   try {

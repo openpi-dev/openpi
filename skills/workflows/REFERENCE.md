@@ -38,6 +38,11 @@ Workflow concurrency defaults to the configured package value and has a hard max
 
 Each call persists intent, admission, and execution state. Interrupted nonterminal calls become `uncertain`, never guessed failed. Artifacts contain results, bounded transcripts, and a read-only graph projection for explicit result refs.
 
+Terminal workflow details may expose owner-bound resource references. Agent
+result refs are complete only for the coordinator value; final `result.json`
+and transcript refs explicitly remain partial bounded projections. References
+are run-owned recovery metadata, not restart-stable handoff handles or authority.
+
 ## Lifecycle and replay
 
 Interactive TUI runs return an accepted run id immediately by default, release the parent turn, and later deliver a terminal completion with a stable delivery id. Delivery is at least once: normal retries do not duplicate a run, but a process loss after Pi accepts the message and before the receipt is persisted can replay the same id. `wait: true` explicitly waits inline; interrupting that wait releases only the waiter and the run continues. Print/automation defaults to waiting because it has no later delivery channel.

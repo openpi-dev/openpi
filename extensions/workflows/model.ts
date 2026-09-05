@@ -13,6 +13,7 @@ import { spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import type { WorktreeCleanup } from "../shared/worktree.ts";
 import type { AcceptanceLedger } from "./acceptance.ts";
+import type { OpenPiResourceRef } from "../shared/resource-reference.ts";
 import {
   projectWorkflowGraph,
   type WorkflowGraphProjection,
@@ -182,6 +183,8 @@ export interface WorkflowDetails {
   result?: unknown;
   resultArtifact?: string;
   transcriptArtifact?: string;
+  /** Owner-bound recovery metadata; storage and authorization remain here. */
+  resourceRefs?: OpenPiResourceRef[];
   /** Run this one replayed cached agent results from, when resuming. */
   resumedFrom?: string;
   /** Why a requested resume produced no cache, for an honest result message. */

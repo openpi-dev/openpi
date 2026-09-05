@@ -20,6 +20,7 @@ import {
   truncateUtf8,
   writeFileAtomic,
 } from "./serialization.ts";
+import { createOwnerFileResourceRef } from "../shared/resource-reference.ts";
 
 export const JOURNAL_FILE = "journal.json";
 
@@ -210,12 +211,68 @@ export function persistWorkflowJson(
       safeStringify(details.result, { maxBytes: 1024 * 1024 }),
     );
   }
+  const resourceCandidates =
+    details.status === "running"
+      ? []
+      : [
+          ...(details.result !== undefined
+            ? [
+                {
+                  resourceId: "final-result",
+                  file: "result.json",
+                  completeness: "partial-owner-value" as const,
+                  sourceCoverage: "bounded-workflow-result-projection",
+                },
+              ]
+            : []),
+          {
+            resourceId: "transcripts",
+            file: "transcripts.json",
+            completeness: "partial-owner-value" as const,
+            sourceCoverage: "bounded-transcript-copy",
+          },
+          ...details.agents.flatMap((agent) =>
+            agent.resultArtifact
+              ? [
+                  {
+                    resourceId: `agent-${agent.index}-result`,
+                    file: agent.resultArtifact,
+                    completeness: "complete-owner-value" as const,
+                    sourceCoverage: "coordinator-result",
+                  },
+                ]
+              : [],
+          ),
+        ];
+  const resourceRefs = resourceCandidates.flatMap((resource) => {
+    try {
+      return [
+        createOwnerFileResourceRef({
+          owner: {
+            kind: "workflow",
+            id: details.runId,
+            generation: String(details.startedAt),
+          },
+          resourceId: resource.resourceId,
+          root: runDir,
+          file: path.join(runDir, resource.file),
+          mediaType: "application/json",
+          completeness: resource.completeness,
+          sourceCoverage: resource.sourceCoverage,
+          lifetime: "workflow-run",
+        }),
+      ];
+    } catch {
+      return [];
+    }
+  });
   const compact: WorkflowDetails = {
     ...details,
     ...(details.result !== undefined
       ? { result: "[stored in result.json]", resultArtifact: "result.json" }
       : {}),
     transcriptArtifact: "transcripts.json",
+    ...(resourceRefs.length > 0 ? { resourceRefs } : {}),
     agents: details.agents.map((agent) => ({ ...agent, transcript: [] })),
   };
   writeRunFile(
