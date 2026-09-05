@@ -16,6 +16,7 @@ import {
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
+  WEB_MAX_ARCHIVED_SESSION_PAGE,
   WEB_MAX_EVENT_BYTES,
   WEB_MAX_EVENTS,
   WEB_MAX_SNAPSHOT_BYTES,
@@ -556,6 +557,48 @@ export class WebHost {
           truncated: projection.omitted > 0,
           sessionsOmitted: projection.omitted,
         },
+      });
+    }
+    if (url.pathname === "/api/sessions/archived") {
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? undefined : Number(rawLimit);
+      if (
+        rawLimit !== null &&
+        (!/^\d+$/u.test(rawLimit) ||
+          !Number.isSafeInteger(limit) ||
+          limit! <= 0 ||
+          limit! > WEB_MAX_ARCHIVED_SESSION_PAGE)
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_ARCHIVED_SESSION_QUERY",
+          error: "archived Session limit must be a bounded positive integer",
+        });
+      }
+      const result = await this.adapter.listArchivedSessions({
+        ...(url.searchParams.has("cursor")
+          ? { cursor: url.searchParams.get("cursor") ?? "" }
+          : {}),
+        ...(limit !== undefined ? { limit } : {}),
+        ...(url.searchParams.has("q")
+          ? { query: url.searchParams.get("q") ?? "" }
+          : {}),
+      });
+      if (result.status === "invalid") {
+        return this.json(response, 400, {
+          code: "INVALID_ARCHIVED_SESSION_QUERY",
+          error: "archived Session query is invalid or exceeds its bounds",
+        });
+      }
+      if (result.status === "stale_cursor") {
+        return this.json(response, 409, {
+          code: "ARCHIVED_SESSION_CURSOR_STALE",
+          error: "archived Session cursor is stale for this query",
+        });
+      }
+      return this.json(response, 200, {
+        sessions: result.sessions,
+        ...(result.nextCursor ? { nextCursor: result.nextCursor } : {}),
+        truncation: result.truncation,
       });
     }
     if (url.pathname === "/api/models")
