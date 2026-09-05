@@ -196,10 +196,18 @@ function renderMarkdown(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { ...headers(Boolean(options.body)), ...options.headers },
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 30_000);
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: { ...headers(Boolean(options.body)), ...options.headers },
+      signal: options.signal || controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
   return body;
@@ -382,8 +390,17 @@ function messageMarkup(entry) {
   }
   if (message.role === "toolResult") {
     const toolName = message.toolName || "tool";
+    const kind = /(?:read|cat|file)/iu.test(toolName)
+      ? "file"
+      : /diff/iu.test(toolName)
+        ? "diff"
+        : /test/iu.test(toolName)
+          ? "test"
+          : /(?:bash|terminal|exec)/iu.test(toolName)
+            ? "terminal"
+            : "generic";
     const summary = compactSummary(message.content || "completed");
-    return `<article class="message-row assistant detail-only">
+    return `<article class="message-row assistant detail-only tool-kind-${kind}">
       <div class="message-content"><details class="message-details tool-details">
         <summary><span class="details-mark" aria-hidden="true"></span><span class="details-title">${escapeHtml(toolName)} · ${escapeHtml(summary)}</span></summary>
         <div class="details-body tool-evidence">${escapeHtml(message.content || "completed")}</div>
