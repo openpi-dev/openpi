@@ -288,16 +288,6 @@ export class PiWebRuntime implements WebRuntimeController {
       releaseAdmission = resolveAdmission;
     });
     const startedAt = performance.now();
-    const queued = session.isStreaming;
-    const promptTrace: PromptTrace | undefined = options?.commandId
-      ? {
-          commandId: options.commandId,
-          sessionId,
-          startedAt,
-          started: false,
-          queued,
-        }
-      : undefined;
     this.retainRuntimeReference(agentRuntime);
     let resolveRequest: (receipt: WebPromptAdmissionReceipt) => void = () => undefined;
     let rejectRequest: (error: unknown) => void = () => undefined;
@@ -312,10 +302,22 @@ export class PiWebRuntime implements WebRuntimeController {
       let admitted = false;
       let agentLifecycleStarted = false;
       let queuedForAgent = false;
+      let queued = false;
+      let promptTrace: PromptTrace | undefined;
       let unsubscribePromptLifecycle: (() => void) | undefined;
       try {
         await previousAdmission;
         this.assertActive();
+        queued = session.isStreaming;
+        promptTrace = options?.commandId
+          ? {
+              commandId: options.commandId,
+              sessionId,
+              startedAt,
+              started: false,
+              queued,
+            }
+          : undefined;
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();

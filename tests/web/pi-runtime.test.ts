@@ -284,6 +284,32 @@ test("prompt admission reports the canonical queue position", async () => {
   await Promise.resolve();
 });
 
+test("prompt admission observes streaming after an earlier admission gate", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const first = runtime.sendPrompt("first", {
+    commandId: "command-first",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  const second = runtime.sendPrompt("second", {
+    commandId: "command-second",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.calls[0].options.preflightResult?.(true);
+  session.isStreaming = true;
+  assert.deepEqual(await first, { queued: false, queuePosition: 0 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+  session.calls[1].options.preflightResult?.(true);
+  assert.deepEqual(await second, { queued: true, queuePosition: 1 });
+
+  session.calls[1].run.resolve();
+  await Promise.resolve();
+});
+
 test("prompt preflight rejection is a typed non-admission", async () => {
   const session = promptSession("session-a");
   const runtime = promptHarness(session);
