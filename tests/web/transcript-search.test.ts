@@ -114,7 +114,7 @@ test("searches a Session file written by Pi", async () => {
   }
 });
 
-test("searches user, assistant, and bounded tool evidence with provenance", async () => {
+test("searches user and assistant evidence without indexing tool payloads", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-transcript-search-"));
   const path = join(root, "session.jsonl");
   try {
@@ -168,18 +168,73 @@ test("searches user, assistant, and bounded tool evidence with provenance", asyn
 
     assert.equal(result.partial, false);
     assert.equal(result.scannedFiles, 1);
-    assert.equal(result.matches.length, 4);
+    assert.equal(result.matches.length, 2);
     assert.deepEqual(
       new Set(result.matches.map((match) => match.source)),
-      new Set(["user", "assistant", "tool_call", "tool_result"]),
+      new Set(["user", "assistant"]),
     );
     assert.ok(result.matches.every((match) => match.turnId === "user-1"));
     assert.ok(
       result.matches.every((match) => match.snippetFormat === "plain-text"),
     );
-    assert.equal(result.matches[0]?.messageId, "result-1");
-    assert.equal(result.matches[0]?.toolName, "rg");
+    assert.equal(result.matches[0]?.messageId, "assistant-1");
     assert.doesNotMatch(result.matches[0]?.snippet ?? "", /[\u001b\u202e]/u);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("tool arguments and results never enter searchable snippets", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "openpi-transcript-search-secret-"),
+  );
+  const path = join(root, "session.jsonl");
+  try {
+    await writeFile(
+      path,
+      [
+        header("session-secret", root),
+        message(
+          "assistant-secret",
+          null,
+          "assistant",
+          [
+            {
+              type: "toolCall",
+              id: "call-secret",
+              name: "curl",
+              arguments: { authorization: "Bearer very-secret-token" },
+            },
+          ],
+          1,
+        ),
+        message(
+          "result-secret",
+          "assistant-secret",
+          "toolResult",
+          [{ type: "text", text: "apiKey=another-secret" }],
+          2,
+          { toolName: "curl", toolCallId: "call-secret" },
+        ),
+      ]
+        .map(line)
+        .join(""),
+    );
+
+    const result = await searchWebTranscripts({
+      query: "secret",
+      sessions: [session("session-secret", path, root)],
+      allowedSessionRoots: [root],
+      allowedWorkspaces: [root],
+    });
+    assert.equal(result.matches.length, 0);
+    assert.ok(
+      result.matches.every(
+        (match) =>
+          !match.snippet.includes("very-secret-token") &&
+          !match.snippet.includes("another-secret"),
+      ),
+    );
   } finally {
     await rm(root, { recursive: true, force: true });
   }

@@ -210,15 +210,6 @@ function queryTokens(query: string) {
   return normalizeSearchText(trimmed).split(/\s+/u);
 }
 
-function jsonEvidence(value: unknown) {
-  try {
-    const serialized = JSON.stringify(value);
-    return typeof serialized === "string" ? serialized : "";
-  } catch {
-    return "";
-  }
-}
-
 function textContent(value: unknown) {
   if (typeof value === "string") return value;
   if (!Array.isArray(value)) return "";
@@ -248,12 +239,10 @@ function messageEvidence(message: unknown): SearchEvidence[] {
         if (!part || typeof part !== "object" || Array.isArray(part)) continue;
         const tool = part as Record<string, unknown>;
         if (tool.type !== "toolCall" || typeof tool.name !== "string") continue;
-        const payload =
-          tool.arguments === undefined ? tool.input : tool.arguments;
         evidence.push({
           source: "tool_call",
           toolName: tool.name,
-          text: `${tool.name} ${jsonEvidence(payload)}`.trim(),
+          text: tool.name,
         });
       }
     }
@@ -261,7 +250,9 @@ function messageEvidence(message: unknown): SearchEvidence[] {
   }
   if (role !== "toolResult") return [];
   const toolName = typeof record.toolName === "string" ? record.toolName : undefined;
-  const text = `${toolName ?? ""} ${textContent(record.content)}`.trim();
+  // Tool output can contain credentials, paths, or other private payloads.
+  // Keep only the stable, non-secret tool identity searchable.
+  const text = toolName ?? "";
   return text ? [{ source: "tool_result", text, ...(toolName ? { toolName } : {}) }] : [];
 }
 
