@@ -33,6 +33,7 @@ import {
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
 import {
+  projectBackgroundTerminalDetail,
   projectBackgroundTerminalCapability,
   registerWebCapability,
 } from "../shared/web-observer-registry.ts";
@@ -133,6 +134,12 @@ export default function (pi: ExtensionAPI) {
                 kind: "background-terminals",
                 snapshot: () =>
                   projectBackgroundTerminalCapability(manager.view.list()),
+                detail: (id) => {
+                  const terminal = manager.view.get(id);
+                  return terminal
+                    ? projectBackgroundTerminalDetail(terminal)
+                    : undefined;
+                },
                 subscribe: (listener) => manager.view.subscribe(listener),
               })
             : undefined;
