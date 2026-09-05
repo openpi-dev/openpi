@@ -922,6 +922,58 @@ test("app.js settles an admitted prompt that Pi handles without an agent turn", 
   assert.equal((app.state.terminalPromptIds as Set<string>).size, 32);
 });
 
+test("app.js keeps an active agent running when a handled prompt settles", async () => {
+  const app = await renderApp();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "handled"}}); applyRuntimeEvent({sequence: 4, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "handled"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 5, type: "agent_settled", detail: {sessionId: "s1"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, false);
+  assert.equal(app.state.livePhase, "idle");
+});
+
+test("app.js keeps an active agent running when a queued prompt is accepted", async () => {
+  const app = await renderApp();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "queued"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+});
+
+test("app.js keeps an active agent running when its prompt receipt settles late", async () => {
+  const app = await renderApp();
+  const prompt = deferred<ReturnType<typeof response>>();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") return prompt.promise;
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "late receipt";
+  const sending = app.sendPrompt();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "late"}})',
+    app.context as vm.Context,
+  );
+  prompt.resolve(response({ id: "late", accepted: true }));
+  await sending;
+
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+});
+
 test("app.js scopes model selection to its session epoch", async () => {
   const app = await renderApp();
   const model = deferred<ReturnType<typeof response>>();

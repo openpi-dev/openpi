@@ -5,6 +5,11 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import {
+  missingPiCodingAgentDiagnostic,
+  PI_CODING_AGENT_ENTRY_ENV,
+  resolvePiCodingAgentEntry,
+} from "../../web/host/pi-coding-agent-entry.ts";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 
@@ -26,12 +31,20 @@ interface SpawnWebOptions {
   stdio: "inherit";
 }
 
-function webProcessEnvironment(cwd: string) {
+function webProcessEnvironment(
+  cwd: string,
+  piCodingAgentEntry: string | undefined,
+) {
   const environment: NodeJS.ProcessEnv = { ...process.env, PWD: cwd };
   delete environment.OLDPWD;
   delete environment.INIT_CWD;
   delete environment.PI_SESSION_ID;
   delete environment.PI_SESSION_FILE;
+  if (piCodingAgentEntry) {
+    environment[PI_CODING_AGENT_ENTRY_ENV] = piCodingAgentEntry;
+  } else {
+    delete environment[PI_CODING_AGENT_ENTRY_ENV];
+  }
   return environment;
 }
 
@@ -40,6 +53,7 @@ export interface WebCommandDependencies {
   spawn(command: string, args: string[], options: SpawnWebOptions): WebProcess;
   clearTerminal(): void;
   holdParentSigint(): () => void;
+  resolvePiCodingAgentEntry(): string | undefined;
   shutdownTimeoutMs: number;
 }
 
@@ -65,6 +79,8 @@ const defaultDependencies: WebCommandDependencies = {
     process.on("SIGINT", keepPiAlive);
     return () => process.removeListener("SIGINT", keepPiAlive);
   },
+  resolvePiCodingAgentEntry: () =>
+    resolvePiCodingAgentEntry({ source: "host" }),
   shutdownTimeoutMs: DEFAULT_SHUTDOWN_TIMEOUT_MS,
 };
 
@@ -95,6 +111,7 @@ function runWebInForeground(
   dependencies: WebCommandDependencies,
   setActive: (active: ActiveWebProcess | undefined) => void,
   isShuttingDown: () => boolean,
+  piCodingAgentEntry: string,
 ) {
   return ctx.ui.custom<WebExit>((tui, _theme, _keybindings, done) => {
     let finished = false;
@@ -128,7 +145,7 @@ function runWebInForeground(
         [dependencies.entrypoint, "web", "--no-workspace"],
         {
           cwd: childCwd,
-          env: webProcessEnvironment(childCwd),
+          env: webProcessEnvironment(childCwd, piCodingAgentEntry),
           shell: false,
           stdio: "inherit",
         },
@@ -191,6 +208,11 @@ export default function web(
         ctx.ui.notify("OpenPI Web Workbench is already running.", "warning");
         return;
       }
+      const piCodingAgentEntry = dependencies.resolvePiCodingAgentEntry();
+      if (!piCodingAgentEntry) {
+        ctx.ui.notify(missingPiCodingAgentDiagnostic(), "error");
+        return;
+      }
 
       running = true;
       try {
@@ -201,6 +223,7 @@ export default function web(
             active = next;
           },
           () => shuttingDown,
+          piCodingAgentEntry,
         );
         if (shuttingDown) return;
         if (result.kind === "error") {

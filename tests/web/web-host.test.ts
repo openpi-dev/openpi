@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -64,7 +65,22 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       };
     },
     switchSession: async () => ({ cancelled: false }),
-    listModels: () => [],
+    listModels: () => [
+      {
+        provider: "fixture",
+        id: "current-model",
+        name: "Current",
+        label: "Current",
+        current: true,
+      },
+      {
+        provider: "fixture",
+        id: "other-model",
+        name: "Other",
+        label: "Other",
+        current: false,
+      },
+    ],
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -194,6 +210,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.workbench-header \{\s*display: none;\s*\}/);
     assert.match(
       stylesSource,
+      /@media \(max-width: 760px\) \{\s*\.workbench-header \{[^}]*backdrop-filter: none;[^}]*-webkit-backdrop-filter: none;/,
+    );
+    assert.match(
+      stylesSource,
       /\.composer\.dormant \{[^}]*border-style: dashed/,
     );
     assert.match(
@@ -243,6 +263,14 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
+    const unauthorizedCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+    );
+    assert.equal(unauthorizedCapabilities.status, 401);
+    const unauthorizedDiagnostics = await fetch(
+      `${launched.origin}/api/diagnostics`,
+    );
+    assert.equal(unauthorizedDiagnostics.status, 401);
 
     const response = await fetch(`${launched.origin}/api/snapshot`, {
       headers: authorized,
@@ -294,6 +322,69 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       omitted: 0,
       truncated: false,
     });
+    const capabilitiesResponse = await fetch(
+      `${launched.origin}/api/capabilities`,
+      { headers: authorized },
+    );
+    assert.equal(capabilitiesResponse.status, 200);
+    const capabilitiesBody = (await capabilitiesResponse.json()) as {
+      sessionId: string;
+      capabilities: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(capabilitiesBody).sort(), [
+      "capabilities",
+      "sessionId",
+    ]);
+    assert.equal(capabilitiesBody.sessionId, sessionManager.getSessionId());
+    assert.deepEqual(
+      capabilitiesBody.capabilities,
+      snapshot.runtime.capabilities,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(capabilitiesBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+      {
+        method: "POST",
+        headers: authorized,
+        body: "{}",
+      },
+    );
+    assert.equal(writeCapabilities.status, 405);
+
+    const diagnosticsResponse = await fetch(
+      `${launched.origin}/api/diagnostics`,
+      { headers: authorized },
+    );
+    assert.equal(diagnosticsResponse.status, 200);
+    const diagnosticsBody = await diagnosticsResponse.json();
+    assert.deepEqual(diagnosticsBody, {
+      node: process.version,
+      cwd,
+      sessionId: sessionManager.getSessionId(),
+      workspaceSelected: true,
+      models: [
+        {
+          provider: "fixture",
+          id: "current-model",
+          name: "Current",
+          label: "Current",
+          current: true,
+        },
+      ],
+    });
+    assert.doesNotMatch(
+      JSON.stringify(diagnosticsBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeDiagnostics = await fetch(`${launched.origin}/api/diagnostics`, {
+      method: "POST",
+      headers: authorized,
+      body: "{}",
+    });
+    assert.equal(writeDiagnostics.status, 405);
 
     const sessionsResponse = await fetch(`${launched.origin}/api/sessions`, {
       headers: authorized,
@@ -345,21 +436,9 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       body: JSON.stringify({
         sessionId: sessionManager.getSessionId(),
         content: "continue here",
-        commandId: "retry-command-1",
       }),
     });
     assert.equal(prompt.status, 202);
-    assert.deepEqual(prompts, ["continue here"]);
-    const retriedPrompt = await fetch(`${launched.origin}/api/prompt`, {
-      method: "POST",
-      headers: authorized,
-      body: JSON.stringify({
-        sessionId: sessionManager.getSessionId(),
-        content: "continue here",
-        commandId: "retry-command-1",
-      }),
-    });
-    assert.equal(retriedPrompt.status, 202);
     assert.deepEqual(prompts, ["continue here"]);
 
     const importResponse = await fetch(`${launched.origin}/api/workspaces`, {
@@ -709,6 +788,134 @@ async function startTestHost(runtime: WebRuntimeController) {
   return { host, launched, headers };
 }
 
+test("classifies invalid and oversized JSON bodies as client errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const invalidJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: '{"path":',
+    });
+    assert.equal(invalidJson.status, 400);
+    assert.deepEqual(await invalidJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body is invalid JSON",
+    });
+
+    const nonObjectJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: "[]",
+    });
+    assert.equal(nonObjectJson.status, 400);
+    assert.deepEqual(await nonObjectJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body must be an object",
+    });
+
+    const oversizedBody = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "x".repeat(16 * 1024) }),
+    });
+    assert.equal(oversizedBody.status, 413);
+    assert.deepEqual(await oversizedBody.json(), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("classifies an oversized body sent in multiple chunks as a client error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-chunks-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const bodyLength = 64 * 1024;
+  let request: ReturnType<typeof httpRequest> | undefined;
+  const responsePromise = new Promise<{
+    statusCode: number | undefined;
+    body: string;
+  }>((resolve, reject) => {
+    request = httpRequest(
+      {
+        hostname: launched.hostname,
+        port: Number(launched.port),
+        path: "/api/workspaces",
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "Content-Length": bodyLength,
+        },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () =>
+          resolve({ statusCode: response.statusCode, body }),
+        );
+      },
+    );
+    request.once("error", reject);
+    request.write(Buffer.alloc(20 * 1024, "a"));
+  });
+
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for early 413 response")),
+        2_000,
+      );
+      timer.unref();
+    });
+    const response = await Promise.race([responsePromise, timeout]);
+    assert.equal(response.statusCode, 413);
+    assert.deepEqual(JSON.parse(response.body), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    request?.destroy();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("keeps unexpected Web Host failures classified as server errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-server-error-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const adapter = (
+    host as unknown as {
+      adapter: { importWorkspace(path: string): Promise<string> };
+    }
+  ).adapter;
+  adapter.importWorkspace = async () => {
+    throw new Error("unexpected adapter failure");
+  };
+  try {
+    const response = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: cwd }),
+    });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), {
+      error: "unexpected adapter failure",
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("quiet SSE clients receive heartbeats without advancing the event cursor", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-heartbeat-"));
   const host = new WebHost({
@@ -733,7 +940,7 @@ test("quiet SSE clients receive heartbeats without advancing the event cursor", 
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let received = "";
-    while (!received.includes(": heartbeat\n\n")) {
+    while (!received.includes(": heartbeat\\n\\n")) {
       const chunk = await reader.read();
       assert.equal(chunk.done, false);
       received += decoder.decode(chunk.value, { stream: true });

@@ -265,6 +265,18 @@ function compactSummary(value, limit = 96) {
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
 }
 
+function applyPromptAcceptedState(alreadySettled) {
+  if (alreadySettled) {
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+    }
+    return;
+  }
+  state.liveRunning = true;
+  if (state.livePhase !== "running") state.livePhase = "preparing";
+}
+
 function relativeTime(value) {
   const elapsed = Date.now() - new Date(value).getTime();
   if (elapsed < 60_000) return "now";
@@ -810,8 +822,7 @@ async function sendPrompt() {
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
     $("prompt-input").value = "";
     resizePrompt();
     setComposerFeedback(t("acceptedHint"));
@@ -1127,8 +1138,7 @@ function applyRuntimeEvent(event) {
     scheduleSnapshotRefresh();
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_start") {
@@ -1136,11 +1146,18 @@ function applyRuntimeEvent(event) {
     state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
-  } else if (event.type === "agent_settled" || event.type === "prompt_settled") {
-    if (event.type === "prompt_settled") rememberTerminalPrompt(event.detail?.commandId);
+  } else if (event.type === "agent_settled") {
     state.liveRunning = false;
     state.livePhase = "idle";
     state.liveRetry = null;
+    renderConversation();
+  } else if (event.type === "prompt_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+    }
     renderConversation();
   } else if (event.detail?.message) {
     if (event.detail.message.role === "user") {

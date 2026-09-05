@@ -17,8 +17,8 @@ export const SUBAGENT_SCHEMA_BUDGETS = Object.freeze({
 
 /** Describes subagent_spawn, including the fixed concurrency cap. */
 export const SUBAGENT_SPAWN_TOOL_DESCRIPTION =
-  "Spawn a background in-process Pi subagent with its own context, child-safe tools, and normal host permissions. Returns immediately; its final result is delivered automatically. The child cannot see this conversation, ask the user, or orchestrate agents/workflows. Use only trusted working directories. " +
-  `Max ${MAX_RUNNING} subagents can be running at once.`;
+  "Spawn a background Pi subagent with isolated context and child-safe tools. Returns immediately; its result arrives automatically. It cannot see this chat, ask the user, or orchestrate. Use trusted directories. " +
+  `Max ${MAX_RUNNING} subagents can run at once.`;
 
 /** UTF-8 bounded, whitespace-normalized text for the parent-facing roster. */
 function boundedPurpose(description: string) {
@@ -152,6 +152,7 @@ export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
     'Optional "provider/model-id" or current-provider model override. Omit to use the preset, configured role, or parent default. Never guess a model name.',
   reasoningEffort:
     "Optional child thinking level. Honor the user's requested level. Otherwise choose a level supported by the resolved child model based on the selected role and task difficulty. An explicit value overrides a role default.",
+  outputSchema: "Optional result JSON Schema.",
 };
 
 /** The exact name/description/wire-schema source used by registration/tests. */
@@ -193,6 +194,15 @@ export function createSubagentSpawnToolSurface(
           description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
         }),
       ),
+      output_schema: Type.Optional(
+        Type.Object(
+          {},
+          {
+            additionalProperties: true,
+            description: SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.outputSchema,
+          },
+        ),
+      ),
     }),
   };
 }
@@ -207,6 +217,7 @@ export function buildSubagentSpawnResult(options: {
   agentTypeName?: string;
   tools?: readonly string[];
   worktreeBranch?: string;
+  structured?: boolean;
 }) {
   const typeNote = options.agentTypeName
     ? ` Agent type "${options.agentTypeName}" applied.`
@@ -226,8 +237,11 @@ export function buildSubagentSpawnResult(options: {
   const worktreeNote = options.worktreeBranch
     ? ` Isolated in its own worktree on branch "${options.worktreeBranch}" — its edits are invisible here until you merge that branch. The checkout stays available for later send/review and is reclaimed on Session retirement only when bounded inspection proves it empty.`
     : "";
+  const structuredNote = options.structured
+    ? " This run must finish with the requested validated structured result."
+    : "";
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}\n` +
+    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}${structuredNote}\n` +
     `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
     `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );
