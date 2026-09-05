@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import vm from "node:vm";
+
+const appDisposers = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  await Promise.all([...appDisposers].map((dispose) => dispose()));
+  appDisposers.clear();
+});
 
 /**
  * Executes web/ui/app.js in a stubbed DOM and feeds it a representative
@@ -291,6 +298,10 @@ async function renderApp(
     setItem: (key: string, value: string) => stored.set(key, value),
   };
   const replaced: string[] = [];
+  const windowListeners = new Map<
+    string,
+    Array<(event?: Record<string, unknown>) => void>
+  >();
   let eventFetches = 0;
   let snapshotFetches = 0;
   let readerCancellations = 0;
@@ -313,6 +324,7 @@ async function renderApp(
         eventFetches++;
         const connectionEvents = eventFetches === 1 ? encodedEvents : [];
         let index = 0;
+        let resolveRead: ((value: { done: boolean }) => void) | undefined;
         return {
           ok: true,
           status: 200,
@@ -320,6 +332,7 @@ async function renderApp(
             getReader: () => ({
               cancel: async () => {
                 readerCancellations++;
+                resolveRead?.({ done: true });
               },
               read: () =>
                 index < connectionEvents.length
@@ -327,7 +340,9 @@ async function renderApp(
                       done: false,
                       value: connectionEvents[index++],
                     })
-                  : new Promise(() => {}),
+                  : new Promise((resolve) => {
+                      resolveRead = resolve;
+                    }),
             }),
           },
         };
@@ -358,6 +373,15 @@ async function renderApp(
     clearInterval,
     setTimeout,
     clearTimeout,
+    addEventListener(
+      type: string,
+      listener: (event?: Record<string, unknown>) => void,
+    ) {
+      windowListeners.set(type, [
+        ...(windowListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -375,6 +399,17 @@ async function renderApp(
   );
   vm.runInContext(source, context as vm.Context, { filename: "app.js" });
   await new Promise((resolve) => setTimeout(resolve, 200));
+  const dispatchWindowEvent = (
+    type: string,
+    event?: Record<string, unknown>,
+  ) => {
+    for (const listener of windowListeners.get(type) ?? []) listener(event);
+  };
+  const dispose = async () => {
+    dispatchWindowEvent("pagehide", { persisted: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  appDisposers.add(dispose);
   return {
     elements,
     stored,
@@ -424,6 +459,15 @@ async function renderApp(
       resetCursor?: boolean;
       epoch?: number;
     }) => Promise<boolean>,
+    dispose,
+    suspendForPageCache: async () => {
+      dispatchWindowEvent("pagehide", { persisted: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    resumeFromPageCache: async () => {
+      dispatchWindowEvent("pageshow", { persisted: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
   };
 }
 
@@ -485,6 +529,14 @@ test("app.js uses quiet-stream heartbeats for bounded snapshot recovery", async 
   assert.equal(app.state.cursor, SNAPSHOT.cursor);
 });
 
+test("app.js keeps its one SSE loop across a back-forward cache restore", async () => {
+  const app = await renderApp();
+  assert.equal(app.eventFetches(), 1);
+  await app.suspendForPageCache();
+  await app.resumeFromPageCache();
+  assert.equal(app.eventFetches(), 1);
+});
+
 test("app.js bounds API waits and explains duplicate prompt admission", async () => {
   const app = await renderApp();
   app.context.fetch = async (
@@ -516,6 +568,100 @@ test("app.js bounds API waits and explains duplicate prompt admission", async ()
     app.elements.get("composer-hint")?.textContent,
     "OpenPI is still accepting the previous message.",
   );
+});
+
+test("app.js retries a timed-out admission with the exact same command", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  (
+    app.context.window as {
+      setTimeout(
+        callback: () => void,
+        delay: number,
+      ): ReturnType<typeof setTimeout>;
+    }
+  ).setTimeout = (callback: () => void, delay: number) =>
+    setTimeout(callback, delay === 30_000 ? 1 : delay);
+  app.context.fetch = (
+    url: unknown,
+    options?: {
+      body?: string;
+      signal?: AbortSignal;
+    },
+  ) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1) {
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        });
+      }
+      return Promise.resolve(
+        response({ id: requests[0]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+
+  input.value = "admit this once";
+  await app.sendPrompt();
+  assert.equal(app.state.promptAdmissionPending, false);
+  assert.ok(app.state.promptAdmission);
+
+  await app.sendPrompt();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], {
+    sessionId: "s1",
+    content: "admit this once",
+    commandId: requests[0]?.commandId,
+    retry: false,
+  });
+  assert.deepEqual(requests[1], {
+    ...requests[0],
+    retry: true,
+  });
+  assert.equal(app.state.promptAdmission, null);
+});
+
+test("app.js preserves an uncertain transport admission without resetting an active turn", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  app.context.fetch = (url: unknown, options?: { body?: string }) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1)
+        return Promise.reject(new TypeError("network dropped"));
+      return Promise.resolve(
+        response({ id: requests[0]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  app.state.liveRunning = true;
+  app.state.livePhase = "running";
+  input.value = "do not duplicate this";
+
+  await app.sendPrompt();
+  assert.equal(app.state.livePhase, "running");
+  assert.ok(app.state.promptAdmission);
+
+  await app.sendPrompt();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]?.commandId, requests[1]?.commandId);
+  assert.equal(requests[0]?.retry, false);
+  assert.equal(requests[1]?.retry, true);
 });
 
 test("app.js invalidates snapshots for cross-tab session metadata events", async () => {
@@ -1045,7 +1191,12 @@ test("app.js accepts an unbound snapshot and preserves a chosen workspace throug
   activated.selectedSession.cwd = chosenPath;
   let currentSnapshot: SnapshotFixture = chosen;
   let sessionCreations = 0;
-  const prompts: Array<{ sessionId: string; content: string }> = [];
+  const prompts: Array<{
+    sessionId: string;
+    content: string;
+    commandId?: string;
+    retry?: boolean;
+  }> = [];
   app.context.fetch = async (url: unknown, options?: { body?: string }) => {
     if (String(url) === "/api/workspaces/select") {
       return response({ cancelled: false, path: chosenPath });
@@ -1084,7 +1235,13 @@ test("app.js accepts an unbound snapshot and preserves a chosen workspace throug
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(sessionCreations, 1);
-  assert.deepEqual(prompts, [{ sessionId: "s1", content: "first task" }]);
+  assert.equal(prompts.length, 1);
+  assert.deepEqual(prompts[0], {
+    sessionId: "s1",
+    content: "first task",
+    commandId: prompts[0]?.commandId,
+    retry: false,
+  });
   assert.equal(app.state.selectedWorkspace, chosenPath);
   assert.equal(app.state.selectedPath, "/tmp/s1.jsonl");
   assert.equal(input.value, "");

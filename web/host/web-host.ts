@@ -39,7 +39,20 @@ const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
 const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
+const MAX_PROMPT_ADMISSIONS = 128;
 const execFileAsync = promisify(execFile);
+
+type PromptAdmissionResponse = {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+};
+
+type PromptAdmission = {
+  readonly sessionId: string;
+  readonly content: string;
+  readonly completion: Promise<PromptAdmissionResponse>;
+  result?: PromptAdmissionResponse;
+};
 
 type WebRequestErrorCode =
   | "INVALID_REQUEST_BODY"
@@ -103,11 +116,7 @@ export class WebHost {
   private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
   private readonly promptAdmissions = new Map<
     string,
-    {
-      readonly sessionId: string;
-      readonly content: string;
-      readonly promise: Promise<void>;
-    }
+    PromptAdmission
   >();
   private stopping = false;
   private stopPromise?: Promise<void>;
@@ -551,6 +560,42 @@ export class WebHost {
           error: "commandId must be at most 128 characters",
         });
       }
+      if (body.retry !== undefined && typeof body.retry !== "boolean") {
+        return this.json(response, 400, {
+          error: "retry must be a boolean when provided",
+        });
+      }
+      if (typeof body.sessionId !== "string") {
+        return this.json(response, 400, {
+          error: "sessionId is required",
+        });
+      }
+      const existing = this.promptAdmissions.get(commandId);
+      if (existing) {
+        if (
+          existing.sessionId !== body.sessionId ||
+          existing.content !== content
+        ) {
+          return this.json(response, 409, {
+            code: "COMMAND_CONFLICT",
+            error: "commandId is already bound to a different prompt",
+          });
+        }
+        const result = await existing.completion;
+        traceWeb("prompt_admission_replayed", {
+          commandId,
+          sessionId: body.sessionId,
+          status: result.status,
+          elapsedMs: elapsed(requestStarted),
+        });
+        return this.json(response, result.status, result.body);
+      }
+      if (body.retry === true) {
+        return this.json(response, 409, {
+          code: "COMMAND_ADMISSION_UNKNOWN",
+          error: "previous prompt admission is unknown; refresh canonical state before sending a new request",
+        });
+      }
       if (this.runtime.workspaceSelected !== true) {
         return this.json(response, 409, {
           code: "WORKSPACE_REQUIRED",
@@ -558,7 +603,6 @@ export class WebHost {
         });
       }
       if (
-        typeof body.sessionId !== "string" ||
         body.sessionId !== this.runtime.sessionManager.getSessionId()
       ) {
         return this.json(response, 409, {
@@ -566,68 +610,19 @@ export class WebHost {
           error: "Only the active Web session accepts messages",
         });
       }
-      traceWeb("prompt_received", {
-        commandId,
-        sessionId: body.sessionId,
-        chars: content.length,
-      });
-      let acceptedFresh = true;
-      try {
-        const existing = this.promptAdmissions.get(commandId);
-        if (existing) {
-          acceptedFresh = false;
-          if (
-            existing.sessionId !== body.sessionId ||
-            existing.content !== content
-          ) {
-            return this.json(response, 409, {
-              code: "COMMAND_CONFLICT",
-              error: "commandId is already bound to a different prompt",
-            });
-          }
-          await existing.promise;
-        } else {
-          const promise = this.runtime.sendPrompt(content, {
-            commandId,
-            expectedSessionId: body.sessionId,
-          });
-          this.promptAdmissions.set(commandId, {
-            sessionId: body.sessionId,
-            content,
-            promise,
-          });
-          await promise;
-        }
-        traceWeb("prompt_admission_finished", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-        });
-      } catch (error) {
-        const failure = this.runtimeRequestFailure(error);
-        traceWeb("prompt_admission_failed", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-          error: failure.error,
-        });
-        return this.json(response, failure.status, {
-          code: failure.code,
-          error: failure.error,
+      if (!this.makePromptAdmissionSpace()) {
+        return this.json(response, 503, {
+          code: "PROMPT_ADMISSION_CAPACITY",
+          error: "prompt admission capacity is full; wait for a pending admission to settle",
         });
       }
-      if (acceptedFresh) {
-        this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
-      }
-      traceWeb("prompt_response_sent", {
+      const admission = this.beginPromptAdmission(
         commandId,
-        sessionId: body.sessionId,
-        elapsedMs: elapsed(requestStarted),
-      });
-      return this.json(response, 202, {
-        id: commandId,
-        accepted: true,
-        state: "accepted",
-        cursor: this.sequence,
-      });
+        body.sessionId,
+        content,
+      );
+      const result = await admission.completion;
+      return this.json(response, result.status, result.body);
     }
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
@@ -726,6 +721,103 @@ export class WebHost {
     } catch {
       return undefined;
     }
+  }
+
+  private makePromptAdmissionSpace() {
+    while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
+      const settled = [...this.promptAdmissions.entries()].find(
+        ([, admission]) => admission.result !== undefined,
+      );
+      if (!settled) return false;
+      this.promptAdmissions.delete(settled[0]);
+    }
+    return true;
+  }
+
+  private beginPromptAdmission(
+    commandId: string,
+    sessionId: string,
+    content: string,
+  ) {
+    let settle!: (result: PromptAdmissionResponse) => void;
+    const admission: PromptAdmission = {
+      sessionId,
+      content,
+      completion: new Promise<PromptAdmissionResponse>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    // Store before dispatch: a client retry can only replay this record.
+    this.promptAdmissions.set(commandId, admission);
+    try {
+      traceWeb("prompt_received", {
+        commandId,
+        sessionId,
+        chars: content.length,
+      });
+    } catch {}
+    void Promise.resolve()
+      .then(() =>
+        this.runtime.sendPrompt(content, {
+          commandId,
+          expectedSessionId: sessionId,
+        }),
+      )
+      .then(
+        () => {
+          const result: PromptAdmissionResponse = {
+            status: 202,
+            body: {
+              id: commandId,
+              accepted: true,
+              state: "accepted",
+              cursor: this.sequence,
+            },
+          };
+          try {
+            this.publish("prompt_accepted", { commandId, sessionId });
+            result.body.cursor = this.sequence;
+          } catch {}
+          return result;
+        },
+        (error) => {
+          const failure = this.runtimeRequestFailure(error);
+          return {
+            status: failure.status,
+            body: { code: failure.code, error: failure.error },
+          };
+        },
+      )
+      .then((result: PromptAdmissionResponse) => {
+        admission.result = result;
+        settle(result);
+        try {
+          traceWeb(
+            result.status === 202
+              ? "prompt_admission_finished"
+              : "prompt_admission_failed",
+            {
+              commandId,
+              sessionId,
+              status: result.status,
+              ...(typeof result.body.error === "string"
+                ? { error: result.body.error }
+                : {}),
+            },
+          );
+        } catch {}
+      })
+      .catch((error) => {
+        if (admission.result) return;
+        const failure = this.runtimeRequestFailure(error);
+        const result: PromptAdmissionResponse = {
+          status: failure.status,
+          body: { code: failure.code, error: failure.error },
+        };
+        admission.result = result;
+        settle(result);
+      });
+    return admission;
   }
 
   private async readJson(request: IncomingMessage) {

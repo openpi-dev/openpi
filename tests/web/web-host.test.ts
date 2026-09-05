@@ -916,12 +916,15 @@ test("keeps unexpected Web Host failures classified as server errors", async () 
   }
 });
 
-test("quiet SSE clients receive heartbeats without advancing the event cursor", async () => {
+test("quiet SSE clients receive heartbeats without advancing the event cursor", {
+  timeout: 2_000,
+}, async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-heartbeat-"));
   const host = new WebHost({
     runtime: testRuntime(cwd),
     sseHeartbeatMs: 10,
   });
+  let request: ReturnType<typeof httpRequest> | undefined;
   try {
     await host.start();
     const launched = new URL(host.url);
@@ -931,26 +934,40 @@ test("quiet SSE clients receive heartbeats without advancing the event cursor", 
     const before = (await (
       await fetch(`${launched.origin}/api/snapshot`, { headers })
     ).json()) as { cursor: number };
-    const response = await fetch(
-      `${launched.origin}/events?cursor=${before.cursor}`,
-      { headers },
-    );
-    assert.equal(response.status, 200);
-    assert.ok(response.body);
-    const reader = response.body.getReader();
-    const decoder = new TextDecoder();
-    let received = "";
-    while (!received.includes(": heartbeat\\n\\n")) {
-      const chunk = await reader.read();
-      assert.equal(chunk.done, false);
-      received += decoder.decode(chunk.value, { stream: true });
-    }
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("timed out waiting for an SSE heartbeat")),
+        1_000,
+      );
+      request = httpRequest(
+        {
+          hostname: launched.hostname,
+          port: Number(launched.port),
+          path: `/events?cursor=${before.cursor}`,
+          headers,
+        },
+        (response) => {
+          assert.equal(response.statusCode, 200);
+          response.setEncoding("utf8");
+          let received = "";
+          response.on("data", (chunk: string) => {
+            received += chunk;
+            if (!received.includes(": heartbeat\n\n")) return;
+            clearTimeout(timeout);
+            resolve();
+          });
+          response.once("error", reject);
+        },
+      );
+      request.once("error", reject);
+      request.end();
+    });
     const after = (await (
       await fetch(`${launched.origin}/api/snapshot`, { headers })
     ).json()) as { cursor: number };
     assert.equal(after.cursor, before.cursor);
-    await reader.cancel();
   } finally {
+    request?.destroy();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
@@ -1020,7 +1037,9 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
     "PROMPT_REJECTED",
     422,
   );
+  let sendCalls = 0;
   const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
     throw rejection;
   });
   const { host, launched, headers } = await startTestHost(runtime);
@@ -1031,6 +1050,8 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
         content: "reject me",
+        commandId: "rejected-admission",
+        retry: false,
       }),
     });
     assert.equal(response.status, 422);
@@ -1038,7 +1059,180 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       code: "PROMPT_REJECTED",
       error: "Pi rejected this prompt",
     });
+    const replay = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "reject me",
+        commandId: "rejected-admission",
+        retry: true,
+      }),
+    });
+    assert.equal(replay.status, 422);
+    assert.deepEqual(await replay.json(), {
+      code: "PROMPT_REJECTED",
+      error: "Pi rejected this prompt",
+    });
+    assert.equal(sendCalls, 1);
   } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("replays one prompt admission after a browser timeout", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-retry-"));
+  let sendCalls = 0;
+  let releaseAdmission!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    releaseAdmission = resolve;
+  });
+  const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
+    await admitted;
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const commandId = "browser-timeout-retry";
+  const prompt = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    content: "send this exactly once",
+    commandId,
+  };
+  try {
+    const abort = new AbortController();
+    const timedOut = fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...prompt, retry: false }),
+      signal: abort.signal,
+    });
+    while (sendCalls === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    abort.abort();
+    await assert.rejects(timedOut, /abort/u);
+    // The host can accept after the client loses its receipt. The retry must
+    // replay that completed admission rather than dispatch it again.
+    releaseAdmission();
+    while (
+      (
+        (await (
+          await fetch(`${launched.origin}/api/snapshot`, { headers })
+        ).json()) as { cursor: number }
+      ).cursor < 2
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const replay = fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...prompt, retry: true }),
+    });
+    const response = await replay;
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      id: commandId,
+      accepted: true,
+      state: "accepted",
+      cursor: 2,
+    });
+    assert.equal(sendCalls, 1);
+
+    const conflict = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        content: "different body",
+        retry: true,
+      }),
+    });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), {
+      code: "COMMAND_CONFLICT",
+      error: "commandId is already bound to a different prompt",
+    });
+
+    const unknown = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        commandId: "after-host-restart",
+        retry: true,
+      }),
+    });
+    assert.equal(unknown.status, 409);
+    assert.deepEqual(await unknown.json(), {
+      code: "COMMAND_ADMISSION_UNKNOWN",
+      error:
+        "previous prompt admission is unknown; refresh canonical state before sending a new request",
+    });
+    assert.equal(sendCalls, 1);
+  } finally {
+    releaseAdmission?.();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("fails closed instead of evicting pending prompt admissions", {
+  timeout: 10_000,
+}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-capacity-"));
+  let sendCalls = 0;
+  let releaseAdmissions!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseAdmissions = resolve;
+  });
+  const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
+    await held;
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const requests = Array.from({ length: 128 }, (_, index) =>
+      fetch(`${launched.origin}/api/prompt`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: runtime.sessionManager.getSessionId(),
+          content: `pending ${index}`,
+          commandId: `pending-${index}`,
+          retry: false,
+        }),
+      }),
+    );
+    while (sendCalls !== 128) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const overflow = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "must not replace a pending admission",
+        commandId: "overflow",
+        retry: false,
+      }),
+    });
+    assert.equal(overflow.status, 503);
+    assert.deepEqual(await overflow.json(), {
+      code: "PROMPT_ADMISSION_CAPACITY",
+      error:
+        "prompt admission capacity is full; wait for a pending admission to settle",
+    });
+    assert.equal(sendCalls, 128);
+    releaseAdmissions();
+    assert.ok(
+      (await Promise.all(requests)).every(
+        (response) => response.status === 202,
+      ),
+    );
+  } finally {
+    releaseAdmissions?.();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }

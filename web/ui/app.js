@@ -22,6 +22,7 @@ const state = {
   promptAdmissionPending: false,
   promptAdmissionToken: null,
   promptAdmissionSequence: 0,
+  promptAdmission: null,
   terminalPromptIds: new Set(),
   sessionEpoch: 0,
   sessionSwitching: false,
@@ -69,7 +70,7 @@ const translations = {
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
     admissionPendingHint: "OpenPI is still accepting the previous message.",
-    admissionTimeout: "Prompt admission timed out. Your draft was restored; try again.",
+    admissionTimeout: "Prompt admission timed out. Retrying will check the same message.",
     requestTimeout: "The Web request timed out.",
     reconnectingHint: "Live updates were interrupted. Reconnecting and checking canonical state...",
     modelRunning: "Working...",
@@ -109,7 +110,7 @@ const translations = {
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
     admissionPendingHint: "OpenPI 仍在接收上一条消息，请稍候。",
-    admissionTimeout: "消息接收超时，草稿已恢复，请重试。",
+    admissionTimeout: "消息接收超时；重试会核对同一条消息。",
     requestTimeout: "Web 请求已超时。",
     reconnectingHint: "实时更新已中断，正在重连并核对权威状态……",
     modelRunning: "正在运行...",
@@ -245,11 +246,20 @@ async function api(path, options = {}) {
       },
     });
     const body = await response.json().catch(() => ({}));
-    if (!response.ok)
-      throw new Error(body.error || `Request failed (${response.status})`);
+    if (!response.ok) {
+      const failure = new Error(body.error || `Request failed (${response.status})`);
+      failure.name = "WebApiResponseError";
+      if (typeof body.code === "string") failure.code = body.code;
+      failure.status = response.status;
+      throw failure;
+    }
     return body;
   } catch (error) {
-    if (timedOut) throw new Error(timeoutMessage);
+    if (timedOut) {
+      const timeout = new Error(timeoutMessage);
+      timeout.name = "WebRequestTimeout";
+      throw timeout;
+    }
     throw error;
   } finally {
     window.clearTimeout(timer);
@@ -676,7 +686,8 @@ async function refreshSnapshot({
     state.snapshot = snapshot;
     if (
       state.snapshot.runtime.status !== "running" &&
-      !state.promptAdmissionPending
+      !state.promptAdmissionPending &&
+      !state.promptAdmission
     ) {
       state.liveRunning = false;
       state.livePhase = "idle";
@@ -722,6 +733,7 @@ async function selectSession(path) {
   state.selectedPath = path;
   state.promptAdmissionPending = false;
   state.promptAdmissionToken = null;
+  state.promptAdmission = null;
   resetLiveState();
   document.body.classList.remove("sidebar-open");
   renderWorkspaces();
@@ -802,13 +814,25 @@ async function sendPrompt() {
   if (!sessionId || state.sessionSwitching || state.promptAdmissionPending) return;
   const epoch = state.sessionEpoch;
   const admissionToken = ++state.promptAdmissionSequence;
-  const commandId = globalThis.crypto?.randomUUID?.() ||
-    `web-prompt-${Date.now()}-${admissionToken}`;
-  const optimisticKey = `optimistic-${commandId}`;
-  state.liveMessages = [
-    ...state.liveMessages,
-    { key: optimisticKey, message: { role: "user", content } },
-  ].slice(-8);
+  const retrying =
+    state.promptAdmission?.sessionId === sessionId &&
+    state.promptAdmission?.content === content;
+  const commandId = retrying
+    ? state.promptAdmission.commandId
+    : globalThis.crypto?.randomUUID?.() ||
+      `web-prompt-${Date.now()}-${admissionToken}`;
+  const optimisticKey = retrying
+    ? state.promptAdmission.optimisticKey
+    : `optimistic-${commandId}`;
+  if (!retrying) {
+    state.liveMessages = [
+      ...state.liveMessages,
+      { key: optimisticKey, message: { role: "user", content } },
+    ].slice(-8);
+  }
+  // Keep this attempt before dispatch. A timeout may be a lost receipt, not a
+  // failed admission, so the next submit must replay this exact request.
+  state.promptAdmission = { sessionId, content, commandId, optimisticKey };
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
   clearComposerFeedback();
@@ -816,22 +840,45 @@ async function sendPrompt() {
   try {
     const receipt = await api("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content, commandId }),
+      body: JSON.stringify({ sessionId, content, commandId, retry: retrying }),
       timeoutMs: PROMPT_ADMISSION_TIMEOUT_MS,
       timeoutMessage: t("admissionTimeout"),
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
     applyPromptAcceptedState(alreadySettled);
+    if (state.promptAdmission?.commandId === commandId) {
+      state.promptAdmission = null;
+    }
     $("prompt-input").value = "";
     resizePrompt();
     setComposerFeedback(t("acceptedHint"));
     scheduleSnapshotRefresh(120);
   } catch (error) {
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
-    state.liveRunning = false;
-    state.livePhase = "idle";
-    state.liveRetry = null;
+    const knownRejection =
+      error?.name === "WebApiResponseError" &&
+      [
+        "WORKSPACE_REQUIRED",
+        "SESSION_CONFLICT",
+        "PROMPT_REJECTED",
+        "COMMAND_CONFLICT",
+      ].includes(error?.code);
+    if (!knownRejection) {
+      if (state.livePhase !== "running") {
+        state.liveRunning = true;
+        state.livePhase = "preparing";
+      }
+      state.liveRetry = null;
+      setComposerFeedback(
+        error?.name === "WebRequestTimeout" ? t("admissionTimeout") : error.message,
+        "connection",
+      );
+      return;
+    }
+    if (state.promptAdmission?.commandId === commandId) {
+      state.promptAdmission = null;
+    }
     state.liveMessages = state.liveMessages.filter(
       (entry) => entry.key !== optimisticKey,
     );
@@ -926,6 +973,7 @@ async function createSession(workspacePath) {
   state.selectedPath = null;
   state.promptAdmissionPending = false;
   state.promptAdmissionToken = null;
+  state.promptAdmission = null;
   resetLiveState();
   document.body.classList.remove("sidebar-open");
   renderWorkspaces();
@@ -1238,6 +1286,17 @@ function rememberCompletedActivation(commandId) {
 }
 
 let eventLoopStarted = false;
+let eventLoopStopped = false;
+let activeEventReader = null;
+
+window.addEventListener("pagehide", (event) => {
+  // A bfcache entry resumes this same document and its event loop. Do not
+  // create a second SSE connection on pageshow.
+  if (event.persisted) return;
+  eventLoopStopped = true;
+  void activeEventReader?.cancel().catch(() => undefined);
+});
+
 function resetLiveState() {
   state.liveMessages = [];
   state.liveRunning = false;
@@ -1249,7 +1308,7 @@ async function connectEvents() {
   if (eventLoopStarted) return;
   eventLoopStarted = true;
   let reconnectDelay = 500;
-  while (true) {
+  while (!eventLoopStopped) {
     let reader = null;
     let recoveryAttempted = false;
     try {
@@ -1274,6 +1333,7 @@ async function connectEvents() {
       clearComposerFeedback("connection");
       reconnectDelay = 500;
       reader = response.body.getReader();
+      activeEventReader = reader;
       const decoder = new TextDecoder();
       let buffer = "";
       let heartbeatCount = 0;
@@ -1305,7 +1365,9 @@ async function connectEvents() {
       }
     } catch {
       await reader?.cancel().catch(() => undefined);
+      if (activeEventReader === reader) activeEventReader = null;
       reader = null;
+      if (eventLoopStopped) break;
       $("connection-state").textContent = "Reconnecting";
       $("connection-state").classList.add("reconnecting");
       const recovered = recoveryAttempted
@@ -1317,6 +1379,7 @@ async function connectEvents() {
       reconnectDelay = Math.min(reconnectDelay * 2, 5_000);
     } finally {
       await reader?.cancel().catch(() => undefined);
+      if (activeEventReader === reader) activeEventReader = null;
     }
   }
 }
