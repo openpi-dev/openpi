@@ -697,6 +697,76 @@ async function startTestHost(runtime: WebRuntimeController) {
   return { host, launched, headers };
 }
 
+test("classifies invalid and oversized JSON bodies as client errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const invalidJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: '{"path":',
+    });
+    assert.equal(invalidJson.status, 400);
+    assert.deepEqual(await invalidJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body is invalid JSON",
+    });
+
+    const nonObjectJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: "[]",
+    });
+    assert.equal(nonObjectJson.status, 400);
+    assert.deepEqual(await nonObjectJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body must be an object",
+    });
+
+    const oversizedBody = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "x".repeat(16 * 1024) }),
+    });
+    assert.equal(oversizedBody.status, 413);
+    assert.deepEqual(await oversizedBody.json(), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("keeps unexpected Web Host failures classified as server errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-server-error-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const adapter = (
+    host as unknown as {
+      adapter: { importWorkspace(path: string): Promise<string> };
+    }
+  ).adapter;
+  adapter.importWorkspace = async () => {
+    throw new Error("unexpected adapter failure");
+  };
+  try {
+    const response = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: cwd }),
+    });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), {
+      error: "unexpected adapter failure",
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("adapter initialization fails before the Host starts listening", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-startup-failure-"));
   const runtime = testRuntime(cwd);
