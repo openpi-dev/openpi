@@ -56,7 +56,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "Interactive sessions launch in the background by default and deliver completion later. Set wait: true only when this tool call must return the final result inline.",
   "Derive fan-out from independent verifiable work items and task difficulty. Concurrency is a runtime ceiling, not a target or the total-call limit; user cost, count, model, and effort constraints take precedence.",
   "For concurrent writers use isolation: 'worktree' and tell each agent to commit. Read-only work should normally stay in the shared checkout.",
-  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, acceptance, result refs, replay, background lifecycle, limits, and examples.",
+  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, result refs, replay, background lifecycle, limits, and examples.",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
@@ -157,7 +157,9 @@ export function buildWorkflowResultMessage(
               : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
-          (agent.acceptance ? ` · acceptance ${agent.acceptance.status}` : "") +
+          (agent.acceptance
+            ? ` · deprecated model self-attestation ${agent.acceptance.status}`
+            : "") +
           (agent.error ? ` — ${agent.error}` : ""),
       );
     }

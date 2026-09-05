@@ -52,6 +52,11 @@ test("the standalone CLI ships its TypeScript module loader", () => {
   assert.equal(manifest.dependencies?.jiti, "2.7.0");
 });
 
+test("the standalone Web CLI carries the Pi 0.85 server packaging workaround", () => {
+  // Remove with OpenPI #395 after upstream earendil-works/pi#9140 is released.
+  assert.equal(manifest.dependencies?.["@earendil-works/pi-server"], "0.85.0");
+});
+
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
   assert.equal(manifest.dependencies?.["pi-intercom"], undefined);
   assert.equal(manifest.devDependencies?.["pi-intercom"], undefined);

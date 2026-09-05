@@ -301,13 +301,24 @@ test("unproven or non-standalone rm input fails closed", async () => {
 
 test("quoted or escaped literals remain directly verifiable", async () => {
   await withWorkspace(async (workspace) => {
-    for (const target of [
-      "keep*.txt",
-      "keep\\*.txt",
-      "keep.txt",
-      "scratch$1.txt",
-      "file name.txt",
-    ]) {
+    const cases =
+      process.platform === "win32"
+        ? [
+            ["rm 'keep[1].txt'", "keep[1].txt"],
+            ["rm scratch\\$1.txt", "scratch$1.txt"],
+            ["rm 'scratch$1.txt'", "scratch$1.txt"],
+            ['rm "file name.txt"', "file name.txt"],
+            ['rm "keep\\\n.txt"', "keep.txt"],
+          ]
+        : [
+            ["rm 'keep*.txt'", "keep*.txt"],
+            ["rm keep\\*.txt", "keep*.txt"],
+            ["rm 'scratch$1.txt'", "scratch$1.txt"],
+            ['rm "file name.txt"', "file name.txt"],
+            ['rm "keep\\*.txt"', "keep\\*.txt"],
+            ['rm "keep\\\n.txt"', "keep.txt"],
+          ];
+    for (const target of new Set(cases.map(([, target]) => target))) {
       await writeFile(path.join(workspace, target), "keep");
     }
     const confirmations: string[][] = [];
@@ -316,14 +327,7 @@ test("quoted or escaped literals remain directly verifiable", async () => {
       return false;
     });
 
-    for (const [index, command] of [
-      "rm 'keep*.txt'",
-      "rm keep\\*.txt",
-      "rm 'scratch$1.txt'",
-      'rm "file name.txt"',
-      'rm "keep\\*.txt"',
-      'rm "keep\\\n.txt"',
-    ].entries()) {
+    for (const [index, [command]] of cases.entries()) {
       assert.equal(
         (
           await guard.before({
@@ -336,14 +340,10 @@ test("quoted or escaped literals remain directly verifiable", async () => {
         command,
       );
     }
-    assert.deepEqual(confirmations, [
-      ["keep*.txt"],
-      ["keep*.txt"],
-      ["scratch$1.txt"],
-      ["file name.txt"],
-      ["keep\\*.txt"],
-      ["keep.txt"],
-    ]);
+    assert.deepEqual(
+      confirmations,
+      cases.map(([, target]) => [target]),
+    );
   });
 });
 
@@ -413,7 +413,7 @@ test("direct rm targets must resolve from workspace-relative paths", async () =>
     });
 
     for (const [index, command] of [
-      `rm ${target}`,
+      "rm /outside/keep.txt",
       "rm ../keep.txt",
       "rm .",
       "rm ~/keep.txt",

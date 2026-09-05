@@ -22,6 +22,25 @@ export interface AcceptanceLedger {
   readonly status: "accepted" | "rejected" | "missing" | "malformed";
   readonly criteria: readonly AcceptanceCriterionResult[];
   readonly errors: readonly string[];
+  /** Child-authored judgment retained only for migration; never a runtime fact. */
+  readonly authority?: "model-self-attestation";
+  readonly deprecated?: {
+    readonly since: "0.5";
+    readonly removal: "1.0";
+  };
+}
+
+export const ACCEPTANCE_DEPRECATION_WARNING =
+  "acceptance is deprecated since OpenPI 0.5 and will be removed in 1.0; it is model self-attestation, not runtime-verified evidence, and does not determine ok";
+
+function ledger(
+  value: Omit<AcceptanceLedger, "authority" | "deprecated">,
+): AcceptanceLedger {
+  return {
+    ...value,
+    authority: "model-self-attestation",
+    deprecated: { since: "0.5", removal: "1.0" },
+  };
 }
 
 const ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/;
@@ -169,6 +188,12 @@ export function isAcceptanceLedger(value: unknown): value is AcceptanceLedger {
       value.status === "rejected" ||
       value.status === "missing" ||
       value.status === "malformed") &&
+    (value.authority === undefined ||
+      value.authority === "model-self-attestation") &&
+    (value.deprecated === undefined ||
+      (record(value.deprecated) &&
+        value.deprecated.since === "0.5" &&
+        value.deprecated.removal === "1.0")) &&
     value.errors.every((error) => typeof error === "string") &&
     value.criteria.every(
       (criterion) =>
@@ -187,7 +212,7 @@ export function acceptanceInstruction(contract: AcceptanceContract) {
       `- ${criterion.id}: ${criterion.description}${criterion.requiredEvidence?.length ? `; required evidence labels: ${criterion.requiredEvidence.join(", ")}` : ""}`,
   );
   return [
-    "Acceptance is explicit evidence, not a self-awarded success claim.",
+    "Deprecated compatibility protocol: this acceptance ledger is your own model self-attestation, not runtime-verified evidence, and it does not determine execution success.",
     "Include an `acceptance.criteria` array in structured_output with exactly these ids. Mark rejected when the criterion is not demonstrated. Evidence entries must be concise labels or concrete references; do not invent evidence.",
     ...criteria,
   ].join("\n");
@@ -198,19 +223,19 @@ export function evaluateAcceptance(
   structured: unknown,
 ): AcceptanceLedger {
   if (!record(structured) || !record(structured.acceptance)) {
-    return {
+    return ledger({
       status: "missing",
       criteria: [],
       errors: ["structured result omitted acceptance"],
-    };
+    });
   }
   const rawCriteria = structured.acceptance.criteria;
   if (!Array.isArray(rawCriteria)) {
-    return {
+    return ledger({
       status: "malformed",
       criteria: [],
       errors: ["acceptance.criteria is not an array"],
-    };
+    });
   }
   const errors: string[] = [];
   const byId = new Map<string, AcceptanceCriterionResult>();
@@ -265,14 +290,15 @@ export function evaluateAcceptance(
       errors.push(`unexpected acceptance criterion "${id}"`);
     }
   }
-  if (errors.length) return { status: "malformed", criteria: results, errors };
-  return {
+  if (errors.length)
+    return ledger({ status: "malformed", criteria: results, errors });
+  return ledger({
     status: results.every((result) => result.status === "accepted")
       ? "accepted"
       : "rejected",
     criteria: results,
     errors: [],
-  };
+  });
 }
 
 export function applyAcceptance(options: {
@@ -284,15 +310,13 @@ export function applyAcceptance(options: {
   const ledger = options.contract
     ? evaluateAcceptance(options.contract, options.structured)
     : undefined;
-  const acceptanceError =
-    ledger && ledger.status !== "accepted"
-      ? `Acceptance ${ledger.status}${ledger.errors.length ? `: ${ledger.errors.join("; ")}` : ": one or more criteria were rejected"}`
-      : undefined;
-  const ok = options.agentOk && !acceptanceError;
-  const error = ok
-    ? undefined
-    : options.agentError
-      ? `${options.agentError}${acceptanceError ? `; ${acceptanceError}` : ""}`
-      : (acceptanceError ?? "Agent failed");
-  return { ok, ...(ledger ? { ledger } : {}), ...(error ? { error } : {}) };
+  const ok = options.agentOk;
+  const error = ok ? undefined : (options.agentError ?? "Agent failed");
+  return {
+    ok,
+    ...(ledger
+      ? { ledger, acceptanceWarning: ACCEPTANCE_DEPRECATION_WARNING }
+      : {}),
+    ...(error ? { error } : {}),
+  };
 }

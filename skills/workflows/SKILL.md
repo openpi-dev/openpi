@@ -1,6 +1,6 @@
 ---
 name: workflows
-description: Orchestrates multi-agent work with OpenPI's inline JavaScript Workflow DSL. Use when a task needs multi-phase fan-out, pipelines, barriers, structured handoffs, acceptance evidence, or resumable background orchestration.
+description: Orchestrates multi-agent work with OpenPI's inline JavaScript Workflow DSL. Use when a task needs multi-phase fan-out, pipelines, barriers, structured handoffs, or resumable background orchestration.
 ---
 
 # Workflows

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtemp, mkdir, rm, symlink } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import test from "node:test";
 import { createSessionStatsLoader } from "../../../extensions/sessions/git-stats.ts";
 import type { SessionInfoLike } from "../../../extensions/sessions/sessions.ts";
@@ -105,6 +105,7 @@ test("overlapping viewport work is retained while work that leaves is cancelled"
   });
   const loader = createSessionStatsLoader({
     maxConcurrency: 4,
+    canonicalizeCwd: async (cwd) => cwd,
     runGit: (args, cwd, signal) => {
       const id = `${cwd}:${args[0]}`;
       started.push(id);
@@ -140,7 +141,8 @@ test("overlapping viewport work is retained while work that leaves is cancelled"
 
   assert.equal(aborted.length, 4);
   assert.equal(
-    started.filter((entry) => entry.startsWith("/tmp/project-2:")).length,
+    started.filter((entry) => entry.startsWith(`${resolve("/tmp/project-2")}:`))
+      .length,
     2,
     "overlapping work must not restart",
   );
@@ -219,7 +221,11 @@ test("real and symlink workspace paths share one canonical latest bucket", async
   const alias = join(root, "alias");
   try {
     await mkdir(workspace);
-    await symlink(workspace, alias);
+    await symlink(
+      workspace,
+      alias,
+      process.platform === "win32" ? "junction" : "dir",
+    );
     const [newest, older] = makeSessions(2).map((entry, index) => ({
       ...entry,
       cwd: index === 0 ? workspace : alias,
