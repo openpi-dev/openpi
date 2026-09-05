@@ -33,6 +33,10 @@ import {
   acquireWebHostLease,
   type WebHostLease,
 } from "./web-host-lease.ts";
+import {
+  projectWebTrustStatus,
+  type WebProjectTrustStatus,
+} from "./trust-status.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_WORKSPACE_DIRECTORY = ".bootstrap-workspace";
@@ -168,6 +172,23 @@ export class PiWebRuntime implements WebRuntimeController {
 
   get sessionManager() {
     return this.runtime.session.sessionManager;
+  }
+
+  getProjectTrustStatus(): WebProjectTrustStatus {
+    if (!this.hasSelectedWorkspace) return projectWebTrustStatus({});
+    const workspace = this.cwd;
+    try {
+      const storedDecision = new ProjectTrustStore(getAgentDir()).get(workspace);
+      return projectWebTrustStatus({
+        workspace,
+        storedDecision,
+        projectResources: hasTrustRequiringProjectResources(workspace),
+        sessionTrusted:
+          this.runtime.session.settingsManager.isProjectTrusted(),
+      });
+    } catch {
+      return projectWebTrustStatus({ workspace });
+    }
   }
 
   isIdle() {

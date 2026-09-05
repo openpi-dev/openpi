@@ -557,6 +557,15 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/trust") {
+      if (!this.runtime.getProjectTrustStatus) {
+        return this.json(response, 501, {
+          code: "PROJECT_TRUST_STATUS_UNAVAILABLE",
+          error: "project Trust status is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.getProjectTrustStatus());
+    }
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(

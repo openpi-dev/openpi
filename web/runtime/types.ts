@@ -1,5 +1,6 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { WebModelSummary } from "../protocol/types.ts";
+import type { WebProjectTrustStatus } from "./trust-status.ts";
 
 export interface WebRuntimeEvent {
   type: string;
@@ -53,6 +54,7 @@ export interface WebRuntimeController {
   readonly workspaceSelected: boolean;
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
+  getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
   newSession(
