@@ -8,5 +8,6 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 
 - [`CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md) — official-source research on dynamic fan-out and bounded execution.
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
+- [`CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md`](CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md) — Issue #19 的 Explicit/Adaptive gateway 边界研究。
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
