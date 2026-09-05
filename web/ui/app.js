@@ -1079,11 +1079,18 @@ function applyRuntimeEvent(event) {
     state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
-  } else if (event.type === "agent_settled" || event.type === "prompt_settled") {
-    if (event.type === "prompt_settled") rememberTerminalPrompt(event.detail?.commandId);
+  } else if (event.type === "agent_settled") {
     state.liveRunning = false;
     state.livePhase = "idle";
     state.liveRetry = null;
+    renderConversation();
+  } else if (event.type === "prompt_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+    }
     renderConversation();
   } else if (event.detail?.message) {
     if (event.detail.message.role === "user") {
