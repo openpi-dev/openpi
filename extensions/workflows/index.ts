@@ -55,6 +55,7 @@ import {
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { waitBounded } from "../shared/child-session.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -537,6 +538,8 @@ interface ScriptAgentResult {
   /** Opaque same-run handle for bounded downstream handoff. */
   ref?: string;
   acceptance?: AgentRecord["acceptance"];
+  /** Present only for the deprecated model self-attestation compatibility path. */
+  acceptanceWarning?: string;
   error?: string;
 }
 
@@ -857,6 +860,8 @@ export default function workflows(
   };
   const resultDelivery = createWorkflowResultDelivery({
     isIdle: () => lastContext?.isIdle() ?? false,
+    owner: () =>
+      lastContext ? completionOwnerFor(lastContext.sessionManager) : undefined,
     persist: (details) => {
       if (!details.delivery)
         throw new Error("Workflow delivery identity is missing");
@@ -1276,6 +1281,8 @@ export default function workflows(
         agents: [],
         delivery: {
           id: `workflow:${runId}:terminal`,
+          ownerSessionId: completionOwnerFor(ctx.sessionManager).sessionId,
+          ownerEpoch: completionOwnerFor(ctx.sessionManager).epoch,
           state: launchMode === "inline" ? "held-for-inline" : "none",
           attempts: 0,
           updatedAt: now,
@@ -1880,6 +1887,9 @@ export default function workflows(
               : {}),
             ...(ref ? { ref } : {}),
             ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+            ...(judged.acceptanceWarning
+              ? { acceptanceWarning: judged.acceptanceWarning }
+              : {}),
           };
         }
 
@@ -2131,6 +2141,9 @@ export default function workflows(
                   : {}),
                 ...(ref ? { ref } : {}),
                 ...(acceptance ? { acceptance } : {}),
+                ...(judged.acceptanceWarning
+                  ? { acceptanceWarning: judged.acceptanceWarning }
+                  : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
               };
             } finally {
