@@ -472,12 +472,19 @@ test("app.js resolves system theme and keeps explicit choices stable", async () 
     systemDark: false,
   });
   assert.equal(systemLight.documentElement.dataset.theme, "light");
-  vm.runInContext(
-    'applyThemePreference("dark")',
-    systemLight.context as vm.Context,
-  );
   systemLight.setSystemTheme(true);
   assert.equal(systemLight.documentElement.dataset.theme, "dark");
+  systemLight.setSystemTheme(false);
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+
+  const explicitDark = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "dark" } },
+    systemDark: false,
+  });
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+  explicitDark.setSystemTheme(true);
+  explicitDark.setSystemTheme(false);
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
 
   const explicitLight = await renderApp({
     snapshot: { ...SNAPSHOT, preferences: { theme: "light" } },
@@ -485,6 +492,7 @@ test("app.js resolves system theme and keeps explicit choices stable", async () 
   });
   assert.equal(explicitLight.documentElement.dataset.theme, "light");
   explicitLight.setSystemTheme(false);
+  explicitLight.setSystemTheme(true);
   assert.equal(explicitLight.documentElement.dataset.theme, "light");
 });
 
