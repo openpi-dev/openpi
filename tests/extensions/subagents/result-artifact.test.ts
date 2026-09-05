@@ -139,7 +139,9 @@ test("content-addressed artifacts are exact, private, and reusable", async () =>
 
     assert.equal(first, second);
     assert.equal(await readFile(first, "utf8"), content);
-    assert.equal((await lstat(first)).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(first)).mode & 0o777, 0o600);
+    }
     assert.equal(path.basename(first).length, 68);
   } finally {
     await rm(agentDir, { recursive: true, force: true });
@@ -150,7 +152,11 @@ test("artifact persistence refuses a symlinked cache component", async () => {
   const agentDir = await mkdtemp(path.join(tmpdir(), "openpi-result-symlink-"));
   const outside = await mkdtemp(path.join(tmpdir(), "openpi-result-outside-"));
   try {
-    await symlink(outside, path.join(agentDir, "cache"));
+    await symlink(
+      outside,
+      path.join(agentDir, "cache"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     assert.throws(
       () => persistResultArtifact(agentDir, "do not write outside"),
       /Unsafe result artifact directory/,

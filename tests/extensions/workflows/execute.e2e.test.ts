@@ -1146,7 +1146,7 @@ async function runTamperedAcceptanceReplay(
   const script =
     `export const meta = { name: "acceptance-replay-${fixtureId}" };\n` +
     'const r = await agent("verify the fixture", { agent_type: "reviewer", acceptance: { criteria: [{ id: "tests", description: "Focused tests pass", requiredEvidence: ["command"] }] } });\n' +
-    "return { ok: r.ok, error: r.error };";
+    "return { ok: r.ok, error: r.error, acceptanceWarning: r.acceptanceWarning };";
 
   try {
     const first = (await workflow.execute(
@@ -1195,50 +1195,46 @@ const replayAcceptanceVerdicts = [
   "malformed",
 ] as const satisfies readonly ReplayAcceptanceVerdict[];
 
-// Keep the three projections independent: the script-visible result, the
-// persisted lifecycle record, and success-only filesystem side effects.
-test("replay acceptance verdicts preserve the script return contract", async () => {
+// Keep the three projections independent: the deprecated model judgment, the
+// runtime execution record, and success-only filesystem side effects.
+test("replay self-attestation verdicts do not override runtime success", async () => {
   for (const verdict of replayAcceptanceVerdicts) {
     const fixture = await runTamperedAcceptanceReplay(verdict);
     const projected = fixture.resumed.content
       .map((entry) => entry.text)
       .join("\n");
-    assert.match(projected, /"ok"\s*:\s*false/);
-    assert.match(projected, new RegExp(`Acceptance ${verdict}`));
-    if (verdict === "malformed") {
-      const error = projected.match(/Acceptance malformed[^\n]*/)?.[0] ?? "";
-      assert.ok([...error].length <= 2_000);
-      assert.ok(!/[\u0000-\u001f\u007f-\u009f]/.test(error));
-    }
+    assert.match(projected, /"ok"\s*:\s*true/);
+    assert.doesNotMatch(projected, /"error"/);
+    assert.match(projected, /model self-attestation/);
   }
 });
 
-test("replay acceptance verdicts persist fail-closed runtime records", async () => {
+test("replay self-attestation remains distinct from runtime records", async () => {
   for (const verdict of replayAcceptanceVerdicts) {
     const { agents, sessionCreations } =
       await runTamperedAcceptanceReplay(verdict);
     assert.equal(sessionCreations, 1);
     assert.equal(agents.length, 1);
-    assert.equal(agents[0]?.state, "error");
-    assert.equal(agents[0]?.replayed, undefined);
-    assert.equal(agents[0]?.invocation?.admissionState, "rejected");
+    assert.equal(agents[0]?.state, "done");
+    assert.equal(agents[0]?.replayed, true);
+    assert.equal(agents[0]?.invocation?.admissionState, "replayed");
     assert.equal(agents[0]?.invocation?.executionState, "settled");
-    assert.equal(agents[0]?.invocation?.outcome, "error");
+    assert.equal(agents[0]?.invocation?.outcome, "success");
     assert.equal(agents[0]?.acceptance?.status, verdict);
-    assert.match(String(agents[0]?.error), new RegExp(`Acceptance ${verdict}`));
-    assert.equal(agents[0]?.resultArtifact, undefined);
-    assert.equal(agents[0]?.resultRef, undefined);
+    assert.equal(agents[0]?.error, undefined);
+    assert.equal(typeof agents[0]?.resultArtifact, "string");
+    assert.equal(typeof agents[0]?.resultRef, "string");
   }
 });
 
-test("replay acceptance verdicts do not create success filesystem side effects", async () => {
+test("replayed runtime successes retain artifacts despite self-attestation", async () => {
   for (const verdict of replayAcceptanceVerdicts) {
     const { runDir } = await runTamperedAcceptanceReplay(verdict);
     assert.equal(
       existsSync(join(runDir, "agent-results/agent-0001.json")),
-      false,
+      true,
     );
-    assert.equal(existsSync(join(runDir, "journal.json")), false);
+    assert.equal(existsSync(join(runDir, "journal.json")), true);
   }
 });
 
