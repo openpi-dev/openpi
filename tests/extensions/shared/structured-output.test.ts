@@ -52,4 +52,12 @@ test("schema and result bounds fail closed without producing partial JSON", () =
     () => encodeStructuredResult({ value: Number.NaN }),
     /only acyclic JSON values/,
   );
+  assert.throws(
+    () =>
+      encodeStructuredResult({
+        a: "a".repeat(STRUCTURED_RESULT_LIMITS.resultStringBytes),
+        b: "b".repeat(STRUCTURED_RESULT_LIMITS.resultStringBytes),
+      }),
+    /total byte limit/,
+  );
 });
