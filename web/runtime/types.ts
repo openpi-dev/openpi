@@ -53,6 +53,7 @@ export interface WebRuntimeController {
   readonly workspaceSelected: boolean;
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
+  readonly projectTrustState?: "trusted" | "untrusted" | "unknown";
   isIdle(): boolean;
   sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
   newSession(
