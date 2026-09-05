@@ -146,3 +146,21 @@ test("an unavailable owner becomes an inspectable dead letter", () => {
   assert.equal(inbox.size(), 0);
   assert.equal(inbox.inspectDeadLetters()[0]?.failure, "owner-unavailable");
 });
+
+test("an unowned completion cannot match any session and dead-letters fail-closed", () => {
+  const inbox = createCompletionInbox<{ value: string }>();
+  assert.equal(
+    inbox.defer(
+      envelope("unowned-1", {
+        owner: { sessionId: "unowned", epoch: 0 },
+      }),
+      {
+        sessionId: "unowned",
+        epoch: 0,
+      },
+    ),
+    false,
+  );
+  assert.equal(inbox.size(), 0);
+  assert.equal(inbox.inspectDeadLetters()[0]?.failure, "stale-owner");
+});

@@ -32,7 +32,12 @@ export interface CompletionDeadLetter {
 }
 
 function sameOwner(left: CompletionOwner, right: CompletionOwner) {
-  return left.sessionId === right.sessionId && left.epoch === right.epoch;
+  return (
+    Boolean(left.sessionId) &&
+    left.sessionId !== "unowned" &&
+    left.sessionId === right.sessionId &&
+    left.epoch === right.epoch
+  );
 }
 
 let nextOwnerEpoch = 1;

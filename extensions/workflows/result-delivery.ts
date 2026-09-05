@@ -68,16 +68,25 @@ export function createWorkflowResultDelivery(
   const inboxEnvelope = (
     envelope: WorkflowCompletionEnvelope,
   ): CompletionEnvelope<WorkflowCompletionEnvelope> => {
-    const owner = currentOwner();
+    const delivery = envelope.details.delivery;
+    const deliverySessionId = delivery?.ownerSessionId;
+    const detailsSessionId = envelope.details.sessionId;
+
+    // Conflicting owner fields invalidate delivery ownership fail-closed.
+    const hasConflict =
+      deliverySessionId !== undefined &&
+      detailsSessionId !== undefined &&
+      deliverySessionId !== detailsSessionId;
+
+    const ownerSessionId = hasConflict ? undefined : deliverySessionId;
     return {
       deliveryId: envelope.deliveryId,
       owner: {
         sessionId:
-          envelope.details.delivery?.ownerSessionId ??
-          envelope.details.sessionId ??
-          owner?.sessionId ??
-          "unowned",
-        epoch: envelope.details.delivery?.ownerEpoch ?? 0,
+          ownerSessionId && ownerSessionId !== "unowned"
+            ? ownerSessionId
+            : "unowned",
+        epoch: delivery?.ownerEpoch ?? 0,
       },
       producer: "workflow",
       producerId: envelope.runId,
@@ -251,10 +260,15 @@ export function createWorkflowResultDelivery(
       const state = envelope.details.delivery?.state;
       if (state !== "pending" && state !== "held-for-inline") return false;
       const owner = currentOwner();
-      const storedSessionId =
-        envelope.details.delivery?.ownerSessionId ??
-        envelope.details.sessionId ??
-        undefined;
+      const deliverySessionId = envelope.details.delivery?.ownerSessionId;
+      const detailsSessionId = envelope.details.sessionId;
+      const hasConflict =
+        deliverySessionId !== undefined &&
+        detailsSessionId !== undefined &&
+        deliverySessionId !== detailsSessionId;
+      const storedSessionId = hasConflict
+        ? undefined
+        : (deliverySessionId ?? detailsSessionId);
 
       // Restoring canonical producer state is the explicit owner-revival
       // boundary. Rebind only the same transcript to this process-local
