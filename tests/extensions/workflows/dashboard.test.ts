@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -17,6 +19,7 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
+import { WORKFLOW_COMMIT_FILE } from "../../../extensions/workflows/artifacts.ts";
 import type {
   Theme,
   WorkflowDetails,
@@ -32,12 +35,74 @@ const {
   buildWorkflowReport,
   loadRunEntries,
   normalizePersistedWorkflowDetails,
+  readPersistedWorkflowDetails,
   recoverStaleWorkflowDetails,
   workflowGraphSummary,
   WorkflowDashboard,
 } = await import("../../../extensions/workflows/dashboard.ts");
 
 const SESSION = "session-1";
+
+test("persisted reads recover a fully prepared terminal artifact commit", () => {
+  const runId = "wf_commit_read";
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  const manifest = JSON.stringify({
+    runId,
+    sessionId: SESSION,
+    background: true,
+    status: "completed",
+    startedAt: 1,
+    finishedAt: 2,
+    phases: [],
+    agents: [],
+    result: "[stored in result.json]",
+    resultArtifact: "result.json",
+    transcriptArtifact: "transcripts.json",
+  });
+  const result = JSON.stringify({ verdict: "complete" });
+  const transcripts = JSON.stringify({});
+  const artifact = (name: string, content: string) => ({
+    name,
+    bytes: Buffer.byteLength(content),
+    sha256: createHash("sha256").update(content).digest("hex"),
+  });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: SESSION,
+      background: true,
+      status: "completed",
+      startedAt: 1,
+      finishedAt: 2,
+      phases: [],
+      agents: [],
+    }),
+  );
+  writeFileSync(join(dir, "result.json"), result);
+  writeFileSync(join(dir, "transcripts.json"), transcripts);
+  writeFileSync(
+    join(dir, WORKFLOW_COMMIT_FILE),
+    JSON.stringify({
+      version: 1,
+      runId,
+      manifest,
+      artifacts: [
+        artifact("transcripts.json", transcripts),
+        artifact("result.json", result),
+      ],
+    }),
+  );
+
+  const restored = readPersistedWorkflowDetails(runId, {
+    hydrateArtifacts: true,
+  });
+  assert.equal(restored?.status, "completed");
+  assert.equal(restored?.resultArtifact, "result.json");
+  assert.deepEqual(restored?.result, { verdict: "complete" });
+  assert.equal(existsSync(join(dir, WORKFLOW_COMMIT_FILE)), false);
+});
 
 function writeRun(
   runId: string,

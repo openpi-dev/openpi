@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -14,8 +16,11 @@ import {
   createWorkflowPersistence,
   loadJournal,
   persistWorkflowAgentResult,
+  persistWorkflowDeliveryState,
   persistWorkflowJson,
   persistWorkflowTerminalState,
+  recoverPendingWorkflowCommit,
+  WORKFLOW_COMMIT_FILE,
 } from "../../../extensions/workflows/artifacts.ts";
 import {
   createJournalAccumulator,
@@ -37,6 +42,66 @@ function workflowDetails(): WorkflowDetails {
     phases: [],
     agents: [],
   };
+}
+
+function artifactDigest(content: string) {
+  return createHash("sha256").update(content).digest("hex");
+}
+
+function stageTerminalCommit(
+  root: string,
+  options: { omitResult?: boolean; committedManifest?: boolean } = {},
+) {
+  const runId = "wf_crash";
+  const prepared = join(root, "prepared");
+  const runDir = join(root, runId);
+  mkdirSync(prepared);
+  mkdirSync(runDir);
+  const details: WorkflowDetails = {
+    ...workflowDetails(),
+    runId,
+    status: "completed",
+    finishedAt: 2,
+    result: { verdict: "complete" },
+  };
+  persistWorkflowJson(prepared, details);
+  const manifest = readFileSync(join(prepared, "workflow.json"), "utf8");
+  const transcripts = readFileSync(join(prepared, "transcripts.json"), "utf8");
+  const result = readFileSync(join(prepared, "result.json"), "utf8");
+  writeFileSync(
+    join(runDir, "workflow.json"),
+    options.committedManifest
+      ? manifest
+      : JSON.stringify({
+          ...details,
+          result: undefined,
+          resultArtifact: undefined,
+          transcriptArtifact: undefined,
+        }),
+  );
+  writeFileSync(join(runDir, "transcripts.json"), transcripts);
+  if (!options.omitResult) writeFileSync(join(runDir, "result.json"), result);
+  writeFileSync(
+    join(runDir, WORKFLOW_COMMIT_FILE),
+    JSON.stringify({
+      version: 1,
+      runId,
+      manifest,
+      artifacts: [
+        {
+          name: "transcripts.json",
+          bytes: Buffer.byteLength(transcripts),
+          sha256: artifactDigest(transcripts),
+        },
+        {
+          name: "result.json",
+          bytes: Buffer.byteLength(result),
+          sha256: artifactDigest(result),
+        },
+      ],
+    }),
+  );
+  return { runDir, manifest };
 }
 
 test("artifact transcript keeps the initial prompt, marker, and newest entries", () => {
@@ -283,8 +348,129 @@ test("terminal persistence publishes status before dependent artifacts", () => {
       JSON.parse(readFileSync(join(directory, "result.json"), "utf8")),
       { partial: true },
     );
+    assert.equal(existsSync(join(directory, WORKFLOW_COMMIT_FILE)), false);
   } finally {
     rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("a complete pending artifact receipt recovers the exact terminal manifest", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-commit-recovery-"));
+  try {
+    const { runDir, manifest } = stageTerminalCommit(root);
+
+    assert.equal(recoverPendingWorkflowCommit(runDir), "recovered");
+    assert.equal(readFileSync(join(runDir, "workflow.json"), "utf8"), manifest);
+    assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), false);
+    assert.equal(recoverPendingWorkflowCommit(runDir), "none");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("an incomplete pending artifact receipt cannot publish terminal references", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-commit-incomplete-"));
+  try {
+    const { runDir } = stageTerminalCommit(root, { omitResult: true });
+
+    assert.equal(recoverPendingWorkflowCommit(runDir), "incomplete");
+    const stored = JSON.parse(
+      readFileSync(join(runDir, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.resultArtifact, undefined);
+    assert.equal(stored.transcriptArtifact, undefined);
+    assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), true);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("a same-size artifact substitution cannot satisfy the commit receipt", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-commit-digest-"));
+  try {
+    const { runDir } = stageTerminalCommit(root);
+    const resultPath = join(runDir, "result.json");
+    const result = readFileSync(resultPath, "utf8");
+    writeFileSync(resultPath, result.replace("complete", "tampered"));
+
+    assert.equal(
+      readFileSync(resultPath).byteLength,
+      Buffer.byteLength(result),
+    );
+    assert.equal(recoverPendingWorkflowCommit(runDir), "incomplete");
+    const stored = JSON.parse(
+      readFileSync(join(runDir, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.resultArtifact, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("delivery persistence first recovers a complete pending artifact commit", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-delivery-recovery-"));
+  try {
+    const { runDir } = stageTerminalCommit(root);
+
+    persistWorkflowDeliveryState(runDir, {
+      id: "workflow:wf_crash:terminal",
+      state: "delivered",
+      attempts: 1,
+      updatedAt: 3,
+    });
+
+    const stored = JSON.parse(
+      readFileSync(join(runDir, "workflow.json"), "utf8"),
+    ) as WorkflowDetails;
+    assert.equal(stored.resultArtifact, "result.json");
+    assert.equal(stored.transcriptArtifact, "transcripts.json");
+    assert.equal(stored.delivery?.state, "delivered");
+    assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery removes a receipt whose manifest was already committed", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-commit-idempotent-"));
+  try {
+    const { runDir } = stageTerminalCommit(root, {
+      committedManifest: true,
+    });
+
+    assert.equal(recoverPendingWorkflowCommit(runDir), "already-committed");
+    assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("recovery preserves newer delivery fields in an already committed manifest", () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "pi-workflow-commit-newer-manifest-"),
+  );
+  try {
+    const { runDir } = stageTerminalCommit(root, { committedManifest: true });
+    const manifestPath = join(runDir, "workflow.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    manifest.delivery = { state: "delivered", attempts: 2, updatedAt: 9 };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    assert.equal(recoverPendingWorkflowCommit(runDir), "already-committed");
+    assert.deepEqual(
+      (
+        JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+          string,
+          unknown
+        >
+      ).delivery,
+      { state: "delivered", attempts: 2, updatedAt: 9 },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
@@ -311,6 +497,7 @@ test("a dependent artifact write failure cannot leave the prior running manifest
     assert.equal(stored.status, "completed");
     assert.equal(stored.resultArtifact, undefined);
     assert.equal(stored.transcriptArtifact, undefined);
+    assert.equal(existsSync(join(directory, WORKFLOW_COMMIT_FILE)), true);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
