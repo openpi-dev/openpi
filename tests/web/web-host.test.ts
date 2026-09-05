@@ -187,10 +187,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
+    assert.match(appSource, /applyThemePreference/);
+    assert.doesNotMatch(appSource, /message-edit-input|enterMessageEdit/);
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
@@ -261,7 +259,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
     assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /:root\[data-theme="dark"\]/);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
@@ -281,6 +279,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const snapshot = (await response.json()) as {
       protocolVersion: number;
       cursor: number;
+      preferences: { theme: string };
       currentSessionId: string;
       workspaces: Array<{ path: string }>;
       sessions: Array<{ cwd: string; ungrouped?: boolean }>;
@@ -288,6 +287,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       runtime: { status: string; capabilities: Record<string, unknown> };
     };
     assert.equal(snapshot.protocolVersion, 1);
+    assert.equal(snapshot.preferences.theme, "system");
     assert.ok(snapshot.cursor >= 1);
     assert.equal(snapshot.currentSessionId, sessionManager.getSessionId());
     assert.ok(Array.isArray(snapshot.models));
