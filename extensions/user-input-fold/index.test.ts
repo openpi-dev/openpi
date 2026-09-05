@@ -141,6 +141,28 @@ test("multiple fenced blocks fold per block while prose shares one budget", () =
   );
 });
 
+test("nested fences require the matching marker length and support tildes", () => {
+  const message = [
+    "````markdown",
+    "before",
+    "```js",
+    "nested",
+    "```",
+    ...Array.from({ length: 20 }, (_, i) => `line-${i}`),
+    "````",
+    "~~~text",
+    ...Array.from({ length: 10 }, (_, i) => `tilde-${i}`),
+    "~~~",
+  ].join("\n");
+  const out = foldUserMessage(message);
+  assert.ok(out.includes("```js"));
+  assert.ok(out.includes("nested"));
+  assert.ok(out.includes("````markdown"));
+  assert.ok(out.includes("~~~text"));
+  assert.ok(out.includes("~~~"));
+  assert.equal((out.match(/````/g) ?? []).length % 2, 0);
+});
+
 test("CRLF messages fold without losing their line endings", () => {
   const message = Array.from(
     { length: 21 },

@@ -40,8 +40,8 @@ type Segment =
   | { kind: "prose"; lines: string[] }
   | { kind: "code"; open: string; content: string[]; close: string };
 
-const FENCE_OPEN = /^ {0,3}`{3,}/;
-const FENCE_CLOSE = /^ {0,3}`{3,}[ \t]*$/;
+const FENCE_OPEN = /^ {0,3}(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^ {0,3}([`~]+)[ \t]*$/;
 
 function countLines(markdown: string) {
   const parts = markdown.split("\n");
@@ -60,7 +60,8 @@ function parseSegments(lines: string[]): Segment[] {
   let prose: string[] = [];
   let i = 0;
   while (i < lines.length) {
-    if (!FENCE_OPEN.test(lines[i])) {
+    const opening = lines[i].match(FENCE_OPEN);
+    if (!opening) {
       prose.push(lines[i]);
       i += 1;
       continue;
@@ -70,12 +71,23 @@ function parseSegments(lines: string[]): Segment[] {
       prose = [];
     }
     const open = lines[i];
+    const fence = opening[1];
+    const fenceChar = fence[0];
+    const fenceLength = fence.length;
     const content: string[] = [];
     let close: string | undefined;
     let j = i + 1;
     while (j < lines.length && close === undefined) {
-      if (FENCE_CLOSE.test(lines[j])) close = lines[j];
-      else content.push(lines[j]);
+      const closing = lines[j].match(FENCE_CLOSE)?.[1];
+      if (
+        closing &&
+        closing[0] === fenceChar &&
+        closing.length >= fenceLength
+      ) {
+        close = lines[j];
+      } else {
+        content.push(lines[j]);
+      }
       j += 1;
     }
     if (close === undefined) {
