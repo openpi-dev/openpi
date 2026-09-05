@@ -865,6 +865,7 @@ export class WorkflowDashboard {
   private onAbort?: (runId: string) => boolean;
   private initialToolsExpanded: boolean;
   private initialRunId?: string;
+  private projectionSignature?: string;
 
   constructor(
     tui: TUI,
@@ -959,6 +960,22 @@ export class WorkflowDashboard {
   }
 
   private refresh() {
+    const activeSignature = [...this.getActive().entries()]
+      .map(
+        ([runId, details]) =>
+          `${runId}:${details.status}:${details.finishedAt ?? 0}:${details.agents.map((agent) => `${agent.index}:${agent.state}`).join(",")}`,
+      )
+      .sort()
+      .join("|");
+    if (
+      this.projectionSignature === activeSignature &&
+      this.entries.length > 0
+    ) {
+      if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
+        this.notice = undefined;
+      return;
+    }
+    this.projectionSignature = activeSignature;
     const selected = this.entries[this.listIndex]?.runId;
     const pinnedRunId =
       this.view === "list"
