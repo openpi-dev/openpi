@@ -454,6 +454,24 @@ export class PiWebRuntime implements WebRuntimeController {
     await requestAdmission;
   }
 
+  async interruptTurn(options?: { expectedSessionId?: string }) {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    const session = this.runtime.session;
+    const sessionId = session.sessionManager.getSessionId();
+    if (options?.expectedSessionId !== undefined && options.expectedSessionId !== sessionId) {
+      throw new WebRuntimeRequestError(
+        "Only the active Web session accepts cancellation",
+        "SESSION_CONFLICT",
+        409,
+      );
+    }
+    if (!session.isStreaming) return { state: "already_settled" as const };
+    await session.abort();
+    this.emit("prompt_cancelled", { sessionId });
+    return { state: "cancelled" as const };
+  }
+
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {
     return this.serializeControllerMutation(() =>
       this.createNewSession(workspacePath, options),

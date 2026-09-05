@@ -10,6 +10,7 @@ export type WebRuntimeRequestErrorCode =
   | "MODEL_NOT_AVAILABLE"
   | "SESSION_CONFLICT"
   | "PROMPT_REJECTED"
+  | "PROMPT_CANCEL_FAILED"
   | "WORKSPACE_REQUIRED";
 
 export class WebRuntimeRequestError extends Error {
@@ -55,6 +56,9 @@ export interface WebRuntimeController {
   readonly sessionManager: SessionManager;
   isIdle(): boolean;
   sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
+  interruptTurn?(options?: { expectedSessionId?: string }): Promise<{
+    state: "cancelled" | "already_settled";
+  }>;
   newSession(
     workspacePath: string,
     options?: WebSessionCreationOptions,
