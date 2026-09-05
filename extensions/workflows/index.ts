@@ -538,6 +538,8 @@ interface ScriptAgentResult {
   /** Opaque same-run handle for bounded downstream handoff. */
   ref?: string;
   acceptance?: AgentRecord["acceptance"];
+  /** Present only for the deprecated model self-attestation compatibility path. */
+  acceptanceWarning?: string;
   error?: string;
 }
 
@@ -1885,6 +1887,9 @@ export default function workflows(
               : {}),
             ...(ref ? { ref } : {}),
             ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+            ...(judged.acceptanceWarning
+              ? { acceptanceWarning: judged.acceptanceWarning }
+              : {}),
           };
         }
 
@@ -2136,6 +2141,9 @@ export default function workflows(
                   : {}),
                 ...(ref ? { ref } : {}),
                 ...(acceptance ? { acceptance } : {}),
+                ...(judged.acceptanceWarning
+                  ? { acceptanceWarning: judged.acceptanceWarning }
+                  : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
               };
             } finally {

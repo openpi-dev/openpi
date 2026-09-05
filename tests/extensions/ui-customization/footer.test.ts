@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { posix, win32 } from "node:path";
 import { visibleWidth } from "@earendil-works/pi-tui";
 import {
   DEFAULT_FOOTER_LINES,
@@ -9,6 +10,7 @@ import {
 import {
   buildSegmentCatalog,
   fitSegmentsToWidth,
+  formatDirectory,
   renderFooter,
   resolveLineSegments,
   type FooterSegment,
@@ -42,6 +44,39 @@ const gitInfo: GitInfoState = {
   changedFiles: 7,
   pullRequest: { number: 42, url: "https://example.com/pr/42", isDraft: false },
 };
+
+test("formatDirectory shortens Windows Home paths", () => {
+  assert.equal(
+    formatDirectory("C:\\Users\\Adam\\project", "C:\\Users\\Adam", win32),
+    "~/project",
+  );
+  assert.equal(
+    formatDirectory("C:\\Users\\Adam", "C:\\Users\\Adam", win32),
+    "~",
+  );
+  assert.equal(
+    formatDirectory("C:\\Users\\Adam2\\project", "C:\\Users\\Adam", win32),
+    "C:\\Users\\Adam2\\project",
+  );
+  assert.equal(
+    formatDirectory("/Users/adam/project", "/Users/adam"),
+    "~/project",
+  );
+});
+
+test("formatDirectory respects POSIX backslashes as filename characters", () => {
+  assert.equal(
+    formatDirectory("/Users/adam\\project", "/Users/adam", posix),
+    "/Users/adam\\project",
+  );
+});
+
+test("formatDirectory compares Windows paths case-insensitively", () => {
+  assert.equal(
+    formatDirectory("c:\\users\\adam\\project", "C:\\Users\\Adam", win32),
+    "~/project",
+  );
+});
 
 test("default one-line layout leads with model context and ends with cwd", () => {
   const lines = renderFooter({
