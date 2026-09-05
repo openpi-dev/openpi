@@ -49,11 +49,11 @@ type PromptTrace = {
   queued: boolean;
   userMessageObserved: boolean;
   epoch?: number;
-  outcome?: "completed" | "cancelled" | "failed";
+  outcome?: "completed" | "cancelled" | "failed" | "uncertain";
 };
 
 type TurnSettlement = WebActiveTurn & {
-  outcome: "completed" | "cancelled" | "failed";
+  outcome: "completed" | "cancelled" | "failed" | "uncertain";
 };
 
 function errorText(error: unknown) {
@@ -94,6 +94,8 @@ export class PiWebRuntime implements WebRuntimeController {
     string,
     Set<(settlement: TurnSettlement) => void>
   >();
+  /** Native aborts remain owned by Pi until its agent_settled event arrives. */
+  private readonly turnAbortOperations = new Map<string, Promise<unknown>>();
   private liveMessageKey?: string;
   private liveMessageSequence = 0;
   private readonly webSessionDirectory: string;
@@ -223,6 +225,13 @@ export class PiWebRuntime implements WebRuntimeController {
     ) {
       return { ...options, state: "stale-turn" };
     }
+    if (this.turnAbortOperations.has(key)) {
+      return {
+        ...options,
+        state: "failed",
+        error: "Cancellation is already waiting for Pi to settle this turn",
+      };
+    }
 
     let ownWaiter: ((settlement: TurnSettlement) => void) | undefined;
     const settlement = new Promise<TurnSettlement>((resolveSettlement) => {
@@ -234,6 +243,12 @@ export class PiWebRuntime implements WebRuntimeController {
     let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const abortOperation = this.runtime.session.abort();
+      this.turnAbortOperations.set(key, abortOperation);
+      void abortOperation.catch(() => {
+        if (this.turnAbortOperations.get(key) === abortOperation) {
+          this.turnAbortOperations.delete(key);
+        }
+      });
       const abortFailure = new Promise<never>((_, reject) => {
         void abortOperation.catch(reject);
       });
@@ -263,7 +278,12 @@ export class PiWebRuntime implements WebRuntimeController {
               : "failed",
         ...(terminal.outcome === "failed"
           ? { error: "The active turn failed while cancellation was requested" }
-          : {}),
+          : terminal.outcome === "uncertain"
+            ? {
+                error:
+                  "Pi settled without a terminal assistant outcome for this cancellation",
+              }
+            : {}),
       };
     } catch (error) {
       return { ...options, state: "failed", error: errorText(error) };
@@ -836,12 +856,6 @@ export class PiWebRuntime implements WebRuntimeController {
     if (event.type === "message_start" && event.message.role === "user") {
       if (!this.activePromptTrace) {
         this.activePromptTrace = this.pendingPromptTraces.shift();
-      } else if (
-        this.activePromptTrace.userMessageObserved &&
-        this.pendingPromptTraces.length > 0
-      ) {
-        this.settlePromptTrace(this.activePromptTrace);
-        this.activePromptTrace = this.pendingPromptTraces.shift();
       }
       if (this.activePromptTrace) {
         this.startPromptTrace(this.activePromptTrace);
@@ -893,13 +907,14 @@ export class PiWebRuntime implements WebRuntimeController {
         });
         break;
       case "agent_settled":
-        if (
-          this.activePromptTrace?.started &&
-          this.pendingPromptTraces.length === 0
-        ) {
+        // Pi emits this only after the whole agent run (including tool loops
+        // and admitted follow-ups) has reached a terminal state. A
+        // message_end is only one model response and must not settle a turn.
+        if (this.activePromptTrace?.started) {
           this.settlePromptTrace(this.activePromptTrace);
-          this.activePromptTrace = undefined;
         }
+        this.activePromptTrace = undefined;
+        this.pendingPromptTraces.length = 0;
         this.emit(event.type, {
           sessionId: session.sessionManager.getSessionId(),
         });
@@ -925,12 +940,21 @@ export class PiWebRuntime implements WebRuntimeController {
           event.message.role === "assistant" &&
           this.activePromptTrace
         ) {
-          this.activePromptTrace.outcome =
+          // Preserve the terminal model result for classification, but defer
+          // publication until Pi confirms the entire run is settled.
+          const outcome =
             event.message.stopReason === "aborted"
               ? "cancelled"
               : event.message.stopReason === "error"
                 ? "failed"
                 : "completed";
+          // A later queued continuation must not erase proof that the
+          // provider result targeted by Stop was aborted. The control remains
+          // owned until agent_settled; this outcome does not claim that every
+          // queued follow-up in the same Pi execution was cancelled.
+          if (this.activePromptTrace.outcome !== "cancelled") {
+            this.activePromptTrace.outcome = outcome;
+          }
         }
         this.emit(event.type, {
           message: projectMessage(event.message),
@@ -977,11 +1001,13 @@ export class PiWebRuntime implements WebRuntimeController {
     if (!activeTurn) return;
     const settlement: TurnSettlement = {
       ...activeTurn,
-      outcome: trace.outcome ?? "completed",
+      outcome:
+        trace.outcome ?? "uncertain",
     };
     const key = this.turnKey(activeTurn);
     if (this.terminalTurnKeys.has(key)) return;
     this.terminalTurnKeys.add(key);
+    this.turnAbortOperations.delete(key);
     while (this.terminalTurnKeys.size > 64) {
       const oldest = this.terminalTurnKeys.values().next().value;
       if (typeof oldest === "string") this.terminalTurnKeys.delete(oldest);
@@ -1001,7 +1027,8 @@ export class PiWebRuntime implements WebRuntimeController {
     const pendingIndex = this.pendingPromptTraces.indexOf(trace);
     if (pendingIndex !== -1) this.pendingPromptTraces.splice(pendingIndex, 1);
     if (this.activePromptTrace !== trace) return;
-    if (trace.started) this.settlePromptTrace(trace);
+    // A started trace can only be terminally projected by agent_settled.
+    if (trace.started) return;
     this.activePromptTrace = this.pendingPromptTraces.shift();
   }
 
@@ -1166,5 +1193,6 @@ export class PiWebRuntime implements WebRuntimeController {
   private resetPromptTraces() {
     this.activePromptTrace = undefined;
     this.pendingPromptTraces.length = 0;
+    this.turnAbortOperations.clear();
   }
 }
