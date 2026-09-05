@@ -296,7 +296,7 @@ test("standalone fail-closes without a peer and does not walk PATH", async () =>
   }
 });
 
-test("real checkout 0.84.1 exports resolve from this install", () => {
+test("real checkout 0.85.1 exports resolve from this install", () => {
   const aliases = resolveStandaloneJitiAliases({
     env: {},
     fromUrl: new URL("../../bin/openpi.js", import.meta.url).href,
@@ -331,6 +331,6 @@ test("real checkout 0.84.1 exports resolve from this install", () => {
       "utf8",
     ),
   ) as { version?: string; exports?: { "."?: { import?: string } } };
-  assert.equal(manifest.version, "0.84.1");
+  assert.equal(manifest.version, "0.85.1");
   assert.equal(manifest.exports?.["."]?.import, "./dist/index.js");
 });
