@@ -919,6 +919,52 @@ test("app.js keeps an active agent running when its prompt receipt settles late"
   assert.equal(app.state.livePhase, "running");
 });
 
+test("app.js reports an admitted native follow-up queue snapshot", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({
+        id: "received",
+        accepted: true,
+        pendingFollowUps: 2,
+      });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "queue me";
+
+  await app.sendPrompt();
+
+  assert.match(
+    app.elements.get("composer-hint")?.textContent || "",
+    /2 follow-up messages were waiting when it was received/,
+  );
+});
+
+test("app.js reports acceptance without a queue count when none are pending", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({ id: "received", accepted: true, pendingFollowUps: 0 });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "receive me";
+
+  await app.sendPrompt();
+
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "Message accepted by OpenPI Web.",
+  );
+});
+
 test("app.js scopes model selection to its session epoch", async () => {
   const app = await renderApp();
   const model = deferred<ReturnType<typeof response>>();

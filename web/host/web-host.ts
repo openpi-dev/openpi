@@ -542,7 +542,7 @@ export class WebHost {
         sessionId: body.sessionId,
         chars: content.length,
       });
-      let admission: { queued: boolean; queuePosition: number };
+      let admission: { pendingFollowUps: number };
       try {
         admission = await this.runtime.sendPrompt(content, {
           commandId,
@@ -567,8 +567,7 @@ export class WebHost {
       this.publish("prompt_accepted", {
         commandId,
         sessionId: body.sessionId,
-        queuePosition: admission.queuePosition,
-        queued: admission.queued,
+        pendingFollowUps: admission.pendingFollowUps,
       });
       traceWeb("prompt_response_sent", {
         commandId,
@@ -579,8 +578,7 @@ export class WebHost {
         id: commandId,
         accepted: true,
         state: "accepted",
-        queued: admission.queued,
-        queuePosition: admission.queuePosition,
+        pendingFollowUps: admission.pendingFollowUps,
         cursor: this.sequence,
       });
     }

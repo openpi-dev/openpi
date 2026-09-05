@@ -507,6 +507,7 @@ body.sidebar-collapsed .icon-button { width: 36px; height: 36px; }
 .send-button:disabled { background: var(--warm-accent-disabled); color: var(--subtle); }
 .send-button svg { width: 17px; height: 17px; stroke-width: 2; }
 .composer-hint { display: none; }
+.composer-hint.receipt { display: block; color: var(--subtle); }
 .composer-hint.error { color: var(--error); }
 .sidebar-scrim { display: none; }
 

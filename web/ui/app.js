@@ -30,6 +30,7 @@ const state = {
   snapshotGeneration: 0,
   livePhase: "idle",
   liveRetry: null,
+  pendingFollowUpsReceipt: null,
   query: "",
   selectedWorkspace: null,
   language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
@@ -67,6 +68,7 @@ const translations = {
     enterHint: "Enter to send, Shift+Enter for a new line.",
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
+    pendingFollowUpsHint: "Message received; {count} follow-up messages were waiting when it was received.",
     modelRunning: "Working...",
     modelPreparing: "Preparing task...",
     modelRetrying: "Retrying model request...",
@@ -103,6 +105,7 @@ const translations = {
     enterHint: "按 Enter 发送，Shift+Enter 换行。",
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
+    pendingFollowUpsHint: "消息已接收；接收时有 {count} 条后续消息等待处理。",
     modelRunning: "正在运行...",
     modelPreparing: "正在准备任务...",
     modelRetrying: "模型请求重试中...",
@@ -539,11 +542,20 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent = canCompose
-    ? state.snapshot.runtime.status === "running" || state.liveRunning
-      ? t("queuedHint")
-      : t("enterHint")
-    : t("activeOnlyHint");
+  const composerHint = $("composer-hint");
+  composerHint.classList.toggle("receipt", state.pendingFollowUpsReceipt > 0);
+  composerHint.textContent = state.pendingFollowUpsReceipt !== null
+    ? state.pendingFollowUpsReceipt > 0
+      ? t("pendingFollowUpsHint").replace(
+          "{count}",
+          String(state.pendingFollowUpsReceipt),
+        )
+      : t("acceptedHint")
+    : canCompose
+      ? state.snapshot.runtime.status === "running" || state.liveRunning
+        ? t("queuedHint")
+        : t("enterHint")
+      : t("activeOnlyHint");
 }
 
 async function selectModel(value) {
@@ -750,6 +762,7 @@ async function sendPrompt() {
   ].slice(-8);
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
+  state.pendingFollowUpsReceipt = null;
   renderConversation();
   $("composer-hint").classList.remove("error");
   try {
@@ -760,6 +773,7 @@ async function sendPrompt() {
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
     applyPromptAcceptedState(alreadySettled);
+    state.pendingFollowUpsReceipt = receipt.pendingFollowUps;
     $("prompt-input").value = "";
     resizePrompt();
     $("composer-hint").textContent = t("acceptedHint");
@@ -1078,6 +1092,9 @@ function applyRuntimeEvent(event) {
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
     applyPromptAcceptedState(alreadySettled);
+    state.pendingFollowUpsReceipt = Number.isInteger(event.detail?.pendingFollowUps)
+      ? event.detail.pendingFollowUps
+      : state.pendingFollowUpsReceipt;
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_start") {
@@ -1086,6 +1103,7 @@ function applyRuntimeEvent(event) {
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_settled") {
+    state.pendingFollowUpsReceipt = null;
     state.liveRunning = false;
     state.livePhase = "idle";
     state.liveRetry = null;
@@ -1182,6 +1200,7 @@ function resetLiveState() {
   state.liveRunning = false;
   state.livePhase = "idle";
   state.liveRetry = null;
+  state.pendingFollowUpsReceipt = null;
 }
 
 async function connectEvents() {

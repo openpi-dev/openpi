@@ -302,20 +302,18 @@ export class PiWebRuntime implements WebRuntimeController {
       let admitted = false;
       let agentLifecycleStarted = false;
       let queuedForAgent = false;
-      let queued = false;
       let promptTrace: PromptTrace | undefined;
       let unsubscribePromptLifecycle: (() => void) | undefined;
       try {
         await previousAdmission;
         this.assertActive();
-        queued = session.isStreaming;
         promptTrace = options?.commandId
           ? {
               commandId: options.commandId,
               sessionId,
               startedAt,
               started: false,
-              queued,
+              queued: false,
             }
           : undefined;
         if (promptTrace && agentRuntime === this.runtime) {
@@ -336,14 +334,15 @@ export class PiWebRuntime implements WebRuntimeController {
             elapsedMs: elapsed(startedAt),
           });
         }
-        const pendingMessagesBefore = session.pendingMessageCount;
+        let followUpMessages = session.getFollowUpMessages().length;
         unsubscribePromptLifecycle = session.subscribe((event) => {
           if (event.type === "agent_start") agentLifecycleStarted = true;
-          if (
-            event.type === "queue_update" &&
-            event.steering.length + event.followUp.length > pendingMessagesBefore
-          ) {
-            queuedForAgent = true;
+          if (event.type === "queue_update") {
+            if (event.followUp.length > followUpMessages) {
+              queuedForAgent = true;
+              if (promptTrace) promptTrace.queued = true;
+            }
+            followUpMessages = event.followUp.length;
           }
         });
         await session.prompt(content, {
@@ -368,16 +367,8 @@ export class PiWebRuntime implements WebRuntimeController {
               );
             }
             if (accepted) {
-              const queuePosition = queued
-                ? Math.max(
-                    1,
-                    this.pendingPromptTraces.length +
-                      (this.activePromptTrace ? 1 : 0),
-                  )
-                : 0;
               resolveRequest({
-                queued,
-                queuePosition,
+                pendingFollowUps: session.getFollowUpMessages().length,
               });
             } else {
               rejectRequest(

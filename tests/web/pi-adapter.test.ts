@@ -29,7 +29,7 @@ function runtimeFor(
     sessionDirectory,
     sessionManager,
     isIdle: () => true,
-    sendPrompt: async () => ({ queued: false, queuePosition: 0 }),
+    sendPrompt: async () => ({ pendingFollowUps: 0 }),
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],

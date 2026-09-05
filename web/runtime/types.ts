@@ -34,8 +34,7 @@ export interface WebPromptOptions {
 }
 
 export interface WebPromptAdmissionReceipt {
-  queued: boolean;
-  queuePosition: number;
+  pendingFollowUps: number;
 }
 
 export interface WebModelSelectionOptions {
