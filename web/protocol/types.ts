@@ -113,6 +113,7 @@ export interface WebSnapshot {
   models: WebModelSummary[];
   runtime: {
     status: "idle" | "running" | "unknown";
+    trust: "trusted" | "untrusted" | "unknown";
     capabilities: WebCapabilitySnapshot;
   };
   truncation: WebSnapshotTruncation;

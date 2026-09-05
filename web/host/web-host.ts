@@ -602,6 +602,19 @@ export class WebHost {
             error: "session is not in the current workspace",
           });
     }
+    if (url.pathname === "/api/search") {
+      const query = url.searchParams.get("q") ?? "";
+      const includeArchived = url.searchParams.get("archived") === "true";
+      if (query.length > 200) {
+        return this.json(response, 400, { error: "search query must be at most 200 characters" });
+      }
+      const sessions = await this.adapter.searchSessions(query, includeArchived);
+      return this.json(response, 200, {
+        query,
+        sessions,
+        truncated: sessions.length >= 100,
+      });
+    }
     this.json(response, 404, { error: "not found" });
   }
 
