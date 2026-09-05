@@ -67,6 +67,10 @@ export type WorkflowDeliveryState =
 export interface WorkflowDelivery {
   /** Stable per-run idempotency identity, never a transport-batch id. */
   id: string;
+  /** Destination transcript identity; legacy records fall back to run.sessionId. */
+  ownerSessionId?: string;
+  /** Process-local generation of the Pi SessionManager owner. */
+  ownerEpoch?: number;
   state: WorkflowDeliveryState;
   attempts: number;
   updatedAt: number;
@@ -123,7 +127,7 @@ export interface AgentRecord {
   usage: AgentUsage;
   /** Replayed from a prior run's journal instead of actually executed. */
   replayed?: boolean;
-  /** Explicit caller-supplied acceptance result; never inferred from role/task. */
+  /** Deprecated child self-attestation; never runtime-observed evidence. */
   acceptance?: AcceptanceLedger;
   /** Branch of the isolated worktree this agent ran in, when it holds commits. */
   worktreeBranch?: string;
