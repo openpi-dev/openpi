@@ -101,9 +101,33 @@ test("snapshot pins current and selected sessions while bounding the projection"
         (session) => session.id === current.getSessionId(),
       ),
     );
+    const currentSummary = snapshot.sessions.find(
+      (session) => session.id === current.getSessionId(),
+    );
+    assert.deepEqual(
+      {
+        source: currentSummary?.source,
+        origin: currentSummary?.origin,
+        controller: currentSummary?.controller,
+        readOnly: currentSummary?.readOnly,
+      },
+      {
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+      },
+    );
     assert.ok(
       snapshot.sessions.some((session) => session.path === selectedPath),
     );
+    const selectedSummary = snapshot.sessions.find(
+      (session) => session.path === selectedPath,
+    );
+    assert.equal(selectedSummary?.source, "web-session");
+    assert.equal(selectedSummary?.origin, "web");
+    assert.equal(selectedSummary?.controller, "none");
+    assert.equal(selectedSummary?.readOnly, false);
     assert.equal(snapshot.selectedSession?.path, selectedPath);
     assert.equal(
       (

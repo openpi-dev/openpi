@@ -27,6 +27,10 @@ export interface WebSessionSummary {
   id: string;
   path: string;
   cwd: string;
+  source: "web-session";
+  origin: "web";
+  controller: "web" | "none";
+  readOnly: false;
   name?: string;
   modified: string;
   created: string;
