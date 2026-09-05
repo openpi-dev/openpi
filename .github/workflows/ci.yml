@@ -59,6 +59,7 @@ jobs:
             --no-extensions \
             --extension "$package/extensions/file-search/index.ts" \
             --extension "$package/extensions/git-info/index.ts" \
+            --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
       - name: Smoke-test packed standalone Web CLI
         run: |
@@ -117,3 +118,6 @@ jobs:
             "extensions/background-terminals/manager.test.ts"
           }
           node --test --experimental-strip-types $testPath
+      - name: Test Windows full-suite isolation
+        timeout-minutes: 5
+        run: bun run test

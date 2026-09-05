@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { relative, resolve, sep } from "node:path";
 import test from "node:test";
 
 test("recursive discovery includes nested Node and Vitest suites", () => {
+  const testsRoot = resolve("tests");
   const discovered = JSON.parse(
     execFileSync(process.execPath, ["scripts/discover-tests.mjs"], {
       cwd: resolve("."),
@@ -12,13 +13,15 @@ test("recursive discovery includes nested Node and Vitest suites", () => {
     }),
   ) as string[];
 
-  assert.ok(
-    discovered.some((file) => file.endsWith("tests/test-discovery.test.ts")),
-  );
-  assert.ok(discovered.some((file) => file.includes("tests/extensions/")));
+  assert.ok(discovered.includes(resolve(testsRoot, "test-discovery.test.ts")));
   assert.ok(
     discovered.some((file) =>
-      file.endsWith("tests/extensions/file-search/index.spec.ts"),
+      relative(testsRoot, file).startsWith(`extensions${sep}`),
+    ),
+  );
+  assert.ok(
+    discovered.includes(
+      resolve(testsRoot, "extensions", "file-search", "index.spec.ts"),
     ),
   );
 });
