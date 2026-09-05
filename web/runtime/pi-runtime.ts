@@ -17,6 +17,8 @@ import {
 import {
   type WebModelSelectionOptions,
   type WebPromptOptions,
+  type WebProviderAuthProjection,
+  type WebProviderAuthSource,
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
@@ -36,6 +38,18 @@ import {
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const BOOTSTRAP_WORKSPACE_DIRECTORY = ".bootstrap-workspace";
+const WEB_MAX_PROVIDER_AUTH_ITEMS = 250;
+const WEB_MAX_PROVIDER_AUTH_SCANNED = 1_024;
+const WEB_MAX_PROVIDER_ID_LENGTH = 160;
+const WEB_MAX_PROVIDER_NAME_LENGTH = 160;
+const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
+  "stored",
+  "runtime",
+  "environment",
+  "fallback",
+  "models_json_key",
+  "models_json_command",
+]);
 
 type PromptTrace = {
   commandId: string;
@@ -47,6 +61,24 @@ type PromptTrace = {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function safeProviderId(value: string) {
+  return value.length > 0 &&
+    value.length <= WEB_MAX_PROVIDER_ID_LENGTH &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
+}
+
+function boundedProviderName(value: string) {
+  const sanitized = value.replace(/[\u0000-\u001f\u007f]/gu, " ");
+  return sanitized.length <= WEB_MAX_PROVIDER_NAME_LENGTH
+    ? { value: sanitized, truncated: false }
+    : {
+        value: `${sanitized.slice(0, WEB_MAX_PROVIDER_NAME_LENGTH - 1)}…`,
+        truncated: true,
+      };
 }
 
 async function canonicalDirectory(path: string) {
@@ -192,6 +224,61 @@ export class PiWebRuntime implements WebRuntimeController {
       label: model.name || `${model.provider}/${model.id}`,
       current: current?.provider === model.provider && current.id === model.id,
     }));
+  }
+
+  listProviderAuth(): WebProviderAuthProjection {
+    const modelRuntime = this.runtime.services.modelRuntime;
+    const allProviders = modelRuntime.getProviders();
+    const providers = allProviders.slice(0, WEB_MAX_PROVIDER_AUTH_SCANNED);
+    const projection: WebProviderAuthProjection["providers"][number][] = [];
+    let omitted = Math.max(
+      0,
+      allProviders.length - WEB_MAX_PROVIDER_AUTH_SCANNED,
+    );
+    let namesTruncated = 0;
+    for (const provider of providers) {
+      if (projection.length >= WEB_MAX_PROVIDER_AUTH_ITEMS) {
+        omitted++;
+        continue;
+      }
+      try {
+        const id = safeProviderId(provider.id);
+        if (!id) {
+          omitted++;
+          continue;
+        }
+        const name = boundedProviderName(provider.name || id);
+        if (name.truncated) namesTruncated++;
+        const status = modelRuntime.getProviderAuthStatus(id);
+        const source =
+          status.source && WEB_PROVIDER_AUTH_SOURCES.has(status.source)
+            ? status.source
+            : undefined;
+        projection.push({
+          id,
+          name: name.value,
+          authMethods: [
+            ...(provider.auth.apiKey ? (["api_key"] as const) : []),
+            ...(provider.auth.oauth ? (["oauth"] as const) : []),
+          ],
+          configured: status.configured,
+          ...(source ? { source } : {}),
+          subscription: modelRuntime.isUsingSubscription(id),
+          nameTruncated: name.truncated,
+        });
+      } catch {
+        omitted++;
+      }
+    }
+    return {
+      providers: projection,
+      truncation: {
+        truncated: omitted > 0 || namesTruncated > 0,
+        providersOmitted: omitted,
+        namesTruncated,
+        maxProviders: WEB_MAX_PROVIDER_AUTH_ITEMS,
+      },
+    };
   }
 
   setModel(

@@ -1,6 +1,34 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { WebModelSummary } from "../protocol/types.ts";
 
+export type WebProviderAuthSource =
+  | "stored"
+  | "runtime"
+  | "environment"
+  | "fallback"
+  | "models_json_key"
+  | "models_json_command";
+
+export interface WebProviderAuthSummary {
+  readonly id: string;
+  readonly name: string;
+  readonly authMethods: readonly ("api_key" | "oauth")[];
+  readonly configured: boolean;
+  readonly source?: WebProviderAuthSource;
+  readonly subscription: boolean;
+  readonly nameTruncated: boolean;
+}
+
+export interface WebProviderAuthProjection {
+  readonly providers: readonly WebProviderAuthSummary[];
+  readonly truncation: {
+    readonly truncated: boolean;
+    readonly providersOmitted: number;
+    readonly namesTruncated: number;
+    readonly maxProviders: number;
+  };
+}
+
 export interface WebRuntimeEvent {
   type: string;
   detail?: Record<string, unknown>;
@@ -61,6 +89,7 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
+  listProviderAuth?(): WebProviderAuthProjection;
   setModel(
     provider: string,
     modelId: string,

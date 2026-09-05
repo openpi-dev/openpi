@@ -557,6 +557,15 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/providers/auth-status") {
+      if (!this.runtime.listProviderAuth) {
+        return this.json(response, 501, {
+          code: "PROVIDER_AUTH_STATUS_UNAVAILABLE",
+          error: "provider authentication status is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.listProviderAuth());
+    }
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(

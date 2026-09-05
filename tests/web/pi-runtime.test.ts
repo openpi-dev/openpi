@@ -352,6 +352,51 @@ test("stale expected Session fails before prompt dispatch", async () => {
   assert.equal(session.calls.length, 0);
 });
 
+test("provider auth projection is bounded and never serializes credentials", () => {
+  const secret = "sk-must-never-reach-web";
+  const providers = Array.from({ length: 252 }, (_, index) => ({
+    id: index === 0 ? "invalid\u0000provider" : `provider-${index}`,
+    name: index === 1 ? "n".repeat(500) : `Provider ${index}`,
+    auth: {
+      apiKey: { secret },
+      ...(index % 2 === 0 ? { oauth: { token: secret } } : {}),
+    },
+  }));
+  const modelRuntime = {
+    getProviders: () => providers,
+    getProviderAuthStatus: () => ({
+      configured: true,
+      source: "stored" as const,
+      label: secret,
+    }),
+    isUsingSubscription: (id: string) => id === "provider-2",
+  };
+  const runtime = Object.create(PiWebRuntime.prototype) as {
+    runtime: { services: { modelRuntime: typeof modelRuntime } };
+    listProviderAuth: PiWebRuntime["listProviderAuth"];
+  };
+  runtime.runtime = { services: { modelRuntime } };
+
+  const projection = runtime.listProviderAuth();
+  assert.equal(projection.providers.length, 250);
+  assert.equal(projection.truncation.providersOmitted, 2);
+  assert.equal(projection.truncation.namesTruncated, 1);
+  assert.equal(projection.truncation.truncated, true);
+  assert.deepEqual(projection.providers[0], {
+    id: "provider-1",
+    name: `${"n".repeat(159)}…`,
+    authMethods: ["api_key"],
+    configured: true,
+    source: "stored",
+    subscription: false,
+    nameTruncated: true,
+  });
+  assert.deepEqual(projection.providers[1]?.authMethods, ["api_key", "oauth"]);
+  assert.equal(projection.providers[1]?.subscription, true);
+  assert.doesNotMatch(JSON.stringify(projection), /sk-must-never-reach-web/u);
+  assert.doesNotMatch(JSON.stringify(projection), /label|token|secret/u);
+});
+
 test("model selection and Session activation are serialized", async () => {
   const applied = deferred();
   const model = { provider: "fixture", id: "model-a", name: "Model A" };
