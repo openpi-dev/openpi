@@ -445,6 +445,35 @@ test("recovery removes a receipt whose manifest was already committed", () => {
   }
 });
 
+test("recovery preserves newer delivery fields in an already committed manifest", () => {
+  const root = mkdtempSync(
+    join(tmpdir(), "pi-workflow-commit-newer-manifest-"),
+  );
+  try {
+    const { runDir } = stageTerminalCommit(root, { committedManifest: true });
+    const manifestPath = join(runDir, "workflow.json");
+    const manifest = JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+      string,
+      unknown
+    >;
+    manifest.delivery = { state: "delivered", attempts: 2, updatedAt: 9 };
+    writeFileSync(manifestPath, JSON.stringify(manifest));
+
+    assert.equal(recoverPendingWorkflowCommit(runDir), "already-committed");
+    assert.deepEqual(
+      (
+        JSON.parse(readFileSync(manifestPath, "utf8")) as Record<
+          string,
+          unknown
+        >
+      ).delivery,
+      { state: "delivered", attempts: 2, updatedAt: 9 },
+    );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
 test("a dependent artifact write failure cannot leave the prior running manifest", () => {
   const directory = mkdtempSync(
     join(tmpdir(), "pi-workflow-terminal-failure-"),
