@@ -33,6 +33,11 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
 }
 
+export interface WebPromptAdmissionReceipt {
+  queued: boolean;
+  queuePosition: number;
+}
+
 export interface WebModelSelectionOptions {
   expectedSessionId?: string;
 }
@@ -54,7 +59,10 @@ export interface WebRuntimeController {
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
   isIdle(): boolean;
-  sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
+  sendPrompt(
+    content: string,
+    options?: WebPromptOptions,
+  ): Promise<WebPromptAdmissionReceipt>;
   newSession(
     workspacePath: string,
     options?: WebSessionCreationOptions,

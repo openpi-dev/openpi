@@ -507,8 +507,9 @@ export class WebHost {
         sessionId: body.sessionId,
         chars: content.length,
       });
+      let admission: { queued: boolean; queuePosition: number };
       try {
-        await this.runtime.sendPrompt(content, {
+        admission = await this.runtime.sendPrompt(content, {
           commandId,
           expectedSessionId: body.sessionId,
         });
@@ -528,7 +529,12 @@ export class WebHost {
           error: failure.error,
         });
       }
-      this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
+      this.publish("prompt_accepted", {
+        commandId,
+        sessionId: body.sessionId,
+        queuePosition: admission.queuePosition,
+        queued: admission.queued,
+      });
       traceWeb("prompt_response_sent", {
         commandId,
         sessionId: body.sessionId,
@@ -538,6 +544,8 @@ export class WebHost {
         id: commandId,
         accepted: true,
         state: "accepted",
+        queued: admission.queued,
+        queuePosition: admission.queuePosition,
         cursor: this.sequence,
       });
     }

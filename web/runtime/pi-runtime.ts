@@ -17,6 +17,7 @@ import {
 import {
   type WebModelSelectionOptions,
   type WebPromptOptions,
+  type WebPromptAdmissionReceipt,
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
@@ -298,12 +299,14 @@ export class PiWebRuntime implements WebRuntimeController {
         }
       : undefined;
     this.retainRuntimeReference(agentRuntime);
-    let resolveRequest: () => void = () => undefined;
+    let resolveRequest: (receipt: WebPromptAdmissionReceipt) => void = () => undefined;
     let rejectRequest: (error: unknown) => void = () => undefined;
-    const requestAdmission = new Promise<void>((resolveRequestAdmission, reject) => {
+    const requestAdmission = new Promise<WebPromptAdmissionReceipt>(
+      (resolveRequestAdmission, reject) => {
       resolveRequest = resolveRequestAdmission;
       rejectRequest = reject;
-    });
+      },
+    );
     const operation = (async () => {
       let preflightObserved = false;
       let admitted = false;
@@ -363,7 +366,17 @@ export class PiWebRuntime implements WebRuntimeController {
               );
             }
             if (accepted) {
-              resolveRequest();
+              const queuePosition = queued
+                ? Math.max(
+                    1,
+                    this.pendingPromptTraces.length +
+                      (this.activePromptTrace ? 1 : 0),
+                  )
+                : 0;
+              resolveRequest({
+                queued,
+                queuePosition,
+              });
             } else {
               rejectRequest(
                 new WebRuntimeRequestError(
@@ -451,7 +464,7 @@ export class PiWebRuntime implements WebRuntimeController {
       () => this.promptOperations.delete(operation),
       () => this.promptOperations.delete(operation),
     );
-    await requestAdmission;
+    return requestAdmission;
   }
 
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {

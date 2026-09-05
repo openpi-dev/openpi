@@ -262,9 +262,24 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   assert.equal(settled, false);
 
   session.calls[0].options.preflightResult?.(true);
-  await admission;
+  assert.deepEqual(await admission, { queued: false, queuePosition: 0 });
   assert.equal(settled, true);
 
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission reports the canonical queue position", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("queued", {
+    commandId: "command-queued",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { queued: true, queuePosition: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
 });

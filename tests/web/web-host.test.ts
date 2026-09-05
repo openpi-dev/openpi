@@ -51,6 +51,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     isIdle: () => false,
     sendPrompt: async (content) => {
       prompts.push(content);
+      return { queued: false, queuePosition: 0 };
     },
     newSession: async (workspacePath, options) => {
       newSessions++;
@@ -529,6 +530,7 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     isIdle: () => true,
     sendPrompt: async () => {
       prompts++;
+      return { queued: false, queuePosition: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -614,6 +616,7 @@ test("returns accepted only after Pi admits the prompt", async () => {
     sendPrompt: async () => {
       promptStarted = true;
       await promptAdmitted;
+      return { queued: false, queuePosition: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -654,7 +657,14 @@ test("returns accepted only after Pi admits the prompt", async () => {
     resolvePrompt();
     const response = await responsePromise;
     assert.equal(response.status, 202);
-    assert.equal((await response.json()).accepted, true);
+    const responseBody = (await response.json()) as {
+      accepted: boolean;
+      queued: boolean;
+      queuePosition: number;
+    };
+    assert.equal(responseBody.accepted, true);
+    assert.equal(responseBody.queued, false);
+    assert.equal(responseBody.queuePosition, 0);
   } finally {
     resolvePrompt();
     await host.stop();
@@ -665,7 +675,10 @@ test("returns accepted only after Pi admits the prompt", async () => {
 
 function testRuntime(
   cwd: string,
-  sendPrompt: WebRuntimeController["sendPrompt"] = async () => {},
+  sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
+    queued: false,
+    queuePosition: 0,
+  }),
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
@@ -1120,6 +1133,7 @@ test("stop rejects a late keepalive mutation before it enters the drain", async 
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await promptBarrier;
+    return { queued: false, queuePosition: 0 };
   });
   runtime.dispose = async () => {
     releasePrompt();
@@ -1304,6 +1318,7 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await pendingPrompt;
+    return { queued: false, queuePosition: 0 };
   });
   runtime.dispose = async () => {
     disposeCalls++;
