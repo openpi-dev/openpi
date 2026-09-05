@@ -40,6 +40,29 @@ const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const execFileAsync = promisify(execFile);
 
+type WebRequestErrorCode =
+  | "INVALID_REQUEST_BODY"
+  | "REQUEST_BODY_TOO_LARGE";
+
+class WebRequestError extends Error {
+  readonly code: WebRequestErrorCode;
+  readonly statusCode: 400 | 413;
+  readonly maxBytes?: number;
+
+  constructor(
+    message: string,
+    code: WebRequestErrorCode,
+    statusCode: 400 | 413,
+    maxBytes?: number,
+  ) {
+    super(message);
+    this.name = "WebRequestError";
+    this.code = code;
+    this.statusCode = statusCode;
+    this.maxBytes = maxBytes;
+  }
+}
+
 export interface WebHostOptions {
   runtime: WebRuntimeController;
   onEvent?: (type: string, detail?: Record<string, unknown>) => void;
@@ -269,6 +292,15 @@ export class WebHost {
       await this.handle(request, response);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
+      if (error instanceof WebRequestError) {
+        return this.json(response, error.statusCode, {
+          code: error.code,
+          error: error.message,
+          ...(error.maxBytes === undefined
+            ? {}
+            : { maxBytes: error.maxBytes }),
+        });
+      }
       this.json(response, 500, {
         error: error instanceof Error ? error.message : "request failed",
       });
@@ -649,23 +681,34 @@ export class WebHost {
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       bytes += buffer.length;
-      if (bytes > MAX_COMMAND_BYTES)
-        throw new Error("request body is too large");
+      if (bytes > MAX_COMMAND_BYTES) {
+        throw new WebRequestError(
+          "request body is too large",
+          "REQUEST_BODY_TOO_LARGE",
+          413,
+          MAX_COMMAND_BYTES,
+        );
+      }
       chunks.push(buffer);
     }
+    let value: unknown;
     try {
-      const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("request body must be an object");
-      }
-      return value as Record<string, unknown>;
-    } catch (error) {
-      throw new Error(
-        error instanceof SyntaxError
-          ? "request body is invalid JSON"
-          : String(error),
+      value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      throw new WebRequestError(
+        "request body is invalid JSON",
+        "INVALID_REQUEST_BODY",
+        400,
       );
     }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new WebRequestError(
+        "request body must be an object",
+        "INVALID_REQUEST_BODY",
+        400,
+      );
+    }
+    return value as Record<string, unknown>;
   }
 
   private authorized(request: IncomingMessage) {
