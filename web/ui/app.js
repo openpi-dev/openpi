@@ -196,10 +196,18 @@ function renderMarkdown(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { ...headers(Boolean(options.body)), ...options.headers },
-  });
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), 30_000);
+  let response;
+  try {
+    response = await fetch(path, {
+      ...options,
+      headers: { ...headers(Boolean(options.body)), ...options.headers },
+      signal: options.signal || controller.signal,
+    });
+  } finally {
+    window.clearTimeout(timeout);
+  }
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
   return body;
