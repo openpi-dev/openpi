@@ -31,7 +31,7 @@ function runtimeFor(
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
-    sendPrompt: async () => {},
+    sendPrompt: async () => ({ pendingFollowUps: 0 }),
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],

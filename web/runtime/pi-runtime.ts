@@ -18,6 +18,7 @@ import {
   type WebActiveTurn,
   type WebModelSelectionOptions,
   type WebPromptOptions,
+  type WebPromptAdmissionReceipt,
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
@@ -410,24 +411,25 @@ export class PiWebRuntime implements WebRuntimeController {
       releaseAdmission = resolveAdmission;
     });
     const startedAt = performance.now();
-    const queued = session.isStreaming;
     const promptTrace: PromptTrace | undefined = options?.commandId
       ? {
           commandId: options.commandId,
           sessionId,
           startedAt,
           started: false,
-          queued,
+          queued: false,
           userMessageObserved: false,
         }
       : undefined;
     this.retainRuntimeReference(agentRuntime);
-    let resolveRequest: () => void = () => undefined;
+    let resolveRequest: (receipt: WebPromptAdmissionReceipt) => void = () => undefined;
     let rejectRequest: (error: unknown) => void = () => undefined;
-    const requestAdmission = new Promise<void>((resolveRequestAdmission, reject) => {
-      resolveRequest = resolveRequestAdmission;
-      rejectRequest = reject;
-    });
+    const requestAdmission = new Promise<WebPromptAdmissionReceipt>(
+      (resolveRequestAdmission, reject) => {
+        resolveRequest = resolveRequestAdmission;
+        rejectRequest = reject;
+      },
+    );
     const operation = (async () => {
       let preflightObserved = false;
       let admitted = false;
@@ -455,14 +457,15 @@ export class PiWebRuntime implements WebRuntimeController {
             elapsedMs: elapsed(startedAt),
           });
         }
-        const pendingMessagesBefore = session.pendingMessageCount;
+        let followUpMessages = session.getFollowUpMessages().length;
         unsubscribePromptLifecycle = session.subscribe((event) => {
           if (event.type === "agent_start") agentLifecycleStarted = true;
-          if (
-            event.type === "queue_update" &&
-            event.steering.length + event.followUp.length > pendingMessagesBefore
-          ) {
-            queuedForAgent = true;
+          if (event.type === "queue_update") {
+            if (event.followUp.length > followUpMessages) {
+              queuedForAgent = true;
+              if (promptTrace) promptTrace.queued = true;
+            }
+            followUpMessages = event.followUp.length;
           }
         });
         await session.prompt(content, {
@@ -487,7 +490,9 @@ export class PiWebRuntime implements WebRuntimeController {
               );
             }
             if (accepted) {
-              resolveRequest();
+              resolveRequest({
+                pendingFollowUps: session.getFollowUpMessages().length,
+              });
             } else {
               rejectRequest(
                 new WebRuntimeRequestError(
@@ -576,7 +581,7 @@ export class PiWebRuntime implements WebRuntimeController {
       () => this.promptOperations.delete(operation),
       () => this.promptOperations.delete(operation),
     );
-    await requestAdmission;
+    return await requestAdmission;
   }
 
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {

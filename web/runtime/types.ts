@@ -33,6 +33,10 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
 }
 
+export interface WebPromptAdmissionReceipt {
+  pendingFollowUps: number;
+}
+
 export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
@@ -75,7 +79,10 @@ export interface WebRuntimeController {
   readonly sessionManager: SessionManager;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;
-  sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
+  sendPrompt(
+    content: string,
+    options?: WebPromptOptions,
+  ): Promise<WebPromptAdmissionReceipt>;
   cancelTurn(
     options: WebTurnCancellationOptions,
   ): Promise<WebTurnCancellationResult>;

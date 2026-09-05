@@ -54,6 +54,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async (content) => {
       prompts.push(content);
+      return { pendingFollowUps: 0 };
     },
     newSession: async (workspacePath, options) => {
       newSessions++;
@@ -624,6 +625,7 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       prompts++;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -723,6 +725,7 @@ test("returns accepted only after Pi admits the prompt", async () => {
     sendPrompt: async () => {
       promptStarted = true;
       await promptAdmitted;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -763,7 +766,12 @@ test("returns accepted only after Pi admits the prompt", async () => {
     resolvePrompt();
     const response = await responsePromise;
     assert.equal(response.status, 202);
-    assert.equal((await response.json()).accepted, true);
+    const responseBody = (await response.json()) as {
+      accepted: boolean;
+      pendingFollowUps: number;
+    };
+    assert.equal(responseBody.accepted, true);
+    assert.equal(responseBody.pendingFollowUps, 0);
   } finally {
     resolvePrompt();
     await host.stop();
@@ -835,7 +843,9 @@ test("returns an exact receipt for a turn-bound cancellation", async () => {
 
 function testRuntime(
   cwd: string,
-  sendPrompt: WebRuntimeController["sendPrompt"] = async () => {},
+  sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
+    pendingFollowUps: 0,
+  }),
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
@@ -1026,7 +1036,7 @@ async function readEventRecords(response: Response, count: number) {
   let buffer = "";
   const records: Array<{
     id: number;
-    event: { sequence: number; type: string };
+    event: { sequence: number; type: string; detail?: Record<string, unknown> };
   }> = [];
   while (records.length < count) {
     const chunk = await reader.read();
@@ -1046,7 +1056,11 @@ async function readEventRecords(response: Response, count: number) {
       if (!id || !data) continue;
       records.push({
         id: Number(id),
-        event: JSON.parse(data) as { sequence: number; type: string },
+        event: JSON.parse(data) as {
+          sequence: number;
+          type: string;
+          detail?: Record<string, unknown>;
+        },
       });
     }
   }
@@ -1079,6 +1093,66 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       code: "PROMPT_REJECTED",
       error: "Pi rejected this prompt",
     });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("returns and publishes the observed follow-up queue receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-queue-"));
+  const runtime = testRuntime(cwd, async () => ({
+    pendingFollowUps: 2,
+  }));
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "queue me",
+      }),
+    });
+    assert.equal(response.status, 202);
+    const receipt = (await response.json()) as {
+      id: string;
+      accepted: boolean;
+      state: string;
+      pendingFollowUps: number;
+      cursor: number;
+    };
+    assert.match(receipt.id, /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...receipt, id: undefined },
+      {
+        id: undefined,
+        accepted: true,
+        state: "accepted",
+        pendingFollowUps: 2,
+        cursor: snapshot.cursor + 1,
+      },
+    );
+    const events = await readEventRecords(
+      await fetch(`${launched.origin}/events?cursor=${snapshot.cursor}`, {
+        headers,
+      }),
+      1,
+    );
+    assert.equal(events[0].event.sequence, snapshot.cursor + 1);
+    assert.equal(events[0].event.type, "prompt_accepted");
+    assert.match(String(events[0].event.detail?.commandId), /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...events[0].event.detail, commandId: undefined },
+      {
+        commandId: undefined,
+        sessionId: runtime.sessionManager.getSessionId(),
+        pendingFollowUps: 2,
+      },
+    );
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
@@ -1420,6 +1494,7 @@ test("stop rejects a late keepalive mutation before it enters the drain", async 
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await promptBarrier;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     releasePrompt();
@@ -1604,6 +1679,7 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await pendingPrompt;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     disposeCalls++;

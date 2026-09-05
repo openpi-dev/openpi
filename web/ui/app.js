@@ -33,6 +33,7 @@ const state = {
   snapshotGeneration: 0,
   livePhase: "idle",
   liveRetry: null,
+  pendingFollowUpsReceipt: null,
   themePreference: "system",
   query: "",
   selectedWorkspace: null,
@@ -71,6 +72,7 @@ const translations = {
     enterHint: "Enter to send, Shift+Enter for a new line.",
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
+    pendingFollowUpsHint: "Message received; {count} follow-up messages were waiting when it was received.",
     stopTurn: "Stop turn",
     stoppingTurn: "Stopping current turn...",
     stoppedTurn: "Current turn stopped.",
@@ -110,6 +112,7 @@ const translations = {
     enterHint: "按 Enter 发送，Shift+Enter 换行。",
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
+    pendingFollowUpsHint: "消息已接收；接收时有 {count} 条后续消息等待处理。",
     stopTurn: "停止当前回合",
     stoppingTurn: "正在停止当前回合...",
     stoppedTurn: "当前回合已停止。",
@@ -572,12 +575,21 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent =
+  const composerHint = $("composer-hint");
+  composerHint.classList.toggle("receipt", state.pendingFollowUpsReceipt > 0);
+  composerHint.textContent =
     state.turnCancellationPending
       ? t("stoppingTurn")
       : state.turnTerminalStatus === "cancelled"
         ? t("stoppedTurn")
-        : canCompose
+        : state.pendingFollowUpsReceipt !== null
+          ? state.pendingFollowUpsReceipt > 0
+            ? t("pendingFollowUpsHint").replace(
+                "{count}",
+                String(state.pendingFollowUpsReceipt),
+              )
+            : t("acceptedHint")
+          : canCompose
           ? state.snapshot.runtime.status === "running" || state.liveRunning
             ? t("queuedHint")
             : t("enterHint")
@@ -791,6 +803,7 @@ async function sendPrompt() {
   ].slice(-8);
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
+  state.pendingFollowUpsReceipt = null;
   state.turnTerminalStatus = null;
   renderConversation();
   $("composer-hint").classList.remove("error");
@@ -802,6 +815,7 @@ async function sendPrompt() {
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
     applyPromptAcceptedState(alreadySettled);
+    state.pendingFollowUpsReceipt = receipt.pendingFollowUps;
     $("prompt-input").value = "";
     resizePrompt();
     $("composer-hint").textContent = t("acceptedHint");
@@ -1150,6 +1164,9 @@ function applyRuntimeEvent(event) {
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
     applyPromptAcceptedState(alreadySettled);
+    state.pendingFollowUpsReceipt = Number.isInteger(event.detail?.pendingFollowUps)
+      ? event.detail.pendingFollowUps
+      : state.pendingFollowUpsReceipt;
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "turn_started") {
@@ -1184,6 +1201,7 @@ function applyRuntimeEvent(event) {
     }
     renderConversation();
   } else if (event.type === "agent_settled") {
+    state.pendingFollowUpsReceipt = null;
     if (!state.activeTurn) {
       state.liveRunning = false;
       state.livePhase = "idle";
@@ -1287,6 +1305,7 @@ function resetLiveState() {
   state.turnTerminalStatus = null;
   state.livePhase = "idle";
   state.liveRetry = null;
+  state.pendingFollowUpsReceipt = null;
 }
 
 async function connectEvents() {

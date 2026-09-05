@@ -55,13 +55,35 @@ function promptSession(sessionId: string) {
     options: PromptOptions;
     run: ReturnType<typeof deferred>;
   }> = [];
+  const listeners = new Set<
+    (event: {
+      type: "queue_update";
+      steering: string[];
+      followUp: string[];
+    }) => void
+  >();
+  let followUpMessages: string[] = [];
   return {
     isStreaming: false,
     pendingMessageCount: 0,
     sessionManager: { getSessionId: () => sessionId },
     abort: async (): Promise<void> => undefined,
-    subscribe() {
-      return () => undefined;
+    subscribe(
+      listener: (event: {
+        type: "queue_update";
+        steering: string[];
+        followUp: string[];
+      }) => void,
+    ) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getFollowUpMessages: () => followUpMessages,
+    emitFollowUpQueue(messages: string[]) {
+      followUpMessages = messages;
+      for (const listener of listeners) {
+        listener({ type: "queue_update", steering: [], followUp: messages });
+      }
     },
     prompt(content: string, options: PromptOptions) {
       const run = deferred();
@@ -283,9 +305,88 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   assert.equal(settled, false);
 
   session.calls[0].options.preflightResult?.(true);
-  await admission;
+  assert.deepEqual(await admission, { pendingFollowUps: 0 });
   assert.equal(settled, true);
 
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission snapshots Pi follow-up messages", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("queued", {
+    commandId: "command-queued",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  session.emitFollowUpQueue(["queued"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission snapshots a follow-up queue that shrinks before it grows", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  session.emitFollowUpQueue(["already pending"]);
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("queued", {
+    commandId: "command-queued",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.emitFollowUpQueue([]);
+  session.emitFollowUpQueue(["queued"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission observes streaming after an earlier admission gate", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const first = runtime.sendPrompt("first", {
+    commandId: "command-first",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  const second = runtime.sendPrompt("second", {
+    commandId: "command-second",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.calls[0].options.preflightResult?.(true);
+  session.isStreaming = true;
+  assert.deepEqual(await first, { pendingFollowUps: 0 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+  session.emitFollowUpQueue(["second"]);
+  session.calls[1].options.preflightResult?.(true);
+  assert.deepEqual(await second, { pendingFollowUps: 1 });
+
+  session.calls[1].run.resolve();
+  await Promise.resolve();
+});
+
+test("handled input snapshots an externally pending follow-up without claiming ownership", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("/handled", {
+    commandId: "command-handled",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.emitFollowUpQueue(["external delivery"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
 });

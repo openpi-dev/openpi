@@ -582,6 +582,7 @@ body.sidebar-collapsed .icon-button { width: 36px; height: 36px; }
 .stop-button[hidden] { display: none; }
 .stop-button svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
 .composer-hint { display: none; }
+.composer-hint.receipt { display: block; color: var(--subtle); }
 .composer-hint.error { color: var(--error); }
 .sidebar-scrim { display: none; }
 
