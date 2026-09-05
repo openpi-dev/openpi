@@ -863,6 +863,7 @@ async function sendPrompt() {
         "SESSION_CONFLICT",
         "PROMPT_REJECTED",
         "COMMAND_CONFLICT",
+        "PROMPT_ADMISSION_CAPACITY",
       ].includes(error?.code);
     if (!knownRejection) {
       if (state.livePhase !== "running") {

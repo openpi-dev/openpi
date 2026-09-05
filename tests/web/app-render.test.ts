@@ -664,6 +664,44 @@ test("app.js preserves an uncertain transport admission without resetting an act
   assert.equal(requests[1]?.retry, true);
 });
 
+test("app.js starts a new attempt after admission capacity rejects before dispatch", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  app.context.fetch = (url: unknown, options?: { body?: string }) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({
+            code: "PROMPT_ADMISSION_CAPACITY",
+            error: "prompt admission capacity is full",
+          }),
+        });
+      }
+      return Promise.resolve(
+        response({ id: requests[1]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  input.value = "try after capacity opens";
+
+  await app.sendPrompt();
+  assert.equal(app.state.promptAdmission, null);
+  await app.sendPrompt();
+
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[0]?.commandId, requests[1]?.commandId);
+  assert.equal(requests[0]?.retry, false);
+  assert.equal(requests[1]?.retry, false);
+});
+
 test("app.js invalidates snapshots for cross-tab session metadata events", async () => {
   const app = await renderApp({
     eventRecords: [
