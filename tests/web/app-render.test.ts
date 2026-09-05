@@ -72,6 +72,7 @@ const SNAPSHOT = {
   protocolVersion: 1,
   generatedAt: new Date().toISOString(),
   cursor: 1,
+  preferences: { theme: "dark" as const },
   currentSessionId: "s1",
   workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
   sessions: [
@@ -264,9 +265,10 @@ const SNAPSHOT = {
 
 type SnapshotFixture = Omit<
   typeof SNAPSHOT,
-  "currentSessionId" | "selectedSession"
+  "currentSessionId" | "selectedSession" | "preferences"
 > & {
   currentSessionId?: string;
+  preferences: { theme: "system" | "light" | "dark" };
   selectedSession?: typeof SNAPSHOT.selectedSession;
 };
 
@@ -275,6 +277,7 @@ async function renderApp(
     eventRecords?: string[];
     snapshot?: SnapshotFixture;
     storageValues?: Record<string, string>;
+    systemDark?: boolean;
   } = {},
 ) {
   const elements = new Map<string, ElementStub>();
@@ -305,6 +308,13 @@ async function renderApp(
   let eventFetches = 0;
   let snapshotFetches = 0;
   let readerCancellations = 0;
+  const systemThemeListeners = new Set<() => void>();
+  const systemTheme = {
+    matches: options.systemDark ?? false,
+    addEventListener: (_type: string, listener: () => void) => {
+      systemThemeListeners.add(listener);
+    },
+  };
   const encodedEvents = (options.eventRecords || []).map((record) =>
     new TextEncoder().encode(record),
   );
@@ -359,6 +369,7 @@ async function renderApp(
     clearTimeout,
     setInterval,
     clearInterval,
+    matchMedia: () => systemTheme,
     URLSearchParams,
     URL,
     TextDecoder,
@@ -382,6 +393,7 @@ async function renderApp(
         listener,
       ]);
     },
+    matchMedia: () => systemTheme,
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -418,6 +430,11 @@ async function renderApp(
     snapshotFetches: () => snapshotFetches,
     readerCancellations: () => readerCancellations,
     context,
+    documentElement: documentStub.documentElement,
+    setSystemTheme(dark: boolean) {
+      systemTheme.matches = dark;
+      for (const listener of systemThemeListeners) listener();
+    },
     state: vm.runInContext("state", context as vm.Context) as typeof SNAPSHOT &
       Record<string, unknown>,
     selectSession: vm.runInContext("selectSession", context as vm.Context) as (
@@ -448,6 +465,10 @@ async function renderApp(
       reader: { read(): Promise<unknown> },
       timeoutMs?: number,
     ) => Promise<unknown>,
+    cancelActiveTurn: vm.runInContext(
+      "cancelActiveTurn",
+      context as vm.Context,
+    ) as () => Promise<void>,
     updateComposer: vm.runInContext(
       "updateComposer",
       context as vm.Context,
@@ -490,7 +511,8 @@ function deferred<T>() {
 }
 
 test("app.js renders a full session without runtime errors", async () => {
-  const { elements } = await renderApp();
+  const { documentElement, elements } = await renderApp();
+  assert.equal(documentElement.dataset.theme, "dark");
   const conversation = elements.get("conversation");
   assert.ok(conversation, "conversation element exists");
   assert.match(conversation.innerHTML, /message-row user/);
@@ -502,6 +524,36 @@ test("app.js renders a full session without runtime errors", async () => {
   assert.match(conversation.innerHTML, /delivery/);
   assert.match(conversation.innerHTML, /file1/);
   assert.match(conversation.innerHTML, /最终总结/);
+});
+
+test("app.js resolves system theme and keeps explicit choices stable", async () => {
+  const systemLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "system" } },
+    systemDark: false,
+  });
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+  systemLight.setSystemTheme(true);
+  assert.equal(systemLight.documentElement.dataset.theme, "dark");
+  systemLight.setSystemTheme(false);
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+
+  const explicitDark = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "dark" } },
+    systemDark: false,
+  });
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+  explicitDark.setSystemTheme(true);
+  explicitDark.setSystemTheme(false);
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+
+  const explicitLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "light" } },
+    systemDark: true,
+  });
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
+  explicitLight.setSystemTheme(false);
+  explicitLight.setSystemTheme(true);
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
 });
 
 test("app.js moves the bootstrap token into tab storage and clears the URL", async () => {
@@ -1106,6 +1158,72 @@ test("app.js settles an admitted prompt that Pi handles without an agent turn", 
   assert.equal((app.state.terminalPromptIds as Set<string>).size, 32);
 });
 
+test("app.js stops only the canonical active turn without optimistic settlement", async () => {
+  const app = await renderApp();
+  const cancellation = deferred<ReturnType<typeof response>>();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/turns/cancel") return cancellation.promise;
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "turn_started", detail: {sessionId: "s1", commandId: "c1", epoch: 4}})',
+    app.context as vm.Context,
+  );
+
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.elements.get("stop-turn")?.hidden, false);
+  assert.equal(app.elements.get("send-prompt")?.hidden, true);
+  const stopping = app.cancelActiveTurn();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.turnCancellationPending, true);
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 3, type: "turn_settled", detail: {sessionId: "s1", commandId: "c1", epoch: 4, outcome: "cancelled"}})',
+    app.context as vm.Context,
+  );
+  cancellation.resolve(
+    response({
+      sessionId: "s1",
+      commandId: "c1",
+      epoch: 4,
+      state: "accepted",
+      accepted: true,
+    }),
+  );
+  await stopping;
+
+  assert.equal(app.state.liveRunning, false);
+  assert.equal(app.state.activeTurn, null);
+  assert.equal(app.elements.get("stop-turn")?.hidden, true);
+  assert.equal(app.elements.get("send-prompt")?.hidden, false);
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "Current turn stopped.",
+  );
+});
+
+test("app.js restores the active turn and Stop control from a snapshot", async () => {
+  const running = structuredClone(SNAPSHOT) as SnapshotFixture & {
+    runtime: typeof SNAPSHOT.runtime & {
+      activeTurn: { sessionId: string; commandId: string; epoch: number };
+    };
+  };
+  running.runtime.status = "running";
+  running.runtime.activeTurn = {
+    sessionId: "s1",
+    commandId: "c1",
+    epoch: 9,
+  };
+  const app = await renderApp({ snapshot: running });
+
+  assert.deepEqual(app.state.activeTurn, running.runtime.activeTurn);
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.elements.get("stop-turn")?.hidden, false);
+  assert.equal(app.elements.get("send-prompt")?.hidden, true);
+});
+
 test("app.js keeps an active agent running when a handled prompt settles", async () => {
   const app = await renderApp();
   vm.runInContext(
@@ -1156,6 +1274,52 @@ test("app.js keeps an active agent running when its prompt receipt settles late"
 
   assert.equal(app.state.liveRunning, true);
   assert.equal(app.state.livePhase, "running");
+});
+
+test("app.js reports an admitted native follow-up queue snapshot", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({
+        id: "received",
+        accepted: true,
+        pendingFollowUps: 2,
+      });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "queue me";
+
+  await app.sendPrompt();
+
+  assert.match(
+    app.elements.get("composer-hint")?.textContent || "",
+    /2 follow-up messages were waiting when it was received/,
+  );
+});
+
+test("app.js reports acceptance without a queue count when none are pending", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({ id: "received", accepted: true, pendingFollowUps: 0 });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "receive me";
+
+  await app.sendPrompt();
+
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "Message accepted by OpenPI Web.",
+  );
 });
 
 test("app.js scopes model selection to its session epoch", async () => {

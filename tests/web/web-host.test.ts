@@ -50,8 +50,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       return sessionManager;
     },
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async (content) => {
       prompts.push(content);
+      return { pendingFollowUps: 0 };
     },
     newSession: async (workspacePath, options) => {
       newSessions++;
@@ -185,10 +188,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
+    assert.match(appSource, /applyThemePreference/);
+    assert.doesNotMatch(appSource, /message-edit-input|enterMessageEdit/);
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
@@ -259,7 +260,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
     assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /:root\[data-theme="dark"\]/);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
@@ -279,6 +280,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const snapshot = (await response.json()) as {
       protocolVersion: number;
       cursor: number;
+      preferences: { theme: string };
       currentSessionId: string;
       workspaces: Array<{ path: string }>;
       sessions: Array<{ cwd: string; ungrouped?: boolean }>;
@@ -286,6 +288,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       runtime: { status: string; capabilities: Record<string, unknown> };
     };
     assert.equal(snapshot.protocolVersion, 1);
+    assert.equal(snapshot.preferences.theme, "system");
     assert.ok(snapshot.cursor >= 1);
     assert.equal(snapshot.currentSessionId, sessionManager.getSessionId());
     assert.ok(Array.isArray(snapshot.models));
@@ -618,8 +621,11 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     sessionDirectory: root,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       prompts++;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -677,6 +683,18 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     });
     assert.equal(prompts, 0);
 
+    const cancellation = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        commandId: "command-a",
+        epoch: 1,
+      }),
+    });
+    assert.equal(cancellation.status, 409);
+    assert.equal((await cancellation.json()).code, "WORKSPACE_REQUIRED");
+
     const started = events.find((event) => event.type === "web_host_started");
     assert.ok(started);
     assert.equal("cwd" in (started.detail ?? {}), false);
@@ -702,9 +720,12 @@ test("returns accepted only after Pi admits the prompt", async () => {
     cwd,
     sessionManager,
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       promptStarted = true;
       await promptAdmitted;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -745,7 +766,12 @@ test("returns accepted only after Pi admits the prompt", async () => {
     resolvePrompt();
     const response = await responsePromise;
     assert.equal(response.status, 202);
-    assert.equal((await response.json()).accepted, true);
+    const responseBody = (await response.json()) as {
+      accepted: boolean;
+      pendingFollowUps: number;
+    };
+    assert.equal(responseBody.accepted, true);
+    assert.equal(responseBody.pendingFollowUps, 0);
   } finally {
     resolvePrompt();
     await host.stop();
@@ -754,9 +780,72 @@ test("returns accepted only after Pi admits the prompt", async () => {
   }
 });
 
+test("returns an exact receipt for a turn-bound cancellation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-cancel-"));
+  const runtime = testRuntime(cwd);
+  const activeTurn = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    commandId: "command-a",
+    epoch: 3,
+  };
+  runtime.getActiveTurn = () => activeTurn;
+  runtime.cancelTurn = async (options) => ({
+    ...options,
+    state: "accepted",
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshotResponse = await fetch(`${launched.origin}/api/snapshot`, {
+      headers,
+    });
+    assert.equal(snapshotResponse.status, 200);
+    assert.deepEqual(
+      (await snapshotResponse.json()).runtime.activeTurn,
+      activeTurn,
+    );
+
+    const response = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      ...activeTurn,
+      state: "accepted",
+      accepted: true,
+      cursor: 1,
+    });
+
+    runtime.cancelTurn = async (options) => ({
+      ...options,
+      state: "stale-turn",
+    });
+    const stale = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).state, "stale-turn");
+
+    const invalid = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeTurn, epoch: 0 }),
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function testRuntime(
   cwd: string,
-  sendPrompt: WebRuntimeController["sendPrompt"] = async () => {},
+  sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
+    pendingFollowUps: 0,
+  }),
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
@@ -765,6 +854,8 @@ function testRuntime(
     cwd,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt,
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -1002,7 +1093,7 @@ async function readEventRecords(response: Response, count: number) {
   let buffer = "";
   const records: Array<{
     id: number;
-    event: { sequence: number; type: string };
+    event: { sequence: number; type: string; detail?: Record<string, unknown> };
   }> = [];
   while (records.length < count) {
     const chunk = await reader.read();
@@ -1022,7 +1113,11 @@ async function readEventRecords(response: Response, count: number) {
       if (!id || !data) continue;
       records.push({
         id: Number(id),
-        event: JSON.parse(data) as { sequence: number; type: string },
+        event: JSON.parse(data) as {
+          sequence: number;
+          type: string;
+          detail?: Record<string, unknown>;
+        },
       });
     }
   }
@@ -1088,9 +1183,13 @@ test("replays one prompt admission after a browser timeout", async () => {
   const admitted = new Promise<void>((resolve) => {
     releaseAdmission = resolve;
   });
+  let runtimePendingFollowUps = 2;
   const runtime = testRuntime(cwd, async () => {
     sendCalls++;
     await admitted;
+    const receipt = { pendingFollowUps: runtimePendingFollowUps };
+    runtimePendingFollowUps = 0;
+    return receipt;
   });
   const { host, launched, headers } = await startTestHost(runtime);
   const commandId = "browser-timeout-retry";
@@ -1136,8 +1235,10 @@ test("replays one prompt admission after a browser timeout", async () => {
       id: commandId,
       accepted: true,
       state: "accepted",
+      pendingFollowUps: 2,
       cursor: 2,
     });
+    assert.equal(runtimePendingFollowUps, 0);
     assert.equal(sendCalls, 1);
 
     const conflict = await fetch(`${launched.origin}/api/prompt`, {
@@ -1190,6 +1291,7 @@ test("fails closed instead of evicting pending prompt admissions", {
   const runtime = testRuntime(cwd, async () => {
     sendCalls++;
     await held;
+    return { pendingFollowUps: 0 };
   });
   const { host, launched, headers } = await startTestHost(runtime);
   try {
@@ -1233,6 +1335,66 @@ test("fails closed instead of evicting pending prompt admissions", {
     );
   } finally {
     releaseAdmissions?.();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("returns and publishes the observed follow-up queue receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-queue-"));
+  const runtime = testRuntime(cwd, async () => ({
+    pendingFollowUps: 2,
+  }));
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "queue me",
+      }),
+    });
+    assert.equal(response.status, 202);
+    const receipt = (await response.json()) as {
+      id: string;
+      accepted: boolean;
+      state: string;
+      pendingFollowUps: number;
+      cursor: number;
+    };
+    assert.match(receipt.id, /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...receipt, id: undefined },
+      {
+        id: undefined,
+        accepted: true,
+        state: "accepted",
+        pendingFollowUps: 2,
+        cursor: snapshot.cursor + 1,
+      },
+    );
+    const events = await readEventRecords(
+      await fetch(`${launched.origin}/events?cursor=${snapshot.cursor}`, {
+        headers,
+      }),
+      1,
+    );
+    assert.equal(events[0].event.sequence, snapshot.cursor + 1);
+    assert.equal(events[0].event.type, "prompt_accepted");
+    assert.match(String(events[0].event.detail?.commandId), /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...events[0].event.detail, commandId: undefined },
+      {
+        commandId: undefined,
+        sessionId: runtime.sessionManager.getSessionId(),
+        pendingFollowUps: 2,
+      },
+    );
+  } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
@@ -1573,6 +1735,7 @@ test("stop rejects a late keepalive mutation before it enters the drain", async 
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await promptBarrier;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     releasePrompt();
@@ -1757,6 +1920,7 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await pendingPrompt;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     disposeCalls++;

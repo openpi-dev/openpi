@@ -17,6 +17,9 @@ type Trace = {
   startedAt: number;
   started: boolean;
   queued: boolean;
+  userMessageObserved?: boolean;
+  epoch?: number;
+  outcome?: "completed" | "cancelled" | "failed" | "uncertain";
 };
 
 type RuntimeHarness = {
@@ -26,6 +29,10 @@ type RuntimeHarness = {
   liveMessageSequence: number;
   liveMessageKey?: string;
   listeners: Set<(event: WebRuntimeEvent) => void>;
+  nextTurnEpoch: number;
+  terminalTurnKeys: Set<string>;
+  turnSettlementWaiters: Map<string, Set<(settlement: unknown) => void>>;
+  turnAbortOperations: Map<string, Promise<unknown>>;
 };
 
 function deferred() {
@@ -48,13 +55,35 @@ function promptSession(sessionId: string) {
     options: PromptOptions;
     run: ReturnType<typeof deferred>;
   }> = [];
+  const listeners = new Set<
+    (event: {
+      type: "queue_update";
+      steering: string[];
+      followUp: string[];
+    }) => void
+  >();
+  let followUpMessages: string[] = [];
   return {
     isStreaming: false,
     pendingMessageCount: 0,
     sessionManager: { getSessionId: () => sessionId },
     abort: async (): Promise<void> => undefined,
-    subscribe() {
-      return () => undefined;
+    subscribe(
+      listener: (event: {
+        type: "queue_update";
+        steering: string[];
+        followUp: string[];
+      }) => void,
+    ) {
+      listeners.add(listener);
+      return () => listeners.delete(listener);
+    },
+    getFollowUpMessages: () => followUpMessages,
+    emitFollowUpQueue(messages: string[]) {
+      followUpMessages = messages;
+      for (const listener of listeners) {
+        listener({ type: "queue_update", steering: [], followUp: messages });
+      }
     },
     prompt(content: string, options: PromptOptions) {
       const run = deferred();
@@ -84,11 +113,18 @@ type PromptRuntimeHarness = {
   runtimeDisposalPromises: WeakMap<FakeAgentRuntime, Promise<void>>;
   promptAdmission: Promise<void>;
   pendingPromptTraces: Trace[];
+  activePromptTrace?: Trace;
+  nextTurnEpoch: number;
+  terminalTurnKeys: Set<string>;
+  turnSettlementWaiters: Map<string, Set<(settlement: unknown) => void>>;
+  turnAbortOperations: Map<string, Promise<unknown>>;
+  controllerMutation: Promise<void>;
   disposed: boolean;
   hasSelectedWorkspace: boolean;
   dispatcherLease: { release: () => Promise<void> };
   webHostLease: { release: () => Promise<void> };
   sendPrompt: PiWebRuntime["sendPrompt"];
+  cancelTurn: PiWebRuntime["cancelTurn"];
   subscribe: PiWebRuntime["subscribe"];
   dispose: PiWebRuntime["dispose"];
 };
@@ -130,6 +166,7 @@ type LifecycleHarness = {
   candidateRuntimes: Set<LifecycleRuntime>;
   pendingPromptTraces: Trace[];
   activePromptTrace?: Trace;
+  turnAbortOperations: Map<string, Promise<unknown>>;
   liveMessageSequence: number;
   disposed: boolean;
   dispatcherLease: { release: () => Promise<void> };
@@ -198,6 +235,7 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
   harness.runtimeOperations = new Set();
   harness.candidateRuntimes = new Set();
   harness.pendingPromptTraces = [];
+  harness.turnAbortOperations = new Map();
   harness.liveMessageSequence = 0;
   harness.disposed = false;
   harness.dispatcherLease = { release: async () => undefined };
@@ -237,6 +275,11 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   harness.runtimeDisposalPromises = new WeakMap();
   harness.promptAdmission = Promise.resolve();
   harness.pendingPromptTraces = [];
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.turnAbortOperations = new Map();
+  harness.controllerMutation = Promise.resolve();
   harness.disposed = false;
   harness.hasSelectedWorkspace = true;
   harness.dispatcherLease = { release: async () => undefined };
@@ -262,9 +305,88 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   assert.equal(settled, false);
 
   session.calls[0].options.preflightResult?.(true);
-  await admission;
+  assert.deepEqual(await admission, { pendingFollowUps: 0 });
   assert.equal(settled, true);
 
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission snapshots Pi follow-up messages", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("queued", {
+    commandId: "command-queued",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  session.emitFollowUpQueue(["queued"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission snapshots a follow-up queue that shrinks before it grows", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  session.emitFollowUpQueue(["already pending"]);
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("queued", {
+    commandId: "command-queued",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.emitFollowUpQueue([]);
+  session.emitFollowUpQueue(["queued"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+});
+
+test("prompt admission observes streaming after an earlier admission gate", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const first = runtime.sendPrompt("first", {
+    commandId: "command-first",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  const second = runtime.sendPrompt("second", {
+    commandId: "command-second",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.calls[0].options.preflightResult?.(true);
+  session.isStreaming = true;
+  assert.deepEqual(await first, { pendingFollowUps: 0 });
+  session.calls[0].run.resolve();
+  await Promise.resolve();
+  session.emitFollowUpQueue(["second"]);
+  session.calls[1].options.preflightResult?.(true);
+  assert.deepEqual(await second, { pendingFollowUps: 1 });
+
+  session.calls[1].run.resolve();
+  await Promise.resolve();
+});
+
+test("handled input snapshots an externally pending follow-up without claiming ownership", async () => {
+  const session = promptSession("session-a");
+  session.isStreaming = true;
+  const runtime = promptHarness(session);
+  const admission = runtime.sendPrompt("/handled", {
+    commandId: "command-handled",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+
+  session.emitFollowUpQueue(["external delivery"]);
+  session.calls[0].options.preflightResult?.(true);
+  assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
 });
@@ -554,6 +676,188 @@ test("later prompt failures retain their command and Session correlation", async
       error: "provider failed",
     },
   });
+});
+
+test("turn cancellation reports uncertainty without assistant terminal evidence", async () => {
+  const session = promptSession("session-a");
+  let aborts = 0;
+  session.abort = async () => {
+    aborts += 1;
+  };
+  const runtime = promptHarness(session);
+  const trace: Trace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 7,
+  };
+  runtime.activePromptTrace = trace;
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: { type: string },
+      ): void;
+    }
+  ).projectEvent;
+
+  const cancellation = runtime.cancelTurn({
+    sessionId: "session-a",
+    commandId: "command-a",
+    epoch: 7,
+  });
+  await Promise.resolve();
+  projectEvent.call(runtime, session, { type: "agent_settled" });
+
+  assert.deepEqual(await cancellation, {
+    sessionId: "session-a",
+    commandId: "command-a",
+    epoch: 7,
+    state: "failed",
+    error:
+      "Pi settled without a terminal assistant outcome for this cancellation",
+  });
+  assert.equal(aborts, 1);
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-a",
+        commandId: "command-a",
+        epoch: 7,
+      })
+    ).state,
+    "already-settled",
+  );
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-a",
+        commandId: "command-a",
+        epoch: 8,
+      })
+    ).state,
+    "stale-turn",
+  );
+  assert.equal(
+    (
+      await runtime.cancelTurn({
+        sessionId: "session-b",
+        commandId: "command-a",
+        epoch: 7,
+      })
+    ).state,
+    "stale-session",
+  );
+  assert.equal(aborts, 1);
+});
+
+test("turn cancellation loses to a naturally completed terminal run", async () => {
+  const session = promptSession("session-a");
+  let aborts = 0;
+  session.abort = async () => {
+    aborts += 1;
+  };
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 1,
+    outcome: "completed",
+  };
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: { type: string },
+      ): void;
+    }
+  ).projectEvent;
+
+  const cancellation = runtime.cancelTurn({
+    sessionId: "session-a",
+    commandId: "command-a",
+    epoch: 1,
+  });
+  await Promise.resolve();
+  projectEvent.call(runtime, session, { type: "agent_settled" });
+
+  assert.equal((await cancellation).state, "already-settled");
+  assert.equal(aborts, 1);
+});
+
+test("a repeated cancellation does not issue another native abort while settling", async () => {
+  const session = promptSession("session-a");
+  let aborts = 0;
+  session.abort = async () => {
+    aborts += 1;
+  };
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 1,
+  };
+  runtime.turnAbortOperations.set(
+    "session-a\u0000command-a\u00001",
+    new Promise(() => undefined),
+  );
+
+  assert.deepEqual(
+    await runtime.cancelTurn({
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+    }),
+    {
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+      state: "failed",
+      error: "Cancellation is already waiting for Pi to settle this turn",
+    },
+  );
+  assert.equal(aborts, 0);
+});
+
+test("turn cancellation reports native abort failures", async () => {
+  const session = promptSession("session-a");
+  session.abort = async () => {
+    throw new Error("abort failed");
+  };
+  const runtime = promptHarness(session);
+  runtime.activePromptTrace = {
+    commandId: "command-a",
+    sessionId: "session-a",
+    startedAt: 1,
+    started: true,
+    queued: false,
+    epoch: 1,
+  };
+
+  assert.deepEqual(
+    await runtime.cancelTurn({
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+    }),
+    {
+      sessionId: "session-a",
+      commandId: "command-a",
+      epoch: 1,
+      state: "failed",
+      error: "abort failed",
+    },
+  );
 });
 
 test("retained Session cleanup waits for all of its prompt operations", async () => {
@@ -909,13 +1213,19 @@ test("runtime creation failure releases the Web Host lease", async () => {
   }
 });
 
-test("prompt traces advance with queued user messages", () => {
-  const session = {};
+test("message_end and queued prompts do not settle a running turn", () => {
+  const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
   harness.pendingPromptTraces = [];
   harness.liveMessageSequence = 0;
   harness.listeners = new Set();
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.turnAbortOperations = new Map();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
   harness.activePromptTrace = {
     commandId: "first",
     sessionId: "session",
@@ -941,12 +1251,181 @@ test("prompt traces advance with queued user messages", () => {
     message: { role: "user", content: [{ type: "text", text }] },
   });
 
+  projectEvent.call(harness, session, { type: "agent_start" });
   projectEvent.call(harness, session, userMessage("first"));
   assert.equal(harness.activePromptTrace?.commandId, "first");
   assert.equal(harness.activePromptTrace?.started, true);
 
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "aborted",
+      timestamp: 3,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    },
+  });
+
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "stop",
+      timestamp: 4,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    },
+  });
+
   projectEvent.call(harness, session, userMessage("second"));
-  assert.equal(harness.activePromptTrace?.commandId, "second");
+  assert.equal(harness.activePromptTrace?.commandId, "first");
   assert.equal(harness.activePromptTrace?.started, true);
+  assert.equal(harness.activePromptTrace?.epoch, 1);
+  assert.equal(harness.pendingPromptTraces.length, 1);
+  assert.deepEqual(
+    events.filter((event) => event.type === "turn_settled"),
+    [],
+  );
+
+  projectEvent.call(harness, session, { type: "agent_settled" });
+  assert.equal(harness.activePromptTrace, undefined);
   assert.equal(harness.pendingPromptTraces.length, 0);
+
+  harness.activePromptTrace = {
+    commandId: "third",
+    sessionId: "session",
+    startedAt: 5,
+    started: false,
+    queued: false,
+  };
+  projectEvent.call(harness, session, { type: "agent_start" });
+  projectEvent.call(harness, session, userMessage("third"));
+  assert.deepEqual(harness.activePromptTrace, {
+    commandId: "third",
+    sessionId: "session",
+    startedAt: 5,
+    started: true,
+    queued: false,
+    userMessageObserved: true,
+    epoch: 2,
+  });
+  assert.deepEqual(
+    events
+      .filter((event) => event.type.startsWith("turn_"))
+      .map((event) => ({ type: event.type, detail: event.detail })),
+    [
+      {
+        type: "turn_started",
+        detail: { sessionId: "session", commandId: "first", epoch: 1 },
+      },
+      {
+        type: "turn_settled",
+        detail: {
+          sessionId: "session",
+          commandId: "first",
+          epoch: 1,
+          outcome: "cancelled",
+        },
+      },
+      {
+        type: "turn_started",
+        detail: { sessionId: "session", commandId: "third", epoch: 2 },
+      },
+    ],
+  );
+});
+
+test("toolUse message_end without a terminal result settles as uncertain", () => {
+  const session = { sessionManager: { getSessionId: () => "session" } };
+  const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+  harness.runtime = { session };
+  harness.pendingPromptTraces = [];
+  harness.liveMessageSequence = 0;
+  harness.listeners = new Set();
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.turnAbortOperations = new Map();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  harness.activePromptTrace = {
+    commandId: "tool-use",
+    sessionId: "session",
+    startedAt: 1,
+    started: false,
+    queued: false,
+  };
+
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+
+  projectEvent.call(harness, session, { type: "agent_start" });
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "toolUse",
+      timestamp: 2,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    },
+  });
+  projectEvent.call(harness, session, { type: "agent_settled" });
+
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn_settled")
+      .map((event) => event.detail),
+    [
+      {
+        sessionId: "session",
+        commandId: "tool-use",
+        epoch: 1,
+        outcome: "uncertain",
+      },
+    ],
+  );
 });
