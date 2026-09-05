@@ -91,6 +91,35 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
+    const deletable = SessionManager.create(cwd, cwd);
+    deletable.appendMessage({
+      role: "user",
+      content: "deletable session",
+      timestamp: 1,
+    });
+    deletable.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "fixture",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
 
     const page = await fetch(`${launched.origin}/`);
     assert.equal(page.status, 200);
@@ -308,6 +337,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     const currentSessionPath = listedSessions.sessions[0]?.path;
     assert.ok(currentSessionPath);
+    const deletableSessionPath = listedSessions.sessions.find(
+      (session) => session.path !== currentSessionPath,
+    )?.path;
+    assert.equal(deletableSessionPath, deletable.getSessionFile());
     const sessionRename = await fetch(`${launched.origin}/api/sessions`, {
       method: "PATCH",
       headers: authorized,
@@ -330,6 +363,34 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         (session) => session.path === currentSessionPath,
       )?.archived,
       true,
+    );
+
+    const deleteActive = await fetch(
+      `${launched.origin}/api/sessions?path=${encodeURIComponent(currentSessionPath)}`,
+      { method: "DELETE", headers: authorized },
+    );
+    assert.equal(deleteActive.status, 409);
+    assert.deepEqual(await deleteActive.json(), {
+      code: "SESSION_CONFLICT",
+      error: "Cannot delete the active Session",
+    });
+    const deleteSession = await fetch(
+      `${launched.origin}/api/sessions?path=${encodeURIComponent(deletableSessionPath!)}`,
+      { method: "DELETE", headers: authorized },
+    );
+    assert.equal(deleteSession.status, 200);
+    assert.deepEqual(await deleteSession.json(), {
+      path: deletableSessionPath,
+      deleted: true,
+    });
+    const afterDelete = (await (
+      await fetch(`${launched.origin}/api/sessions`, { headers: authorized })
+    ).json()) as { sessions: Array<{ path: string }> };
+    assert.equal(
+      afterDelete.sessions.some(
+        (session) => session.path === deletableSessionPath,
+      ),
+      false,
     );
 
     const wrongSession = await fetch(`${launched.origin}/api/prompt`, {

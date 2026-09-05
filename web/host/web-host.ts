@@ -10,7 +10,10 @@ import {
 import { URL } from "node:url";
 import { promisify } from "node:util";
 import { subscribeWebCapabilities } from "../../extensions/shared/web-observer-registry.ts";
-import { PiWebAdapter } from "../adapter/pi-adapter.ts";
+import {
+  PiWebAdapter,
+  WebSessionDeletionError,
+} from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
   WEB_MAX_EVENT_BYTES,
@@ -424,6 +427,24 @@ export class WebHost {
       await this.adapter.archiveSession(path);
       this.publish("session_archived", { sessionPath: path });
       return this.json(response, 200, { path, archived: true });
+    }
+    if (url.pathname === "/api/sessions" && request.method === "DELETE") {
+      const path = url.searchParams.get("path");
+      if (!path)
+        return this.json(response, 400, { error: "session path is required" });
+      try {
+        const deletedPath = await this.adapter.deleteSession(path);
+        this.publish("session_deleted", { sessionPath: deletedPath });
+        return this.json(response, 200, { path: deletedPath, deleted: true });
+      } catch (error) {
+        if (error instanceof WebSessionDeletionError) {
+          return this.json(response, error.statusCode, {
+            code: error.code,
+            error: error.message,
+          });
+        }
+        throw error;
+      }
     }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);

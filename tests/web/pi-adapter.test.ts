@@ -233,6 +233,67 @@ test("first archive mutation preserves previously persisted archive metadata", a
   }
 });
 
+test("deletes a persisted non-active session and cleans derived metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const candidate = SessionManager.create(root, sessionDirectory);
+    persistSession(candidate, "delete me", 2);
+    const candidatePath = candidate.getSessionFile();
+    assert.ok(candidatePath);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    await adapter.archiveSession(candidatePath);
+    await adapter.removeWorkspace(root);
+
+    const deletedPath = await adapter.deleteSession(candidatePath);
+    assert.equal(deletedPath, candidatePath);
+    await assert.rejects(readFile(candidatePath));
+    const archived = JSON.parse(
+      await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
+    ) as string[];
+    assert.equal(archived.includes(candidatePath), false);
+    const workspaceState = JSON.parse(
+      await readFile(join(sessionDirectory, "workspace-state.json"), "utf8"),
+    ) as { ungroupedSessions: string[] };
+    assert.equal(
+      workspaceState.ungroupedSessions.includes(candidatePath),
+      false,
+    );
+    assert.equal(
+      (await adapter.listSessions()).some(
+        (session) => session.path === candidatePath,
+      ),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to delete the active session", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "openpi-web-session-delete-active-"),
+  );
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    await assert.rejects(
+      adapter.deleteSession(`current:${current.getSessionId()}`),
+      /active Session/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("corrupt package metadata fails closed without overwriting it", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-corrupt-state-"));
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-corrupt-import-"));
