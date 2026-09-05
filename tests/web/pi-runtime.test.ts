@@ -1260,3 +1260,71 @@ test("message_end and queued prompts do not settle a running turn", () => {
     ],
   );
 });
+
+test("toolUse message_end without a terminal result settles as uncertain", () => {
+  const session = { sessionManager: { getSessionId: () => "session" } };
+  const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+  harness.runtime = { session };
+  harness.pendingPromptTraces = [];
+  harness.liveMessageSequence = 0;
+  harness.listeners = new Set();
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.turnAbortOperations = new Map();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  harness.activePromptTrace = {
+    commandId: "tool-use",
+    sessionId: "session",
+    startedAt: 1,
+    started: false,
+    queued: false,
+  };
+
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+
+  projectEvent.call(harness, session, { type: "agent_start" });
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [],
+      stopReason: "toolUse",
+      timestamp: 2,
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+        },
+      },
+    },
+  });
+  projectEvent.call(harness, session, { type: "agent_settled" });
+
+  assert.deepEqual(
+    events
+      .filter((event) => event.type === "turn_settled")
+      .map((event) => event.detail),
+    [
+      {
+        sessionId: "session",
+        commandId: "tool-use",
+        epoch: 1,
+        outcome: "uncertain",
+      },
+    ],
+  );
+});

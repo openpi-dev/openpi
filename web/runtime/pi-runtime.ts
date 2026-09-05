@@ -947,12 +947,15 @@ export class PiWebRuntime implements WebRuntimeController {
               ? "cancelled"
               : event.message.stopReason === "error"
                 ? "failed"
-                : "completed";
+                : event.message.stopReason === "stop" ||
+                    event.message.stopReason === "length"
+                  ? "completed"
+                  : undefined;
           // A later queued continuation must not erase proof that the
           // provider result targeted by Stop was aborted. The control remains
           // owned until agent_settled; this outcome does not claim that every
           // queued follow-up in the same Pi execution was cancelled.
-          if (this.activePromptTrace.outcome !== "cancelled") {
+          if (outcome && this.activePromptTrace.outcome !== "cancelled") {
             this.activePromptTrace.outcome = outcome;
           }
         }
