@@ -19,6 +19,9 @@ const state = {
   collapsed: readCollapsedWorkspaces(),
   liveMessages: [],
   liveRunning: false,
+  activeTurn: null,
+  turnCancellationPending: false,
+  turnTerminalStatus: null,
   promptAdmissionPending: false,
   promptAdmissionToken: null,
   promptAdmissionSequence: 0,
@@ -31,6 +34,7 @@ const state = {
   livePhase: "idle",
   liveRetry: null,
   pendingFollowUpsReceipt: null,
+  themePreference: "system",
   query: "",
   selectedWorkspace: null,
   language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
@@ -69,6 +73,9 @@ const translations = {
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
     pendingFollowUpsHint: "Message received; {count} follow-up messages were waiting when it was received.",
+    stopTurn: "Stop turn",
+    stoppingTurn: "Stopping current turn...",
+    stoppedTurn: "Current turn stopped.",
     modelRunning: "Working...",
     modelPreparing: "Preparing task...",
     modelRetrying: "Retrying model request...",
@@ -106,6 +113,9 @@ const translations = {
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
     pendingFollowUpsHint: "消息已接收；接收时有 {count} 条后续消息等待处理。",
+    stopTurn: "停止当前回合",
+    stoppingTurn: "正在停止当前回合...",
+    stoppedTurn: "当前回合已停止。",
     modelRunning: "正在运行...",
     modelPreparing: "正在准备任务...",
     modelRetrying: "模型请求重试中...",
@@ -129,6 +139,19 @@ function applyLanguage() {
 }
 
 const $ = (id) => document.getElementById(id);
+const supportedThemes = new Set(["system", "light", "dark"]);
+const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+function applyThemePreference(preference) {
+  state.themePreference = supportedThemes.has(preference) ? preference : "system";
+  const resolved = state.themePreference === "system"
+    ? systemTheme?.matches ? "dark" : "light"
+    : state.themePreference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+}
+systemTheme?.addEventListener?.("change", () => {
+  if (state.themePreference === "system") applyThemePreference("system");
+});
 const tokenStorageKey = "openpi.web.token";
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
@@ -497,6 +520,13 @@ function updateComposer() {
     !selected &&
     !state.snapshot?.currentSessionId;
   const canCompose = active || newSessionDraft;
+  const activeTurn = active
+    ? state.activeTurn || state.snapshot?.runtime.activeTurn || null
+    : null;
+  const canStop = Boolean(
+    activeTurn &&
+      (state.snapshot?.runtime.status === "running" || state.liveRunning),
+  );
   $("prompt-input").disabled =
     state.sessionSwitching || (!canCompose && Boolean(state.selectedWorkspace));
   $("send-prompt").disabled =
@@ -504,6 +534,9 @@ function updateComposer() {
     !canCompose ||
     !state.selectedWorkspace ||
     state.promptAdmissionPending;
+  $("send-prompt").hidden = canStop;
+  $("stop-turn").hidden = !canStop;
+  $("stop-turn").disabled = state.turnCancellationPending;
   const modelPicker = $("model-picker");
   const modelPickerValue = $("model-picker-value");
   const modelMenu = $("model-menu");
@@ -544,18 +577,23 @@ function updateComposer() {
         : t("promptReadonly");
   const composerHint = $("composer-hint");
   composerHint.classList.toggle("receipt", state.pendingFollowUpsReceipt > 0);
-  composerHint.textContent = state.pendingFollowUpsReceipt !== null
-    ? state.pendingFollowUpsReceipt > 0
-      ? t("pendingFollowUpsHint").replace(
-          "{count}",
-          String(state.pendingFollowUpsReceipt),
-        )
-      : t("acceptedHint")
-    : canCompose
-      ? state.snapshot.runtime.status === "running" || state.liveRunning
-        ? t("queuedHint")
-        : t("enterHint")
-      : t("activeOnlyHint");
+  composerHint.textContent =
+    state.turnCancellationPending
+      ? t("stoppingTurn")
+      : state.turnTerminalStatus === "cancelled"
+        ? t("stoppedTurn")
+        : state.pendingFollowUpsReceipt !== null
+          ? state.pendingFollowUpsReceipt > 0
+            ? t("pendingFollowUpsHint").replace(
+                "{count}",
+                String(state.pendingFollowUpsReceipt),
+              )
+            : t("acceptedHint")
+          : canCompose
+          ? state.snapshot.runtime.status === "running" || state.liveRunning
+            ? t("queuedHint")
+            : t("enterHint")
+          : t("activeOnlyHint");
 }
 
 async function selectModel(value) {
@@ -629,6 +667,10 @@ async function refreshSnapshot({
       return false;
     }
     state.snapshot = snapshot;
+    if (resetCursor) resetLiveState();
+    state.activeTurn = snapshot.runtime.activeTurn || null;
+    if (snapshot.runtime.status === "running") state.liveRunning = true;
+    applyThemePreference(snapshot.preferences?.theme);
     if (
       state.snapshot.runtime.status !== "running" &&
       !state.promptAdmissionPending
@@ -637,7 +679,6 @@ async function refreshSnapshot({
       state.livePhase = "idle";
       state.liveRetry = null;
     }
-    if (resetCursor) resetLiveState();
     state.cursor = resetCursor || state.cursor === null
       ? state.snapshot.cursor
       : Math.max(state.cursor, state.snapshot.cursor);
@@ -763,6 +804,7 @@ async function sendPrompt() {
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
   state.pendingFollowUpsReceipt = null;
+  state.turnTerminalStatus = null;
   renderConversation();
   $("composer-hint").classList.remove("error");
   try {
@@ -792,6 +834,36 @@ async function sendPrompt() {
     if (epoch === state.sessionEpoch && state.promptAdmissionToken === admissionToken) {
       state.promptAdmissionPending = false;
       state.promptAdmissionToken = null;
+      renderConversation();
+    }
+  }
+}
+
+async function cancelActiveTurn() {
+  const turn = state.activeTurn || state.snapshot?.runtime.activeTurn;
+  if (!turn || state.turnCancellationPending || state.sessionSwitching) return;
+  const epoch = state.sessionEpoch;
+  state.turnCancellationPending = true;
+  $("composer-hint").classList.remove("error");
+  $("composer-hint").textContent = t("stoppingTurn");
+  updateComposer();
+  try {
+    const receipt = await api("/api/turns/cancel", {
+      method: "POST",
+      body: JSON.stringify(turn),
+    });
+    if (epoch !== state.sessionEpoch) return;
+    if (receipt.state === "accepted" || receipt.state === "already-settled") {
+      $("composer-hint").textContent = t("stoppedTurn");
+    }
+  } catch (error) {
+    if (epoch !== state.sessionEpoch) return;
+    const message = error.message;
+    await refreshSnapshot({ epoch });
+    if (epoch === state.sessionEpoch) showNotice(message);
+  } finally {
+    if (epoch === state.sessionEpoch) {
+      state.turnCancellationPending = false;
       renderConversation();
     }
   }
@@ -1097,16 +1169,44 @@ function applyRuntimeEvent(event) {
       : state.pendingFollowUpsReceipt;
     state.liveRetry = null;
     renderConversation();
+  } else if (event.type === "turn_started") {
+    state.activeTurn = {
+      sessionId: event.detail?.sessionId,
+      commandId: event.detail?.commandId,
+      epoch: event.detail?.epoch,
+    };
+    state.liveRunning = true;
+    state.turnTerminalStatus = null;
+    state.livePhase = "running";
+    state.liveRetry = null;
+    renderConversation();
   } else if (event.type === "agent_start") {
+    if (event.detail?.activeTurn) state.activeTurn = event.detail.activeTurn;
     state.liveRunning = true;
     state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
+  } else if (event.type === "turn_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    const isActiveTurn =
+      state.activeTurn?.sessionId === event.detail?.sessionId &&
+      state.activeTurn?.commandId === event.detail?.commandId &&
+      state.activeTurn?.epoch === event.detail?.epoch;
+    if (isActiveTurn) {
+      state.activeTurn = null;
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+      state.turnTerminalStatus = event.detail?.outcome || null;
+    }
+    renderConversation();
   } else if (event.type === "agent_settled") {
     state.pendingFollowUpsReceipt = null;
-    state.liveRunning = false;
-    state.livePhase = "idle";
-    state.liveRetry = null;
+    if (!state.activeTurn) {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+    }
     renderConversation();
   } else if (event.type === "prompt_settled") {
     rememberTerminalPrompt(event.detail?.commandId);
@@ -1135,6 +1235,8 @@ function applyRuntimeEvent(event) {
     [
       "agent_start",
       "agent_settled",
+      "turn_started",
+      "turn_settled",
       "prompt_settled",
       "message_end",
       "tool_execution_end",
@@ -1198,6 +1300,9 @@ let eventLoopStarted = false;
 function resetLiveState() {
   state.liveMessages = [];
   state.liveRunning = false;
+  state.activeTurn = null;
+  state.turnCancellationPending = false;
+  state.turnTerminalStatus = null;
   state.livePhase = "idle";
   state.liveRetry = null;
   state.pendingFollowUpsReceipt = null;
@@ -1420,6 +1525,9 @@ $("composer")?.addEventListener("submit", (event) => {
   if (state.selectedWorkspace) void sendPrompt();
   else void chooseWorkspace();
 });
+$("stop-turn")?.addEventListener("click", () => {
+  void cancelActiveTurn();
+});
 $("prompt-input")?.addEventListener("input", resizePrompt);
 $("prompt-input")?.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
@@ -1430,5 +1538,6 @@ $("prompt-input")?.addEventListener("keydown", (event) => {
   }
 });
 
+applyThemePreference("system");
 applyLanguage();
 void connectEvents();

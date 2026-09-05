@@ -50,6 +50,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       return sessionManager;
     },
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async (content) => {
       prompts.push(content);
       return { pendingFollowUps: 0 };
@@ -186,10 +188,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
+    assert.match(appSource, /applyThemePreference/);
+    assert.doesNotMatch(appSource, /message-edit-input|enterMessageEdit/);
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
@@ -260,7 +260,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
     assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /:root\[data-theme="dark"\]/);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
@@ -280,6 +280,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const snapshot = (await response.json()) as {
       protocolVersion: number;
       cursor: number;
+      preferences: { theme: string };
       currentSessionId: string;
       workspaces: Array<{ path: string }>;
       sessions: Array<{ cwd: string; ungrouped?: boolean }>;
@@ -287,6 +288,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       runtime: { status: string; capabilities: Record<string, unknown> };
     };
     assert.equal(snapshot.protocolVersion, 1);
+    assert.equal(snapshot.preferences.theme, "system");
     assert.ok(snapshot.cursor >= 1);
     assert.equal(snapshot.currentSessionId, sessionManager.getSessionId());
     assert.ok(Array.isArray(snapshot.models));
@@ -619,6 +621,8 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     sessionDirectory: root,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       prompts++;
       return { pendingFollowUps: 0 };
@@ -679,6 +683,18 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     });
     assert.equal(prompts, 0);
 
+    const cancellation = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        commandId: "command-a",
+        epoch: 1,
+      }),
+    });
+    assert.equal(cancellation.status, 409);
+    assert.equal((await cancellation.json()).code, "WORKSPACE_REQUIRED");
+
     const started = events.find((event) => event.type === "web_host_started");
     assert.ok(started);
     assert.equal("cwd" in (started.detail ?? {}), false);
@@ -704,6 +720,8 @@ test("returns accepted only after Pi admits the prompt", async () => {
     cwd,
     sessionManager,
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       promptStarted = true;
       await promptAdmitted;
@@ -762,6 +780,67 @@ test("returns accepted only after Pi admits the prompt", async () => {
   }
 });
 
+test("returns an exact receipt for a turn-bound cancellation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-cancel-"));
+  const runtime = testRuntime(cwd);
+  const activeTurn = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    commandId: "command-a",
+    epoch: 3,
+  };
+  runtime.getActiveTurn = () => activeTurn;
+  runtime.cancelTurn = async (options) => ({
+    ...options,
+    state: "accepted",
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshotResponse = await fetch(`${launched.origin}/api/snapshot`, {
+      headers,
+    });
+    assert.equal(snapshotResponse.status, 200);
+    assert.deepEqual(
+      (await snapshotResponse.json()).runtime.activeTurn,
+      activeTurn,
+    );
+
+    const response = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      ...activeTurn,
+      state: "accepted",
+      accepted: true,
+      cursor: 1,
+    });
+
+    runtime.cancelTurn = async (options) => ({
+      ...options,
+      state: "stale-turn",
+    });
+    const stale = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).state, "stale-turn");
+
+    const invalid = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeTurn, epoch: 0 }),
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function testRuntime(
   cwd: string,
   sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
@@ -775,6 +854,8 @@ function testRuntime(
     cwd,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt,
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
