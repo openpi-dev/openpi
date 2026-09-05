@@ -121,6 +121,52 @@ test("snapshot pins current and selected sessions while bounding the projection"
   }
 });
 
+test("discovers default Pi sessions as bounded read-only projections", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-history-"));
+  const sessionDirectory = join(root, "web-sessions");
+  const agentDirectory = join(root, "pi-agent");
+  const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDirectory;
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const terminal = SessionManager.create(root);
+    persistSession(terminal, "terminal history", 2);
+    const terminalPath = terminal.getSessionFile();
+    assert.ok(terminalPath);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+
+    const listed = await adapter.listReadOnlyTerminalSessions({ limit: 1 });
+    assert.equal(listed.total, 1);
+    assert.deepEqual(listed.sessions[0], {
+      id: terminal.getSessionId(),
+      path: terminalPath,
+      cwd: root,
+      modified: listed.sessions[0]?.modified,
+      created: listed.sessions[0]?.created,
+      messageCount: 2,
+      firstMessage: "terminal history",
+      source: "pi-default",
+      origin: "terminal",
+      readOnly: true,
+    });
+    const inspected = await adapter.getReadOnlyTerminalSession(terminalPath);
+    assert.equal(inspected.readOnly, true);
+    assert.equal(inspected.source, "pi-default");
+    assert.equal(inspected.preview.messages.length, 2);
+    assert.equal((await SessionManager.listAll(sessionDirectory)).length, 0);
+  } finally {
+    if (previousAgentDirectory === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an unbound Web runtime never projects its bootstrap cwd as a workspace or Session", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-"));
   const bootstrap = join(root, ".bootstrap-workspace");

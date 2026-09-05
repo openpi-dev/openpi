@@ -514,6 +514,141 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
+test("serves terminal Sessions through a read-only bounded endpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-host-"));
+  const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "pi-agent");
+  const sessionManager = SessionManager.inMemory(root);
+  const terminal = SessionManager.create(root);
+  terminal.appendMessage({
+    role: "user",
+    content: "terminal endpoint",
+    timestamp: 1,
+  });
+  terminal.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  const runtime: WebRuntimeController = {
+    cwd: root,
+    workspaceSelected: true,
+    sessionDirectory: join(root, "web-sessions"),
+    sessionManager,
+    isIdle: () => true,
+    sendPrompt: async () => {},
+    newSession: async () => ({ cancelled: false }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("not available");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {},
+  };
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}` };
+    const listed = await fetch(
+      `${launched.origin}/api/terminal-sessions?limit=1`,
+      {
+        headers,
+      },
+    );
+    assert.equal(listed.status, 200);
+    const page = (await listed.json()) as {
+      sessions: Array<{
+        path: string;
+        source: string;
+        origin: string;
+        readOnly: boolean;
+      }>;
+      total: number;
+    };
+    assert.equal(page.total, 1);
+    assert.equal(page.sessions[0]?.path, terminal.getSessionFile());
+    assert.equal(page.sessions[0]?.source, "pi-default");
+    assert.equal(page.sessions[0]?.origin, "terminal");
+    assert.equal(page.sessions[0]?.readOnly, true);
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/terminal-sessions?query=${"x".repeat(201)}`,
+          { headers },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?cursor=nope`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?limit=101`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    const missing = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(join(root, "missing.jsonl"))}`,
+      { headers },
+    );
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), {
+      code: "SESSION_NOT_FOUND",
+      error: "Terminal Session is not available",
+    });
+    const inspected = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(terminal.getSessionFile()!)}`,
+      { headers },
+    );
+    assert.equal(inspected.status, 200);
+    const details = (await inspected.json()) as {
+      readOnly: boolean;
+      preview: { messages: unknown[]; retainedBytes: number };
+    };
+    assert.equal(details.readOnly, true);
+    assert.equal(details.preview.messages.length, 2);
+    assert.ok(details.preview.retainedBytes > 0);
+  } finally {
+    await host.stop();
+    if (previousAgentDirectory === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-host-"));
   const bootstrap = join(root, ".bootstrap-workspace");
