@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -821,6 +822,64 @@ test("classifies invalid and oversized JSON bodies as client errors", async () =
       maxBytes: 16 * 1024,
     });
   } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("classifies an oversized body sent in multiple chunks as a client error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-chunks-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const bodyLength = 64 * 1024;
+  let request: ReturnType<typeof httpRequest> | undefined;
+  const responsePromise = new Promise<{
+    statusCode: number | undefined;
+    body: string;
+  }>((resolve, reject) => {
+    request = httpRequest(
+      {
+        hostname: launched.hostname,
+        port: Number(launched.port),
+        path: "/api/workspaces",
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "Content-Length": bodyLength,
+        },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () =>
+          resolve({ statusCode: response.statusCode, body }),
+        );
+      },
+    );
+    request.once("error", reject);
+    request.write(Buffer.alloc(20 * 1024, "a"));
+  });
+
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for early 413 response")),
+        2_000,
+      );
+      timer.unref();
+    });
+    const response = await Promise.race([responsePromise, timeout]);
+    assert.equal(response.statusCode, 413);
+    assert.deepEqual(JSON.parse(response.body), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    request?.destroy();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
