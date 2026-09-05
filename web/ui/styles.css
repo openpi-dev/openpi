@@ -576,6 +576,11 @@ body.sidebar-collapsed .icon-button { width: 36px; height: 36px; }
 .send-button:hover { background: var(--warm-accent-hover); }
 .send-button:disabled { background: var(--warm-accent-disabled); color: var(--subtle); }
 .send-button svg { width: 17px; height: 17px; stroke-width: 2; }
+.stop-button { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border: 1px solid #d6cbc1; border-radius: 50%; background: #f7eee8; color: #8a3f32; }
+.stop-button:hover { border-color: #c8b3a5; background: #f1e2d9; }
+.stop-button:disabled { border-color: var(--border); background: #f3f1ed; color: var(--subtle); }
+.stop-button[hidden] { display: none; }
+.stop-button svg { width: 16px; height: 16px; fill: currentColor; stroke: none; }
 .composer-hint { display: none; }
 .composer-hint.error { color: var(--error); }
 .sidebar-scrim { display: none; }
