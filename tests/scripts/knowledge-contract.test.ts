@@ -111,7 +111,11 @@ test("rejects a new frontmatter-less record outside the legacy allowlist", () =>
   const root = fixture();
   writeFileSync(join(root, "docs", "research", "new-record.md"), "# New\n");
   const result = checkKnowledgeContract(root);
-  assert(result.problems.includes("docs/research/new-record.md: missing frontmatter"));
+  assert(
+    result.problems.includes(
+      "docs/research/new-record.md: missing frontmatter",
+    ),
+  );
 });
 
 test("reports missing benchmark evidence fields without validating claims", () => {
