@@ -19,9 +19,6 @@ const state = {
   collapsed: readCollapsedWorkspaces(),
   liveMessages: [],
   liveRunning: false,
-  activeTurn: null,
-  turnCancellationPending: false,
-  turnTerminalStatus: null,
   promptAdmissionPending: false,
   promptAdmissionToken: null,
   promptAdmissionSequence: 0,
@@ -70,9 +67,6 @@ const translations = {
     enterHint: "Enter to send, Shift+Enter for a new line.",
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
-    stopTurn: "Stop turn",
-    stoppingTurn: "Stopping current turn...",
-    stoppedTurn: "Current turn stopped.",
     modelRunning: "Working...",
     modelPreparing: "Preparing task...",
     modelRetrying: "Retrying model request...",
@@ -109,9 +103,6 @@ const translations = {
     enterHint: "按 Enter 发送，Shift+Enter 换行。",
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
-    stopTurn: "停止当前回合",
-    stoppingTurn: "正在停止当前回合...",
-    stoppedTurn: "当前回合已停止。",
     modelRunning: "正在运行...",
     modelPreparing: "正在准备任务...",
     modelRetrying: "模型请求重试中...",
@@ -221,6 +212,18 @@ function sessionTitle(session) {
 function compactSummary(value, limit = 96) {
   const text = String(value ?? "").replace(/\s+/gu, " ").trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function applyPromptAcceptedState(alreadySettled) {
+  if (alreadySettled) {
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+    }
+    return;
+  }
+  state.liveRunning = true;
+  if (state.livePhase !== "running") state.livePhase = "preparing";
 }
 
 function relativeTime(value) {
@@ -491,13 +494,6 @@ function updateComposer() {
     !selected &&
     !state.snapshot?.currentSessionId;
   const canCompose = active || newSessionDraft;
-  const activeTurn = active
-    ? state.activeTurn || state.snapshot?.runtime.activeTurn || null
-    : null;
-  const canStop = Boolean(
-    activeTurn &&
-    (state.snapshot?.runtime.status === "running" || state.liveRunning),
-  );
   $("prompt-input").disabled =
     state.sessionSwitching || (!canCompose && Boolean(state.selectedWorkspace));
   $("send-prompt").disabled =
@@ -505,9 +501,6 @@ function updateComposer() {
     !canCompose ||
     !state.selectedWorkspace ||
     state.promptAdmissionPending;
-  $("send-prompt").hidden = canStop;
-  $("stop-turn").hidden = !canStop;
-  $("stop-turn").disabled = state.turnCancellationPending;
   const modelPicker = $("model-picker");
   const modelPickerValue = $("model-picker-value");
   const modelMenu = $("model-menu");
@@ -546,14 +539,11 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent =
-    state.turnTerminalStatus === "cancelled"
-      ? t("stoppedTurn")
-      : canCompose
-        ? state.snapshot.runtime.status === "running" || state.liveRunning
-          ? t("queuedHint")
-          : t("enterHint")
-        : t("activeOnlyHint");
+  $("composer-hint").textContent = canCompose
+    ? state.snapshot.runtime.status === "running" || state.liveRunning
+      ? t("queuedHint")
+      : t("enterHint")
+    : t("activeOnlyHint");
 }
 
 async function selectModel(value) {
@@ -627,9 +617,6 @@ async function refreshSnapshot({
       return false;
     }
     state.snapshot = snapshot;
-    if (resetCursor) resetLiveState();
-    state.activeTurn = snapshot.runtime.activeTurn || null;
-    if (snapshot.runtime.status === "running") state.liveRunning = true;
     if (
       state.snapshot.runtime.status !== "running" &&
       !state.promptAdmissionPending
@@ -638,6 +625,7 @@ async function refreshSnapshot({
       state.livePhase = "idle";
       state.liveRetry = null;
     }
+    if (resetCursor) resetLiveState();
     state.cursor = resetCursor || state.cursor === null
       ? state.snapshot.cursor
       : Math.max(state.cursor, state.snapshot.cursor);
@@ -762,7 +750,6 @@ async function sendPrompt() {
   ].slice(-8);
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
-  state.turnTerminalStatus = null;
   renderConversation();
   $("composer-hint").classList.remove("error");
   try {
@@ -772,8 +759,7 @@ async function sendPrompt() {
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
     $("prompt-input").value = "";
     resizePrompt();
     $("composer-hint").textContent = t("acceptedHint");
@@ -792,36 +778,6 @@ async function sendPrompt() {
     if (epoch === state.sessionEpoch && state.promptAdmissionToken === admissionToken) {
       state.promptAdmissionPending = false;
       state.promptAdmissionToken = null;
-      renderConversation();
-    }
-  }
-}
-
-async function cancelActiveTurn() {
-  const turn = state.activeTurn || state.snapshot?.runtime.activeTurn;
-  if (!turn || state.turnCancellationPending || state.sessionSwitching) return;
-  const epoch = state.sessionEpoch;
-  state.turnCancellationPending = true;
-  $("composer-hint").classList.remove("error");
-  $("composer-hint").textContent = t("stoppingTurn");
-  updateComposer();
-  try {
-    const receipt = await api("/api/turns/cancel", {
-      method: "POST",
-      body: JSON.stringify(turn),
-    });
-    if (epoch !== state.sessionEpoch) return;
-    if (receipt.state === "accepted" || receipt.state === "already-settled") {
-      $("composer-hint").textContent = t("stoppedTurn");
-    }
-  } catch (error) {
-    if (epoch !== state.sessionEpoch) return;
-    $("composer-hint").textContent = error.message;
-    $("composer-hint").classList.add("error");
-    await refreshSnapshot({ epoch });
-  } finally {
-    if (epoch === state.sessionEpoch) {
-      state.turnCancellationPending = false;
       renderConversation();
     }
   }
@@ -1121,44 +1077,22 @@ function applyRuntimeEvent(event) {
     scheduleSnapshotRefresh();
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
-    state.liveRetry = null;
-    renderConversation();
-  } else if (event.type === "turn_started") {
-    state.activeTurn = {
-      sessionId: event.detail?.sessionId,
-      commandId: event.detail?.commandId,
-      epoch: event.detail?.epoch,
-    };
-    state.liveRunning = true;
-    state.turnTerminalStatus = null;
-    state.livePhase = "running";
+    applyPromptAcceptedState(alreadySettled);
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_start") {
-    if (event.detail?.activeTurn) state.activeTurn = event.detail.activeTurn;
     state.liveRunning = true;
     state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
-  } else if (event.type === "turn_settled") {
-    rememberTerminalPrompt(event.detail?.commandId);
-    const isActiveTurn =
-      state.activeTurn?.sessionId === event.detail?.sessionId &&
-      state.activeTurn?.commandId === event.detail?.commandId &&
-      state.activeTurn?.epoch === event.detail?.epoch;
-    if (isActiveTurn) {
-      state.activeTurn = null;
-      state.liveRunning = false;
-      state.livePhase = "idle";
-      state.liveRetry = null;
-      state.turnTerminalStatus = event.detail?.outcome || null;
-    }
+  } else if (event.type === "agent_settled") {
+    state.liveRunning = false;
+    state.livePhase = "idle";
+    state.liveRetry = null;
     renderConversation();
-  } else if (event.type === "agent_settled" || event.type === "prompt_settled") {
-    if (event.type === "prompt_settled") rememberTerminalPrompt(event.detail?.commandId);
-    if (!state.activeTurn) {
+  } else if (event.type === "prompt_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    if (state.livePhase !== "running") {
       state.liveRunning = false;
       state.livePhase = "idle";
       state.liveRetry = null;
@@ -1183,8 +1117,6 @@ function applyRuntimeEvent(event) {
     [
       "agent_start",
       "agent_settled",
-      "turn_started",
-      "turn_settled",
       "prompt_settled",
       "message_end",
       "tool_execution_end",
@@ -1248,9 +1180,6 @@ let eventLoopStarted = false;
 function resetLiveState() {
   state.liveMessages = [];
   state.liveRunning = false;
-  state.activeTurn = null;
-  state.turnCancellationPending = false;
-  state.turnTerminalStatus = null;
   state.livePhase = "idle";
   state.liveRetry = null;
 }
@@ -1471,9 +1400,6 @@ $("composer")?.addEventListener("submit", (event) => {
   event.preventDefault();
   if (state.selectedWorkspace) void sendPrompt();
   else void chooseWorkspace();
-});
-$("stop-turn")?.addEventListener("click", () => {
-  void cancelActiveTurn();
 });
 $("prompt-input")?.addEventListener("input", resizePrompt);
 $("prompt-input")?.addEventListener("keydown", (event) => {

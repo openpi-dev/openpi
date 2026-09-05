@@ -115,6 +115,24 @@ test("an explicit user-selected reasoning level remains available", () => {
   );
 });
 
+test("output_schema is optional and validates the schema container", () => {
+  const schema =
+    createSubagentSpawnToolSurface(BUILT_IN_AGENT_TYPES).parameters;
+  const task = { prompt: "Review", name: "review" };
+  assert.equal(Value.Check(schema, task), true);
+  assert.equal(
+    Value.Check(schema, {
+      ...task,
+      output_schema: {
+        type: "object",
+        properties: { verdict: { type: "string" } },
+      },
+    }),
+    true,
+  );
+  assert.equal(Value.Check(schema, { ...task, output_schema: [] }), false);
+});
+
 test("the default spawn surface stays within its resident budget", () => {
   assert.ok(
     spawnSurfaceBytes(BUILT_IN_AGENT_TYPES) <=

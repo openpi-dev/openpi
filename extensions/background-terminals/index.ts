@@ -32,6 +32,7 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
   projectBackgroundTerminalCapability,
   registerWebCapability,
@@ -105,7 +106,12 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   let startReservations = 0;
-  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>({
+    owner: () =>
+      sessionContext
+        ? completionOwnerFor(sessionContext.sessionManager)
+        : undefined,
+  });
   const hideLifecycleTools = () =>
     patchOwnedTools(pi, "background", {
       disable: OPENPI_TOOL_SURFACE.background.deferred,
@@ -245,6 +251,7 @@ export default function (pi: ExtensionAPI) {
   const flushResults = (wake: boolean) => {
     const snaps = resultDelivery.drain(MAX_RUNNING);
     if (!deliverResults(snaps, wake)) resultDelivery.restore(snaps);
+    else resultDelivery.acknowledge(snaps);
   };
 
   const idleResultBatcher = createIdleResultBatcher({

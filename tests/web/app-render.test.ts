@@ -401,10 +401,6 @@ async function renderApp(
       "sendPrompt",
       context as vm.Context,
     ) as () => Promise<void>,
-    cancelActiveTurn: vm.runInContext(
-      "cancelActiveTurn",
-      context as vm.Context,
-    ) as () => Promise<void>,
     updateComposer: vm.runInContext(
       "updateComposer",
       context as vm.Context,
@@ -871,70 +867,56 @@ test("app.js settles an admitted prompt that Pi handles without an agent turn", 
   assert.equal((app.state.terminalPromptIds as Set<string>).size, 32);
 });
 
-test("app.js stops only the canonical active turn without optimistic settlement", async () => {
+test("app.js keeps an active agent running when a handled prompt settles", async () => {
   const app = await renderApp();
-  const cancellation = deferred<ReturnType<typeof response>>();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "handled"}}); applyRuntimeEvent({sequence: 4, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "handled"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 5, type: "agent_settled", detail: {sessionId: "s1"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, false);
+  assert.equal(app.state.livePhase, "idle");
+});
+
+test("app.js keeps an active agent running when a queued prompt is accepted", async () => {
+  const app = await renderApp();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "queued"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+});
+
+test("app.js keeps an active agent running when its prompt receipt settles late", async () => {
+  const app = await renderApp();
+  const prompt = deferred<ReturnType<typeof response>>();
   app.context.fetch = async (url: unknown) => {
-    if (String(url) === "/api/turns/cancel") return cancellation.promise;
+    if (String(url) === "/api/prompt") return prompt.promise;
     if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
     throw new Error(`unexpected request: ${String(url)}`);
   };
-  vm.runInContext(
-    'applyRuntimeEvent({sequence: 2, type: "turn_started", detail: {sessionId: "s1", commandId: "c1", epoch: 4}})',
-    app.context as vm.Context,
-  );
-
-  assert.equal(app.state.liveRunning, true);
-  assert.equal(app.elements.get("stop-turn")?.hidden, false);
-  assert.equal(app.elements.get("send-prompt")?.hidden, true);
-  const stopping = app.cancelActiveTurn();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "late receipt";
+  const sending = app.sendPrompt();
   await new Promise((resolve) => setTimeout(resolve, 0));
-  assert.equal(app.state.liveRunning, true);
-  assert.equal(app.state.turnCancellationPending, true);
 
   vm.runInContext(
-    'applyRuntimeEvent({sequence: 3, type: "turn_settled", detail: {sessionId: "s1", commandId: "c1", epoch: 4, outcome: "cancelled"}})',
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "late"}})',
     app.context as vm.Context,
   );
-  cancellation.resolve(
-    response({
-      sessionId: "s1",
-      commandId: "c1",
-      epoch: 4,
-      state: "accepted",
-      accepted: true,
-    }),
-  );
-  await stopping;
+  prompt.resolve(response({ id: "late", accepted: true }));
+  await sending;
 
-  assert.equal(app.state.liveRunning, false);
-  assert.equal(app.state.activeTurn, null);
-  assert.equal(app.elements.get("stop-turn")?.hidden, true);
-  assert.equal(app.elements.get("send-prompt")?.hidden, false);
-  assert.equal(
-    app.elements.get("composer-hint")?.textContent,
-    "Current turn stopped.",
-  );
-});
-
-test("app.js restores the active turn and Stop control from a snapshot", async () => {
-  const running = structuredClone(SNAPSHOT) as SnapshotFixture & {
-    runtime: typeof SNAPSHOT.runtime & {
-      activeTurn: { sessionId: string; commandId: string; epoch: number };
-    };
-  };
-  running.runtime.status = "running";
-  running.runtime.activeTurn = {
-    sessionId: "s1",
-    commandId: "c1",
-    epoch: 9,
-  };
-  const app = await renderApp({ snapshot: running });
-
-  assert.deepEqual(app.state.activeTurn, running.runtime.activeTurn);
   assert.equal(app.state.liveRunning, true);
-  assert.equal(app.elements.get("stop-turn")?.hidden, false);
-  assert.equal(app.elements.get("send-prompt")?.hidden, true);
+  assert.equal(app.state.livePhase, "running");
 });
 
 test("app.js scopes model selection to its session epoch", async () => {
