@@ -236,6 +236,31 @@ function parseWorkflowCommitMarker(
   };
 }
 
+function hasCommittedManifest(
+  manifestPath: string,
+  marker: WorkflowCommitMarker,
+) {
+  try {
+    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return false;
+    }
+    const manifest = parsed as Record<string, unknown>;
+    const markerManifest = JSON.parse(marker.manifest) as Record<
+      string,
+      unknown
+    >;
+    return (
+      manifest.runId === marker.runId &&
+      manifest.status === markerManifest.status &&
+      manifest.transcriptArtifact === markerManifest.transcriptArtifact &&
+      manifest.resultArtifact === markerManifest.resultArtifact
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Complete a terminal artifact commit only when every prepared file matches
  * the exact bounded receipt written before the side-artifact sequence began.
@@ -275,7 +300,7 @@ export function recoverPendingWorkflowCommit(
   try {
     if (
       fs.existsSync(manifestPath) &&
-      fs.readFileSync(manifestPath, "utf8") === marker.manifest
+      hasCommittedManifest(manifestPath, marker)
     ) {
       removeWorkflowCommit(runDir);
       return "already-committed";
