@@ -215,9 +215,15 @@ function compactSummary(value, limit = 96) {
 }
 
 function applyPromptAcceptedState(alreadySettled) {
-  state.liveRunning = !alreadySettled;
-  if (alreadySettled) state.livePhase = "idle";
-  else if (state.livePhase !== "running") state.livePhase = "preparing";
+  if (alreadySettled) {
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+    }
+    return;
+  }
+  state.liveRunning = true;
+  if (state.livePhase !== "running") state.livePhase = "preparing";
 }
 
 function relativeTime(value) {
