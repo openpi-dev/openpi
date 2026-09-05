@@ -89,8 +89,8 @@ const SNAPSHOT = {
             id: "sa-1",
             title: "explore",
             status: "done",
-            createdAt: "2026-09-01T10:00:00Z",
-            settledAt: "2026-09-01T10:00:30Z",
+            createdAt: Date.parse("2026-09-01T10:00:00Z"),
+            settledAt: Date.parse("2026-09-01T10:00:30Z"),
           },
         ],
         omitted: 2,
@@ -102,8 +102,8 @@ const SNAPSHOT = {
             runId: "wf-1",
             name: "delivery",
             status: "completed",
-            startedAt: "2026-09-01T10:00:00Z",
-            finishedAt: "2026-09-01T10:01:00Z",
+            startedAt: Date.parse("2026-09-01T10:00:00Z"),
+            finishedAt: Date.parse("2026-09-01T10:01:00Z"),
             agents: { total: 1, running: 0, done: 1, error: 0, uncertain: 0 },
           },
         ],
@@ -438,14 +438,28 @@ test("app.js renders a full session without runtime errors", async () => {
   const conversation = elements.get("conversation");
   assert.ok(conversation, "conversation element exists");
   assert.match(conversation.innerHTML, /message-row user/);
-  assert.match(conversation.innerHTML, /assistant-detail/);
-  assert.match(conversation.innerHTML, /tool-details/);
-  assert.match(conversation.innerHTML, /runtime-activity/);
+  assert.match(conversation.innerHTML, /thinking-line/);
+  assert.match(conversation.innerHTML, /tool-line/);
+  // Settled tool calls carry an outcome glyph at the row's right edge.
+  assert.match(conversation.innerHTML, /tool-status done/);
+  assert.match(conversation.innerHTML, /activity-card subagent/);
+  assert.match(conversation.innerHTML, /activity-card workflow/);
   assert.match(conversation.innerHTML, /explore/);
-  assert.match(conversation.innerHTML, /\+2 omitted/);
-  assert.match(conversation.innerHTML, /delivery/);
   assert.match(conversation.innerHTML, /file1/);
   assert.match(conversation.innerHTML, /最终总结/);
+  // Copy/time shows on user messages and each turn's final assistant answer
+  // (this fixture is a single turn: one user row + one final answer).
+  const actionBars = conversation.innerHTML.match(/message-actions/g) || [];
+  assert.equal(actionBars.length, 2);
+  const activityBar = elements.get("activity-bar");
+  assert.ok(activityBar, "activity bar element exists");
+  assert.equal(activityBar.hidden, false);
+  assert.match(activityBar.innerHTML, /activity-chip workflow done/);
+  assert.match(activityBar.innerHTML, /activity-chip subagent done/);
+  assert.match(activityBar.innerHTML, /delivery/);
+  assert.match(activityBar.innerHTML, /\+2/);
+  const turnRail = elements.get("turn-rail");
+  assert.ok(turnRail, "turn rail element exists");
 });
 
 test("app.js moves the bootstrap token into tab storage and clears the URL", async () => {

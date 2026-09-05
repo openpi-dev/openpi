@@ -317,7 +317,8 @@ export class WebHost {
     if (
       url.pathname === "/styles.css" ||
       url.pathname === "/app.js" ||
-      url.pathname === "/marked.js"
+      url.pathname === "/marked.js" ||
+      url.pathname === "/favicon.svg"
     ) {
       if (request.method !== "GET")
         return this.json(response, 405, {
@@ -332,7 +333,9 @@ export class WebHost {
       response.writeHead(200, {
         "Content-Type": file.endsWith(".css")
           ? "text/css; charset=utf-8"
-          : "text/javascript; charset=utf-8",
+          : file.endsWith(".svg")
+            ? "image/svg+xml; charset=utf-8"
+            : "text/javascript; charset=utf-8",
         "Cache-Control": "no-store",
       });
       response.end(body);

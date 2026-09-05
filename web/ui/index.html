@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="color-scheme" content="light" />
     <title>OpenPI</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="stylesheet" href="/styles.css" />
     <script src="/marked.js"></script>
     <script src="/app.js" defer></script>
@@ -73,7 +74,6 @@
             </div>
           </form>
         </dialog>
-
       </aside>
 
       <main class="conversation-shell landing">
@@ -91,12 +91,15 @@
         <section id="conversation" class="conversation" aria-label="Conversation">
           <div class="landing-welcome">
             <div class="landing-brand">
-              <strong>Open<span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
+              <strong><span class="brand-word">Open</span><span class="pixel-mark" aria-label="OpenPI"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span></strong>
             </div>
           </div>
         </section>
 
+        <nav id="turn-rail" class="turn-rail" aria-label="Conversation turns" hidden></nav>
+
         <div class="composer-dock">
+          <div id="activity-bar" class="activity-bar" hidden></div>
           <div class="workspace-picker-row">
             <button id="select-workspace" class="workspace-picker" type="button" data-i18n-aria="selectWorkspace">
               <svg class="workspace-symbol icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3.5 7.5a2 2 0 0 1 2-2h5l2 2h6a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2h-13a2 2 0 0 1-2-2z"></path></svg>

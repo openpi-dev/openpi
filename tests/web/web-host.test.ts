@@ -143,8 +143,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(pageHtml, /id="workspace-menu"/);
     assert.match(pageHtml, /Rename workspace/);
     assert.match(pageHtml, /Remove from sidebar/);
-    assert.doesNotMatch(pageHtml, /theme-picker-trigger|data-theme-value/);
-    assert.doesNotMatch(pageHtml, /settings-dialog|language-picker/u);
+    // Settings persistence/entry is deferred to #350 (canonical config contract).
+    assert.doesNotMatch(
+      pageHtml,
+      /settings-dialog|open-settings|theme-picker|language-picker/,
+    );
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
@@ -178,22 +181,46 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /visibleUngroupedSessions/);
     assert.match(appSource, /workspaceDeleteConfirm/);
     assert.match(appSource, /workspace-delete-dialog/);
-    assert.match(appSource, /runtime-activity/);
+    assert.match(appSource, /message-copy/);
+    assert.match(appSource, /messageActionsMarkup/);
+    assert.match(appSource, /turn-tick/);
+    assert.match(appSource, /turn-rail/);
+    assert.match(appSource, /scrollIntoView/);
+    assert.match(appSource, /activity-card/);
+    assert.match(appSource, /familyToolCallCard/);
+    assert.match(appSource, /toolLineMarkup/);
+    assert.match(appSource, /toolCallSummary/);
+    assert.match(appSource, /groupRows/);
+    assert.match(appSource, /tool-group/);
+    assert.match(appSource, /thinkingLineMarkup/);
+    assert.match(appSource, /data-thinking-start/);
+    assert.match(appSource, /message-edit-input/);
+    assert.match(appSource, /enterMessageEdit/);
+    assert.match(appSource, /renderActivityBar/);
+    assert.match(appSource, /activity-chip/);
     assert.match(appSource, /runtime_changed/);
+    assert.match(appSource, /resultsByCallId/);
+    assert.match(appSource, /pinnedToBottom/);
+    assert.match(appSource, /behavior: "instant"/);
+    assert.match(appSource, /customType/);
+    assert.match(appSource, /subagent-result/);
+    assert.match(appSource, /workflow-result/);
     assert.match(appSource, /sessionStorage\.setItem/);
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
-    assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
-    assert.doesNotMatch(appSource, /language-picker|open-settings/u);
+    assert.doesNotMatch(appSource, /openpi\.archived-sessions/);
+    assert.doesNotMatch(appSource, /applyTheme|data-theme-value|open-settings/);
+    assert.doesNotMatch(appSource, /openpi\.language|openpi\.web\.theme/);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
     assert.equal(marked.status, 200);
     assert.match(marked.headers.get("content-type") || "", /javascript/);
     assert.match(await marked.text(), /marked v18/);
+
+    const favicon = await fetch(`${launched.origin}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.headers.get("content-type") || "", /image\/svg\+xml/);
+    assert.match(await favicon.text(), /<svg/);
 
     const styles = await fetch(`${launched.origin}/styles.css`);
     assert.equal(styles.status, 200);
@@ -217,7 +244,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.workspace-picker-row \{[^}]*width: min\(780px, 100%\)/,
+      /\.workspace-picker-row \{[^}]*width: min\(840px, 100%\)/,
     );
     assert.match(
       stylesSource,
@@ -234,7 +261,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(stylesSource, /\.composer-hint \{ display: none; \}/);
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \{ width: min\(780px, calc\(100% - 48px\)\); \}/,
+      /\.message-row\.assistant \{ width: min\(840px, calc\(100% - 48px\)\); padding: 6px 0; \}/,
     );
     assert.match(
       stylesSource,
@@ -242,19 +269,42 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(
       stylesSource,
-      /\.message-row\.assistant \.message-details \{ width: min\(760px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
+      /\.message-row\.assistant \.message-details \{ width: min\(820px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
     );
     assert.match(
       stylesSource,
-      /\.message-row\.detail-only \{ padding: 12px 0; \}/,
+      /\.message-row\.detail-only \{ padding: 6px 0; \}/,
     );
     assert.match(
       stylesSource,
       /\.message-row\.detail-only \.message-details \{ margin: 0 auto; \}/,
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
-    assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /\.message-actions \{/);
+    assert.match(stylesSource, /\.turn-rail \{/);
+    assert.match(stylesSource, /\.turn-tick-label \{/);
+    assert.match(stylesSource, /\.activity-card \{/);
+    assert.match(stylesSource, /\.activity-chip \{/);
+    assert.match(stylesSource, /\.activity-bar \{/);
+    assert.match(stylesSource, /\.tool-icon \{/);
+    assert.match(stylesSource, /\.tool-line\.error/);
+    assert.match(stylesSource, /\.tool-group \{/);
+    assert.match(stylesSource, /\.thinking-line/);
+    assert.doesNotMatch(
+      stylesSource,
+      /html\[data-theme=|settings-dialog|language-picker/,
+    );
+    assert.match(stylesSource, /@keyframes pixel-nudge/);
+    // Narrow-screen regression: the off-canvas sidebar must not keep a
+    // backdrop-filter, or Chromium blurs the whole page backdrop (#352 P1).
+    assert.match(
+      stylesSource,
+      /@media \(max-width: 760px\) \{[\s\S]*?\.session-sidebar \{[^}]*backdrop-filter: none;/,
+    );
+    assert.match(
+      stylesSource,
+      /@media \(max-width: 760px\) \{[\s\S]*?\.session-sidebar::before \{ display: none; \}/,
+    );
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
