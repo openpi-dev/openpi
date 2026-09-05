@@ -95,8 +95,23 @@ test("accepts reachable research and benchmark records", () => {
 
 test("ignores legacy records without frontmatter", () => {
   const root = fixture();
-  writeFileSync(join(root, "docs", "research", "legacy.md"), "# Legacy\n");
+  writeFileSync(
+    join(
+      root,
+      "docs",
+      "research",
+      "CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md",
+    ),
+    "# Legacy\n",
+  );
   assert.equal(assertKnowledgeContract(root).records.length, 2);
+});
+
+test("rejects a new frontmatter-less record outside the legacy allowlist", () => {
+  const root = fixture();
+  writeFileSync(join(root, "docs", "research", "new-record.md"), "# New\n");
+  const result = checkKnowledgeContract(root);
+  assert(result.problems.includes("docs/research/new-record.md: missing frontmatter"));
 });
 
 test("reports missing benchmark evidence fields without validating claims", () => {
