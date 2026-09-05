@@ -95,6 +95,19 @@ try {
       : {}),
   });
   await host.start();
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, () => {
+      void stop().then(
+        () => process.exit(0),
+        (error) => {
+          console.error(
+            `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
+          );
+          process.exit(1);
+        },
+      );
+    });
+  }
   traceWeb("web_started", {
     ...(runtime.workspaceSelected === true ? { cwd: runtime.cwd } : {}),
     origin: host.origin,
@@ -113,19 +126,6 @@ try {
     if (!opened) console.log(`Open this URL in a browser: ${host.url}`);
   }
 
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-      void stop().then(
-        () => process.exit(0),
-        (error) => {
-          console.error(
-            `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
-          );
-          process.exit(1);
-        },
-      );
-    });
-  }
 } catch (error) {
   let cleanupError;
   try {

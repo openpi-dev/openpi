@@ -28,6 +28,10 @@ const manifest = JSON.parse(
     image?: string;
   };
 };
+const npmConfig = readFileSync(
+  new URL("../../../.npmrc", import.meta.url),
+  "utf8",
+);
 
 const HOST_PACKAGES = [
   "@earendil-works/pi-ai",
@@ -42,6 +46,14 @@ test("Pi host packages stay peers while local checks keep development copies", (
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
   }
+});
+
+test("Git source installs do not resolve host-provided peer dependencies", () => {
+  const directives = npmConfig
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  assert.deepEqual(directives, ["legacy-peer-deps=true"]);
 });
 
 test("the manifest enforces the documented Node floor", () => {

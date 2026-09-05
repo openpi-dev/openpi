@@ -25,10 +25,9 @@ import {
   type WebRuntimeController,
 } from "../runtime/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
-import { MARKED_BROWSER_URL } from "./static-assets.ts";
 
 const HOST = "127.0.0.1";
-const UI_ROOT = new URL("../ui/", import.meta.url);
+const UI_ROOT = new URL("../dist/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
@@ -314,22 +313,20 @@ export class WebHost {
     if (
       url.pathname === "/styles.css" ||
       url.pathname === "/app.js" ||
-      url.pathname === "/marked.js"
+      url.pathname === "/favicon.svg"
     ) {
       if (request.method !== "GET")
         return this.json(response, 405, {
           error: "static assets accept GET only",
         });
       const file = url.pathname.slice(1);
-      const body = await readFile(
-        file === "marked.js"
-          ? MARKED_BROWSER_URL
-          : new URL(file, UI_ROOT),
-      );
+      const body = await readFile(new URL(file, UI_ROOT));
       response.writeHead(200, {
         "Content-Type": file.endsWith(".css")
           ? "text/css; charset=utf-8"
-          : "text/javascript; charset=utf-8",
+          : file.endsWith(".svg")
+            ? "image/svg+xml; charset=utf-8"
+            : "text/javascript; charset=utf-8",
         "Cache-Control": "no-store",
       });
       response.end(body);

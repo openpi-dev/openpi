@@ -1,5 +1,7 @@
 import { defineConfig } from "vite";
 import { fileURLToPath } from "node:url";
+import react from "@vitejs/plugin-react";
+import tailwindcss from "@tailwindcss/vite";
 
 const backendOrigin =
   process.env.OPENPI_WEB_BACKEND?.replace(/\/$/u, "") ||
@@ -21,6 +23,25 @@ function backendProxy() {
 
 export default defineConfig({
   root: fileURLToPath(new URL("./ui/", import.meta.url)),
+  publicDir: fileURLToPath(new URL("./ui/public/", import.meta.url)),
+  plugins: [react(), tailwindcss()],
+  build: {
+    outDir: fileURLToPath(new URL("./dist/", import.meta.url)),
+    emptyOutDir: true,
+    cssCodeSplit: false,
+    sourcemap: false,
+    rollupOptions: {
+      output: {
+        entryFileNames: "app.js",
+        chunkFileNames: "app-[name].js",
+        assetFileNames: ({ names }) =>
+          names?.some((name) => name.endsWith(".css"))
+            ? "styles.css"
+            : "[name][extname]",
+        manualChunks: undefined,
+      },
+    },
+  },
   server: {
     host: "127.0.0.1",
     port: Number(process.env.OPENPI_WEB_UI_PORT || 5173),
@@ -28,7 +49,6 @@ export default defineConfig({
     proxy: {
       "/api": backendProxy(),
       "/events": backendProxy(),
-      "/marked.js": backendProxy(),
     },
   },
 });

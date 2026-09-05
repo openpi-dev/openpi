@@ -100,146 +100,45 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
-    assert.match(pageHtml, /<script src="\/marked\.js"><\/script>/);
-    assert.match(pageHtml, /<script src="\/app\.js" defer><\/script>/);
+    assert.match(pageHtml, /<div id="root"><\/div>/);
     assert.match(
       pageHtml,
-      /aria-label="New session"|class="new-session-button"/,
+      /<script type="module"[^>]*src="\/app\.js"><\/script>/,
     );
-    assert.match(
-      pageHtml,
-      /id="import-workspace"[^>]*aria-label="Add workspace"/,
-    );
-    assert.match(pageHtml, /id="workspaces"/);
-    assert.match(pageHtml, /id="connection-state"/);
-    assert.match(pageHtml, /id="composer"/);
-    assert.match(pageHtml, /id="prompt-input"/);
-    assert.match(pageHtml, /id="send-prompt"/);
-    assert.match(pageHtml, /id="model-picker"/);
-    assert.match(pageHtml, /id="composer-hint"/);
-    assert.match(pageHtml, /id="select-workspace" class="workspace-picker"/);
-    assert.match(
-      pageHtml,
-      /class="composer-dock">[\s\S]*id="select-workspace"[\s\S]*id="composer"/,
-    );
-    assert.doesNotMatch(pageHtml, /landing-context/);
-    assert.doesNotMatch(pageHtml, /class="context-picker"/);
-    assert.doesNotMatch(pageHtml, /aria-label="Search"/);
-    assert.match(pageHtml, /id="workspace-menu"/);
-    assert.match(pageHtml, /Rename workspace/);
-    assert.match(pageHtml, /Remove from sidebar/);
-    assert.doesNotMatch(pageHtml, /theme-picker-trigger|data-theme-value/);
-    assert.doesNotMatch(pageHtml, /settings-dialog|language-picker/u);
+    assert.match(pageHtml, /<link rel="stylesheet"[^>]*href="\/styles\.css">/);
+    assert.match(pageHtml, /href="\/favicon\.svg"/);
+    assert.doesNotMatch(pageHtml, /marked\.js|https?:\/\//u);
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
+    assert.match(app.headers.get("content-type") || "", /javascript/);
     const appSource = await app.text();
-    assert.doesNotMatch(
-      appSource,
-      /\$\("(?:workspace-path|workspace-dialog|close-workspace-dialog|cancel-workspace|workspace-form)"\)|importWorkspace/,
-    );
-    assert.match(appSource, /collapseButton\?\.addEventListener\("click"/);
-    assert.match(appSource, /aria-expanded="\$\{!collapsed\}"/);
-    assert.doesNotMatch(appSource, /icon\("conversation"/);
-    assert.match(appSource, /session-title.*session-time/s);
-    assert.match(appSource, /data-workspace-action="more"/);
-    assert.match(appSource, /data-workspace-action="new"/);
-    assert.doesNotMatch(appSource, /workspace-count/);
-    assert.match(appSource, /if \(!shell\) \{/);
-    assert.match(
-      appSource,
-      /new-session-button[\s\S]*?createSession\(state\.selectedWorkspace\)/,
-    );
-    assert.match(appSource, /data-session-action="menu"/);
-    assert.match(appSource, /archiveSession\(path\)/);
-    assert.match(appSource, /method: "PATCH"/);
-    assert.match(appSource, /message\.parts/);
-    assert.match(appSource, /message-row assistant detail-only/);
-    assert.match(
-      appSource,
-      /typeof message\.content === "string" \? message\.content\.trim\(\)/,
-    );
-    assert.match(appSource, /conversation-running/);
-    assert.match(appSource, /visibleUngroupedSessions/);
-    assert.match(appSource, /workspaceDeleteConfirm/);
-    assert.match(appSource, /workspace-delete-dialog/);
-    assert.match(appSource, /runtime-activity/);
-    assert.match(appSource, /runtime_changed/);
-    assert.match(appSource, /sessionStorage\.setItem/);
-    assert.match(appSource, /history\.replaceState/);
+    assert.match(appSource, /OpenPI Web root is missing/);
+    assert.match(appSource, /openpi\.web\.token/);
     assert.match(appSource, /\/events\?cursor=/);
+    assert.match(appSource, /workspaceDeleteConfirm/);
+    assert.match(appSource, /activity-card/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
-
-    const marked = await fetch(`${launched.origin}/marked.js`);
-    assert.equal(marked.status, 200);
-    assert.match(marked.headers.get("content-type") || "", /javascript/);
-    assert.match(await marked.text(), /marked v18/);
 
     const styles = await fetch(`${launched.origin}/styles.css`);
     assert.equal(styles.status, 200);
     const stylesSource = await styles.text();
+    assert.match(stylesSource, /\.landing \.conversation/);
+    assert.match(stylesSource, /\.composer\.dormant/);
+    assert.match(stylesSource, /\.activity-card/);
     assert.match(
       stylesSource,
-      /\.landing \.conversation, \.landing \.composer-dock \{ grid-area: 1 \/ 1; \}/,
+      /@media\s*\((?:max-width:\s*760px|width\s*<=\s*760px)\)/,
     );
-    assert.match(
-      stylesSource,
-      /\.landing \.composer-dock \{[\s\S]*?align-self: center;/,
-    );
-    assert.match(stylesSource, /\.workbench-header \{\s*display: none;\s*\}/);
-    assert.match(
-      stylesSource,
-      /\.composer\.dormant \{[^}]*border-style: dashed/,
-    );
-    assert.match(
-      stylesSource,
-      /\.composer\.dormant:hover \{[^}]*border-color:/,
-    );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker-row \{[^}]*width: min\(780px, 100%\)/,
-    );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker-row \{[^}]*margin: 0 auto[^}]*padding-left: 15px/,
-    );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker \{[^}]*width: fit-content[^}]*padding: 0 10px 0 0/,
-    );
-    assert.match(
-      stylesSource,
-      /\.composer-toolbar \{[^}]*justify-content: flex-end/,
-    );
-    assert.match(stylesSource, /\.composer-hint \{ display: none; \}/);
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \{ width: min\(780px, calc\(100% - 48px\)\); \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \.message-content \{ width: 100%; max-width: none; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \.message-details \{ width: min\(760px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.detail-only \{ padding: 12px 0; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.detail-only \.message-details \{ margin: 0 auto; \}/,
-    );
-    assert.match(stylesSource, /\.workspace-delete-dialog/);
-    assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /prefers-reduced-motion/);
+
+    const favicon = await fetch(`${launched.origin}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.headers.get("content-type") || "", /svg/);
+
+    const removedLegacyAsset = await fetch(`${launched.origin}/marked.js`);
+    assert.equal(removedLegacyAsset.status, 401);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);

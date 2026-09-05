@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import test from "node:test";
 import type {
   ExtensionAPI,
@@ -29,6 +30,7 @@ class FakeWebProcess extends EventEmitter implements WebProcess {
   exitCode: number | null = null;
   signalCode: NodeJS.Signals | null = null;
   readonly kills: NodeJS.Signals[] = [];
+  readonly stderr = new PassThrough();
 
   kill(signal: NodeJS.Signals = "SIGTERM") {
     this.kills.push(signal);
@@ -39,6 +41,10 @@ class FakeWebProcess extends EventEmitter implements WebProcess {
     this.exitCode = code;
     this.signalCode = signal;
     this.emit("close", code, signal);
+  }
+
+  writeError(text: string) {
+    this.stderr.write(text);
   }
 }
 
@@ -54,6 +60,7 @@ function harness(
   let spawnCalls = 0;
   let activeSigint = 0;
   let clearCalls = 0;
+  let forwardedStderr = "";
   const notifications: Array<{ message: string; level?: string }> = [];
   const children: FakeWebProcess[] = [];
   const cwd = "/workspace/current";
@@ -88,10 +95,13 @@ function harness(
       )?.[1];
       assert.equal(childPath, process.env.PATH);
       assert.equal(spawnOptions.shell, false);
-      assert.equal(spawnOptions.stdio, "inherit");
+      assert.deepEqual(spawnOptions.stdio, ["inherit", "inherit", "pipe"]);
       const child = new FakeWebProcess();
       children.push(child);
       return child;
+    },
+    writeStderr(chunk) {
+      forwardedStderr += String(chunk);
     },
     clearTerminal() {
       clearCalls++;
@@ -162,6 +172,7 @@ function harness(
     spawnCalls: () => spawnCalls,
     activeSigint: () => activeSigint,
     clearCalls: () => clearCalls,
+    forwardedStderr: () => forwardedStderr,
   };
 }
 
@@ -246,6 +257,21 @@ test("/web restores the TUI and reports startup or process failures", async () =
   nonzero.children[0]!.close(2);
   await failed;
   assert.match(nonzero.notifications.at(-1)?.message ?? "", /code 2/u);
+
+  const diagnosed = harness();
+  const diagnosedFailure = diagnosed.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  diagnosed.children[0]!.writeError(
+    `\u001b[31m${"x".repeat(9 * 1024)}\u001b[0m\n` +
+      "Failed to start OpenPI Web Workbench: Web Host runtime is already owned by live PID 52690\u202e\n",
+  );
+  diagnosed.children[0]!.close(1);
+  await diagnosedFailure;
+  const diagnosedMessage = diagnosed.notifications.at(-1)?.message ?? "";
+  assert.match(diagnosedMessage, /already owned by live PID 52690/u);
+  assert.doesNotMatch(diagnosedMessage, /\u001b|\u202e/u);
+  assert.ok(Buffer.byteLength(diagnosedMessage, "utf8") <= 8 * 1024);
+  assert.match(diagnosed.forwardedStderr(), /\u001b\[31m/u);
 
   const signalled = harness();
   const terminated = signalled.run();

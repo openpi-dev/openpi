@@ -5,12 +5,23 @@ import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
+import { TerminalTextSanitizer } from "../shared/terminal-text.ts";
 
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
+const WEB_ERROR_TAIL_MAX_BYTES = 8 * 1024;
+
+interface WebProcessErrorStream {
+  on(event: "data", listener: (chunk: Buffer | string) => void): this;
+  removeListener(
+    event: "data",
+    listener: (chunk: Buffer | string) => void,
+  ): this;
+}
 
 export interface WebProcess {
   readonly exitCode: number | null;
   readonly signalCode: NodeJS.Signals | null;
+  readonly stderr: WebProcessErrorStream | null;
   once(event: "error", listener: (error: Error) => void): this;
   once(
     event: "close",
@@ -23,7 +34,7 @@ interface SpawnWebOptions {
   cwd: string;
   env: NodeJS.ProcessEnv;
   shell: false;
-  stdio: "inherit";
+  stdio: ["inherit", "inherit", "pipe"];
 }
 
 function webProcessEnvironment(cwd: string) {
@@ -38,13 +49,19 @@ function webProcessEnvironment(cwd: string) {
 export interface WebCommandDependencies {
   entrypoint: string;
   spawn(command: string, args: string[], options: SpawnWebOptions): WebProcess;
+  writeStderr(chunk: Buffer | string): void;
   clearTerminal(): void;
   holdParentSigint(): () => void;
   shutdownTimeoutMs: number;
 }
 
 type WebExit =
-  | { kind: "close"; code: number | null; signal: NodeJS.Signals | null }
+  | {
+      kind: "close";
+      code: number | null;
+      signal: NodeJS.Signals | null;
+      errorDetail?: string;
+    }
   | { kind: "error"; error: Error };
 
 interface ActiveWebProcess {
@@ -56,6 +73,9 @@ const defaultDependencies: WebCommandDependencies = {
   entrypoint: fileURLToPath(new URL("../../bin/openpi.js", import.meta.url)),
   spawn(command, args, options) {
     return nodeSpawn(command, args, options);
+  },
+  writeStderr(chunk) {
+    process.stderr.write(chunk);
   },
   clearTerminal() {
     process.stdout.write("\u001b[2J\u001b[H");
@@ -73,6 +93,31 @@ function delay(milliseconds: number) {
     const timer = setTimeout(resolve, milliseconds);
     timer.unref();
   });
+}
+
+function boundedUtf8Tail(text: string, maxBytes: number) {
+  let bytes = 0;
+  let start = text.length;
+  for (const character of Array.from(text).reverse()) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > maxBytes) break;
+    bytes += characterBytes;
+    start -= character.length;
+  }
+  return text.slice(start);
+}
+
+function actionableWebError(stderr: string) {
+  const lines = stderr
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const newestFirst = [...lines].reverse();
+  return (
+    newestFirst.find((line) =>
+      line.includes("Failed to start OpenPI Web Workbench:"),
+    ) ?? newestFirst.find((line) => /^(?:Error|Failed):/u.test(line))
+  );
 }
 
 async function stopWebProcess(active: ActiveWebProcess, timeoutMs: number) {
@@ -99,15 +144,26 @@ function runWebInForeground(
   return ctx.ui.custom<WebExit>((tui, _theme, _keybindings, done) => {
     let finished = false;
     let tuiStopped = false;
+    let stderrTail = "";
+    let childStderr: WebProcessErrorStream | null | undefined;
     let resolveClosed = () => {};
     const closed = new Promise<void>((resolve) => {
       resolveClosed = resolve;
     });
     const releaseParentSigint = dependencies.holdParentSigint();
+    const sanitizer = new TerminalTextSanitizer();
+    const captureStderr = (chunk: Buffer | string) => {
+      dependencies.writeStderr(chunk);
+      stderrTail = boundedUtf8Tail(
+        `${stderrTail}${sanitizer.push(String(chunk))}`,
+        WEB_ERROR_TAIL_MAX_BYTES,
+      );
+    };
 
     const finish = (result: WebExit) => {
       if (finished) return;
       finished = true;
+      childStderr?.removeListener("data", captureStderr);
       releaseParentSigint();
       setActive(undefined);
       resolveClosed();
@@ -130,13 +186,20 @@ function runWebInForeground(
           cwd: childCwd,
           env: webProcessEnvironment(childCwd),
           shell: false,
-          stdio: "inherit",
+          stdio: ["inherit", "inherit", "pipe"],
         },
       );
+      childStderr = child.stderr;
+      childStderr?.on("data", captureStderr);
       setActive({ child, closed });
       child.once("error", (error) => finish({ kind: "error", error }));
       child.once("close", (code, signal) =>
-        finish({ kind: "close", code, signal }),
+        finish({
+          kind: "close",
+          code,
+          signal,
+          errorDetail: actionableWebError(stderrTail),
+        }),
       );
     } catch (error) {
       finish({
@@ -219,7 +282,8 @@ export default function web(
         }
         if (result.code !== 0) {
           ctx.ui.notify(
-            `OpenPI Web Workbench exited with code ${result.code ?? "unknown"}.`,
+            result.errorDetail ??
+              `OpenPI Web Workbench exited with code ${result.code ?? "unknown"}.`,
             "error",
           );
           return;

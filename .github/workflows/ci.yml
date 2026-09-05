@@ -20,7 +20,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        node-version: [22.19.0, 24]
+        node-version: [22.19.0, 24, 26]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
@@ -32,6 +32,14 @@ jobs:
       - name: Install dependencies
         run: bun install --frozen-lockfile
       - run: bun run check
+      - name: Verify committed Web build
+        run: |
+          changes="$(git status --porcelain=v1 --untracked-files=all -- web/dist)"
+          if [[ -n "$changes" ]]; then
+            printf '%s\n' "$changes"
+            echo "web/dist is missing or stale; run bun run build:web and commit the result"
+            exit 1
+          fi
       - run: bun run test
       - name: Smoke-test Pi package discovery
         run: |
@@ -61,7 +69,7 @@ jobs:
             --extension "$package/extensions/git-info/index.ts" \
             --extension "$package/extensions/ai-providers/index.ts" \
             </dev/null
-      - name: Smoke-test packed standalone Web CLI
+      - name: Smoke-test packed Web CLI with locked Pi host
         run: |
           root="$(mktemp -d)"
           server_pid=""
@@ -78,7 +86,16 @@ jobs:
           npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
           tarballs=("$root"/*.tgz)
           test "${#tarballs[@]}" -eq 1
-          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
+          pi_ai_version="$(node -p 'require("./node_modules/@earendil-works/pi-ai/package.json").version')"
+          pi_agent_version="$(node -p 'require("./node_modules/@earendil-works/pi-coding-agent/package.json").version')"
+          pi_tui_version="$(node -p 'require("./node_modules/@earendil-works/pi-tui/package.json").version')"
+          typebox_version="$(node -p 'require("./node_modules/typebox/package.json").version')"
+          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund \
+            "@earendil-works/pi-ai@$pi_ai_version" \
+            "@earendil-works/pi-coding-agent@$pi_agent_version" \
+            "@earendil-works/pi-tui@$pi_tui_version" \
+            "typebox@$typebox_version" \
+            "${tarballs[0]}"
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             "$root/app/node_modules/.bin/openpi" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &
@@ -90,11 +107,96 @@ jobs:
           done
           origin="$(sed -n 's/^OpenPI Web Workbench is running at //p' "$root/host.log" | tail -n 1)"
           test -n "$origin"
-          curl --fail --silent --show-error --output "$root/marked.js" "$origin/marked.js"
-          grep -q 'marked v18' "$root/marked.js"
+          curl --fail --silent --show-error --output "$root/index.html" "$origin/"
+          grep -q '<div id="root"></div>' "$root/index.html"
+          grep -Eq '<script type="module"[^>]*src="/app\.js"' "$root/index.html"
+          grep -Eq '<link rel="stylesheet"[^>]*href="/styles\.css"' "$root/index.html"
+          grep -q 'href="/favicon.svg"' "$root/index.html"
+          if grep -Eq '(src|href)="https?://' "$root/index.html"; then
+            echo "packed Web entrypoint references a remote asset"
+            exit 1
+          fi
+          curl --fail --silent --show-error --output "$root/app.js" "$origin/app.js"
+          curl --fail --silent --show-error --output "$root/styles.css" "$origin/styles.css"
+          curl --fail --silent --show-error --output "$root/favicon.svg" "$origin/favicon.svg"
+          test -s "$root/app.js"
+          test -s "$root/styles.css"
+          test -s "$root/favicon.svg"
           kill -TERM "$server_pid"
           wait "$server_pid"
           server_pid=""
+
+      - name: Smoke-test committed Git Web source
+        if: matrix.node-version == '22.19.0'
+        run: |
+          root="$(mktemp -d)"
+          server_pid=""
+          cleanup() {
+            if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
+              kill -TERM "$server_pid"
+              wait "$server_pid"
+            fi
+            rm -rf "$root"
+          }
+          trap cleanup EXIT
+          mkdir "$root/source" "$root/workspace"
+          git archive HEAD | tar -x -C "$root/source"
+          test -s "$root/source/web/dist/index.html"
+          test -s "$root/source/web/dist/app.js"
+          test -s "$root/source/web/dist/styles.css"
+          test -s "$root/source/web/dist/favicon.svg"
+          npm install --prefix "$root/source" --ignore-scripts --omit=dev --no-audit --no-fund
+          test ! -e "$root/source/node_modules/@earendil-works/pi-coding-agent"
+          # Exercise the CLI with the lockfile's Pi host, not package-owned peers.
+          mkdir -p "$root/source/node_modules/@earendil-works"
+          for peer in pi-ai pi-coding-agent pi-tui; do
+            ln -s \
+              "$PWD/node_modules/@earendil-works/$peer" \
+              "$root/source/node_modules/@earendil-works/$peer"
+          done
+          ln -s "$PWD/node_modules/typebox" "$root/source/node_modules/typebox"
+          OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
+            node "$root/source/bin/openpi.js" web "$root/workspace" --port 0 --no-open \
+            >"$root/host.log" 2>&1 &
+          server_pid=$!
+          for _ in {1..100}; do
+            grep -q '^OpenPI Web Workbench is running at ' "$root/host.log" && break
+            kill -0 "$server_pid"
+            sleep 0.1
+          done
+          origin="$(sed -n 's/^OpenPI Web Workbench is running at //p' "$root/host.log" | tail -n 1)"
+          test -n "$origin"
+          curl --fail --silent --show-error --output "$root/source-index.html" "$origin/"
+          grep -q '<div id="root"></div>' "$root/source-index.html"
+          kill -TERM "$server_pid"
+          wait "$server_pid"
+          server_pid=""
+
+  web-e2e:
+    name: Web E2E (Node 22.19.0)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22.19.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: 1.3.14
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - run: bun run test:web:e2e
+      - name: Upload Playwright failure artifacts
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: openpi-web-playwright-results
+          path: /tmp/openpi-web-playwright-results
+          if-no-files-found: ignore
+          retention-days: 7
 
   windows-background-terminals:
     name: Background terminals (Windows)
