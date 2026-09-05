@@ -37,9 +37,23 @@ const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
+const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
+const MAX_PROMPT_ADMISSIONS = 128;
 const execFileAsync = promisify(execFile);
+
+type PromptAdmissionResponse = {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+};
+
+type PromptAdmission = {
+  readonly sessionId: string;
+  readonly content: string;
+  readonly completion: Promise<PromptAdmissionResponse>;
+  result?: PromptAdmissionResponse;
+};
 
 type WebRequestErrorCode =
   | "INVALID_REQUEST_BODY"
@@ -72,6 +86,7 @@ export interface WebHostOptions {
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
   shutdownTimeoutMs?: number;
+  sseHeartbeatMs?: number;
 }
 
 export class WebHost {
@@ -79,6 +94,10 @@ export class WebHost {
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
+  private readonly clientHeartbeats = new Map<
+    ServerResponse,
+    ReturnType<typeof setInterval>
+  >();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
   private port = 0;
@@ -90,11 +109,16 @@ export class WebHost {
     WebHostOptions["directoryChooser"]
   >;
   private readonly shutdownTimeoutMs: number;
+  private readonly sseHeartbeatMs: number;
   private readonly unsubscribeCapabilities: () => void;
   private readonly unsubscribeRuntime: () => void;
   private readonly chooserAbort = new AbortController();
   private readonly leaseSensitiveRequests = new Set<Promise<void>>();
   private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
+  private readonly promptAdmissions = new Map<
+    string,
+    PromptAdmission
+  >();
   private stopping = false;
   private stopPromise?: Promise<void>;
 
@@ -116,6 +140,14 @@ export class WebHost {
       this.shutdownTimeoutMs <= 0
     ) {
       throw new Error("Web host shutdown timeout must be a positive integer");
+    }
+    this.sseHeartbeatMs =
+      options.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+    if (
+      !Number.isSafeInteger(this.sseHeartbeatMs) ||
+      this.sseHeartbeatMs <= 0
+    ) {
+      throw new Error("SSE heartbeat interval must be a positive integer");
     }
     this.adapter = new PiWebAdapter(options.runtime);
     this.onEvent = options.onEvent;
@@ -212,8 +244,7 @@ export class WebHost {
         client.writableLength > MAX_SSE_BUFFER_BYTES ||
         !client.write(record)
       ) {
-        this.clients.delete(client);
-        client.destroy();
+        this.removeSseClient(client, "destroy");
       }
     }
     this.onEvent?.(event.type, event.detail);
@@ -231,8 +262,7 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
-      for (const client of this.clients) client.end();
-      this.clients.clear();
+      for (const client of [...this.clients]) this.removeSseClient(client, "end");
       const closeServer = this.server.listening
         ? new Promise<void>((resolve) => {
             const forceClose = setTimeout(
@@ -523,6 +553,51 @@ export class WebHost {
           error: "prompt must be 1-12000 characters",
         });
       }
+      const commandId =
+        typeof body.commandId === "string" && body.commandId.length > 0
+          ? body.commandId
+          : randomUUID();
+      if (commandId.length > 128) {
+        return this.json(response, 400, {
+          error: "commandId must be at most 128 characters",
+        });
+      }
+      if (body.retry !== undefined && typeof body.retry !== "boolean") {
+        return this.json(response, 400, {
+          error: "retry must be a boolean when provided",
+        });
+      }
+      if (typeof body.sessionId !== "string") {
+        return this.json(response, 400, {
+          error: "sessionId is required",
+        });
+      }
+      const existing = this.promptAdmissions.get(commandId);
+      if (existing) {
+        if (
+          existing.sessionId !== body.sessionId ||
+          existing.content !== content
+        ) {
+          return this.json(response, 409, {
+            code: "COMMAND_CONFLICT",
+            error: "commandId is already bound to a different prompt",
+          });
+        }
+        const result = await existing.completion;
+        traceWeb("prompt_admission_replayed", {
+          commandId,
+          sessionId: body.sessionId,
+          status: result.status,
+          elapsedMs: elapsed(requestStarted),
+        });
+        return this.json(response, result.status, result.body);
+      }
+      if (body.retry === true) {
+        return this.json(response, 409, {
+          code: "COMMAND_ADMISSION_UNKNOWN",
+          error: "previous prompt admission is unknown; refresh canonical state before sending a new request",
+        });
+      }
       if (this.runtime.workspaceSelected !== true) {
         return this.json(response, 409, {
           code: "WORKSPACE_REQUIRED",
@@ -530,7 +605,6 @@ export class WebHost {
         });
       }
       if (
-        typeof body.sessionId !== "string" ||
         body.sessionId !== this.runtime.sessionManager.getSessionId()
       ) {
         return this.json(response, 409, {
@@ -538,51 +612,19 @@ export class WebHost {
           error: "Only the active Web session accepts messages",
         });
       }
-      const commandId = randomUUID();
-      traceWeb("prompt_received", {
-        commandId,
-        sessionId: body.sessionId,
-        chars: content.length,
-      });
-      let admission: { pendingFollowUps: number };
-      try {
-        admission = await this.runtime.sendPrompt(content, {
-          commandId,
-          expectedSessionId: body.sessionId,
-        });
-        traceWeb("prompt_admission_finished", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-        });
-      } catch (error) {
-        const failure = this.runtimeRequestFailure(error);
-        traceWeb("prompt_admission_failed", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-          error: failure.error,
-        });
-        return this.json(response, failure.status, {
-          code: failure.code,
-          error: failure.error,
+      if (!this.makePromptAdmissionSpace()) {
+        return this.json(response, 503, {
+          code: "PROMPT_ADMISSION_CAPACITY",
+          error: "prompt admission capacity is full; wait for a pending admission to settle",
         });
       }
-      this.publish("prompt_accepted", {
+      const admission = this.beginPromptAdmission(
         commandId,
-        sessionId: body.sessionId,
-        pendingFollowUps: admission.pendingFollowUps,
-      });
-      traceWeb("prompt_response_sent", {
-        commandId,
-        sessionId: body.sessionId,
-        elapsedMs: elapsed(requestStarted),
-      });
-      return this.json(response, 202, {
-        id: commandId,
-        accepted: true,
-        state: "accepted",
-        pendingFollowUps: admission.pendingFollowUps,
-        cursor: this.sequence,
-      });
+        body.sessionId,
+        content,
+      );
+      const result = await admission.completion;
+      return this.json(response, result.status, result.body);
     }
     if (url.pathname === "/api/turns/cancel" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -728,6 +770,108 @@ export class WebHost {
     }
   }
 
+  private makePromptAdmissionSpace() {
+    while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
+      const settled = [...this.promptAdmissions.entries()].find(
+        ([, admission]) => admission.result !== undefined,
+      );
+      if (!settled) return false;
+      this.promptAdmissions.delete(settled[0]);
+    }
+    return true;
+  }
+
+  private beginPromptAdmission(
+    commandId: string,
+    sessionId: string,
+    content: string,
+  ) {
+    let settle!: (result: PromptAdmissionResponse) => void;
+    const admission: PromptAdmission = {
+      sessionId,
+      content,
+      completion: new Promise<PromptAdmissionResponse>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    // Store before dispatch: a client retry can only replay this record.
+    this.promptAdmissions.set(commandId, admission);
+    try {
+      traceWeb("prompt_received", {
+        commandId,
+        sessionId,
+        chars: content.length,
+      });
+    } catch {}
+    void Promise.resolve()
+      .then(() =>
+        this.runtime.sendPrompt(content, {
+          commandId,
+          expectedSessionId: sessionId,
+        }),
+      )
+      .then(
+        (receipt) => {
+          const result: PromptAdmissionResponse = {
+            status: 202,
+            body: {
+              id: commandId,
+              accepted: true,
+              state: "accepted",
+              pendingFollowUps: receipt.pendingFollowUps,
+              cursor: this.sequence,
+            },
+          };
+          try {
+            this.publish("prompt_accepted", {
+              commandId,
+              sessionId,
+              pendingFollowUps: receipt.pendingFollowUps,
+            });
+            result.body.cursor = this.sequence;
+          } catch {}
+          return result;
+        },
+        (error) => {
+          const failure = this.runtimeRequestFailure(error);
+          return {
+            status: failure.status,
+            body: { code: failure.code, error: failure.error },
+          };
+        },
+      )
+      .then((result: PromptAdmissionResponse) => {
+        admission.result = result;
+        settle(result);
+        try {
+          traceWeb(
+            result.status === 202
+              ? "prompt_admission_finished"
+              : "prompt_admission_failed",
+            {
+              commandId,
+              sessionId,
+              status: result.status,
+              ...(typeof result.body.error === "string"
+                ? { error: result.body.error }
+                : {}),
+            },
+          );
+        } catch {}
+      })
+      .catch((error) => {
+        if (admission.result) return;
+        const failure = this.runtimeRequestFailure(error);
+        const result: PromptAdmissionResponse = {
+          status: failure.status,
+          body: { code: failure.code, error: failure.error },
+        };
+        admission.result = result;
+        settle(result);
+      });
+    return admission;
+  }
+
   private async readJson(request: IncomingMessage) {
     const chunks: Buffer[] = [];
     let bytes = 0;
@@ -848,7 +992,31 @@ export class WebHost {
     // ordering without treating normal backpressure as a broken client.
     for (const record of replay) response.write(record);
     this.clients.add(response);
-    response.on("close", () => this.clients.delete(response));
+    const heartbeat = setInterval(() => {
+      if (
+        response.destroyed ||
+        response.writableEnded ||
+        response.writableLength > MAX_SSE_BUFFER_BYTES ||
+        !response.write(": heartbeat\n\n")
+      ) {
+        this.removeSseClient(response, "destroy");
+      }
+    }, this.sseHeartbeatMs);
+    heartbeat.unref();
+    this.clientHeartbeats.set(response, heartbeat);
+    response.on("close", () => this.removeSseClient(response));
+  }
+
+  private removeSseClient(
+    response: ServerResponse,
+    close?: "destroy" | "end",
+  ) {
+    this.clients.delete(response);
+    const heartbeat = this.clientHeartbeats.get(response);
+    if (heartbeat) clearInterval(heartbeat);
+    this.clientHeartbeats.delete(response);
+    if (close === "destroy" && !response.destroyed) response.destroy();
+    else if (close === "end" && !response.writableEnded) response.end();
   }
 
   private parseCursor(value: string | undefined | null) {
