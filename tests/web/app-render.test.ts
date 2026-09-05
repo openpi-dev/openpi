@@ -269,6 +269,7 @@ async function renderApp(
     eventRecords?: string[];
     snapshot?: SnapshotFixture;
     storageValues?: Record<string, string>;
+    systemDark?: boolean;
   } = {},
 ) {
   const elements = new Map<string, ElementStub>();
@@ -295,6 +296,13 @@ async function renderApp(
   let eventFetches = 0;
   let snapshotFetches = 0;
   let readerCancellations = 0;
+  const systemThemeListeners = new Set<() => void>();
+  const systemTheme = {
+    matches: options.systemDark ?? false,
+    addEventListener: (_type: string, listener: () => void) => {
+      systemThemeListeners.add(listener);
+    },
+  };
   const encodedEvents = (options.eventRecords || []).map((record) =>
     new TextEncoder().encode(record),
   );
@@ -345,6 +353,7 @@ async function renderApp(
     clearTimeout,
     setInterval,
     clearInterval,
+    matchMedia: () => systemTheme,
     URLSearchParams,
     URL,
     TextDecoder,
@@ -358,7 +367,7 @@ async function renderApp(
     clearInterval,
     setTimeout,
     clearTimeout,
-    matchMedia: () => ({ matches: false, addEventListener() {} }),
+    matchMedia: () => systemTheme,
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -385,6 +394,10 @@ async function renderApp(
     readerCancellations: () => readerCancellations,
     context,
     documentElement: documentStub.documentElement,
+    setSystemTheme(dark: boolean) {
+      systemTheme.matches = dark;
+      for (const listener of systemThemeListeners) listener();
+    },
     state: vm.runInContext("state", context as vm.Context) as typeof SNAPSHOT &
       Record<string, unknown>,
     selectSession: vm.runInContext("selectSession", context as vm.Context) as (
@@ -450,6 +463,28 @@ test("app.js renders a full session without runtime errors", async () => {
   assert.match(conversation.innerHTML, /delivery/);
   assert.match(conversation.innerHTML, /file1/);
   assert.match(conversation.innerHTML, /最终总结/);
+});
+
+test("app.js resolves system theme and keeps explicit choices stable", async () => {
+  const systemLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "system" } },
+    systemDark: false,
+  });
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+  vm.runInContext(
+    'applyThemePreference("dark")',
+    systemLight.context as vm.Context,
+  );
+  systemLight.setSystemTheme(true);
+  assert.equal(systemLight.documentElement.dataset.theme, "dark");
+
+  const explicitLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "light" } },
+    systemDark: true,
+  });
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
+  explicitLight.setSystemTheme(false);
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
 });
 
 test("app.js moves the bootstrap token into tab storage and clears the URL", async () => {
