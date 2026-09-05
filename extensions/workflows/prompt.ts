@@ -75,14 +75,6 @@ export function buildWorkflowAgentPrompt(prompt: string) {
   return prompt;
 }
 
-/** Instructs structured workflow children to terminate with exactly one structured_output call. */
-export const STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION =
-  "When your task is complete, call the `structured_output` tool exactly once as your final action, with fields matching the required schema. Do not write any other text after it.";
-
-/** Describes the terminating structured_output tool and its final-action contract. */
-export const STRUCTURED_OUTPUT_TOOL_DESCRIPTION =
-  "Return your final result as structured data matching the required schema. Call this exactly once, as your last action; do not write any other text after it.";
-
 /** Builds the workflow completion report returned to the parent model. */
 export function buildWorkflowResultMessage(
   details: WorkflowDetails,

@@ -220,6 +220,14 @@ function normalizeDelivery(value: unknown): WorkflowDetails["delivery"] {
       : 0;
   return {
     id: sanitizeLine(record.id, 256),
+    ...(typeof record.ownerSessionId === "string" && record.ownerSessionId
+      ? { ownerSessionId: sanitizeLine(record.ownerSessionId, 256) }
+      : {}),
+    ...(typeof record.ownerEpoch === "number" &&
+    Number.isSafeInteger(record.ownerEpoch) &&
+    record.ownerEpoch >= 0
+      ? { ownerEpoch: record.ownerEpoch }
+      : {}),
     state,
     attempts,
     updatedAt,
