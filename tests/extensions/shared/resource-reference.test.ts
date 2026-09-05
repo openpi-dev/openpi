@@ -2,8 +2,10 @@ import assert from "node:assert/strict";
 import {
   mkdtempSync,
   rmSync,
+  statSync,
   symlinkSync,
   unlinkSync,
+  utimesSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -124,6 +126,24 @@ test("traversal, symlink substitution, missing bytes, and revision drift fail cl
   } finally {
     rmSync(item.root, { recursive: true, force: true });
     rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test("same-size replacement with the original mtime is stale", () => {
+  const item = fixture();
+  try {
+    const originalMtime = statSync(item.file).mtime;
+    writeFileSync(item.file, "complete owner bytes");
+    utimesSync(item.file, originalMtime, originalMtime);
+    const result = resolveOwnerFileResourceRef(item.ref, {
+      owner: item.owner,
+      root: item.root,
+      ownerAlive: true,
+      authorized: true,
+    });
+    assert.equal(failure(result), "stale-resource");
+  } finally {
+    rmSync(item.root, { recursive: true, force: true });
   }
 });
 
