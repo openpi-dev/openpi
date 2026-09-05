@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstatSync } from "node:fs";
+import { lstatSync, readFileSync } from "node:fs";
 import path from "node:path";
 
 export const OPENPI_RESOURCE_REF_VERSION = 1 as const;
@@ -158,17 +158,8 @@ function inspectOwnedFile(rootValue: string, fileValue: string) {
   }
 }
 
-function resourceRevision(
-  owner: OpenPiResourceRef["owner"],
-  relative: string,
-  size: number,
-  mtimeMs: number,
-) {
-  return createHash("sha256")
-    .update(
-      `${owner.kind}\0${owner.id}\0${owner.generation}\0${relative}\0${size}\0${mtimeMs}`,
-    )
-    .digest("hex");
+function resourceRevision(file: string) {
+  return createHash("sha256").update(readFileSync(file)).digest("hex");
 }
 
 export function createOwnerFileResourceRef(options: {
@@ -203,13 +194,7 @@ export function createOwnerFileResourceRef(options: {
   ) {
     throw new Error("Cannot publish resource reference: stale-resource");
   }
-  const relative = path.relative(inspected.root, inspected.file);
-  const revision = resourceRevision(
-    options.owner,
-    relative,
-    inspected.stat.size,
-    inspected.stat.mtimeMs,
-  );
+  const revision = resourceRevision(inspected.file);
   return {
     version: OPENPI_RESOURCE_REF_VERSION,
     owner: { ...options.owner },
@@ -290,12 +275,7 @@ export function resolveOwnerFileResourceRef(
       message: "Resource bytes no longer match the published reference",
     };
   }
-  const revision = resourceRevision(
-    ref.owner,
-    path.relative(inspected.root, inspected.file),
-    inspected.stat.size,
-    inspected.stat.mtimeMs,
-  );
+  const revision = resourceRevision(inspected.file);
   if (revision !== ref.resource.revision) {
     return {
       ok: false,
