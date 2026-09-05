@@ -345,9 +345,21 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       body: JSON.stringify({
         sessionId: sessionManager.getSessionId(),
         content: "continue here",
+        commandId: "retry-command-1",
       }),
     });
     assert.equal(prompt.status, 202);
+    assert.deepEqual(prompts, ["continue here"]);
+    const retriedPrompt = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: authorized,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        content: "continue here",
+        commandId: "retry-command-1",
+      }),
+    });
+    assert.equal(retriedPrompt.status, 202);
     assert.deepEqual(prompts, ["continue here"]);
 
     const importResponse = await fetch(`${launched.origin}/api/workspaces`, {

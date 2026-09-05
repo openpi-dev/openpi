@@ -790,7 +790,9 @@ async function sendPrompt() {
   if (!sessionId || state.sessionSwitching || state.promptAdmissionPending) return;
   const epoch = state.sessionEpoch;
   const admissionToken = ++state.promptAdmissionSequence;
-  const optimisticKey = `optimistic-${Date.now()}`;
+  const commandId = globalThis.crypto?.randomUUID?.() ||
+    `web-prompt-${Date.now()}-${admissionToken}`;
+  const optimisticKey = `optimistic-${commandId}`;
   state.liveMessages = [
     ...state.liveMessages,
     { key: optimisticKey, message: { role: "user", content } },
@@ -802,7 +804,7 @@ async function sendPrompt() {
   try {
     const receipt = await api("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content }),
+      body: JSON.stringify({ sessionId, content, commandId }),
       timeoutMs: PROMPT_ADMISSION_TIMEOUT_MS,
       timeoutMessage: t("admissionTimeout"),
     });

@@ -75,6 +75,14 @@ export class WebHost {
   private readonly chooserAbort = new AbortController();
   private readonly leaseSensitiveRequests = new Set<Promise<void>>();
   private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
+  private readonly promptAdmissions = new Map<
+    string,
+    {
+      readonly sessionId: string;
+      readonly content: string;
+      readonly promise: Promise<void>;
+    }
+  >();
   private stopping = false;
   private stopPromise?: Promise<void>;
 
@@ -499,6 +507,15 @@ export class WebHost {
           error: "prompt must be 1-12000 characters",
         });
       }
+      const commandId =
+        typeof body.commandId === "string" && body.commandId.length > 0
+          ? body.commandId
+          : randomUUID();
+      if (commandId.length > 128) {
+        return this.json(response, 400, {
+          error: "commandId must be at most 128 characters",
+        });
+      }
       if (this.runtime.workspaceSelected !== true) {
         return this.json(response, 409, {
           code: "WORKSPACE_REQUIRED",
@@ -514,17 +531,38 @@ export class WebHost {
           error: "Only the active Web session accepts messages",
         });
       }
-      const commandId = randomUUID();
       traceWeb("prompt_received", {
         commandId,
         sessionId: body.sessionId,
         chars: content.length,
       });
+      let acceptedFresh = true;
       try {
-        await this.runtime.sendPrompt(content, {
-          commandId,
-          expectedSessionId: body.sessionId,
-        });
+        const existing = this.promptAdmissions.get(commandId);
+        if (existing) {
+          acceptedFresh = false;
+          if (
+            existing.sessionId !== body.sessionId ||
+            existing.content !== content
+          ) {
+            return this.json(response, 409, {
+              code: "COMMAND_CONFLICT",
+              error: "commandId is already bound to a different prompt",
+            });
+          }
+          await existing.promise;
+        } else {
+          const promise = this.runtime.sendPrompt(content, {
+            commandId,
+            expectedSessionId: body.sessionId,
+          });
+          this.promptAdmissions.set(commandId, {
+            sessionId: body.sessionId,
+            content,
+            promise,
+          });
+          await promise;
+        }
         traceWeb("prompt_admission_finished", {
           commandId,
           elapsedMs: elapsed(requestStarted),
@@ -541,7 +579,9 @@ export class WebHost {
           error: failure.error,
         });
       }
-      this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
+      if (acceptedFresh) {
+        this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
+      }
       traceWeb("prompt_response_sent", {
         commandId,
         sessionId: body.sessionId,
