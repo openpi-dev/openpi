@@ -341,6 +341,10 @@ export class PiWebAdapter {
         id: session.id,
         path: session.path,
         cwd: resolve(session.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: session.id === currentId ? ("web" as const) : ("none" as const),
+        readOnly: false as const,
         ...(session.name
           ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
           : {}),
@@ -378,6 +382,10 @@ export class PiWebAdapter {
         id: currentId,
         path: currentPath,
         cwd: resolve(this.runtime.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: "web" as const,
+        readOnly: false as const,
         ...(this.runtime.sessionManager.getSessionName()
           ? {
               name: boundedText(
