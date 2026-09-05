@@ -316,11 +316,29 @@ export function resolveWorkflowRunTarget(
 
   const normalizedTarget = trimmed.toLowerCase();
   const runIds = [...new Set([...candidates].filter(isWorkflowRunId))].sort();
-  if (isWorkflowRunId(normalizedTarget) && runIds.includes(normalizedTarget)) {
-    return { ok: true, runId: normalizedTarget } as const;
+  const normalizedRunIds = runIds.map((runId) => ({
+    runId,
+    normalized: runId.toLowerCase(),
+  }));
+  if (isWorkflowRunId(normalizedTarget)) {
+    const exactCase = runIds.find((runId) => runId === trimmed);
+    if (exactCase) return { ok: true, runId: exactCase } as const;
+    const exactMatches = normalizedRunIds.filter(
+      (candidate) => candidate.normalized === normalizedTarget,
+    );
+    if (exactMatches.length === 1)
+      return { ok: true, runId: exactMatches[0]!.runId } as const;
+    if (exactMatches.length > 1) {
+      return {
+        ok: false,
+        error: `Workflow run suffix "${sanitizeLine(trimmed, 80)}" is ambiguous. Matches: ${boundedRunList(exactMatches.map((candidate) => candidate.runId))}. Use a longer suffix or full run id.`,
+      } as const;
+    }
   }
 
-  const matches = runIds.filter((runId) => runId.endsWith(normalizedTarget));
+  const matches = normalizedRunIds
+    .filter((candidate) => candidate.normalized.endsWith(normalizedTarget))
+    .map((candidate) => candidate.runId);
   if (matches.length === 1) return { ok: true, runId: matches[0]! } as const;
 
   const displayTarget = sanitizeLine(trimmed, 80);
