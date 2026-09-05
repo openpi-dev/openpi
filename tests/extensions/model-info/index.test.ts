@@ -377,3 +377,20 @@ test("shutdown removes refresh work and clears the current context", async () =>
   assert.equal(harness.publications.length, publicationsBeforeShutdown);
   assert.equal(harness.manager.visitCount(), visitsBeforeShutdown);
 });
+
+test("shutdown drops a pending cache identity so a late turn_end cannot observe", async () => {
+  const harness = new ModelInfoHarness([]);
+  await harness.emit("session_start");
+  await harness.emit("before_agent_start", {
+    systemPrompt: "system",
+    systemPromptOptions: { cwd: "/repo", selectedTools: ["read"] },
+  });
+  await harness.emit("session_shutdown");
+  await harness.emit("turn_end", {
+    turnIndex: 0,
+    message: assistant("late", null, usage({ input: 120 })).message,
+    toolResults: [],
+  });
+
+  assert.equal(harness.cacheObservations.length, 0);
+});

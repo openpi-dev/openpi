@@ -253,5 +253,7 @@ export default function modelInfo(pi: ExtensionAPI) {
     stopRefreshListener();
     currentContext = undefined;
     sessionMetrics.reset();
+    cacheDiagnostics.reset();
+    cacheIdentity = undefined;
   });
 }
