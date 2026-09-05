@@ -83,7 +83,10 @@ function harness(
       assert.equal(spawnOptions.env.INIT_CWD, undefined);
       assert.equal(spawnOptions.env.PI_SESSION_ID, undefined);
       assert.equal(spawnOptions.env.PI_SESSION_FILE, undefined);
-      assert.equal(spawnOptions.env.PATH, process.env.PATH);
+      const childPath = Object.entries(spawnOptions.env).find(
+        ([name]) => name.toLowerCase() === "path",
+      )?.[1];
+      assert.equal(childPath, process.env.PATH);
       assert.equal(spawnOptions.shell, false);
       assert.equal(spawnOptions.stdio, "inherit");
       const child = new FakeWebProcess();

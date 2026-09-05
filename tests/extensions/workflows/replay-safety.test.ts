@@ -7,6 +7,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -27,6 +28,35 @@ import {
 
 function git(cwd: string, ...args: string[]) {
   return execFileSync("git", args, { cwd, encoding: "utf8" }).trim();
+}
+
+function assertSameDirectory(actual: string, expected: string) {
+  const actualStats = statSync(actual);
+  const expectedStats = statSync(expected);
+  assert.deepEqual(
+    { dev: actualStats.dev, ino: actualStats.ino },
+    { dev: expectedStats.dev, ino: expectedStats.ino },
+  );
+}
+
+function createFileSymlinkOrSkip(
+  t: { skip(message?: string): void },
+  target: string,
+  path: string,
+) {
+  try {
+    symlinkSync(target, path);
+    return true;
+  } catch (error) {
+    if (
+      process.platform === "win32" &&
+      (error as NodeJS.ErrnoException).code === "EPERM"
+    ) {
+      t.skip("Windows file symlinks require Developer Mode or elevation");
+      return false;
+    }
+    throw error;
+  }
 }
 
 function recordingGit(commands: string[][]) {
@@ -227,13 +257,17 @@ test("replay filesystem boundary permits repo-local observers and rejects escapi
   }
 });
 
-test("replay filesystem boundary fails closed for symlinks and uncertain paths", async () => {
+test("replay filesystem boundary fails closed for symlinks and uncertain paths", async (t) => {
   const cwd = repository();
   const outside = mkdtempSync(path.join(tmpdir(), "pi-replay-symlink-"));
   try {
     const outsideFile = path.join(outside, "outside.txt");
     writeFileSync(outsideFile, "external one\n");
-    symlinkSync(outsideFile, path.join(cwd, "external-link"));
+    if (
+      !createFileSymlinkOrSkip(t, outsideFile, path.join(cwd, "external-link"))
+    ) {
+      return;
+    }
     let observations = 0;
     let violations = 0;
     const definition = filesystemTool("read", (pathname) => {
@@ -417,11 +451,12 @@ test("canonical cwd and repository state participate in replay identity", () => 
       true,
     );
     assert.equal(originalIdentity?.version, 3);
-    assert.equal(originalIdentity?.repositoryRoot, realpathSync(cwd));
+    assert.ok(originalIdentity);
+    assertSameDirectory(originalIdentity.repositoryRoot, realpathSync(cwd));
     const original = replayKey(cwd, resourcePath);
 
     const alias = path.join(path.dirname(cwd), `${path.basename(cwd)}-alias`);
-    symlinkSync(cwd, alias, "dir");
+    symlinkSync(cwd, alias, process.platform === "win32" ? "junction" : "dir");
     try {
       assert.equal(
         replayKey(alias, path.join(alias, "resource.md")),
@@ -429,7 +464,7 @@ test("canonical cwd and repository state participate in replay identity", () => 
         "a symlink spelling of the same cwd must canonicalize",
       );
     } finally {
-      rmSync(alias, { force: true });
+      rmSync(alias, { recursive: true, force: true });
     }
 
     const nested = path.join(cwd, "nested");
@@ -486,13 +521,21 @@ test("ignored observable files disable replay rather than returning stale output
   }
 });
 
-test("tracked and untracked symlinks disable replay", () => {
+test("tracked and untracked symlinks disable replay", (t) => {
   for (const tracked of [true, false]) {
     const cwd = repository();
     try {
       const resourcePath = path.join(cwd, "resource.md");
       writeFileSync(resourcePath, "resource\n");
-      symlinkSync("tracked.txt", path.join(cwd, "observable-link"));
+      if (
+        !createFileSymlinkOrSkip(
+          t,
+          "tracked.txt",
+          path.join(cwd, "observable-link"),
+        )
+      ) {
+        return;
+      }
       if (tracked) {
         git(cwd, "add", "observable-link");
         git(cwd, "commit", "-qm", "track symlink");
@@ -580,7 +623,7 @@ test("replay fingerprint keeps the early ignored gate and post-diff safety gates
     const commands: string[][] = [];
     const fingerprint = repositoryFingerprint(cwd, recordingGit(commands));
     assert.ok(fingerprint);
-    assert.equal(fingerprint.root, realpathSync(cwd));
+    assertSameDirectory(fingerprint.root, realpathSync(cwd));
     assert.deepEqual(commands, [
       ["rev-parse", "--show-toplevel"],
       [

@@ -55,6 +55,7 @@
   },
   "dependencies": {
     "@effect/platform-node": "^4.0.0-beta.99",
+    "@earendil-works/pi-server": "0.85.0",
     "acorn": "^8.17.0",
     "effect": "^4.0.0-beta.99",
     "jiti": "2.7.0",
