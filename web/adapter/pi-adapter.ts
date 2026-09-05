@@ -1,6 +1,7 @@
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, join, resolve } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
   boundedText,
@@ -18,6 +19,16 @@ import {
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
 import type { WebRuntimeController } from "../runtime/types.ts";
+
+export class WebReadOnlySessionError extends Error {
+  readonly code = "SESSION_NOT_FOUND" as const;
+  readonly statusCode = 404 as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WebReadOnlySessionError";
+  }
+}
 
 type WorkspaceStateSnapshot = {
   importedWorkspaces: Set<string>;
@@ -425,6 +436,89 @@ export class PiWebAdapter {
 
   async listSessions(pinnedPath?: string): Promise<WebSessionSummary[]> {
     return (await this.listSessionProjection(pinnedPath)).sessions;
+  }
+
+  async listReadOnlyTerminalSessions(
+    options: { query?: string; cursor?: number; limit?: number } = {},
+  ) {
+    const workspace = await this.requireWorkspace(this.runtime.cwd);
+    const query = options.query?.trim().toLocaleLowerCase() ?? "";
+    const cursor = options.cursor ?? 0;
+    const limit = options.limit ?? 50;
+    const sessions = (await SessionManager.listAll())
+      .filter((session) => resolve(session.cwd) === workspace)
+      .filter((session) => {
+        if (!query) return true;
+        return [session.name, session.cwd, session.firstMessage].some((value) =>
+          value?.toLocaleLowerCase().includes(query),
+        );
+      });
+    const page = sessions.slice(cursor, cursor + limit);
+    return {
+      sessions: page.map((session) => ({
+        id: session.id,
+        path: session.path,
+        cwd: resolve(session.cwd),
+        ...(session.name
+          ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+          : {}),
+        modified: session.modified.toISOString(),
+        created: session.created.toISOString(),
+        messageCount: session.messageCount,
+        firstMessage: boundedText(
+          session.firstMessage,
+          WEB_MAX_SESSION_PREVIEW,
+        ),
+        source: "pi-default" as const,
+        origin: "terminal" as const,
+        readOnly: true as const,
+      })),
+      cursor,
+      nextCursor:
+        cursor + page.length < sessions.length
+          ? cursor + page.length
+          : undefined,
+      total: sessions.length,
+    };
+  }
+
+  async getReadOnlyTerminalSession(path: string) {
+    const workspace = await this.requireWorkspace(this.runtime.cwd);
+    const canonical = resolve(path);
+    const session = (await SessionManager.listAll()).find(
+      (candidate) =>
+        resolve(candidate.path) === canonical &&
+        resolve(candidate.cwd) === workspace,
+    );
+    if (!session) {
+      throw new WebReadOnlySessionError("Terminal Session is not available");
+    }
+    const preview = await loadSessionPreviewData(session.path);
+    return {
+      id: session.id,
+      path: session.path,
+      cwd: resolve(session.cwd),
+      ...(session.name
+        ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+        : {}),
+      modified: session.modified.toISOString(),
+      created: session.created.toISOString(),
+      messageCount: session.messageCount,
+      firstMessage: boundedText(
+        session.firstMessage,
+        WEB_MAX_SESSION_PREVIEW,
+      ),
+      source: "pi-default" as const,
+      origin: "terminal" as const,
+      readOnly: true as const,
+      preview: {
+        messages: preview.messages,
+        totalMessages: preview.totalMessages,
+        bytesRead: preview.bytesRead,
+        retainedBytes: preview.retainedBytes,
+        truncatedBytes: preview.truncatedBytes,
+      },
+    };
   }
 
   async getSnapshot(selectedPath?: string) {
