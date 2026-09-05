@@ -581,7 +581,7 @@ export class PiWebRuntime implements WebRuntimeController {
       () => this.promptOperations.delete(operation),
       () => this.promptOperations.delete(operation),
     );
-    await requestAdmission;
+    return await requestAdmission;
   }
 
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {
