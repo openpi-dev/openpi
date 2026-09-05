@@ -179,6 +179,7 @@ test("partial batch receipts retry only unacknowledged runs", async () => {
 
 test("stale held inline completion restores as pending", () => {
   const run = details("wf_cc");
+  run.sessionId = "test";
   run.delivery!.state = "held-for-inline";
   const delivery = createWorkflowResultDelivery({
     isIdle: () => false,
@@ -254,6 +255,31 @@ test("same-Session restore explicitly revives a pending completion", () => {
   assert.equal(run.delivery.state, "pending");
   assert.equal(delivery.size(), 1);
   assert.deepEqual(delivery.inspectDeadLetters(), []);
+});
+
+test("legacy restore without an owner session is dead-lettered", () => {
+  const run = details("wf_missing_owner");
+  run.delivery = {
+    ...run.delivery!,
+    state: "pending",
+  };
+  const delivery = createWorkflowResultDelivery({
+    isIdle: () => false,
+    owner: () => ({ sessionId: "current-session", epoch: 1 }),
+    persist: () => {},
+    deliver: async () => [],
+  });
+
+  assert.equal(
+    delivery.restore({
+      deliveryId: run.delivery.id,
+      runId: run.runId,
+      details: run,
+    }),
+    false,
+  );
+  assert.equal(delivery.size(), 0);
+  assert.equal(delivery.inspectDeadLetters()[0]?.failure, "stale-owner");
 });
 
 test("a receipt persistence failure retains the same delivery for at-least-once recovery", async () => {
@@ -431,6 +457,8 @@ test("a persistence exception cannot drop later unacknowledged receipts", async 
 test("a held-inline restore persistence failure does not block the final idle flush", async () => {
   const first = details("wf_restore_a");
   const second = details("wf_restore_b");
+  first.sessionId = "test";
+  second.sessionId = "test";
   first.delivery!.state = "held-for-inline";
   second.delivery!.state = "pending";
   let failPersistence = true;

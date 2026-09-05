@@ -1,13 +1,13 @@
-import type { WorkflowDetails } from "./model.ts";
-import type {
-  DurableResultDeliveryQueue,
-  DurableResultDeliveryReceipt,
-} from "../shared/result-delivery.ts";
 import {
   type CompletionEnvelope,
   type CompletionOwner,
   createCompletionInbox,
 } from "../shared/completion-inbox.ts";
+import type {
+  DurableResultDeliveryQueue,
+  DurableResultDeliveryReceipt,
+} from "../shared/result-delivery.ts";
+import type { WorkflowDetails } from "./model.ts";
 
 export interface WorkflowCompletionEnvelope {
   deliveryId: string;
@@ -254,12 +254,16 @@ export function createWorkflowResultDelivery(
       const storedSessionId =
         envelope.details.delivery?.ownerSessionId ??
         envelope.details.sessionId ??
-        owner?.sessionId;
+        undefined;
 
       // Restoring canonical producer state is the explicit owner-revival
       // boundary. Rebind only the same transcript to this process-local
       // SessionManager generation; a different Session still dead-letters.
-      if (owner && storedSessionId === owner.sessionId) {
+      if (
+        owner &&
+        storedSessionId !== undefined &&
+        storedSessionId === owner.sessionId
+      ) {
         envelope.details.delivery = {
           ...envelope.details.delivery!,
           ownerSessionId: owner.sessionId,
