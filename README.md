@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
   <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
+  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.85.1+" src="https://img.shields.io/badge/Pi-0.85.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
@@ -123,13 +123,14 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 工作面       | 已包含的能力                                                                                              |
 | ------------ | --------------------------------------------------------------------------------------------------------- |
 | 执行         | Background Terminal、Pi-native Subagent、Dynamic Workflow、隔离 Worktree                                  |
-| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Acceptance Ledger、Safe Replay、派生 Graph |
+| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Safe Replay、派生 Graph |
 | 连续性       | Tasks、Goal、Plan Mode、Context Pivot、Session Browser、Session-scoped Cron                               |
 | 自定义 Agent | `explorer` / `implementer` / `reviewer` / `advisor`，支持全局与项目角色文件、独立模型与 effort            |
 | 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
+| 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（仅聊天，不执行 Cursor 原生工具）                   |
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -270,7 +271,7 @@ return agent("Synthesize the verified findings", {
 | `phase()`    | 标记当前阶段                                                               |
 | `log()`      | 向实时界面与最终报告追加一行进度                                           |
 | `usage()`    | 读取累计 Token、缓存、成本及本轮并发/调用余量；Token 是 lower bound，不是预算器 |
-| `agent()`    | 启动 Pi Agent；支持 role、schema、acceptance、inputs、operator 与 worktree |
+| `agent()`    | 启动 Pi Agent；支持 role、schema、inputs、operator 与 worktree |
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
@@ -308,9 +309,11 @@ OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程�
 
 `operator: "name"` 在同一 Run 内复用一个内存 Child Session，并把同名 activation 串行化。首个 activation 固定 model、role/tool surface、effort、structured mode 与 cwd。Operator 不与 per-call Worktree 或 Replay 混用，也不承诺跨重启持久记忆。
 
-### Explicit Acceptance
+### Deprecated Acceptance compatibility
 
-可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。支持 1–32 条验收条件；`description` 为人类可读说明（1–500 字符），可选的 `requiredEvidence` 为字符串数组（至多 16 个标签，每项至多 120 字符），子 Agent 必须在 `acceptance.criteria[].evidence` 中返回完全匹配的标签：
+`acceptance` 自 OpenPI 0.5 起弃用，并计划在 1.0 删除。兼容期仍读取旧 DSL、journal 与 artifact，但 ledger 只是执行任务的同一个模型所写的 `model-self-attestation`，不是 runtime-observed evidence，也不再决定 `agent().ok`；`ok` 只表示 child execution 与结果制品是否成功。
+
+新 Workflow 应使用普通 `schema` 返回判断材料，由父模型结合退出码、测试结果、文件指纹和 tool receipts 等真实运行时事实综合判断。旧的可选 `acceptance: { criteria: [...] }` 仍可要求同一个 Agent 返回 ledger：
 
 ```js
 acceptance: {
@@ -324,7 +327,7 @@ acceptance: {
 }
 ```
 
-条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+条件缺失、格式错误或被拒绝时，原始输出与 ledger 仍保留并明确标注 authority/deprecation；它们不会把成功执行改成失败，也不会把失败执行改成成功。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
 
 未设置 `requiredEvidence` 的 criterion 是对 `description` 的自我声明，不是有证据约束的验收门禁；需要 evidence-backed gate 时，必须声明所需证据标签。
 
@@ -447,7 +450,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 
 ### 安装要求与来源
 
-- Pi `0.84.1` 或更新版本；
+- Pi `0.85.1` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
@@ -608,6 +611,8 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 
 `subagent_spawn` 立即返回，结束后自动回传并重新唤醒主 Agent。交互会话没有其他工作时，主 Agent 应结束当前轮、让用户继续交互；“下一步依赖结果”本身不是阻塞理由。只有用户明确要求当前回复等完，或非交互自动化必须在同一次调用中返回完整结果时，才应调用 `subagent_wait`。
 
+需要机器可验证的 review findings、research evidence 或 test matrix 时，可为 `subagent_spawn` 提供可选 `output_schema`。该次 Direct Subagent 只会额外获得 terminating `structured_output`，未提交匹配结果会明确失败；验证后的 JSON 会有界回传并写入私有 content-addressed artifact。省略 schema 的普通文本路径不会加载该 child tool 或 structured instruction。
+
 </details>
 
 <details>
@@ -648,6 +653,7 @@ Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件
 
 ```text
 extensions/
+├── ai-providers/          # Antigravity 与实验性 Cursor OAuth 模型 Provider
 ├── setup/                 # /openpi-setup 与受限配置工具
 ├── capabilities/          # 最小能力发现入口与 Session 工具面加载
 ├── background-terminals/  # 长进程、日志、/ps
@@ -693,6 +699,6 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 
 本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
 
-`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+`extensions/ai-providers/` 的部分协议实现改编自 [oh-my-pi](https://github.com/can1357/oh-my-pi)；`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
 
 本项目以 MIT 许可证发布（见 [`LICENSE`](LICENSE)）；`THIRD_PARTY_NOTICES.md` 记录第三方来源与各自许可。

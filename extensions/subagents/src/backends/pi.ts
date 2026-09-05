@@ -19,6 +19,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
+  getAgentDir,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
@@ -49,6 +50,14 @@ import {
   reclaimWorktree,
 } from "../../../shared/worktree.ts";
 import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
+import {
+  childToolsWithStructuredOutput,
+  createStructuredOutputTool,
+  encodeStructuredResult,
+  type EncodedStructuredResult,
+  STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
+} from "../../../shared/structured-output.ts";
+import { persistStructuredResultArtifact } from "../result-artifact.ts";
 
 const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
 const PARTIAL_TEXT_MAX_LENGTH = 128 * 1_024;
@@ -198,14 +207,26 @@ const makePiSession = (
     const thinkingLevel = (task.reasoningEffort ??
       task.parent.inheritedThinkingLevel) as ThinkingLevel | undefined;
 
+    let capturedStructured: EncodedStructuredResult | undefined;
+    const structuredOutputTool =
+      task.outputSchema === undefined
+        ? undefined
+        : createStructuredOutputTool(task.outputSchema, (value) => {
+            capturedStructured = encodeStructuredResult(value);
+          });
+
     const session = yield* Effect.tryPromise({
       try: async () => {
+        const appendSystemPrompt = [
+          ...(task.appendSystemPrompt ?? []),
+          ...(structuredOutputTool
+            ? [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION]
+            : []),
+        ];
         const { loader, settingsManager } = await createChildResources({
           cwd: task.cwd,
           projectTrusted: task.parent.projectTrusted,
-          ...(task.appendSystemPrompt
-            ? { appendSystemPrompt: [...task.appendSystemPrompt] }
-            : {}),
+          ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
         });
         const { session } = await (
           options.sessionFactory ?? createAgentSession
@@ -216,13 +237,27 @@ const makePiSession = (
           resourceLoader: loader,
           model,
           thinkingLevel,
-          ...childToolPolicy(task.tools),
+          ...(structuredOutputTool
+            ? { customTools: [structuredOutputTool] }
+            : {}),
+          ...childToolPolicy(
+            childToolsWithStructuredOutput(
+              task.tools,
+              structuredOutputTool !== undefined,
+            ),
+          ),
         });
         // Start child extension session hooks/resources in headless mode.
         // A rejection here would otherwise leak the freshly created session:
         // the scope finalizer that owns cleanup is only registered later.
         try {
-          await bindChildSessionExtensions(session, task.tools);
+          await bindChildSessionExtensions(
+            session,
+            childToolsWithStructuredOutput(
+              task.tools,
+              structuredOutputTool !== undefined,
+            ),
+          );
         } catch (error) {
           await shutdownAndDisposeChildSession(session, {
             timeoutMs: options.shutdownTimeoutMs,
@@ -338,11 +373,46 @@ const makePiSession = (
         });
         return;
       }
+      if (task.outputSchema !== undefined && capturedStructured === undefined) {
+        emit({
+          _tag: "RunSettled",
+          outcome: {
+            _tag: "Failed",
+            errorText:
+              "Agent finished without calling structured_output; no structured result matching output_schema was produced.",
+            partialText,
+          },
+        });
+        return;
+      }
+      let structuredResult;
+      if (capturedStructured) {
+        try {
+          structuredResult = {
+            ...capturedStructured,
+            artifactPath: persistStructuredResultArtifact(
+              getAgentDir(),
+              capturedStructured.json,
+            ),
+          };
+        } catch (error) {
+          emit({
+            _tag: "RunSettled",
+            outcome: {
+              _tag: "Failed",
+              errorText: `Structured result artifact could not be persisted: ${boundedError(error)}`,
+              partialText,
+            },
+          });
+          return;
+        }
+      }
       emit({
         _tag: "RunSettled",
         outcome: {
           _tag: "Completed",
           finalText: prompt.finalText,
+          ...(structuredResult ? { structuredResult } : {}),
         },
       });
     };
@@ -597,6 +667,7 @@ const makePiSession = (
         promise: Promise.resolve(),
       };
       state.activePrompt = activePrompt;
+      capturedStructured = undefined;
       state.settled = false;
       emit({ _tag: "RunStarted" });
       let prompt: Promise<void>;

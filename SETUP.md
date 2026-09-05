@@ -1,6 +1,6 @@
 # Setup
 
-Use Node.js 22.19.0 or newer. Install the public Pi package:
+Use Pi 0.85.1 or newer and Node.js 22.19.0 or newer. Upgrade Pi before installing this OpenPI version; the temporary Pi 0.85.0 SDK import workaround has been removed. Install the public Pi package:
 
 ```sh
 pi install npm:@tt-a1i/openpi

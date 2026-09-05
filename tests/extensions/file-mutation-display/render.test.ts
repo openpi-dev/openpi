@@ -65,7 +65,7 @@ const fixtures: Array<{
       content: [{ type: "text", text: "one\ntwo" }],
       details: undefined,
     },
-    success: /Read\s+src\/long-file\.ts:10-29/,
+    success: /Read\s+src[\\/]long-file\.ts:10-29/,
   },
   {
     name: "bash",
