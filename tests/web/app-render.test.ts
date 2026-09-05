@@ -258,9 +258,10 @@ const SNAPSHOT = {
 
 type SnapshotFixture = Omit<
   typeof SNAPSHOT,
-  "currentSessionId" | "selectedSession"
+  "currentSessionId" | "selectedSession" | "preferences"
 > & {
   currentSessionId?: string;
+  preferences: { theme: "system" | "light" | "dark" };
   selectedSession?: typeof SNAPSHOT.selectedSession;
 };
 
