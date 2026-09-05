@@ -105,6 +105,9 @@ export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
   generatedAt: string;
   cursor: number;
+  preferences: {
+    theme: "system" | "light" | "dark";
+  };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
   workspaces: WebWorkspaceSummary[];

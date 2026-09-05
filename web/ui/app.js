@@ -30,6 +30,7 @@ const state = {
   snapshotGeneration: 0,
   livePhase: "idle",
   liveRetry: null,
+  themePreference: "system",
   query: "",
   selectedWorkspace: null,
   language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
@@ -126,6 +127,19 @@ function applyLanguage() {
 }
 
 const $ = (id) => document.getElementById(id);
+const supportedThemes = new Set(["system", "light", "dark"]);
+const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+function applyThemePreference(preference) {
+  state.themePreference = supportedThemes.has(preference) ? preference : "system";
+  const resolved = state.themePreference === "system"
+    ? systemTheme?.matches ? "dark" : "light"
+    : state.themePreference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+}
+systemTheme?.addEventListener?.("change", () => {
+  if (state.themePreference === "system") applyThemePreference("system");
+});
 const tokenStorageKey = "openpi.web.token";
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
@@ -617,6 +631,7 @@ async function refreshSnapshot({
       return false;
     }
     state.snapshot = snapshot;
+    applyThemePreference(snapshot.preferences?.theme);
     if (
       state.snapshot.runtime.status !== "running" &&
       !state.promptAdmissionPending
@@ -1411,5 +1426,6 @@ $("prompt-input")?.addEventListener("keydown", (event) => {
   }
 });
 
+applyThemePreference("system");
 applyLanguage();
 void connectEvents();

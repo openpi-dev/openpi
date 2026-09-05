@@ -13,6 +13,7 @@ import {
   subscribeWebCapabilities,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
+import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
@@ -614,6 +615,7 @@ export class WebHost {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
         cursor,
+        preferences: { theme: loadSetupConfig().ui.webTheme },
         ...projection,
       };
       let finalBytes = jsonByteLength(snapshot);

@@ -65,6 +65,7 @@ const SNAPSHOT = {
   protocolVersion: 1,
   generatedAt: new Date().toISOString(),
   cursor: 1,
+  preferences: { theme: "dark" as const },
   currentSessionId: "s1",
   workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
   sessions: [
@@ -257,9 +258,10 @@ const SNAPSHOT = {
 
 type SnapshotFixture = Omit<
   typeof SNAPSHOT,
-  "currentSessionId" | "selectedSession"
+  "currentSessionId" | "selectedSession" | "preferences"
 > & {
   currentSessionId?: string;
+  preferences: { theme: "system" | "light" | "dark" };
   selectedSession?: typeof SNAPSHOT.selectedSession;
 };
 
@@ -268,6 +270,7 @@ async function renderApp(
     eventRecords?: string[];
     snapshot?: SnapshotFixture;
     storageValues?: Record<string, string>;
+    systemDark?: boolean;
   } = {},
 ) {
   const elements = new Map<string, ElementStub>();
@@ -294,6 +297,13 @@ async function renderApp(
   let eventFetches = 0;
   let snapshotFetches = 0;
   let readerCancellations = 0;
+  const systemThemeListeners = new Set<() => void>();
+  const systemTheme = {
+    matches: options.systemDark ?? false,
+    addEventListener: (_type: string, listener: () => void) => {
+      systemThemeListeners.add(listener);
+    },
+  };
   const encodedEvents = (options.eventRecords || []).map((record) =>
     new TextEncoder().encode(record),
   );
@@ -344,6 +354,7 @@ async function renderApp(
     clearTimeout,
     setInterval,
     clearInterval,
+    matchMedia: () => systemTheme,
     URLSearchParams,
     URL,
     TextDecoder,
@@ -357,6 +368,7 @@ async function renderApp(
     clearInterval,
     setTimeout,
     clearTimeout,
+    matchMedia: () => systemTheme,
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -382,6 +394,11 @@ async function renderApp(
     snapshotFetches: () => snapshotFetches,
     readerCancellations: () => readerCancellations,
     context,
+    documentElement: documentStub.documentElement,
+    setSystemTheme(dark: boolean) {
+      systemTheme.matches = dark;
+      for (const listener of systemThemeListeners) listener();
+    },
     state: vm.runInContext("state", context as vm.Context) as typeof SNAPSHOT &
       Record<string, unknown>,
     selectSession: vm.runInContext("selectSession", context as vm.Context) as (
@@ -434,7 +451,8 @@ function deferred<T>() {
 }
 
 test("app.js renders a full session without runtime errors", async () => {
-  const { elements } = await renderApp();
+  const { documentElement, elements } = await renderApp();
+  assert.equal(documentElement.dataset.theme, "dark");
   const conversation = elements.get("conversation");
   assert.ok(conversation, "conversation element exists");
   assert.match(conversation.innerHTML, /message-row user/);
@@ -446,6 +464,36 @@ test("app.js renders a full session without runtime errors", async () => {
   assert.match(conversation.innerHTML, /delivery/);
   assert.match(conversation.innerHTML, /file1/);
   assert.match(conversation.innerHTML, /最终总结/);
+});
+
+test("app.js resolves system theme and keeps explicit choices stable", async () => {
+  const systemLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "system" } },
+    systemDark: false,
+  });
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+  systemLight.setSystemTheme(true);
+  assert.equal(systemLight.documentElement.dataset.theme, "dark");
+  systemLight.setSystemTheme(false);
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+
+  const explicitDark = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "dark" } },
+    systemDark: false,
+  });
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+  explicitDark.setSystemTheme(true);
+  explicitDark.setSystemTheme(false);
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+
+  const explicitLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "light" } },
+    systemDark: true,
+  });
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
+  explicitLight.setSystemTheme(false);
+  explicitLight.setSystemTheme(true);
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
 });
 
 test("app.js moves the bootstrap token into tab storage and clears the URL", async () => {

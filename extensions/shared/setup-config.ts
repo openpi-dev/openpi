@@ -63,6 +63,9 @@ export type FooterLines = readonly (readonly FooterLayoutItem[])[];
 export const DETAIL_DISPLAYS = ["full", "compact"] as const;
 export type DetailDisplay = (typeof DETAIL_DISPLAYS)[number];
 
+export const WEB_THEMES = ["system", "light", "dark"] as const;
+export type WebTheme = (typeof WEB_THEMES)[number];
+
 export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
 export type CapabilityDiscoveryMode =
   (typeof CAPABILITY_DISCOVERY_MODES)[number];
@@ -149,6 +152,7 @@ export interface MyPiSetupConfig {
     readonly maxAgentCalls: number;
   };
   readonly ui: {
+    readonly webTheme: WebTheme;
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerStyle: FooterStyle;
@@ -179,6 +183,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   },
   ui: {
+    webTheme: "system",
     showHeader: false,
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
@@ -225,6 +230,9 @@ const isCapabilityDiscoveryMode = (
 ): value is CapabilityDiscoveryMode =>
   typeof value === "string" &&
   CAPABILITY_DISCOVERY_MODES.includes(value as CapabilityDiscoveryMode);
+
+const isWebTheme = (value: unknown): value is WebTheme =>
+  typeof value === "string" && WEB_THEMES.includes(value as WebTheme);
 
 export function flattenFooterItems(lines: FooterLines): readonly FooterItem[] {
   const items: FooterItem[] = [];
@@ -485,6 +493,7 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       ),
     },
     ui: {
+      webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
       showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
@@ -1016,7 +1025,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
-    `UI: large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
