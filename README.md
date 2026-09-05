@@ -93,6 +93,9 @@ Skill 正文通过原生用户消息或工具结果进入正常 Session 历史�
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 
+> [!TIP]
+> Windows 用户如果在输入 `/lo` 等斜杠命令时看到旧的补全行残留，OpenPI 会在没有明确 TUI 配置时为下一次启动选择 `fullscreen`，避免 Pi `regular` TUI 的旧补全行残留；如果你明确选择 `regular`，OpenPI 会保留该选择并启用尽量安全的收缩清理。
+
 ```text
 /openpi-setup
 ```
