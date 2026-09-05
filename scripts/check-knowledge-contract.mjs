@@ -34,6 +34,10 @@ const RESEARCH_SECTIONS = [
 ];
 const RECORD_STATUSES = new Set(["draft", "validated", "superseded"]);
 const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
+const LEGACY_RECORDS = new Set([
+  "docs/research/CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md",
+  "docs/research/CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md",
+]);
 const MARKDOWN_LINK_PATTERN =
   /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
 
@@ -137,11 +141,14 @@ export function checkKnowledgeContract(root = REPOSITORY_ROOT) {
       if (isTemplateOrIndex(path)) continue;
       const source = readFileSync(path, "utf8");
       const metadata = parseRecordFrontmatter(source);
-      // Decision 0001 is forward-only. A record without frontmatter is legacy
-      // until a scoped review explicitly migrates it into this contract.
-      if (!metadata) continue;
-
       const record = relativeRecordPath(canonicalRoot, path);
+      // Decision 0001 is forward-only, but legacy is an immutable allowlist,
+      // not an opt-out available to newly added files.
+      if (!metadata) {
+        if (LEGACY_RECORDS.has(record)) continue;
+        problems.push(`${record}: missing frontmatter`);
+        continue;
+      }
       records.push(record);
       validateMetadata({ category, metadata, record, problems });
       if (category === "research") {
