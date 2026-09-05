@@ -217,7 +217,14 @@ export default function modelInfo(pi: ExtensionAPI) {
   pi.on("turn_end", (event, ctx) => {
     syncSessionMetrics(ctx);
     refresh(ctx);
-    if (event.message?.role === "assistant" && cacheIdentity) {
+    // Failed/cancelled responses may carry placeholder zero usage. They do
+    // not establish a cache observation or replace the last valid baseline.
+    if (
+      event.message?.role === "assistant" &&
+      event.message.stopReason !== "error" &&
+      event.message.stopReason !== "aborted" &&
+      cacheIdentity
+    ) {
       pi.events.emit(
         CACHE_DIAGNOSTICS_CHANNEL,
         cacheDiagnostics.observe({

@@ -394,3 +394,45 @@ test("shutdown drops a pending cache identity so a late turn_end cannot observe"
 
   assert.equal(harness.cacheObservations.length, 0);
 });
+
+for (const stopReason of ["error", "aborted"] as const) {
+  test(`${stopReason} responses preserve the last valid cache baseline`, async () => {
+    const harness = new ModelInfoHarness([]);
+    await harness.emit("session_start");
+    await harness.selectModel({
+      provider: "anthropic",
+      id: "fixture",
+      name: "Fixture",
+      contextWindow: 200_000,
+      reasoning: false,
+    });
+    await harness.emit("before_agent_start", {
+      systemPrompt: "system",
+      systemPromptOptions: { cwd: "/repo", selectedTools: ["read"] },
+    });
+    await harness.emit("turn_end", {
+      turnIndex: 0,
+      message: assistant("warm", null, usage({ cacheRead: 4_096 })).message,
+      toolResults: [],
+    });
+    await harness.emit("session_compact");
+    await harness.emit("turn_end", {
+      turnIndex: 1,
+      message: {
+        ...assistant("failed", null, usage()).message,
+        stopReason,
+      },
+      toolResults: [],
+    });
+    assert.equal(harness.cacheObservations.length, 1);
+    await harness.emit("turn_end", {
+      turnIndex: 2,
+      message: assistant("cold", null, usage({ input: 4_400 })).message,
+      toolResults: [],
+    });
+    const observation = harness.cacheObservations.at(-1);
+    assert.equal(observation?.kind, "miss-after-warm-prefix");
+    assert.equal(observation?.previousCacheRead, 4_096);
+    assert.deepEqual(observation?.correlations, ["compaction"]);
+  });
+}
