@@ -64,7 +64,22 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       };
     },
     switchSession: async () => ({ cancelled: false }),
-    listModels: () => [],
+    listModels: () => [
+      {
+        provider: "fixture",
+        id: "current-model",
+        name: "Current",
+        label: "Current",
+        current: true,
+      },
+      {
+        provider: "fixture",
+        id: "other-model",
+        name: "Other",
+        label: "Other",
+        current: false,
+      },
+    ],
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -243,6 +258,14 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
+    const unauthorizedCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+    );
+    assert.equal(unauthorizedCapabilities.status, 401);
+    const unauthorizedDiagnostics = await fetch(
+      `${launched.origin}/api/diagnostics`,
+    );
+    assert.equal(unauthorizedDiagnostics.status, 401);
 
     const response = await fetch(`${launched.origin}/api/snapshot`, {
       headers: authorized,
@@ -294,6 +317,69 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       omitted: 0,
       truncated: false,
     });
+    const capabilitiesResponse = await fetch(
+      `${launched.origin}/api/capabilities`,
+      { headers: authorized },
+    );
+    assert.equal(capabilitiesResponse.status, 200);
+    const capabilitiesBody = (await capabilitiesResponse.json()) as {
+      sessionId: string;
+      capabilities: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(capabilitiesBody).sort(), [
+      "capabilities",
+      "sessionId",
+    ]);
+    assert.equal(capabilitiesBody.sessionId, sessionManager.getSessionId());
+    assert.deepEqual(
+      capabilitiesBody.capabilities,
+      snapshot.runtime.capabilities,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(capabilitiesBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+      {
+        method: "POST",
+        headers: authorized,
+        body: "{}",
+      },
+    );
+    assert.equal(writeCapabilities.status, 405);
+
+    const diagnosticsResponse = await fetch(
+      `${launched.origin}/api/diagnostics`,
+      { headers: authorized },
+    );
+    assert.equal(diagnosticsResponse.status, 200);
+    const diagnosticsBody = await diagnosticsResponse.json();
+    assert.deepEqual(diagnosticsBody, {
+      node: process.version,
+      cwd,
+      sessionId: sessionManager.getSessionId(),
+      workspaceSelected: true,
+      models: [
+        {
+          provider: "fixture",
+          id: "current-model",
+          name: "Current",
+          label: "Current",
+          current: true,
+        },
+      ],
+    });
+    assert.doesNotMatch(
+      JSON.stringify(diagnosticsBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeDiagnostics = await fetch(`${launched.origin}/api/diagnostics`, {
+      method: "POST",
+      headers: authorized,
+      body: "{}",
+    });
+    assert.equal(writeDiagnostics.status, 405);
 
     const sessionsResponse = await fetch(`${launched.origin}/api/sessions`, {
       headers: authorized,
