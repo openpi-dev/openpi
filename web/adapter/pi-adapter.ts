@@ -284,6 +284,14 @@ export class PiWebAdapter {
     });
   }
 
+  async unarchiveSession(path: string) {
+    await this.ensureArchivesLoaded();
+    await this.enqueueArchiveMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      draft.delete(resolve(session.path));
+    });
+  }
+
   async removeWorkspace(path: string) {
     await this.ensureWorkspaceStateLoaded();
     const canonical = resolve(path);
@@ -490,6 +498,7 @@ export class PiWebAdapter {
         status: this.runtime.isIdle()
           ? ("idle" as const)
           : ("running" as const),
+        trust: this.runtime.projectTrustState ?? "unknown",
         capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
       },
       truncation: {

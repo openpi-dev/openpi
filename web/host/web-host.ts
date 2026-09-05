@@ -428,6 +428,13 @@ export class WebHost {
       this.publish("session_archived", { sessionPath: path });
       return this.json(response, 200, { path, archived: true });
     }
+    if (url.pathname === "/api/sessions/unarchive" && request.method === "POST") {
+      const path = url.searchParams.get("path");
+      if (!path) return this.json(response, 400, { error: "session path is required" });
+      await this.adapter.unarchiveSession(path);
+      this.publish("session_unarchived", { sessionPath: path });
+      return this.json(response, 200, { path, archived: false });
+    }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);
       if (typeof body.path !== "string" || body.path.trim().length === 0) {
