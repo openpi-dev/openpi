@@ -399,23 +399,221 @@ function findResult(
 ) {
   const indices = pairing.resultsById.get(toolId);
   if (!indices) return undefined;
-  // Ascending by construction, so the first entry past the call is the match.
-  for (const index of indices) {
-    if (index <= callIndex) continue;
-    const candidate = transcript[index];
-    return candidate?.kind === "toolResult" ? candidate : undefined;
+  // Ascending by construction: binary search the first result past the call, so
+  // a wide fan of parallel calls whose results all land later cannot degrade
+  // into a quadratic pairing scan.
+  let low = 0;
+  let high = indices.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (indices[middle]! <= callIndex) low = middle + 1;
+    else high = middle;
   }
-  return undefined;
+  const index = indices[low];
+  if (index === undefined) return undefined;
+  const candidate = transcript[index];
+  return candidate?.kind === "toolResult" ? candidate : undefined;
+}
+
+/** Rows pre-rendered around the window so a scroll step lands on warm rows. */
+const DEFAULT_OVERSCAN_ROWS = 6;
+
+/** A resolved frame: the row total, plus rows on demand by absolute position. */
+export interface AgentTranscriptFrame {
+  /** Total rows including the live tail. Drives the viewport's scroll math. */
+  readonly rowCount: number;
+  /** Rows [top, top + height), rendering only the items those rows need. */
+  rows(top: number, height: number, overscan?: number): string[];
+}
+
+/** Everything besides item identity that can change an item's rows. */
+interface RenderContext {
+  readonly width: number;
+  readonly now: number;
+  readonly expanded: boolean;
+  readonly liveIds: ReadonlySet<string>;
+  readonly liveKey: string;
+  readonly pairing: PairingIndex;
+  /** Discriminates cached rows across cwd, expansion, and native tool output. */
+  readonly keyPrefix: string;
 }
 
 /**
- * Caches finalized transcript items by identity and width. Live state remains
- * uncached because it changes on every stream tick; callers clear this cache
- * from their component's invalidate() when Pi changes theme.
+ * Row layout for one items array under one RenderContext. Heights change only
+ * when the items array, the live-tool set, the theme generation, the key
+ * prefix, or a referenced tool's native output changes, so a hot repaint
+ * validates this in O(1) instead of re-deriving every preceding row.
+ */
+interface TranscriptLayout {
+  readonly keyPrefix: string;
+  readonly liveKey: string;
+  readonly generation: number;
+  /**
+   * The pairing index this layout was measured against. Producers rebuild it on
+   * every transcript mutation, so identity here is an O(1) content check.
+   */
+  readonly pairing: PairingIndex;
+  length: number;
+  last: AgentTranscriptItem | undefined;
+  /** offsets[i] is the first row of item i; offsets[length] is the row total. */
+  offsets: number[];
+  heights: number[];
+  /** The exact items these heights were measured from. */
+  measured: Array<AgentTranscriptItem | undefined>;
+  /** Indices of items whose rows come from a tool, with their revision token. */
+  toolItems: number[];
+  toolTokens: string[];
+  /** Ledger clock at build time; native output moves without items moving. */
+  toolGeneration: number;
+}
+
+/**
+ * Resolve everything besides item identity that can change an item's rows.
+ * cwd and expansion both change tool rows, so they belong in the cache key;
+ * omitting them would serve a row rendered for a different child or view.
+ */
+function renderContext(
+  document: AgentTranscriptDocument,
+  width: number,
+  options?: { readonly now?: number; readonly expanded?: boolean },
+): RenderContext {
+  const liveIds = new Set((document.liveTools ?? []).map((t) => t.toolId));
+  const expanded = options?.expanded === true;
+  return {
+    width,
+    now: options?.now ?? Date.now(),
+    expanded,
+    liveIds,
+    liveKey: [...liveIds].sort().join(","),
+    pairing: document.pairing ?? buildPairingIndex(document.items),
+    keyPrefix: `${width}|${expanded ? "x" : "c"}|${document.cwd ?? ""}`,
+  };
+}
+
+/** First item whose row range contains `row`. */
+function itemAtRow(offsets: ReadonlyArray<number>, row: number) {
+  let low = 0;
+  let high = offsets.length - 1;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (offsets[middle + 1]! <= row) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
+/**
+ * Native tool output changes without the transcript item changing, so cached
+ * rows and heights carry the renderer's revision for every tool id they show.
+ * A renderer that cannot report revisions yields no suffix and stays uncached.
+ */
+function toolRevisionToken(
+  item: AgentTranscriptItem,
+  toolRenderer?: AgentToolRenderer,
+) {
+  if (!toolRenderer?.revision) return "";
+  if (item.kind === "toolResult") {
+    return `#${toolRenderer.revision(item.toolId)}`;
+  }
+  if (item.kind !== "assistant") return "";
+  let token = "";
+  for (const part of item.parts) {
+    if (part.type !== "toolCall") continue;
+    token += `#${toolRenderer.revision(part.toolId)}`;
+  }
+  return token;
+}
+
+/**
+ * Caches finalized transcript items by identity, width, and render context.
+ * Live state remains uncached because it changes on every stream tick; callers
+ * clear this cache from their component's invalidate() when Pi changes theme.
  */
 export class AgentTranscriptRenderer {
   private itemCache = new WeakMap<AgentTranscriptItem, Map<string, string[]>>();
+  private heightCache = new WeakMap<AgentTranscriptItem, Map<string, number>>();
+  private layoutCache = new WeakMap<
+    ReadonlyArray<AgentTranscriptItem>,
+    TranscriptLayout
+  >();
   private toolRenderers = new Set<AgentToolRenderer>();
+  /** Bumped by invalidate() so cached rows and heights cannot outlive a theme. */
+  private generation = 0;
+
+  /**
+   * Resolve the row total first so the viewport can settle its anchor, then
+   * render only the rows it asks for. Callers that need the whole transcript
+   * use render(), which is this with a full-height window.
+   */
+  beginFrame(
+    document: AgentTranscriptDocument,
+    width: number,
+    theme: Theme,
+    options?: { readonly now?: number; readonly expanded?: boolean },
+  ): AgentTranscriptFrame {
+    if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
+    const context = renderContext(document, width, options);
+    const layout = this.layout(document, theme, context);
+    // The live tail is re-rendered every frame by definition: it is the part of
+    // the transcript that changes on each stream tick.
+    const tail = this.renderTail(document, theme, context);
+    const itemRows = () => layout.offsets[layout.length] ?? 0;
+    const rowCount = itemRows() + tail.length;
+
+    return {
+      rowCount,
+      rows: (top: number, height: number, overscan?: number) => {
+        const from = Math.max(0, top);
+        const to = Math.min(rowCount, from + Math.max(0, height));
+        if (to <= from) return [];
+
+        // A visible item that no longer matches what was measured means the
+        // offsets this slice was cut against are wrong. Repair and retry within
+        // the same frame rather than emitting rows the operator would see move.
+        let out = this.collectRows(
+          document,
+          layout,
+          theme,
+          context,
+          from,
+          Math.min(to, itemRows()),
+        );
+        if (out === undefined) {
+          this.resum(layout);
+          out =
+            this.collectRows(
+              document,
+              layout,
+              theme,
+              context,
+              from,
+              Math.min(to, itemRows()),
+            ) ?? [];
+        }
+
+        const tailStart = itemRows();
+        for (
+          let row = Math.max(0, from - tailStart);
+          row < to - tailStart;
+          row++
+        ) {
+          const line = tail[row];
+          if (line !== undefined) out.push(line);
+        }
+
+        this.warmOverscan(
+          document,
+          layout,
+          theme,
+          context,
+          from,
+          to,
+          overscan ?? DEFAULT_OVERSCAN_ROWS,
+        );
+        return out;
+      },
+    };
+  }
 
   render(
     document: AgentTranscriptDocument,
@@ -423,47 +621,391 @@ export class AgentTranscriptRenderer {
     theme: Theme,
     options?: { readonly now?: number; readonly expanded?: boolean },
   ) {
-    const out: string[] = [];
-    const now = options?.now ?? Date.now();
-    const expanded = options?.expanded === true;
-    const liveTools = document.liveTools ?? [];
-    if (document.toolRenderer) this.toolRenderers.add(document.toolRenderer);
-    const liveIds = new Set(liveTools.map((tool) => tool.toolId));
-    const pairing = document.pairing ?? buildPairingIndex(document.items);
+    const frame = this.beginFrame(document, width, theme, options);
+    return frame.rows(0, frame.rowCount, 0);
+  }
 
-    for (let index = 0; index < document.items.length; index++) {
-      const item = document.items[index];
-      const context = itemContext(document.items, index, liveIds, pairing);
-      const key = `${width}|${context.token}`;
-      const cacheable = !document.toolRenderer || !itemHasTool(item);
-      const cached = cacheable ? this.itemCache.get(item)?.get(key) : undefined;
-      const lines =
-        cached ??
-        renderTranscriptItem(
-          theme,
-          item,
-          width,
-          context,
-          now,
-          document.cwd,
-          document.toolRenderer,
-          expanded,
-        );
-      if (!cached && cacheable) {
-        const widths = this.itemCache.get(item) ?? new Map<string, string[]>();
-        if (widths.size >= MAX_CACHED_WIDTHS_PER_ITEM) {
-          const oldestWidth = widths.keys().next().value;
-          if (oldestWidth !== undefined) widths.delete(oldestWidth);
-        }
-        widths.set(key, lines);
-        this.itemCache.set(item, widths);
+  /**
+   * Rows [from, to) of the items block, or undefined when a visible item no
+   * longer matches what was measured and the layout must be re-summed first.
+   *
+   * The two known ways a height can go stale are caught before the row total is
+   * published: in-place replacement by itemsUnmoved, and unrevisioned native
+   * output by remeasureUnrevisioned. No test reaches this check (verified by
+   * sentinel injection across every suite that renders a transcript), so it is
+   * a last-resort guard for a cache-key input nobody has enumerated yet. It is
+   * deliberately kept rather than deleted: the failure it prevents is a
+   * misaligned viewport, and repairing costs one extra pass over the window
+   * while removing it would make that misalignment permanent for the frame.
+   */
+  private collectRows(
+    document: AgentTranscriptDocument,
+    layout: TranscriptLayout,
+    theme: Theme,
+    context: RenderContext,
+    from: number,
+    to: number,
+  ) {
+    const out: string[] = [];
+    if (to <= from) return out;
+    for (
+      let index = itemAtRow(layout.offsets, from);
+      index < layout.length;
+      index++
+    ) {
+      const start = layout.offsets[index] ?? 0;
+      if (start >= to) break;
+      const lines = this.itemLines(document, index, theme, context);
+      // Identity is the cause, height is the symptom; either one means these
+      // offsets no longer describe the document.
+      if (
+        layout.measured[index] !== document.items[index] ||
+        lines.length !== layout.heights[index]
+      ) {
+        layout.measured[index] = document.items[index];
+        layout.heights[index] = lines.length;
+        return undefined;
       }
-      if (lines.length > 0) {
-        out.push(...lines);
+      const sliceFrom = Math.max(0, from - start);
+      const sliceTo = Math.min(lines.length, to - start);
+      for (let row = sliceFrom; row < sliceTo; row++) out.push(lines[row]!);
+    }
+    return out;
+  }
+
+  /** Rebuild the prefix sums from recorded heights. No item is re-rendered. */
+  private resum(layout: TranscriptLayout) {
+    for (let index = 0; index < layout.length; index++) {
+      layout.offsets[index + 1] =
+        (layout.offsets[index] ?? 0) + (layout.heights[index] ?? 0);
+    }
+  }
+
+  /**
+   * Pre-render cacheable neighbours so a scroll step reuses rows instead of
+   * rendering them under the operator's keypress. Items drawn by a native
+   * renderer without revisions are skipped: they cannot be cached, so warming
+   * them would be pure overhead.
+   */
+  private warmOverscan(
+    document: AgentTranscriptDocument,
+    layout: TranscriptLayout,
+    theme: Theme,
+    context: RenderContext,
+    from: number,
+    to: number,
+    overscan: number,
+  ) {
+    if (overscan <= 0 || layout.length === 0) return;
+    const start = Math.max(0, from - overscan);
+    const end = Math.min(layout.offsets[layout.length] ?? 0, to + overscan);
+    for (
+      let index = itemAtRow(layout.offsets, start);
+      index < layout.length;
+      index++
+    ) {
+      const itemStart = layout.offsets[index] ?? 0;
+      if (itemStart >= end) break;
+      if (itemStart >= from && itemStart < to) continue;
+      const item = document.items[index];
+      if (!item) break;
+      if (!this.cacheable(document, item)) continue;
+      this.itemLines(document, index, theme, context);
+    }
+  }
+
+  /**
+   * Without a revision the native output can change silently, so those items
+   * are re-rendered every frame exactly as they were before windowing.
+   */
+  private cacheable(
+    document: AgentTranscriptDocument,
+    item: AgentTranscriptItem,
+  ) {
+    return (
+      !document.toolRenderer ||
+      !itemHasTool(item) ||
+      document.toolRenderer.revision !== undefined
+    );
+  }
+
+  private itemKey(
+    document: AgentTranscriptDocument,
+    item: AgentTranscriptItem,
+    index: number,
+    context: RenderContext,
+  ) {
+    const itemContextValue = itemContext(
+      document.items,
+      index,
+      context.liveIds,
+      context.pairing,
+    );
+    return {
+      context: itemContextValue,
+      key: `${context.keyPrefix}|${itemContextValue.token}${toolRevisionToken(item, document.toolRenderer)}`,
+    };
+  }
+
+  /** Rows for one item, reusing the identity+context cache where allowed. */
+  private itemLines(
+    document: AgentTranscriptDocument,
+    index: number,
+    theme: Theme,
+    context: RenderContext,
+  ): string[] {
+    const item = document.items[index];
+    if (!item) return [];
+    const { context: itemContextValue, key } = this.itemKey(
+      document,
+      item,
+      index,
+      context,
+    );
+    const cacheable = this.cacheable(document, item);
+    const cached = cacheable ? this.itemCache.get(item)?.get(key) : undefined;
+    if (cached) return cached;
+    const lines = renderTranscriptItem(
+      theme,
+      item,
+      context.width,
+      itemContextValue,
+      context.now,
+      document.cwd,
+      document.toolRenderer,
+      context.expanded,
+    );
+    if (cacheable) this.remember(this.itemCache, item, key, lines);
+    this.remember(this.heightCache, item, key, lines.length);
+    return lines;
+  }
+
+  /** Bounded per-item cache: a child page is read at one or two widths. */
+  private remember<T>(
+    cache: WeakMap<AgentTranscriptItem, Map<string, T>>,
+    item: AgentTranscriptItem,
+    key: string,
+    value: T,
+  ) {
+    const keyed = cache.get(item) ?? new Map<string, T>();
+    if (keyed.size >= MAX_CACHED_WIDTHS_PER_ITEM && !keyed.has(key)) {
+      const oldest = keyed.keys().next().value;
+      if (oldest !== undefined) keyed.delete(oldest);
+    }
+    keyed.set(key, value);
+    cache.set(item, keyed);
+  }
+
+  /**
+   * Height of one item, measured once per identity+context and then reused.
+   * Measuring is a render, so this is only paid for genuinely new rows.
+   */
+  private itemHeight(
+    document: AgentTranscriptDocument,
+    index: number,
+    theme: Theme,
+    context: RenderContext,
+  ) {
+    const item = document.items[index];
+    if (!item) return 0;
+    const { key } = this.itemKey(document, item, index, context);
+    const cached = this.heightCache.get(item)?.get(key);
+    if (cached !== undefined) return cached;
+    return this.itemLines(document, index, theme, context).length;
+  }
+
+  /**
+   * Row offsets for the items block. Appends extend the cached prefix sums, a
+   * native tool update re-measures only the items that reference it, and
+   * anything else (front trimming from compaction, width, expansion, or theme
+   * change) re-sums from cached heights without re-rendering settled rows.
+   */
+  private layout(
+    document: AgentTranscriptDocument,
+    theme: Theme,
+    context: RenderContext,
+  ): TranscriptLayout {
+    const items = document.items;
+    const toolGeneration = document.toolRenderer?.generation?.() ?? 0;
+    const cached = this.layoutCache.get(items);
+    // A document that carries its own pairing index rebuilds it on mutation, so
+    // identity settles content in O(1). Without one, fall back to comparing the
+    // measured items, which is the same order of growth as building the index.
+    const trusted = document.pairing !== undefined;
+    const reusable =
+      cached !== undefined &&
+      cached.keyPrefix === context.keyPrefix &&
+      cached.liveKey === context.liveKey &&
+      cached.generation === this.generation &&
+      (trusted
+        ? cached.pairing === context.pairing
+        : this.itemsUnmoved(cached, items));
+
+    if (reusable) {
+      if (
+        cached.length === items.length &&
+        cached.last === items[items.length - 1]
+      ) {
+        this.settleToolRows(cached, document, theme, context, toolGeneration);
+        this.remeasureUnrevisioned(cached, document, theme, context);
+        return cached;
+      }
+      // Append-only growth keeps every preceding offset valid.
+      if (
+        items.length > cached.length &&
+        cached.last === items[cached.length - 1]
+      ) {
+        this.settleToolRows(cached, document, theme, context, toolGeneration);
+        for (let index = cached.length; index < items.length; index++) {
+          const item = items[index];
+          if (!item) break;
+          const metrics = this.itemHeight(document, index, theme, context);
+          cached.heights[index] = metrics;
+          cached.measured[index] = item;
+          if (itemHasTool(item)) {
+            cached.toolItems.push(index);
+            cached.toolTokens.push(
+              toolRevisionToken(item, document.toolRenderer),
+            );
+          }
+        }
+        cached.length = items.length;
+        cached.last = items[items.length - 1];
+        this.remeasureUnrevisioned(cached, document, theme, context);
+        this.resum(cached);
+        return cached;
       }
     }
-    while (out.length > 0 && out[out.length - 1] === "") out.pop();
 
+    const heights: number[] = [];
+    const measured: Array<AgentTranscriptItem | undefined> = [];
+    const offsets: number[] = [0];
+    const toolItems: number[] = [];
+    const toolTokens: string[] = [];
+    for (let index = 0; index < items.length; index++) {
+      const item = items[index];
+      if (!item) break;
+      const height = this.itemHeight(document, index, theme, context);
+      heights.push(height);
+      measured.push(item);
+      offsets.push((offsets[index] ?? 0) + height);
+      if (itemHasTool(item)) {
+        toolItems.push(index);
+        toolTokens.push(toolRevisionToken(item, document.toolRenderer));
+      }
+    }
+    const layout: TranscriptLayout = {
+      keyPrefix: context.keyPrefix,
+      liveKey: context.liveKey,
+      generation: this.generation,
+      pairing: context.pairing,
+      length: items.length,
+      last: items[items.length - 1],
+      offsets,
+      heights,
+      measured,
+      toolItems,
+      toolTokens,
+      toolGeneration,
+    };
+    this.layoutCache.set(items, layout);
+    return layout;
+  }
+
+  /**
+   * A renderer without revision() can change its native output with no cache
+   * key movement, so those heights cannot be trusted between frames. They are
+   * re-measured here, before the row total is published, rather than being
+   * discovered mid-slice once the total is already wrong.
+   *
+   * These items are also uncached, so this is the same per-frame work the
+   * pre-windowing renderer already did for them, restricted to tool items.
+   */
+  private remeasureUnrevisioned(
+    layout: TranscriptLayout,
+    document: AgentTranscriptDocument,
+    theme: Theme,
+    context: RenderContext,
+  ) {
+    if (!document.toolRenderer || document.toolRenderer.revision) return;
+    let moved = false;
+    for (const index of layout.toolItems) {
+      if (index >= layout.length) continue;
+      const item = document.items[index];
+      if (!item) continue;
+      // The recorded height is keyed on inputs that did not move, so it would
+      // just echo the stale value. Render to find the current height.
+      const lines = this.itemLines(document, index, theme, context);
+      if (lines.length === layout.heights[index]) continue;
+      layout.heights[index] = lines.length;
+      layout.measured[index] = item;
+      moved = true;
+    }
+    if (!moved) return;
+    this.resum(layout);
+  }
+
+  /**
+   * Whether every already-measured slot still holds the item it was measured
+   * from. Endpoint checks catch appends and front trimming, but a same-length
+   * in-place replacement moves rows without moving either endpoint, and the row
+   * total is published before any slice is cut, so it has to be caught here.
+   *
+   * Only reached when the document omits a pairing index: producers that supply
+   * one rebuild it on every transcript mutation, which makes pairing identity an
+   * O(1) proxy for this walk. Callers without an index already pay O(n) to build
+   * one, so this walk adds no order of growth.
+   */
+  private itemsUnmoved(
+    layout: TranscriptLayout,
+    items: ReadonlyArray<AgentTranscriptItem>,
+  ) {
+    const checked = Math.min(layout.length, items.length);
+    for (let index = 0; index < checked; index++) {
+      if (layout.measured[index] !== items[index]) return false;
+    }
+    return true;
+  }
+
+  /**
+   * Re-measure only the items whose native tool output moved. Revision lookups
+   * are map reads, so a streaming tool costs its own rows plus prefix-sum
+   * arithmetic instead of a fresh pass over settled history.
+   */
+  private settleToolRows(
+    layout: TranscriptLayout,
+    document: AgentTranscriptDocument,
+    theme: Theme,
+    context: RenderContext,
+    toolGeneration: number,
+  ) {
+    if (layout.toolGeneration === toolGeneration) return;
+    layout.toolGeneration = toolGeneration;
+    let moved = false;
+    for (let slot = 0; slot < layout.toolItems.length; slot++) {
+      const index = layout.toolItems[slot];
+      if (index === undefined || index >= layout.length) continue;
+      const item = document.items[index];
+      if (!item) continue;
+      const token = toolRevisionToken(item, document.toolRenderer);
+      if (token === layout.toolTokens[slot]) continue;
+      layout.toolTokens[slot] = token;
+      const metrics = this.itemHeight(document, index, theme, context);
+      layout.heights[index] = metrics;
+      layout.measured[index] = item;
+      moved = true;
+    }
+    if (!moved) return;
+    this.resum(layout);
+  }
+
+  private renderTail(
+    document: AgentTranscriptDocument,
+    theme: Theme,
+    context: RenderContext,
+  ) {
+    const out: string[] = [];
+    const { width, now, expanded } = context;
     // Live streaming assistant buffers (cleared when the finalized message lands).
     if (document.liveAssistant) {
       const { thinking, text } = document.liveAssistant;
@@ -476,7 +1018,7 @@ export class AgentTranscriptRenderer {
     // Live tool executions. The manager drops a live entry when its ToolEnd
     // lands, and the transcript's call line then takes over with the settled
     // glyph in the same column, so the block never reflows.
-    for (const tool of liveTools) {
+    for (const tool of document.liveTools ?? []) {
       const phase: ToolPhase = tool.done
         ? tool.isError
           ? "error"
@@ -512,12 +1054,14 @@ export class AgentTranscriptRenderer {
         ).render(width),
       );
     }
-
     return out;
   }
 
   invalidate() {
     this.itemCache = new WeakMap();
+    this.heightCache = new WeakMap();
+    this.layoutCache = new WeakMap();
+    this.generation++;
     for (const renderer of this.toolRenderers) renderer.invalidate?.();
     this.toolRenderers.clear();
   }

@@ -20,6 +20,14 @@ export interface AgentToolRenderer {
     request: AgentToolRenderRequest,
     width: number,
   ): string[] | undefined;
+  /**
+   * Monotonic revision of one tool's native output, and of the ledger as a
+   * whole. Row and height caches key on these instead of re-rendering settled
+   * history every frame. A renderer that cannot report them is treated as
+   * changing on every frame: correct, but uncached.
+   */
+  revision?(toolId: string): number;
+  generation?(): number;
   invalidate?(): void;
 }
 
@@ -37,6 +45,8 @@ interface ToolExecutionRecord {
   component?: ToolExecutionComponent;
   componentCwd?: string;
   componentExpanded?: boolean;
+  /** Ledger clock value of the last mutation that can change rendered output. */
+  revision: number;
 }
 
 const inertTui = {
@@ -89,6 +99,8 @@ function normalizeResult(value: unknown, isError: boolean): ToolResult {
  */
 export class AgentToolRenderLedger implements AgentToolRenderer {
   private executions = new Map<string, ToolExecutionRecord>();
+  /** One clock for all ids: a bump is both a per-tool and a ledger-wide fact. */
+  private clock = 0;
 
   start(
     toolId: string,
@@ -103,18 +115,26 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
         current.component = undefined;
         current.componentCwd = undefined;
         current.componentExpanded = undefined;
+        current.revision = ++this.clock;
       }
       current.name = name;
       if (current.args !== args) {
         current.args = args;
         current.component?.updateArgs(args);
+        current.revision = ++this.clock;
       }
       const wasStarted = current.executionStarted;
       const wereArgsComplete = current.argsComplete;
       current.executionStarted = true;
       current.argsComplete = true;
-      if (!wasStarted) current.component?.markExecutionStarted();
-      if (!wereArgsComplete) current.component?.setArgsComplete();
+      if (!wasStarted) {
+        current.component?.markExecutionStarted();
+        current.revision = ++this.clock;
+      }
+      if (!wereArgsComplete) {
+        current.component?.setArgsComplete();
+        current.revision = ++this.clock;
+      }
       return;
     }
     this.executions.set(toolId, {
@@ -124,6 +144,7 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
       executionStarted: true,
       argsComplete: true,
       isPartial: true,
+      revision: ++this.clock,
     });
   }
 
@@ -138,18 +159,21 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
         result: normalizeResult(result, false),
         resultSource: result,
         isPartial: true,
+        revision: ++this.clock,
       });
       return;
     }
     if (current.args !== args) {
       current.args = args;
       current.component?.updateArgs(args);
+      current.revision = ++this.clock;
     }
     if (current.resultSource === result && current.isPartial) return;
     current.result = normalizeResult(result, false);
     current.resultSource = result;
     current.isPartial = true;
     current.component?.updateResult(current.result, true);
+    current.revision = ++this.clock;
   }
 
   end(toolId: string, name: string, result: unknown, isError: boolean) {
@@ -163,6 +187,7 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
         result: normalizeResult(result, isError),
         resultSource: result,
         isPartial: false,
+        revision: ++this.clock,
       });
       return;
     }
@@ -177,6 +202,19 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
     current.resultSource = result;
     current.isPartial = false;
     current.component?.updateResult(current.result, false);
+    current.revision = ++this.clock;
+  }
+
+  /**
+   * Zero means "this ledger has no native output for the id", which is itself a
+   * stable fact: renderTool then falls back to the bounded preview row.
+   */
+  revision(toolId: string) {
+    return this.executions.get(toolId)?.revision ?? 0;
+  }
+
+  generation() {
+    return this.clock;
   }
 
   renderTool(request: AgentToolRenderRequest, width: number) {
@@ -213,6 +251,7 @@ export class AgentToolRenderLedger implements AgentToolRenderer {
   invalidate() {
     for (const execution of this.executions.values()) {
       execution.component?.invalidate();
+      execution.revision = ++this.clock;
     }
   }
 }
