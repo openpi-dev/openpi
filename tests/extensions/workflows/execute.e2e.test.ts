@@ -782,17 +782,14 @@ test("shutdown preserves a failed completion for reload recovery", async () => {
     "delivered",
   );
 
-  // The original instance represents the process that was replaced. Drain
-  // its intentionally retained in-memory retry so later tests do not batch it
-  // with an unrelated completion; the assertion above was reached solely via
-  // the fresh instance and persisted session state.
+  // The original instance represents the process that was replaced. Its
+  // owner was disposed at shutdown, so the shared inbox must dead-letter the
+  // stale in-memory retry rather than append a duplicate to the revived
+  // Session. The fresh instance recovered solely from canonical durable state.
   for (const handler of handlers.get("agent_settled") ?? []) {
     await handler({}, ctx);
   }
-  await waitFor(
-    () => sentMessages.length === 2,
-    "discarded predecessor instance retry",
-  );
+  assert.equal(sentMessages.length, 1);
   sentMessages.length = 0;
 });
 

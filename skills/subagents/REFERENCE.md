@@ -159,6 +159,8 @@ an owner-bound resource reference beside the existing Pi-readable path. The
 reference names the `manager-bounded-final` coverage and Session-cache lifetime;
 it neither proves uncaptured backend bytes nor grants a child extra read access.
 A structured Workflow child additionally receives only its terminating
+`structured_output` tool. A Workflow child with a schema, or a Direct Subagent
+spawned with `output_schema`, additionally receives only its terminating
 `structured_output` tool; this does not restore any denied repository tool.
 
 While `/plan` is armed, `isolation: "worktree"` is rejected before Git is

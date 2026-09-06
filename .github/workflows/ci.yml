@@ -73,12 +73,16 @@ jobs:
             rm -rf "$root"
           }
           trap cleanup EXIT
-          mkdir "$root/app" "$root/workspace"
+          mkdir "$root/app" "$root/workspace" "$root/agent"
           printf '{"private":true}\n' >"$root/app/package.json"
           npm pack --ignore-scripts --silent --pack-destination "$root" >/dev/null
           tarballs=("$root"/*.tgz)
           test "${#tarballs[@]}" -eq 1
-          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund "${tarballs[0]}"
+          npm install --prefix "$root/app" --ignore-scripts --no-audit --no-fund "${tarballs[0]}" \
+            @earendil-works/pi-coding-agent@0.85.1 @earendil-works/pi-ai@0.85.1 @earendil-works/pi-tui@0.85.1
+          test ! -e "$root/app/node_modules/@earendil-works/pi-server"
+          (cd "$root/app" && node --input-type=module -e 'await import("@earendil-works/pi-coding-agent")')
+          PI_CODING_AGENT_DIR="$root/agent" \
           OPENPI_WEB_TOKEN=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa \
             "$root/app/node_modules/.bin/openpi" web "$root/workspace" --port 0 --no-open \
             >"$root/host.log" 2>&1 &

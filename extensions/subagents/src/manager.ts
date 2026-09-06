@@ -123,6 +123,7 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
+  structuredResult?: SubagentSnapshot["structuredResult"];
   turns: number;
 }
 
@@ -363,6 +364,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
+          s.structuredResult = outcome.structuredResult;
           break;
         case "Failed":
           s.status = "error";
@@ -373,6 +375,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             0,
             FINAL_TEXT_MAX_LENGTH,
           );
+          s.structuredResult = undefined;
           break;
         case "Interrupted":
           s.status = "error";
@@ -382,6 +385,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             0,
             FINAL_TEXT_MAX_LENGTH,
           );
+          s.structuredResult = undefined;
           break;
       }
       s.liveAssistant = undefined;
@@ -446,6 +450,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
+          s.structuredResult = undefined;
           armWatchdog(entry);
           break;
         case "RunSettled":
