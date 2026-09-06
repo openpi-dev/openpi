@@ -20,7 +20,7 @@
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
   <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
+  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.85.1+" src="https://img.shields.io/badge/Pi-0.85.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
@@ -414,12 +414,14 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup Web 主题跟随系统
+/openpi-setup Web 使用深色主题
 /openpi-setup Footer 两行：cwd flex model / context cost flex git
 /openpi-setup Bash 展开，Write/Edit 保持紧凑
 /openpi-setup 编辑后自动跑 npm run format
@@ -440,18 +442,18 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
+| Web 主题                    | `system`；可选 `light` / `dark`                 |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
-| 主题                         | 保留用户现有选择                               |
 
 </details>
 
 ### 安装要求与来源
 
-- Pi `0.84.1` 或更新版本；
+- Pi `0.85.1` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
@@ -611,6 +613,8 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 <summary><strong>Subagent 会阻塞主 Agent 吗？</strong></summary>
 
 `subagent_spawn` 立即返回，结束后自动回传并重新唤醒主 Agent。交互会话没有其他工作时，主 Agent 应结束当前轮、让用户继续交互；“下一步依赖结果”本身不是阻塞理由。只有用户明确要求当前回复等完，或非交互自动化必须在同一次调用中返回完整结果时，才应调用 `subagent_wait`。
+
+需要机器可验证的 review findings、research evidence 或 test matrix 时，可为 `subagent_spawn` 提供可选 `output_schema`。该次 Direct Subagent 只会额外获得 terminating `structured_output`，未提交匹配结果会明确失败；验证后的 JSON 会有界回传并写入私有 content-addressed artifact。省略 schema 的普通文本路径不会加载该 child tool 或 structured instruction。
 
 </details>
 

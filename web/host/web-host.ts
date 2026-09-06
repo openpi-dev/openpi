@@ -9,7 +9,11 @@ import {
 } from "node:http";
 import { URL } from "node:url";
 import { promisify } from "node:util";
-import { subscribeWebCapabilities } from "../../extensions/shared/web-observer-registry.ts";
+import {
+  subscribeWebCapabilities,
+  webCapabilitySnapshot,
+} from "../../extensions/shared/web-observer-registry.ts";
+import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { PiWebAdapter } from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
@@ -33,9 +37,46 @@ const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
+const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
+const MAX_PROMPT_ADMISSIONS = 128;
 const execFileAsync = promisify(execFile);
+
+type PromptAdmissionResponse = {
+  readonly status: number;
+  readonly body: Record<string, unknown>;
+};
+
+type PromptAdmission = {
+  readonly sessionId: string;
+  readonly content: string;
+  readonly completion: Promise<PromptAdmissionResponse>;
+  result?: PromptAdmissionResponse;
+};
+
+type WebRequestErrorCode =
+  | "INVALID_REQUEST_BODY"
+  | "REQUEST_BODY_TOO_LARGE";
+
+class WebRequestError extends Error {
+  readonly code: WebRequestErrorCode;
+  readonly statusCode: 400 | 413;
+  readonly maxBytes?: number;
+
+  constructor(
+    message: string,
+    code: WebRequestErrorCode,
+    statusCode: 400 | 413,
+    maxBytes?: number,
+  ) {
+    super(message);
+    this.name = "WebRequestError";
+    this.code = code;
+    this.statusCode = statusCode;
+    this.maxBytes = maxBytes;
+  }
+}
 
 export interface WebHostOptions {
   runtime: WebRuntimeController;
@@ -45,6 +86,7 @@ export interface WebHostOptions {
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
   shutdownTimeoutMs?: number;
+  sseHeartbeatMs?: number;
 }
 
 export class WebHost {
@@ -52,6 +94,10 @@ export class WebHost {
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
+  private readonly clientHeartbeats = new Map<
+    ServerResponse,
+    ReturnType<typeof setInterval>
+  >();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
   private port = 0;
@@ -63,11 +109,16 @@ export class WebHost {
     WebHostOptions["directoryChooser"]
   >;
   private readonly shutdownTimeoutMs: number;
+  private readonly sseHeartbeatMs: number;
   private readonly unsubscribeCapabilities: () => void;
   private readonly unsubscribeRuntime: () => void;
   private readonly chooserAbort = new AbortController();
   private readonly leaseSensitiveRequests = new Set<Promise<void>>();
   private readonly leaseSensitiveMessages = new Set<IncomingMessage>();
+  private readonly promptAdmissions = new Map<
+    string,
+    PromptAdmission
+  >();
   private stopping = false;
   private stopPromise?: Promise<void>;
 
@@ -89,6 +140,14 @@ export class WebHost {
       this.shutdownTimeoutMs <= 0
     ) {
       throw new Error("Web host shutdown timeout must be a positive integer");
+    }
+    this.sseHeartbeatMs =
+      options.sseHeartbeatMs ?? DEFAULT_SSE_HEARTBEAT_MS;
+    if (
+      !Number.isSafeInteger(this.sseHeartbeatMs) ||
+      this.sseHeartbeatMs <= 0
+    ) {
+      throw new Error("SSE heartbeat interval must be a positive integer");
     }
     this.adapter = new PiWebAdapter(options.runtime);
     this.onEvent = options.onEvent;
@@ -185,8 +244,7 @@ export class WebHost {
         client.writableLength > MAX_SSE_BUFFER_BYTES ||
         !client.write(record)
       ) {
-        this.clients.delete(client);
-        client.destroy();
+        this.removeSseClient(client, "destroy");
       }
     }
     this.onEvent?.(event.type, event.detail);
@@ -204,8 +262,7 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
-      for (const client of this.clients) client.end();
-      this.clients.clear();
+      for (const client of [...this.clients]) this.removeSseClient(client, "end");
       const closeServer = this.server.listening
         ? new Promise<void>((resolve) => {
             const forceClose = setTimeout(
@@ -266,6 +323,15 @@ export class WebHost {
       await this.handle(request, response);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
+      if (error instanceof WebRequestError) {
+        return this.json(response, error.statusCode, {
+          code: error.code,
+          error: error.message,
+          ...(error.maxBytes === undefined
+            ? {}
+            : { maxBytes: error.maxBytes }),
+        });
+      }
       this.json(response, 500, {
         error: error instanceof Error ? error.message : "request failed",
       });
@@ -276,6 +342,7 @@ export class WebHost {
     if (request.method === "GET" || request.method === "HEAD") return false;
     const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
     if (pathname === "/api/prompt") return false;
+    if (pathname === "/api/turns/cancel") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname === "/api/model";
@@ -486,6 +553,51 @@ export class WebHost {
           error: "prompt must be 1-12000 characters",
         });
       }
+      const commandId =
+        typeof body.commandId === "string" && body.commandId.length > 0
+          ? body.commandId
+          : randomUUID();
+      if (commandId.length > 128) {
+        return this.json(response, 400, {
+          error: "commandId must be at most 128 characters",
+        });
+      }
+      if (body.retry !== undefined && typeof body.retry !== "boolean") {
+        return this.json(response, 400, {
+          error: "retry must be a boolean when provided",
+        });
+      }
+      if (typeof body.sessionId !== "string") {
+        return this.json(response, 400, {
+          error: "sessionId is required",
+        });
+      }
+      const existing = this.promptAdmissions.get(commandId);
+      if (existing) {
+        if (
+          existing.sessionId !== body.sessionId ||
+          existing.content !== content
+        ) {
+          return this.json(response, 409, {
+            code: "COMMAND_CONFLICT",
+            error: "commandId is already bound to a different prompt",
+          });
+        }
+        const result = await existing.completion;
+        traceWeb("prompt_admission_replayed", {
+          commandId,
+          sessionId: body.sessionId,
+          status: result.status,
+          elapsedMs: elapsed(requestStarted),
+        });
+        return this.json(response, result.status, result.body);
+      }
+      if (body.retry === true) {
+        return this.json(response, 409, {
+          code: "COMMAND_ADMISSION_UNKNOWN",
+          error: "previous prompt admission is unknown; refresh canonical state before sending a new request",
+        });
+      }
       if (this.runtime.workspaceSelected !== true) {
         return this.json(response, 409, {
           code: "WORKSPACE_REQUIRED",
@@ -493,7 +605,6 @@ export class WebHost {
         });
       }
       if (
-        typeof body.sessionId !== "string" ||
         body.sessionId !== this.runtime.sessionManager.getSessionId()
       ) {
         return this.json(response, 409, {
@@ -501,43 +612,61 @@ export class WebHost {
           error: "Only the active Web session accepts messages",
         });
       }
-      const commandId = randomUUID();
-      traceWeb("prompt_received", {
-        commandId,
-        sessionId: body.sessionId,
-        chars: content.length,
-      });
-      try {
-        await this.runtime.sendPrompt(content, {
-          commandId,
-          expectedSessionId: body.sessionId,
-        });
-        traceWeb("prompt_admission_finished", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-        });
-      } catch (error) {
-        const failure = this.runtimeRequestFailure(error);
-        traceWeb("prompt_admission_failed", {
-          commandId,
-          elapsedMs: elapsed(requestStarted),
-          error: failure.error,
-        });
-        return this.json(response, failure.status, {
-          code: failure.code,
-          error: failure.error,
+      if (!this.makePromptAdmissionSpace()) {
+        return this.json(response, 503, {
+          code: "PROMPT_ADMISSION_CAPACITY",
+          error: "prompt admission capacity is full; wait for a pending admission to settle",
         });
       }
-      this.publish("prompt_accepted", { commandId, sessionId: body.sessionId });
-      traceWeb("prompt_response_sent", {
+      const admission = this.beginPromptAdmission(
         commandId,
+        body.sessionId,
+        content,
+      );
+      const result = await admission.completion;
+      return this.json(response, result.status, result.body);
+    }
+    if (url.pathname === "/api/turns/cancel" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (
+        typeof body.sessionId !== "string" ||
+        body.sessionId.length === 0 ||
+        body.sessionId.length > 128 ||
+        typeof body.commandId !== "string" ||
+        body.commandId.length === 0 ||
+        body.commandId.length > 128 ||
+        typeof body.epoch !== "number" ||
+        !Number.isSafeInteger(body.epoch) ||
+        body.epoch <= 0
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_TURN",
+          error: "bounded sessionId, commandId, and positive turn epoch are required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using the Web runtime",
+        });
+      }
+      const result = await this.runtime.cancelTurn({
         sessionId: body.sessionId,
-        elapsedMs: elapsed(requestStarted),
+        commandId: body.commandId,
+        epoch: body.epoch,
       });
-      return this.json(response, 202, {
-        id: commandId,
-        accepted: true,
-        state: "accepted",
+      traceWeb("turn_cancel_receipt", { ...result });
+      const status =
+        result.state === "accepted"
+          ? 202
+          : result.state === "already-settled"
+            ? 200
+            : result.state === "failed"
+              ? 500
+              : 409;
+      return this.json(response, status, {
+        ...result,
+        accepted: result.state === "accepted",
         cursor: this.sequence,
       });
     }
@@ -557,6 +686,19 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/capabilities")
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        capabilities: webCapabilitySnapshot(this.runtime.sessionManager),
+      });
+    if (url.pathname === "/api/diagnostics")
+      return this.json(response, 200, {
+        node: process.version,
+        cwd: this.runtime.cwd,
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        workspaceSelected: this.runtime.workspaceSelected,
+        models: this.runtime.listModels().filter((model) => model.current),
+      });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
@@ -566,6 +708,7 @@ export class WebHost {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
         cursor,
+        preferences: { theme: loadSetupConfig().ui.webTheme },
         ...projection,
       };
       let finalBytes = jsonByteLength(snapshot);
@@ -627,29 +770,142 @@ export class WebHost {
     }
   }
 
+  private makePromptAdmissionSpace() {
+    while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
+      const settled = [...this.promptAdmissions.entries()].find(
+        ([, admission]) => admission.result !== undefined,
+      );
+      if (!settled) return false;
+      this.promptAdmissions.delete(settled[0]);
+    }
+    return true;
+  }
+
+  private beginPromptAdmission(
+    commandId: string,
+    sessionId: string,
+    content: string,
+  ) {
+    let settle!: (result: PromptAdmissionResponse) => void;
+    const admission: PromptAdmission = {
+      sessionId,
+      content,
+      completion: new Promise<PromptAdmissionResponse>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    // Store before dispatch: a client retry can only replay this record.
+    this.promptAdmissions.set(commandId, admission);
+    try {
+      traceWeb("prompt_received", {
+        commandId,
+        sessionId,
+        chars: content.length,
+      });
+    } catch {}
+    void Promise.resolve()
+      .then(() =>
+        this.runtime.sendPrompt(content, {
+          commandId,
+          expectedSessionId: sessionId,
+        }),
+      )
+      .then(
+        (receipt) => {
+          const result: PromptAdmissionResponse = {
+            status: 202,
+            body: {
+              id: commandId,
+              accepted: true,
+              state: "accepted",
+              pendingFollowUps: receipt.pendingFollowUps,
+              cursor: this.sequence,
+            },
+          };
+          try {
+            this.publish("prompt_accepted", {
+              commandId,
+              sessionId,
+              pendingFollowUps: receipt.pendingFollowUps,
+            });
+            result.body.cursor = this.sequence;
+          } catch {}
+          return result;
+        },
+        (error) => {
+          const failure = this.runtimeRequestFailure(error);
+          return {
+            status: failure.status,
+            body: { code: failure.code, error: failure.error },
+          };
+        },
+      )
+      .then((result: PromptAdmissionResponse) => {
+        admission.result = result;
+        settle(result);
+        try {
+          traceWeb(
+            result.status === 202
+              ? "prompt_admission_finished"
+              : "prompt_admission_failed",
+            {
+              commandId,
+              sessionId,
+              status: result.status,
+              ...(typeof result.body.error === "string"
+                ? { error: result.body.error }
+                : {}),
+            },
+          );
+        } catch {}
+      })
+      .catch((error) => {
+        if (admission.result) return;
+        const failure = this.runtimeRequestFailure(error);
+        const result: PromptAdmissionResponse = {
+          status: failure.status,
+          body: { code: failure.code, error: failure.error },
+        };
+        admission.result = result;
+        settle(result);
+      });
+    return admission;
+  }
+
   private async readJson(request: IncomingMessage) {
     const chunks: Buffer[] = [];
     let bytes = 0;
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       bytes += buffer.length;
-      if (bytes > MAX_COMMAND_BYTES)
-        throw new Error("request body is too large");
+      if (bytes > MAX_COMMAND_BYTES) {
+        throw new WebRequestError(
+          "request body is too large",
+          "REQUEST_BODY_TOO_LARGE",
+          413,
+          MAX_COMMAND_BYTES,
+        );
+      }
       chunks.push(buffer);
     }
+    let value: unknown;
     try {
-      const value: unknown = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-      if (!value || typeof value !== "object" || Array.isArray(value)) {
-        throw new Error("request body must be an object");
-      }
-      return value as Record<string, unknown>;
-    } catch (error) {
-      throw new Error(
-        error instanceof SyntaxError
-          ? "request body is invalid JSON"
-          : String(error),
+      value = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+    } catch {
+      throw new WebRequestError(
+        "request body is invalid JSON",
+        "INVALID_REQUEST_BODY",
+        400,
       );
     }
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new WebRequestError(
+        "request body must be an object",
+        "INVALID_REQUEST_BODY",
+        400,
+      );
+    }
+    return value as Record<string, unknown>;
   }
 
   private authorized(request: IncomingMessage) {
@@ -736,7 +992,31 @@ export class WebHost {
     // ordering without treating normal backpressure as a broken client.
     for (const record of replay) response.write(record);
     this.clients.add(response);
-    response.on("close", () => this.clients.delete(response));
+    const heartbeat = setInterval(() => {
+      if (
+        response.destroyed ||
+        response.writableEnded ||
+        response.writableLength > MAX_SSE_BUFFER_BYTES ||
+        !response.write(": heartbeat\n\n")
+      ) {
+        this.removeSseClient(response, "destroy");
+      }
+    }, this.sseHeartbeatMs);
+    heartbeat.unref();
+    this.clientHeartbeats.set(response, heartbeat);
+    response.on("close", () => this.removeSseClient(response));
+  }
+
+  private removeSseClient(
+    response: ServerResponse,
+    close?: "destroy" | "end",
+  ) {
+    this.clients.delete(response);
+    const heartbeat = this.clientHeartbeats.get(response);
+    if (heartbeat) clearInterval(heartbeat);
+    this.clientHeartbeats.delete(response);
+    if (close === "destroy" && !response.destroyed) response.destroy();
+    else if (close === "end" && !response.writableEnded) response.end();
   }
 
   private parseCursor(value: string | undefined | null) {
