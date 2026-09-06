@@ -2,6 +2,10 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
+## Validated investigations
+
+- [`WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md`](WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md) — repeated synchronous history loading on dashboard animation ticks, its regression boundary, and measurement limits ([#420](https://github.com/openpi-dev/openpi/issues/420)).
+
 ## Legacy records
 
 The following records predate [`Decision 0001`](../decisions/0001-documentation-and-evidence-governance.md). They remain useful historical sources but have not been migrated to the new metadata contract as part of this change:
