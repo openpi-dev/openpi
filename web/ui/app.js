@@ -19,9 +19,13 @@ const state = {
   collapsed: readCollapsedWorkspaces(),
   liveMessages: [],
   liveRunning: false,
+  activeTurn: null,
+  turnCancellationPending: false,
+  turnTerminalStatus: null,
   promptAdmissionPending: false,
   promptAdmissionToken: null,
   promptAdmissionSequence: 0,
+  promptAdmission: null,
   terminalPromptIds: new Set(),
   sessionEpoch: 0,
   sessionSwitching: false,
@@ -30,6 +34,9 @@ const state = {
   snapshotGeneration: 0,
   livePhase: "idle",
   liveRetry: null,
+  composerFeedback: null,
+  pendingFollowUpsReceipt: null,
+  themePreference: "system",
   query: "",
   selectedWorkspace: null,
   language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
@@ -67,6 +74,14 @@ const translations = {
     enterHint: "Enter to send, Shift+Enter for a new line.",
     activeOnlyHint: "Only the active Web session accepts messages.",
     acceptedHint: "Message accepted by OpenPI Web.",
+    admissionPendingHint: "OpenPI is still accepting the previous message.",
+    admissionTimeout: "Prompt admission timed out. Retrying will check the same message.",
+    requestTimeout: "The Web request timed out.",
+    reconnectingHint: "Live updates were interrupted. Reconnecting and checking canonical state...",
+    pendingFollowUpsHint: "Message received; {count} follow-up messages were waiting when it was received.",
+    stopTurn: "Stop turn",
+    stoppingTurn: "Stopping current turn...",
+    stoppedTurn: "Current turn stopped.",
     modelRunning: "Working...",
     modelPreparing: "Preparing task...",
     modelRetrying: "Retrying model request...",
@@ -103,6 +118,14 @@ const translations = {
     enterHint: "按 Enter 发送，Shift+Enter 换行。",
     activeOnlyHint: "只有当前 Web 会话可以接收消息。",
     acceptedHint: "OpenPI Web 已接收消息。",
+    admissionPendingHint: "OpenPI 仍在接收上一条消息，请稍候。",
+    admissionTimeout: "消息接收超时；重试会核对同一条消息。",
+    requestTimeout: "Web 请求已超时。",
+    reconnectingHint: "实时更新已中断，正在重连并核对权威状态……",
+    pendingFollowUpsHint: "消息已接收；接收时有 {count} 条后续消息等待处理。",
+    stopTurn: "停止当前回合",
+    stoppingTurn: "正在停止当前回合...",
+    stoppedTurn: "当前回合已停止。",
     modelRunning: "正在运行...",
     modelPreparing: "正在准备任务...",
     modelRetrying: "模型请求重试中...",
@@ -126,7 +149,24 @@ function applyLanguage() {
 }
 
 const $ = (id) => document.getElementById(id);
+const supportedThemes = new Set(["system", "light", "dark"]);
+const systemTheme = window.matchMedia?.("(prefers-color-scheme: dark)");
+function applyThemePreference(preference) {
+  state.themePreference = supportedThemes.has(preference) ? preference : "system";
+  const resolved = state.themePreference === "system"
+    ? systemTheme?.matches ? "dark" : "light"
+    : state.themePreference;
+  document.documentElement.dataset.theme = resolved;
+  document.documentElement.style.colorScheme = resolved;
+}
+systemTheme?.addEventListener?.("change", () => {
+  if (state.themePreference === "system") applyThemePreference("system");
+});
 const tokenStorageKey = "openpi.web.token";
+const DEFAULT_API_TIMEOUT_MS = 15_000;
+const PROMPT_ADMISSION_TIMEOUT_MS = 30_000;
+const SSE_STALE_TIMEOUT_MS = 45_000;
+const HEARTBEATS_PER_SNAPSHOT = 4;
 const fragmentToken = new URLSearchParams(location.hash.slice(1)).get("token");
 let token = fragmentToken;
 if (fragmentToken) {
@@ -139,6 +179,21 @@ const headers = (json = false) => ({
   Authorization: `Bearer ${token}`,
   ...(json ? { "Content-Type": "application/json" } : {}),
 });
+
+function setComposerFeedback(message, kind = "status") {
+  state.composerFeedback = message ? { message, kind } : null;
+  const hint = $("composer-hint");
+  if (!hint) return;
+  hint.textContent = message || "";
+  for (const candidate of ["status", "error", "connection"]) {
+    hint.classList.toggle(candidate, candidate === kind && Boolean(message));
+  }
+}
+
+function clearComposerFeedback(kind) {
+  if (kind && state.composerFeedback?.kind !== kind) return;
+  setComposerFeedback("");
+}
 const escapeHtml = (value) =>
   String(value ?? "").replace(
     /[&<>"']/g,
@@ -196,13 +251,45 @@ function renderMarkdown(value) {
 }
 
 async function api(path, options = {}) {
-  const response = await fetch(path, {
-    ...options,
-    headers: { ...headers(Boolean(options.body)), ...options.headers },
-  });
-  const body = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(body.error || `Request failed (${response.status})`);
-  return body;
+  const {
+    timeoutMs = DEFAULT_API_TIMEOUT_MS,
+    timeoutMessage = t("requestTimeout"),
+    ...requestOptions
+  } = options;
+  const controller = new AbortController();
+  let timedOut = false;
+  const timer = window.setTimeout(() => {
+    timedOut = true;
+    controller.abort();
+  }, timeoutMs);
+  try {
+    const response = await fetch(path, {
+      ...requestOptions,
+      signal: controller.signal,
+      headers: {
+        ...headers(Boolean(requestOptions.body)),
+        ...requestOptions.headers,
+      },
+    });
+    const body = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      const failure = new Error(body.error || `Request failed (${response.status})`);
+      failure.name = "WebApiResponseError";
+      if (typeof body.code === "string") failure.code = body.code;
+      failure.status = response.status;
+      throw failure;
+    }
+    return body;
+  } catch (error) {
+    if (timedOut) {
+      const timeout = new Error(timeoutMessage);
+      timeout.name = "WebRequestTimeout";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function sessionTitle(session) {
@@ -212,6 +299,18 @@ function sessionTitle(session) {
 function compactSummary(value, limit = 96) {
   const text = String(value ?? "").replace(/\s+/gu, " ").trim();
   return text.length > limit ? `${text.slice(0, limit - 1)}…` : text;
+}
+
+function applyPromptAcceptedState(alreadySettled) {
+  if (alreadySettled) {
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+    }
+    return;
+  }
+  state.liveRunning = true;
+  if (state.livePhase !== "running") state.livePhase = "preparing";
 }
 
 function relativeTime(value) {
@@ -482,6 +581,13 @@ function updateComposer() {
     !selected &&
     !state.snapshot?.currentSessionId;
   const canCompose = active || newSessionDraft;
+  const activeTurn = active
+    ? state.activeTurn || state.snapshot?.runtime.activeTurn || null
+    : null;
+  const canStop = Boolean(
+    activeTurn &&
+      (state.snapshot?.runtime.status === "running" || state.liveRunning),
+  );
   $("prompt-input").disabled =
     state.sessionSwitching || (!canCompose && Boolean(state.selectedWorkspace));
   $("send-prompt").disabled =
@@ -489,6 +595,9 @@ function updateComposer() {
     !canCompose ||
     !state.selectedWorkspace ||
     state.promptAdmissionPending;
+  $("send-prompt").hidden = canStop;
+  $("stop-turn").hidden = !canStop;
+  $("stop-turn").disabled = state.turnCancellationPending;
   const modelPicker = $("model-picker");
   const modelPickerValue = $("model-picker-value");
   const modelMenu = $("model-menu");
@@ -527,11 +636,30 @@ function updateComposer() {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  $("composer-hint").textContent = canCompose
+  const defaultHint = canCompose
     ? state.snapshot.runtime.status === "running" || state.liveRunning
       ? t("queuedHint")
       : t("enterHint")
     : t("activeOnlyHint");
+  const feedback = state.composerFeedback;
+  const hint = $("composer-hint");
+  const receipt = state.pendingFollowUpsReceipt;
+  hint.textContent = state.turnCancellationPending
+    ? t("stoppingTurn")
+    : state.turnTerminalStatus === "cancelled"
+      ? t("stoppedTurn")
+      : receipt !== null
+        ? receipt > 0
+          ? t("pendingFollowUpsHint").replace("{count}", String(receipt))
+          : t("acceptedHint")
+        : feedback?.message || defaultHint;
+  hint.classList.toggle("receipt", receipt > 0);
+  for (const candidate of ["status", "error", "connection"]) {
+    hint.classList.toggle(
+      candidate,
+      receipt === null && feedback?.kind === candidate,
+    );
+  }
 }
 
 async function selectModel(value) {
@@ -605,15 +733,19 @@ async function refreshSnapshot({
       return false;
     }
     state.snapshot = snapshot;
+    if (resetCursor) resetLiveState();
+    state.activeTurn = snapshot.runtime.activeTurn || null;
+    if (snapshot.runtime.status === "running") state.liveRunning = true;
+    applyThemePreference(snapshot.preferences?.theme);
     if (
       state.snapshot.runtime.status !== "running" &&
-      !state.promptAdmissionPending
+      !state.promptAdmissionPending &&
+      !state.promptAdmission
     ) {
       state.liveRunning = false;
       state.livePhase = "idle";
       state.liveRetry = null;
     }
-    if (resetCursor) resetLiveState();
     state.cursor = resetCursor || state.cursor === null
       ? state.snapshot.cursor
       : Math.max(state.cursor, state.snapshot.cursor);
@@ -640,8 +772,7 @@ async function refreshSnapshot({
     ) return false;
     $("connection-state").textContent = "Unavailable";
     $("connection-state").classList.add("reconnecting");
-    $("composer-hint").textContent = error.message;
-    $("composer-hint").classList.add("error");
+    setComposerFeedback(error.message, "error");
     return false;
   }
 }
@@ -654,6 +785,7 @@ async function selectSession(path) {
   state.selectedPath = path;
   state.promptAdmissionPending = false;
   state.promptAdmissionToken = null;
+  state.promptAdmission = null;
   resetLiveState();
   document.body.classList.remove("sidebar-open");
   renderWorkspaces();
@@ -718,11 +850,14 @@ async function sendPrompt() {
     await chooseWorkspace();
   }
   const content = $("prompt-input").value.trim();
+  if (state.promptAdmissionPending) {
+    setComposerFeedback(t("admissionPendingHint"));
+    return;
+  }
   if (
     !content ||
     !state.selectedWorkspace ||
-    state.sessionSwitching ||
-    state.promptAdmissionPending
+    state.sessionSwitching
   ) return;
   if (!state.snapshot?.selectedSession?.id) {
     await createSession(state.selectedWorkspace);
@@ -731,42 +866,113 @@ async function sendPrompt() {
   if (!sessionId || state.sessionSwitching || state.promptAdmissionPending) return;
   const epoch = state.sessionEpoch;
   const admissionToken = ++state.promptAdmissionSequence;
-  const optimisticKey = `optimistic-${Date.now()}`;
-  state.liveMessages = [
-    ...state.liveMessages,
-    { key: optimisticKey, message: { role: "user", content } },
-  ].slice(-8);
+  const retrying =
+    state.promptAdmission?.sessionId === sessionId &&
+    state.promptAdmission?.content === content;
+  const commandId = retrying
+    ? state.promptAdmission.commandId
+    : globalThis.crypto?.randomUUID?.() ||
+      `web-prompt-${Date.now()}-${admissionToken}`;
+  const optimisticKey = retrying
+    ? state.promptAdmission.optimisticKey
+    : `optimistic-${commandId}`;
+  if (!retrying) {
+    state.liveMessages = [
+      ...state.liveMessages,
+      { key: optimisticKey, message: { role: "user", content } },
+    ].slice(-8);
+  }
+  // Keep this attempt before dispatch. A timeout may be a lost receipt, not a
+  // failed admission, so the next submit must replay this exact request.
+  state.promptAdmission = { sessionId, content, commandId, optimisticKey };
   state.promptAdmissionPending = true;
   state.promptAdmissionToken = admissionToken;
+  clearComposerFeedback();
+  state.pendingFollowUpsReceipt = null;
+  state.turnTerminalStatus = null;
   renderConversation();
-  $("composer-hint").classList.remove("error");
   try {
     const receipt = await api("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content }),
+      body: JSON.stringify({ sessionId, content, commandId, retry: retrying }),
+      timeoutMs: PROMPT_ADMISSION_TIMEOUT_MS,
+      timeoutMessage: t("admissionTimeout"),
     });
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
     const alreadySettled = state.terminalPromptIds.has(receipt.id);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
+    if (state.promptAdmission?.commandId === commandId) {
+      state.promptAdmission = null;
+    }
+    state.pendingFollowUpsReceipt = receipt.pendingFollowUps;
     $("prompt-input").value = "";
     resizePrompt();
-    $("composer-hint").textContent = t("acceptedHint");
+    clearComposerFeedback();
     scheduleSnapshotRefresh(120);
   } catch (error) {
     if (epoch !== state.sessionEpoch || state.promptAdmissionToken !== admissionToken) return;
-    state.liveRunning = false;
-    state.livePhase = "idle";
-    state.liveRetry = null;
+    const knownRejection =
+      error?.name === "WebApiResponseError" &&
+      [
+        "WORKSPACE_REQUIRED",
+        "SESSION_CONFLICT",
+        "PROMPT_REJECTED",
+        "COMMAND_CONFLICT",
+        "PROMPT_ADMISSION_CAPACITY",
+      ].includes(error?.code);
+    if (!knownRejection) {
+      if (state.livePhase !== "running") {
+        state.liveRunning = true;
+        state.livePhase = "preparing";
+      }
+      state.liveRetry = null;
+      setComposerFeedback(
+        error?.name === "WebRequestTimeout" ? t("admissionTimeout") : error.message,
+        "connection",
+      );
+      return;
+    }
+    if (state.promptAdmission?.commandId === commandId) {
+      state.promptAdmission = null;
+    }
     state.liveMessages = state.liveMessages.filter(
       (entry) => entry.key !== optimisticKey,
     );
-    $("composer-hint").textContent = error.message;
-    $("composer-hint").classList.add("error");
+    setComposerFeedback(error.message, "error");
   } finally {
     if (epoch === state.sessionEpoch && state.promptAdmissionToken === admissionToken) {
       state.promptAdmissionPending = false;
       state.promptAdmissionToken = null;
+      renderConversation();
+    }
+  }
+}
+
+async function cancelActiveTurn() {
+  const turn = state.activeTurn || state.snapshot?.runtime.activeTurn;
+  if (!turn || state.turnCancellationPending || state.sessionSwitching) return;
+  const epoch = state.sessionEpoch;
+  state.turnCancellationPending = true;
+  $("composer-hint").classList.remove("error");
+  $("composer-hint").textContent = t("stoppingTurn");
+  updateComposer();
+  try {
+    const receipt = await api("/api/turns/cancel", {
+      method: "POST",
+      body: JSON.stringify(turn),
+    });
+    if (epoch !== state.sessionEpoch) return;
+    if (receipt.state === "accepted" || receipt.state === "already-settled") {
+      $("composer-hint").textContent = t("stoppedTurn");
+    }
+  } catch (error) {
+    if (epoch !== state.sessionEpoch) return;
+    const message = error.message;
+    await refreshSnapshot({ epoch });
+    if (epoch === state.sessionEpoch) showNotice(message);
+  } finally {
+    if (epoch === state.sessionEpoch) {
+      state.turnCancellationPending = false;
       renderConversation();
     }
   }
@@ -853,6 +1059,7 @@ async function createSession(workspacePath) {
   state.selectedPath = null;
   state.promptAdmissionPending = false;
   state.promptAdmissionToken = null;
+  state.promptAdmission = null;
   resetLiveState();
   document.body.classList.remove("sidebar-open");
   renderWorkspaces();
@@ -897,8 +1104,7 @@ async function createSession(workspacePath) {
 }
 
 function showNotice(message) {
-  $("composer-hint").textContent = message;
-  $("composer-hint").classList.add("error");
+  setComposerFeedback(message, "error");
 }
 
 function openWorkspaceMenu(path, anchor) {
@@ -1066,20 +1272,58 @@ function applyRuntimeEvent(event) {
     scheduleSnapshotRefresh();
   } else if (event.type === "prompt_accepted") {
     const alreadySettled = state.terminalPromptIds.has(event.detail?.commandId);
-    state.liveRunning = !alreadySettled;
-    state.livePhase = alreadySettled ? "idle" : "preparing";
+    applyPromptAcceptedState(alreadySettled);
+    state.pendingFollowUpsReceipt = Number.isInteger(event.detail?.pendingFollowUps)
+      ? event.detail.pendingFollowUps
+      : state.pendingFollowUpsReceipt;
+    state.liveRetry = null;
+    renderConversation();
+  } else if (event.type === "turn_started") {
+    state.activeTurn = {
+      sessionId: event.detail?.sessionId,
+      commandId: event.detail?.commandId,
+      epoch: event.detail?.epoch,
+    };
+    state.liveRunning = true;
+    state.turnTerminalStatus = null;
+    state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
   } else if (event.type === "agent_start") {
+    if (event.detail?.activeTurn) state.activeTurn = event.detail.activeTurn;
     state.liveRunning = true;
     state.livePhase = "running";
     state.liveRetry = null;
     renderConversation();
-  } else if (event.type === "agent_settled" || event.type === "prompt_settled") {
-    if (event.type === "prompt_settled") rememberTerminalPrompt(event.detail?.commandId);
-    state.liveRunning = false;
-    state.livePhase = "idle";
-    state.liveRetry = null;
+  } else if (event.type === "turn_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    const isActiveTurn =
+      state.activeTurn?.sessionId === event.detail?.sessionId &&
+      state.activeTurn?.commandId === event.detail?.commandId &&
+      state.activeTurn?.epoch === event.detail?.epoch;
+    if (isActiveTurn) {
+      state.activeTurn = null;
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+      state.turnTerminalStatus = event.detail?.outcome || null;
+    }
+    renderConversation();
+  } else if (event.type === "agent_settled") {
+    state.pendingFollowUpsReceipt = null;
+    if (!state.activeTurn) {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+    }
+    renderConversation();
+  } else if (event.type === "prompt_settled") {
+    rememberTerminalPrompt(event.detail?.commandId);
+    if (state.livePhase !== "running") {
+      state.liveRunning = false;
+      state.livePhase = "idle";
+      state.liveRetry = null;
+    }
     renderConversation();
   } else if (event.detail?.message) {
     if (event.detail.message.role === "user") {
@@ -1100,6 +1344,8 @@ function applyRuntimeEvent(event) {
     [
       "agent_start",
       "agent_settled",
+      "turn_started",
+      "turn_settled",
       "prompt_settled",
       "message_end",
       "tool_execution_end",
@@ -1160,18 +1406,33 @@ function rememberCompletedActivation(commandId) {
 }
 
 let eventLoopStarted = false;
+let eventLoopStopped = false;
+let activeEventReader = null;
+
+window.addEventListener("pagehide", (event) => {
+  // A bfcache entry resumes this same document and its event loop. Do not
+  // create a second SSE connection on pageshow.
+  if (event.persisted) return;
+  eventLoopStopped = true;
+  void activeEventReader?.cancel().catch(() => undefined);
+});
+
 function resetLiveState() {
   state.liveMessages = [];
   state.liveRunning = false;
+  state.activeTurn = null;
+  state.turnCancellationPending = false;
+  state.turnTerminalStatus = null;
   state.livePhase = "idle";
   state.liveRetry = null;
+  state.pendingFollowUpsReceipt = null;
 }
 
 async function connectEvents() {
   if (eventLoopStarted) return;
   eventLoopStarted = true;
   let reconnectDelay = 500;
-  while (true) {
+  while (!eventLoopStopped) {
     let reader = null;
     let recoveryAttempted = false;
     try {
@@ -1193,17 +1454,28 @@ async function connectEvents() {
       if (!response.ok || !response.body) throw new Error("event connection failed");
       $("connection-state").textContent = "Connected";
       $("connection-state").classList.remove("reconnecting");
+      clearComposerFeedback("connection");
       reconnectDelay = 500;
       reader = response.body.getReader();
+      activeEventReader = reader;
       const decoder = new TextDecoder();
       let buffer = "";
+      let heartbeatCount = 0;
       while (true) {
-        const { done, value } = await reader.read();
+        const { done, value } = await readEventChunk(reader);
         if (done) throw new Error("event connection closed");
         buffer += decoder.decode(value, { stream: true });
         const records = buffer.split("\n\n");
         buffer = records.pop() || "";
         for (const record of records) {
+          if (record.split("\n").some((item) => item === ": heartbeat")) {
+            heartbeatCount++;
+            if (heartbeatCount >= HEARTBEATS_PER_SNAPSHOT) {
+              heartbeatCount = 0;
+              scheduleSnapshotRefresh(0);
+            }
+            continue;
+          }
           const line = record.split("\n").find((item) => item.startsWith("data: "));
           if (!line) continue;
           const event = JSON.parse(line.slice(6));
@@ -1217,18 +1489,39 @@ async function connectEvents() {
       }
     } catch {
       await reader?.cancel().catch(() => undefined);
+      if (activeEventReader === reader) activeEventReader = null;
       reader = null;
+      if (eventLoopStopped) break;
       $("connection-state").textContent = "Reconnecting";
       $("connection-state").classList.add("reconnecting");
       const recovered = recoveryAttempted
         ? false
         : await refreshSnapshot({ resetCursor: true });
       if (!recovered) resetLiveState();
+      setComposerFeedback(t("reconnectingHint"), "connection");
       await new Promise((resolve) => setTimeout(resolve, reconnectDelay));
       reconnectDelay = Math.min(reconnectDelay * 2, 5_000);
     } finally {
       await reader?.cancel().catch(() => undefined);
+      if (activeEventReader === reader) activeEventReader = null;
     }
+  }
+}
+
+async function readEventChunk(reader, timeoutMs = SSE_STALE_TIMEOUT_MS) {
+  let timer;
+  try {
+    return await Promise.race([
+      reader.read(),
+      new Promise((_, reject) => {
+        timer = window.setTimeout(
+          () => reject(new Error("event stream stalled")),
+          timeoutMs,
+        );
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) window.clearTimeout(timer);
   }
 }
 
@@ -1384,7 +1677,15 @@ $("composer")?.addEventListener("submit", (event) => {
   if (state.selectedWorkspace) void sendPrompt();
   else void chooseWorkspace();
 });
-$("prompt-input")?.addEventListener("input", resizePrompt);
+$("stop-turn")?.addEventListener("click", () => {
+  void cancelActiveTurn();
+});
+$("prompt-input")?.addEventListener("input", () => {
+  state.pendingFollowUpsReceipt = null;
+  if (!state.promptAdmissionPending) clearComposerFeedback();
+  resizePrompt();
+  updateComposer();
+});
 $("prompt-input")?.addEventListener("keydown", (event) => {
   if (event.isComposing || event.keyCode === 229) return;
   if (event.key === "Enter" && !event.shiftKey) {
@@ -1394,5 +1695,6 @@ $("prompt-input")?.addEventListener("keydown", (event) => {
   }
 });
 
+applyThemePreference("system");
 applyLanguage();
 void connectEvents();

@@ -195,17 +195,94 @@ test("empty and whitespace-only messages are left alone", () => {
   }
 });
 
-test("an unterminated fence folds conservatively as plain text", () => {
+test("an unterminated fence folds as a code block with a synthesized close", () => {
   const message = [
     "```js",
     ...Array.from({ length: 30 }, (_, i) => `stmt ${i};`),
   ].join("\n");
   const out = foldUserMessage(message);
   assert.ok(out.startsWith("```js"));
-  assert.ok(out.includes("stmt 10;"));
-  assert.ok(!out.includes("stmt 12;"));
+  assert.ok(out.includes("stmt 3;"));
+  assert.ok(!out.includes("stmt 4;"));
+  // The synthesized closing fence keeps the folded preview balanced Markdown.
+  assert.ok(out.includes("…\n```"));
   assert.ok(
-    out.endsWith("… folded 19 lines · full content was sent to the model"),
+    out.endsWith("… folded 25 lines · full content was sent to the model"),
+  );
+});
+
+test("a nested ``` block does not close a ```` block (CommonMark §4.5)", () => {
+  const message = [
+    "Please review this prompt template:",
+    "````markdown",
+    "Here is an example snippet:",
+    "```javascript",
+    "function hello() {",
+    '  console.log("Hello world");',
+    "}",
+    "```",
+    "Follow the instructions above carefully.",
+    ...Array.from({ length: 15 }, (_, i) => `${i + 1}. Step ${i + 1}`),
+    "````",
+    "End of message.",
+  ].join("\n");
+  const out = foldUserMessage(message);
+  assert.ok(
+    out.startsWith("Please review this prompt template:\n````markdown"),
+  );
+  // Content after the inner ``` fence stays inside the outer block.
+  assert.ok(!out.includes("Follow the instructions"));
+  assert.ok(!out.includes("Step 1"));
+  // The outer block is closed by its matching four-backtick fence.
+  assert.ok(out.includes("…\n````\nEnd of message."));
+  assert.ok(
+    out.endsWith("… folded 18 lines · full content was sent to the model"),
+  );
+});
+
+test("a longer closing fence closes a shorter opening fence", () => {
+  const message = ["~~~", ...numberedLines(30), "~~~~~~"].join("\n");
+  const out = foldUserMessage(message);
+  assert.ok(out.startsWith("~~~\nline 01"));
+  assert.ok(out.includes("…\n~~~~~~"));
+  assert.ok(
+    out.endsWith("… folded 26 lines · full content was sent to the model"),
+  );
+});
+
+test("tilde fences are recognized and fold like backtick fences", () => {
+  const message = [
+    "intro",
+    "~~~py",
+    ...Array.from({ length: 30 }, (_, i) => `py-${i}`),
+    "~~~",
+    "outro",
+  ].join("\n");
+  const out = foldUserMessage(message);
+  assert.ok(out.startsWith("intro\n~~~py"));
+  assert.ok(out.includes("py-3"));
+  assert.ok(!out.includes("py-4"));
+  assert.ok(out.includes("…\n~~~\noutro"));
+  assert.ok(
+    out.endsWith("… folded 26 lines · full content was sent to the model"),
+  );
+});
+
+test("backtick and tilde fences never close each other", () => {
+  const message = [
+    "~~~text",
+    "```",
+    ...numberedLines(30),
+    "```",
+    "~~~",
+    "tail",
+  ].join("\n");
+  const out = foldUserMessage(message);
+  // The inner ``` lines are content of the tilde block, not its closer.
+  assert.ok(out.startsWith("~~~text\n```\nline 01"));
+  assert.ok(out.includes("…\n~~~\ntail"));
+  assert.ok(
+    out.endsWith("… folded 28 lines · full content was sent to the model"),
   );
 });
 

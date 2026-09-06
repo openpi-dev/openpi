@@ -405,7 +405,11 @@ test("retained projections without session metadata keep current-session runs vi
   assert.equal(entry.details, details);
 });
 test("restored run directories require a generated safe id", () => {
-  writeRun("wf_\u001b]52;c;clipboard\u0007", 9_000);
+  const unsafeRunId =
+    process.platform === "win32"
+      ? "wf_not-generated-clipboard"
+      : "wf_\u001b]52;c;clipboard\u0007";
+  writeRun(unsafeRunId, 9_000);
   const runIds = loadRunEntries(new Map(), SESSION, new Set()).map(
     (entry) => entry.runId,
   );
@@ -834,7 +838,9 @@ function saveReport(runId: string) {
 
 test("a newly created dashboard report is private", () => {
   const report = saveReport("wf_600001");
-  assert.equal(statSync(report).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(report).mode & 0o777, 0o600);
+  }
 });
 
 test("overwriting a dashboard report restores private mode atomically", () => {
@@ -845,7 +851,9 @@ test("overwriting a dashboard report restores private mode atomically", () => {
   chmodSync(report, 0o644);
 
   assert.equal(saveReport(runId), report);
-  assert.equal(statSync(report).mode & 0o777, 0o600);
+  if (process.platform !== "win32") {
+    assert.equal(statSync(report).mode & 0o777, 0o600);
+  }
   assert.notEqual(readFileSync(report, "utf8"), "old report");
 });
 

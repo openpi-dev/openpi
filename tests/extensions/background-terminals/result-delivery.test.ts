@@ -90,6 +90,18 @@ test("a drained result can be retained for retry after delivery fails", () => {
   assert.deepEqual(delivery.drain(), [result]);
 });
 
+test("a deferred terminal completion cannot cross a Session switch", () => {
+  let sessionId = "session-1";
+  const delivery = createDeferredResultDelivery<{ id: string }>({
+    owner: () => ({ sessionId, epoch: 0 }),
+  });
+  delivery.defer({ id: "bt-1" });
+
+  sessionId = "session-2";
+  assert.deepEqual(delivery.drain(), []);
+  assert.equal(delivery.inspectDeadLetters()[0]?.failure, "stale-owner");
+});
+
 test("idle result batching uses one fixed bounded window", () => {
   let callback: (() => void) | undefined;
   let scheduled = 0;
