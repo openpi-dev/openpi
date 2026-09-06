@@ -1,5 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { ProjectTrustStore } from "@earendil-works/pi-coding-agent";
+import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import { projectWebTrustStatus } from "../../web/runtime/trust-status.ts";
 
 test("unbound or incomplete Trust facts fail closed to unknown", () => {
@@ -89,4 +94,30 @@ test("TrustStore changes do not pretend to mutate active Session authority", () 
   assert.equal(newlyDenied.state, "trusted");
   assert.equal(newlyDenied.decision, "denied");
   assert.equal(newlyDenied.refreshRequired, true);
+});
+
+
+test("PiWebRuntime reads the real ProjectTrustStore decision", async () => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-trust-runtime-"));
+  const agentDir = await mkdtemp(join(tmpdir(), "openpi-agent-dir-"));
+  await mkdir(join(workspace, ".pi"));
+  await writeFile(join(workspace, ".pi", "settings.json"), "{}\n");
+  new ProjectTrustStore(agentDir).set(workspace, true);
+  const previous = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const runtime = Object.create(PiWebRuntime.prototype) as PiWebRuntime & {
+      hasSelectedWorkspace: boolean;
+      runtime: { cwd: string; session: { settingsManager: { isProjectTrusted(): boolean } } };
+    };
+    runtime.hasSelectedWorkspace = true;
+    runtime.runtime = { cwd: workspace, session: { settingsManager: { isProjectTrusted: () => true } } };
+    assert.deepEqual(runtime.getProjectTrustStatus(), {
+      source: "pi-project-trust", workspace, state: "trusted", decision: "trusted",
+      projectResources: true, sessionTrusted: true, refreshRequired: false,
+    });
+  } finally {
+    if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previous;
+  }
 });
