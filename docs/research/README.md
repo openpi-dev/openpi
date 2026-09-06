@@ -2,7 +2,7 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
-New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. Add every governed record to this index; records without frontmatter remain legacy until a scoped migration.
+New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. Add every governed record to this index. Only the explicitly enumerated historical records below are exempt from frontmatter; a new record without frontmatter fails the governance check.
 
 ## Legacy records
 
