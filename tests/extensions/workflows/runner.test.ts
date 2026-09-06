@@ -1027,10 +1027,10 @@ test("model-progress watchdog aborts a silent provider turn", async () => {
   assert.equal(aborted, true);
 });
 
-test("model-progress timeout preserves the default and honors wider Pi idle settings", () => {
+test("model-progress timeout follows Pi's effective idle setting with a floor", () => {
   assert.equal(
     resolveModelProgressTimeoutMs(SettingsManager.inMemory()),
-    45_000,
+    300_000,
   );
   assert.equal(
     resolveModelProgressTimeoutMs(
@@ -1044,6 +1044,18 @@ test("model-progress timeout preserves the default and honors wider Pi idle sett
       5,
     ),
     5,
+  );
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 10_000 }),
+    ),
+    45_000,
+  );
+  assert.equal(
+    resolveModelProgressTimeoutMs(
+      SettingsManager.inMemory({ httpIdleTimeoutMs: 0 }),
+    ),
+    45_000,
   );
 });
 

@@ -256,12 +256,12 @@ export function resolveModelProgressTimeoutMs(
   override?: number,
 ) {
   if (override !== undefined) return override;
-  const configured =
-    settingsManager.getProjectSettings().httpIdleTimeoutMs ??
-    settingsManager.getGlobalSettings().httpIdleTimeoutMs;
-  return typeof configured === "number" && Number.isFinite(configured)
-    ? Math.max(MODEL_PROGRESS_TIMEOUT_MS, Math.floor(configured))
-    : MODEL_PROGRESS_TIMEOUT_MS;
+  // Pi 的原始设置不包含有效默认值；复用原生传输层的 accessor，避免未配置时
+  // 把健康的慢速子会话错误缩短到 OpenPI 的 45 秒下限。
+  return Math.max(
+    MODEL_PROGRESS_TIMEOUT_MS,
+    Math.floor(settingsManager.getHttpIdleTimeoutMs()),
+  );
 }
 
 /** Abort any provider turn that stops producing model-visible progress. */

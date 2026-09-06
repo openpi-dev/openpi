@@ -5,6 +5,7 @@ Research records preserve sourced investigation and distinguish observations, in
 ## Validated investigations
 
 - [`WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md`](WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md) — repeated synchronous history loading on dashboard animation ticks, its regression boundary, and measurement limits ([#420](https://github.com/openpi-dev/openpi/issues/420)).
+- [`ISSUE_425_WORKFLOW_WATCHDOG_2026-09-07.md`](ISSUE_425_WORKFLOW_WATCHDOG_2026-09-07.md) — Pi effective HTTP idle timeout provenance, the bounded child progress watchdog floor, and deterministic validation ([#425](https://github.com/openpi-dev/openpi/issues/425), [#424](https://github.com/openpi-dev/openpi/issues/424)).
 
 ## Legacy records
 
