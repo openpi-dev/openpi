@@ -7,6 +7,7 @@ import {
   readdir,
   open,
   readFile,
+  writeFile,
   realpath,
   rm,
 } from "node:fs/promises";
@@ -25,6 +26,7 @@ export interface WebAttachmentStagingLimits {
 const DEFAULT_STAGING_TTL_MS = 60 * 60 * 1000;
 const MAX_ATTACHMENT_NAME_BYTES = 256;
 const MAX_ATTACHMENT_MIME_BYTES = 256;
+const OWNER_MARKER_SUFFIX = ".owner";
 
 export interface WebAttachmentBinding {
   readonly workspace: string;
@@ -172,6 +174,15 @@ function isContained(parent: string, child: string) {
   return path.length > 0 && path !== ".." && !path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) && !isAbsolute(path);
 }
 
+function processIsAlive(pid: number) {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "EPERM";
+  }
+}
+
 function settledReceipt(record: StagingRecord) {
   return {
     status: "settled" as const,
@@ -207,11 +218,25 @@ export class WebAttachmentStagingStore {
       const candidate = join(parent, entry);
       try {
         const candidateStat = await lstat(candidate);
+        let ownedByLiveProcess = false;
+        try {
+          const marker = JSON.parse(
+            await readFile(`${candidate}${OWNER_MARKER_SUFFIX}`, "utf8"),
+          ) as { pid?: unknown };
+          ownedByLiveProcess =
+            typeof marker.pid === "number" &&
+            Number.isSafeInteger(marker.pid) &&
+            processIsAlive(marker.pid);
+        } catch {
+          // Older roots have no marker and remain eligible for TTL cleanup.
+        }
         if (
           candidateStat.isDirectory() &&
+          !ownedByLiveProcess &&
           now - candidateStat.mtimeMs > ttl
         ) {
           await rm(candidate, { recursive: true, force: true });
+          await rm(`${candidate}${OWNER_MARKER_SUFFIX}`, { force: true });
         }
       } catch {
         // Another process may have reclaimed the abandoned root already.
@@ -219,6 +244,11 @@ export class WebAttachmentStagingStore {
     }
     const directory = await mkdtemp(join(parent, ".openpi-web-attachments-"));
     await chmod(directory, 0o700);
+    await writeFile(
+      `${directory}${OWNER_MARKER_SUFFIX}`,
+      JSON.stringify({ pid: process.pid }),
+      { mode: 0o600 },
+    );
     return new WebAttachmentStagingStore(directory, limits);
   }
 
