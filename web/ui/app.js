@@ -1,4 +1,12 @@
 const collapsedWorkspacesStorageKey = "openpi.collapsed-workspaces";
+const languageStorageKey = "openpi.language";
+function readLanguage() {
+  try {
+    const value = localStorage.getItem(languageStorageKey);
+    if (value === "en" || value === "zh") return value;
+  } catch {}
+  return navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
 function readCollapsedWorkspaces() {
   try {
     const value = JSON.parse(sessionStorage.getItem(collapsedWorkspacesStorageKey) || "[]");
@@ -39,7 +47,7 @@ const state = {
   themePreference: "system",
   query: "",
   selectedWorkspace: null,
-  language: navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en",
+  language: readLanguage(),
 };
 
 const translations = {
@@ -146,6 +154,12 @@ function applyLanguage() {
     renderWorkspaces();
     renderConversation();
   }
+}
+
+function toggleLanguage() {
+  state.language = state.language === "zh" ? "en" : "zh";
+  try { localStorage.setItem(languageStorageKey, state.language); } catch {}
+  applyLanguage();
 }
 
 const $ = (id) => document.getElementById(id);
@@ -1697,4 +1711,5 @@ $("prompt-input")?.addEventListener("keydown", (event) => {
 
 applyThemePreference("system");
 applyLanguage();
+$("language-toggle")?.addEventListener("click", toggleLanguage);
 void connectEvents();
