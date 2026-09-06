@@ -124,3 +124,20 @@ test("a synchronous delivery failure restores the batch in order", () => {
 
   assert.deepEqual(delivered, [["sa-1", "sa-2", "sa-3"]]);
 });
+
+test("a completion cannot cross a parent Session switch", () => {
+  let sessionId = "session-1";
+  const delivered: string[] = [];
+  const delivery = createSubagentResultDelivery<{ id: string }>({
+    isIdle: () => false,
+    owner: () => ({ sessionId, epoch: 0 }),
+    deliver: (results) => delivered.push(...results.map((result) => result.id)),
+  });
+
+  delivery.defer({ id: "sa-1" });
+  sessionId = "session-2";
+  delivery.parentSettled();
+
+  assert.deepEqual(delivered, []);
+  assert.equal(delivery.inspectDeadLetters()[0]?.failure, "stale-owner");
+});

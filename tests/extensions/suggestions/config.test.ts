@@ -14,6 +14,7 @@ import {
 } from "../../../extensions/shared/setup-config.ts";
 
 const defaultUi = {
+  webTheme: "system" as const,
   showHeader: false,
   customFooter: true,
   footerStyle: "plain" as const,
@@ -27,7 +28,7 @@ test("setup defaults to disabled next-action suggestions", () => {
   assert.deepEqual(parseSetupConfig(undefined), DEFAULT_SETUP_CONFIG);
   assert.equal(
     formatSetupConfig(parseSetupConfig(undefined)),
-    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: disabled\nWorkflows: 8 concurrent agents · 128 total calls\nUI: Web theme system · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 });
 
@@ -59,7 +60,7 @@ test("setup config accepts suggestion models and migrates the recap key", () => 
   });
   assert.equal(
     formatSetupConfig(configured),
-    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
+    `Capability discovery: explicit\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls\nUI: Web theme system · large header off · custom footer on · plain · ${formatFooterLines(DEFAULT_FOOTER_LINES)}\nSubagent results: compact status summary (Ctrl+O expands full output)\nBash operations: one-line activity summary (Ctrl+O restores native evidence)\nWrite/Edit operations: one-line activity summary (Ctrl+O restores native evidence)\nPost-edit command: off\nAgent role models (Subagents + Workflows): explorer inherit · implementer inherit · reviewer inherit · advisor inherit`,
   );
 
   assert.deepEqual(
@@ -126,6 +127,7 @@ test("UI defaults to a compact header and one-line plain footer", () => {
   assert.deepEqual(
     parseSetupConfig({ ui: { showHeader: true, customFooter: false } }).ui,
     {
+      webTheme: "system",
       showHeader: true,
       customFooter: false,
       footerStyle: "plain",
@@ -134,6 +136,14 @@ test("UI defaults to a compact header and one-line plain footer", () => {
       bashToolDisplay: "compact",
       fileMutationDisplay: "compact",
     },
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { webTheme: "dark" } }).ui.webTheme,
+    "dark",
+  );
+  assert.equal(
+    parseSetupConfig({ ui: { webTheme: "unexpected" } }).ui.webTheme,
+    "system",
   );
   assert.equal(
     parseSetupConfig({ ui: { subagentResultDisplay: "compact" } }).ui

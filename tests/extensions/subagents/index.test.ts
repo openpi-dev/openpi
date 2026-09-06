@@ -8,6 +8,8 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { convertToLlm } from "@earendil-works/pi-coding-agent";
+import { encodeStructuredResult } from "../../../extensions/shared/structured-output.ts";
 import { initTheme } from "@earendil-works/pi-coding-agent";
 import { PLAN_MODE_CHANNEL } from "../../../extensions/shared/plan-mode-state.ts";
 import subagents, {
@@ -87,6 +89,134 @@ test("subagent results render before the hidden wake-up message", () => {
       options: { deliverAs: "followUp", triggerTurn: true },
     },
   ]);
+});
+
+test("automatic delivery exposes structured data and its canonical artifact", () => {
+  let entry: { content: string; details: Record<string, unknown> } | undefined;
+  const pi = {
+    appendEntry(
+      _customType: string,
+      data: { content: string; details: Record<string, unknown> },
+    ) {
+      entry = data;
+    },
+    sendMessage() {},
+  } as unknown as ExtensionAPI;
+  const dispatch = createSubagentResultDispatcher(pi);
+  dispatch([
+    {
+      id: "sa-structured",
+      origin: "model",
+      backend: "pi",
+      title: "structured review",
+      prompt: "review",
+      cwd: process.cwd(),
+      status: "done",
+      outcome: "completed",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "",
+      structuredResult: {
+        value: { verdict: "pass" },
+        json: '{"verdict":"pass"}',
+        byteLength: 18,
+        artifactPath: "/tmp/structured.json",
+      },
+      turns: 1,
+    },
+  ]);
+
+  assert.match(entry?.content ?? "", /\{"verdict":"pass"\}/);
+  assert.deepEqual(entry?.details.structured, { verdict: "pass" });
+  assert.equal(entry?.details.structuredArtifactPath, "/tmp/structured.json");
+});
+
+test("automatic delivery keeps large structured values in runtime details, not parent model text", () => {
+  const findings = "x".repeat(80 * 1024);
+  const value = { findings };
+  const encoded = encodeStructuredResult(value);
+  let persisted = "";
+  let sent: { content: string; details: Record<string, unknown> } | undefined;
+  const pi = {
+    appendEntry() {},
+    sendMessage(message: {
+      content: string;
+      details: Record<string, unknown>;
+    }) {
+      sent = message;
+    },
+  } as unknown as ExtensionAPI;
+  const dispatch = createSubagentResultDispatcher(pi, (snap, maxBytes) =>
+    truncatedOutput(snap, maxBytes, (content) => {
+      persisted = content;
+      return "/tmp/structured-full.json";
+    }),
+  );
+
+  dispatch([
+    {
+      id: "sa-structured-large",
+      origin: "model",
+      backend: "pi",
+      title: "structured review",
+      prompt: "review",
+      cwd: process.cwd(),
+      status: "done",
+      outcome: "completed",
+      createdAt: 0,
+      settledAt: 1_000,
+      meta: { backend: "pi" },
+      usage: {},
+      transcriptVersion: 0,
+      transcript: [],
+      liveTools: [],
+      queued: [],
+      finalText: "",
+      structuredResult: {
+        ...encoded,
+        artifactPath: "/tmp/structured-full.json",
+      },
+      turns: 1,
+    },
+  ]);
+
+  assert.ok(sent);
+  assert.equal(persisted, encoded.json);
+  assert.deepEqual(sent.details.structured, value);
+  assert.equal(
+    sent.details.structuredArtifactPath,
+    "/tmp/structured-full.json",
+  );
+  assert.ok(Buffer.byteLength(sent.content, "utf8") < encoded.byteLength);
+  assert.equal(sent.content.includes(findings), false);
+
+  const llm = convertToLlm([
+    {
+      role: "custom",
+      customType: "subagent-result",
+      content: sent.content,
+      display: false,
+      details: sent.details,
+      timestamp: Date.now(),
+    },
+  ]);
+  const llmText = llm
+    .flatMap((message) =>
+      Array.isArray(message.content)
+        ? message.content
+            .filter((block) => block.type === "text")
+            .map((block) => block.text)
+        : [],
+    )
+    .join("");
+  assert.equal(llmText, sent.content);
+  assert.equal(JSON.stringify(llm).includes(findings), false);
 });
 
 test("automatic result projection keeps both ends and persists the exact final answer", () => {
