@@ -41,12 +41,12 @@ Persisted Workflow reads and delivery-receipt updates check for a pending commit
 - manifest references agree exactly with the receipt's artifact set;
 - every artifact is a regular, non-symlink file whose byte count and SHA-256 digest match the receipt.
 
-If the final manifest is already byte-identical, recovery only removes the stale receipt. If every artifact validates and the manifest is still the earlier terminal projection, recovery atomically completes the manifest commit. Missing, truncated, substituted, oversized, malformed, or path-traversing evidence never gains an artifact reference.
+If the existing manifest has the same run id, terminal state, and artifact references, recovery only removes the stale receipt; delivery and resource-reference fields may have been updated since the receipt was written. If every artifact validates and the manifest is still the earlier terminal projection, recovery atomically completes the manifest commit. Missing, truncated, substituted, oversized, malformed, or path-traversing evidence never gains an artifact reference.
 
 An incomplete or invalid receipt stays available for inspection and for a concurrently finishing writer; the next terminal persistence attempt replaces the single fixed receipt. Legacy runs without a receipt keep their existing compatibility behavior. In particular, recovery does not infer completion merely from an orphan `result.json`, because that file alone does not carry a trustworthy terminal identity.
 
 ## Evidence and limits
 
-At `cd60a15`, focused tests cover full preparation followed by recovery, incomplete preparation, same-size content substitution, an already-committed manifest, delivery mutation after recovery, normal receipt cleanup, and the dashboard/startup read path. `bun run check` passed; the full suite passed with 1247 Node tests, 0 failures, 1 skip, and 30 Vitest tests.
+At `fd2842f`, focused tests cover full preparation followed by recovery, incomplete preparation, same-size content substitution, an already-committed manifest, delivery mutation after recovery, normal receipt cleanup, and the dashboard/startup read path. `bun run check` passed; the full suite passed with 1247 Node tests, 0 failures, 1 skip, and 30 Vitest tests.
 
 The guarantee is process-crash recovery at the repository's existing per-file atomic-replace boundary. It does not claim a filesystem-wide transaction or power-loss durability beyond `writeFileAtomic`, which does not currently fsync file and directory metadata.
