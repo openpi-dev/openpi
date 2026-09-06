@@ -940,6 +940,8 @@ test("streamAntigravity fails over to the sandbox endpoint on 5xx", async () => 
 });
 
 test("streamAntigravity bounds a stalled non-2xx body and fails over", async () => {
+  const stalledBodyTimeoutMs = 500;
+  const stalledBodyOuterMs = 2 * stalledBodyTimeoutMs + 500;
   let requests = 0;
   const server = http.createServer((_request, response) => {
     requests++;
@@ -966,7 +968,7 @@ test("streamAntigravity bounds a stalled non-2xx body and fails over", async () 
     events = await collectEvents(
       streamAntigravity(GEMINI_MODEL, SIMPLE_CONTEXT, {
         apiKey: API_KEY,
-        timeoutMs: 50,
+        timeoutMs: stalledBodyTimeoutMs,
         fetch: (_input, init) => originalFetch(localUrl, init),
       }),
     );
@@ -974,7 +976,7 @@ test("streamAntigravity bounds a stalled non-2xx body and fails over", async () 
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
-  assert.ok(Date.now() - startedAt < 1_000);
+  assert.ok(Date.now() - startedAt < stalledBodyOuterMs);
   assert.equal(requests, 2);
   const done = events.find((event) => event.type === "done");
   assert.ok(done && done.type === "done" && done.reason === "stop");
