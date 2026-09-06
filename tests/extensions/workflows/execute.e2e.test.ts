@@ -17,7 +17,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, relative } from "node:path";
 import test from "node:test";
 import type {
   AgentSession,
@@ -56,6 +56,14 @@ writeFileSync(join(repoDir, "fixture.txt"), "fixture\n");
 git(["add", "."]);
 git(["commit", "-q", "-m", "fixture"]);
 
+// Replay tests deliberately opt into a bounded custom role. Built-in roles
+// now inherit tools and cannot promise a repository-only replay identity.
+mkdirSync(join(agentDir, "agents"), { recursive: true });
+writeFileSync(
+  join(agentDir, "agents", "bounded-reviewer.md"),
+  "---\nname: bounded-reviewer\ndescription: Replay fixture\ntools: [read]\n---\nInspect the repository without modifications.\n",
+);
+
 const {
   default: workflows,
   __setWorkflowTestAgentSessionFactory,
@@ -84,7 +92,7 @@ type SentMessage = {
 };
 
 const tools = new Map<string, CapturedTool>();
-let activeTools: string[] = [];
+let activeTools: string[] = ["read"];
 const handlers = new Map<
   string,
   Array<(event: unknown, ctx: ExtensionContext) => unknown>
@@ -476,7 +484,7 @@ test("interrupting an inline wait leaves the run stoppable and delivers one term
         {
           script:
             'export const meta = { name: "interrupted-inline-wait" };\n' +
-            'return await agent("wait for interruption", { agent_type: "reviewer" });',
+            'return await agent("wait for interruption", { agent_type: "bounded-reviewer" });',
           wait: true,
         },
         controller.signal,
@@ -611,7 +619,7 @@ test("a settled launch card does not repaint while its detached run stays active
       {
         script:
           'export const meta = { name: "detached-render" };\n' +
-          'return await agent("wait for release", { agent_type: "reviewer" });',
+          'return await agent("wait for release", { agent_type: "bounded-reviewer" });',
       },
       undefined,
       undefined,
@@ -812,7 +820,7 @@ test("cancelled detached delivery preserves aborted status after artifact persis
       {
         script:
           'export const meta = { name: "cancelled-persistence-failure" };\n' +
-          'return await agent("wait for cancellation", { agent_type: "reviewer" });',
+          'return await agent("wait for cancellation", { agent_type: "bounded-reviewer" });',
         background: true,
       },
       undefined,
@@ -959,7 +967,7 @@ test("agent calls run through the injected session factory and resume replays th
 
   const agentScript =
     'export const meta = { name: "agent-run" };\n' +
-    'const r = await agent("say something", { agent_type: "reviewer", label: "speaker" });\n' +
+    'const r = await agent("say something", { agent_type: "bounded-reviewer", label: "speaker" });\n' +
     'log("agent said: " + r.output);\n' +
     "return { ok: r.ok, output: r.output };";
 
@@ -1142,7 +1150,7 @@ async function runTamperedAcceptanceReplay(
   const fixtureId = ++replayAcceptanceFixtureId;
   const script =
     `export const meta = { name: "acceptance-replay-${fixtureId}" };\n` +
-    'const r = await agent("verify the fixture", { agent_type: "reviewer", acceptance: { criteria: [{ id: "tests", description: "Focused tests pass", requiredEvidence: ["command"] }] } });\n' +
+    'const r = await agent("verify the fixture", { agent_type: "bounded-reviewer", acceptance: { criteria: [{ id: "tests", description: "Focused tests pass", requiredEvidence: ["command"] }] } });\n' +
     "return { ok: r.ok, error: r.error, acceptanceWarning: r.acceptanceWarning };";
 
   try {
@@ -1294,8 +1302,8 @@ test("structured agent results survive handoff refs and downstream inputs", asyn
       {
         script:
           'export const meta = { name: "structured-handoff" };\n' +
-          'const first = await agent("produce a verdict", { agent_type: "reviewer", schema: { type: "object", properties: { verdict: { type: "string" }, score: { type: "number" } }, required: ["verdict", "score"] } });\n' +
-          'const second = await agent("consume the upstream verdict", { agent_type: "reviewer", inputs: [first.ref] });\n' +
+          'const first = await agent("produce a verdict", { agent_type: "bounded-reviewer", schema: { type: "object", properties: { verdict: { type: "string" }, score: { type: "number" } }, required: ["verdict", "score"] } });\n' +
+          'const second = await agent("consume the upstream verdict", { agent_type: "bounded-reviewer", inputs: [first.ref] });\n' +
           "return { firstOk: first.ok, firstRef: first.ref ?? null, secondOk: second.ok, secondOutput: second.output };",
         wait: true,
       },
@@ -1389,7 +1397,7 @@ test("oversized authoritative agent results fail without a success record", asyn
       {
         script:
           'export const meta = { name: "oversized-agent-result" };\n' +
-          'const r = await agent("return a large fixture", { agent_type: "reviewer", schema: { type: "object", properties: { blob: { type: "string" } }, required: ["blob"] } });\n' +
+          'const r = await agent("return a large fixture", { agent_type: "bounded-reviewer", schema: { type: "object", properties: { blob: { type: "string" } }, required: ["blob"] } });\n' +
           "return { ok: r.ok, error: r.error };",
         wait: true,
       },
@@ -1434,7 +1442,7 @@ test("an oversized legacy replay is rejected without a success record", async ()
   __setWorkflowTestAgentSessionFactory(factory);
   const script =
     'export const meta = { name: "oversized-replay" };\n' +
-    'const r = await agent("replay fixture", { agent_type: "reviewer" });\n' +
+    'const r = await agent("replay fixture", { agent_type: "bounded-reviewer" });\n' +
     "return { ok: r.ok, error: r.error };";
 
   try {
@@ -1510,7 +1518,7 @@ test("extension retention stays bounded and reports evictions under settled-run 
   });
   const script =
     'export const meta = { name: "retention-pressure" };\n' +
-    'const r = await agent("pressure fixture", { agent_type: "reviewer", label: "pressure-agent" });\n' +
+    'const r = await agent("pressure fixture", { agent_type: "bounded-reviewer", label: "pressure-agent" });\n' +
     'log("pressure log: " + r.output);\n' +
     "return { ok: r.ok, output: r.output };";
 
@@ -1572,6 +1580,8 @@ test("extension retention stays bounded and reports evictions under settled-run 
 });
 
 test("forced settlement persists worktree cleanup that finishes later", async () => {
+  const selectedRepo = join(agentDir, "worktree-source");
+  execFileSync("git", ["clone", "--quiet", repoDir, selectedRepo]);
   modelIdle = true;
   for (const handler of handlers.get("agent_settled") ?? []) {
     await handler({}, ctx);
@@ -1610,6 +1620,7 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
       activeRun = run;
     },
     async reclaimWorktree(repoCwd, worktree) {
+      assert.equal(repoCwd, selectedRepo);
       markCleanupStarted();
       await cleanupGate;
       actualCleanup = await reclaimWorktree(repoCwd, worktree);
@@ -1623,7 +1634,9 @@ test("forced settlement persists worktree cleanup that finishes later", async ()
       {
         script:
           'export const meta = { name: "forced-worktree-cleanup" };\n' +
-          'await agent("finish in isolation", { agent_type: "reviewer", isolation: "worktree" });\n' +
+          'await agent("finish in isolation", { agent_type: "bounded-reviewer", isolation: "worktree", working_dir: ' +
+          JSON.stringify(selectedRepo) +
+          " });\n" +
           "return true;",
         background: true,
       },
@@ -1708,4 +1721,85 @@ test.after(() => {
   }
   rmSync(agentDir, { recursive: true, force: true });
   rmSync(repoDir, { recursive: true, force: true });
+});
+
+test("built-in Workflow children inherit active shell/network tools in the selected cwd without replay", async () => {
+  const previousTools = [...activeTools];
+  activeTools = [...activeTools, "bash", "fixture_network", "subagent_spawn"];
+  const alternate = join(agentDir, "alternate");
+  const targetExtensions = join(alternate, ".pi", "extensions");
+  mkdirSync(targetExtensions, { recursive: true });
+  const targetExtension = join(targetExtensions, "target.ts");
+  writeFileSync(
+    targetExtension,
+    'export default function () { throw new Error("untrusted target extension loaded"); }',
+  );
+  const calls: Array<{ cwd: string; tools: readonly string[] | undefined }> =
+    [];
+  __setWorkflowTestAgentSessionFactory(async (options) => {
+    assert.ok(options);
+    assert.ok(options.resourceLoader);
+    assert.equal(
+      options.resourceLoader
+        .getExtensions()
+        .errors.some((error) =>
+          JSON.stringify(error).includes("untrusted target extension"),
+        ),
+      false,
+    );
+    assert.equal(
+      options.resourceLoader
+        .getExtensions()
+        .extensions.some((extension) => extension.path === targetExtension),
+      false,
+    );
+    calls.push({ cwd: options.cwd!, tools: options.tools });
+    const session = fakeAgentSession("alternate output");
+    session.getActiveToolNames = () => ["read", "bash", "fixture_network"];
+    session.getAllTools = () =>
+      ["read", "bash", "fixture_network"].map((name) => ({
+        name,
+      })) as ReturnType<AgentSession["getAllTools"]>;
+    return { session };
+  });
+  const script = `return await agent("inspect", { agent_type: "explorer", working_dir: ${JSON.stringify(relative(repoDir, alternate))} });`;
+  try {
+    const first = (await workflow.execute(
+      "cwd-inherit",
+      { script, wait: true },
+      undefined,
+      undefined,
+      { ...ctx, isProjectTrusted: () => true },
+    )) as { details: { runId: string } };
+    assert.equal(calls[0]?.cwd, alternate);
+    assert.deepEqual(calls[0]?.tools, ["read", "bash", "fixture_network"]);
+    assert.equal(
+      existsSync(join(runDirFor(first.details.runId), "journal.json")),
+      false,
+    );
+    await workflow.execute(
+      "cwd-inherit-resume",
+      { script, wait: true, resume_from_run_id: first.details.runId },
+      undefined,
+      undefined,
+      { ...ctx, isProjectTrusted: () => true },
+    );
+    assert.equal(calls.length, 2);
+    for (const working_dir of ["", 42, join(alternate, "missing")]) {
+      await workflow.execute(
+        "cwd-invalid",
+        {
+          script: `return await agent("inspect", { working_dir: ${JSON.stringify(working_dir)} });`,
+          wait: true,
+        },
+        undefined,
+        undefined,
+        { ...ctx, isProjectTrusted: () => true },
+      );
+    }
+    assert.equal(calls.length, 2, "invalid cwd must not create child sessions");
+  } finally {
+    activeTools = previousTools;
+    __setWorkflowTestAgentSessionFactory(undefined);
+  }
 });

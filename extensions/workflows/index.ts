@@ -53,7 +53,11 @@ import {
   formatActivityStatus,
 } from "../shared/activity-status.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
-import { waitBounded } from "../shared/child-session.ts";
+import {
+  inheritedChildToolAllowlist,
+  resolveStandaloneChildProjectTrust,
+  waitBounded,
+} from "../shared/child-session.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
@@ -544,6 +548,7 @@ interface ScriptAgentResult {
 }
 
 interface AgentCallOptions {
+  working_dir?: unknown;
   agent_type?: unknown;
   label?: unknown;
   phase?: unknown;
@@ -1339,11 +1344,12 @@ export default function workflows(
         structured: boolean,
         cwd: string,
         agentTypePrompt?: string,
+        childProjectTrusted = projectTrusted,
       ) =>
         createWorkflowResources(
           cwd,
           structured ? "structured" : "plain",
-          projectTrusted,
+          childProjectTrusted,
           agentTypePrompt,
         );
 
@@ -1638,6 +1644,36 @@ export default function workflows(
           );
         }
 
+        const childTools = inheritedChildToolAllowlist(
+          pi.getActiveTools(),
+          agentType?.tools,
+        );
+        if (
+          opts.working_dir !== undefined &&
+          (typeof opts.working_dir !== "string" || !opts.working_dir.trim())
+        ) {
+          return fail(
+            `agent "${label}": working_dir must be a non-empty string`,
+          );
+        }
+        const requestedCwd = path.resolve(
+          ctx.cwd,
+          typeof opts.working_dir === "string" ? opts.working_dir : ".",
+        );
+        try {
+          if (!fs.statSync(requestedCwd).isDirectory())
+            throw new Error("not a directory");
+        } catch {
+          return fail(
+            `agent "${label}": working_dir is not a directory: ${requestedCwd}`,
+          );
+        }
+        const childProjectTrusted = resolveStandaloneChildProjectTrust({
+          parentCwd: ctx.cwd,
+          childCwd: requestedCwd,
+          parentTrusted: projectTrusted,
+        });
+
         const explicitModel =
           typeof opts.model === "string" && opts.model.trim()
             ? opts.model.trim()
@@ -1708,11 +1744,14 @@ export default function workflows(
         const operatorFingerprint = operatorKey
           ? agentCallKey("workflow-operator", {
               execution: {
+                cwd: requestedCwd,
+                projectTrusted: childProjectTrusted,
+                tools: childTools,
                 agentType: agentType
                   ? {
                       name: agentType.name,
                       body: agentType.body,
-                      tools: agentType.tools,
+                      tools: childTools,
                     }
                   : undefined,
                 model: model ? `${model.provider}/${model.id}` : undefined,
@@ -1732,7 +1771,7 @@ export default function workflows(
         const replaySafe =
           operatorKey === undefined &&
           isReplaySafeAgentCall({
-            tools: agentType?.tools,
+            tools: agentType?.tools === undefined ? undefined : childTools,
             isolation: opts.isolation,
           });
         const replayLease = beginProcessReplayWorkspaceLease(replaySafe);
@@ -1744,13 +1783,14 @@ export default function workflows(
           try {
             replayResources = await getResources(
               effectiveSchema !== undefined,
-              ctx.cwd,
+              requestedCwd,
               agentType?.body,
+              childProjectTrusted,
             );
             replayIdentity = createReplayIdentity(
-              ctx.cwd,
+              requestedCwd,
               replayResources.loader,
-              projectTrusted,
+              childProjectTrusted,
             );
           } catch {
             // Fingerprinting is an optimization boundary. If resources cannot
@@ -1768,7 +1808,7 @@ export default function workflows(
                 ? {
                     name: agentType.name,
                     body: agentType.body,
-                    tools: agentType.tools,
+                    tools: childTools,
                   }
                 : undefined,
               model: model ? `${model.provider}/${model.id}` : undefined,
@@ -1925,7 +1965,7 @@ export default function workflows(
                 );
               }
               const created = await createWorktree({
-                cwd: ctx.cwd,
+                cwd: requestedCwd,
                 label,
                 id: `${details.runId}-${record.index}`,
               });
@@ -1942,7 +1982,7 @@ export default function workflows(
                 ? runSignal.reason
                 : new Error("Workflow was aborted");
             }
-            const agentCwd = worktree?.path ?? ctx.cwd;
+            const agentCwd = worktree?.path ?? requestedCwd;
 
             // Inside the try, not before it: building resources can throw
             // (bad settings, an unreadable skills dir), and a throw out here
@@ -1968,6 +2008,7 @@ export default function workflows(
                     effectiveSchema !== undefined,
                     agentCwd,
                     agentType?.body,
+                    childProjectTrusted,
                   ),
                 resourceAbort,
               ]).finally(() => {
@@ -1992,7 +2033,7 @@ export default function workflows(
                   settingsManager: resources.settingsManager,
                   ...(sessionManager ? { sessionManager } : {}),
                   modelRegistry: ctx.modelRegistry,
-                  ...(agentType?.tools ? { tools: agentType.tools } : {}),
+                  tools: childTools,
                   ...(testAgentSessionFactory
                     ? { sessionFactory: testAgentSessionFactory }
                     : {}),
@@ -2108,9 +2149,9 @@ export default function workflows(
               // unfingerprintable calls always run for real.
               const completedIdentity = callKey
                 ? createReplayIdentity(
-                    ctx.cwd,
+                    requestedCwd,
                     resources.loader,
-                    projectTrusted,
+                    childProjectTrusted,
                   )
                 : undefined;
               const completedKey = completedIdentity
@@ -2157,7 +2198,7 @@ export default function workflows(
                   runId: details.runId,
                   agentIndex: record.index,
                   agentLabel: record.label,
-                  repoCwd: ctx.cwd,
+                  repoCwd: requestedCwd,
                   worktree,
                 });
                 let cleanup: WorktreeCleanup;
@@ -2174,7 +2215,7 @@ export default function workflows(
                   const reclaimer =
                     workflowLifecycleTestHooks?.reclaimWorktree ??
                     reclaimWorktree;
-                  cleanup = await reclaimer(ctx.cwd, worktree).catch(
+                  cleanup = await reclaimer(requestedCwd, worktree).catch(
                     (error): WorktreeCleanup => ({
                       removed: false,
                       branchDeleted: false,

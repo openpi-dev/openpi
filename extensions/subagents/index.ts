@@ -57,6 +57,7 @@ import {
 } from "../shared/below-editor-navigation.ts";
 import {
   effectiveChildToolAllowlist,
+  inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
@@ -886,6 +887,7 @@ export default function (
       if (
         planning &&
         agentType &&
+        !agentType.planningCompatible &&
         !planModeAllowsDeclaredTools(declaredChildTools)
       ) {
         throw new Error(
@@ -934,7 +936,10 @@ export default function (
       const requestedChildTools = planning
         ? planModeChildTools(declaredChildTools)
         : declaredChildTools;
-      const childTools = effectiveChildToolAllowlist(requestedChildTools);
+      const childTools = inheritedChildToolAllowlist(
+        pi.getActiveTools(),
+        requestedChildTools,
+      );
       // Read at spawn time so `/openpi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model
       // inheritance in the backend.

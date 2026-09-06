@@ -126,18 +126,13 @@ function harnessFactory(
   return { factory, creations, harnesses };
 }
 
-function createManagerRuntime(
-  backend: SubagentBackend,
-  firstResponseTimeoutMs = 500,
-) {
+function createManagerRuntime(backend: SubagentBackend) {
   const registry = Layer.succeed(
     BackendRegistry,
     new Map<BackendName, SubagentBackend>([["pi", backend]]),
   );
   return ManagedRuntime.make(
-    makeSubagentManagerLayer({ firstResponseTimeoutMs }).pipe(
-      Layer.provide(registry),
-    ),
+    makeSubagentManagerLayer().pipe(Layer.provide(registry)),
   );
 }
 
@@ -362,7 +357,7 @@ test("prompt rejection wins over an earlier agent_settled event", async () => {
     sessionFactory: fixtures.factory,
     shutdownTimeoutMs: 50,
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -400,7 +395,7 @@ test("a prompt that resolves without lifecycle events fails explicitly", async (
     sessionFactory: fixtures.factory,
     shutdownTimeoutMs: 50,
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -1041,7 +1036,7 @@ test("a preflight that ignores abort is force-closed without reopening the sessi
       throw new Error("unsafe worktree cleanup should not run");
     },
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -1214,94 +1209,65 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
   }
 });
 
-test("a silent provider is terminalized once, disposed, and releases all slots", async () => {
-  const never = new Promise<void>(() => {});
-  const fixtures = harnessFactory((_options, index) => {
-    if (index >= 4) return {};
-    if (index % 2 === 0) return { shutdown: () => never };
-    return {
-      shutdown: async () => {
-        throw new Error("shutdown fixture failed");
-      },
-      dispose: () => {
-        throw new Error("dispose fixture failed");
-      },
-    };
-  });
-  const backend = makePiBackend({
-    sessionFactory: fixtures.factory,
-    shutdownTimeoutMs: 30,
-  });
-  const runtime = createManagerRuntime(backend, 40);
+test("quiet provider thinking past 45 seconds remains live and can complete", async (t) => {
+  const fixtures = harnessFactory(() => ({}));
+  const runtime = createManagerRuntime(
+    makePiBackend({ sessionFactory: fixtures.factory }),
+  );
   try {
     const manager = await runtime.runPromise(SubagentManager);
-    let settlements = 0;
-    manager.view.setOnSettled(() => settlements++);
-    const stalled = await Promise.all(
-      [0, 1, 2, 3].map((index) =>
-        runtime.runPromise(manager.spawn("pi", task(`silent ${index}`))),
-      ),
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("quiet thinking")),
     );
-
-    await assert.rejects(
-      runtime.runPromise(manager.spawn("pi", task("over capacity"))),
-      /Max 4 subagent sessions/,
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.emit({ type: "agent_start" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(46_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
+    assert.equal(harness.calls.aborts, 0);
+    t.mock.timers.reset();
+    harness.emitAssistant("completed after quiet thinking");
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(manager.view.get(spawned.id)?.status, "done");
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "completed after quiet thinking",
     );
-    await runtime.runPromise(
-      manager.waitFor(stalled.map((snapshot) => snapshot.id)),
-    );
-    for (const snapshot of stalled) {
-      const failed = manager.view.get(snapshot.id);
-      assert.equal(failed?.status, "error");
-      assert.match(failed?.errorText ?? "", /no assistant response event/);
-    }
-    assert.equal(settlements, 4);
-    await waitFor(
-      () =>
-        fixtures.harnesses.every((harness) => harness.calls.disposals === 1),
-      "silent sessions to be disposed despite cleanup failures",
-    );
-
-    const late = fixtures.harnesses[0];
-    assert.ok(late);
-    late.emitAssistant("late provider completion");
-    late.emit({ type: "agent_settled" });
-    late.resolvePrompt();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(settlements, 4);
-    assert.equal(manager.view.get(stalled[0]!.id)?.finalText, "");
-
-    const fresh = await runtime.runPromise(
-      manager.spawn("pi", task("fresh after watchdog")),
-    );
-    assert.equal(fresh.status, "running");
-    const freshCancellation = runtime.runPromise(manager.cancel([fresh.id]));
-    const freshHarness = fixtures.harnesses[4];
-    assert.ok(freshHarness);
-    await waitFor(() => freshHarness.calls.aborts === 1, "fresh run abort");
-    freshHarness.emit({ type: "agent_settled" });
-    freshHarness.resolvePrompt();
-    await freshCancellation;
   } finally {
+    t.mock.timers.reset();
     await runtime.dispose();
   }
 });
 
-test("adapter scope cleanup is bounded across shutdown timeouts and failures", async () => {
+test("adapter scope cleanup is bounded across shutdown timeouts and failures", async (t) => {
   const never = new Promise<void>(() => {});
   const timedOutFixtures = harnessFactory(() => ({
     prompt: async () => {},
-    shutdown: () => never,
+    shutdown: () => {
+      // Start the clock at the owned cleanup seam, after resource loading.
+      // Advancing the configured deadline verifies the bound without a wall-
+      // time assertion that also charges unrelated parallel-suite startup.
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      setImmediate(() => t.mock.timers.tick(25));
+      return never;
+    },
   }));
   const timedOutBackend = makePiBackend({
     sessionFactory: timedOutFixtures.factory,
     shutdownTimeoutMs: 25,
   });
-  const timeoutStartedAt = Date.now();
-  await Effect.runPromise(
-    Effect.scoped(timedOutBackend.spawn(task("timeout cleanup"))),
-  );
-  assert.ok(Date.now() - timeoutStartedAt < 500);
+  try {
+    await Effect.runPromise(
+      Effect.scoped(timedOutBackend.spawn(task("timeout cleanup"))),
+    );
+  } finally {
+    t.mock.timers.reset();
+  }
   const timedOutHarness = timedOutFixtures.harnesses[0];
   assert.ok(timedOutHarness);
   assert.equal(timedOutHarness.calls.shutdowns, 1);

@@ -4,6 +4,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WORKFLOW_CHILD_FAILURES_2026-09-07.md`](WORKFLOW_CHILD_FAILURES_2026-09-07.md) — child tool transport, cwd and timeout failure mechanisms, intended capability inheritance, and acceptance limits ([#424](https://github.com/openpi-dev/openpi/issues/424)).
+
 - [`WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md`](WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md) — repeated synchronous history loading on dashboard animation ticks, its regression boundary, and measurement limits ([#420](https://github.com/openpi-dev/openpi/issues/420)).
 
 ## Legacy records

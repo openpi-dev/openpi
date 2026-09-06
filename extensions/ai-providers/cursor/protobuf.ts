@@ -472,7 +472,12 @@ function compileMapField(desc: MapFieldDesc): CompiledField {
         }
       }
 
-      target[entryKey] = entryValue;
+      Object.defineProperty(target, entryKey, {
+        value: entryValue,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     },
     toJson(message, output) {
       const input = Reflect.get(message, name);
@@ -1143,7 +1148,12 @@ function readJsonStruct(reader: Reader): { [key: string]: JsonValue } {
           entryReader.skip(entryWire);
         }
       }
-      output[entryKey] = entryVal;
+      Object.defineProperty(output, entryKey, {
+        value: entryVal,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
     } else {
       reader.skip(wireType);
     }

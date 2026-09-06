@@ -8,6 +8,7 @@ import { createServer as createNetServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, test } from "node:test";
+import { Agent } from "@earendil-works/pi-agent-core";
 import type {
   Api,
   AssistantMessage,
@@ -21,6 +22,7 @@ import {
   type ExtensionContext,
   VERSION as PI_VERSION,
 } from "@earendil-works/pi-coding-agent";
+import { Type } from "typebox";
 import {
   fetchCursorModels,
   fetchCursorUsableModels,
@@ -36,11 +38,15 @@ import {
   type AgentClientMessage,
   AgentClientMessageSchema,
   AgentServerMessageSchema,
+  CursorToolCallSchema,
   ExecServerMessageSchema,
   GetUsableModelsResponseSchema,
   InteractionQueryPayloadSchema,
   InteractionQuerySchema,
   InteractionUpdateSchema,
+  McpArgsSchema,
+  McpToolCallSchema,
+  type McpToolDefinition,
   ModelDetailsSchema,
   TextDeltaUpdateSchema,
   ThinkingCompletedUpdateSchema,
@@ -51,6 +57,8 @@ import {
 } from "../../../extensions/ai-providers/cursor/proto.ts";
 import {
   create,
+  decodeJsonValue,
+  encodeJsonValue,
   fromBinary,
   toBinary,
 } from "../../../extensions/ai-providers/cursor/protobuf.ts";
@@ -1151,5 +1159,524 @@ test("Cursor rejects custom fetch and bounds an idle HTTP/2 stream", async () =>
   assert.match(
     timeoutError.error.errorMessage ?? "",
     /idle timeout after 10ms/,
+  );
+});
+
+test("Cursor advertises the active Pi tool schema over local request_context", async () => {
+  let advertised: McpToolDefinition[] | undefined;
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+    peer.on("data", (chunk) => {
+      buffer = appendChunk(buffer, chunk);
+      while (buffer.length >= 5) {
+        const size = buffer.readUInt32BE(1);
+        if (buffer.length < size + 5) break;
+        const message = fromBinary(
+          AgentClientMessageSchema,
+          buffer.subarray(5, size + 5),
+        ).message;
+        buffer = buffer.subarray(size + 5);
+        if (message.case === "runRequest") {
+          peer.write(
+            frameServerMessage(
+              create(AgentServerMessageSchema, {
+                message: {
+                  case: "execServerMessage",
+                  value: create(ExecServerMessageSchema, {
+                    id: 1,
+                    execId: "context",
+                    message: { case: "requestContextArgs", value: {} },
+                  }),
+                },
+              }),
+            ),
+          );
+        } else if (
+          message.case === "execClientMessage" &&
+          message.value.message.case === "requestContextResult"
+        ) {
+          const result = message.value.message.value.result;
+          if (result.case === "success")
+            advertised = result.value.requestContext?.tools;
+          peer.end(
+            responseUpdate(
+              create(InteractionUpdateSchema, {
+                message: { case: "turnEnded", value: {} },
+              }),
+            ),
+          );
+        }
+      }
+    });
+  });
+  servers.push(server);
+  await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      {
+        ...CONTEXT,
+        tools: [
+          {
+            name: "lookup",
+            description: "Look up a public page",
+            parameters: Type.Object({ url: Type.String() }),
+          },
+        ],
+      },
+      { apiKey: "token" },
+    ),
+  );
+  assert.equal(advertised?.length, 1);
+  assert.equal(advertised?.[0]?.providerIdentifier, "openpi");
+  assert.equal(advertised?.[0]?.toolName, "lookup");
+  assert.deepEqual(decodeJsonValue(advertised![0]!.inputSchema), {
+    type: "object",
+    properties: { url: { type: "string" } },
+    required: ["url"],
+  });
+});
+
+const LOOKUP = {
+  name: "lookup",
+  description: "Look up a public page",
+  parameters: Type.Object({ url: Type.String() }),
+};
+function mcpExec(
+  overrides: Partial<ReturnType<typeof McpArgsSchema.create>> = {},
+) {
+  return frameServerMessage(
+    create(AgentServerMessageSchema, {
+      message: {
+        case: "execServerMessage",
+        value: create(ExecServerMessageSchema, {
+          id: 2,
+          execId: "mcp",
+          message: {
+            case: "mcpArgs",
+            value: create(McpArgsSchema, {
+              providerIdentifier: "openpi",
+              toolName: "lookup",
+              name: "lookup",
+              toolCallId: "lookup-1",
+              args: { url: encodeJsonValue("https://example.test/page") },
+              ...overrides,
+            }),
+          },
+        }),
+      },
+    }),
+  );
+}
+function receiveClient(
+  peer: ServerHttp2Stream,
+  handler: (message: AgentClientMessage["message"]) => void,
+) {
+  let buffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  peer.on("data", (chunk) => {
+    buffer = appendChunk(buffer, chunk);
+    while (buffer.length >= 5) {
+      const size = buffer.readUInt32BE(1);
+      if (buffer.length < size + 5) break;
+      const message = fromBinary(
+        AgentClientMessageSchema,
+        buffer.subarray(5, size + 5),
+      ).message;
+      buffer = buffer.subarray(size + 5);
+      handler(message);
+    }
+  });
+}
+
+test("Cursor MCP handoff executes through Pi exactly once and resumes with the paired result", async () => {
+  let requests = 0;
+  let executed = 0;
+  let history: unknown[] = [];
+  const lifecycle: string[] = [];
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case !== "runRequest") return;
+      requests++;
+      if (requests === 1) {
+        assert.equal(message.value.action?.action.case, "userMessageAction");
+        const preview = responseUpdate(
+          create(InteractionUpdateSchema, {
+            message: {
+              case: "partialToolCall",
+              value: {
+                callId: "preview-1",
+                argsTextDelta: '{"url":',
+                toolCall: create(CursorToolCallSchema, {
+                  tool: {
+                    case: "mcpToolCall",
+                    value: create(McpToolCallSchema, {}),
+                  },
+                }),
+              },
+            },
+          }),
+        );
+        peer.write(Buffer.concat([preview, mcpExec(), mcpExec()]));
+      } else {
+        assert.equal(message.value.action?.action.case, "resumeAction");
+        peer.end(
+          Buffer.concat([
+            responseUpdate(
+              create(InteractionUpdateSchema, {
+                message: {
+                  case: "textDelta",
+                  value: create(TextDeltaUpdateSchema, {
+                    text: "Page checked.",
+                  }),
+                },
+              }),
+            ),
+            responseUpdate(
+              create(InteractionUpdateSchema, {
+                message: { case: "turnEnded", value: {} },
+              }),
+            ),
+          ]),
+        );
+      }
+    });
+  });
+  servers.push(server);
+  const agent = new Agent({
+    initialState: {
+      model: localModel(server.baseUrl),
+      systemPrompt: "Use lookup once.",
+      tools: [
+        {
+          ...LOOKUP,
+          label: "Lookup",
+          execute: async (_id, args) => {
+            executed++;
+            assert.deepEqual(args, { url: "https://example.test/page" });
+            return {
+              content: [{ type: "text", text: "Page contents" }],
+              details: {},
+            };
+          },
+        },
+      ],
+    },
+    getApiKey: () => "token",
+    streamFn: async (model, context, options) => {
+      if (context.messages.at(-1)?.role === "toolResult") {
+        const built = await buildCursorRequest(model, context, options);
+        history = built.conversationState.rootPromptMessagesJson.map((id) =>
+          JSON.parse(
+            Buffer.from(
+              built.blobStore.get(Buffer.from(id).toString("hex"))!,
+            ).toString(),
+          ),
+        );
+      }
+      return streamCursor(model, context, options);
+    },
+  });
+  agent.subscribe((event) => {
+    lifecycle.push(event.type);
+  });
+  await agent.prompt("Check the page.");
+  assert.equal(requests, 2);
+  assert.equal(executed, 1);
+  assert.equal(
+    lifecycle.filter((type) => type === "tool_execution_start").length,
+    1,
+  );
+  assert.equal(
+    lifecycle.filter((type) => type === "tool_execution_end").length,
+    1,
+  );
+  assert.match(JSON.stringify(history), /"tool-call".*lookup-1/);
+  assert.match(JSON.stringify(history), /"tool-result".*Page contents/);
+  assert.equal(agent.state.messages.at(-1)?.role, "assistant");
+  assert.match(JSON.stringify(agent.state.messages.at(-1)), /Page checked/);
+});
+
+test("Cursor rejects unadvertised, conflicting and malformed MCP requests without executable calls", async () => {
+  const cases = [
+    [
+      responseUpdate(
+        create(InteractionUpdateSchema, {
+          message: {
+            case: "toolCallStarted",
+            value: {
+              toolCall: create(CursorToolCallSchema, {
+                tool: { case: undefined },
+                $unknown: [{ no: 2, wireType: 2, data: new Uint8Array([0]) }],
+              }),
+            },
+          },
+        }),
+      ),
+    ],
+    [
+      mcpExec(),
+      frameConnectMessage(
+        Buffer.from(
+          JSON.stringify({
+            error: {
+              code: "resource_exhausted",
+              message: "fixture rate limit",
+            },
+          }),
+        ),
+        2,
+      ),
+    ],
+    [mcpExec({ providerIdentifier: "other" })],
+    [mcpExec({ toolName: "bash", name: "bash" })],
+    [mcpExec({ toolCallId: "" })],
+    [mcpExec({ args: { url: new Uint8Array([255]) } })],
+    [mcpExec({ args: { url: new Uint8Array() } })],
+    [mcpExec({ args: { url: encodeJsonValue(Number.NaN) } })],
+    [mcpExec(), mcpExec({ args: { url: encodeJsonValue("different") } })],
+  ];
+  for (const frames of cases) {
+    const server = await startServer((peer) => {
+      peer.respond({ ":status": 200 });
+      receiveClient(peer, (message) => {
+        if (message.case === "runRequest") peer.end(Buffer.concat(frames));
+      });
+    });
+    servers.push(server);
+    const events = await collectEvents(
+      streamCursor(
+        localModel(server.baseUrl),
+        { ...CONTEXT, tools: [LOOKUP] },
+        { apiKey: "token" },
+      ),
+    );
+    assert.equal(events.at(-1)?.type, "error");
+    assert.equal(
+      events.some((event) => event.type === "toolcall_end"),
+      false,
+    );
+  }
+});
+
+test("Cursor approval-only probes reject without execution and can continue to ordinary text", async () => {
+  let rejected = false;
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest")
+        peer.write(mcpExec({ smartModeApprovalOnly: true }));
+      if (
+        message.case === "execClientMessage" &&
+        message.value.message.case === "mcpResult"
+      ) {
+        rejected = message.value.message.value.result.case === "rejected";
+        peer.end(
+          responseUpdate(
+            create(InteractionUpdateSchema, {
+              message: { case: "turnEnded", value: {} },
+            }),
+          ),
+        );
+      }
+    });
+  });
+  servers.push(server);
+  const events = await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      { ...CONTEXT, tools: [LOOKUP] },
+      { apiKey: "token" },
+    ),
+  );
+  assert.equal(rejected, true);
+  assert.equal(events.at(-1)?.type, "done");
+  assert.equal(
+    events.some((event) => event.type === "toolcall_end"),
+    false,
+  );
+});
+
+test("Cursor tool handoff preserves Pi permission denial and failed-tool results", async () => {
+  for (const deny of [true, false]) {
+    let requests = 0;
+    let executions = 0;
+    let replay = "";
+    const server = await startServer((peer) => {
+      peer.respond({ ":status": 200 });
+      receiveClient(peer, (message) => {
+        if (message.case !== "runRequest") return;
+        if (++requests === 1) peer.write(mcpExec());
+        else
+          peer.end(
+            responseUpdate(
+              create(InteractionUpdateSchema, {
+                message: { case: "turnEnded", value: {} },
+              }),
+            ),
+          );
+      });
+    });
+    servers.push(server);
+    const agent = new Agent({
+      initialState: {
+        model: localModel(server.baseUrl),
+        tools: [
+          {
+            ...LOOKUP,
+            label: "Lookup",
+            execute: async () => {
+              executions++;
+              throw new Error("Local fixture tool failed");
+            },
+          },
+        ],
+      },
+      getApiKey: () => "token",
+      beforeToolCall: async () =>
+        deny ? { block: true, reason: "Policy denied this tool" } : undefined,
+      streamFn: async (model, context, options) => {
+        if (context.messages.at(-1)?.role === "toolResult") {
+          const built = await buildCursorRequest(model, context, options);
+          replay = built.conversationState.rootPromptMessagesJson
+            .map((id) =>
+              Buffer.from(
+                built.blobStore.get(Buffer.from(id).toString("hex"))!,
+              ).toString(),
+            )
+            .join("\n");
+        }
+        return streamCursor(model, context, options);
+      },
+    });
+    await agent.prompt("Look up the page.");
+    assert.equal(executions, deny ? 0 : 1);
+    assert.equal(requests, 2);
+    assert.match(replay, /"isError":true/);
+    assert.match(
+      replay,
+      deny ? /Policy denied this tool/ : /Local fixture tool failed/,
+    );
+  }
+});
+
+test("Cursor partial previews never execute and cancellation closes the request", async () => {
+  const controller = new AbortController();
+  const sawRequest = Promise.withResolvers<void>();
+  const peerClosed = Promise.withResolvers<void>();
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    peer.on("close", () => peerClosed.resolve());
+    receiveClient(peer, (message) => {
+      if (message.case !== "runRequest") return;
+      peer.write(
+        responseUpdate(
+          create(InteractionUpdateSchema, {
+            message: {
+              case: "partialToolCall",
+              value: {
+                callId: "partial",
+                argsTextDelta: '{"url":',
+                toolCall: create(CursorToolCallSchema, {
+                  tool: {
+                    case: "mcpToolCall",
+                    value: create(McpToolCallSchema, {}),
+                  },
+                }),
+              },
+            },
+          }),
+        ),
+      );
+      sawRequest.resolve();
+    });
+  });
+  servers.push(server);
+  const collected = collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      { ...CONTEXT, tools: [LOOKUP] },
+      { apiKey: "token", signal: controller.signal },
+    ),
+  );
+  await sawRequest.promise;
+  controller.abort();
+  const events = await collected;
+  const terminal = events.at(-1);
+  assert.ok(terminal?.type === "error" && terminal.reason === "aborted");
+  assert.equal(
+    events.some((event) => event.type === "toolcall_end"),
+    false,
+  );
+  await peerClosed.promise;
+});
+
+test("Cursor bridge preserves nested special JSON keys and rejects replayed invocation identities", async () => {
+  const special = JSON.parse(
+    '{"__proto__":{"unexpected":true},"constructor":"value"}',
+  );
+  assert.deepEqual(decodeJsonValue(encodeJsonValue(special)), special);
+  assert.equal(
+    Object.getPrototypeOf(decodeJsonValue(encodeJsonValue(special))),
+    Object.prototype,
+  );
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest") peer.write(mcpExec());
+    });
+  });
+  servers.push(server);
+  const previous: AssistantMessage = {
+    role: "assistant",
+    api: MODEL.api,
+    provider: MODEL.provider,
+    model: MODEL.id,
+    timestamp: 0,
+    stopReason: "toolUse",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    content: [
+      {
+        type: "toolCall",
+        id: "lookup-1",
+        name: "lookup",
+        arguments: { url: "https://example.test/page" },
+      },
+    ],
+  };
+  const events = await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      {
+        ...CONTEXT,
+        tools: [LOOKUP],
+        messages: [
+          ...CONTEXT.messages,
+          previous,
+          {
+            role: "toolResult",
+            toolCallId: "lookup-1",
+            toolName: "lookup",
+            content: [],
+            isError: false,
+            timestamp: 0,
+          },
+        ],
+      },
+      { apiKey: "token" },
+    ),
+  );
+  assert.equal(events.at(-1)?.type, "error");
+  assert.match(JSON.stringify(events.at(-1)), /already present in Pi history/);
+  assert.equal(
+    events.some((event) => event.type === "toolcall_end"),
+    false,
   );
 });

@@ -496,114 +496,19 @@ test("a wait issued alongside a restart does not return the stale run", () => {
   });
 });
 
-test("a run with no first response is settled by the watchdog and frees its slot", async () => {
-  await withManager(
-    async (manager, runtime) => {
-      const settled: Array<{ id: string; status: string; consumed: boolean }> =
-        [];
-      manager.view.setOnSettled((snap, consumed) =>
-        settled.push({ id: snap.id, status: snap.status, consumed }),
-      );
-
-      // Fill every model slot with runs that accept the prompt but never
-      // emit a first assistant event (stalled provider requests).
-      const hung = await runTool(
-        runtime,
-        Effect.forEach(
-          [1, 2, 3, 4],
-          (n) => manager.spawn("pi", task(`HANG: stall ${n}`)),
-          { concurrency: "unbounded" },
-        ),
-      );
-      await assert.rejects(
-        runTool(runtime, manager.spawn("pi", task("Task 5"))),
-        /Max 4 subagent sessions/,
-      );
-
-      // The watchdog settles each hung run as an explicit error through the
-      // normal settle path (so waits and result delivery observe it).
-      await runTool(runtime, manager.waitFor(hung.map((snap) => snap.id)));
-      for (const snap of hung) {
-        const failed = manager.view.get(snap.id);
-        assert.equal(failed?.status, "error");
-        assert.match(
-          failed?.errorText ?? "",
-          /no assistant response event.*provider request may be stalled/,
-        );
-      }
-      assert.deepEqual(
-        settled.sort((a, b) => a.id.localeCompare(b.id)),
-        hung
-          .map((snap) => ({
-            id: snap.id,
-            status: "error",
-            consumed: true,
-          }))
-          .sort((a, b) => a.id.localeCompare(b.id)),
-      );
-
-      // The freed slots accept new spawns again.
-      const fresh = await runTool(
-        runtime,
-        manager.spawn("pi", task("ok after the stall")),
-      );
-      assert.equal(fresh.status, "running");
-      await runTool(runtime, manager.waitFor([fresh.id]));
-      assert.equal(manager.view.get(fresh.id)?.status, "done");
-    },
-    { firstResponseTimeoutMs: 150 },
-  );
-});
-
-test("a first response clears the watchdog so slower runs are not killed", async () => {
-  await withManager(
-    async (manager, runtime) => {
-      // The stub streams its first assistant delta within one cadence
-      // (~40ms) but needs well over the watchdog budget to finish the whole
-      // turn; without clearing on first response it would be killed mid-run.
-      const snap = await runTool(
-        runtime,
-        manager.spawn("pi", task("Slow but responsive")),
-      );
-      await runTool(runtime, manager.waitFor([snap.id]));
-      const done = manager.view.get(snap.id);
-      assert.equal(done?.status, "done");
-      assert.match(
-        done?.finalText ?? "",
-        /\[stub:pi\] completed: Slow but responsive/,
-      );
-      assert.equal(done?.errorText, undefined);
-    },
-    { firstResponseTimeoutMs: 250 },
-  );
-});
-
-test("a restart whose run never starts is settled by the watchdog", async () => {
-  await withManager(
-    async (manager, runtime) => {
-      const snap = await runTool(runtime, manager.spawn("pi", task("First")));
-      await runTool(runtime, manager.waitFor([snap.id]));
-      assert.equal(manager.view.get(snap.id)?.status, "done");
-
-      // The backend accepts the send but the new run never emits RunStarted,
-      // so the restarting entry holds its slot with nothing to clear it.
-      await runTool(runtime, manager.send(snap.id, "HANG: stalled restart"));
-      await runTool(runtime, manager.waitFor([snap.id]));
-      const after = manager.view.get(snap.id);
-      assert.equal(after?.status, "error");
-      assert.match(
-        after?.errorText ?? "",
-        /no assistant response event.*provider request may be stalled/,
-      );
-
-      // The freed slot accepts a fresh spawn again.
-      const fresh = await runTool(
-        runtime,
-        manager.spawn("pi", task("ok after the stalled restart")),
-      );
-      await runTool(runtime, manager.waitFor([fresh.id]));
-      assert.equal(manager.view.get(fresh.id)?.status, "done");
-    },
-    { firstResponseTimeoutMs: 150 },
-  );
+test("responsive runs preserve their final outcome", async () => {
+  await withManager(async (manager, runtime) => {
+    const snap = await runTool(
+      runtime,
+      manager.spawn("pi", task("Slow but responsive")),
+    );
+    await runTool(runtime, manager.waitFor([snap.id]));
+    const done = manager.view.get(snap.id);
+    assert.equal(done?.status, "done");
+    assert.match(
+      done?.finalText ?? "",
+      /\[stub:pi\] completed: Slow but responsive/,
+    );
+    assert.equal(done?.errorText, undefined);
+  });
 });
