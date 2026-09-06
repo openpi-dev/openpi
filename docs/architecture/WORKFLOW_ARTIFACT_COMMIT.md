@@ -3,7 +3,7 @@
 - Status: `validated`
 - Created: 2026-09-04
 - Verified: 2026-09-04
-- Source boundary: implementation commit `cd60a15`, based on `72fbba5`
+- Source boundary: implementation commit `68774e1`, based on `c1c60cd`
 - Affected Pi primitive: the OpenPI Workflow extension's run-directory persistence; Pi Sessions, messages, providers, and child lifecycle remain unchanged
 - Related Issue: [#110](https://github.com/openpi-dev/openpi/issues/110)
 - Related PR: [#386](https://github.com/openpi-dev/openpi/pull/386)
@@ -23,7 +23,7 @@ For a terminal run, persistence follows this order:
 1. Remove any receipt from an older attempt, failing closed if that cannot be done.
 2. Atomically publish a terminal `workflow.json` without side-artifact references. A later write failure therefore cannot leave a known terminal run recorded as `running`.
 3. Build the final compact manifest and every dependent artifact in memory.
-4. Atomically write `.workflow-commit.json`. It contains version `1`, the exact run id, the exact final manifest bytes, and a filename, byte count, and SHA-256 digest for each artifact.
+4. Atomically write `.workflow-commit.json`. It contains version `1`, the terminal run identity, the terminal status, the artifact references, and a filename, byte count, and SHA-256 digest for each artifact.
 5. Atomically replace each side artifact.
 6. Atomically replace `workflow.json` with the exact manifest recorded by the receipt.
 7. Best-effort remove the receipt. A crash or unlink failure after step 6 is harmless because recovery recognizes the already-committed manifest.
@@ -41,7 +41,7 @@ Persisted Workflow reads and delivery-receipt updates check for a pending commit
 - manifest references agree exactly with the receipt's artifact set;
 - every artifact is a regular, non-symlink file whose byte count and SHA-256 digest match the receipt.
 
-If the existing manifest has the same run id, terminal state, and artifact references, recovery only removes the stale receipt; delivery and resource-reference fields may have been updated since the receipt was written. If every artifact validates and the manifest is still the earlier terminal projection, recovery atomically completes the manifest commit. Missing, truncated, substituted, oversized, malformed, or path-traversing evidence never gains an artifact reference.
+If the existing manifest has the same run id, terminal state, and artifact references, recovery only removes the stale receipt; delivery and resource-reference fields may have been updated since the receipt was written. The already-committed check deliberately ignores those mutable fields and never relies on whole-file byte equality. If every artifact validates and the manifest is still the earlier terminal projection, recovery atomically completes the manifest commit. Missing, truncated, substituted, oversized, malformed, or path-traversing evidence never gains an artifact reference.
 
 An incomplete or invalid receipt stays available for inspection and for a concurrently finishing writer; the next terminal persistence attempt replaces the single fixed receipt. Legacy runs without a receipt keep their existing compatibility behavior. In particular, recovery does not infer completion merely from an orphan `result.json`, because that file alone does not carry a trustworthy terminal identity.
 
