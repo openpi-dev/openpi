@@ -260,15 +260,9 @@ export function truncatedOutput(
 function projectSubagentOutput(
   snap: SubagentSnapshot,
   maxBytes: number,
-<<<<<<< HEAD
 ): ResultProjection & { readonly resource?: OpenPiResourceRef } {
-  const output = snap.finalText || "(no output)";
-  const projection = projectResult(output, {
-=======
-): ResultProjection {
   const output = subagentResultContent(snap);
-  return projectResult(output, {
->>>>>>> upstream/main
+  const projection = projectResult(output, {
     maxBytes: Math.min(maxBytes, DEFAULT_MAX_BYTES),
     maxLines: Math.min(600, DEFAULT_MAX_LINES),
     writeArtifact: (content) => persistResultArtifact(getAgentDir(), content),
