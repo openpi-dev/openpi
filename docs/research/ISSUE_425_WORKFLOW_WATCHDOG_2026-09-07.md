@@ -5,7 +5,7 @@ last-verified: 2026-09-07
 applies-to: OpenPI at a7455cd378ef7befa9c7cf099c1fa1e4ee5dc3e3 with Pi 0.85.1
 source-boundary: OpenPI source, deterministic tests, and the installed Pi 0.85.1 package
 related-issues: "#425, #424"
-related-prs: "待创建"
+related-prs: "#427"
 supersedes: none
 ---
 
@@ -65,4 +65,4 @@ provider，也没有声称测量慢 provider 的端到端成功率。Pi 或 Open
 
 - Issue：[#425](https://github.com/openpi-dev/openpi/issues/425)
 - 上游综合 Issue：[#424](https://github.com/openpi-dev/openpi/issues/424)
-- PR：待创建，创建后回填此处并在 Issue 留言互链。
+- PR：[#427](https://github.com/openpi-dev/openpi/pull/427)
