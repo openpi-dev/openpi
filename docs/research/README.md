@@ -4,6 +4,7 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md`](ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md) — headless 子 Session 被展示扩展覆盖 bash 定义、shellPath 丢失的根因与回归证据 ([#419](https://github.com/openpi-dev/openpi/issues/419), [PR #423](https://github.com/openpi-dev/openpi/pull/423))。
 - [`WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md`](WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md) — repeated synchronous history loading on dashboard animation ticks, its regression boundary, and measurement limits ([#420](https://github.com/openpi-dev/openpi/issues/420)).
 
 ## Legacy records
