@@ -204,6 +204,32 @@ test("Windows taskkill timeout waits for the stopped helper to close", async () 
   });
 });
 
+test("Windows taskkill timeout never falls back to a direct shell signal", async () => {
+  const killer = new EventEmitter() as ChildProcess;
+  killer.kill = () => {
+    queueMicrotask(() => killer.emit("close", null, "SIGKILL"));
+    return true;
+  };
+  const signals: Array<NodeJS.Signals | number | undefined> = [];
+
+  const result = await signalWindowsProcessTree(
+    {
+      pid: 47,
+      kill(signal) {
+        signals.push(signal);
+        return true;
+      },
+    },
+    "SIGKILL",
+    () => false,
+    () => killer,
+  );
+
+  assert.equal(result.outcome, "unresolved");
+  assert.match(result.detail, /helper closed after SIGKILL/);
+  assert.deepEqual(signals, []);
+});
+
 test("Windows taskkill helper close has a second explicit bound", async () => {
   const killer = new EventEmitter() as ChildProcess;
   killer.kill = () => true;

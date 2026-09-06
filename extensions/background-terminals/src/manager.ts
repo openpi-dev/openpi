@@ -395,11 +395,9 @@ export async function signalWindowsProcessTree(
       : attempt.outcome === "timed_out"
         ? `taskkill timed out after ${attempt.timeoutMs}ms; helper ${attempt.helperClosed ? "closed after SIGKILL" : `did not close within an additional ${attempt.helperCloseTimeoutMs}ms`}`
         : `taskkill exited ${attempt.exitCode ?? "without a code"}${attempt.signal ? ` (${attempt.signal})` : ""}`;
-  if (
-    attempt.outcome === "timed_out" &&
-    !attempt.helperClosed &&
-    !targetExited()
-  ) {
+  // ponytail: a closed helper proves only that taskkill stopped, not that the
+  // target tree was removed; retry or Job Objects can provide stronger proof.
+  if (attempt.outcome === "timed_out") {
     return { outcome: "unresolved", detail };
   }
   // A failed graceful taskkill must leave the shell PID alive for the
