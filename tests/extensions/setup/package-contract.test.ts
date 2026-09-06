@@ -38,7 +38,10 @@ const HOST_PACKAGES = [
 
 test("Pi host packages stay peers while local checks keep development copies", () => {
   for (const packageName of HOST_PACKAGES) {
-    assert.equal(manifest.peerDependencies?.[packageName], "*");
+    assert.equal(
+      manifest.peerDependencies?.[packageName],
+      packageName === "typebox" ? "*" : ">=0.85.1",
+    );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
   }
@@ -50,6 +53,10 @@ test("the manifest enforces the documented Node floor", () => {
 
 test("the standalone CLI ships its TypeScript module loader", () => {
   assert.equal(manifest.dependencies?.jiti, "2.7.0");
+});
+
+test("experimental Pi server stays outside OpenPI runtime dependencies", () => {
+  assert.equal(manifest.dependencies?.["@earendil-works/pi-server"], undefined);
 });
 
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {

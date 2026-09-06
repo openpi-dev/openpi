@@ -232,17 +232,19 @@ it.effect("binary resolution: fdfind is accepted as a system fd", () =>
 
 it.effect("binary resolution: an existing cached binary is used silently", () =>
   Effect.gen(function* () {
-    const env = makeEnv({ available: ["/cache/bin/rg"] });
+    const binDir = join("/cache", "bin");
+    const cachedBinary = join(binDir, "rg");
+    const env = makeEnv({ available: [cachedBinary] });
     const resolved = yield* resolveBinary(
       TOOL_SPECS.rg,
-      "/cache/bin",
+      binDir,
       darwinArm,
       env,
     );
 
     assert.deepEqual(resolved, {
       tool: "rg",
-      command: "/cache/bin/rg",
+      command: cachedBinary,
       source: "cached",
     });
     assert.equal(env.installs.length, 0);
@@ -253,16 +255,17 @@ it.effect(
   "binary resolution: missing everywhere triggers exactly one install",
   () =>
     Effect.gen(function* () {
+      const binDir = join("/repo", "bin");
       const env = makeEnv({ available: [] });
       const resolved = yield* resolveBinary(
         TOOL_SPECS.rg,
-        "/repo/bin",
+        binDir,
         darwinArm,
         env,
       );
 
       assert.equal(resolved.source, "installed");
-      assert.equal(resolved.command, "/repo/bin/rg");
+      assert.equal(resolved.command, join(binDir, "rg"));
       assert.equal(env.installs.length, 1);
       assert.match(
         env.installs[0].url,

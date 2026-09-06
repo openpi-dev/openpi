@@ -554,7 +554,12 @@ describe("worktree lifecycle", () => {
         `child ${index}\n`,
       );
     }
-    assert.equal(fs.readFileSync(path.join(repo, "a.txt"), "utf8"), "hello\n");
+    assert.equal(
+      fs
+        .readFileSync(path.join(repo, "a.txt"), "utf8")
+        .replaceAll("\r\n", "\n"),
+      "hello\n",
+    );
 
     for (const worktree of worktrees) {
       if (!worktree) continue;
@@ -577,10 +582,19 @@ describe("worktree lifecycle", () => {
     });
     assert.ok(inner.ok);
     if (!inner.ok) return;
-    assert.equal(
-      // realpath because git resolves symlinks and macOS tmpdirs are one.
-      fs.realpathSync(path.dirname(path.dirname(inner.worktree.path))),
-      fs.realpathSync(path.join(repo, ".git")),
+    const worktreeContainer = fs.statSync(
+      path.dirname(path.dirname(inner.worktree.path)),
+    );
+    const commonGitDirectory = fs.statSync(path.join(repo, ".git"));
+    assert.deepEqual(
+      {
+        dev: worktreeContainer.dev,
+        ino: worktreeContainer.ino,
+      },
+      {
+        dev: commonGitDirectory.dev,
+        ino: commonGitDirectory.ino,
+      },
     );
 
     git(repo, "worktree", "remove", "--force", inner.worktree.path);
