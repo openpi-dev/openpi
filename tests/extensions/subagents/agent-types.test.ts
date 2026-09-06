@@ -338,7 +338,7 @@ test("a project agent type overrides the global one of the same name", async () 
     // Global replaces the built-in, then the trusted project replaces global.
     const messages = diagnostics.map((entry) => entry.message).join("\n");
     assert.match(messages, /from built-in:explorer/);
-    assert.match(messages, /from .*agent\/agents\/explorer\.md/);
+    assert.match(messages, /from .*agent[\\/]agents[\\/]explorer\.md/);
   });
 });
 
@@ -577,7 +577,7 @@ Body.
   assert.match(messages, /unrecognized tool "gerp"/);
 });
 
-test("a symlinked agent type is discovered like a real file", async () => {
+test("a symlinked agent type is discovered like a real file", async (t) => {
   // These commonly live in a dotfiles repo and are symlinked into place — the
   // same shape this user's own ~/.pi/agent/skills uses. `isFile()` is false
   // for a symlink, so the type simply never appeared, with no diagnostic.
@@ -586,10 +586,21 @@ test("a symlinked agent type is discovered like a real file", async () => {
     const real = path.join(root, "dotfiles");
     await mkdir(real, { recursive: true });
     await writeFile(path.join(real, "explore.md"), VALID);
-    await symlink(
-      path.join(real, "explore.md"),
-      path.join(agentDir, "agents", "explore.md"),
-    );
+    try {
+      await symlink(
+        path.join(real, "explore.md"),
+        path.join(agentDir, "agents", "explore.md"),
+      );
+    } catch (error) {
+      if (
+        process.platform === "win32" &&
+        (error as NodeJS.ErrnoException).code === "EPERM"
+      ) {
+        t.skip("Windows file symlinks require Developer Mode or elevation");
+        return;
+      }
+      throw error;
+    }
 
     const { agentTypes } = loadAgentTypes({
       agentDir,
@@ -611,7 +622,11 @@ test("a symlink pointing at a directory is still skipped", async () => {
     const { agentDir, cwd } = await seed(root, {});
     const dir = path.join(root, "notafile");
     await mkdir(dir, { recursive: true });
-    await symlink(dir, path.join(agentDir, "agents", "broken.md"));
+    await symlink(
+      dir,
+      path.join(agentDir, "agents", "broken.md"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
 
     const { agentTypes } = loadAgentTypes({
       agentDir,

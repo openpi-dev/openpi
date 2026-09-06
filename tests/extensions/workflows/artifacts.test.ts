@@ -302,7 +302,7 @@ test("a dependent artifact write failure cannot leave the prior running manifest
 
     assert.throws(
       () => persistWorkflowJson(directory, details),
-      /EISDIR|directory/i,
+      /EISDIR|EPERM|directory/i,
     );
 
     const stored = JSON.parse(

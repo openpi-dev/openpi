@@ -1,7 +1,14 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import test from "node:test";
+import test, { afterEach } from "node:test";
 import vm from "node:vm";
+
+const appDisposers = new Set<() => Promise<void>>();
+
+afterEach(async () => {
+  await Promise.all([...appDisposers].map((dispose) => dispose()));
+  appDisposers.clear();
+});
 
 /**
  * Executes web/ui/app.js in a stubbed DOM and feeds it a representative
@@ -65,6 +72,7 @@ const SNAPSHOT = {
   protocolVersion: 1,
   generatedAt: new Date().toISOString(),
   cursor: 1,
+  preferences: { theme: "dark" as const },
   currentSessionId: "s1",
   workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
   sessions: [
@@ -257,9 +265,10 @@ const SNAPSHOT = {
 
 type SnapshotFixture = Omit<
   typeof SNAPSHOT,
-  "currentSessionId" | "selectedSession"
+  "currentSessionId" | "selectedSession" | "preferences"
 > & {
   currentSessionId?: string;
+  preferences: { theme: "system" | "light" | "dark" };
   selectedSession?: typeof SNAPSHOT.selectedSession;
 };
 
@@ -268,6 +277,7 @@ async function renderApp(
     eventRecords?: string[];
     snapshot?: SnapshotFixture;
     storageValues?: Record<string, string>;
+    systemDark?: boolean;
   } = {},
 ) {
   const elements = new Map<string, ElementStub>();
@@ -291,9 +301,20 @@ async function renderApp(
     setItem: (key: string, value: string) => stored.set(key, value),
   };
   const replaced: string[] = [];
+  const windowListeners = new Map<
+    string,
+    Array<(event?: Record<string, unknown>) => void>
+  >();
   let eventFetches = 0;
   let snapshotFetches = 0;
   let readerCancellations = 0;
+  const systemThemeListeners = new Set<() => void>();
+  const systemTheme = {
+    matches: options.systemDark ?? false,
+    addEventListener: (_type: string, listener: () => void) => {
+      systemThemeListeners.add(listener);
+    },
+  };
   const encodedEvents = (options.eventRecords || []).map((record) =>
     new TextEncoder().encode(record),
   );
@@ -313,6 +334,7 @@ async function renderApp(
         eventFetches++;
         const connectionEvents = eventFetches === 1 ? encodedEvents : [];
         let index = 0;
+        let resolveRead: ((value: { done: boolean }) => void) | undefined;
         return {
           ok: true,
           status: 200,
@@ -320,6 +342,7 @@ async function renderApp(
             getReader: () => ({
               cancel: async () => {
                 readerCancellations++;
+                resolveRead?.({ done: true });
               },
               read: () =>
                 index < connectionEvents.length
@@ -327,7 +350,9 @@ async function renderApp(
                       done: false,
                       value: connectionEvents[index++],
                     })
-                  : new Promise(() => {}),
+                  : new Promise((resolve) => {
+                      resolveRead = resolve;
+                    }),
             }),
           },
         };
@@ -344,10 +369,12 @@ async function renderApp(
     clearTimeout,
     setInterval,
     clearInterval,
+    matchMedia: () => systemTheme,
     URLSearchParams,
     URL,
     TextDecoder,
     TextEncoder,
+    AbortController,
     Element: class Element {},
   };
   context.window = {
@@ -357,6 +384,16 @@ async function renderApp(
     clearInterval,
     setTimeout,
     clearTimeout,
+    addEventListener(
+      type: string,
+      listener: (event?: Record<string, unknown>) => void,
+    ) {
+      windowListeners.set(type, [
+        ...(windowListeners.get(type) ?? []),
+        listener,
+      ]);
+    },
+    matchMedia: () => systemTheme,
   };
   context.globalThis = context;
   vm.createContext(context as vm.Context);
@@ -374,6 +411,17 @@ async function renderApp(
   );
   vm.runInContext(source, context as vm.Context, { filename: "app.js" });
   await new Promise((resolve) => setTimeout(resolve, 200));
+  const dispatchWindowEvent = (
+    type: string,
+    event?: Record<string, unknown>,
+  ) => {
+    for (const listener of windowListeners.get(type) ?? []) listener(event);
+  };
+  const dispose = async () => {
+    dispatchWindowEvent("pagehide", { persisted: false });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  };
+  appDisposers.add(dispose);
   return {
     elements,
     stored,
@@ -382,6 +430,11 @@ async function renderApp(
     snapshotFetches: () => snapshotFetches,
     readerCancellations: () => readerCancellations,
     context,
+    documentElement: documentStub.documentElement,
+    setSystemTheme(dark: boolean) {
+      systemTheme.matches = dark;
+      for (const listener of systemThemeListeners) listener();
+    },
     state: vm.runInContext("state", context as vm.Context) as typeof SNAPSHOT &
       Record<string, unknown>,
     selectSession: vm.runInContext("selectSession", context as vm.Context) as (
@@ -401,6 +454,21 @@ async function renderApp(
       "sendPrompt",
       context as vm.Context,
     ) as () => Promise<void>,
+    api: vm.runInContext("api", context as vm.Context) as (
+      path: string,
+      options?: Record<string, unknown>,
+    ) => Promise<unknown>,
+    readEventChunk: vm.runInContext(
+      "readEventChunk",
+      context as vm.Context,
+    ) as (
+      reader: { read(): Promise<unknown> },
+      timeoutMs?: number,
+    ) => Promise<unknown>,
+    cancelActiveTurn: vm.runInContext(
+      "cancelActiveTurn",
+      context as vm.Context,
+    ) as () => Promise<void>,
     updateComposer: vm.runInContext(
       "updateComposer",
       context as vm.Context,
@@ -412,6 +480,15 @@ async function renderApp(
       resetCursor?: boolean;
       epoch?: number;
     }) => Promise<boolean>,
+    dispose,
+    suspendForPageCache: async () => {
+      dispatchWindowEvent("pagehide", { persisted: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    resumeFromPageCache: async () => {
+      dispatchWindowEvent("pageshow", { persisted: true });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
   };
 }
 
@@ -434,7 +511,8 @@ function deferred<T>() {
 }
 
 test("app.js renders a full session without runtime errors", async () => {
-  const { elements } = await renderApp();
+  const { documentElement, elements } = await renderApp();
+  assert.equal(documentElement.dataset.theme, "dark");
   const conversation = elements.get("conversation");
   assert.ok(conversation, "conversation element exists");
   assert.match(conversation.innerHTML, /message-row user/);
@@ -446,6 +524,36 @@ test("app.js renders a full session without runtime errors", async () => {
   assert.match(conversation.innerHTML, /delivery/);
   assert.match(conversation.innerHTML, /file1/);
   assert.match(conversation.innerHTML, /最终总结/);
+});
+
+test("app.js resolves system theme and keeps explicit choices stable", async () => {
+  const systemLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "system" } },
+    systemDark: false,
+  });
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+  systemLight.setSystemTheme(true);
+  assert.equal(systemLight.documentElement.dataset.theme, "dark");
+  systemLight.setSystemTheme(false);
+  assert.equal(systemLight.documentElement.dataset.theme, "light");
+
+  const explicitDark = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "dark" } },
+    systemDark: false,
+  });
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+  explicitDark.setSystemTheme(true);
+  explicitDark.setSystemTheme(false);
+  assert.equal(explicitDark.documentElement.dataset.theme, "dark");
+
+  const explicitLight = await renderApp({
+    snapshot: { ...SNAPSHOT, preferences: { theme: "light" } },
+    systemDark: true,
+  });
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
+  explicitLight.setSystemTheme(false);
+  explicitLight.setSystemTheme(true);
+  assert.equal(explicitLight.documentElement.dataset.theme, "light");
 });
 
 test("app.js moves the bootstrap token into tab storage and clears the URL", async () => {
@@ -461,6 +569,189 @@ test("app.js resnapshots on an SSE cursor gap", async () => {
   assert.equal(app.eventFetches(), 1);
   assert.ok(app.snapshotFetches() >= 2);
   assert.ok(app.readerCancellations() >= 1);
+});
+
+test("app.js uses quiet-stream heartbeats for bounded snapshot recovery", async () => {
+  const heartbeat = ": heartbeat\n\n";
+  const app = await renderApp({
+    eventRecords: [heartbeat.repeat(4)],
+  });
+  assert.equal(app.eventFetches(), 1);
+  assert.ok(app.snapshotFetches() >= 2);
+  assert.equal(app.state.cursor, SNAPSHOT.cursor);
+});
+
+test("app.js keeps its one SSE loop across a back-forward cache restore", async () => {
+  const app = await renderApp();
+  assert.equal(app.eventFetches(), 1);
+  await app.suspendForPageCache();
+  await app.resumeFromPageCache();
+  assert.equal(app.eventFetches(), 1);
+});
+
+test("app.js bounds API waits and explains duplicate prompt admission", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (
+    _url: unknown,
+    options?: { signal?: AbortSignal },
+  ) =>
+    new Promise((_resolve, reject) => {
+      options?.signal?.addEventListener("abort", () => {
+        const error = new Error("aborted");
+        error.name = "AbortError";
+        reject(error);
+      });
+    });
+  await assert.rejects(
+    app.api("/api/stuck", { timeoutMs: 5, timeoutMessage: "bounded timeout" }),
+    /bounded timeout/u,
+  );
+  await assert.rejects(
+    app.readEventChunk({ read: () => new Promise(() => {}) }, 5),
+    /event stream stalled/u,
+  );
+
+  app.state.promptAdmissionPending = true;
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "another message";
+  await app.sendPrompt();
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "OpenPI is still accepting the previous message.",
+  );
+});
+
+test("app.js retries a timed-out admission with the exact same command", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  (
+    app.context.window as {
+      setTimeout(
+        callback: () => void,
+        delay: number,
+      ): ReturnType<typeof setTimeout>;
+    }
+  ).setTimeout = (callback: () => void, delay: number) =>
+    setTimeout(callback, delay === 30_000 ? 1 : delay);
+  app.context.fetch = (
+    url: unknown,
+    options?: {
+      body?: string;
+      signal?: AbortSignal;
+    },
+  ) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1) {
+        return new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener("abort", () => {
+            const error = new Error("aborted");
+            error.name = "AbortError";
+            reject(error);
+          });
+        });
+      }
+      return Promise.resolve(
+        response({ id: requests[0]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+
+  input.value = "admit this once";
+  await app.sendPrompt();
+  assert.equal(app.state.promptAdmissionPending, false);
+  assert.ok(app.state.promptAdmission);
+
+  await app.sendPrompt();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[0], {
+    sessionId: "s1",
+    content: "admit this once",
+    commandId: requests[0]?.commandId,
+    retry: false,
+  });
+  assert.deepEqual(requests[1], {
+    ...requests[0],
+    retry: true,
+  });
+  assert.equal(app.state.promptAdmission, null);
+});
+
+test("app.js preserves an uncertain transport admission without resetting an active turn", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  app.context.fetch = (url: unknown, options?: { body?: string }) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1)
+        return Promise.reject(new TypeError("network dropped"));
+      return Promise.resolve(
+        response({ id: requests[0]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  app.state.liveRunning = true;
+  app.state.livePhase = "running";
+  input.value = "do not duplicate this";
+
+  await app.sendPrompt();
+  assert.equal(app.state.livePhase, "running");
+  assert.ok(app.state.promptAdmission);
+
+  await app.sendPrompt();
+  assert.equal(requests.length, 2);
+  assert.equal(requests[0]?.commandId, requests[1]?.commandId);
+  assert.equal(requests[0]?.retry, false);
+  assert.equal(requests[1]?.retry, true);
+});
+
+test("app.js starts a new attempt after admission capacity rejects before dispatch", async () => {
+  const app = await renderApp();
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  const requests: Array<Record<string, unknown>> = [];
+  app.context.fetch = (url: unknown, options?: { body?: string }) => {
+    if (String(url) === "/api/prompt") {
+      requests.push(JSON.parse(options?.body || "{}"));
+      if (requests.length === 1) {
+        return Promise.resolve({
+          ok: false,
+          status: 503,
+          json: async () => ({
+            code: "PROMPT_ADMISSION_CAPACITY",
+            error: "prompt admission capacity is full",
+          }),
+        });
+      }
+      return Promise.resolve(
+        response({ id: requests[1]?.commandId, accepted: true }),
+      );
+    }
+    if (String(url).startsWith("/api/snapshot"))
+      return Promise.resolve(response(SNAPSHOT));
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  input.value = "try after capacity opens";
+
+  await app.sendPrompt();
+  assert.equal(app.state.promptAdmission, null);
+  await app.sendPrompt();
+
+  assert.equal(requests.length, 2);
+  assert.notEqual(requests[0]?.commandId, requests[1]?.commandId);
+  assert.equal(requests[0]?.retry, false);
+  assert.equal(requests[1]?.retry, false);
 });
 
 test("app.js invalidates snapshots for cross-tab session metadata events", async () => {
@@ -867,6 +1158,170 @@ test("app.js settles an admitted prompt that Pi handles without an agent turn", 
   assert.equal((app.state.terminalPromptIds as Set<string>).size, 32);
 });
 
+test("app.js stops only the canonical active turn without optimistic settlement", async () => {
+  const app = await renderApp();
+  const cancellation = deferred<ReturnType<typeof response>>();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/turns/cancel") return cancellation.promise;
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "turn_started", detail: {sessionId: "s1", commandId: "c1", epoch: 4}})',
+    app.context as vm.Context,
+  );
+
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.elements.get("stop-turn")?.hidden, false);
+  assert.equal(app.elements.get("send-prompt")?.hidden, true);
+  const stopping = app.cancelActiveTurn();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.turnCancellationPending, true);
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 3, type: "turn_settled", detail: {sessionId: "s1", commandId: "c1", epoch: 4, outcome: "cancelled"}})',
+    app.context as vm.Context,
+  );
+  cancellation.resolve(
+    response({
+      sessionId: "s1",
+      commandId: "c1",
+      epoch: 4,
+      state: "accepted",
+      accepted: true,
+    }),
+  );
+  await stopping;
+
+  assert.equal(app.state.liveRunning, false);
+  assert.equal(app.state.activeTurn, null);
+  assert.equal(app.elements.get("stop-turn")?.hidden, true);
+  assert.equal(app.elements.get("send-prompt")?.hidden, false);
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "Current turn stopped.",
+  );
+});
+
+test("app.js restores the active turn and Stop control from a snapshot", async () => {
+  const running = structuredClone(SNAPSHOT) as SnapshotFixture & {
+    runtime: typeof SNAPSHOT.runtime & {
+      activeTurn: { sessionId: string; commandId: string; epoch: number };
+    };
+  };
+  running.runtime.status = "running";
+  running.runtime.activeTurn = {
+    sessionId: "s1",
+    commandId: "c1",
+    epoch: 9,
+  };
+  const app = await renderApp({ snapshot: running });
+
+  assert.deepEqual(app.state.activeTurn, running.runtime.activeTurn);
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.elements.get("stop-turn")?.hidden, false);
+  assert.equal(app.elements.get("send-prompt")?.hidden, true);
+});
+
+test("app.js keeps an active agent running when a handled prompt settles", async () => {
+  const app = await renderApp();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "handled"}}); applyRuntimeEvent({sequence: 4, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "handled"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 5, type: "agent_settled", detail: {sessionId: "s1"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, false);
+  assert.equal(app.state.livePhase, "idle");
+});
+
+test("app.js keeps an active agent running when a queued prompt is accepted", async () => {
+  const app = await renderApp();
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_accepted", detail: {sessionId: "s1", commandId: "queued"}})',
+    app.context as vm.Context,
+  );
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+});
+
+test("app.js keeps an active agent running when its prompt receipt settles late", async () => {
+  const app = await renderApp();
+  const prompt = deferred<ReturnType<typeof response>>();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") return prompt.promise;
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "late receipt";
+  const sending = app.sendPrompt();
+  await new Promise((resolve) => setTimeout(resolve, 0));
+
+  vm.runInContext(
+    'applyRuntimeEvent({sequence: 2, type: "agent_start", detail: {sessionId: "s1"}}); applyRuntimeEvent({sequence: 3, type: "prompt_settled", detail: {sessionId: "s1", commandId: "late"}})',
+    app.context as vm.Context,
+  );
+  prompt.resolve(response({ id: "late", accepted: true }));
+  await sending;
+
+  assert.equal(app.state.liveRunning, true);
+  assert.equal(app.state.livePhase, "running");
+});
+
+test("app.js reports an admitted native follow-up queue snapshot", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({
+        id: "received",
+        accepted: true,
+        pendingFollowUps: 2,
+      });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "queue me";
+
+  await app.sendPrompt();
+
+  assert.match(
+    app.elements.get("composer-hint")?.textContent || "",
+    /2 follow-up messages were waiting when it was received/,
+  );
+});
+
+test("app.js reports acceptance without a queue count when none are pending", async () => {
+  const app = await renderApp();
+  app.context.fetch = async (url: unknown) => {
+    if (String(url) === "/api/prompt") {
+      return response({ id: "received", accepted: true, pendingFollowUps: 0 });
+    }
+    if (String(url).startsWith("/api/snapshot")) return response(SNAPSHOT);
+    throw new Error(`unexpected request: ${String(url)}`);
+  };
+  const input = app.elements.get("prompt-input");
+  assert.ok(input);
+  input.value = "receive me";
+
+  await app.sendPrompt();
+
+  assert.equal(
+    app.elements.get("composer-hint")?.textContent,
+    "Message accepted by OpenPI Web.",
+  );
+});
+
 test("app.js scopes model selection to its session epoch", async () => {
   const app = await renderApp();
   const model = deferred<ReturnType<typeof response>>();
@@ -938,7 +1393,12 @@ test("app.js accepts an unbound snapshot and preserves a chosen workspace throug
   activated.selectedSession.cwd = chosenPath;
   let currentSnapshot: SnapshotFixture = chosen;
   let sessionCreations = 0;
-  const prompts: Array<{ sessionId: string; content: string }> = [];
+  const prompts: Array<{
+    sessionId: string;
+    content: string;
+    commandId?: string;
+    retry?: boolean;
+  }> = [];
   app.context.fetch = async (url: unknown, options?: { body?: string }) => {
     if (String(url) === "/api/workspaces/select") {
       return response({ cancelled: false, path: chosenPath });
@@ -977,7 +1437,13 @@ test("app.js accepts an unbound snapshot and preserves a chosen workspace throug
     await new Promise((resolve) => setTimeout(resolve, 0));
   }
   assert.equal(sessionCreations, 1);
-  assert.deepEqual(prompts, [{ sessionId: "s1", content: "first task" }]);
+  assert.equal(prompts.length, 1);
+  assert.deepEqual(prompts[0], {
+    sessionId: "s1",
+    content: "first task",
+    commandId: prompts[0]?.commandId,
+    retry: false,
+  });
   assert.equal(app.state.selectedWorkspace, chosenPath);
   assert.equal(app.state.selectedPath, "/tmp/s1.jsonl");
   assert.equal(input.value, "");
