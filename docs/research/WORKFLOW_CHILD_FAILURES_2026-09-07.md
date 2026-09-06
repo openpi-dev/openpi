@@ -5,6 +5,7 @@
 - Observed runtime: `c8f2c13d49f2e6cd3b389dfff72ccc2eaca970c1`, the unique OpenPI source returned by `pi list`
 - Repair base: `a7455cd378ef7befa9c7cf099c1fa1e4ee5dc3e3`
 - Issue: [#424](https://github.com/openpi-dev/openpi/issues/424)
+- Repair PR: [#426](https://github.com/openpi-dev/openpi/pull/426)
 - Related performance repair: [#420](https://github.com/openpi-dev/openpi/issues/420), [PR #422](https://github.com/openpi-dev/openpi/pull/422)
 - Supersedes: none
 
