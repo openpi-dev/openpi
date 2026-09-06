@@ -34,6 +34,30 @@ export interface WebPromptOptions {
   expectedSessionId?: string;
 }
 
+export interface WebPromptAdmissionReceipt {
+  pendingFollowUps: number;
+}
+
+export interface WebActiveTurn {
+  sessionId: string;
+  commandId: string;
+  epoch: number;
+}
+
+export interface WebTurnCancellationOptions extends WebActiveTurn {}
+
+export type WebTurnCancellationState =
+  | "accepted"
+  | "already-settled"
+  | "stale-session"
+  | "stale-turn"
+  | "failed";
+
+export interface WebTurnCancellationResult extends WebActiveTurn {
+  state: WebTurnCancellationState;
+  error?: string;
+}
+
 export interface WebModelSelectionOptions {
   expectedSessionId?: string;
 }
@@ -56,7 +80,14 @@ export interface WebRuntimeController {
   readonly sessionManager: SessionManager;
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
-  sendPrompt(content: string, options?: WebPromptOptions): Promise<void>;
+  getActiveTurn(): WebActiveTurn | undefined;
+  sendPrompt(
+    content: string,
+    options?: WebPromptOptions,
+  ): Promise<WebPromptAdmissionReceipt>;
+  cancelTurn(
+    options: WebTurnCancellationOptions,
+  ): Promise<WebTurnCancellationResult>;
   newSession(
     workspacePath: string,
     options?: WebSessionCreationOptions,

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -49,8 +50,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       return sessionManager;
     },
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async (content) => {
       prompts.push(content);
+      return { pendingFollowUps: 0 };
     },
     newSession: async (workspacePath, options) => {
       newSessions++;
@@ -64,7 +68,22 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       };
     },
     switchSession: async () => ({ cancelled: false }),
-    listModels: () => [],
+    listModels: () => [
+      {
+        provider: "fixture",
+        id: "current-model",
+        name: "Current",
+        label: "Current",
+        current: true,
+      },
+      {
+        provider: "fixture",
+        id: "other-model",
+        name: "Other",
+        label: "Other",
+        current: false,
+      },
+    ],
     getProjectTrustStatus: () => ({
       source: "pi-project-trust",
       workspace: runtimeCwd,
@@ -178,10 +197,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.match(appSource, /history\.replaceState/);
     assert.match(appSource, /\/events\?cursor=/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.doesNotMatch(
-      appSource,
-      /applyTheme|message-edit-input|enterMessageEdit/,
-    );
+    assert.match(appSource, /applyThemePreference/);
+    assert.doesNotMatch(appSource, /message-edit-input|enterMessageEdit/);
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
 
     const marked = await fetch(`${launched.origin}/marked.js`);
@@ -201,6 +218,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       /\.landing \.composer-dock \{[\s\S]*?align-self: center;/,
     );
     assert.match(stylesSource, /\.workbench-header \{\s*display: none;\s*\}/);
+    assert.match(
+      stylesSource,
+      /@media \(max-width: 760px\) \{\s*\.workbench-header \{[^}]*backdrop-filter: none;[^}]*-webkit-backdrop-filter: none;/,
+    );
     assert.match(
       stylesSource,
       /\.composer\.dormant \{[^}]*border-style: dashed/,
@@ -248,10 +269,18 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.match(stylesSource, /\.workspace-delete-dialog/);
     assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.doesNotMatch(stylesSource, /html\[data-theme=/);
+    assert.match(stylesSource, /:root\[data-theme="dark"\]/);
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
+    const unauthorizedCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+    );
+    assert.equal(unauthorizedCapabilities.status, 401);
+    const unauthorizedDiagnostics = await fetch(
+      `${launched.origin}/api/diagnostics`,
+    );
+    assert.equal(unauthorizedDiagnostics.status, 401);
 
     const response = await fetch(`${launched.origin}/api/snapshot`, {
       headers: authorized,
@@ -260,6 +289,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const snapshot = (await response.json()) as {
       protocolVersion: number;
       cursor: number;
+      preferences: { theme: string };
       currentSessionId: string;
       workspaces: Array<{ path: string }>;
       sessions: Array<{ cwd: string; ungrouped?: boolean }>;
@@ -267,6 +297,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       runtime: { status: string; capabilities: Record<string, unknown> };
     };
     assert.equal(snapshot.protocolVersion, 1);
+    assert.equal(snapshot.preferences.theme, "system");
     assert.ok(snapshot.cursor >= 1);
     assert.equal(snapshot.currentSessionId, sessionManager.getSessionId());
     assert.ok(Array.isArray(snapshot.models));
@@ -316,6 +347,69 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       omitted: 0,
       truncated: false,
     });
+    const capabilitiesResponse = await fetch(
+      `${launched.origin}/api/capabilities`,
+      { headers: authorized },
+    );
+    assert.equal(capabilitiesResponse.status, 200);
+    const capabilitiesBody = (await capabilitiesResponse.json()) as {
+      sessionId: string;
+      capabilities: Record<string, unknown>;
+    };
+    assert.deepEqual(Object.keys(capabilitiesBody).sort(), [
+      "capabilities",
+      "sessionId",
+    ]);
+    assert.equal(capabilitiesBody.sessionId, sessionManager.getSessionId());
+    assert.deepEqual(
+      capabilitiesBody.capabilities,
+      snapshot.runtime.capabilities,
+    );
+    assert.doesNotMatch(
+      JSON.stringify(capabilitiesBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeCapabilities = await fetch(
+      `${launched.origin}/api/capabilities`,
+      {
+        method: "POST",
+        headers: authorized,
+        body: "{}",
+      },
+    );
+    assert.equal(writeCapabilities.status, 405);
+
+    const diagnosticsResponse = await fetch(
+      `${launched.origin}/api/diagnostics`,
+      { headers: authorized },
+    );
+    assert.equal(diagnosticsResponse.status, 200);
+    const diagnosticsBody = await diagnosticsResponse.json();
+    assert.deepEqual(diagnosticsBody, {
+      node: process.version,
+      cwd,
+      sessionId: sessionManager.getSessionId(),
+      workspaceSelected: true,
+      models: [
+        {
+          provider: "fixture",
+          id: "current-model",
+          name: "Current",
+          label: "Current",
+          current: true,
+        },
+      ],
+    });
+    assert.doesNotMatch(
+      JSON.stringify(diagnosticsBody),
+      /token|Authorization|Bearer|transcript|entries|messages|apiKey|secret/i,
+    );
+    const writeDiagnostics = await fetch(`${launched.origin}/api/diagnostics`, {
+      method: "POST",
+      headers: authorized,
+      body: "{}",
+    });
+    assert.equal(writeDiagnostics.status, 405);
 
     const sessionsResponse = await fetch(`${launched.origin}/api/sessions`, {
       headers: authorized,
@@ -549,8 +643,11 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     sessionDirectory: root,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       prompts++;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -608,6 +705,18 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     });
     assert.equal(prompts, 0);
 
+    const cancellation = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        sessionId: sessionManager.getSessionId(),
+        commandId: "command-a",
+        epoch: 1,
+      }),
+    });
+    assert.equal(cancellation.status, 409);
+    assert.equal((await cancellation.json()).code, "WORKSPACE_REQUIRED");
+
     const started = events.find((event) => event.type === "web_host_started");
     assert.ok(started);
     assert.equal("cwd" in (started.detail ?? {}), false);
@@ -633,9 +742,12 @@ test("returns accepted only after Pi admits the prompt", async () => {
     cwd,
     sessionManager,
     isIdle: () => false,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => {
       promptStarted = true;
       await promptAdmitted;
+      return { pendingFollowUps: 0 };
     },
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -676,7 +788,12 @@ test("returns accepted only after Pi admits the prompt", async () => {
     resolvePrompt();
     const response = await responsePromise;
     assert.equal(response.status, 202);
-    assert.equal((await response.json()).accepted, true);
+    const responseBody = (await response.json()) as {
+      accepted: boolean;
+      pendingFollowUps: number;
+    };
+    assert.equal(responseBody.accepted, true);
+    assert.equal(responseBody.pendingFollowUps, 0);
   } finally {
     resolvePrompt();
     await host.stop();
@@ -685,9 +802,72 @@ test("returns accepted only after Pi admits the prompt", async () => {
   }
 });
 
+test("returns an exact receipt for a turn-bound cancellation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-cancel-"));
+  const runtime = testRuntime(cwd);
+  const activeTurn = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    commandId: "command-a",
+    epoch: 3,
+  };
+  runtime.getActiveTurn = () => activeTurn;
+  runtime.cancelTurn = async (options) => ({
+    ...options,
+    state: "accepted",
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshotResponse = await fetch(`${launched.origin}/api/snapshot`, {
+      headers,
+    });
+    assert.equal(snapshotResponse.status, 200);
+    assert.deepEqual(
+      (await snapshotResponse.json()).runtime.activeTurn,
+      activeTurn,
+    );
+
+    const response = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      ...activeTurn,
+      state: "accepted",
+      accepted: true,
+      cursor: 1,
+    });
+
+    runtime.cancelTurn = async (options) => ({
+      ...options,
+      state: "stale-turn",
+    });
+    const stale = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify(activeTurn),
+    });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).state, "stale-turn");
+
+    const invalid = await fetch(`${launched.origin}/api/turns/cancel`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...activeTurn, epoch: 0 }),
+    });
+    assert.equal(invalid.status, 400);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function testRuntime(
   cwd: string,
-  sendPrompt: WebRuntimeController["sendPrompt"] = async () => {},
+  sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
+    pendingFollowUps: 0,
+  }),
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
@@ -696,6 +876,8 @@ function testRuntime(
     cwd,
     sessionManager,
     isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt,
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
@@ -718,6 +900,191 @@ async function startTestHost(runtime: WebRuntimeController) {
   const headers = { Authorization: `Bearer ${token}` };
   return { host, launched, headers };
 }
+
+test("classifies invalid and oversized JSON bodies as client errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const invalidJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: '{"path":',
+    });
+    assert.equal(invalidJson.status, 400);
+    assert.deepEqual(await invalidJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body is invalid JSON",
+    });
+
+    const nonObjectJson = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: "[]",
+    });
+    assert.equal(nonObjectJson.status, 400);
+    assert.deepEqual(await nonObjectJson.json(), {
+      code: "INVALID_REQUEST_BODY",
+      error: "request body must be an object",
+    });
+
+    const oversizedBody = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: "x".repeat(16 * 1024) }),
+    });
+    assert.equal(oversizedBody.status, 413);
+    assert.deepEqual(await oversizedBody.json(), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("classifies an oversized body sent in multiple chunks as a client error", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-chunks-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const bodyLength = 64 * 1024;
+  let request: ReturnType<typeof httpRequest> | undefined;
+  const responsePromise = new Promise<{
+    statusCode: number | undefined;
+    body: string;
+  }>((resolve, reject) => {
+    request = httpRequest(
+      {
+        hostname: launched.hostname,
+        port: Number(launched.port),
+        path: "/api/workspaces",
+        method: "POST",
+        headers: {
+          ...headers,
+          "Content-Type": "application/json",
+          "Content-Length": bodyLength,
+        },
+      },
+      (response) => {
+        let body = "";
+        response.setEncoding("utf8");
+        response.on("data", (chunk: string) => {
+          body += chunk;
+        });
+        response.on("end", () =>
+          resolve({ statusCode: response.statusCode, body }),
+        );
+      },
+    );
+    request.once("error", reject);
+    request.write(Buffer.alloc(20 * 1024, "a"));
+  });
+
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error("timed out waiting for early 413 response")),
+        2_000,
+      );
+      timer.unref();
+    });
+    const response = await Promise.race([responsePromise, timeout]);
+    assert.equal(response.statusCode, 413);
+    assert.deepEqual(JSON.parse(response.body), {
+      code: "REQUEST_BODY_TOO_LARGE",
+      error: "request body is too large",
+      maxBytes: 16 * 1024,
+    });
+  } finally {
+    request?.destroy();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("keeps unexpected Web Host failures classified as server errors", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-server-error-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  const adapter = (
+    host as unknown as {
+      adapter: { importWorkspace(path: string): Promise<string> };
+    }
+  ).adapter;
+  adapter.importWorkspace = async () => {
+    throw new Error("unexpected adapter failure");
+  };
+  try {
+    const response = await fetch(`${launched.origin}/api/workspaces`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: cwd }),
+    });
+    assert.equal(response.status, 500);
+    assert.deepEqual(await response.json(), {
+      error: "unexpected adapter failure",
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("quiet SSE clients receive heartbeats without advancing the event cursor", {
+  timeout: 2_000,
+}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-heartbeat-"));
+  const host = new WebHost({
+    runtime: testRuntime(cwd),
+    sseHeartbeatMs: 10,
+  });
+  let request: ReturnType<typeof httpRequest> | undefined;
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}` };
+    const before = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    await new Promise<void>((resolve, reject) => {
+      const timeout = setTimeout(
+        () => reject(new Error("timed out waiting for an SSE heartbeat")),
+        1_000,
+      );
+      request = httpRequest(
+        {
+          hostname: launched.hostname,
+          port: Number(launched.port),
+          path: `/events?cursor=${before.cursor}`,
+          headers,
+        },
+        (response) => {
+          assert.equal(response.statusCode, 200);
+          response.setEncoding("utf8");
+          let received = "";
+          response.on("data", (chunk: string) => {
+            received += chunk;
+            if (!received.includes(": heartbeat\n\n")) return;
+            clearTimeout(timeout);
+            resolve();
+          });
+          response.once("error", reject);
+        },
+      );
+      request.once("error", reject);
+      request.end();
+    });
+    const after = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    assert.equal(after.cursor, before.cursor);
+  } finally {
+    request?.destroy();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 test("adapter initialization fails before the Host starts listening", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-startup-failure-"));
@@ -748,7 +1115,7 @@ async function readEventRecords(response: Response, count: number) {
   let buffer = "";
   const records: Array<{
     id: number;
-    event: { sequence: number; type: string };
+    event: { sequence: number; type: string; detail?: Record<string, unknown> };
   }> = [];
   while (records.length < count) {
     const chunk = await reader.read();
@@ -768,7 +1135,11 @@ async function readEventRecords(response: Response, count: number) {
       if (!id || !data) continue;
       records.push({
         id: Number(id),
-        event: JSON.parse(data) as { sequence: number; type: string },
+        event: JSON.parse(data) as {
+          sequence: number;
+          type: string;
+          detail?: Record<string, unknown>;
+        },
       });
     }
   }
@@ -783,7 +1154,9 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
     "PROMPT_REJECTED",
     422,
   );
+  let sendCalls = 0;
   const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
     throw rejection;
   });
   const { host, launched, headers } = await startTestHost(runtime);
@@ -794,6 +1167,8 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
         content: "reject me",
+        commandId: "rejected-admission",
+        retry: false,
       }),
     });
     assert.equal(response.status, 422);
@@ -801,6 +1176,246 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       code: "PROMPT_REJECTED",
       error: "Pi rejected this prompt",
     });
+    const replay = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "reject me",
+        commandId: "rejected-admission",
+        retry: true,
+      }),
+    });
+    assert.equal(replay.status, 422);
+    assert.deepEqual(await replay.json(), {
+      code: "PROMPT_REJECTED",
+      error: "Pi rejected this prompt",
+    });
+    assert.equal(sendCalls, 1);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("replays one prompt admission after a browser timeout", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-retry-"));
+  let sendCalls = 0;
+  let releaseAdmission!: () => void;
+  const admitted = new Promise<void>((resolve) => {
+    releaseAdmission = resolve;
+  });
+  let runtimePendingFollowUps = 2;
+  const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
+    await admitted;
+    const receipt = { pendingFollowUps: runtimePendingFollowUps };
+    runtimePendingFollowUps = 0;
+    return receipt;
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const commandId = "browser-timeout-retry";
+  const prompt = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    content: "send this exactly once",
+    commandId,
+  };
+  try {
+    const abort = new AbortController();
+    const timedOut = fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...prompt, retry: false }),
+      signal: abort.signal,
+    });
+    while (sendCalls === 0) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    abort.abort();
+    await assert.rejects(timedOut, /abort/u);
+    // The host can accept after the client loses its receipt. The retry must
+    // replay that completed admission rather than dispatch it again.
+    releaseAdmission();
+    while (
+      (
+        (await (
+          await fetch(`${launched.origin}/api/snapshot`, { headers })
+        ).json()) as { cursor: number }
+      ).cursor < 2
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+
+    const replay = fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ ...prompt, retry: true }),
+    });
+    const response = await replay;
+    assert.equal(response.status, 202);
+    assert.deepEqual(await response.json(), {
+      id: commandId,
+      accepted: true,
+      state: "accepted",
+      pendingFollowUps: 2,
+      cursor: 2,
+    });
+    assert.equal(runtimePendingFollowUps, 0);
+    assert.equal(sendCalls, 1);
+
+    const conflict = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        content: "different body",
+        retry: true,
+      }),
+    });
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), {
+      code: "COMMAND_CONFLICT",
+      error: "commandId is already bound to a different prompt",
+    });
+
+    const unknown = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        ...prompt,
+        commandId: "after-host-restart",
+        retry: true,
+      }),
+    });
+    assert.equal(unknown.status, 409);
+    assert.deepEqual(await unknown.json(), {
+      code: "COMMAND_ADMISSION_UNKNOWN",
+      error:
+        "previous prompt admission is unknown; refresh canonical state before sending a new request",
+    });
+    assert.equal(sendCalls, 1);
+  } finally {
+    releaseAdmission?.();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("fails closed instead of evicting pending prompt admissions", {
+  timeout: 10_000,
+}, async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-capacity-"));
+  let sendCalls = 0;
+  let releaseAdmissions!: () => void;
+  const held = new Promise<void>((resolve) => {
+    releaseAdmissions = resolve;
+  });
+  const runtime = testRuntime(cwd, async () => {
+    sendCalls++;
+    await held;
+    return { pendingFollowUps: 0 };
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const requests = Array.from({ length: 128 }, (_, index) =>
+      fetch(`${launched.origin}/api/prompt`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: runtime.sessionManager.getSessionId(),
+          content: `pending ${index}`,
+          commandId: `pending-${index}`,
+          retry: false,
+        }),
+      }),
+    );
+    while (sendCalls !== 128) {
+      await new Promise((resolve) => setTimeout(resolve, 1));
+    }
+    const overflow = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "must not replace a pending admission",
+        commandId: "overflow",
+        retry: false,
+      }),
+    });
+    assert.equal(overflow.status, 503);
+    assert.deepEqual(await overflow.json(), {
+      code: "PROMPT_ADMISSION_CAPACITY",
+      error:
+        "prompt admission capacity is full; wait for a pending admission to settle",
+    });
+    assert.equal(sendCalls, 128);
+    releaseAdmissions();
+    assert.ok(
+      (await Promise.all(requests)).every(
+        (response) => response.status === 202,
+      ),
+    );
+  } finally {
+    releaseAdmissions?.();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("returns and publishes the observed follow-up queue receipt", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-prompt-queue-"));
+  const runtime = testRuntime(cwd, async () => ({
+    pendingFollowUps: 2,
+  }));
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        content: "queue me",
+      }),
+    });
+    assert.equal(response.status, 202);
+    const receipt = (await response.json()) as {
+      id: string;
+      accepted: boolean;
+      state: string;
+      pendingFollowUps: number;
+      cursor: number;
+    };
+    assert.match(receipt.id, /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...receipt, id: undefined },
+      {
+        id: undefined,
+        accepted: true,
+        state: "accepted",
+        pendingFollowUps: 2,
+        cursor: snapshot.cursor + 1,
+      },
+    );
+    const events = await readEventRecords(
+      await fetch(`${launched.origin}/events?cursor=${snapshot.cursor}`, {
+        headers,
+      }),
+      1,
+    );
+    assert.equal(events[0].event.sequence, snapshot.cursor + 1);
+    assert.equal(events[0].event.type, "prompt_accepted");
+    assert.match(String(events[0].event.detail?.commandId), /^[0-9a-f-]{36}$/u);
+    assert.deepEqual(
+      { ...events[0].event.detail, commandId: undefined },
+      {
+        commandId: undefined,
+        sessionId: runtime.sessionManager.getSessionId(),
+        pendingFollowUps: 2,
+      },
+    );
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
@@ -1142,6 +1757,7 @@ test("stop rejects a late keepalive mutation before it enters the drain", async 
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await promptBarrier;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     releasePrompt();
@@ -1326,6 +1942,7 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
   const runtime = testRuntime(cwd, async () => {
     promptStarted();
     await pendingPrompt;
+    return { pendingFollowUps: 0 };
   });
   runtime.dispose = async () => {
     disposeCalls++;

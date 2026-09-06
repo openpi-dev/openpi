@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import { test } from "node:test";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import {
@@ -16,7 +17,7 @@ function deferred<T = void>() {
 
 test("reuses one in-memory SessionManager for an operator identity", async () => {
   const registry = new WorkflowOperatorRegistry();
-  const cwd = "/tmp/openpi-operator";
+  const cwd = resolve("/tmp/openpi-operator");
   const managers: SessionManager[] = [];
   const identity = {
     key: "reviewer:1",
