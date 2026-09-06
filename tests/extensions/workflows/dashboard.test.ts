@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import {
   chmodSync,
   mkdirSync,
@@ -7,6 +8,7 @@ import {
   statSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -930,4 +932,199 @@ test("narrator lines survive the disk round trip and are re-sanitized", () => {
     !/[\u0000-\u001f\u007f-\u009f]/.test(details?.logs?.[1]?.text ?? ""),
   );
   assert.equal(details?.logsDropped, 4);
+});
+
+function performanceDashboard(
+  active: Map<string, WorkflowDetails>,
+  initialRunId?: string,
+  retained: Map<string, WorkflowDetails> = new Map(),
+  startedSince = 0,
+) {
+  return new WorkflowDashboard(
+    { terminal: { rows: 30 }, requestRender() {} } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches: () => false,
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => active,
+    SESSION,
+    new Set(),
+    startedSince,
+    () => {},
+    initialRunId,
+    undefined,
+    () => retained,
+  );
+}
+
+test("animation and navigation reuse history while live progress and settlement remain visible", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const runId = "wf_ab120";
+  const details = {
+    ...retainedRun(runId, Date.now()),
+    status: "running" as const,
+  };
+  delete details.finishedAt;
+  writeRun(runId, details.startedAt);
+  const active = new Map<string, WorkflowDetails>([[runId, details]]);
+  const dashboard = performanceDashboard(active);
+  const read = t.mock.method(fs, "readFileSync");
+  const scan = t.mock.method(fs, "readdirSync");
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  try {
+    details.name = "updated-live-name";
+    for (let i = 0; i < 10; i++) {
+      t.mock.timers.tick(SPINNER_INTERVAL_MS);
+      dashboard.render(100);
+    }
+    assert.match(dashboard.render(100).join("\n"), /updated-live-name/);
+    dashboard.handleInput("l");
+    dashboard.handleInput("h");
+    assert.equal(
+      read.mock.callCount(),
+      0,
+      "animation/navigation must not reread history",
+    );
+    assert.equal(
+      scan.mock.callCount(),
+      0,
+      "animation/navigation must not rescan history",
+    );
+
+    // Completion is still read from canonical disk once the live owner leaves.
+    writeFileSync(
+      join(agentDir, "workflows", runId, "workflow.json"),
+      JSON.stringify({
+        ...details,
+        name: "canonical-settled-name",
+        status: "completed",
+        finishedAt: Date.now(),
+      }),
+    );
+    active.delete(runId);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS);
+    assert.match(dashboard.render(100).join("\n"), /canonical-settled-name/);
+    const readsAfterSettlement = read.mock.callCount();
+    assert.equal(readsAfterSettlement, 1);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS * 10);
+    assert.equal(read.mock.callCount(), readsAfterSettlement);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
+test("history overview defers artifacts until a persisted transcript is opened", (t) => {
+  const runId = "wf_ab121";
+  const details = retainedRun(runId, Date.now());
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      ...details,
+      transcriptArtifact: "transcripts.json",
+      resultArtifact: "result.json",
+      phases: [{ title: "Work" }],
+      agents: [
+        {
+          index: 1,
+          label: "worker",
+          phase: "Work",
+          state: "done",
+          startedAt: details.startedAt,
+        },
+      ],
+    }),
+  );
+  writeFileSync(
+    join(dir, "transcripts.json"),
+    JSON.stringify({
+      "1": [{ role: "assistant", text: "lazy transcript evidence" }],
+    }),
+  );
+  writeFileSync(
+    join(dir, "result.json"),
+    JSON.stringify("lazy result evidence"),
+  );
+  const read = t.mock.method(fs, "readFileSync");
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  const artifactReads = () =>
+    read.mock.calls.filter((call) =>
+      /(?:transcripts|result)\.json$/.test(String(call.arguments[0])),
+    ).length;
+  const dashboard = performanceDashboard(new Map(), runId);
+  try {
+    assert.equal(
+      artifactReads(),
+      0,
+      "overview must not hydrate side artifacts",
+    );
+    dashboard.handleInput("l");
+    assert.equal(
+      artifactReads(),
+      0,
+      "agent list must not hydrate side artifacts",
+    );
+    dashboard.handleInput("l");
+    assert.match(dashboard.render(100).join("\n"), /lazy transcript evidence/);
+    const loaded = artifactReads();
+    assert.ok(loaded > 0);
+    dashboard.render(100);
+    dashboard.render(100);
+    assert.equal(
+      artifactReads(),
+      loaded,
+      "render must reuse the loaded transcript",
+    );
+  } finally {
+    dashboard.dispose();
+  }
+});
+
+test("retained history excluded by request time is not retried on animation ticks", (t) => {
+  t.mock.timers.enable({ apis: ["setInterval"] });
+  const oldId = "wf_ab122";
+  const liveId = "wf_ab123";
+  const old = retainedRun(oldId, 1);
+  writeRun(oldId, 1);
+  const live = { ...retainedRun(liveId, 10_000), status: "running" as const };
+  const retained = new Map([[oldId, old]]);
+  const dashboard = performanceDashboard(
+    new Map([[liveId, live]]),
+    undefined,
+    retained,
+    5_000,
+  );
+  const read = t.mock.method(fs, "readFileSync");
+  syncBuiltinESMExports();
+  t.after(() => {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+  });
+  try {
+    t.mock.timers.tick(SPINNER_INTERVAL_MS * 10);
+    assert.equal(read.mock.callCount(), 0);
+    // A run may finish entirely between frames; retention must surface it.
+    const finished = retainedRun("wf_ab124", 11_000);
+    retained.set(finished.runId, finished);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS);
+    assert.match(dashboard.render(100).join("\n"), /wf_ab124/);
+    assert.equal(read.mock.callCount(), 1);
+    t.mock.timers.tick(SPINNER_INTERVAL_MS * 10);
+    assert.equal(read.mock.callCount(), 1);
+  } finally {
+    dashboard.dispose();
+  }
 });
