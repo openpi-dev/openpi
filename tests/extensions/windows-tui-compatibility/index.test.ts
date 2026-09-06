@@ -7,8 +7,8 @@ import type {
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import {
   registerWindowsTuiCompatibility,
+  shouldEnableWindowsClearOnShrink,
   shouldInstallWindowsTuiCompatibility,
-  shouldPreferWindowsFullscreen,
 } from "../../../extensions/windows-tui-compatibility/index.ts";
 
 type WidgetFactory = (
@@ -86,30 +86,30 @@ test("installs only for interactive Windows sessions", () => {
   assert.equal(shouldInstallWindowsTuiCompatibility("win32", "rpc"), false);
 
   assert.equal(
-    shouldPreferWindowsFullscreen({ platform: "win32", mode: "tui" }),
+    shouldEnableWindowsClearOnShrink({ platform: "win32", mode: "tui" }),
     true,
   );
   assert.equal(
-    shouldPreferWindowsFullscreen({
+    shouldEnableWindowsClearOnShrink({
       platform: "win32",
       mode: "tui",
-      globalTuiMode: "regular",
+      globalClearOnShrink: false,
     }),
     false,
   );
   assert.equal(
-    shouldPreferWindowsFullscreen({
+    shouldEnableWindowsClearOnShrink({
       platform: "win32",
       mode: "tui",
-      projectTuiMode: "fullscreen",
+      globalClearOnShrink: true,
     }),
     false,
   );
   assert.equal(
-    shouldPreferWindowsFullscreen({
+    shouldEnableWindowsClearOnShrink({
       platform: "win32",
       mode: "tui",
-      explicitCliTuiMode: true,
+      projectClearOnShrink: false,
     }),
     false,
   );
@@ -119,9 +119,12 @@ test("installs only for interactive Windows sessions", () => {
   assert.equal(linux.widgetFactory, undefined);
 });
 
-test("enables clear-on-shrink for regular TUI but not fullscreen", () => {
-  const harness = createHarness("win32");
-  harness.emit("session_start");
+test("enables clear-on-shrink for regular TUI but not fullscreen", async () => {
+  const harness = createHarness("win32", "tui", async () => ({
+    getGlobalSettings: () => ({}),
+    getProjectSettings: () => ({}),
+  }));
+  await harness.emit("session_start");
 
   const clearOnShrink: boolean[] = [];
   harness.mount({
@@ -148,33 +151,46 @@ test("enables clear-on-shrink for regular TUI but not fullscreen", () => {
   assert.deepEqual(clearOnShrink, []);
 });
 
-test("persists fullscreen only when no TUI mode is configured", async () => {
-  let selectedMode: string | undefined;
-  let flushCount = 0;
-  const unset = createHarness("win32", "tui", async () => ({
-    getGlobalSettings: () => ({}),
-    getProjectSettings: () => ({}),
-    setTuiMode: (mode: "regular" | "fullscreen") => {
-      selectedMode = mode;
-    },
-    flush: async () => {
-      flushCount += 1;
-    },
-  }));
-  await unset.emit("session_start");
-  assert.equal(selectedMode, "fullscreen");
-  assert.equal(flushCount, 1);
-  assert.match(unset.notifications[0] ?? "", /Restart Pi/);
-
+test("keeps the workaround session-local and respects explicit clear-on-shrink", async () => {
+  const writes: string[] = [];
   const explicit = createHarness("win32", "tui", async () => ({
-    getGlobalSettings: () => ({ tuiMode: "regular" as const }),
+    getGlobalSettings: () => ({ terminal: { clearOnShrink: false } }),
     getProjectSettings: () => ({}),
-    setTuiMode: () => {
-      throw new Error("must not override an explicit mode");
-    },
+    drainErrors: () => [],
   }));
   await explicit.emit("session_start");
+
+  const clearOnShrink: boolean[] = [];
+  explicit.mount({
+    mode: "regular",
+    setClearOnShrink(enabled: boolean) {
+      writes.push("clear-on-shrink");
+      clearOnShrink.push(enabled);
+    },
+    requestRender() {},
+  } as TUI);
+
+  assert.deepEqual(clearOnShrink, []);
   assert.deepEqual(explicit.notifications, []);
+  assert.deepEqual(writes, []);
+});
+
+test("fails closed when settings cannot be read", async () => {
+  const harness = createHarness("win32", "tui", async () => {
+    throw new Error("malformed settings");
+  });
+  await harness.emit("session_start");
+
+  const clearOnShrink: boolean[] = [];
+  harness.mount({
+    mode: "regular",
+    setClearOnShrink(enabled: boolean) {
+      clearOnShrink.push(enabled);
+    },
+    requestRender() {},
+  } as TUI);
+
+  assert.deepEqual(clearOnShrink, []);
 });
 
 test("cleans up the compatibility widget on shutdown", () => {

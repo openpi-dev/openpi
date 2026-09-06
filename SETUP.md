@@ -18,15 +18,18 @@ Pi installs the package dependencies automatically. Restart Pi or run `/reload` 
 
 On Windows, OpenPI detects the stale autocomplete-row redraw problem in Pi's
 `regular` (main-screen) renderer. When neither global nor project settings
-explicitly selects a TUI mode, it saves `fullscreen` as the safe default for
-the next start and shows a one-time restart notice. This prevents old
-slash-command autocomplete rows from making commands look duplicated.
+explicitly sets `terminal.clearOnShrink`, it enables Pi's supported
+`clear-on-shrink` behavior for the current renderer only. This prevents old
+slash-command autocomplete rows from making commands look duplicated without
+changing a global or project preference.
 
-If you explicitly select `regular`, OpenPI preserves that choice and enables
-Pi's supported `clear-on-shrink` behavior as a best-effort mitigation.
+An explicit `terminal.clearOnShrink` value is always preserved, including
+`false`. OpenPI also leaves the selected `tuiMode` unchanged; use Pi's native
+`/settings`, `settings.json`, or the `--tui-mode` flag when you want to choose
+that mode explicitly.
 
-If you prefer the alternate-screen renderer, Pi's `fullscreen` mode remains
-available from `/settings` or `settings.json`:
+For example, Pi's alternate-screen renderer remains available from `/settings`
+or `settings.json`:
 
 ```json
 {

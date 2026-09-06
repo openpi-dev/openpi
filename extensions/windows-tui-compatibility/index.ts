@@ -3,13 +3,16 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 
-type TuiMode = "regular" | "fullscreen";
+interface TuiSettings {
+  terminal?: {
+    clearOnShrink?: boolean;
+  };
+}
 
 interface TuiSettingsManager {
-  getGlobalSettings(): { tuiMode?: TuiMode };
-  getProjectSettings(): { tuiMode?: TuiMode };
-  setTuiMode?(mode: TuiMode): void;
-  flush?(): Promise<void>;
+  getGlobalSettings(): TuiSettings;
+  getProjectSettings(): TuiSettings;
+  drainErrors?(): readonly unknown[];
 }
 
 type TuiSettingsManagerFactory = (
@@ -30,19 +33,26 @@ export function shouldInstallWindowsTuiCompatibility(
   return platform === "win32" && mode === "tui";
 }
 
-export function shouldPreferWindowsFullscreen(options: {
+export function shouldEnableWindowsClearOnShrink(options: {
   platform: NodeJS.Platform;
   mode: ExtensionContext["mode"];
-  globalTuiMode?: TuiMode;
-  projectTuiMode?: TuiMode;
-  explicitCliTuiMode?: boolean;
+  globalClearOnShrink?: boolean;
+  projectClearOnShrink?: boolean;
 }) {
   return (
     shouldInstallWindowsTuiCompatibility(options.platform, options.mode) &&
-    options.globalTuiMode === undefined &&
-    options.projectTuiMode === undefined &&
-    options.explicitCliTuiMode !== true
+    options.globalClearOnShrink === undefined &&
+    options.projectClearOnShrink === undefined
   );
+}
+
+function readClearOnShrinkSettings(settingsManager: TuiSettingsManager) {
+  const globalSettings = settingsManager.getGlobalSettings();
+  const projectSettings = settingsManager.getProjectSettings();
+  return {
+    globalClearOnShrink: globalSettings.terminal?.clearOnShrink,
+    projectClearOnShrink: projectSettings.terminal?.clearOnShrink,
+  };
 }
 
 /**
@@ -51,6 +61,11 @@ export function shouldPreferWindowsFullscreen(options: {
  * Pi exposes the renderer to widget factories, but not as a direct property
  * on ExtensionContext. The zero-height widget lets us apply the supported
  * renderer setting without replacing OpenPI's header, footer, or editor.
+ *
+ * The renderer setting is deliberately session-local. Pi's SettingsManager
+ * setters persist global preferences, so this compatibility extension only
+ * reads the existing clear-on-shrink settings and never changes tuiMode or
+ * terminal preferences on the user's behalf.
  */
 export function registerWindowsTuiCompatibility(
   pi: ExtensionAPI,
@@ -73,13 +88,33 @@ export function registerWindowsTuiCompatibility(
     cleanup();
     if (!shouldInstallWindowsTuiCompatibility(platform, ctx.mode)) return;
 
+    let enableClearOnShrink = false;
+    if (settingsManagerFactory) {
+      try {
+        const settingsManager = await settingsManagerFactory(ctx.cwd);
+        const settings = readClearOnShrinkSettings(settingsManager);
+        const settingsErrors = settingsManager.drainErrors?.() ?? [];
+        enableClearOnShrink =
+          settingsErrors.length === 0 &&
+          shouldEnableWindowsClearOnShrink({
+            platform,
+            mode: ctx.mode,
+            ...settings,
+          });
+      } catch {
+        // Settings reads must never prevent the OpenPI session from starting.
+      }
+    }
+
     activeUi = ctx.ui;
     ctx.ui.setWidget(
       WIDGET_KEY,
       (tui) => {
         // The renderer can be replaced at runtime when the user switches TUI
         // modes, so apply this when the factory receives the active renderer.
-        if (tui.mode === "regular") tui.setClearOnShrink(true);
+        if (tui.mode === "regular" && enableClearOnShrink) {
+          tui.setClearOnShrink(true);
+        }
         return {
           render: () => [],
           invalidate() {},
@@ -87,39 +122,6 @@ export function registerWindowsTuiCompatibility(
       },
       { placement: "belowEditor" },
     );
-
-    if (!settingsManagerFactory) return;
-
-    try {
-      const settingsManager = await settingsManagerFactory(ctx.cwd);
-      const globalSettings = settingsManager.getGlobalSettings();
-      const projectSettings = settingsManager.getProjectSettings();
-      const explicitCliTuiMode = process.argv.some(
-        (arg) => arg === "--tui-mode" || arg.startsWith("--tui-mode="),
-      );
-
-      if (
-        !shouldPreferWindowsFullscreen({
-          platform,
-          mode: ctx.mode,
-          globalTuiMode: globalSettings.tuiMode,
-          projectTuiMode: projectSettings.tuiMode,
-          explicitCliTuiMode,
-        }) ||
-        settingsManager.setTuiMode === undefined
-      ) {
-        return;
-      }
-
-      settingsManager.setTuiMode("fullscreen");
-      await settingsManager.flush?.();
-      ctx.ui.notify(
-        "OpenPI detected the Windows regular-TUI redraw issue and selected fullscreen mode for the next start. Restart Pi to apply it.",
-        "warning",
-      );
-    } catch {
-      // A settings write must never prevent the OpenPI session from starting.
-    }
   });
 
   pi.on("session_shutdown", cleanup);
