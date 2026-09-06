@@ -96,7 +96,6 @@ test("TrustStore changes do not pretend to mutate active Session authority", () 
   assert.equal(newlyDenied.refreshRequired, true);
 });
 
-
 test("PiWebRuntime reads the real ProjectTrustStore decision", async () => {
   const workspace = await mkdtemp(join(tmpdir(), "openpi-trust-runtime-"));
   const agentDir = await mkdtemp(join(tmpdir(), "openpi-agent-dir-"));
@@ -108,14 +107,25 @@ test("PiWebRuntime reads the real ProjectTrustStore decision", async () => {
   try {
     const runtime = Object.create(PiWebRuntime.prototype) as {
       hasSelectedWorkspace: boolean;
-      runtime: { cwd: string; session: { settingsManager: { isProjectTrusted(): boolean } } };
+      runtime: {
+        cwd: string;
+        session: { settingsManager: { isProjectTrusted(): boolean } };
+      };
       getProjectTrustStatus: PiWebRuntime["getProjectTrustStatus"];
     };
     runtime.hasSelectedWorkspace = true;
-    runtime.runtime = { cwd: workspace, session: { settingsManager: { isProjectTrusted: () => true } } };
+    runtime.runtime = {
+      cwd: workspace,
+      session: { settingsManager: { isProjectTrusted: () => true } },
+    };
     assert.deepEqual(runtime.getProjectTrustStatus(), {
-      source: "pi-project-trust", workspace, state: "trusted", decision: "trusted",
-      projectResources: true, sessionTrusted: true, refreshRequired: false,
+      source: "pi-project-trust",
+      workspace,
+      state: "trusted",
+      decision: "trusted",
+      projectResources: true,
+      sessionTrusted: true,
+      refreshRequired: false,
     });
   } finally {
     if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
