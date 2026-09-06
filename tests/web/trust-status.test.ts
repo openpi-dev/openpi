@@ -106,9 +106,10 @@ test("PiWebRuntime reads the real ProjectTrustStore decision", async () => {
   const previous = process.env.PI_CODING_AGENT_DIR;
   process.env.PI_CODING_AGENT_DIR = agentDir;
   try {
-    const runtime = Object.create(PiWebRuntime.prototype) as PiWebRuntime & {
+    const runtime = Object.create(PiWebRuntime.prototype) as {
       hasSelectedWorkspace: boolean;
       runtime: { cwd: string; session: { settingsManager: { isProjectTrusted(): boolean } } };
+      getProjectTrustStatus: PiWebRuntime["getProjectTrustStatus"];
     };
     runtime.hasSelectedWorkspace = true;
     runtime.runtime = { cwd: workspace, session: { settingsManager: { isProjectTrusted: () => true } } };
