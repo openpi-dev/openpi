@@ -4,7 +4,7 @@ import { expect, type Page, test } from "@playwright/test";
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
-const authenticatedPath = `/#token=${token}`;
+const authenticatedPath = "/";
 
 async function openWorkbench(page: Page) {
   const externalRequests: string[] = [];
@@ -575,4 +575,44 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   }
   await page.getByRole("button", { name: "对话", exact: true }).click();
   await expect(view).toHaveCount(0);
+});
+
+test("fresh browser contexts open the bare address and can request workspace selection", async ({
+  browser,
+}) => {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const context = await browser.newContext();
+    try {
+      const page = await context.newPage();
+      await page.addInitScript(() => {
+        sessionStorage.setItem("openpi.web.token", "stale-host-token");
+        Object.defineProperty(Storage.prototype, "setItem", {
+          value() {
+            throw new Error("storage disabled");
+          },
+        });
+      });
+      let selections = 0;
+      await page.route("**/api/workspaces/select", async (route) => {
+        expect(route.request().headers().authorization).toBe(`Bearer ${token}`);
+        selections++;
+        await route.fulfill({ json: { cancelled: true } });
+      });
+      const snapshot = page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === "/api/snapshot" &&
+          response.status() === 200,
+      );
+      await page.goto("http://127.0.0.1:57109/");
+      await snapshot;
+      await expect(page.locator(".notice")).toHaveCount(0);
+      await page.locator(".workspace-heading button").last().click();
+      await expect.poll(() => selections).toBe(1);
+      await page.reload();
+      await expect(page.locator(".notice")).toHaveCount(0);
+      expect(new URL(page.url()).hash).toBe("");
+    } finally {
+      await context.close();
+    }
+  }
 });

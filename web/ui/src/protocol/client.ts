@@ -17,15 +17,21 @@ export class WebApiError extends Error {
 }
 
 function readToken() {
+  const pageToken = document.querySelector<HTMLMetaElement>(
+    'meta[name="openpi-web-token"]',
+  )?.content;
   const fragmentToken = new URLSearchParams(location.hash.slice(1)).get(
     "token",
   );
-  if (fragmentToken) {
-    try {
-      window.sessionStorage.setItem(tokenStorageKey, fragmentToken);
-    } catch {}
+  const token =
+    pageToken && /^[a-f0-9]{64}$/i.test(pageToken) ? pageToken : fragmentToken;
+  if (fragmentToken)
     history.replaceState(null, "", `${location.pathname}${location.search}`);
-    return fragmentToken;
+  if (token) {
+    try {
+      window.sessionStorage.setItem(tokenStorageKey, token);
+    } catch {}
+    return token;
   }
   try {
     return window.sessionStorage.getItem(tokenStorageKey);

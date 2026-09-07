@@ -367,13 +367,36 @@ export class WebHost {
       return;
     }
     if (url.pathname === "/" && request.method === "GET") {
-      const body = await readFile(new URL("index.html", UI_ROOT));
+      // The credential is issued only to the exact local document origin.
+      // allowedOrigins remains an API compatibility option, not a bootstrap grant.
+      const site = request.headers["sec-fetch-site"];
+      const destination = request.headers["sec-fetch-dest"];
+      const mode = request.headers["sec-fetch-mode"];
+      let foreignReferrer = false;
+      if (request.headers.referer) {
+        try { foreignReferrer = new URL(request.headers.referer).origin !== this.origin; }
+        catch { foreignReferrer = true; }
+      }
+      if (
+        (request.headers.origin && request.headers.origin !== this.origin) ||
+        (site !== undefined && site !== "none" && site !== "same-origin") ||
+        (destination !== undefined && destination !== "document") ||
+        (mode !== undefined && mode !== "navigate") || foreignReferrer
+      ) {
+        return this.json(response, 403, { error: "Open the local Web address directly in your browser." });
+      }
+      const template = await readFile(new URL("index.html", UI_ROOT), "utf8");
+      const body = template.replace("<head>", `<head><meta name="openpi-web-token" content="${this.token.toString("hex")}">`);
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
           "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
       });
       response.end(body);
       return;

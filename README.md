@@ -536,7 +536,7 @@ Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
-Host 仅监听 loopback。启动链接中的高熵 token 属于本次 Web Host 进程，浏览器会从 URL fragment 取出后保存到当前标签页的 `sessionStorage`，并立即清除地址栏 fragment；关闭 Host 后该 token 失效。这不是远程身份或长期登录机制。
+Host 仅监听 loopback。本机任意浏览器直接输入终端显示的 `http://127.0.0.1:端口` 即可使用，无需配对或复制 token。正式页面在本地导航时自动取得当前 Host 的高熵凭据，API 仍校验 Bearer token；跨站、其他本地端口和嵌入页面不能取得入口凭据。凭据只属于本次进程，不是远程身份或长期登录机制；Host 重启后刷新页面即可取得新凭据。旧的 fragment 登录链接仍兼容，读取后清除地址栏 fragment。Vite 开发页面保持开发启动器提供的 fragment 入口。
 
 发布包提供 `openpi` 可执行文件。需要同时使用终端扩展和 Web 时，安装同一版本的 Pi package 与 CLI：
 

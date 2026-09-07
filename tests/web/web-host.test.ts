@@ -15,6 +15,35 @@ import {
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 
+// Use a raw document request: fetch always sets Sec-Fetch-Mode to cors.
+function documentRequest(url: string, headers: Record<string, string> = {}) {
+  return new Promise<Response>((resolve, reject) => {
+    const request = httpRequest(url, { headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined)
+            responseHeaders.set(
+              name,
+              Array.isArray(value) ? value.join(", ") : value,
+            );
+        }
+        resolve(
+          new Response(Buffer.concat(chunks), {
+            status: response.statusCode,
+            headers: responseHeaders,
+          }),
+        );
+      });
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
 test("serves workspaces through a runtime isolated from terminal sessions", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-host-"));
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-import-"));
@@ -160,7 +189,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       disposed = true;
     },
   };
-  const host = new WebHost({ runtime });
+  const host = new WebHost({
+    runtime,
+    allowedOrigins: ["http://127.0.0.1:59999"],
+  });
 
   try {
     await host.start();
@@ -172,7 +204,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       "Content-Type": "application/json",
     };
 
-    const page = await fetch(`${launched.origin}/`);
+    const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
     assert.match(
       page.headers.get("content-security-policy") || "",
@@ -181,6 +213,35 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
     assert.match(pageHtml, /<div id="root"><\/div>/);
+    assert.ok(
+      pageHtml.includes(`<meta name="openpi-web-token" content="${token}">`),
+    );
+    assert.equal(
+      page.headers.get("cross-origin-resource-policy"),
+      "same-origin",
+    );
+    assert.equal(page.headers.get("x-frame-options"), "DENY");
+    const blockedHeaders: Record<string, string>[] = [
+      { "Sec-Fetch-Site": "cross-site" },
+      { "Sec-Fetch-Site": "same-site" },
+      { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin" },
+      { "Sec-Fetch-Dest": "script" },
+      { Referer: "https://attacker.example/" },
+      { Origin: "https://attacker.example" },
+      { Origin: "http://127.0.0.1:59999" },
+    ];
+    for (const headers of blockedHeaders) {
+      const blocked = await documentRequest(`${launched.origin}/`, headers);
+      assert.equal(blocked.status, 403);
+      assert.ok(!(await blocked.text()).includes(token));
+    }
+    const navigation = await documentRequest(`${launched.origin}/`, {
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    });
+    assert.equal(navigation.status, 200);
+    assert.equal((await fetch(`${launched.origin}/api/snapshot`)).status, 401);
     assert.match(
       pageHtml,
       /<script type="module"[^>]*src="\/app\.js"><\/script>/,
@@ -193,6 +254,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(app.status, 200);
     assert.match(app.headers.get("content-type") || "", /javascript/);
     const appSource = await app.text();
+    assert.ok(!appSource.includes(token));
     assert.match(appSource, /OpenPI Web root is missing/);
     assert.match(appSource, /openpi\.web\.token/);
     assert.match(appSource, /\/events\?cursor=/);
