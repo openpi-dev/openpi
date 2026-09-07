@@ -1,5 +1,17 @@
 # Third-Party Notices
 
+## Project origins and acknowledgments
+
+OpenPI originated from [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) and is maintained as an independent distribution. Thanks to the original author for the starting point.
+
+Web workbench contributions include:
+
+- [@testikun](https://github.com/testikun): Web runtime source information ([#398](https://github.com/openpi-dev/openpi/pull/398)) and Pi project trust diagnostics ([#392](https://github.com/openpi-dev/openpi/pull/392)).
+- [QuinnWan (@somewan820)](https://github.com/somewan820): UI restoration baseline and clipboard fallback ([#352](https://github.com/openpi-dev/openpi/pull/352)), carried forward through the React migration ([#384](https://github.com/openpi-dev/openpi/pull/384)).
+- [@seekskyworld](https://github.com/seekskyworld): request timeout protection ([#377](https://github.com/openpi-dev/openpi/pull/377)) and native cancellation proposals ([#358](https://github.com/openpi-dev/openpi/pull/358)), whose goals were integrated with the existing React transport and cancellation implementation, including additional regression coverage.
+
+The optional top-level Session communication package is [pi-intercom](https://github.com/nicobailon/pi-intercom).
+
 ## OAuth model providers
 
 `extensions/ai-providers/` adapts protocol and OAuth details from
