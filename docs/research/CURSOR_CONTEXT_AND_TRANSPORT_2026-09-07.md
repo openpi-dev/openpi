@@ -4,6 +4,7 @@
 - Created / verified: 2026-09-07
 - Source boundary: `69a7e5f19b4db3e32b7ad6abc81884edf767b2e3` (v0.6.1)
 - Issue: [#431](https://github.com/openpi-dev/openpi/issues/431)
+- Repair PR: [#432](https://github.com/openpi-dev/openpi/pull/432)
 - Supersedes: none
 
 ## Scope and runtime identity
