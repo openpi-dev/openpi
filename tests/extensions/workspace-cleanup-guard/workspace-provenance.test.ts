@@ -382,6 +382,46 @@ test("ordinary Bash and identifiers without an rm executable stay native", async
   });
 });
 
+test("an rm substring inside a longer path segment is not an rm reference", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => false);
+
+    for (const [index, command] of [
+      "curl -s https://api.github.com/repos/apache/storm/issues/1 | head -c 10",
+      "grep -rn cleanup /repos/eclipse/platform/foo.c | head -5",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `path-word-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "allow", command);
+    }
+  });
+});
+
+test("piped xargs input and absolute rm paths fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => true);
+
+    for (const [index, command] of [
+      "echo temp/ | xargs rm",
+      "/bin/rm -rf build",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `destructive-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "block", command);
+      if (decision.kind === "block") {
+        assert.deepEqual(decision.protectedPaths, [], command);
+        assert.match(decision.reason, /direct rm command/u);
+      }
+    }
+  });
+});
+
 test("literal word concatenation still identifies the direct rm executable", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
