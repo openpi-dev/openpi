@@ -50,3 +50,14 @@ An incomplete or invalid receipt stays available for inspection and for a concur
 At `fd2842f`, focused tests cover full preparation followed by recovery, incomplete preparation, same-size content substitution, an already-committed manifest, delivery mutation after recovery, normal receipt cleanup, and the dashboard/startup read path. `bun run check` passed; the full suite passed with 1247 Node tests, 0 failures, 1 skip, and 30 Vitest tests.
 
 The guarantee is process-crash recovery at the repository's existing per-file atomic-replace boundary. It does not claim a filesystem-wide transaction or power-loss durability beyond `writeFileAtomic`, which does not currently fsync file and directory metadata.
+
+## 2026-09-07 amendment: predecessor identity
+
+- Verification boundary: PR #386 integrated with main `0bd0041`; this amendment describes the subsequent repair, not the historical validation above.
+- Evidence: focused regressions reproduce the original recovery overwriting a newer failure publication and recreating a missing canonical manifest. The repaired path refuses both, and also preserves same-status cleanup changes.
+
+The unshipped version-1 receipt now also requires `predecessorSha256`: the SHA-256 of the exact reference-free `workflow.json` bytes successfully published before preparing the receipt. `persistWorkflowTerminalState` returns that digest; ordinary terminal-recovery callers may ignore it.
+
+Before promoting a pending receipt, recovery requires a bounded, regular, non-symlink canonical file with exactly that digest. Missing, unreadable, replaced, or newer canonical facts make the receipt invalid for promotion. A final-manifest failure may therefore publish a newer `failed` state without a stale completed receipt later erasing its error. Same-status cleanup and delivery changes are equally protected. Complete artifacts alone no longer authorize replacement.
+
+The already-committed case still removes only the receipt and preserves current mutable delivery/resource fields. A delivery mutation before the artifact commit completes conservatively prevents later promotion; automatic recovery does not reset that delivery state. Receipts from the earlier unshipped implementation without a predecessor digest fail closed. This is a process-crash protocol under the existing single-writer assumption, not a filesystem compare-and-swap transaction against simultaneous external writers.

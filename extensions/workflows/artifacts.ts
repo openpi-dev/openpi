@@ -55,6 +55,7 @@ interface WorkflowCommitMarker {
   version: 1;
   runId: string;
   manifest: string;
+  predecessorSha256: string;
   artifacts: WorkflowCommitArtifact[];
 }
 
@@ -93,6 +94,7 @@ function workflowCommitMarker(
   details: WorkflowDetails,
   manifest: string,
   artifacts: WorkflowArtifactWrite[],
+  predecessorSha256: string,
 ): WorkflowCommitMarker {
   for (const { name, content } of artifacts) {
     const bytes = textBytes(content);
@@ -105,6 +107,7 @@ function workflowCommitMarker(
     version: 1,
     runId: details.runId,
     manifest,
+    predecessorSha256,
     artifacts: artifacts.map(({ name, content }) => ({
       name,
       bytes: textBytes(content),
@@ -117,9 +120,10 @@ function serializeWorkflowCommitMarker(
   details: WorkflowDetails,
   manifest: string,
   artifacts: WorkflowArtifactWrite[],
+  predecessorSha256: string,
 ) {
   const content = JSON.stringify(
-    workflowCommitMarker(details, manifest, artifacts),
+    workflowCommitMarker(details, manifest, artifacts, predecessorSha256),
   );
   if (textBytes(content) > WORKFLOW_COMMIT_MAX_BYTES) {
     throw new Error(
@@ -162,6 +166,8 @@ function parseWorkflowCommitMarker(
     record.version !== 1 ||
     typeof record.runId !== "string" ||
     record.runId !== path.basename(runDir) ||
+    typeof record.predecessorSha256 !== "string" ||
+    !/^[0-9a-f]{64}$/u.test(record.predecessorSha256) ||
     typeof record.manifest !== "string" ||
     textBytes(record.manifest) > WORKFLOW_MANIFEST_MAX_BYTES ||
     !Array.isArray(record.artifacts) ||
@@ -232,6 +238,7 @@ function parseWorkflowCommitMarker(
     version: 1,
     runId: record.runId,
     manifest: record.manifest,
+    predecessorSha256: record.predecessorSha256,
     artifacts,
   };
 }
@@ -241,7 +248,16 @@ function hasCommittedManifest(
   marker: WorkflowCommitMarker,
 ) {
   try {
-    const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    const stat = fs.lstatSync(manifestPath);
+    if (
+      !stat.isFile() ||
+      stat.isSymbolicLink() ||
+      stat.size > WORKFLOW_MANIFEST_MAX_BYTES
+    )
+      return false;
+    const content = fs.readFileSync(manifestPath);
+    if (content.byteLength > WORKFLOW_MANIFEST_MAX_BYTES) return false;
+    const parsed: unknown = JSON.parse(content.toString("utf8"));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
       return false;
     }
@@ -304,6 +320,28 @@ export function recoverPendingWorkflowCommit(
     ) {
       removeWorkflowCommit(runDir);
       return "already-committed";
+    }
+    // A later terminal/cleanup/delivery publication supersedes this receipt.
+    // Artifact validity alone cannot authorize replacing canonical facts.
+    let predecessor: Buffer;
+    try {
+      const stat = fs.lstatSync(manifestPath);
+      if (
+        !stat.isFile() ||
+        stat.isSymbolicLink() ||
+        stat.size > WORKFLOW_MANIFEST_MAX_BYTES
+      ) {
+        return "invalid";
+      }
+      predecessor = fs.readFileSync(manifestPath);
+    } catch {
+      return "invalid";
+    }
+    if (
+      predecessor.byteLength > WORKFLOW_MANIFEST_MAX_BYTES ||
+      sha256(predecessor) !== marker.predecessorSha256
+    ) {
+      return "invalid";
     }
     writeFileAtomic(manifestPath, marker.manifest);
     removeWorkflowCommit(runDir);
@@ -394,11 +432,11 @@ export function persistWorkflowTerminalState(
   delete terminalManifest.result;
   delete terminalManifest.resultArtifact;
   delete terminalManifest.transcriptArtifact;
-  writeRunFile(
-    runDir,
-    "workflow.json",
-    safeStringify(terminalManifest, { maxBytes: 1024 * 1024 }),
-  );
+  const content = safeStringify(terminalManifest, {
+    maxBytes: WORKFLOW_MANIFEST_MAX_BYTES,
+  });
+  writeRunFile(runDir, "workflow.json", content);
+  return sha256(content);
 }
 
 /** Persist one successful child result before any handoff/context projection. */
@@ -452,12 +490,13 @@ export function persistWorkflowJson(
   // instead of the previous `running` manifest. The final manifest below adds
   // the artifact references once every dependent file has committed.
   const terminal = details.status !== "running";
+  let predecessorSha256: string | undefined;
   if (terminal) {
     // A retry supersedes an older unfinished receipt before it publishes a new
     // terminal fact. Failing to remove it must stop the new commit rather than
     // let a concurrent reader promote stale artifact identities.
     removeWorkflowCommit(runDir, true);
-    persistWorkflowTerminalState(runDir, details);
+    predecessorSha256 = persistWorkflowTerminalState(runDir, details);
   }
 
   const artifactWrites: WorkflowArtifactWrite[] = [
@@ -505,11 +544,16 @@ export function persistWorkflowJson(
     maxBytes: WORKFLOW_MANIFEST_MAX_BYTES,
   });
 
-  if (terminal) {
+  if (predecessorSha256 !== undefined) {
     writeRunFile(
       runDir,
       WORKFLOW_COMMIT_FILE,
-      serializeWorkflowCommitMarker(details, manifest, artifactWrites),
+      serializeWorkflowCommitMarker(
+        details,
+        manifest,
+        artifactWrites,
+        predecessorSha256,
+      ),
     );
   }
   for (const artifact of artifactWrites) {

@@ -2,6 +2,16 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
+## Validated investigations
+
+- [`CURSOR_CONTEXT_AND_TRANSPORT_2026-09-07.md`](CURSOR_CONTEXT_AND_TRANSPORT_2026-09-07.md) — Cursor protocol context boundaries, linear frame accumulation and cwd-sensitive transcript caching ([#431](https://github.com/openpi-dev/openpi/issues/431)).
+
+- [`CHILD_ACQUISITION_AND_PROGRESS_2026-09-07.md`](CHILD_ACQUISITION_AND_PROGRESS_2026-09-07.md) — cancelled child/worktree acquisitions and stale progress evidence under output pressure ([#428](https://github.com/openpi-dev/openpi/issues/428)).
+
+- [`WORKFLOW_CHILD_FAILURES_2026-09-07.md`](WORKFLOW_CHILD_FAILURES_2026-09-07.md) — child tool transport, cwd and timeout failure mechanisms, intended capability inheritance, and acceptance limits ([#424](https://github.com/openpi-dev/openpi/issues/424)).
+
+- [`WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md`](WORKFLOW_DASHBOARD_REFRESH_2026-09-07.md) — repeated synchronous history loading on dashboard animation ticks, its regression boundary, and measurement limits ([#420](https://github.com/openpi-dev/openpi/issues/420)).
+
 ## Legacy records
 
 The following records predate [`Decision 0001`](../decisions/0001-documentation-and-evidence-governance.md). They remain useful historical sources but have not been migrated to the new metadata contract as part of this change:

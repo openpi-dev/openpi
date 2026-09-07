@@ -87,6 +87,9 @@ function stageTerminalCommit(
       version: 1,
       runId,
       manifest,
+      predecessorSha256: artifactDigest(
+        readFileSync(join(runDir, "workflow.json"), "utf8"),
+      ),
       artifacts: [
         {
           name: "transcripts.json",
@@ -363,6 +366,65 @@ test("a complete pending artifact receipt recovers the exact terminal manifest",
     assert.equal(readFileSync(join(runDir, "workflow.json"), "utf8"), manifest);
     assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), false);
     assert.equal(recoverPendingWorkflowCommit(runDir), "none");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("pending recovery never overwrites a newer terminal publication", () => {
+  for (const newer of [
+    { status: "failed", error: "Artifact persistence failed: EIO" },
+    { status: "completed", error: "Cleanup failed: checkout retained" },
+  ] as const) {
+    const root = mkdtempSync(join(tmpdir(), "pi-workflow-newer-terminal-"));
+    try {
+      const { runDir } = stageTerminalCommit(root);
+      persistWorkflowTerminalState(runDir, {
+        ...workflowDetails(),
+        runId: "wf_crash",
+        finishedAt: 2,
+        ...newer,
+      });
+      const before = readFileSync(join(runDir, "workflow.json"), "utf8");
+      assert.equal(recoverPendingWorkflowCommit(runDir), "invalid");
+      assert.equal(readFileSync(join(runDir, "workflow.json"), "utf8"), before);
+      assert.equal(existsSync(join(runDir, WORKFLOW_COMMIT_FILE)), true);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("pending recovery preserves delivery changes and rejects legacy receipts", () => {
+  for (const mutation of ["delivery", "legacy"] as const) {
+    const root = mkdtempSync(join(tmpdir(), "pi-workflow-predecessor-"));
+    try {
+      const { runDir } = stageTerminalCommit(root);
+      const file = join(
+        runDir,
+        mutation === "delivery" ? "workflow.json" : WORKFLOW_COMMIT_FILE,
+      );
+      const raw = JSON.parse(readFileSync(file, "utf8"));
+      if (mutation === "delivery")
+        raw.delivery = { state: "delivered", attempts: 1, updatedAt: 3 };
+      else delete raw.predecessorSha256;
+      writeFileSync(file, JSON.stringify(raw));
+      const before = readFileSync(join(runDir, "workflow.json"), "utf8");
+      assert.equal(recoverPendingWorkflowCommit(runDir), "invalid");
+      assert.equal(readFileSync(join(runDir, "workflow.json"), "utf8"), before);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
+test("pending recovery requires its canonical predecessor to exist", () => {
+  const root = mkdtempSync(join(tmpdir(), "pi-workflow-missing-predecessor-"));
+  try {
+    const { runDir } = stageTerminalCommit(root);
+    rmSync(join(runDir, "workflow.json"));
+    assert.equal(recoverPendingWorkflowCommit(runDir), "invalid");
+    assert.equal(existsSync(join(runDir, "workflow.json")), false);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

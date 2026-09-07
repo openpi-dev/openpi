@@ -57,6 +57,7 @@ import {
 } from "../shared/below-editor-navigation.ts";
 import {
   effectiveChildToolAllowlist,
+  inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
@@ -144,6 +145,7 @@ import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
   runTool,
+  SubagentToolInterruptedError,
   type SubagentRuntime,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
@@ -886,6 +888,7 @@ export default function (
       if (
         planning &&
         agentType &&
+        !agentType.planningCompatible &&
         !planModeAllowsDeclaredTools(declaredChildTools)
       ) {
         throw new Error(
@@ -934,7 +937,10 @@ export default function (
       const requestedChildTools = planning
         ? planModeChildTools(declaredChildTools)
         : declaredChildTools;
-      const childTools = effectiveChildToolAllowlist(requestedChildTools);
+      const childTools = inheritedChildToolAllowlist(
+        pi.getActiveTools(),
+        requestedChildTools,
+      );
       // Read at spawn time so `/openpi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model
       // inheritance in the backend.
@@ -980,11 +986,22 @@ export default function (
           interruptMessage: "Subagent spawn aborted.",
         });
       } catch (error) {
-        // The session scope owns reclamation, but it never opened, so this
-        // worktree would otherwise be orphaned on disk.
+        // Known startup failures can reclaim their empty checkout. Interrupted
+        // startup must preserve it while asynchronous acquisition may continue.
         if (worktree) {
           const spawnError =
             error instanceof Error ? error.message : String(error);
+          // Cancelling Effect acquisition does not prove an asynchronous
+          // factory or extension hook has quiesced. It may still use this cwd.
+          if (
+            signal?.aborted ||
+            error instanceof SubagentToolInterruptedError
+          ) {
+            throw new Error(
+              `${spawnError}; startup quiescence is unknown; checkout preserved at ${worktree.path} (branch ${worktree.branch})`,
+              { cause: error },
+            );
+          }
           let cleanupWarning: string | undefined;
           let cleanupError: unknown;
           try {
