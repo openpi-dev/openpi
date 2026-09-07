@@ -6,6 +6,10 @@ const resources = {
     translation: {
       activeOnlyHint: "Only the active Web session accepts messages.",
       acceptedHint: "Message accepted by OpenPI Web.",
+      stopTurn: "Stop current turn",
+      stoppingTurn: "Stopping current turn…",
+      stoppedTurn: "Current turn stopped.",
+      pendingFollowUpsHint: "{{count}} messages queued",
       addWorkspace: "Add workspace",
       addWorkspaceMenu: "Add workspace...",
       archiveConversation: "Archive conversation",
@@ -70,6 +74,10 @@ const resources = {
   zh: {
     translation: {
       activeOnlyHint: "只有当前 Web 会话可以接收消息。",
+      stopTurn: "停止当前轮次",
+      stoppingTurn: "正在停止当前轮次…",
+      stoppedTurn: "当前轮次已停止。",
+      pendingFollowUpsHint: "{{count}} 条消息正在排队",
       acceptedHint: "OpenPI Web 已接收消息。",
       addWorkspace: "添加工作区",
       addWorkspaceMenu: "添加工作区...",

@@ -55,6 +55,7 @@ export function App() {
         </button>
       )}
       <main className={`conversation-shell ${landing ? "landing" : ""}`}>
+        <h1 className="sr-only">OpenPI</h1>
         <header className="mobile-header">
           <button
             type="button"
@@ -80,7 +81,6 @@ export function App() {
             aria-label="Conversation"
           >
             <div className="landing-welcome">
-              <h1 className="sr-only">OpenPI</h1>
               <OpenPiLogo animated />
             </div>
           </section>
@@ -98,6 +98,10 @@ export function App() {
           />
         ) : null}
         <Composer
+          activeTurn={state.activeTurn}
+          turnCancellationPending={state.turnCancellationPending}
+          turnTerminalStatus={state.turnTerminalStatus}
+          pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
           snapshot={state.snapshot}
           selectedWorkspace={state.selectedWorkspace}
           sessionSwitching={state.sessionSwitching}

@@ -45,6 +45,7 @@ export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
   const running = [
     ...(capabilities?.subagents?.items ?? []),
     ...(capabilities?.workflows?.items ?? []),
+    ...(capabilities?.["background-terminals"]?.items ?? []),
   ].some((item) => item.status === "running");
   useEffect(() => {
     if (!running) return;
@@ -87,6 +88,15 @@ export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
       status: canonicalStatus(subagent.status),
     });
   }
+  for (const terminal of capabilities?.["background-terminals"]?.items ?? []) {
+    const elapsed = formatElapsedMs(terminal.createdAt, terminal.settledAt);
+    chips.push({
+      key: `terminal-${terminal.id}`,
+      kind: "terminal",
+      label: `${terminal.title || terminal.id}${elapsed ? ` · ${elapsed}` : ""}`,
+      status: canonicalStatus(terminal.status),
+    });
+  }
   chips.sort(
     (left, right) =>
       Number(right.status === "running") - Number(left.status === "running"),
@@ -96,7 +106,8 @@ export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
     chips.length -
     visible.length +
     (capabilities?.subagents?.omitted ?? 0) +
-    (capabilities?.workflows?.omitted ?? 0);
+    (capabilities?.workflows?.omitted ?? 0) +
+    (capabilities?.["background-terminals"]?.omitted ?? 0);
   if (!visible.length && !omitted) return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">

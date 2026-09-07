@@ -229,9 +229,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-row.detail-only { padding: 6px 0; }
 .message-content { min-width: 0; max-width: min(78%, 620px); }
 .message-row.assistant .message-content { width: 100%; max-width: none; }
-.message-body { color: oklch(28% .018 249); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
+.message-body { color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-row.user .message-body { padding: 9px 15px; border-radius: 18px; background: var(--sidebar-active); box-shadow: inset 0 0 0 1px oklch(72% .06 85 / 20%); }
-.markdown { color: oklch(28% .018 249); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
+.markdown { color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
 .markdown p { margin: 0 0 12px; }
@@ -401,3 +401,20 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .landing-brand .pixel-mark i::after { opacity: 0; }
   .status-mark.running i, .activity-chip-dot, .conversation-running-dot { animation: none; }
 }
+
+/* Resolve the canonical Pi theme without a second browser preference. */
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --page: #17191c; --sidebar: #1d2024; --sidebar-hover: #292d32; --sidebar-active: #30353b;
+  --border: #353a40; --border-strong: #48515a; --text: #edf0f2; --muted: #a8b0b8; --subtle: #7f8993;
+  --accent: #74a9e6; --focus: #78aee9; --healthy: #62c795; --error: #ff8c84; --warning: #e5b64f;
+  --grid-minor: #87909908; --grid-major: #87909912; --grid-cross: #8790991c;
+}
+:root[data-theme="dark"] body { background-image: linear-gradient(var(--grid-minor) 1px, transparent 1px), linear-gradient(90deg, var(--grid-minor) 1px, transparent 1px); }
+:root[data-theme="dark"] .session-sidebar { background: var(--sidebar); box-shadow: none; border-color: var(--border); }
+:root[data-theme="dark"] .conversation-shell:not(.landing) { background-image: none; background-color: var(--page); }
+:root[data-theme="dark"] .details-body { color: var(--muted); }
+:root[data-theme="dark"] :is(.markdown blockquote, .markdown code, .markdown pre, .markdown th, .tool-evidence, .tool-group, .activity-card, .activity-chip, .mobile-header > button) { background: var(--sidebar); color: var(--text); border-color: var(--border); }
+:root[data-theme="dark"] :is(.new-session-button:hover, .message-details summary:hover, .tool-group > summary:hover, .message-actions button:hover, .turn-tick:hover) { background: var(--sidebar-hover); border-color: var(--border); }
+:root[data-theme="dark"] :is(.turn-rail:hover, .turn-rail:focus-within) { background: var(--page); }
+:root[data-theme="dark"] .model-picker:hover, :root[data-theme="dark"] .model-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }

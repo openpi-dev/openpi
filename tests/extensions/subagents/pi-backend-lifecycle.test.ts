@@ -1,8 +1,12 @@
 import assert from "node:assert/strict";
+import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type {
   AgentSession,
   CreateAgentSessionOptions,
+  ExtensionContext,
   ModelRegistry,
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
@@ -122,25 +126,20 @@ function harnessFactory(
   return { factory, creations, harnesses };
 }
 
-function createManagerRuntime(
-  backend: SubagentBackend,
-  firstResponseTimeoutMs = 500,
-) {
+function createManagerRuntime(backend: SubagentBackend) {
   const registry = Layer.succeed(
     BackendRegistry,
     new Map<BackendName, SubagentBackend>([["pi", backend]]),
   );
   return ManagedRuntime.make(
-    makeSubagentManagerLayer({ firstResponseTimeoutMs }).pipe(
-      Layer.provide(registry),
-    ),
+    makeSubagentManagerLayer().pipe(Layer.provide(registry)),
   );
 }
 
 async function spawnDirect(
   backend: SubagentBackend,
   spawnTask: SpawnTask,
-  drive: (session: SubagentSession) => void,
+  drive: (session: SubagentSession) => void | Promise<void>,
 ) {
   const events: SubagentEvent[] = [];
   const firstSettlement = deferred<void>();
@@ -156,7 +155,7 @@ async function spawnDirect(
             }),
           ),
         );
-        drive(session);
+        yield* Effect.promise(() => Promise.resolve(drive(session)));
         yield* Effect.promise(() => firstSettlement.promise);
       }),
     ),
@@ -257,6 +256,98 @@ test("the production Pi adapter bridges startup, first response, tools, usage, a
   assert.equal(harness.calls.disposals, 1);
 });
 
+test("a direct subagent validates, persists, and delivers structured output", async () => {
+  const agentDir = await mkdtemp(
+    path.join(tmpdir(), "openpi-structured-child-"),
+  );
+  const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = agentDir;
+  try {
+    const fixtures = harnessFactory();
+    const backend = makePiBackend({
+      sessionFactory: fixtures.factory,
+      shutdownTimeoutMs: 50,
+    });
+    const events = await spawnDirect(
+      backend,
+      task("return a verdict", {
+        outputSchema: {
+          type: "object",
+          properties: { verdict: { type: "string" } },
+          required: ["verdict"],
+          additionalProperties: false,
+        },
+      }),
+      async () => {
+        const creation = fixtures.creations[0];
+        const harness = fixtures.harnesses[0];
+        assert.ok(creation);
+        assert.ok(harness);
+        assert.deepEqual(creation.tools, ["read", "structured_output"]);
+        assert.equal(creation.customTools?.length, 1);
+        await creation.customTools?.[0]?.execute(
+          "structured",
+          { verdict: "pass" },
+          undefined,
+          undefined,
+          {} as ExtensionContext,
+        );
+        harness.setStreaming(true);
+        harness.emit({ type: "agent_start" });
+        harness.emitAssistant("");
+        harness.setStreaming(false);
+        harness.emit({ type: "agent_settled" });
+        harness.resolvePrompt();
+      },
+    );
+    const settled = events.find((event) => event._tag === "RunSettled");
+    assert.equal(settled?._tag, "RunSettled");
+    if (settled?._tag !== "RunSettled") return;
+    assert.equal(settled.outcome._tag, "Completed");
+    if (settled.outcome._tag !== "Completed") return;
+    assert.deepEqual(settled.outcome.structuredResult?.value, {
+      verdict: "pass",
+    });
+    const artifactPath = settled.outcome.structuredResult?.artifactPath;
+    assert.ok(artifactPath);
+    assert.equal(await readFile(artifactPath, "utf8"), '{"verdict":"pass"}');
+  } finally {
+    if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+    else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("a direct structured subagent fails when it never submits", async () => {
+  const fixtures = harnessFactory();
+  const backend = makePiBackend({
+    sessionFactory: fixtures.factory,
+    shutdownTimeoutMs: 50,
+  });
+  const events = await spawnDirect(
+    backend,
+    task("forget structured output", {
+      outputSchema: { type: "object", additionalProperties: true },
+    }),
+    () => {
+      const harness = fixtures.harnesses[0];
+      assert.ok(harness);
+      harness.setStreaming(true);
+      harness.emit({ type: "agent_start" });
+      harness.emitAssistant("plain text only");
+      harness.setStreaming(false);
+      harness.emit({ type: "agent_settled" });
+      harness.resolvePrompt();
+    },
+  );
+  const settled = events.find((event) => event._tag === "RunSettled");
+  assert.equal(settled?._tag, "RunSettled");
+  if (settled?._tag !== "RunSettled") return;
+  assert.equal(settled.outcome._tag, "Failed");
+  if (settled.outcome._tag !== "Failed") return;
+  assert.match(settled.outcome.errorText, /without calling structured_output/);
+});
+
 test("prompt rejection wins over an earlier agent_settled event", async () => {
   const prompt = deferred<void>();
   const fixtures = harnessFactory(() => ({
@@ -266,7 +357,7 @@ test("prompt rejection wins over an earlier agent_settled event", async () => {
     sessionFactory: fixtures.factory,
     shutdownTimeoutMs: 50,
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -304,7 +395,7 @@ test("a prompt that resolves without lifecycle events fails explicitly", async (
     sessionFactory: fixtures.factory,
     shutdownTimeoutMs: 50,
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -945,7 +1036,7 @@ test("a preflight that ignores abort is force-closed without reopening the sessi
       throw new Error("unsafe worktree cleanup should not run");
     },
   });
-  const runtime = createManagerRuntime(backend, 10_000);
+  const runtime = createManagerRuntime(backend);
   try {
     const manager = await runtime.runPromise(SubagentManager);
     const spawned = await runtime.runPromise(
@@ -1118,94 +1209,65 @@ test("prompt and tool cancellation ignore late completion and free capacity", as
   }
 });
 
-test("a silent provider is terminalized once, disposed, and releases all slots", async () => {
-  const never = new Promise<void>(() => {});
-  const fixtures = harnessFactory((_options, index) => {
-    if (index >= 4) return {};
-    if (index % 2 === 0) return { shutdown: () => never };
-    return {
-      shutdown: async () => {
-        throw new Error("shutdown fixture failed");
-      },
-      dispose: () => {
-        throw new Error("dispose fixture failed");
-      },
-    };
-  });
-  const backend = makePiBackend({
-    sessionFactory: fixtures.factory,
-    shutdownTimeoutMs: 30,
-  });
-  const runtime = createManagerRuntime(backend, 40);
+test("quiet provider thinking past 45 seconds remains live and can complete", async (t) => {
+  const fixtures = harnessFactory(() => ({}));
+  const runtime = createManagerRuntime(
+    makePiBackend({ sessionFactory: fixtures.factory }),
+  );
   try {
     const manager = await runtime.runPromise(SubagentManager);
-    let settlements = 0;
-    manager.view.setOnSettled(() => settlements++);
-    const stalled = await Promise.all(
-      [0, 1, 2, 3].map((index) =>
-        runtime.runPromise(manager.spawn("pi", task(`silent ${index}`))),
-      ),
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+    const spawned = await runtime.runPromise(
+      manager.spawn("pi", task("quiet thinking")),
     );
-
-    await assert.rejects(
-      runtime.runPromise(manager.spawn("pi", task("over capacity"))),
-      /Max 4 subagent sessions/,
+    const harness = fixtures.harnesses[0];
+    assert.ok(harness);
+    harness.emit({ type: "agent_start" });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    t.mock.timers.tick(46_000);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    assert.equal(manager.view.get(spawned.id)?.status, "running");
+    assert.equal(harness.calls.aborts, 0);
+    t.mock.timers.reset();
+    harness.emitAssistant("completed after quiet thinking");
+    harness.emit({ type: "agent_settled" });
+    harness.resolvePrompt();
+    await runtime.runPromise(manager.waitFor([spawned.id]));
+    assert.equal(manager.view.get(spawned.id)?.status, "done");
+    assert.equal(
+      manager.view.get(spawned.id)?.finalText,
+      "completed after quiet thinking",
     );
-    await runtime.runPromise(
-      manager.waitFor(stalled.map((snapshot) => snapshot.id)),
-    );
-    for (const snapshot of stalled) {
-      const failed = manager.view.get(snapshot.id);
-      assert.equal(failed?.status, "error");
-      assert.match(failed?.errorText ?? "", /no assistant response event/);
-    }
-    assert.equal(settlements, 4);
-    await waitFor(
-      () =>
-        fixtures.harnesses.every((harness) => harness.calls.disposals === 1),
-      "silent sessions to be disposed despite cleanup failures",
-    );
-
-    const late = fixtures.harnesses[0];
-    assert.ok(late);
-    late.emitAssistant("late provider completion");
-    late.emit({ type: "agent_settled" });
-    late.resolvePrompt();
-    await new Promise((resolve) => setTimeout(resolve, 20));
-    assert.equal(settlements, 4);
-    assert.equal(manager.view.get(stalled[0]!.id)?.finalText, "");
-
-    const fresh = await runtime.runPromise(
-      manager.spawn("pi", task("fresh after watchdog")),
-    );
-    assert.equal(fresh.status, "running");
-    const freshCancellation = runtime.runPromise(manager.cancel([fresh.id]));
-    const freshHarness = fixtures.harnesses[4];
-    assert.ok(freshHarness);
-    await waitFor(() => freshHarness.calls.aborts === 1, "fresh run abort");
-    freshHarness.emit({ type: "agent_settled" });
-    freshHarness.resolvePrompt();
-    await freshCancellation;
   } finally {
+    t.mock.timers.reset();
     await runtime.dispose();
   }
 });
 
-test("adapter scope cleanup is bounded across shutdown timeouts and failures", async () => {
+test("adapter scope cleanup is bounded across shutdown timeouts and failures", async (t) => {
   const never = new Promise<void>(() => {});
   const timedOutFixtures = harnessFactory(() => ({
     prompt: async () => {},
-    shutdown: () => never,
+    shutdown: () => {
+      // Start the clock at the owned cleanup seam, after resource loading.
+      // Advancing the configured deadline verifies the bound without a wall-
+      // time assertion that also charges unrelated parallel-suite startup.
+      t.mock.timers.enable({ apis: ["setTimeout"] });
+      setImmediate(() => t.mock.timers.tick(25));
+      return never;
+    },
   }));
   const timedOutBackend = makePiBackend({
     sessionFactory: timedOutFixtures.factory,
     shutdownTimeoutMs: 25,
   });
-  const timeoutStartedAt = Date.now();
-  await Effect.runPromise(
-    Effect.scoped(timedOutBackend.spawn(task("timeout cleanup"))),
-  );
-  assert.ok(Date.now() - timeoutStartedAt < 500);
+  try {
+    await Effect.runPromise(
+      Effect.scoped(timedOutBackend.spawn(task("timeout cleanup"))),
+    );
+  } finally {
+    t.mock.timers.reset();
+  }
   const timedOutHarness = timedOutFixtures.harnesses[0];
   assert.ok(timedOutHarness);
   assert.equal(timedOutHarness.calls.shutdowns, 1);
@@ -1232,3 +1294,59 @@ test("adapter scope cleanup is bounded across shutdown timeouts and failures", a
   assert.equal(failedHarness.calls.shutdowns, 1);
   assert.equal(failedHarness.calls.disposals, 1);
 });
+
+for (const stage of ["factory", "binding"] as const) {
+  test(`cancelling during child ${stage} disposes late acquisition exactly once`, async () => {
+    const entered = deferred<void>();
+    const gate = deferred<void>();
+    const harness = createPiAgentSessionHarness({
+      model: FIXTURE_MODEL as AgentSession["model"],
+      activeTools: ["read"],
+      shutdown: async () => {},
+      bind:
+        stage === "binding"
+          ? async () => {
+              entered.resolve();
+              await gate.promise;
+            }
+          : undefined,
+    });
+    const backend = makePiBackend({
+      sessionFactory: async () => {
+        if (stage === "factory") {
+          entered.resolve();
+          await gate.promise;
+        }
+        return { session: harness.session };
+      },
+      shutdownTimeoutMs: 50,
+    });
+    const abort = new AbortController();
+    const result = Effect.runPromise(
+      Effect.scoped(backend.spawn(task("cancel acquisition"))),
+      { signal: abort.signal },
+    ).catch(() => undefined);
+    try {
+      await entered.promise;
+      abort.abort();
+      await result;
+      if (stage === "binding") {
+        await waitFor(
+          () => harness.calls.disposals === 1,
+          "cancelled binding cleanup",
+        );
+      }
+      gate.resolve();
+      await waitFor(() => harness.calls.disposals === 1, "late child cleanup");
+      assert.equal(harness.calls.bindings.length, stage === "factory" ? 0 : 1);
+      assert.equal(harness.calls.aborts, 1);
+      assert.equal(harness.calls.shutdowns, 1);
+      assert.equal(harness.calls.disposals, 1);
+      assert.deepEqual(harness.calls.prompts, []);
+    } finally {
+      abort.abort();
+      gate.resolve();
+      await result;
+    }
+  });
+}

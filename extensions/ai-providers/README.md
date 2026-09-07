@@ -4,10 +4,12 @@ This extension registers two opt-in model providers backed by account OAuth:
 
 - `google-antigravity` uses Google Cloud Code Assist and supports ordinary Pi
   tool calls.
-- `cursor` uses Cursor AgentService and is experimental, chat-only support.
-  It does not advertise or execute Cursor-native coding tools. If the server
-  requests one, the request fails explicitly instead of bypassing Pi's tool and
-  permission lifecycle.
+- `cursor` uses Cursor AgentService with an experimental Pi tool bridge.
+  The active Pi tools are advertised as MCP tools. A complete invocation returns
+  to Pi for permission checks and execution; the next provider turn replays the
+  paired result. Cursor-native shell, editing, web, task, and interaction tools
+  remain unsupported and fail explicitly. The provider never executes tools
+  inside its transport or widens a child session's effective tool set.
 
 After installing OpenPI, restart Pi or run `/reload`, then authenticate and
 select a model:
@@ -43,8 +45,12 @@ When Cursor is selected, a supported PNG/JPEG/GIF/WebP path at the start of an
 interactive prompt is converted into an actual image attachment (up to 10 MiB)
 before the request is sent. The absolute path is not exposed to the model.
 
-The provider also adds an explicit chat-only rule so the normal Pi coding
-system prompt cannot cause Cursor to attempt unavailable read or shell tools.
+When Pi supplies tools, the provider directs Cursor to the advertised Pi MCP
+catalog. Without tools it uses an explicit chat-only rule. Partial tool previews
+and approval-only probes never execute a tool; unknown or malformed invocations
+fail explicitly. Local HTTP/2 tests exercise a normal Pi tool lifecycle and
+result replay, but account/model-specific compatibility still requires a live
+smoke test. Cursor's native execution protocol is intentionally not enabled.
 
 Cursor's token delta describes generated output only, so the provider does not
 publish it as complete context usage. Pi 0.84.3+ can estimate an all-Cursor

@@ -1,11 +1,11 @@
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
-import { Check, ChevronDown, Folder, Plus, Send } from "lucide-react";
+import { Check, ChevronDown, Folder, Plus, Send, Square } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { workspaceName } from "../../lib/format.ts";
-import type { WebStoreActions } from "../../store/web-store.ts";
+import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 
 interface ComposerProps {
@@ -16,6 +16,10 @@ interface ComposerProps {
   liveRunning: boolean;
   landing: boolean;
   actions: WebStoreActions;
+  activeTurn: WebStoreState["activeTurn"];
+  turnCancellationPending: boolean;
+  turnTerminalStatus: string | null;
+  pendingFollowUpsReceipt: number | null;
 }
 
 export function Composer(props: ComposerProps) {
@@ -32,6 +36,10 @@ export function Composer(props: ComposerProps) {
   const canCompose = active || draftSession;
   const running =
     props.snapshot?.runtime.status === "running" || props.liveRunning;
+  const canStop =
+    active &&
+    running &&
+    Boolean(props.activeTurn ?? props.snapshot?.runtime.activeTurn);
   const disabled =
     props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
 
@@ -47,7 +55,13 @@ export function Composer(props: ComposerProps) {
       await props.actions.chooseWorkspace();
       return;
     }
-    if (await props.actions.sendPrompt(prompt)) setPrompt("");
+    if (await props.actions.sendPrompt(prompt)) {
+      setPrompt("");
+      if (textarea.current) {
+        textarea.current.style.height = "auto";
+        textarea.current.style.overflowY = "hidden";
+      }
+    }
   };
 
   const workspaceItems = [
@@ -84,15 +98,23 @@ export function Composer(props: ComposerProps) {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  const hint = canCompose
-    ? running
-      ? t("queuedHint")
-      : t("enterHint")
-    : t("activeOnlyHint");
+  const hint = props.turnCancellationPending
+    ? t("stoppingTurn")
+    : props.turnTerminalStatus === "cancelled"
+      ? t("stoppedTurn")
+      : props.pendingFollowUpsReceipt !== null
+        ? props.pendingFollowUpsReceipt > 0
+          ? t("pendingFollowUpsHint", { count: props.pendingFollowUpsReceipt })
+          : t("acceptedHint")
+        : canCompose
+          ? running
+            ? t("queuedHint")
+            : t("enterHint")
+          : t("activeOnlyHint");
 
   return (
     <div className="composer-dock">
-      <ActivityBar snapshot={props.snapshot} />
+      {active && <ActivityBar snapshot={props.snapshot} />}
       {props.landing && (
         <div className="workspace-picker-row">
           <DropdownMenu
@@ -173,22 +195,38 @@ export function Composer(props: ComposerProps) {
               hasChevron={false}
             />
           </div>
-          <Tooltip content={t("send")} placement="above">
-            <button
-              className="send-button"
-              type="submit"
-              aria-label={t("send")}
-              disabled={
-                props.sessionSwitching ||
-                !canCompose ||
-                !props.selectedWorkspace ||
-                props.promptAdmissionPending ||
-                !prompt.trim()
-              }
-            >
-              <Send />
-            </button>
-          </Tooltip>
+          {canStop ? (
+            <Tooltip content={t("stopTurn")} placement="above">
+              <button
+                className="send-button"
+                type="button"
+                aria-label={t("stopTurn")}
+                disabled={
+                  props.turnCancellationPending || props.sessionSwitching
+                }
+                onClick={() => void props.actions.cancelActiveTurn()}
+              >
+                <Square />
+              </button>
+            </Tooltip>
+          ) : (
+            <Tooltip content={t("send")} placement="above">
+              <button
+                className="send-button"
+                type="submit"
+                aria-label={t("send")}
+                disabled={
+                  props.sessionSwitching ||
+                  !canCompose ||
+                  !props.selectedWorkspace ||
+                  props.promptAdmissionPending ||
+                  !prompt.trim()
+                }
+              >
+                <Send />
+              </button>
+            </Tooltip>
+          )}
         </div>
         <div className="composer-hint" aria-live="polite">
           {hint}

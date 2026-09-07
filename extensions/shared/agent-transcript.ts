@@ -409,7 +409,7 @@ function findResult(
 }
 
 /**
- * Caches finalized transcript items by identity and width. Live state remains
+ * Caches finalized transcript items by identity, width, and cwd. Live state remains
  * uncached because it changes on every stream tick; callers clear this cache
  * from their component's invalidate() when Pi changes theme.
  */
@@ -434,7 +434,8 @@ export class AgentTranscriptRenderer {
     for (let index = 0; index < document.items.length; index++) {
       const item = document.items[index];
       const context = itemContext(document.items, index, liveIds, pairing);
-      const key = `${width}|${context.token}`;
+      // Fallback tool rows relativize paths against the document's cwd.
+      const key = JSON.stringify([width, context.token, document.cwd]);
       const cacheable = !document.toolRenderer || !itemHasTool(item);
       const cached = cacheable ? this.itemCache.get(item)?.get(key) : undefined;
       const lines =

@@ -6,6 +6,7 @@ export class WebApiError extends Error {
   constructor(
     message: string,
     readonly status: number,
+    readonly code?: string,
   ) {
     super(message);
     this.name = "WebApiError";
@@ -33,6 +34,7 @@ function readToken() {
 export interface CommandReceipt {
   id: string;
   accepted: boolean;
+  pendingFollowUps?: number;
 }
 
 export interface SessionMutationResult {
@@ -55,21 +57,49 @@ export class WebClient {
     };
   }
 
-  async request<T>(path: string, options: RequestInit = {}) {
-    const response = await fetch(path, {
-      ...options,
-      headers: { ...this.headers(Boolean(options.body)), ...options.headers },
-    });
-    const body = (await response.json().catch(() => ({}))) as {
-      error?: string;
-    } & T;
-    if (!response.ok) {
-      throw new WebApiError(
-        body.error || `Request failed (${response.status})`,
-        response.status,
-      );
+  async request<T>(
+    path: string,
+    options: RequestInit & { timeoutMs?: number; timeoutMessage?: string } = {},
+  ) {
+    const {
+      timeoutMs = 15_000,
+      timeoutMessage = "Request timed out. Please try again.",
+      ...requestOptions
+    } = options;
+    const controller = new AbortController();
+    let timedOut = false;
+    const abort = () => controller.abort();
+    if (options.signal?.aborted) abort();
+    options.signal?.addEventListener("abort", abort, { once: true });
+    const timer = window.setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, timeoutMs);
+    try {
+      const response = await fetch(path, {
+        ...requestOptions,
+        signal: controller.signal,
+        headers: { ...this.headers(Boolean(options.body)), ...options.headers },
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        code?: string;
+      } & T;
+      if (controller.signal.aborted) throw new Error("Request aborted");
+      if (!response.ok)
+        throw new WebApiError(
+          body.error || `Request failed (${response.status})`,
+          response.status,
+          body.code,
+        );
+      return body;
+    } catch (error) {
+      if (timedOut) throw new Error(timeoutMessage);
+      throw error;
+    } finally {
+      window.clearTimeout(timer);
+      options.signal?.removeEventListener("abort", abort);
     }
-    return body;
   }
 
   snapshot(path?: string | null) {
@@ -132,10 +162,38 @@ export class WebClient {
     });
   }
 
-  prompt(sessionId: string, content: string) {
-    return this.request<CommandReceipt>("/api/prompt", {
+  cancelActiveTurn(turn: NonNullable<WebSnapshot["runtime"]["activeTurn"]>) {
+    return this.request<{ state: "accepted" | "already-settled" }>(
+      "/api/turns/cancel",
+      {
+        method: "POST",
+        body: JSON.stringify(turn),
+      },
+    );
+  }
+
+  async prompt(
+    sessionId: string,
+    content: string,
+    commandId: string,
+    retry = false,
+  ) {
+    const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content }),
+      body: JSON.stringify({ sessionId, content, commandId, retry }),
+      timeoutMs: 30_000,
+      timeoutMessage:
+        "Request timed out; admission may still be pending. Retry the same message to recover its receipt.",
     });
+    if (
+      typeof receipt.id !== "string" ||
+      !receipt.id ||
+      receipt.accepted !== true
+    ) {
+      throw new Error(
+        "Invalid prompt receipt; retry the same message to recover its admission.",
+      );
+    }
+    return receipt;
   }
 }

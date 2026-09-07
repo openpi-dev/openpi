@@ -10,8 +10,8 @@ import {
   Pencil,
   Search,
   Terminal,
-  Wrench,
   Workflow,
+  Wrench,
   X,
 } from "lucide-react";
 import {
@@ -553,6 +553,7 @@ export function Transcript(props: TranscriptProps) {
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
   const lastPath = useRef<string | undefined>(undefined);
+  const lastScrollRequest = useRef(props.scrollToBottom);
   const entries = useMemo(
     () => buildEntries(props.snapshot, props.liveMessages),
     [props.snapshot, props.liveMessages],
@@ -780,13 +781,16 @@ export function Transcript(props: TranscriptProps) {
     t,
   ]);
 
-  const transcriptVersion = `${selected?.path}:${entries.map((entry) => entry.key).join(",")}:${props.scrollToBottom}`;
   useLayoutEffect(() => {
-    void transcriptVersion;
+    // Streamed content can grow without changing message keys.
+    void entries;
     const element = viewport.current;
     if (!element || !selected) return;
     const changed = lastPath.current !== selected.path;
-    if (changed || pinned.current) {
+    const requested = lastScrollRequest.current !== props.scrollToBottom;
+    lastScrollRequest.current = props.scrollToBottom;
+    if (changed || requested || pinned.current) {
+      pinned.current = true;
       if (typeof element.scrollTo === "function") {
         element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
       } else {
@@ -794,7 +798,7 @@ export function Transcript(props: TranscriptProps) {
       }
     }
     lastPath.current = selected.path;
-  }, [selected, transcriptVersion]);
+  }, [selected, entries, props.scrollToBottom]);
 
   const running =
     active &&

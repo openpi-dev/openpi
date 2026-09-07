@@ -19,11 +19,13 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import {
   createAgentSession,
+  getAgentDir,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import { resolveAgentModel } from "../agent-types.ts";
+import { toolPreview } from "./tool-preview.ts";
 import type {
   SubagentBackend,
   SubagentCleanupReceipt,
@@ -49,6 +51,14 @@ import {
   reclaimWorktree,
 } from "../../../shared/worktree.ts";
 import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
+import {
+  childToolsWithStructuredOutput,
+  createStructuredOutputTool,
+  encodeStructuredResult,
+  type EncodedStructuredResult,
+  STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
+} from "../../../shared/structured-output.ts";
+import { persistStructuredResultArtifact } from "../result-artifact.ts";
 
 const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
 const PARTIAL_TEXT_MAX_LENGTH = 128 * 1_024;
@@ -107,27 +117,6 @@ function safeJson(value: unknown): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-/** First non-empty line of a tool result-ish value (v1 liveToolPreview). */
-function toolPreview(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value
-      .split("\n")
-      .find((line) => line.trim())
-      ?.trim();
-  }
-  if (!value || typeof value !== "object") return undefined;
-  const content = (value as { content?: unknown }).content;
-  if (!Array.isArray(content)) return undefined;
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    const record = part as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") continue;
-    const firstLine = record.text.split("\n").find((line) => line.trim());
-    if (firstLine) return firstLine.trim();
-  }
-  return undefined;
 }
 
 function assistantParts(msg: AssistantMessage): TranscriptPart[] {
@@ -198,38 +187,93 @@ const makePiSession = (
     const thinkingLevel = (task.reasoningEffort ??
       task.parent.inheritedThinkingLevel) as ThinkingLevel | undefined;
 
-    const session = yield* Effect.tryPromise({
-      try: async () => {
-        const { loader, settingsManager } = await createChildResources({
-          cwd: task.cwd,
-          projectTrusted: task.parent.projectTrusted,
-          ...(task.appendSystemPrompt
-            ? { appendSystemPrompt: [...task.appendSystemPrompt] }
-            : {}),
-        });
-        const { session } = await (
-          options.sessionFactory ?? createAgentSession
-        )({
-          cwd: task.cwd,
-          sessionManager: SessionManager.create(task.cwd),
-          settingsManager,
-          resourceLoader: loader,
-          model,
-          thinkingLevel,
-          ...childToolPolicy(task.tools),
-        });
-        // Start child extension session hooks/resources in headless mode.
-        // A rejection here would otherwise leak the freshly created session:
-        // the scope finalizer that owns cleanup is only registered later.
-        try {
-          await bindChildSessionExtensions(session, task.tools);
-        } catch (error) {
-          await shutdownAndDisposeChildSession(session, {
-            timeoutMs: options.shutdownTimeoutMs,
+    let capturedStructured: EncodedStructuredResult | undefined;
+    const structuredOutputTool =
+      task.outputSchema === undefined
+        ? undefined
+        : createStructuredOutputTool(task.outputSchema, (value) => {
+            capturedStructured = encodeStructuredResult(value);
           });
+
+    // Own the session before asynchronous startup. Interruption can happen
+    // before the normal backend finalizer has been installed.
+    let acquiringSession: AgentSession | undefined;
+    let startupOwned = true;
+    const cleanupStartup = () =>
+      acquiringSession
+        ? shutdownAndDisposeChildSession(acquiringSession, {
+            abort: true,
+            timeoutMs: options.shutdownTimeoutMs,
+          })
+        : Promise.resolve();
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        if (startupOwned) await cleanupStartup();
+      }),
+    );
+
+    const session = yield* Effect.tryPromise({
+      try: async (signal) => {
+        const checkCancelled = () => {
+          if (signal.aborted)
+            throw signal.reason ?? new Error("Subagent startup cancelled");
+        };
+        const onCancelled = () => {
+          void cleanupStartup().catch(() => {});
+        };
+        signal.addEventListener("abort", onCancelled, { once: true });
+        try {
+          checkCancelled();
+          const appendSystemPrompt = [
+            ...(task.appendSystemPrompt ?? []),
+            ...(structuredOutputTool
+              ? [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION]
+              : []),
+          ];
+          const { loader, settingsManager } = await createChildResources({
+            cwd: task.cwd,
+            projectTrusted: task.parent.projectTrusted,
+            ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
+          });
+          checkCancelled();
+          const { session } = await (
+            options.sessionFactory ?? createAgentSession
+          )({
+            cwd: task.cwd,
+            sessionManager: SessionManager.create(task.cwd),
+            settingsManager,
+            resourceLoader: loader,
+            model,
+            thinkingLevel,
+            ...(structuredOutputTool
+              ? { customTools: [structuredOutputTool] }
+              : {}),
+            ...childToolPolicy(
+              childToolsWithStructuredOutput(
+                task.tools,
+                structuredOutputTool !== undefined,
+              ),
+            ),
+          });
+          acquiringSession = session;
+          checkCancelled();
+          // Never start extension binding for a factory that completed after
+          // cancellation. Already-running hooks retain bounded cleanup ownership.
+          await bindChildSessionExtensions(
+            session,
+            childToolsWithStructuredOutput(
+              task.tools,
+              structuredOutputTool !== undefined,
+            ),
+          );
+          checkCancelled();
+          return session;
+        } catch (error) {
+          await cleanupStartup();
           throw error;
+        } finally {
+          signal.removeEventListener("abort", onCancelled);
         }
-        return session;
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
@@ -338,11 +382,46 @@ const makePiSession = (
         });
         return;
       }
+      if (task.outputSchema !== undefined && capturedStructured === undefined) {
+        emit({
+          _tag: "RunSettled",
+          outcome: {
+            _tag: "Failed",
+            errorText:
+              "Agent finished without calling structured_output; no structured result matching output_schema was produced.",
+            partialText,
+          },
+        });
+        return;
+      }
+      let structuredResult;
+      if (capturedStructured) {
+        try {
+          structuredResult = {
+            ...capturedStructured,
+            artifactPath: persistStructuredResultArtifact(
+              getAgentDir(),
+              capturedStructured.json,
+            ),
+          };
+        } catch (error) {
+          emit({
+            _tag: "RunSettled",
+            outcome: {
+              _tag: "Failed",
+              errorText: `Structured result artifact could not be persisted: ${boundedError(error)}`,
+              partialText,
+            },
+          });
+          return;
+        }
+      }
       emit({
         _tag: "RunSettled",
         outcome: {
           _tag: "Completed",
           finalText: prompt.finalText,
+          ...(structuredResult ? { structuredResult } : {}),
         },
       });
     };
@@ -580,6 +659,8 @@ const makePiSession = (
       }),
     );
 
+    startupOwned = false;
+
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
       if (state.activePrompt) {
@@ -597,6 +678,7 @@ const makePiSession = (
         promise: Promise.resolve(),
       };
       state.activePrompt = activePrompt;
+      capturedStructured = undefined;
       state.settled = false;
       emit({ _tag: "RunStarted" });
       let prompt: Promise<void>;

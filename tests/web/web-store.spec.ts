@@ -6,6 +6,7 @@ import {
   type CommandReceipt,
   type SessionMutationResult,
   WebClient,
+  WebApiError,
   type WorkspaceSelectionResult,
 } from "../../web/ui/src/protocol/client.ts";
 import {
@@ -35,6 +36,7 @@ const transcriptTruncation = {
 function snapshot(name = "Current"): WebSnapshot {
   return {
     protocolVersion: 1,
+    preferences: { theme: "system" },
     generatedAt: "2026-09-03T00:00:00Z",
     cursor: 4,
     currentSessionId: "session-1",
@@ -137,7 +139,10 @@ class FakeClient extends WebClient {
     id: "model-1",
     accepted: true,
   });
-  promptResult = Promise.resolve({ id: "prompt-1", accepted: true });
+  promptResult: Promise<CommandReceipt> = Promise.resolve({
+    id: "prompt-1",
+    accepted: true,
+  });
   creations: Array<{ commandId: string; workspacePath: string }> = [];
   selections: string[] = [];
   modelSelections: Array<{
@@ -173,7 +178,12 @@ class FakeClient extends WebClient {
     return this.modelResult;
   }
 
-  override prompt(sessionId: string, content: string) {
+  override prompt(
+    sessionId: string,
+    content: string,
+    _commandId: string,
+    _retry = false,
+  ) {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
   }
@@ -885,6 +895,158 @@ describe("OpenPI Web store", () => {
     ]);
     expect(store.getState().selectedWorkspace).toBe(workspace);
     expect(store.getState().selectedPath).toBe(`${workspace}/session.jsonl`);
+    store.getState().actions.stop();
+  });
+
+  it("keeps a running agent active when a handled follow-up settles", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    stream.emit(runtimeEvent(5, "agent_start", { sessionId: "session-1" }));
+    stream.emit(
+      runtimeEvent(6, "prompt_settled", {
+        sessionId: "session-1",
+        commandId: "handled",
+      }),
+    );
+    stream.emit(
+      runtimeEvent(7, "prompt_accepted", {
+        sessionId: "session-1",
+        commandId: "handled",
+      }),
+    );
+    expect(store.getState().livePhase).toBe("running");
+    expect(store.getState().liveRunning).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it("retries an uncertain admission with the same identity without idling the running turn", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockResolvedValueOnce({ id: "retry", accepted: true });
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    store.setState({ liveRunning: true, livePhase: "running" });
+    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().liveMessages).toHaveLength(1);
+    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(prompt.mock.calls[0]?.[2]).toEqual(expect.any(String));
+    expect(prompt.mock.calls[1]?.[2]).toBe(prompt.mock.calls[0]?.[2]);
+    expect(prompt.mock.calls[1]?.[3]).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it("restores the canonical running turn from a snapshot", async () => {
+    const client = new FakeClient();
+    const running = snapshot();
+    running.runtime = {
+      ...running.runtime,
+      status: "running",
+      activeTurn: { sessionId: "session-1", commandId: "turn", epoch: 2 },
+    };
+    client.snapshots.push(Promise.resolve(running));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot({ resetCursor: true });
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().activeTurn).toEqual(running.runtime.activeTurn);
+  });
+
+  it("cancels the exact active turn without optimistically ending it", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const cancellation = deferred<{ state: "accepted" }>();
+    const cancel = vi
+      .spyOn(client, "cancelActiveTurn")
+      .mockReturnValue(cancellation.promise);
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const turn = { sessionId: "session-1", commandId: "turn", epoch: 4 };
+    stream.emit(runtimeEvent(5, "turn_started", turn));
+    const stopping = store.getState().actions.cancelActiveTurn();
+    expect(cancel).toHaveBeenCalledWith(turn);
+    expect(store.getState().turnCancellationPending).toBe(true);
+    expect(store.getState().liveRunning).toBe(true);
+    stream.emit(
+      runtimeEvent(6, "turn_settled", {
+        ...turn,
+        epoch: 3,
+        outcome: "cancelled",
+      }),
+    );
+    expect(store.getState().liveRunning).toBe(true);
+    cancellation.resolve({ state: "accepted" });
+    await stopping;
+    expect(store.getState().liveRunning).toBe(true);
+    stream.emit(
+      runtimeEvent(7, "turn_settled", { ...turn, outcome: "cancelled" }),
+    );
+    expect(store.getState().activeTurn).toBeNull();
+    expect(store.getState().turnTerminalStatus).toBe("cancelled");
+    expect(store.getState().liveRunning).toBe(false);
+    store.getState().actions.stop();
+  });
+
+  it("starts a new admission identity only after a definite rejection", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(
+        new WebApiError("full", 503, "PROMPT_ADMISSION_CAPACITY"),
+      )
+      .mockResolvedValueOnce({
+        id: "new",
+        accepted: true,
+        pendingFollowUps: 2,
+      });
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(store.getState().liveMessages).toHaveLength(0);
+    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(prompt.mock.calls[1]?.[2]).not.toBe(prompt.mock.calls[0]?.[2]);
+    expect(prompt.mock.calls[1]?.[3]).toBe(false);
+    expect(store.getState().pendingFollowUpsReceipt).toBe(2);
+    store.getState().actions.stop();
+  });
+
+  it("preserves retry identity when successful headers have a truncated receipt body", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("{", { status: 202 }))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "stable-receipt", accepted: true }), {
+          status: 202,
+        }),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    vi.spyOn(client, "prompt").mockImplementation((...args) =>
+      WebClient.prototype.prompt.call(client, ...args),
+    );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(store.getState().liveMessages).toHaveLength(1);
+    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    const first = JSON.parse(String(fetcher.mock.calls[0]?.[1].body));
+    const second = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
+    expect(second.commandId).toBe(first.commandId);
+    expect(second.retry).toBe(true);
     store.getState().actions.stop();
   });
 

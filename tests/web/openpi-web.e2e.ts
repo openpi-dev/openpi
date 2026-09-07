@@ -169,3 +169,85 @@ test.describe("reduced motion", () => {
     });
   });
 });
+
+test("restores a running turn and canonical dark theme without losing cancellation", async ({
+  page,
+}, testInfo) => {
+  const turn = {
+    sessionId: "browser-parity-session",
+    commandId: "browser-parity-turn",
+    epoch: 7,
+  };
+  const cancelRequests: unknown[] = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.preferences = { theme: "dark" };
+    snapshot.currentSessionId = turn.sessionId;
+    snapshot.selectedSession = {
+      id: turn.sessionId,
+      path: "/browser-parity/session.jsonl",
+      cwd: "/browser-parity",
+      entries: [
+        {
+          id: "user",
+          type: "message",
+          timestamp: "2026-09-07T00:00:00Z",
+          message: { role: "user", content: "Inspect the current task" },
+        },
+        {
+          id: "assistant",
+          type: "message",
+          timestamp: "2026-09-07T00:00:01Z",
+          message: {
+            role: "assistant",
+            content:
+              "Working on the current task.\nStreaming output stays readable.",
+          },
+        },
+      ],
+      bytes: 200,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = {
+      status: "running",
+      activeTurn: turn,
+      capabilities: {},
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/turns/cancel", async (route) => {
+    cancelRequests.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      json: { ...turn, state: "accepted", accepted: true, cursor: 0 },
+    });
+  });
+  await openWorkbench(page);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+  await expect(page.locator(".message-row.assistant")).toContainText(
+    "Streaming output stays readable.",
+  );
+  await page.screenshot({
+    path: testInfo.outputPath("running-dark.png"),
+    fullPage: true,
+  });
+  const stop = page.getByRole("button", { name: "停止当前轮次", exact: true });
+  await expect(stop).toBeVisible();
+  await stop.click();
+  await expect.poll(() => cancelRequests).toEqual([turn]);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});

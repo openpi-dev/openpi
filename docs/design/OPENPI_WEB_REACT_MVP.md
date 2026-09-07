@@ -140,3 +140,13 @@ Real-provider prompt streaming, ordinary tool evidence, Subagent/Workflow projec
 - Adding settings, trust approval, file attachments, interrupt control, transcript search, or other open Web issues.
 - Changing Pi Session storage, provider selection semantics, capability schemas, or command endpoints.
 - Keeping a second legacy UI route.
+
+## 2026-09-07 current-main integration amendment
+
+Status: locally validated integration; final pushed revision and remote CI are recorded in [PR #384](https://github.com/openpi-dev/openpi/pull/384). This amendment preserves the historical receipts above. Its inputs are PR head `001da67154282c793edc7c5f5ba72ba59565e84c` and main `0b282430798939a19412ff83fce277916f5d0cf1`, including the subsequently accepted Web contracts in #364, #370, #371, #385, and #399.
+
+The React implementation preserves the #352 visual baseline while replacing its browser implementation. It also carries forward newer main behavior: canonical light/dark/system preference, exact turn cancellation, native follow-up queue receipts, stable prompt admission identity after uncertain responses, running-state protection, quiet-connection snapshot refresh, and bounded stalled-connection recovery. A truncated successful response cannot masquerade as a valid prompt receipt. Backend protocol, Session ownership, tools, permissions, and persisted configuration are unchanged by this migration. The earlier non-goal concerning interrupt control does not remove the cancellation control now present in main.
+
+The integration review additionally repaired pinned scrolling during same-message streaming, forced scrolling after send, background-terminal activity projection with current-Session attribution, and the persistent accessible page heading. Legacy DOM/source-string tests are replaced by React store, protocol, component, and browser tests rather than retained against unused JavaScript.
+
+Local verification: `bun run check` passed; `bun run test` passed with 1,442 Node tests, one platform skip, and 81 Vitest tests. Four production-WebHost Playwright tests passed using local Chrome, covering desktop/mobile navigation, reduced motion, local assets, running dark-theme projection, exact cancellation request identity, and zero axe violations in the tested states. The running/cancellation browser case uses intercepted canonical snapshots and command receipts; it does not claim a new live-provider or long-running Workflow acceptance. Production JavaScript remains one bundled asset (approximately 714 kB raw / 213 kB gzip), with a Vite size warning; this migration does not claim a measured rendering speedup.

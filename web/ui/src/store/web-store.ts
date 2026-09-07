@@ -4,13 +4,15 @@ import type {
   WebLiveMessage,
   WebSnapshot,
 } from "../../../protocol/types.ts";
-import { WebClient } from "../protocol/client.ts";
+import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
 
 const collapsedWorkspacesStorageKey = "openpi.collapsed-workspaces";
 const sidebarCollapsedStorageKey = "openpi.sidebar-collapsed";
 const refreshEventTypes = new Set([
   "agent_start",
+  "turn_started",
+  "turn_settled",
   "agent_settled",
   "prompt_settled",
   "message_end",
@@ -73,6 +75,10 @@ interface SessionActivation {
 }
 
 export interface WebStoreState {
+  activeTurn: WebSnapshot["runtime"]["activeTurn"] | null;
+  turnCancellationPending: boolean;
+  turnTerminalStatus: string | null;
+  pendingFollowUpsReceipt: number | null;
   snapshot: WebSnapshot | null;
   cursor: number | null;
   selectedPath: string | null;
@@ -113,6 +119,7 @@ export interface WebStoreActions {
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
   selectModel: (value: string) => Promise<void>;
+  cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
   setQuery: (query: string) => void;
   setSearchOpen: (open: boolean) => void;
@@ -148,6 +155,12 @@ export function createWebStore(
   let snapshotGeneration = 0;
   let promptAdmissionSequence = 0;
   let promptAdmissionToken: number | null = null;
+  let promptAdmission: {
+    sessionId: string;
+    content: string;
+    commandId: string;
+    optimisticKey: string;
+  } | null = null;
   let sessionActivation: SessionActivation | null = null;
   let sessionSelectionTail = Promise.resolve();
   let refreshTimer: number | null = null;
@@ -167,6 +180,10 @@ export function createWebStore(
   };
 
   const resetLivePatch = () => ({
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
     liveMessages: [] as LiveEntry[],
     liveRunning: false,
     livePhase: "idle" as const,
@@ -179,12 +196,13 @@ export function createWebStore(
     settled: boolean,
     currentPhase: WebStoreState["livePhase"],
   ) => ({
-    liveRunning: !settled,
-    livePhase: settled
-      ? ("idle" as const)
-      : currentPhase === "running"
+    liveRunning: currentPhase === "running" || !settled,
+    livePhase:
+      currentPhase === "running"
         ? ("running" as const)
-        : ("preparing" as const),
+        : settled
+          ? ("idle" as const)
+          : ("preparing" as const),
   });
 
   const store = createStore<WebStoreState>((set, get) => {
@@ -276,6 +294,7 @@ export function createWebStore(
         if (!belongs) {
           const epoch = ++sessionEpoch;
           promptAdmissionToken = null;
+          promptAdmission = null;
           set({
             ...resetLivePatch(),
             promptAdmissionPending: false,
@@ -299,17 +318,63 @@ export function createWebStore(
         set({
           ...promptAcceptedLivePatch(settled, current.livePhase),
           liveRetry: null,
+          pendingFollowUpsReceipt: Number.isInteger(detail.pendingFollowUps)
+            ? Number(detail.pendingFollowUps)
+            : current.pendingFollowUpsReceipt,
+        });
+      } else if (event.type === "turn_started") {
+        set({
+          activeTurn: {
+            sessionId: String(detail.sessionId),
+            commandId: String(detail.commandId),
+            epoch: Number(detail.epoch),
+          },
+          liveRunning: true,
+          livePhase: "running",
+          liveRetry: null,
+          turnTerminalStatus: null,
         });
       } else if (event.type === "agent_start") {
-        set({ liveRunning: true, livePhase: "running", liveRetry: null });
-      } else if (
-        event.type === "agent_settled" ||
-        event.type === "prompt_settled"
-      ) {
-        if (event.type === "prompt_settled") {
-          rememberBounded(terminalPromptIds, detail.commandId);
+        set({
+          ...(detail.activeTurn
+            ? { activeTurn: detail.activeTurn as WebStoreState["activeTurn"] }
+            : {}),
+          liveRunning: true,
+          livePhase: "running",
+          liveRetry: null,
+        });
+      } else if (event.type === "turn_settled") {
+        rememberBounded(terminalPromptIds, detail.commandId);
+        const turn = current.activeTurn;
+        if (
+          turn?.sessionId === detail.sessionId &&
+          turn?.commandId === detail.commandId &&
+          turn?.epoch === detail.epoch
+        ) {
+          set({
+            activeTurn: null,
+            liveRunning: false,
+            livePhase: "idle",
+            liveRetry: null,
+            turnTerminalStatus:
+              typeof detail.outcome === "string" ? detail.outcome : null,
+          });
         }
-        set({ liveRunning: false, livePhase: "idle", liveRetry: null });
+      } else if (event.type === "agent_settled") {
+        set({
+          pendingFollowUpsReceipt: null,
+          ...(!current.activeTurn
+            ? {
+                liveRunning: false,
+                livePhase: "idle" as const,
+                liveRetry: null,
+              }
+            : {}),
+        });
+      } else if (event.type === "prompt_settled") {
+        rememberBounded(terminalPromptIds, detail.commandId);
+        if (current.livePhase !== "running")
+          set({ liveRunning: false, livePhase: "idle", liveRetry: null });
       } else if (detail.message && typeof detail.message === "object") {
         const message = detail.message as WebLiveMessage;
         let liveMessages = current.liveMessages;
@@ -372,14 +437,17 @@ export function createWebStore(
     const runEventLoop = async (signal: AbortSignal) => {
       let reconnectDelay = 500;
       while (!signal.aborted) {
-        let recovered = false;
+        let recoveryAttempted = false;
         try {
           if (get().cursor === null) {
-            recovered = await get().actions.refreshSnapshot({
+            recoveryAttempted = true;
+            const ready = await get().actions.refreshSnapshot({
               resetCursor: true,
             });
-            if (!recovered) throw new Error("snapshot unavailable");
+            if (!ready) throw new Error("snapshot unavailable");
+            recoveryAttempted = false;
           }
+          if (signal.aborted) return;
           await consumeEvents({
             client,
             cursor: get().cursor ?? 0,
@@ -388,16 +456,15 @@ export function createWebStore(
               set({ connection: "connected", notice: null });
             },
             onEvent: applyRuntimeEvent,
+            onHeartbeat: () => scheduleSnapshotRefresh(0),
             signal,
           });
         } catch (error) {
           if (signal.aborted) return;
           set({ connection: "reconnecting" });
-          if (!recovered) {
-            recovered = await get().actions.refreshSnapshot({
-              resetCursor: true,
-            });
-          }
+          const recovered =
+            !recoveryAttempted &&
+            (await get().actions.refreshSnapshot({ resetCursor: true }));
           if (!recovered) set(resetLivePatch());
           await waitForReconnect(reconnectDelay, signal);
           reconnectDelay = Math.min(reconnectDelay * 2, 5_000);
@@ -477,21 +544,25 @@ export function createWebStore(
               shouldReset || get().cursor === null
                 ? snapshot.cursor
                 : Math.max(get().cursor ?? 0, snapshot.cursor),
+            activeTurn: snapshot.runtime.activeTurn ?? null,
             livePhase:
               snapshot.runtime.status !== "running" &&
-              !get().promptAdmissionPending
+              !get().promptAdmissionPending &&
+              !promptAdmission
                 ? "idle"
                 : get().livePhase,
             liveRetry:
               snapshot.runtime.status !== "running" &&
-              !get().promptAdmissionPending
+              !get().promptAdmissionPending &&
+              !promptAdmission
                 ? null
                 : get().liveRetry,
             liveRunning:
-              snapshot.runtime.status !== "running" &&
-              !get().promptAdmissionPending
-                ? false
-                : get().liveRunning,
+              snapshot.runtime.status === "running"
+                ? true
+                : !get().promptAdmissionPending && !promptAdmission
+                  ? false
+                  : get().liveRunning,
             selectedPath:
               currentSession?.path ?? snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
@@ -549,6 +620,7 @@ export function createWebStore(
           globalThis.crypto?.randomUUID?.() ??
           `web-create-${Date.now()}-${epoch}`;
         promptAdmissionToken = null;
+        promptAdmission = null;
         set({
           ...resetLivePatch(),
           mobileSidebarOpen: false,
@@ -589,6 +661,7 @@ export function createWebStore(
         if (!path) return;
         const epoch = ++sessionEpoch;
         promptAdmissionToken = null;
+        promptAdmission = null;
         set({
           ...resetLivePatch(),
           mobileSidebarOpen: false,
@@ -662,6 +735,22 @@ export function createWebStore(
           await actions.refreshSnapshot({ epoch });
         }
       },
+      async cancelActiveTurn() {
+        const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
+        if (!turn || get().turnCancellationPending || get().sessionSwitching)
+          return;
+        const epoch = sessionEpoch;
+        set({ turnCancellationPending: true });
+        try {
+          await client.cancelActiveTurn(turn);
+        } catch (error) {
+          if (epoch !== sessionEpoch) return;
+          await actions.refreshSnapshot({ epoch });
+          if (epoch === sessionEpoch) showError(error);
+        } finally {
+          if (epoch === sessionEpoch) set({ turnCancellationPending: false });
+        }
+      },
       async sendPrompt(rawContent) {
         const content = rawContent.trim();
         const workspace = get().selectedWorkspace;
@@ -685,28 +774,71 @@ export function createWebStore(
         }
         const epoch = sessionEpoch;
         const admission = ++promptAdmissionSequence;
-        const optimisticKey = `optimistic-${Date.now()}`;
+        const retrying =
+          promptAdmission?.sessionId === sessionId &&
+          promptAdmission.content === content;
+        const commandId = retrying
+          ? promptAdmission!.commandId
+          : (globalThis.crypto?.randomUUID?.() ??
+            `web-prompt-${Date.now()}-${admission}`);
+        const optimisticKey = retrying
+          ? promptAdmission!.optimisticKey
+          : `optimistic-${commandId}`;
+        promptAdmission = { sessionId, content, commandId, optimisticKey };
         promptAdmissionToken = admission;
         set({
-          liveMessages: [
-            ...get().liveMessages,
-            { key: optimisticKey, message: { role: "user", content } },
-          ].slice(-8),
+          liveMessages: retrying
+            ? get().liveMessages
+            : [
+                ...get().liveMessages,
+                { key: optimisticKey, message: { role: "user", content } },
+              ].slice(-8),
           notice: null,
+          pendingFollowUpsReceipt: null,
+          turnTerminalStatus: null,
           promptAdmissionPending: true,
           scrollToBottom: get().scrollToBottom + 1,
         });
         try {
-          const receipt = await client.prompt(sessionId, content);
+          const receipt = await client.prompt(
+            sessionId,
+            content,
+            commandId,
+            retrying,
+          );
           if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
             return false;
           const settled = terminalPromptIds.has(receipt.id);
-          set(promptAcceptedLivePatch(settled, get().livePhase));
+          if (promptAdmission?.commandId === commandId) promptAdmission = null;
+          set({
+            ...promptAcceptedLivePatch(settled, get().livePhase),
+            pendingFollowUpsReceipt: receipt.pendingFollowUps ?? null,
+          });
           scheduleSnapshotRefresh(120);
           return true;
         } catch (error) {
           if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
             return false;
+          const knownRejection =
+            error instanceof WebApiError &&
+            [
+              "WORKSPACE_REQUIRED",
+              "SESSION_CONFLICT",
+              "PROMPT_REJECTED",
+              "COMMAND_CONFLICT",
+              "PROMPT_ADMISSION_CAPACITY",
+            ].includes(error.code ?? "");
+          if (!knownRejection) {
+            set({
+              liveRunning: true,
+              livePhase:
+                get().livePhase === "running" ? "running" : "preparing",
+              liveRetry: null,
+            });
+            showError(error);
+            return false;
+          }
+          if (promptAdmission?.commandId === commandId) promptAdmission = null;
           set({
             liveMessages: get().liveMessages.filter(
               (entry) => entry.key !== optimisticKey,
@@ -760,6 +892,10 @@ export function createWebStore(
     };
 
     return {
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
       snapshot: null,
       cursor: null,
       selectedPath: null,

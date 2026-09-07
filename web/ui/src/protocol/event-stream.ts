@@ -8,14 +8,23 @@ export interface EventStreamOptions {
   client: WebClient;
   cursor: number;
   onConnected: () => void;
+  onHeartbeat?: () => void;
   onEvent: (event: WebEvent) => void;
   signal: AbortSignal;
 }
 
 export async function consumeEventStream(options: EventStreamOptions) {
+  const controller = new AbortController();
+  const abort = () => controller.abort();
+  options.signal.addEventListener("abort", abort, { once: true });
+  if (options.signal.aborted) abort();
+  const timer = window.setTimeout(abort, 45_000);
   const response = await fetch(`/events?cursor=${options.cursor}`, {
     headers: options.client.headers(),
-    signal: options.signal,
+    signal: controller.signal,
+  }).finally(() => {
+    window.clearTimeout(timer);
+    options.signal.removeEventListener("abort", abort);
   });
   if (response.status === 409)
     throw new EventResyncRequired("event replay expired");
@@ -24,7 +33,14 @@ export async function consumeEventStream(options: EventStreamOptions) {
   options.onConnected();
 
   let cursor = options.cursor;
+  let heartbeats = 0;
   const parser = createParser({
+    onComment(comment) {
+      if (comment.trim() === "heartbeat" && ++heartbeats >= 4) {
+        heartbeats = 0;
+        options.onHeartbeat?.();
+      }
+    },
     onEvent(record) {
       const event = JSON.parse(record.data) as WebEvent;
       if (!Number.isSafeInteger(event.sequence)) {
@@ -45,7 +61,24 @@ export async function consumeEventStream(options: EventStreamOptions) {
   const decoder = new TextDecoder();
   try {
     while (!options.signal.aborted) {
-      const { done, value } = await reader.read();
+      let timer: number | undefined;
+      let onAbort: (() => void) | undefined;
+      const chunk = reader.read();
+      const interruption = new Promise<never>((_, reject) => {
+        onAbort = () => reject(new Error("event stream aborted"));
+        options.signal.addEventListener("abort", onAbort, { once: true });
+        if (options.signal.aborted) onAbort();
+        timer = window.setTimeout(
+          () => reject(new Error("event stream stalled")),
+          45_000,
+        );
+      });
+      const { done, value } = await Promise.race([chunk, interruption]).finally(
+        () => {
+          window.clearTimeout(timer);
+          if (onAbort) options.signal.removeEventListener("abort", onAbort);
+        },
+      );
       if (done) throw new Error("event connection closed");
       parser.feed(decoder.decode(value, { stream: true }));
     }

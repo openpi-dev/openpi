@@ -1,16 +1,25 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { OpenPiLogo } from "../../web/ui/src/components/OpenPiLogo.tsx";
+import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
+import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
-import { createWebStore } from "../../web/ui/src/store/web-store.ts";
+import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(cleanup);
 
@@ -61,6 +70,7 @@ describe("OpenPI React transcript", () => {
     store.getState().actions.setQuery("foo ");
     const snapshot: WebSnapshot = {
       protocolVersion: 1,
+      preferences: { theme: "system" },
       generatedAt: "2026-09-01T10:00:00Z",
       cursor: 1,
       workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
@@ -168,6 +178,7 @@ describe("OpenPI React transcript", () => {
     ];
     const snapshot: WebSnapshot = {
       protocolVersion: 1,
+      preferences: { theme: "system" },
       generatedAt: "2026-09-01T10:00:03Z",
       cursor: 1,
       currentSessionId: "session-1",
@@ -220,4 +231,245 @@ describe("OpenPI React transcript", () => {
       container.querySelectorAll("[aria-label=completed]").length,
     ).toBeGreaterThan(0);
   });
+});
+
+function activeSnapshot(): WebSnapshot {
+  return {
+    protocolVersion: 1,
+    preferences: { theme: "system" },
+    generatedAt: "2026-09-01T10:00:00Z",
+    cursor: 1,
+    currentSessionId: "session",
+    workspaces: [],
+    sessions: [],
+    models: [],
+    runtime: { status: "running", capabilities: {} },
+    truncation,
+    selectedSession: {
+      id: "session",
+      path: "/tmp/session",
+      cwd: "/tmp",
+      bytes: 1,
+      truncation,
+      entries: [],
+    },
+  };
+}
+
+it("follows same-key streamed growth, preserves reading position, and honors explicit send scroll", () => {
+  const snapshot = activeSnapshot();
+  const props = {
+    snapshot,
+    liveRunning: true,
+    livePhase: "running" as const,
+    liveRetry: null,
+    thinkingStarts: {},
+    thinkingDurations: {},
+    scrollToBottom: 0,
+    onResend: async () => true,
+  };
+  const node = (content: string, scrollToBottom = 0) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        ...props,
+        scrollToBottom,
+        liveMessages: [
+          { key: "stream", message: { role: "assistant", content } },
+        ],
+      }),
+    );
+  const { container, rerender } = render(node("hello"));
+  const viewport = container.querySelector<HTMLElement>(".conversation")!;
+  const scroll = vi.fn();
+  viewport.scrollTo = scroll;
+  Object.defineProperty(viewport, "scrollHeight", {
+    configurable: true,
+    value: 1000,
+  });
+  Object.defineProperty(viewport, "clientHeight", {
+    configurable: true,
+    value: 100,
+  });
+  rerender(node("hello\nmore streamed content"));
+  expect(scroll).toHaveBeenCalledOnce();
+  scroll.mockClear();
+  viewport.scrollTop = 0;
+  fireEvent.scroll(viewport);
+  rerender(node("still more streamed content"));
+  expect(scroll).not.toHaveBeenCalled();
+  rerender(node("after sending", 1));
+  expect(scroll).toHaveBeenCalledOnce();
+});
+
+it("shows cancellation and queued follow-up receipts on the active session", () => {
+  const snapshot = activeSnapshot();
+  const store = createWebStore();
+  const cancel = vi.fn(async () => {});
+  const { rerender } = renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: true,
+      landing: false,
+      activeTurn: { sessionId: "session", commandId: "turn", epoch: 1 },
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: 2,
+      actions: { ...store.getState().actions, cancelActiveTurn: cancel },
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("stopTurn") }));
+  expect(cancel).toHaveBeenCalledOnce();
+  expect(
+    screen.getByText(i18n.t("pendingFollowUpsHint", { count: 2 })),
+  ).toBeTruthy();
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        snapshot,
+        selectedWorkspace: "/tmp",
+        sessionSwitching: false,
+        promptAdmissionPending: false,
+        liveRunning: true,
+        landing: false,
+        activeTurn: { sessionId: "session", commandId: "turn", epoch: 1 },
+        turnCancellationPending: true,
+        turnTerminalStatus: null,
+        pendingFollowUpsReceipt: 2,
+        actions: store.getState().actions,
+      }),
+    ),
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("stopTurn") })
+      .disabled,
+  ).toBe(true);
+});
+
+it("keeps background terminal activity and omission receipts visible", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.capabilities = {
+    "background-terminals": {
+      items: [
+        {
+          id: "terminal",
+          title: "Build",
+          status: "failed",
+          createdAt: 1,
+          settledAt: 2,
+        },
+      ],
+      omitted: 3,
+      truncated: true,
+    },
+  };
+  render(createElement(ActivityBar, { snapshot }));
+  expect(screen.getByText(/Build/)).toBeTruthy();
+  expect(screen.getByText("+3")).toBeTruthy();
+});
+
+it("resolves canonical system theme changes and explicit overrides", () => {
+  const initial = webStore.getState().snapshot;
+  const media = new EventTarget();
+  const query = Object.assign(media, { matches: false });
+  vi.stubGlobal("matchMedia", () => query);
+  const snapshot = activeSnapshot();
+  webStore.setState({ snapshot });
+  const { unmount } = render(
+    createElement(Providers, null, createElement("span", null, "theme")),
+  );
+  expect(document.documentElement.dataset.theme).toBe("light");
+  act(() => {
+    query.matches = true;
+    query.dispatchEvent(new Event("change"));
+  });
+  expect(document.documentElement.dataset.theme).toBe("dark");
+  act(() =>
+    webStore.setState({
+      snapshot: { ...snapshot, preferences: { theme: "light" } },
+    }),
+  );
+  expect(document.documentElement.dataset.theme).toBe("light");
+  unmount();
+  webStore.setState({ snapshot: initial });
+  vi.unstubAllGlobals();
+});
+
+it("does not attribute current runtime activity to a historical session", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.capabilities = {
+    "background-terminals": {
+      items: [
+        {
+          id: "terminal",
+          title: "Current build",
+          status: "running",
+          createdAt: 1,
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+    subagents: {
+      items: [
+        {
+          id: "agent",
+          title: "Current agent",
+          status: "running",
+          createdAt: 1,
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+    workflows: {
+      items: [
+        {
+          runId: "run",
+          name: "Current workflow",
+          status: "running",
+          startedAt: 1,
+          agents: { total: 1, running: 1, done: 0, error: 0, uncertain: 0 },
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+  };
+  const store = createWebStore();
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions: store.getState().actions,
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+  expect(screen.getByLabelText("Runtime activity")).toBeTruthy();
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: { ...snapshot, currentSessionId: "another-session" },
+      }),
+    ),
+  );
+  expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+  expect(
+    screen.queryByText(/Current build|Current agent|Current workflow/),
+  ).toBeNull();
 });
