@@ -130,7 +130,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
-| 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（仅聊天，不执行 Cursor 原生工具）                   |
+| 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（支持 Pi 工具，不执行 Cursor 原生工具）                   |
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -196,23 +196,23 @@ subagent_spawn({
 每个 Subagent 都是新的进程内 Pi SDK Session：
 
 - 默认继承父会话的 Provider 与模型；用户可明确指定 Thinking Level，否则模型根据角色建议、任务难度与目标模型实际支持的档位选择；
-- 继承普通 child-safe 工具、Skills、项目说明与 Trust 决策；
+- 继承父会话当前启用且允许委派的工具、Skills 和项目说明；目标目录的项目扩展按其自身 Trust 决策加载；
 - 最多 4 个模型发起的 Subagent 并发运行，结束后自动回传；
 - 可 `check`、`wait`、`cancel`，也可用 `subagent_send` 继续同一子会话；
 - 输入框下方显示实时摘要，空输入时按 `↓` 聚焦，`Enter` 或 `→` 打开管理界面。
 
-内置角色由 Harness 强制工具边界，不靠 Prompt 自律：
+内置角色提供任务分工建议，普通模式下继承父会话当前启用且允许委派的工具，包括 Bash 和已启用的联网工具。角色名称本身不是只读权限边界；Plan Mode 与自定义角色的显式工具限制仍由 Harness 执行。
 
-| `agent_type`  | 适合             | 相对 effort 建议    | 强制能力                      |
-| ------------- | ---------------- | ------------------- | ----------------------------- |
-| `explorer`    | 代码追踪与探索   | 中等，难题可提高    | 只读发现工具                  |
-| `implementer` | 聚焦实现         | 中高，按范围与风险调整 | read / bash / edit / write 等 |
-| `reviewer`    | 正确性与回归审查 | 较高                | 只读发现工具                  |
-| `advisor`     | 深度技术建议     | 较高                | 只读发现工具                  |
+| `agent_type`  | 适合             | 相对 effort 建议 |
+| ------------- | ---------------- | ---------------- |
+| `explorer`    | 代码追踪与探索   | 中等，难题可提高 |
+| `implementer` | 聚焦实现         | 中高，按范围与风险调整 |
+| `reviewer`    | 正确性与回归审查 | 较高 |
+| `advisor`     | 深度技术建议     | 较高 |
 
 上述只是模型的相对选择提示，不会为内置角色写死具体档位。用户明确指定的 `reasoning_effort` 始终优先；否则模型结合任务难度，从目标模型实际支持的档位中选择。
 
-角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 覆盖。模型优先级是：显式调用 > Agent Type 文件 > `/openpi-setup` 角色模型 > 父模型继承。更高优先级定义损坏时会阻断 fallback，而不是悄悄退回更宽松的能力。
+角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 覆盖。模型优先级是：显式调用 > Agent Type 文件 > `/openpi-setup` 角色模型 > 父模型继承。更高优先级定义损坏时会阻断 fallback，而不是悄悄退回更宽松的能力。自定义角色省略 `tools` 时继承当前父工具；显式列表只能收窄，未在父会话启用的工具不会由委派自动激活。已有角色文件不会被升级覆盖；旧版 `explorer.md` 的只读列表仍然有效。工具可用性不等于文件系统沙箱；普通模式可使用绝对路径访问其他目录，目标仓库的执行 cwd 应通过 `working_dir` 指定。
 
 <details>
 <summary><strong>并行写文件时如何隔离 Worktree？</strong></summary>
@@ -275,7 +275,7 @@ return agent("Synthesize the verified findings", {
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。每个 Child Provider turn 必须在 45 秒内产生模型可见的 thinking、text、tool call 或完成事件，并在持续输出时按进展续期；空 stream start 与 transport heartbeat 不算进展。用户显式配置了更宽的 Pi `httpIdleTimeoutMs` 时沿用该上限。超时会 abort 当前 Child、保留已有 Transcript/usage/evidence，并让 sibling 与后续阶段继续结算。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
 
 ---
 
@@ -284,6 +284,8 @@ Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64
 OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程退出 0”当成业务成功。
 
 ### Result Handoff 与派生 Graph
+
+`agent(prompt, { working_dir: "/path/to/repository" })` 显式选择子代理工作目录；相对路径以父会话 cwd 解析，并在模型调用前验证。目标目录影响 Git、资源加载、Trust、Worktree 和 Replay 身份；只在 Prompt 中写路径不会切换 cwd。普通继承工具的内置角色不使用只读 Replay；明确配置只读工具的自定义角色仍保留原有 Replay 仓库边界。
 
 成功调用返回同一 Run 内有效的 opaque `ref`。后续调用通过 `inputs: [previous.ref]` 显式接收上游结论；每个结论最多 16 KiB，合计最多 48 KiB，并标记为不可信数据。Artifacts 从这些引用派生只读 Graph，用来观察 lineage，不参与调度。
 
@@ -700,5 +702,12 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
 
 `extensions/ai-providers/` 的部分协议实现改编自 [oh-my-pi](https://github.com/can1357/oh-my-pi)；`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
+
+Web workbench 的贡献包括：
+
+- [@testikun](https://github.com/testikun)：[#398](https://github.com/openpi-dev/openpi/pull/398) 的 Web 会话来源信息和 [#392](https://github.com/openpi-dev/openpi/pull/392) 的 Pi 项目信任诊断。来源字段只描述当前 Web 运行时，信任诊断区分已保存的决定和当前会话权限；这些是只读 API，目前没有新增界面入口。
+
+- [QuinnWan (@somewan820)](https://github.com/somewan820)：[#352](https://github.com/openpi-dev/openpi/pull/352) 提供界面恢复基线及复制回退；界面主体由 [#384](https://github.com/openpi-dev/openpi/pull/384) 迁移至 React，复制回退继续沿用并补充失败反馈。
+- [@seekskyworld](https://github.com/seekskyworld)：[#377](https://github.com/openpi-dev/openpi/pull/377) 提出浏览器请求超时保护，[#358](https://github.com/openpi-dev/openpi/pull/358) 提出 Pi 原生取消能力。当前 React 请求层和精确轮次取消协议已覆盖这些目标；保留当前实现，并补充响应体停滞和超时清理的回归覆盖。
 
 本项目以 MIT 许可证发布（见 [`LICENSE`](LICENSE)）；`THIRD_PARTY_NOTICES.md` 记录第三方来源与各自许可。

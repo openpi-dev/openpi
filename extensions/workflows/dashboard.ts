@@ -31,6 +31,7 @@ import {
 import { SPINNER_INTERVAL_MS, spinnerFrame } from "../shared/spinner.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import { isAcceptanceLedger } from "./acceptance.ts";
+import { recoverPendingWorkflowCommit } from "./artifacts.ts";
 import { projectWorkflowGraph } from "./graph-projection.ts";
 import {
   classifyInterruptedInvocation,
@@ -165,18 +166,55 @@ export function readPersistedWorkflowDetails(
   runId: string,
   options: ReadPersistedRunOptions = {},
 ): WorkflowDetails | undefined {
-  let details: WorkflowDetails | undefined;
+  const details = normalizeReadRecord(
+    runId,
+    readPersistedWorkflowRecord(runId),
+  );
+  if (!details) return undefined;
+  if (options.hydrateArtifacts) hydrateRunArtifacts(runId, details);
+  return details;
+}
+
+function normalizeReadRecord(runId: string, raw: unknown) {
+  try {
+    return normalizePersistedWorkflowDetails(runId, raw);
+  } catch {
+    return undefined;
+  }
+}
+
+function readPersistedWorkflowRecord(runId: string) {
+  recoverPendingWorkflowCommit(path.join(runsDir(), runId));
   try {
     const raw: unknown = JSON.parse(
       fs.readFileSync(path.join(runsDir(), runId, "workflow.json"), "utf8"),
     );
-    details = normalizePersistedWorkflowDetails(runId, raw);
+    return raw && typeof raw === "object"
+      ? (raw as Record<string, unknown>)
+      : undefined;
   } catch {
     return undefined;
   }
-  if (!details) return undefined;
-  if (options.hydrateArtifacts) hydrateRunArtifacts(runId, details);
-  return details;
+}
+
+function matchesRunScope(
+  record: { startedAt?: unknown; finishedAt?: unknown; sessionId?: unknown },
+  runId: string,
+  sessionId: string,
+  referencedRunIds: ReadonlySet<string>,
+  startedSince: number,
+  fromRetention = false,
+) {
+  const touchedAt = Math.max(
+    typeof record.startedAt === "number" ? record.startedAt : 0,
+    typeof record.finishedAt === "number" ? record.finishedAt : 0,
+  );
+  return (
+    touchedAt >= startedSince &&
+    (fromRetention ||
+      record.sessionId === sessionId ||
+      referencedRunIds.has(runId))
+  );
 }
 
 function isWorktreeCleanup(
@@ -686,20 +724,30 @@ export function loadRunEntryProjection(
       addEntry({ runId, details: live, live: true }, true);
       continue;
     }
-    const persisted = readPersistedWorkflowDetails(runId, {
-      hydrateArtifacts: false,
-    });
+    // Reject unrelated history before normalizing potentially large inline
+    // transcripts. Side artifacts belong to explicit detail navigation.
+    const raw = readPersistedWorkflowRecord(runId);
+    if (
+      raw &&
+      !matchesRunScope(raw, runId, sessionId, referencedRunIds, startedSince)
+    ) {
+      continue;
+    }
+    const persisted = normalizeReadRecord(runId, raw);
     const retainedDetails = retained.get(runId);
     const details = persisted ?? retainedDetails;
     if (!details) continue;
     const fromRetention =
       persisted === undefined && retainedDetails !== undefined;
-    const touchedAt = Math.max(details.startedAt, details.finishedAt ?? 0);
     if (
-      touchedAt < startedSince ||
-      (!fromRetention &&
-        details.sessionId !== sessionId &&
-        !referencedRunIds.has(runId))
+      !matchesRunScope(
+        details,
+        runId,
+        sessionId,
+        referencedRunIds,
+        startedSince,
+        fromRetention,
+      )
     ) {
       continue;
     }
@@ -849,6 +897,9 @@ type DetailFocus = "phases" | "agents";
 export class WorkflowDashboard {
   private view: View = "list";
   private entries: RunEntry[] = [];
+  private historyLoaded = false;
+  private seenRetainedRunIds = new Set<string>();
+  private hydratedRunIds = new Set<string>();
   private listIndex = 0;
   private phaseIndex = 0;
   private agentIndex = 0;
@@ -873,7 +924,6 @@ export class WorkflowDashboard {
   private onAbort?: (runId: string) => boolean;
   private initialToolsExpanded: boolean;
   private initialRunId?: string;
-  private projectionSignature?: string;
 
   constructor(
     tui: TUI,
@@ -968,37 +1018,110 @@ export class WorkflowDashboard {
   }
 
   private refresh() {
-    const activeSignature = [...this.getActive().entries()]
-      .map(
-        ([runId, details]) =>
-          `${runId}:${details.status}:${details.finishedAt ?? 0}:${details.agents.map((agent) => `${agent.index}:${agent.state}`).join(",")}`,
-      )
-      .sort()
-      .join("|");
-    if (
-      this.projectionSignature === activeSignature &&
-      this.entries.length > 0
-    ) {
-      if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
-        this.notice = undefined;
-      return;
-    }
-    this.projectionSignature = activeSignature;
     const selected = this.entries[this.listIndex]?.runId;
-    const pinnedRunId =
-      this.view === "list"
-        ? this.initialRunId
-        : (this.current?.runId ?? this.initialRunId);
-    const projection = loadRunEntryProjection(
-      this.getActive(),
-      this.sessionId,
-      this.referencedRunIds,
-      this.startedSince,
-      this.getRetained(),
-      { initialRunId: pinnedRunId },
-    );
-    this.entries = projection.entries;
-    this.omittedRuns = projection.omittedRuns;
+    const active = this.getActive();
+    const retained = this.getRetained();
+    if (!this.historyLoaded) {
+      const pinnedRunId =
+        this.view === "list"
+          ? this.initialRunId
+          : (this.current?.runId ?? this.initialRunId);
+      const projection = loadRunEntryProjection(
+        active,
+        this.sessionId,
+        this.referencedRunIds,
+        this.startedSince,
+        retained,
+        { initialRunId: pinnedRunId },
+      );
+      this.entries = projection.entries;
+      this.omittedRuns = projection.omittedRuns;
+      this.historyLoaded = true;
+    } else {
+      // Animation ticks reuse historical projections. Only a newly settled run
+      // needs one canonical read; stable frames never scan or reread history.
+      const entries = new Map(
+        this.entries.map((entry) => [entry.runId, entry]),
+      );
+      const settledIds = new Set([
+        ...this.entries
+          .filter((entry) => entry.live && !active.has(entry.runId))
+          .map((entry) => entry.runId),
+        ...[...retained.keys()].filter(
+          (runId) =>
+            !this.seenRetainedRunIds.has(runId) &&
+            !entries.has(runId) &&
+            !active.has(runId),
+        ),
+      ]);
+      for (const runId of settledIds) {
+        const persisted = readPersistedWorkflowDetails(runId);
+        const details =
+          persisted ?? retained.get(runId) ?? entries.get(runId)?.details;
+        if (!details) continue;
+        if (
+          !matchesRunScope(
+            details,
+            runId,
+            this.sessionId,
+            this.referencedRunIds,
+            this.startedSince,
+            !persisted,
+          )
+        ) {
+          entries.delete(runId);
+          continue;
+        }
+        // Recovery operates on a projection, never on the former live owner.
+        const recovered = recoverStaleWorkflowDetails({
+          ...details,
+          agents: details.agents.map((agent) => ({ ...agent })),
+        });
+        entries.set(runId, { runId, details: recovered, live: false });
+        this.hydratedRunIds.delete(runId);
+      }
+      for (const [runId, details] of active) {
+        entries.set(runId, { runId, details, live: true });
+      }
+      const pinnedRunId =
+        this.view === "list"
+          ? this.initialRunId
+          : (this.current?.runId ?? this.initialRunId);
+      const pinned: RunEntry[] = [];
+      const bounded: { entry: RunEntry; bytes: number }[] = [];
+      let boundedBytes = 0;
+      for (const entry of entries.values()) {
+        if (
+          entry.live ||
+          (pinnedRunId !== undefined && entry.runId === pinnedRunId)
+        ) {
+          pinned.push(entry);
+          continue;
+        }
+        const bytes = measureRunEntryBytes(entry.details);
+        if (bytes === undefined) {
+          this.omittedRuns++;
+          continue;
+        }
+        bounded.push({ entry, bytes });
+        boundedBytes += bytes;
+      }
+      bounded.sort((a, b) => compareRunEntries(a.entry, b.entry));
+      while (
+        bounded.length > DEFAULT_WORKFLOW_DASHBOARD_MAX_RUNS ||
+        boundedBytes > DEFAULT_WORKFLOW_DASHBOARD_MAX_BYTES
+      ) {
+        const oldest = bounded.pop();
+        if (!oldest) break;
+        boundedBytes -= oldest.bytes;
+        this.omittedRuns++;
+      }
+      this.entries = [
+        ...pinned,
+        ...bounded.map((candidate) => candidate.entry),
+      ].sort(compareRunEntries);
+    }
+    for (const runId of retained.keys()) this.seenRetainedRunIds.add(runId);
     if (selected) {
       const index = this.entries.findIndex((e) => e.runId === selected);
       if (index >= 0) this.listIndex = index;
@@ -1017,41 +1140,26 @@ export class WorkflowDashboard {
           // list projection is refreshed from compact metadata.
           this.current = { ...refreshed, details: this.current.details };
         } else if (this.current.live && !refreshed.live) {
-          // A live run may settle while its detail view is open. Hydrate the
-          // newly canonical state once so the transcript does not disappear.
-          const details =
-            readPersistedWorkflowDetails(refreshed.runId, {
-              hydrateArtifacts: true,
-            }) ?? refreshed.details;
-          this.current = {
-            ...refreshed,
-            details: recoverStaleWorkflowDetails(details),
-          };
+          // A live run may settle while its detail view is open. Keep the
+          // compact projection until a transcript or report is requested.
+          this.current = refreshed;
+          this.hydratedRunIds.delete(refreshed.runId);
         } else {
           this.current = refreshed;
         }
       }
     }
+    if (this.view === "transcript") this.hydrateCurrent();
     if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
       this.notice = undefined;
   }
 
   private enterEntry(entry: RunEntry, directly: boolean) {
-    const details = entry.live
-      ? entry.details
-      : recoverStaleWorkflowDetails(
-          readPersistedWorkflowDetails(entry.runId, {
-            hydrateArtifacts: true,
-          }) ?? entry.details,
-        );
-    this.current = {
-      ...entry,
-      details,
-    };
+    this.current = entry;
     this.openedDirectly = directly;
-    const groups = phaseGroups(this.current.details, true);
+    const groups = phaseGroups(entry.details, true);
     const currentPhase = groups.findIndex(
-      (group) => group.title === this.current?.details.currentPhase,
+      (group) => group.title === entry.details.currentPhase,
     );
     this.phaseIndex = Math.max(0, currentPhase);
     this.agentIndex = 0;
@@ -1077,7 +1185,15 @@ export class WorkflowDashboard {
     this.agentIndex = Math.min(this.agentIndex, Math.max(0, agents.length - 1));
   }
 
+  private hydrateCurrent() {
+    const entry = this.current;
+    if (!entry || entry.live || this.hydratedRunIds.has(entry.runId)) return;
+    hydrateRunArtifacts(entry.runId, entry.details);
+    this.hydratedRunIds.add(entry.runId);
+  }
+
   private saveReport() {
+    this.hydrateCurrent();
     const entry = this.current;
     if (!entry) return;
     const target = path.join(runsDir(), entry.runId, "report.md");
@@ -1218,6 +1334,7 @@ export class WorkflowDashboard {
   }
 
   private openTranscriptPage() {
+    this.hydrateCurrent();
     const transcriptAdapter = new WorkflowTranscriptAdapter();
     this.view = "transcript";
     this.transcriptPage = new AgentSessionPage(

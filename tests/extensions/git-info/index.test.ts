@@ -186,3 +186,72 @@ printf '%s\\n' '{"number":42,"url":"https://example.test/pr/42","state":"OPEN","
     rmSync(root, { recursive: true, force: true });
   }
 });
+
+test("rapid session starts do not leave a stale polling context", async () => {
+  const root = process.cwd();
+  const hooks = new Map<
+    string,
+    (event: unknown, ctx: ExtensionContext) => unknown
+  >();
+  let activeSession = 1;
+  let staleReads = 0;
+  let currentSessionReads = 0;
+  const api = {
+    events: {
+      on: () => () => undefined,
+      emit: () => undefined,
+    },
+    on: (
+      event: string,
+      handler: (event: unknown, ctx: ExtensionContext) => unknown,
+    ) => {
+      hooks.set(event, handler);
+    },
+    registerCommand: () => undefined,
+  } as unknown as ExtensionAPI;
+  const makeContext = (session: number) => {
+    const ctx = {
+      mode: "tui",
+      signal: undefined,
+      ui: { notify: () => undefined },
+    } as Record<string, unknown>;
+    Object.defineProperty(ctx, "cwd", {
+      get: () => {
+        if (session !== activeSession) {
+          staleReads += 1;
+          throw new Error(
+            "This extension ctx is stale after session replacement",
+          );
+        }
+        currentSessionReads += 1;
+        return root;
+      },
+    });
+    return ctx as unknown as ExtensionContext;
+  };
+  const start = (event: unknown, ctx: ExtensionContext) =>
+    hooks.get("session_start")?.(event, ctx);
+  const ctx1 = makeContext(1);
+
+  gitInfo(api);
+  try {
+    await start({}, ctx1);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    activeSession = 10;
+    const starts = Array.from({ length: 9 }, (_, index) =>
+      start({}, makeContext(index + 2)),
+    );
+    await Promise.all(starts);
+    await new Promise((resolve) => setTimeout(resolve, 1_000));
+    assert.equal(currentSessionReads > 0, true);
+    currentSessionReads = 0;
+    staleReads = 0;
+    await new Promise((resolve) => setTimeout(resolve, 6_000));
+
+    assert.equal(currentSessionReads > 0, true);
+    assert.equal(staleReads, 0);
+  } finally {
+    await hooks.get("session_shutdown")?.({}, makeContext(activeSession));
+  }
+});
