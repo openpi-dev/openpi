@@ -164,6 +164,8 @@ export function App() {
           />
         ) : null}
         <Composer
+          draftModel={state.draftModel}
+          modelSelectionPending={state.modelSelectionPending}
           onInspect={inspect}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}

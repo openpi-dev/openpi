@@ -334,7 +334,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .composer textarea { @apply w-full min-w-0 border-0 bg-transparent outline-0; min-height: 52px; max-height: 220px; flex: 0 0 auto; padding: 0 2px; resize: none; color: var(--text); font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--subtle); }
 .composer-toolbar { @apply mt-2 flex min-w-0 items-center justify-end gap-2; }
-.model-picker-wrap { min-width: 0; max-width: 48%; }
+.model-picker-wrap { position: relative; z-index: 11; min-width: 0; max-width: 48%; }
 .model-picker { min-width: 150px !important; max-width: 100% !important; height: 34px !important; padding: 0 9px 0 10px !important; background: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
 .model-picker:hover, .model-picker[aria-expanded="true"] { background: oklch(97% .006 249) !important; color: var(--text) !important; }
 .model-picker svg { width: 14px; height: 14px; }

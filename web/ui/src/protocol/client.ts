@@ -1,7 +1,7 @@
 import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
-import type { WebSnapshot } from "../../../protocol/types.ts";
+import type { WebModelSummary, WebSnapshot } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -204,7 +204,7 @@ export class WebClient {
   }
 
   selectModel(provider: string, modelId: string, sessionId: string) {
-    return this.request<CommandReceipt>("/api/model", {
+    return this.request<WebModelSummary>("/api/model", {
       method: "POST",
       body: JSON.stringify({ provider, modelId, sessionId }),
     });

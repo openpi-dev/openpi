@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebEvent, WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebEvent,
+  WebModelSummary,
+  WebSnapshot,
+} from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
   type SessionMutationResult,
@@ -143,9 +147,12 @@ class FakeClient extends WebClient {
   });
   creationResult: Promise<SessionMutationResult> = Promise.resolve({});
   selectionResults: Array<Promise<SessionMutationResult>> = [];
-  modelResult: Promise<CommandReceipt> = Promise.resolve({
-    id: "model-1",
-    accepted: true,
+  modelResult: Promise<WebModelSummary> = Promise.resolve({
+    provider: "test",
+    id: "model",
+    label: "Test model",
+    name: "model",
+    current: true,
   });
   promptResult: Promise<CommandReceipt> = Promise.resolve({
     id: "prompt-1",
@@ -849,7 +856,7 @@ describe("OpenPI Web store", () => {
       Promise.resolve(snapshot()),
       Promise.resolve(activeSnapshot("session-2", "/tmp/ws/b.jsonl")),
     );
-    const model = deferred<CommandReceipt>();
+    const model = deferred<WebModelSummary>();
     client.modelResult = model.promise;
     client.selectionResults.push(Promise.resolve({}));
     const store = createWebStore(client);
@@ -1129,4 +1136,124 @@ it("keeps archive restoration failure observable without pretending to refresh",
   ).toBe(false);
   expect(store.getState().notice).toBe("archive write failed");
   expect(client.snapshotPaths).toEqual([]);
+});
+
+describe("draft model selection", () => {
+  function draftHarness() {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    const initial = snapshot();
+    delete initial.selectedSession;
+    delete initial.currentSessionId;
+    initial.sessions = [];
+    initial.workspaces = [];
+    store.setState({ snapshot: initial });
+    return { client, store };
+  }
+
+  it("selects before a workspace without creating or mutating a Session and retains it after chooser cancellation", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    await store.getState().actions.chooseWorkspace();
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(client.creations).toHaveLength(0);
+    expect(client.modelSelections).toHaveLength(0);
+    expect(store.getState().selectedWorkspace).toBeNull();
+  });
+
+  it("waits for confirmed model selection before the first prompt and ignores duplicate sends", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
+    const selected = deferred<WebModelSummary>();
+    client.modelResult = selected.promise;
+    const sending = store.getState().actions.sendPrompt("hello");
+    await vi.waitFor(() => expect(client.modelSelections).toHaveLength(1));
+    expect(client.prompts).toHaveLength(0);
+    expect(await store.getState().actions.sendPrompt("duplicate")).toBe(false);
+    selected.resolve(snapshot().models[0]!);
+    expect(await sending).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toEqual([
+      { sessionId: "session-1", content: "hello" },
+    ]);
+    expect(store.getState().draftModel).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("blocks fallback on unavailable model and retries using the already-created Session", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.modelResult = Promise.resolve(snapshot().models[0]!);
+    vi.spyOn(client, "selectModel").mockRejectedValueOnce(
+      new WebApiError("Model unavailable", 400, "MODEL_NOT_AVAILABLE"),
+    );
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(store.getState().notice).toBe("Model unavailable");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    store.getState().actions.stop();
+  });
+
+  it("keeps the draft and blocks sending when the refreshed Session has a different model", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    const changed = snapshot();
+    changed.models = [{ ...changed.models[0]!, id: "other" }];
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(changed),
+    );
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(store.getState().notice).toContain("model changed");
+  });
+
+  it("rejects a confirmation from a different provider instead of sending with a same-named model", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.modelResult = Promise.resolve({
+      ...snapshot().models[0]!,
+      provider: "other",
+    });
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.provider).toBe("test");
+    expect(store.getState().notice).toContain("not confirmed");
+  });
+
+  it("never sends to a newer selected Session after draft creation is superseded", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    const creation = deferred<SessionMutationResult>();
+    client.creationResult = creation.promise;
+    const sending = store.getState().actions.sendPrompt("hello");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    client.snapshots.push(
+      Promise.resolve(activeSnapshot("other", "/tmp/ws/other.jsonl")),
+    );
+    const selecting = store
+      .getState()
+      .actions.selectSession("/tmp/ws/other.jsonl");
+    creation.resolve({});
+    expect(await sending).toBe(false);
+    await selecting;
+    expect(client.prompts).toHaveLength(0);
+    expect(client.modelSelections).toHaveLength(0);
+    expect(store.getState().draftModel).toBeNull();
+  });
 });

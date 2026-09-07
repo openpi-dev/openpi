@@ -615,3 +615,50 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   expect(restore).toHaveBeenCalledWith("/omitted/a.jsonl");
   expect(screen.getByText("Archived work")).toBeTruthy();
 });
+
+it("enables model choice before workspace selection and displays the draft choice", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  delete snapshot.selectedSession;
+  delete snapshot.currentSessionId;
+  snapshot.workspaces = [];
+  snapshot.sessions = [];
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    { provider: "test", id: "a", label: "Model A", name: "A", current: true },
+    { provider: "test", id: "b", label: "Model B", name: "B", current: false },
+  ];
+  const store = createWebStore();
+  const props = {
+    snapshot,
+    selectedWorkspace: null,
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: true,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions: store.getState().actions,
+    draftModel: snapshot.models[1],
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+  const modelButton = screen.getByRole("button", {
+    name: /Model B/u,
+  }) as HTMLButtonElement;
+  expect(modelButton.disabled).toBe(false);
+  fireEvent.click(modelButton);
+  expect(screen.getAllByText("Model A").length).toBeGreaterThan(0);
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, { ...props, modelSelectionPending: true }),
+    ),
+  );
+  expect(
+    (screen.getByRole("button", { name: /Model B/u }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
+});

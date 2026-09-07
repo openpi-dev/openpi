@@ -17,6 +17,8 @@ import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 
 interface ComposerProps {
+  draftModel?: WebStoreState["draftModel"];
+  modelSelectionPending?: boolean;
   onInspect?: (terminalId?: string) => void;
   snapshot: WebSnapshot | null;
   selectedWorkspace: string | null;
@@ -91,12 +93,20 @@ export function Composer(props: ComposerProps) {
     },
   ];
   const currentModel =
+    props.draftModel ??
     props.snapshot?.models.find((model) => model.current) ??
     props.snapshot?.models[0];
   const modelItems = (props.snapshot?.models ?? []).map((model) => ({
     id: `${model.provider}/${model.id}`,
     label: model.label,
-    endContent: model.current ? <Check /> : undefined,
+    endContent: (
+      props.draftModel
+        ? props.draftModel.provider === model.provider &&
+          props.draftModel.id === model.id
+        : model.current
+    ) ? (
+      <Check />
+    ) : undefined,
     onClick: () =>
       void props.actions.selectModel(`${model.provider}/${model.id}`),
   }));
@@ -209,9 +219,10 @@ export function Composer(props: ComposerProps) {
                 className: "model-picker",
                 isDisabled:
                   props.sessionSwitching ||
-                  !active ||
-                  !props.selectedWorkspace ||
-                  props.liveRunning ||
+                  props.modelSelectionPending ||
+                  props.promptAdmissionPending ||
+                  Boolean(selected && !active) ||
+                  running ||
                   !modelItems.length,
               }}
               items={modelItems}
@@ -243,6 +254,7 @@ export function Composer(props: ComposerProps) {
                 aria-label={t("send")}
                 disabled={
                   props.sessionSwitching ||
+                  props.modelSelectionPending ||
                   !canCompose ||
                   !props.selectedWorkspace ||
                   props.promptAdmissionPending ||

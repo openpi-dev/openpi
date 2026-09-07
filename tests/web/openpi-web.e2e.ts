@@ -616,3 +616,54 @@ test("fresh browser contexts open the bare address and can request workspace sel
     }
   }
 });
+
+test("model picker is clickable above the workspace overlay before choosing a directory", async ({
+  page,
+}) => {
+  let modelWrites = 0;
+  page.on("request", (request) => {
+    if (new URL(request.url()).pathname === "/api/model") modelWrites++;
+  });
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    delete snapshot.currentSessionId;
+    delete snapshot.selectedSession;
+    snapshot.sessions = [];
+    snapshot.workspaces = [];
+    snapshot.runtime.status = "idle";
+    snapshot.models = [
+      {
+        provider: "a",
+        id: "one",
+        name: "One",
+        label: "Model One",
+        current: true,
+      },
+      {
+        provider: "b",
+        id: "two",
+        name: "Two",
+        label: "Model Two",
+        current: false,
+      },
+    ];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: ": idle\n\n",
+    }),
+  );
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "Model One" }).click();
+  await page.getByText("Model Two", { exact: true }).click();
+  await expect(page.getByRole("button", { name: "Model Two" })).toBeEnabled();
+  await expect(page.getByRole("textbox", { name: "描述任务" })).toHaveAttribute(
+    "readonly",
+    "",
+  );
+  expect(modelWrites).toBe(0);
+});
