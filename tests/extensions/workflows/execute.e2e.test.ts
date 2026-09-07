@@ -1803,3 +1803,73 @@ test("built-in Workflow children inherit active shell/network tools in the selec
     __setWorkflowTestAgentSessionFactory(undefined);
   }
 });
+
+for (const dirty of [false, true])
+  test(`cancellation during worktree creation ${dirty ? "preserves dirty work" : "reclaims the checkout"}`, {
+    skip: process.platform === "win32",
+  }, async () => {
+    const marker = join(agentDir, `checkout-hook-entered-${dirty}`);
+    const release = join(agentDir, `checkout-hook-release-${dirty}`);
+    const hook = join(repoDir, ".git", "hooks", "post-checkout");
+    writeFileSync(
+      hook,
+      `#!/bin/sh\n${dirty ? "printf evidence > cancellation-evidence.txt\n" : ""}touch '${marker}'\ni=0\nwhile [ ! -f '${release}' ] && [ "$i" -lt 100 ]; do sleep 0.05; i=$((i+1)); done\n`,
+    );
+    (await import("node:fs")).chmodSync(hook, 0o755);
+    let run:
+      | Parameters<typeof shutdownActiveWorkflowRuns>[0][number]
+      | undefined;
+    __setWorkflowTestLifecycleHooks({
+      onRunStarted(value) {
+        run = value;
+      },
+    });
+    try {
+      const launch = (await workflow.execute(
+        "cancel-checkout",
+        {
+          script: 'return await agent("probe", { isolation: "worktree" });',
+          background: true,
+        },
+        undefined,
+        undefined,
+        ctx,
+      )) as { details: { runId: string } };
+      await waitFor(() => existsSync(marker), "checkout hook");
+      await workflowStop.execute("cancel-checkout-stop", {
+        runId: launch.details.runId,
+      });
+      writeFileSync(release, "");
+      assert.ok(run);
+      await run.completion;
+      const listing = execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: repoDir,
+        encoding: "utf8",
+      });
+      assert.equal((listing.match(/^worktree /gm) ?? []).length, dirty ? 2 : 1);
+      const agent = (
+        readWorkflowJson(launch.details.runId).agents as Array<
+          Record<string, unknown>
+        >
+      )[0];
+      assert.equal(
+        (agent?.worktreeCleanup as { removed?: boolean })?.removed,
+        !dirty,
+      );
+      if (dirty) {
+        assert.equal(typeof agent?.worktreePath, "string");
+        assert.equal(
+          readFileSync(
+            join(String(agent?.worktreePath), "cancellation-evidence.txt"),
+            "utf8",
+          ),
+          "evidence",
+        );
+      } else assert.equal(agent?.worktreeBranch, undefined);
+    } finally {
+      writeFileSync(release, "");
+      if (run) await run.completion;
+      rmSync(hook, { force: true });
+      __setWorkflowTestLifecycleHooks(undefined);
+    }
+  });

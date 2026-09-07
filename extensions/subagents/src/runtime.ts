@@ -45,6 +45,9 @@ export function createSubagentRuntime(config: SubagentManagerConfig = {}) {
 
 export type SubagentRuntime = ReturnType<typeof createSubagentRuntime>;
 
+/** Canonical interruption, distinct from a known startup failure. */
+export class SubagentToolInterruptedError extends Error {}
+
 /**
  * Run an effect from an async tool handler. Typed failures and defects are
  * converted to thrown Errors (what pi's tool contract expects); interruption
@@ -60,9 +63,13 @@ export async function runTool<A, E>(
     options.signal ? { signal: options.signal } : undefined,
   );
   if (Exit.isSuccess(exit)) return exit.value;
-  if (Cause.hasInterruptsOnly(exit.cause)) {
-    throw new Error(options.interruptMessage ?? "Operation was aborted.");
-  }
   const [first] = Cause.prettyErrors(exit.cause);
+  if (Cause.hasInterrupts(exit.cause)) {
+    const interrupted = options.interruptMessage ?? "Operation was aborted.";
+    const detail = Cause.hasInterruptsOnly(exit.cause)
+      ? ""
+      : ` ${first?.message ?? Cause.pretty(exit.cause)}`;
+    throw new SubagentToolInterruptedError(`${interrupted}${detail}`);
+  }
   throw new Error(first?.message ?? Cause.pretty(exit.cause));
 }

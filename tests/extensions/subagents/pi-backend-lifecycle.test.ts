@@ -1294,3 +1294,59 @@ test("adapter scope cleanup is bounded across shutdown timeouts and failures", a
   assert.equal(failedHarness.calls.shutdowns, 1);
   assert.equal(failedHarness.calls.disposals, 1);
 });
+
+for (const stage of ["factory", "binding"] as const) {
+  test(`cancelling during child ${stage} disposes late acquisition exactly once`, async () => {
+    const entered = deferred<void>();
+    const gate = deferred<void>();
+    const harness = createPiAgentSessionHarness({
+      model: FIXTURE_MODEL as AgentSession["model"],
+      activeTools: ["read"],
+      shutdown: async () => {},
+      bind:
+        stage === "binding"
+          ? async () => {
+              entered.resolve();
+              await gate.promise;
+            }
+          : undefined,
+    });
+    const backend = makePiBackend({
+      sessionFactory: async () => {
+        if (stage === "factory") {
+          entered.resolve();
+          await gate.promise;
+        }
+        return { session: harness.session };
+      },
+      shutdownTimeoutMs: 50,
+    });
+    const abort = new AbortController();
+    const result = Effect.runPromise(
+      Effect.scoped(backend.spawn(task("cancel acquisition"))),
+      { signal: abort.signal },
+    ).catch(() => undefined);
+    try {
+      await entered.promise;
+      abort.abort();
+      await result;
+      if (stage === "binding") {
+        await waitFor(
+          () => harness.calls.disposals === 1,
+          "cancelled binding cleanup",
+        );
+      }
+      gate.resolve();
+      await waitFor(() => harness.calls.disposals === 1, "late child cleanup");
+      assert.equal(harness.calls.bindings.length, stage === "factory" ? 0 : 1);
+      assert.equal(harness.calls.aborts, 1);
+      assert.equal(harness.calls.shutdowns, 1);
+      assert.equal(harness.calls.disposals, 1);
+      assert.deepEqual(harness.calls.prompts, []);
+    } finally {
+      abort.abort();
+      gate.resolve();
+      await result;
+    }
+  });
+}

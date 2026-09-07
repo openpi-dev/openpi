@@ -1977,11 +1977,6 @@ export default function workflows(
               worktree = created.worktree;
               if (!runSettled) record.worktreeBranch = worktree.branch;
             }
-            if (runSignal.aborted || runSettled) {
-              throw runSignal.reason instanceof Error
-                ? runSignal.reason
-                : new Error("Workflow was aborted");
-            }
             const agentCwd = worktree?.path ?? requestedCwd;
 
             // Inside the try, not before it: building resources can throw
@@ -1989,6 +1984,12 @@ export default function workflows(
             // would skip the finally and leak the worktree permanently —
             // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
+              if (runSignal.aborted || runSettled) {
+                throw runSignal.reason instanceof Error
+                  ? runSignal.reason
+                  : new Error("Workflow was aborted");
+              }
+
               let rejectResourceLoad: (() => void) | undefined;
               const resourceAbort = new Promise<never>((_resolve, reject) => {
                 rejectResourceLoad = () =>
