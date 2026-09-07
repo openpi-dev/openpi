@@ -9,6 +9,7 @@ import {
 } from "../features/inspection/InspectionPanel.tsx";
 import { Composer } from "../features/composer/Composer.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
+import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
 import { webStore } from "../store/web-store.ts";
 
@@ -16,6 +17,7 @@ export function App() {
   const state = useStore(webStore);
   const { t } = useTranslation();
   const { actions } = state;
+  const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
@@ -89,7 +91,9 @@ export function App() {
           <PanelLeftOpen />
         </button>
       )}
-      <main className={`conversation-shell ${landing ? "landing" : ""}`}>
+      <main
+        className={`conversation-shell ${state.snapshot?.selectedSession ? "has-view" : ""} ${landing && view === "chat" ? "landing" : ""}`}
+      >
         <h1 className="sr-only">OpenPI</h1>
         <header className="mobile-header">
           <button
@@ -103,6 +107,27 @@ export function App() {
             {t(state.connection)}
           </span>
         </header>
+        {state.snapshot?.selectedSession && (
+          <fieldset
+            className="conversation-view-switch"
+            aria-label={t("conversationView")}
+          >
+            <button
+              type="button"
+              aria-pressed={view === "chat"}
+              onClick={() => setView("chat")}
+            >
+              {t("chatView")}
+            </button>
+            <button
+              type="button"
+              aria-pressed={view === "trajectory"}
+              onClick={() => setView("trajectory")}
+            >
+              {t("trajectory")}
+            </button>
+          </fieldset>
+        )}
         {state.sessionSwitching ? (
           <div className="conversation switching" role="status">
             <div className="conversation-running">
@@ -110,6 +135,12 @@ export function App() {
               <span>{t("switchingSession")}</span>
             </div>
           </div>
+        ) : view === "trajectory" && state.snapshot?.selectedSession ? (
+          <Trajectory
+            key={state.snapshot.selectedSession.path}
+            snapshot={state.snapshot}
+            running={state.liveRunning}
+          />
         ) : landing ? (
           <section
             className="conversation landing-conversation"

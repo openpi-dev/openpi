@@ -447,3 +447,39 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 button.activity-chip { cursor: pointer; font: inherit; }
 button.activity-chip:hover { filter: brightness(1.15); }
 @media (max-width: 600px) { .inspection-panel { padding: 18px; } .inspection-section dl { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; } }
+
+.conversation-view-switch { position:absolute; top:0; left:30px; z-index:15; display:flex; gap:4px; border:0; margin:10px 24px 0; padding:3px; align-self:flex-start; background:var(--page); border-radius:8px; }
+.conversation-view-switch button { border:0; background:transparent; color:var(--muted); padding:7px 14px; border-radius:6px; cursor:pointer; }
+.conversation-view-switch button[aria-pressed="true"] { color:var(--text); background:var(--page); box-shadow:0 1px 3px #0001; }
+.trajectory { display:flex; flex-direction:column; padding:66px 28px 22px; overflow:auto; }
+.trajectory-heading h2 { margin:0 0 8px; font-size:20px; }
+.trajectory-heading p { color:var(--muted); font-size:12px; margin:6px 0; }
+.trajectory-overview { display:flex; gap:6px; padding:14px 0; flex-shrink:0; overflow-x:auto; }
+.trajectory-point { flex:0 0 30px; height:30px; border:1px solid var(--border); border-radius:50%; color:var(--muted); background:transparent; cursor:pointer; }
+.trajectory-point.call { border-radius:6px; }
+.trajectory-point[aria-pressed="true"] { background:var(--text); color:var(--page); }
+.trajectory-body { display:grid; grid-template-columns:minmax(200px, 34%) minmax(0, 1fr); gap:24px; align-items:start; }
+.trajectory-ledger ol { margin:0; padding-left:24px; border-left:1px solid var(--border); }
+.trajectory-ledger li { font-size:11px; color:var(--muted); padding:0 0 8px 2px; }
+.trajectory-record { display:flex; flex-direction:column; text-align:left; width:100%; border:1px solid transparent; border-radius:8px; padding:10px; gap:5px; background:transparent; color:var(--text); cursor:pointer; overflow-wrap:anywhere; }
+.trajectory-record[aria-pressed="true"] { border-color:var(--border); background:var(--sidebar-hover); }
+.trajectory-kind,.trajectory-preview,.trajectory-metadata { font-size:11px; color:var(--muted); }
+.trajectory-preview { white-space:pre-wrap; max-height:40px; overflow:hidden; }
+.trajectory-inspector { position:sticky; top:0; min-width:0; border:1px solid var(--border); padding:20px; border-radius:12px; overflow-wrap:anywhere; }
+.trajectory-inspector h3 { margin:0 0 12px; }
+.trajectory-inspector h4 { font-size:12px; margin:20px 0 8px; }
+.trajectory-inspector p { font-size:12px; }
+.trajectory-inspector pre { white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.6; padding:12px; background:var(--sidebar-hover); border-radius:6px; max-height:420px; overflow:auto; }
+.trajectory-warning { color:var(--warning); font-size:12px; }
+.trajectory-load { padding:10px; color:var(--text); background:transparent; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; cursor:pointer; }
+@media(max-width:700px) { .trajectory { padding:66px 16px 16px; } .trajectory-body { grid-template-columns:1fr; gap:16px; } .trajectory-ledger { max-height:200px; overflow:auto; } .trajectory-inspector { position:static; padding:16px; } .conversation-view-switch { margin-left:16px; } }
+
+/* Keep navigation and evidence independently reachable while browsing long ledgers. */
+.conversation-shell.has-view:not(.landing) { grid-template-rows:auto minmax(0,1fr) auto; }
+.conversation-shell.has-view:not(.landing) > .conversation-view-switch { position:relative; top:auto; left:auto; }
+.trajectory { padding-top:22px; overflow:hidden; }
+.trajectory-heading { flex-shrink:0; }
+.trajectory-body { flex:1; min-height:0; align-items:stretch; overflow:hidden; }
+.trajectory-ledger { overflow:auto; min-height:0; }
+.trajectory-inspector { position:static; min-height:0; overflow:auto; }
+@media(max-width:700px) { .conversation-view-switch { margin-left:60px; } .trajectory { padding-top:16px; } .trajectory-body { grid-template-rows:minmax(80px,30%) minmax(0,1fr); } .trajectory-ledger { max-height:none; } }

@@ -4,6 +4,41 @@ import { initReactI18next } from "react-i18next";
 const resources = {
   en: {
     translation: {
+      conversationView: "Conversation view",
+      chatView: "Chat",
+      trajectory: "Trajectory",
+      trajectoryScope:
+        "Recorded Session messages in order, not execution durations or the complete model request.",
+      trajectoryRunning:
+        "Work is active. This view updates as saved records arrive; in-flight text is available in Chat.",
+      trajectoryTruncated:
+        "Loaded history is partial: {{entries}} entries omitted, {{parts}} parts omitted, {{messages}} messages truncated.",
+      trajectoryEmpty: "No saved records yet.",
+      trajectoryOverview: "Record sequence overview",
+      trajectoryEarlier:
+        "Show earlier records ({{count}} remaining in loaded history)",
+      trajectoryDetails: "Record details",
+      trajectoryRecordedAt: "Record timestamp",
+      trajectoryEvidenceTruncated:
+        "This evidence was truncated in the Session projection.",
+      trajectoryArguments: "Tool arguments",
+      trajectoryRecordedContent: "Recorded content",
+      trajectoryThinking: "Recorded model reasoning",
+      trajectoryOutput: "Tool result",
+      trajectoryMissingResult:
+        "No unambiguous result is included in the loaded records. This does not imply the tool is still running.",
+      trajectoryStructured: "Structured result",
+      trajectoryEventOnly:
+        "Only this event’s type and timestamp are available.",
+      trajectory_user: "User prompt",
+      trajectory_assistant: "Assistant",
+      trajectory_call: "Tool call",
+      trajectory_result: "Unpaired result",
+      trajectory_event: "Session event",
+      trajectory_returned:
+        "Tool returned successfully; background work may still be active.",
+      trajectory_error: "Tool returned an error",
+      trajectory_unknown: "Outcome not established",
       runtimeStatus: "Runtime status",
       refreshStatus: "Refresh status",
       terminalDetails: "Terminal details",
@@ -133,6 +168,37 @@ const resources = {
   },
   zh: {
     translation: {
+      conversationView: "会话视图",
+      chatView: "对话",
+      trajectory: "执行轨迹",
+      trajectoryScope:
+        "按记录顺序展示会话消息，不表示执行耗时，也不是完整模型请求。",
+      trajectoryRunning:
+        "任务仍在进行。已保存记录到达后自动更新；实时生成内容可在“对话”中查看。",
+      trajectoryTruncated:
+        "当前历史不完整：省略 {{entries}} 条记录、{{parts}} 个内容片段，{{messages}} 条消息被截断。",
+      trajectoryEmpty: "尚无已保存记录。",
+      trajectoryOverview: "记录顺序总览",
+      trajectoryEarlier: "显示更早记录（已加载历史中还有 {{count}} 条）",
+      trajectoryDetails: "记录详情",
+      trajectoryRecordedAt: "记录时间",
+      trajectoryEvidenceTruncated: "此证据在会话投影中已被截断。",
+      trajectoryArguments: "工具参数",
+      trajectoryRecordedContent: "已记录内容",
+      trajectoryThinking: "模型返回的推理内容",
+      trajectoryOutput: "工具结果",
+      trajectoryMissingResult:
+        "当前记录中没有可明确配对的结果。这不表示工具仍在运行。",
+      trajectoryStructured: "结构化结果",
+      trajectoryEventOnly: "当前仅提供此事件的类型和记录时间。",
+      trajectory_user: "用户 Prompt",
+      trajectory_assistant: "模型消息",
+      trajectory_call: "工具调用",
+      trajectory_result: "未配对结果",
+      trajectory_event: "会话事件",
+      trajectory_returned: "工具已成功返回；其启动的后台任务可能仍在进行。",
+      trajectory_error: "工具返回错误",
+      trajectory_unknown: "尚无法确定结果",
       runtimeStatus: "运行状态",
       refreshStatus: "刷新状态",
       terminalDetails: "终端详情",

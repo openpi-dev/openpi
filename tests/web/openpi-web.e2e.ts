@@ -471,3 +471,108 @@ test("restores archived history without switching the active Session", async ({
     page.getByText("Saved browser work", { exact: true }),
   ).toBeVisible();
 });
+
+test("trajectory inspects bounded prompt and tool evidence on desktop and mobile", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const entries = Array.from({ length: 55 }, (_, index) => ({
+      id: `user-${index}`,
+      type: "message",
+      timestamp: "2026-09-07T00:00:00Z",
+      message: { role: "user", content: "Repeated prompt" },
+    }));
+    snapshot.sessions = [];
+    snapshot.workspaces = [];
+    snapshot.currentSessionId = "trajectory-fixture";
+    snapshot.selectedSession = {
+      id: "trajectory-fixture",
+      path: "/trajectory/a.jsonl",
+      cwd: "/trajectory",
+      bytes: 1000,
+      truncation: {
+        truncated: true,
+        entriesOmitted: 4,
+        messagePartsOmitted: 0,
+        messagesTruncated: 1,
+        maxBytes: 2097152,
+      },
+      entries: [
+        ...entries,
+        {
+          id: "call",
+          type: "message",
+          timestamp: "2026-09-07T00:00:01Z",
+          message: {
+            role: "assistant",
+            content: "",
+            parts: [
+              {
+                type: "toolCall",
+                id: "call-1",
+                name: "bash",
+                arguments: '{"command":"printf hello"}',
+              },
+            ],
+          },
+        },
+        {
+          id: "result",
+          type: "message",
+          timestamp: "2026-09-07T00:00:02Z",
+          message: {
+            role: "toolResult",
+            toolCallId: "call-1",
+            toolName: "bash",
+            content: '<script>alert("evidence")</script>',
+            isError: false,
+          },
+        },
+      ],
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
+  const view = page.getByRole("region", { name: "执行轨迹", exact: true });
+  await expect(view.locator(".trajectory-record")).toHaveCount(50);
+  await expect(view.getByText(/省略 4 条记录/)).toBeVisible();
+  await view.getByRole("button", { name: /显示更早记录/ }).click();
+  await expect(view.locator(".trajectory-record")).toHaveCount(56);
+  await view.locator(".trajectory-record").filter({ hasText: "bash" }).click();
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    "printf hello",
+  );
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    '<script>alert("evidence")</script>',
+  );
+  await expect(view.locator("script")).toHaveCount(0);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 900 });
+    await expect(view.locator(".trajectory-inspector")).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect(
+      (await new AxeBuilder({ page }).include(".conversation-shell").analyze())
+        .violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`trajectory-${width}.png`),
+      fullPage: true,
+      animations: "disabled",
+    });
+  }
+  await page.getByRole("button", { name: "对话", exact: true }).click();
+  await expect(view).toHaveCount(0);
+});
