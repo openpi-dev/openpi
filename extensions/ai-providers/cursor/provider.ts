@@ -14,6 +14,7 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
 import { emptyUsage } from "../usage.ts";
+import { ConnectFrameReader } from "./connect-frame-reader.ts";
 import {
   CURSOR_API_URL,
   CURSOR_CLIENT_VERSION,
@@ -833,7 +834,7 @@ export function streamCursor(
           h2Request?.close(http2.constants.NGHTTP2_CANCEL);
         }, requestTimeoutMs);
       };
-      let frameBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      const frames = new ConnectFrameReader(MAX_CONNECT_FRAME_BYTES);
       const processFrame = (flags: number, bytes: Uint8Array) => {
         if (handingOffTools) return;
         if ((flags & CONNECT_COMPRESSED_FLAG) !== 0) {
@@ -1033,23 +1034,9 @@ export function streamCursor(
         );
       };
       const processData = (chunk: Buffer) => {
-        frameBuffer =
-          frameBuffer.length === 0
-            ? chunk
-            : Buffer.concat([frameBuffer, chunk]);
-        while (frameBuffer.length >= 5) {
-          const size = frameBuffer.readUInt32BE(1);
-          if (size > MAX_CONNECT_FRAME_BYTES) {
-            throw new Error(
-              `Cursor Connect frame exceeds ${MAX_CONNECT_FRAME_BYTES} bytes`,
-            );
-          }
-          if (frameBuffer.length < size + 5) return;
-          const flags = frameBuffer[0]!;
-          const data = frameBuffer.subarray(5, size + 5);
-          frameBuffer = frameBuffer.subarray(size + 5);
-          processFrame(flags, data);
-        }
+        frames.push(chunk, processFrame);
+        // Preserve tool batching while a complete header awaits its body.
+        if (frames.awaitingPayload) return;
         if (pendingCalls.size > 0 && !handingOffTools) {
           if (terminalError) throw terminalError;
           if (options?.signal?.aborted)
@@ -1158,7 +1145,7 @@ export function streamCursor(
           .then(() => {
             if (!responseSeen)
               throw new Error("Cursor response headers were not received");
-            if (frameBuffer.length !== 0)
+            if (frames.incomplete)
               throw new Error("Incomplete Cursor Connect frame");
             settle();
           })

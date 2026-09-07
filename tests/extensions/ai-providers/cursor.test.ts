@@ -1680,3 +1680,27 @@ test("Cursor bridge preserves nested special JSON keys and rejects replayed invo
     false,
   );
 });
+
+test("Cursor transport rejects EOF in partial headers and payloads", async () => {
+  const complete = frameConnectMessage(Buffer.from("payload"));
+  for (const length of [1, 4, 5, complete.length - 1]) {
+    const server = await startServer((peer) => {
+      peer.respond({ ":status": 200 });
+      receiveClient(peer, (message) => {
+        if (message.case === "runRequest")
+          peer.end(complete.subarray(0, length));
+      });
+    });
+    servers.push(server);
+    const events = await collectEvents(
+      streamCursor(localModel(server.baseUrl), CONTEXT, { apiKey: "token" }),
+    );
+    const last = events.at(-1);
+    assert.equal(last?.type, "error");
+    if (last?.type === "error")
+      assert.match(
+        last.error.errorMessage ?? "",
+        /Incomplete Cursor Connect frame/,
+      );
+  }
+});
