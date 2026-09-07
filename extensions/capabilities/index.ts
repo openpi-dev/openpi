@@ -25,9 +25,12 @@ import {
   resetOpenPiToolSurface,
 } from "../shared/tool-surface.ts";
 import {
+  CAPABILITY_SHIMMER_INTERVAL_MS,
   CapabilityIntentHighlightEditor,
+  capabilityShimmerPhase,
   colorCapabilityKeyword,
   isLightNamedTheme,
+  supportsDynamicCapabilityShimmer,
 } from "./src/ui.ts";
 
 const CapabilitySchema = Type.Unsafe<OpenPiCapability>({
@@ -77,6 +80,7 @@ function skillGuidance(capabilities: readonly OpenPiCapability[]) {
 interface CapabilityExtensionDependencies {
   readonly loadConfig: () => Pick<MyPiSetupConfig, "capabilities">;
   readonly sourcePath?: string;
+  readonly supportsDynamicShimmer?: () => boolean;
 }
 
 export function createCapabilitiesExtension(
@@ -85,6 +89,30 @@ export function createCapabilitiesExtension(
   },
 ) {
   return function capabilities(pi: ExtensionAPI) {
+    let shimmerEditor: CapabilityIntentHighlightEditor | undefined;
+    let shimmerTimer: ReturnType<typeof setInterval> | undefined;
+    let requestShimmerRender: (() => void) | undefined;
+
+    const stopShimmer = () => {
+      if (shimmerTimer) clearInterval(shimmerTimer);
+      shimmerTimer = undefined;
+      shimmerEditor = undefined;
+      requestShimmerRender = undefined;
+    };
+
+    const startShimmer = (
+      editor: CapabilityIntentHighlightEditor,
+      requestRender: () => void,
+      enabled: boolean,
+    ) => {
+      if (!enabled) return;
+      shimmerEditor = editor;
+      requestShimmerRender = requestRender;
+      shimmerTimer ??= setInterval(() => {
+        if (shimmerEditor?.hasCapabilityIntent()) requestShimmerRender?.();
+      }, CAPABILITY_SHIMMER_INTERVAL_MS);
+    };
+
     const reconcileDiscoveryGateway = () => {
       const adaptive =
         dependencies.loadConfig().capabilities.discovery === "adaptive";
@@ -98,6 +126,10 @@ export function createCapabilitiesExtension(
     pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, reconcileDiscoveryGateway);
 
     pi.on("session_start", (_event, ctx) => {
+      stopShimmer();
+      const animateShimmer =
+        dependencies.supportsDynamicShimmer?.() ??
+        supportsDynamicCapabilityShimmer();
       resetOpenPiToolSurface(
         pi,
         dependencies.sourcePath
@@ -108,17 +140,26 @@ export function createCapabilitiesExtension(
       registerEditorLayer(pi, ctx, {
         id: "capability-intent-highlight",
         order: 150,
-        wrap: (base, _tui, _theme, keybindings) =>
-          new CapabilityIntentHighlightEditor(base, keybindings, (text) =>
-            colorCapabilityKeyword(text, {
-              colorMode: ctx.ui.theme.getColorMode(),
-              light: isLightNamedTheme(ctx.ui.theme.name),
-            }),
-          ),
+        wrap: (base, tui, _theme, keybindings) => {
+          const editor = new CapabilityIntentHighlightEditor(
+            base,
+            keybindings,
+            (text) =>
+              colorCapabilityKeyword(text, {
+                colorMode: ctx.ui.theme.getColorMode(),
+                light: isLightNamedTheme(ctx.ui.theme.name),
+                animated: animateShimmer,
+                ...(animateShimmer ? { phase: capabilityShimmerPhase() } : {}),
+              }),
+          );
+          startShimmer(editor, () => tui.requestRender(), animateShimmer);
+          return editor;
+        },
       });
     });
 
     pi.on("session_shutdown", () => {
+      stopShimmer();
       removeEditorLayer(pi, "capability-intent-highlight");
     });
 

@@ -3,7 +3,9 @@ import test from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
+  KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
+import type { EditorComponent, EditorTheme, TUI } from "@earendil-works/pi-tui";
 import { SETUP_CONFIG_CHANGED_CHANNEL } from "../../../extensions/shared/setup-config.ts";
 import {
   OPENPI_TOOL_SURFACE,
@@ -389,4 +391,90 @@ test("capability loads are monotonic and activate only the requested group", asy
   assert.deepEqual(second.details.newlyLoaded, []);
   assert.deepEqual(second.details.activatedTools, []);
   assert.deepEqual(second.details.loaded, ["search"]);
+});
+
+test("static shimmer fallback does not schedule animation redraws", () => {
+  type RegisteredLayer = {
+    wrap: (
+      base: EditorComponent,
+      tui: TUI,
+      theme: EditorTheme,
+      keybindings: KeybindingsManager,
+    ) => unknown;
+  };
+
+  let sessionStart:
+    | ((event: unknown, ctx: ExtensionContext) => void)
+    | undefined;
+  const registrations: RegisteredLayer[] = [];
+  const eventHandlers = new Map<string, Set<(data: unknown) => void>>();
+  let active = ["read", "bash", "edit", "write"];
+  const pi = {
+    events: {
+      on(channel: string, handler: (data: unknown) => void) {
+        const handlers = eventHandlers.get(channel) ?? new Set();
+        handlers.add(handler);
+        eventHandlers.set(channel, handlers);
+        return () => handlers.delete(handler);
+      },
+      emit(channel: string, data: unknown) {
+        if (channel.endsWith(":register")) {
+          const layer = (data as { layer?: RegisteredLayer }).layer;
+          if (layer) registrations.push(layer);
+        }
+        for (const handler of eventHandlers.get(channel) ?? []) handler(data);
+      },
+    },
+    on(event: string, handler: unknown) {
+      if (event === "session_start") {
+        sessionStart = handler as typeof sessionStart;
+      }
+    },
+    registerTool() {},
+    getActiveTools: () => [...active],
+    getAllTools: () => active.map((name) => ({ name })),
+    setActiveTools(names: string[]) {
+      active = [...names];
+    },
+  };
+
+  createCapabilitiesExtension({
+    loadConfig: () => ({ capabilities: { discovery: "explicit" } }),
+    supportsDynamicShimmer: () => false,
+  })(pi as unknown as ExtensionAPI);
+
+  assert.ok(sessionStart);
+  let intervalCalls = 0;
+  const originalSetInterval = globalThis.setInterval;
+  globalThis.setInterval = ((..._args: Parameters<typeof setInterval>) => {
+    intervalCalls++;
+    return {} as ReturnType<typeof setInterval>;
+  }) as typeof setInterval;
+
+  try {
+    const ctx = {
+      mode: "tui",
+      ui: {
+        theme: {
+          getColorMode: () => "truecolor",
+          name: "dark",
+        },
+        getEditorComponent: () => undefined,
+        setEditorComponent() {},
+      },
+    } as unknown as ExtensionContext;
+    sessionStart({}, ctx);
+
+    assert.equal(registrations.length, 1);
+    registrations[0]!.wrap(
+      {} as EditorComponent,
+      { requestRender() {} } as TUI,
+      {} as EditorTheme,
+      {} as KeybindingsManager,
+    );
+  } finally {
+    globalThis.setInterval = originalSetInterval;
+  }
+
+  assert.equal(intervalCalls, 0);
 });
