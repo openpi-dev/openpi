@@ -1,20 +1,11 @@
 <p align="center">
-  <img src="assets/openpi-launch-card-v1.webp" alt="OpenPI — Pi at the core, power on demand. Small Harness. Clean Context. Deep Extensions." width="100%" />
+  <img src="assets/openpi-product-hero-v2.webp" alt="OpenPI — Build. Delegate. Keep moving. 终端与本地 Web、独立子代理、后台任务的概念插画。" width="100%" />
 </p>
 
 <p align="center">
-  把后台 Terminal、Pi-native Subagent、可恢复 Workflow 与持续任务装进同一套 <a href="https://pi.dev">Pi</a> 工作台。<br />
-  普通回合零常驻 OpenPI 模型工具；明确需要时，才展开对应能力。
-</p>
-
-<p align="center">
-  <strong>Small Harness.</strong> 不替换 Pi 的 Agent loop，普通回合不常驻 OpenPI 模型工具。<br />
-  <strong>Clean Context.</strong> 能力按需加载，Subagent 使用独立 Context，不把所有工作塞进主会话。<br />
-  <strong>Deep Extensions.</strong> 后台执行、Subagent、Workflow 与持续任务在 Pi 原生生命周期内统一运行和观察。
-</p>
-
-<p align="center">
-  <strong>不是把一组插件摆在一起，而是让它们共享同一套配置、权限、状态与清理边界。</strong>
+  <strong>专注手上的问题，让独立任务并行，让长期进程后台运行。</strong><br />
+  OpenPI 为 <a href="https://pi.dev">Pi</a> 增加终端与本地 Web 工作台、独立上下文的子代理、Workflow 和后台任务管理。<br />
+  沿用你的模型、工具与 Skills；普通编码保持轻量，需要时再展开高级能力。
 </p>
 
 <p align="center">
@@ -32,9 +23,10 @@ pi install npm:@tt-a1i/openpi
 <p align="center">
   <a href="https://openpi-dev.github.io/openpi/"><strong>项目网站</strong></a> ·
   <a href="#30-秒开始"><strong>立即开始</strong></a> ·
-  <a href="#默认轻按需强">为什么默认更轻</a> ·
+  <a href="#从这些场景开始">使用场景</a> ·
+  <a href="#独立-web-工作台">Web 工作台</a> ·
   <a href="#运行模型">看看它怎么工作</a> ·
-  <a href="https://github.com/openpi-dev/openpi/issues/22">查看 Benchmark</a>
+  <a href="https://github.com/openpi-dev/openpi/issues/455">参与体验改进</a>
 </p>
 
 <p align="center">
@@ -43,24 +35,30 @@ pi install npm:@tt-a1i/openpi
 
 ---
 
-## 默认轻，按需强
+## 从这些场景开始
 
-**OpenPI 最强的地方，不是工具多，而是复杂度只在值得的时候出现。**
+| 你正在做什么 | OpenPI 怎么帮忙 | 从哪里查看 |
+| --- | --- | --- |
+| 在多个项目之间切换，想看清对话和工具执行 | 本地 Web 按工作区管理会话，检查已保存的 Prompt、工具参数与结果 | `/web` → 会话与轨迹视图 |
+| 改一个功能，需要同时理解代码和检查测试 | 将独立问题交给不同子代理，各自使用独立 Context，主 Agent 汇总发现 | `/subagents` |
+| Dev server、构建或长测试还在运行 | 后台终端保留进程状态和日志，你可以继续讨论下一步 | `/ps` |
+| 一批任务有依赖，需要分阶段收集结果 | Workflow 组织并行与顺序执行，保留结构化结果和可检查的运行记录 | `/workflows` |
 
-普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；只保留独立的工作区删除保护。
+例如，你可以直接说：
 
-任务一旦需要长期进程、并行调研、隔离实现、多阶段协作或跨回合推进，高级能力仍然完整存在。用户直接提出需求，OpenPI 就在当轮加载对应能力；没用到的能力不会常驻模型工具面。
+```text
+用子代理分别检查登录流程和相关测试，各自给出问题与证据，最后汇总。
+```
 
-> **轻路径不缴复杂度税，重任务不缺工程能力。** 这不是一套替代 Pi 的 Agent Runtime，而是一组遵守 Pi 生命周期、Session、Provider、模型与 Trust 边界的 Pi-native 深扩展。
+```text
+在后台启动开发服务器，我继续修改页面；需要时让我查看日志并停止它。
+```
 
-| 使用场景                     | 模型看到什么                                      | OpenPI 的行为                                     |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| 普通编码任务                 | Pi 原生 `read` / `bash` / `edit` / `write`        | 默认不常驻任何 OpenPI 模型工具                    |
-| 用户明确要求委派或高级能力   | 仅与意图匹配的能力组                              | 在当轮开始前直接加载，不要求用户记住工具名        |
-| 用户主动开启 `adaptive`      | 一个小型 `openpi_load_tools` 网关                 | 主模型判断确有收益时，可自主加载一个能力组        |
-| 后台任务或子 Agent 已经运行  | 对应的状态、等待、继续与停止工具                  | 管理面随真实资源出现，资源结束后按生命周期收敛    |
+```text
+用 Workflow 分批审查这些模块，先并行收集问题，再汇总需要优先处理的项。
+```
 
-这套设计保住了两件通常很难同时拥有的东西：Pi 的清爽基本面，以及完整工程工作台的能力上限。
+模型负责判断怎么分工；OpenPI 提供执行、状态、结果和停止入口。独立任务才值得并行，具体收益取决于任务、模型和配置。
 
 ---
 
@@ -77,7 +75,14 @@ pi install npm:@tt-a1i/openpi
 结果回来后汇总风险，主会话不要原地等待。
 ```
 
-OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 Pi Subagent，把多阶段依赖组织成 Workflow。状态会持续显示；完整运行可从 `/ps`、`/subagents` 和 `/workflows` 检查或终止。
+这条请求会启用后台终端与子代理能力。通过 `/ps` 查看进程和日志，通过 `/subagents` 查看子任务和结果；需要多阶段编排时再明确使用 Workflow。
+
+更喜欢浏览器？在 Pi 中输入 `/web`，打开终端显示的本机地址，选择模型和工作区后开始对话。Web 使用独立会话，不会接管终端里正在进行的对话。入口与独立 CLI 用法见 [Web 工作台](#独立-web-工作台)。
+
+> 本 README 描述当前 `main`。npm 发布版本可能尚未包含最近的 Web 改进；体验最新源码前，请按[开发运行时说明](#开发运行时区分-npm-与当前源码)确认安装来源。
+
+<details>
+<summary>能力如何按需开启，以及原生 Skill 的使用方式</summary>
 
 > [!TIP]
 > Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。英文 `subagent` 与 `workflow` 是保留授权词，单独输入也会加载对应能力。
@@ -90,12 +95,35 @@ Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `re
 
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
+</details>
+
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 
 ```text
 /openpi-setup
 ```
+
+---
+
+## 默认轻，按需强
+
+**普通编码沿用 Pi，高级能力按需加入。**
+
+普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；只保留独立的工作区删除保护。
+
+任务一旦需要长期进程、并行调研、隔离实现、多阶段协作或跨回合推进，高级能力仍然完整存在。用户直接提出需求，OpenPI 就在当轮加载对应能力；没用到的能力不会常驻模型工具面。
+
+OpenPI 在 Pi 的生命周期、Session、Provider、模型与 Trust 边界内扩展能力。
+
+| 使用场景                     | 模型看到什么                                      | OpenPI 的行为                                     |
+| ---------------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| 普通编码任务                 | Pi 原生 `read` / `bash` / `edit` / `write`        | 默认不常驻任何 OpenPI 模型工具                    |
+| 用户明确要求委派或高级能力   | 仅与意图匹配的能力组                              | 在当轮开始前直接加载，不要求用户记住工具名        |
+| 用户主动开启 `adaptive`      | 一个小型 `openpi_load_tools` 网关                 | 主模型判断确有收益时，可自主加载一个能力组        |
+| 后台任务或子 Agent 已经运行  | 对应的状态、等待、继续与停止工具                  | 管理面随真实资源出现，资源结束后按生命周期收敛    |
+
+没有运行高级任务时，不需要为它们保留常驻工具面。
 
 ---
 
@@ -126,6 +154,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Safe Replay、派生 Graph |
 | 连续性       | Tasks、Goal、Plan Mode、Context Pivot、Session Browser、Session-scoped Cron                               |
 | 自定义 Agent | `explorer` / `implementer` / `reviewer` / `advisor`，支持全局与项目角色文件、独立模型与 effort            |
+| 本地 Web     | 工作区与会话管理、模型预选、运行诊断、工具证据与持久化轨迹检查；与终端 Session 独立 |
 | 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
