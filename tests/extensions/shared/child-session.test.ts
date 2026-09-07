@@ -19,6 +19,7 @@ import {
   DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
+  type ExtensionContext,
   ProjectTrustStore,
   SessionManager,
   type SessionShutdownEvent,
@@ -257,6 +258,60 @@ test("child resources remove only verified parent-only OpenPI extensions", async
       true,
       "ordinary third-party extensions must survive tool-name collisions",
     );
+  });
+});
+
+test("headless children preserve Pi shellPath through display extension startup", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const missingShell = path.join(directory, "missing-shell");
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ shellPath: missingShell, packages: [repoRoot] }),
+    );
+
+    const { loader, settingsManager } = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      ...childToolPolicy(["bash"]),
+    });
+
+    try {
+      await bindChildSessionExtensions(session, ["bash"]);
+      const bash = session.getToolDefinition("bash");
+      assert.ok(bash);
+      const context = {
+        cwd,
+        sessionManager: {
+          getSessionId: () => "shell-path",
+          getSessionFile: () => undefined,
+        },
+      } as unknown as ExtensionContext;
+      await assert.rejects(
+        bash.execute(
+          "shell-path",
+          { command: "printf should-not-run" },
+          undefined,
+          undefined,
+          context,
+        ),
+        /Custom shell path not found/,
+      );
+    } finally {
+      await shutdownAndDisposeChildSession(session);
+    }
   });
 });
 
