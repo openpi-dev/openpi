@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_STARTUP_2026-09-07.md`](WEB_STARTUP_2026-09-07.md) — terminal startup feedback, browser-launch waiting, and exploratory timing limits ([#450](https://github.com/openpi-dev/openpi/issues/450)).
+
 - [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).
 
 - [`ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md`](ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md) — headless 子 Session 被展示扩展覆盖 bash 定义、shellPath 丢失的根因与回归证据 ([#419](https://github.com/openpi-dev/openpi/issues/419), [PR #423](https://github.com/openpi-dev/openpi/pull/423))。

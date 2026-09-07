@@ -1,7 +1,7 @@
 interface WebReadyScreenOptions {
   origin: string;
   url: string;
-  opened: boolean;
+  opened: boolean | "pending";
   color?: boolean;
 }
 
@@ -30,7 +30,13 @@ export function formatWebReadyScreen(options: WebReadyScreenOptions) {
     `${label("Local")} ${options.origin}`,
     `${label("Workspaces")} choose and switch in the browser`,
     `${label("Sessions")} separate from terminal Pi`,
-    `${label("Browser")} ${options.opened ? "opened" : "not opened"}`,
+    `${label("Browser")} ${
+      options.opened === "pending"
+        ? "opening…"
+        : options.opened
+          ? "open requested"
+          : "not opened"
+    }`,
   ];
   if (!options.opened) rows.push(`${label("Open")} ${options.url}`);
   rows.push("", `${paint(ANSI.bold, "Ctrl+C")}  stop`, "");

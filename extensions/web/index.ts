@@ -195,6 +195,9 @@ function runWebInForeground(
       tui.stop();
       tuiStopped = true;
       dependencies.clearTerminal();
+      dependencies.writeStderr(
+        "Starting OpenPI Web Workbench… Ctrl+C to stop.\n",
+      );
       const childCwd = dirname(dependencies.entrypoint);
       const child = dependencies.spawn(
         process.execPath,
