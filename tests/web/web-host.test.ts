@@ -35,6 +35,39 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       truncated: false,
     }),
   });
+  const unregisterTerminalDetails = registerWebCapability(sessionManager, {
+    kind: "background-terminals",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) =>
+      id === "bt-test"
+        ? {
+            kind: "background-terminals",
+            id,
+            title: "server",
+            command: "run-server",
+            cwd,
+            status: "running",
+            createdAt: 1,
+            stdout: {
+              text: "ready",
+              totalBytes: 5,
+              retainedBytes: 5,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            stderr: {
+              text: "",
+              totalBytes: 0,
+              retainedBytes: 0,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            truncated: false,
+          }
+        : undefined,
+  });
   const prompts: string[] = [];
   const creationCommandIds: string[] = [];
   let newSessions = 0;
@@ -187,6 +220,40 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const removedLegacyAsset = await fetch(`${launched.origin}/marked.js`);
     assert.equal(removedLegacyAsset.status, 401);
 
+    let thinkingReads = 0;
+    runtime.getThinkingState = () => {
+      thinkingReads++;
+      return { level: "high", available: ["off", "high"] };
+    };
+    assert.equal((await fetch(`${launched.origin}/api/thinking`)).status, 401);
+    assert.equal(thinkingReads, 0);
+    const thinkingResponse = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await thinkingResponse.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "high",
+      available: ["off", "high"],
+    });
+    assert.equal(thinkingReads, 1);
+    delete runtime.getThinkingState;
+    const unknownThinking = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await unknownThinking.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+    });
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+        )
+      ).status,
+      401,
+    );
+
     const trustGetter = runtime.getProjectTrustStatus;
     assert.ok(trustGetter);
     let trustReads = 0;
@@ -295,6 +362,46 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         namesTruncated: 0,
         maxProviders: 250,
       },
+    });
+    const terminalDetailResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+      { headers: authorized },
+    );
+    assert.equal(terminalDetailResponse.status, 200);
+    assert.deepEqual((await terminalDetailResponse.json()).detail, {
+      kind: "background-terminals",
+      id: "bt-test",
+      title: "server",
+      command: "run-server",
+      cwd,
+      status: "running",
+      createdAt: 1,
+      stdout: {
+        text: "ready",
+        totalBytes: 5,
+        retainedBytes: 5,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      stderr: {
+        text: "",
+        totalBytes: 0,
+        retainedBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      truncated: false,
+    });
+    const staleTerminalResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-missing`,
+      { headers: authorized },
+    );
+    assert.equal(staleTerminalResponse.status, 404);
+    assert.deepEqual(await staleTerminalResponse.json(), {
+      code: "CAPABILITY_NOT_FOUND",
+      error: "capability resource was not found in the active Session",
     });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
@@ -423,6 +530,38 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         (session) => session.path === currentSessionPath,
       )?.archived,
       true,
+    );
+
+    const unarchiveUrl = `${launched.origin}/api/sessions/unarchive?path=${encodeURIComponent(currentSessionPath)}`;
+    assert.equal((await fetch(unarchiveUrl, { method: "POST" })).status, 401);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/sessions/unarchive`, {
+          method: "POST",
+          headers: authorized,
+        })
+      ).status,
+      400,
+    );
+    const unarchiveResponse = await fetch(unarchiveUrl, {
+      method: "POST",
+      headers: authorized,
+    });
+    assert.equal(unarchiveResponse.status, 200);
+    assert.deepEqual(await unarchiveResponse.json(), {
+      path: currentSessionPath,
+      archived: false,
+    });
+    const restoredSnapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, {
+        headers: authorized,
+      })
+    ).json()) as { sessions: Array<{ path: string; archived?: boolean }> };
+    assert.equal(
+      restoredSnapshot.sessions.find(
+        (session) => session.path === currentSessionPath,
+      )?.archived,
+      undefined,
     );
 
     const wrongSession = await fetch(`${launched.origin}/api/prompt`, {
@@ -600,6 +739,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   } finally {
     await host.stop();
     assert.equal(disposed, true);
+    unregisterTerminalDetails();
     unregister();
     await Promise.all(
       [cwd, imported].map((path) => rm(path, { recursive: true, force: true })),

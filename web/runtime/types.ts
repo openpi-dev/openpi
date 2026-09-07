@@ -123,6 +123,7 @@ export interface WebRuntimeController {
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
   listProviderAuth?(): WebProviderAuthProjection;
+  getThinkingState?(): { level: string; available: readonly string[] };
   setModel(
     provider: string,
     modelId: string,

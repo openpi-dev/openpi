@@ -11,6 +11,7 @@ import { URL } from "node:url";
 import { promisify } from "node:util";
 import {
   subscribeWebCapabilities,
+  webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
@@ -489,6 +490,13 @@ export class WebHost {
       this.publish("session_archived", { sessionPath: path });
       return this.json(response, 200, { path, archived: true });
     }
+    if (url.pathname === "/api/sessions/unarchive" && request.method === "POST") {
+      const path = url.searchParams.get("path");
+      if (!path) return this.json(response, 400, { error: "session path is required" });
+      await this.adapter.unarchiveSession(path);
+      this.publish("session_unarchived", { sessionPath: path });
+      return this.json(response, 200, { path, archived: false });
+    }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);
       if (typeof body.path !== "string" || body.path.trim().length === 0) {
@@ -692,6 +700,45 @@ export class WebHost {
       }
       return this.json(response, 200, this.runtime.getProjectTrustStatus());
     }
+    if (url.pathname === "/api/capabilities/detail") {
+      const kind = url.searchParams.get("kind");
+      const id = url.searchParams.get("id");
+      if (
+        (kind !== "subagents" &&
+          kind !== "workflows" &&
+          kind !== "background-terminals") ||
+        id === null
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_CAPABILITY_DETAIL_TARGET",
+          error: "a supported capability kind and exact id are required",
+        });
+      }
+      const receipt = webCapabilityDetail(
+        this.runtime.sessionManager,
+        kind,
+        id,
+      );
+      if (receipt.status === "invalid") {
+        return this.json(response, 400, {
+          code: "INVALID_CAPABILITY_DETAIL_TARGET",
+          error: "a supported capability kind and exact id are required",
+        });
+      }
+      if (receipt.status === "unavailable") {
+        return this.json(response, 404, {
+          code: "CAPABILITY_DETAILS_UNAVAILABLE",
+          error: "capability details are unavailable for the active Session",
+        });
+      }
+      if (receipt.status === "missing") {
+        return this.json(response, 404, {
+          code: "CAPABILITY_NOT_FOUND",
+          error: "capability resource was not found in the active Session",
+        });
+      }
+      return this.json(response, 200, { detail: receipt.detail });
+    }
     if (url.pathname === "/api/capabilities")
       return this.json(response, 200, {
         sessionId: this.runtime.sessionManager.getSessionId(),
@@ -714,6 +761,11 @@ export class WebHost {
       }
       return this.json(response, 200, this.runtime.listProviderAuth());
     }
+    if (url.pathname === "/api/thinking")
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        ...(this.runtime.getThinkingState?.() ?? { level: "unknown", available: [] }),
+      });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
