@@ -11,7 +11,10 @@ import {
 } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSnapshot } from "../../../../protocol/types.ts";
+import type {
+  WebModelSummary,
+  WebSnapshot,
+} from "../../../../protocol/types.ts";
 import { workspaceName } from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
@@ -31,6 +34,10 @@ interface ComposerProps {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+}
+
+function modelIdentity(model: WebModelSummary) {
+  return `${model.label} (${model.provider}/${model.id})`;
 }
 
 export function Composer(props: ComposerProps) {
@@ -96,9 +103,14 @@ export function Composer(props: ComposerProps) {
     props.draftModel ??
     props.snapshot?.models.find((model) => model.current) ??
     props.snapshot?.models[0];
+  const currentModelLabel = currentModel
+    ? modelIdentity(currentModel)
+    : t("noModels");
   const modelItems = (props.snapshot?.models ?? []).map((model) => ({
     id: `${model.provider}/${model.id}`,
-    label: model.label,
+    label: (
+      <span className="model-menu-item-label">{modelIdentity(model)}</span>
+    ),
     endContent: (
       props.draftModel
         ? props.draftModel.provider === model.provider &&
@@ -212,7 +224,12 @@ export function Composer(props: ComposerProps) {
             <DropdownMenu
               className="model-menu"
               button={{
-                label: currentModel?.label || t("noModels"),
+                label: currentModelLabel,
+                children: currentModel ? (
+                  <span className="model-picker-label">
+                    {currentModelLabel}
+                  </span>
+                ) : undefined,
                 endContent: <ChevronDown />,
                 size: "sm",
                 variant: "ghost",
@@ -226,7 +243,7 @@ export function Composer(props: ComposerProps) {
                   !modelItems.length,
               }}
               items={modelItems}
-              menuWidth={260}
+              menuWidth={320}
               placement="above"
               alignment="end"
               hasChevron={false}

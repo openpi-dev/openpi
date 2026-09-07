@@ -617,7 +617,7 @@ test("fresh browser contexts open the bare address and can request workspace sel
   }
 });
 
-test("model picker is clickable above the workspace overlay before choosing a directory", async ({
+test("model picker distinguishes same-named models before choosing a directory", async ({
   page,
 }) => {
   let modelWrites = 0;
@@ -634,17 +634,17 @@ test("model picker is clickable above the workspace overlay before choosing a di
     snapshot.runtime.status = "idle";
     snapshot.models = [
       {
-        provider: "a",
+        provider: "provider-alpha",
         id: "one",
-        name: "One",
-        label: "Model One",
+        name: "Shared model",
+        label: "Shared model",
         current: true,
       },
       {
-        provider: "b",
+        provider: "provider-beta",
         id: "two",
-        name: "Two",
-        label: "Model Two",
+        name: "Shared model",
+        label: "Shared model",
         current: false,
       },
     ];
@@ -657,10 +657,51 @@ test("model picker is clickable above the workspace overlay before choosing a di
       body: ": idle\n\n",
     }),
   );
+  await page.setViewportSize({ width: 390, height: 844 });
   await openWorkbench(page);
-  await page.getByRole("button", { name: "Model One" }).click();
-  await page.getByText("Model Two", { exact: true }).click();
-  await expect(page.getByRole("button", { name: "Model Two" })).toBeEnabled();
+  const modelPicker = page.getByRole("button", {
+    name: "Shared model (provider-alpha/one)",
+  });
+  await expect(modelPicker).toHaveText("Shared model (provider-alpha/one)");
+  expect(
+    await modelPicker.evaluate((element) => {
+      const label = element.querySelector(".model-picker-label");
+      return (
+        label instanceof HTMLElement &&
+        getComputedStyle(label).whiteSpace === "normal" &&
+        label.scrollWidth <= label.clientWidth
+      );
+    }),
+  ).toBe(true);
+  await modelPicker.focus();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Shared model (provider-alpha/one)",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Shared model (provider-beta/two)",
+    }),
+  ).toBeVisible();
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Shared model (provider-alpha/one)",
+    }),
+  ).toBeFocused();
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    page.getByRole("menuitem", {
+      name: "Shared model (provider-beta/two)",
+    }),
+  ).toBeFocused();
+  await page.keyboard.press("Enter");
+  await expect(
+    page.getByRole("button", {
+      name: "Shared model (provider-beta/two)",
+    }),
+  ).toBeEnabled();
   await expect(page.getByRole("textbox", { name: "描述任务" })).toHaveAttribute(
     "readonly",
     "",

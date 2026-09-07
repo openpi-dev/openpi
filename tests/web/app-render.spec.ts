@@ -616,7 +616,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   expect(screen.getByText("Archived work")).toBeTruthy();
 });
 
-it("enables model choice before workspace selection and displays the draft choice", () => {
+it("shows complete model identities before workspace selection", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
   delete snapshot.selectedSession;
@@ -625,8 +625,20 @@ it("enables model choice before workspace selection and displays the draft choic
   snapshot.sessions = [];
   snapshot.runtime.status = "idle";
   snapshot.models = [
-    { provider: "test", id: "a", label: "Model A", name: "A", current: true },
-    { provider: "test", id: "b", label: "Model B", name: "B", current: false },
+    {
+      provider: "provider-alpha",
+      id: "a",
+      label: "Shared model",
+      name: "A",
+      current: true,
+    },
+    {
+      provider: "provider-beta",
+      id: "b",
+      label: "Shared model",
+      name: "B",
+      current: false,
+    },
   ];
   const store = createWebStore();
   const props = {
@@ -645,11 +657,20 @@ it("enables model choice before workspace selection and displays the draft choic
   };
   const { rerender } = renderWithI18n(createElement(Composer, props));
   const modelButton = screen.getByRole("button", {
-    name: /Model B/u,
+    name: "Shared model (provider-beta/b)",
   }) as HTMLButtonElement;
   expect(modelButton.disabled).toBe(false);
   fireEvent.click(modelButton);
-  expect(screen.getAllByText("Model A").length).toBeGreaterThan(0);
+  expect(
+    screen.getByRole("menuitem", {
+      name: "Shared model (provider-alpha/a)",
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("menuitem", {
+      name: "Shared model (provider-beta/b)",
+    }),
+  ).toBeTruthy();
   rerender(
     createElement(
       I18nextProvider,
@@ -658,7 +679,10 @@ it("enables model choice before workspace selection and displays the draft choic
     ),
   );
   expect(
-    (screen.getByRole("button", { name: /Model B/u }) as HTMLButtonElement)
-      .disabled,
+    (
+      screen.getByRole("button", {
+        name: "Shared model (provider-beta/b)",
+      }) as HTMLButtonElement
+    ).disabled,
   ).toBe(true);
 });
