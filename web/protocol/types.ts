@@ -28,6 +28,13 @@ export interface WebSessionSummary {
   id: string;
   path: string;
   cwd: string;
+  /** Classification of this Web directory projection, not original creation history. */
+  source: "web-session";
+  origin: "web";
+  /** Current runtime only; not a global ownership lock. */
+  controller: "web" | "none";
+  /** Existing operation admission rules still apply. */
+  readOnly: false;
   name?: string;
   modified: string;
   created: string;

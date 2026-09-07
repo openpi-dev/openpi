@@ -84,6 +84,15 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         current: false,
       },
     ],
+    getProjectTrustStatus: () => ({
+      source: "pi-project-trust",
+      workspace: runtimeCwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    }),
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -159,6 +168,43 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const removedLegacyAsset = await fetch(`${launched.origin}/marked.js`);
     assert.equal(removedLegacyAsset.status, 401);
 
+    const trustGetter = runtime.getProjectTrustStatus;
+    assert.ok(trustGetter);
+    let trustReads = 0;
+    runtime.getProjectTrustStatus = () => {
+      trustReads++;
+      return trustGetter();
+    };
+    assert.equal((await fetch(`${launched.origin}/api/trust`)).status, 401);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/trust`, {
+          headers: { ...authorized, Origin: "https://untrusted.example" },
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/trust`, {
+          method: "POST",
+          headers: authorized,
+        })
+      ).status,
+      405,
+    );
+    assert.equal(trustReads, 0);
+    delete runtime.getProjectTrustStatus;
+    const unavailableTrust = await fetch(`${launched.origin}/api/trust`, {
+      headers: authorized,
+    });
+    assert.equal(unavailableTrust.status, 501);
+    assert.equal(
+      (await unavailableTrust.json()).code,
+      "PROJECT_TRUST_STATUS_UNAVAILABLE",
+    );
+    runtime.getProjectTrustStatus = trustGetter;
+
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
     const unauthorizedCapabilities = await fetch(
@@ -194,6 +240,19 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     assert.equal(modelsResponse.status, 200);
     assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const trustResponse = await fetch(`${launched.origin}/api/trust`, {
+      headers: authorized,
+    });
+    assert.equal(trustResponse.status, 200);
+    assert.deepEqual(await trustResponse.json(), {
+      source: "pi-project-trust",
+      workspace: cwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
       headers: authorized,

@@ -705,6 +705,8 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 
 Web workbench 的贡献包括：
 
+- [@testikun](https://github.com/testikun)：[#398](https://github.com/openpi-dev/openpi/pull/398) 的 Web 会话来源信息和 [#392](https://github.com/openpi-dev/openpi/pull/392) 的 Pi 项目信任诊断。来源字段只描述当前 Web 运行时，信任诊断区分已保存的决定和当前会话权限；这些是只读 API，目前没有新增界面入口。
+
 - [QuinnWan (@somewan820)](https://github.com/somewan820)：[#352](https://github.com/openpi-dev/openpi/pull/352) 提供界面恢复基线及复制回退；界面主体由 [#384](https://github.com/openpi-dev/openpi/pull/384) 迁移至 React，复制回退继续沿用并补充失败反馈。
 - [@seekskyworld](https://github.com/seekskyworld)：[#377](https://github.com/openpi-dev/openpi/pull/377) 提出浏览器请求超时保护，[#358](https://github.com/openpi-dev/openpi/pull/358) 提出 Pi 原生取消能力。当前 React 请求层和精确轮次取消协议已覆盖这些目标；保留当前实现，并补充响应体停滞和超时清理的回归覆盖。
 
