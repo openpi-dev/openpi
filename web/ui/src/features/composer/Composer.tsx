@@ -9,7 +9,7 @@ import {
   Square,
   SlidersHorizontal,
 } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
@@ -25,6 +25,7 @@ interface ComposerProps {
   modelSelectionPending?: boolean;
   onInspect?: (terminalId?: string) => void;
   snapshot: WebSnapshot | null;
+  selectedPath?: string | null;
   selectedWorkspace: string | null;
   sessionSwitching: boolean;
   promptAdmissionPending: boolean;
@@ -47,6 +48,20 @@ export function Composer(props: ComposerProps) {
   const [prompt, setPrompt] = useState("");
   const textarea = useRef<HTMLTextAreaElement>(null);
   const selected = props.snapshot?.selectedSession;
+  const selectedPath =
+    props.selectedPath === undefined
+      ? (selected?.path ?? null)
+      : props.selectedPath;
+  const draftScope =
+    selectedPath ??
+    (props.selectedWorkspace ? `new:${props.selectedWorkspace}` : "none");
+  const draftScopeRef = useRef(draftScope);
+  const draftRevision = useRef(0);
+  const pendingSubmission = useRef<{
+    revision: number;
+    scope: string;
+    canTransferToCreatedSession: boolean;
+  } | null>(null);
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
@@ -68,6 +83,29 @@ export function Composer(props: ComposerProps) {
   const disabled =
     props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
 
+  useEffect(() => {
+    const previousScope = draftScopeRef.current;
+    if (previousScope === draftScope) return;
+    draftScopeRef.current = draftScope;
+
+    const submission = pendingSubmission.current;
+    const createdSession =
+      submission?.canTransferToCreatedSession &&
+      submission.scope === previousScope &&
+      Boolean(selectedPath) &&
+      props.snapshot?.selectedSession?.path === selectedPath;
+    if (createdSession) {
+      submission.scope = draftScope;
+      return;
+    }
+
+    draftRevision.current += 1;
+    setPrompt("");
+    if (submission?.scope === previousScope) {
+      submission.canTransferToCreatedSession = false;
+    }
+  }, [draftScope, props.snapshot?.selectedSession?.path, selectedPath]);
+
   const resize = (element: HTMLTextAreaElement) => {
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
@@ -80,11 +118,30 @@ export function Composer(props: ComposerProps) {
       await props.actions.chooseWorkspace();
       return;
     }
-    if (await props.actions.sendPrompt(prompt)) {
-      setPrompt("");
-      if (textarea.current) {
-        textarea.current.style.height = "auto";
-        textarea.current.style.overflowY = "hidden";
+    const submission = {
+      revision: draftRevision.current,
+      scope: draftScopeRef.current,
+      canTransferToCreatedSession: draftSession,
+    };
+    pendingSubmission.current = submission;
+    try {
+      if (await props.actions.sendPrompt(prompt)) {
+        if (
+          pendingSubmission.current === submission &&
+          draftScopeRef.current === submission.scope &&
+          draftRevision.current === submission.revision
+        ) {
+          draftRevision.current += 1;
+          setPrompt("");
+          if (textarea.current) {
+            textarea.current.style.height = "auto";
+            textarea.current.style.overflowY = "hidden";
+          }
+        }
+      }
+    } finally {
+      if (pendingSubmission.current === submission) {
+        pendingSubmission.current = null;
       }
     }
   };
@@ -204,6 +261,7 @@ export function Composer(props: ComposerProps) {
           aria-label={t("describeTask")}
           placeholder={placeholder}
           onChange={(event) => {
+            draftRevision.current += 1;
             setPrompt(event.target.value);
             resize(event.currentTarget);
           }}
