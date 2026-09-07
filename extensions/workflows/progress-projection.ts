@@ -250,8 +250,11 @@ export class AgentProgressProjection {
   snapshot(
     toolTimings: ReadonlyMap<string, ProgressToolTiming> = new Map(),
   ): AgentProgressProjectionSnapshot {
+    // Reserve the initial task, then spend the remaining byte budget on the
+    // newest evidence. Forward selection would silently discard final errors
+    // after enough large tool results, even below the entry-count limit.
     const selected = this.firstEntry
-      ? [this.firstEntry, ...this.tailEntries]
+      ? [this.firstEntry, ...this.tailEntries.slice().reverse()]
       : [];
     const transcript: TranscriptEntry[] = [];
     let totalBytes = 0;
@@ -277,6 +280,9 @@ export class AgentProgressProjection {
           : { timestamp: entry.timestamp }),
       });
     }
+    // Budgeting order is not display order: keep the retained tail chronological.
+    const newestFirstTail = transcript.splice(1);
+    transcript.push(...newestFirstTail.reverse());
     if (transcript.length < this.totalEntries) {
       transcript.push({
         role: "toolResult",

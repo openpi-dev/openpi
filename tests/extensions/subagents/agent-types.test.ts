@@ -64,7 +64,7 @@ async function seed(
   return { agentDir, cwd };
 }
 
-test("built-in roles have exact capability boundaries and no fixed model or effort defaults", () => {
+test("built-in roles inherit the parent tool surface and no fixed model or effort defaults", () => {
   assert.deepEqual(
     BUILT_IN_AGENT_TYPES.map((role) => ({
       name: role.name,
@@ -75,72 +75,35 @@ test("built-in roles have exact capability boundaries and no fixed model or effo
     [
       {
         name: "explorer",
-        tools: [
-          "read",
-          "grep",
-          "find",
-          "ls",
-          "fd",
-          "rg",
-          "git_show",
-          "git_diff",
-          "git_log",
-        ],
+        tools: undefined,
         effort: undefined,
         model: undefined,
       },
       {
         name: "implementer",
-        tools: [
-          "read",
-          "bash",
-          "edit",
-          "write",
-          "grep",
-          "find",
-          "ls",
-          "fd",
-          "rg",
-          "git_show",
-          "git_diff",
-          "git_log",
-        ],
+        tools: undefined,
         effort: undefined,
         model: undefined,
       },
       {
         name: "reviewer",
-        tools: [
-          "read",
-          "grep",
-          "find",
-          "ls",
-          "fd",
-          "rg",
-          "git_show",
-          "git_diff",
-          "git_log",
-        ],
+        tools: undefined,
         effort: undefined,
         model: undefined,
       },
       {
         name: "advisor",
-        tools: [
-          "read",
-          "grep",
-          "find",
-          "ls",
-          "fd",
-          "rg",
-          "git_show",
-          "git_diff",
-          "git_log",
-        ],
+        tools: undefined,
         effort: undefined,
         model: undefined,
       },
     ],
+  );
+  assert.deepEqual(
+    BUILT_IN_AGENT_TYPES.filter((role) => role.planningCompatible).map(
+      (role) => role.name,
+    ),
+    ["explorer", "reviewer", "advisor"],
   );
   assert.match(
     BUILT_IN_AGENT_TYPES[0]?.description ?? "",
@@ -335,6 +298,7 @@ test("a project agent type overrides the global one of the same name", async () 
 
     assert.equal(agentTypes.size, 4);
     assert.deepEqual(agentTypes.get("explorer")?.tools, ["read"]);
+    assert.equal(agentTypes.get("explorer")?.planningCompatible, undefined);
     // Global replaces the built-in, then the trusted project replaces global.
     const messages = diagnostics.map((entry) => entry.message).join("\n");
     assert.match(messages, /from built-in:explorer/);
