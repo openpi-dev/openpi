@@ -35,6 +35,7 @@ import {
   createChildResources,
   type DisposableChildSession,
   effectiveChildToolAllowlist,
+  inheritedChildToolAllowlist,
   resolveGitInfoPathOrThrow,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
@@ -1553,4 +1554,24 @@ test("git-info exclusion: ENOENT degrades, other errors fail closed", async () =
     (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
     "non-ENOENT realpath failures must fail closed",
   );
+});
+
+test("child delegation inherits active tools and custom restrictions only narrow", () => {
+  const parent = ["read", "bash", "web_search", "workflow", "subagent_spawn"];
+  assert.deepEqual(inheritedChildToolAllowlist(parent), [
+    "read",
+    "bash",
+    "web_search",
+  ]);
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, [
+      "read",
+      "rg",
+      "web_search",
+      "workflow",
+    ]),
+    ["read", "web_search"],
+  );
+  assert.deepEqual(inheritedChildToolAllowlist(parent, []), []);
+  assert.deepEqual(inheritedChildToolAllowlist([], ["bash"]), []);
 });
