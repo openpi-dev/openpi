@@ -30,6 +30,7 @@ import type {
   WebSnapshot,
 } from "../../../../protocol/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
+import { copyText } from "../../lib/clipboard.ts";
 import {
   compactSummary,
   formatElapsedMs,
@@ -345,6 +346,17 @@ function MessageActions({
 }) {
   const { t } = useTranslation();
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
+  const [copying, setCopying] = useState(false);
+  const copyGeneration = useRef(0);
+  const copyTimer = useRef<number | undefined>(undefined);
+  useEffect(
+    () => () => {
+      copyGeneration.current += 1;
+      window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
   const editInput = useRef<HTMLTextAreaElement>(null);
@@ -393,7 +405,7 @@ function MessageActions({
   }
   const time = formatTurnTime(timestamp);
   return (
-    <div className="message-actions">
+    <div className={`message-actions${copyFailed ? " copy-failed" : ""}`}>
       {time && <time dateTime={timestamp}>{time}</time>}
       {editable && (
         <button
@@ -409,15 +421,33 @@ function MessageActions({
         type="button"
         aria-label={copied ? t("copiedMessage") : t("copyMessage")}
         title={copied ? t("copiedMessage") : t("copyMessage")}
+        disabled={copying}
         onClick={() => {
-          void navigator.clipboard.writeText(content).then(() => {
-            setCopied(true);
-            window.setTimeout(() => setCopied(false), 1_200);
+          const generation = ++copyGeneration.current;
+          window.clearTimeout(copyTimer.current);
+          setCopying(true);
+          setCopied(false);
+          setCopyFailed(false);
+          void copyText(content).then((success) => {
+            if (generation !== copyGeneration.current) return;
+            setCopying(false);
+            setCopied(success);
+            setCopyFailed(!success);
+            if (success)
+              copyTimer.current = window.setTimeout(
+                () => setCopied(false),
+                1_200,
+              );
           });
         }}
       >
         {copied ? <Check /> : <Clipboard />}
       </button>
+      {copyFailed && (
+        <span className="copy-error" role="status">
+          {t("copyFailed")}
+        </span>
+      )}
     </div>
   );
 }

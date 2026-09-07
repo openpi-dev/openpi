@@ -473,3 +473,67 @@ it("does not attribute current runtime activity to a historical session", () => 
     screen.queryByText(/Current build|Current agent|Current workflow/),
   ).toBeNull();
 });
+
+it("reports failed copy honestly, supports retry, and cleans up feedback on unmount", async () => {
+  vi.useFakeTimers();
+  const scheduled = vi.spyOn(window, "setTimeout");
+  const cleared = vi.spyOn(window, "clearTimeout");
+  const writeText = vi
+    .fn()
+    .mockRejectedValueOnce(new Error("denied"))
+    .mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", { clipboard: { writeText } });
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [
+        {
+          key: "answer",
+          message: { role: "assistant", content: "**original**" },
+        },
+      ],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+  try {
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("copyMessage") }),
+      ),
+    );
+    expect(screen.getByRole("status").textContent).toBe(i18n.t("copyFailed"));
+    expect(
+      screen.queryByRole("button", { name: i18n.t("copiedMessage") }),
+    ).toBeNull();
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("copyMessage") }),
+      ),
+    );
+    expect(writeText).toHaveBeenLastCalledWith("**original**");
+    expect(
+      screen.getByRole("button", { name: i18n.t("copiedMessage") }),
+    ).toBeTruthy();
+    expect(screen.queryByRole("status")).toBeNull();
+    const timerIndex = scheduled.mock.calls.findIndex(
+      (call) => call[1] === 1_200,
+    );
+    expect(timerIndex).toBeGreaterThanOrEqual(0);
+    const timer = scheduled.mock.results[timerIndex].value;
+    view.unmount();
+    expect(cleared).toHaveBeenCalledWith(timer);
+  } finally {
+    view.unmount();
+    vi.restoreAllMocks();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+  }
+});
