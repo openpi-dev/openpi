@@ -4,6 +4,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).
+
 - [`ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md`](ISSUE_419_SHELL_PATH_RETROSPECTIVE_2026-09-07.md) — headless 子 Session 被展示扩展覆盖 bash 定义、shellPath 丢失的根因与回归证据 ([#419](https://github.com/openpi-dev/openpi/issues/419), [PR #423](https://github.com/openpi-dev/openpi/pull/423))。
 
 - [`CURSOR_CONTEXT_AND_TRANSPORT_2026-09-07.md`](CURSOR_CONTEXT_AND_TRANSPORT_2026-09-07.md) — Cursor protocol context boundaries, linear frame accumulation and cwd-sensitive transcript caching ([#431](https://github.com/openpi-dev/openpi/issues/431)).
