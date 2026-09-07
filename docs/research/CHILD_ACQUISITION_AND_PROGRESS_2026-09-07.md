@@ -4,6 +4,7 @@
 - Created / verified: 2026-09-07
 - Source boundary: `eaf470bab4ac2dda607d16c6ddee66dc35367527` (main after PR #426)
 - Issue: [#428](https://github.com/openpi-dev/openpi/issues/428)
+- Repair PR: [#429](https://github.com/openpi-dev/openpi/pull/429)
 - Supersedes: none
 
 ## Scope and provenance
