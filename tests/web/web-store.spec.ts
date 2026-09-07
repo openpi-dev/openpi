@@ -1101,3 +1101,32 @@ describe("OpenPI Web store", () => {
     expect(store.getState().mobileSidebarOpen).toBe(false);
   });
 });
+
+it("restores the exact archived path without selecting it and refreshes canonical state", async () => {
+  const client = new FakeClient();
+  const restore = vi
+    .spyOn(client, "unarchiveSession")
+    .mockResolvedValue({ path: "/tmp/ws/saved.jsonl", archived: false });
+  const next = snapshot("Restored");
+  client.snapshots.push(Promise.resolve(next));
+  const store = createWebStore(client);
+  expect(
+    await store.getState().actions.unarchiveSession("/tmp/ws/saved.jsonl"),
+  ).toBe(true);
+  expect(restore).toHaveBeenCalledWith("/tmp/ws/saved.jsonl");
+  expect(client.selections).toEqual([]);
+  expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
+});
+
+it("keeps archive restoration failure observable without pretending to refresh", async () => {
+  const client = new FakeClient();
+  vi.spyOn(client, "unarchiveSession").mockRejectedValue(
+    new Error("archive write failed"),
+  );
+  const store = createWebStore(client);
+  expect(
+    await store.getState().actions.unarchiveSession("/tmp/ws/saved.jsonl"),
+  ).toBe(false);
+  expect(store.getState().notice).toBe("archive write failed");
+  expect(client.snapshotPaths).toEqual([]);
+});

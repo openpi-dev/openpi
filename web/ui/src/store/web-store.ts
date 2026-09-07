@@ -27,6 +27,7 @@ const refreshEventTypes = new Set([
   "workspace_renamed",
   "session_renamed",
   "session_archived",
+  "session_unarchived",
   "session_created",
   "prompt_accepted",
   "runtime_changed",
@@ -118,6 +119,7 @@ export interface WebStoreActions {
   selectSession: (path: string) => Promise<void>;
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
+  unarchiveSession: (path: string) => Promise<boolean>;
   selectModel: (value: string) => Promise<void>;
   cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
@@ -706,6 +708,17 @@ export function createWebStore(
           await actions.refreshSnapshot();
         } catch (error) {
           showError(error);
+        }
+      },
+      async unarchiveSession(path) {
+        const epoch = sessionEpoch;
+        try {
+          await client.unarchiveSession(path);
+          if (epoch !== sessionEpoch) return true;
+          return await actions.refreshSnapshot({ epoch });
+        } catch (error) {
+          if (epoch === sessionEpoch) showError(error);
+          return false;
         }
       },
       async selectModel(value) {

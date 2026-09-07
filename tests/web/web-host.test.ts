@@ -363,6 +363,29 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         maxProviders: 250,
       },
     });
+    for (const route of [
+      "/api/thinking",
+      "/api/trust",
+      "/api/providers/auth-status",
+      "/api/capabilities/detail?kind=background-terminals&id=bt-test",
+    ]) {
+      const separator = route.includes("?") ? "&" : "?";
+      const mismatched = await fetch(
+        `${launched.origin}${route}${separator}sessionId=another-session`,
+        { headers: authorized },
+      );
+      assert.equal(mismatched.status, 409);
+      assert.equal((await mismatched.json()).code, "SESSION_CHANGED");
+    }
+    const scopedDetail = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
+      { headers: authorized },
+    );
+    assert.equal(scopedDetail.status, 200);
+    assert.equal(
+      (await scopedDetail.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
     const terminalDetailResponse = await fetch(
       `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
       { headers: authorized },

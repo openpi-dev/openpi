@@ -678,6 +678,17 @@ export class WebHost {
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
+    const diagnosticSession = url.searchParams.get("sessionId");
+    if (
+      diagnosticSession !== null &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail"].includes(url.pathname) &&
+      diagnosticSession !== this.runtime.sessionManager.getSessionId()
+    ) {
+      return this.json(response, 409, {
+        code: "SESSION_CHANGED",
+        error: "The active Session changed. Reopen the panel to inspect it.",
+      });
+    }
     if (url.pathname === "/events") return this.eventsStream(request, response);
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
@@ -737,7 +748,10 @@ export class WebHost {
           error: "capability resource was not found in the active Session",
         });
       }
-      return this.json(response, 200, { detail: receipt.detail });
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        detail: receipt.detail,
+      });
     }
     if (url.pathname === "/api/capabilities")
       return this.json(response, 200, {

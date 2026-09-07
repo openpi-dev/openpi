@@ -545,3 +545,73 @@ it("reports failed copy honestly, supports retry, and cleans up feedback on unmo
     vi.unstubAllGlobals();
   }
 });
+
+it("shows bounded archive history even when its workspace summary was omitted", async () => {
+  const store = createWebStore();
+  const restore = vi
+    .spyOn(store.getState().actions, "unarchiveSession")
+    .mockResolvedValue(false);
+  const snapshot: WebSnapshot = {
+    protocolVersion: 1,
+    preferences: { theme: "system" },
+    generatedAt: "2026-09-01T10:00:00Z",
+    cursor: 1,
+    workspaces: [],
+    sessions: [
+      {
+        id: "archived",
+        path: "/omitted/a.jsonl",
+        cwd: "/omitted",
+        name: "Archived work",
+        archived: true,
+        modified: "2026-09-01T10:00:00Z",
+        created: "2026-09-01T10:00:00Z",
+        source: "web-session",
+        origin: "web",
+        controller: "none",
+        readOnly: false,
+        messageCount: 1,
+        firstMessage: "saved",
+      },
+    ],
+    models: [],
+    runtime: { status: "idle", capabilities: {} },
+    truncation: {
+      ...truncation,
+      sessionsOmitted: 20,
+      workspacesOmitted: 1,
+      truncated: true,
+    },
+  };
+  renderWithI18n(
+    createElement(SessionSidebar, {
+      snapshot,
+      selectedPath: null,
+      selectedWorkspace: null,
+      collapsed: new Set<string>(),
+      query: "",
+      searchOpen: false,
+      mobileOpen: false,
+      actions: store.getState().actions,
+    }),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Archived" }));
+  expect(screen.getByText("Archived work")).toBeTruthy();
+  expect(screen.getByText("/omitted")).toBeTruthy();
+  expect(
+    screen.getByText(
+      "20 more sessions and 1 workspace summaries are not loaded. Search covers the loaded list only.",
+    ),
+  ).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
+  fireEvent.click(
+    await screen.findByRole("menuitem", { name: "Restore conversation" }),
+  );
+  expect(
+    await screen.findByText(
+      "Could not confirm restoration. Refresh and try again.",
+    ),
+  ).toBeTruthy();
+  expect(restore).toHaveBeenCalledWith("/omitted/a.jsonl");
+  expect(screen.getByText("Archived work")).toBeTruthy();
+});

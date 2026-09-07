@@ -1,6 +1,14 @@
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
-import { Check, ChevronDown, Folder, Plus, Send, Square } from "lucide-react";
+import {
+  Check,
+  ChevronDown,
+  Folder,
+  Plus,
+  Send,
+  Square,
+  SlidersHorizontal,
+} from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
@@ -9,6 +17,7 @@ import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 
 interface ComposerProps {
+  onInspect?: (terminalId?: string) => void;
   snapshot: WebSnapshot | null;
   selectedWorkspace: string | null;
   sessionSwitching: boolean;
@@ -114,7 +123,12 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="composer-dock">
-      {active && <ActivityBar snapshot={props.snapshot} />}
+      {active && (
+        <ActivityBar
+          snapshot={props.snapshot}
+          onInspectTerminal={props.onInspect}
+        />
+      )}
       {props.landing && (
         <div className="workspace-picker-row">
           <DropdownMenu
@@ -172,6 +186,18 @@ export function Composer(props: ComposerProps) {
           }}
         />
         <div className="composer-toolbar">
+          {props.onInspect && (
+            <button
+              type="button"
+              className="icon-button"
+              aria-label={t("runtimeStatus")}
+              title={t("runtimeStatus")}
+              disabled={!active || props.sessionSwitching}
+              onClick={() => props.onInspect?.()}
+            >
+              <SlidersHorizontal />
+            </button>
+          )}
           <div className="model-picker-wrap">
             <DropdownMenu
               className="model-menu"

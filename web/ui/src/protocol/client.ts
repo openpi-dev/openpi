@@ -1,3 +1,6 @@
+import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
+import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
+import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 import type { WebSnapshot } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
@@ -152,6 +155,45 @@ export class WebClient {
     return this.request<{ path: string; archived: true }>(
       `/api/sessions/archive?path=${encodeURIComponent(path)}`,
       { method: "POST" },
+    );
+  }
+
+  unarchiveSession(path: string) {
+    return this.request<{ path: string; archived: false }>(
+      `/api/sessions/unarchive?path=${encodeURIComponent(path)}`,
+      { method: "POST" },
+    );
+  }
+
+  thinking(sessionId: string, signal: AbortSignal) {
+    return this.request<{
+      sessionId: string;
+      level: string;
+      available: readonly string[];
+    }>(`/api/thinking?sessionId=${encodeURIComponent(sessionId)}`, { signal });
+  }
+
+  trust(sessionId: string, signal: AbortSignal) {
+    return this.request<WebProjectTrustStatus>(
+      `/api/trust?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  providerAuth(sessionId: string, signal: AbortSignal) {
+    return this.request<WebProviderAuthProjection>(
+      `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{
+      sessionId: string;
+      detail: WebBackgroundTerminalDetail;
+    }>(
+      `/api/capabilities/detail?kind=background-terminals&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
     );
   }
 

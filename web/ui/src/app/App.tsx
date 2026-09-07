@@ -1,8 +1,12 @@
 import { Menu, PanelLeftOpen, X } from "lucide-react";
-import { useCallback, useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
+import {
+  InspectionPanel,
+  type InspectionTarget,
+} from "../features/inspection/InspectionPanel.tsx";
 import { Composer } from "../features/composer/Composer.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
@@ -12,6 +16,37 @@ export function App() {
   const state = useStore(webStore);
   const { t } = useTranslation();
   const { actions } = state;
+  const [inspection, setInspection] = useState<InspectionTarget | null>(null);
+  const currentModel = state.snapshot?.models.find((model) => model.current);
+  const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
+  const inspect = (terminalId?: string) => {
+    const snapshot = state.snapshot;
+    const session = snapshot?.selectedSession;
+    if (
+      !snapshot ||
+      !session ||
+      state.sessionSwitching ||
+      session.id !== snapshot.currentSessionId
+    )
+      return;
+    setInspection({
+      sessionId: session.id,
+      sessionPath: session.path,
+      cwd: session.cwd,
+      model: currentModel?.label ?? "",
+      modelKey,
+      terminalId,
+    });
+  };
+  const inspectionVisible =
+    inspection &&
+    !state.sessionSwitching &&
+    inspection.sessionId === state.snapshot?.currentSessionId &&
+    inspection.sessionPath === state.snapshot?.selectedSession?.path &&
+    inspection.modelKey === modelKey;
+  useEffect(() => {
+    if (inspection && !inspectionVisible) setInspection(null);
+  }, [inspection, inspectionVisible]);
 
   useEffect(() => {
     actions.start();
@@ -98,6 +133,7 @@ export function App() {
           />
         ) : null}
         <Composer
+          onInspect={inspect}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
@@ -123,6 +159,13 @@ export function App() {
           </div>
         )}
       </main>
+      {inspectionVisible && (
+        <InspectionPanel
+          key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
+          target={inspection}
+          onClose={() => setInspection(null)}
+        />
+      )}
       <button
         className="sidebar-scrim"
         type="button"
