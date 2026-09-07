@@ -5,8 +5,8 @@ import type { WebEvent, WebSnapshot } from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
   type SessionMutationResult,
-  WebClient,
   WebApiError,
+  WebClient,
   type WorkspaceSelectionResult,
 } from "../../web/ui/src/protocol/client.ts";
 import {
@@ -49,6 +49,10 @@ function snapshot(name = "Current"): WebSnapshot {
         name,
         modified: "2026-09-03T00:00:00Z",
         created: "2026-09-03T00:00:00Z",
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
         messageCount: 1,
         firstMessage: "Hello",
       },
@@ -93,6 +97,10 @@ function activeSnapshot(
       name: options.name ?? id,
       modified: "2026-09-03T00:00:00Z",
       created: "2026-09-03T00:00:00Z",
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
       messageCount: 1,
       firstMessage: "Hello",
     },

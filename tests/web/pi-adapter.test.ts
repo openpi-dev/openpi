@@ -103,9 +103,33 @@ test("snapshot pins current and selected sessions while bounding the projection"
         (session) => session.id === current.getSessionId(),
       ),
     );
+    const currentSummary = snapshot.sessions.find(
+      (session) => session.id === current.getSessionId(),
+    );
+    assert.deepEqual(
+      {
+        source: currentSummary?.source,
+        origin: currentSummary?.origin,
+        controller: currentSummary?.controller,
+        readOnly: currentSummary?.readOnly,
+      },
+      {
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+      },
+    );
     assert.ok(
       snapshot.sessions.some((session) => session.path === selectedPath),
     );
+    const selectedSummary = snapshot.sessions.find(
+      (session) => session.path === selectedPath,
+    );
+    assert.equal(selectedSummary?.source, "web-session");
+    assert.equal(selectedSummary?.origin, "web");
+    assert.equal(selectedSummary?.controller, "none");
+    assert.equal(selectedSummary?.readOnly, false);
     assert.equal(snapshot.selectedSession?.path, selectedPath);
     assert.equal(
       (
@@ -631,6 +655,28 @@ test("initialize fails closed without exposing or retrying uncommitted state", a
         (workspace) => workspace.path === resolve(root),
       ),
       false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Session provenance targets the current file even when a copied file retains its id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-provenance-"));
+  try {
+    const directory = join(root, "sessions");
+    const manager = SessionManager.create(root, directory);
+    persistSession(manager, "original", 1);
+    const original = manager.getSessionFile();
+    assert.ok(original);
+    const copy = join(directory, "copied.jsonl");
+    await writeFile(copy, await readFile(original));
+    const adapter = new PiWebAdapter(runtimeFor(root, directory, manager));
+    const { sessions } = await adapter.listSessionProjection();
+    assert.equal(sessions.find((s) => s.path === copy)?.controller, "none");
+    assert.deepEqual(
+      sessions.filter((s) => s.controller === "web").map((s) => s.path),
+      [original],
     );
   } finally {
     await rm(root, { recursive: true, force: true });

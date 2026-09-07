@@ -321,6 +321,7 @@ export class PiWebAdapter {
     // only the Web projection below is retained and bounded.
     const sorted = allSessions;
     const currentId = this.runtime.sessionManager.getSessionId();
+    const currentFile = this.runtime.sessionManager.getSessionFile();
     const pinned = new Set(
       sorted
         .filter(
@@ -341,6 +342,10 @@ export class PiWebAdapter {
         id: session.id,
         path: session.path,
         cwd: resolve(session.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: session.id === currentId && currentFile !== undefined && resolve(session.path) === resolve(currentFile) ? ("web" as const) : ("none" as const),
+        readOnly: false as const,
         ...(session.name
           ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
           : {}),
@@ -378,6 +383,10 @@ export class PiWebAdapter {
         id: currentId,
         path: currentPath,
         cwd: resolve(this.runtime.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: "web" as const,
+        readOnly: false as const,
         ...(this.runtime.sessionManager.getSessionName()
           ? {
               name: boundedText(
