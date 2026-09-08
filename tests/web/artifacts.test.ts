@@ -1,6 +1,13 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -22,7 +29,8 @@ test("artifact reads bind Session, canonical file, content revision and explicit
     const handle = await reader.resolveFile(sessionId, "./report%20space.md");
     const first = await reader.read(handle, sessionId);
     assert.equal(first.preview.text, "# revision one");
-    assert.equal(first.preview.artifact.path, path);
+    // Windows temporary directories may use an 8.3 alias (e.g. RUNNER~1).
+    assert.equal(first.preview.artifact.path, await realpath(path));
     assert.equal(
       first.preview.artifact.revision,
       createHash("sha256").update(first.bytes).digest("hex"),
