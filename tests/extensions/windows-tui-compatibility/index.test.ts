@@ -16,18 +16,31 @@ type WidgetFactory = (
   theme: unknown,
 ) => Component & { dispose?(): void };
 
+function createTui(mode: TUI["mode"], clearOnShrink: boolean[] = []) {
+  return {
+    mode,
+    setClearOnShrink(enabled: boolean) {
+      clearOnShrink.push(enabled);
+    },
+  } as TUI;
+}
+
 function createHarness(
   platform: NodeJS.Platform,
   mode: ExtensionContext["mode"] = "tui",
   settingsManagerFactory?: Parameters<
     typeof registerWindowsTuiCompatibility
   >[2],
+  initialTui: TUI = createTui("regular"),
 ) {
   const hooks = new Map<
     string,
     (event: unknown, ctx: ExtensionContext) => unknown
   >();
   let widgetFactory: WidgetFactory | undefined;
+  let widget: ReturnType<WidgetFactory> | undefined;
+  let activeTui = initialTui;
+  let widgetFactoryCalls = 0;
   let widgetCleared = false;
   const notifications: string[] = [];
 
@@ -46,9 +59,14 @@ function createHarness(
     hasUI: mode === "tui",
     ui: {
       setWidget(_key: string, content: WidgetFactory | undefined) {
-        if (content) widgetFactory = content;
-        else {
+        widget?.dispose?.();
+        if (content) {
+          widgetFactory = content;
+          widgetFactoryCalls += 1;
+          widget = content(activeTui, {});
+        } else {
           widgetFactory = undefined;
+          widget = undefined;
           widgetCleared = true;
         }
       },
@@ -65,11 +83,18 @@ function createHarness(
     emit(event: string) {
       return hooks.get(event)?.({}, ctx);
     },
-    mount(tui: TUI) {
-      return widgetFactory?.(tui, {});
+    switchTuiMode(tui: TUI) {
+      // Pi keeps the component instance, swaps its active renderer, and then
+      // invalidates the remounted component tree.
+      const remountedWidget = widget;
+      activeTui = tui;
+      remountedWidget?.invalidate();
     },
     get widgetFactory() {
       return widgetFactory;
+    },
+    get widgetFactoryCalls() {
+      return widgetFactoryCalls;
     },
     get widgetCleared() {
       return widgetCleared;
@@ -120,75 +145,87 @@ test("installs only for interactive Windows sessions", () => {
 });
 
 test("enables clear-on-shrink for regular TUI but not fullscreen", async () => {
-  const harness = createHarness("win32", "tui", async () => ({
+  const settingsManagerFactory = async () => ({
     getGlobalSettings: () => ({}),
     getProjectSettings: () => ({}),
-  }));
+  });
+  const regularWrites: boolean[] = [];
+  const regular = createHarness(
+    "win32",
+    "tui",
+    settingsManagerFactory,
+    createTui("regular", regularWrites),
+  );
+  await regular.emit("session_start");
+  assert.deepEqual(regularWrites, [true]);
+
+  const fullscreenWrites: boolean[] = [];
+  const fullscreen = createHarness(
+    "win32",
+    "tui",
+    settingsManagerFactory,
+    createTui("fullscreen", fullscreenWrites),
+  );
+  await fullscreen.emit("session_start");
+  assert.deepEqual(fullscreenWrites, []);
+});
+
+test("enables clear-on-shrink after a native switch to regular TUI", async () => {
+  const fullscreenWrites: boolean[] = [];
+  const harness = createHarness(
+    "win32",
+    "tui",
+    async () => ({
+      getGlobalSettings: () => ({}),
+      getProjectSettings: () => ({}),
+    }),
+    createTui("fullscreen", fullscreenWrites),
+  );
   await harness.emit("session_start");
 
-  const clearOnShrink: boolean[] = [];
-  harness.mount({
-    mode: "regular",
-    setClearOnShrink(enabled: boolean) {
-      clearOnShrink.push(enabled);
-    },
-    requestRender(force?: boolean) {
-      assert.equal(force, undefined);
-    },
-  } as TUI);
-  assert.deepEqual(clearOnShrink, [true]);
+  assert.equal(harness.widgetFactoryCalls, 1);
+  assert.deepEqual(fullscreenWrites, []);
 
-  clearOnShrink.length = 0;
-  harness.mount({
-    mode: "fullscreen",
-    setClearOnShrink(enabled: boolean) {
-      clearOnShrink.push(enabled);
-    },
-    requestRender(force?: boolean) {
-      assert.equal(force, undefined);
-    },
-  } as TUI);
-  assert.deepEqual(clearOnShrink, []);
+  const regularWrites: boolean[] = [];
+  harness.switchTuiMode(createTui("regular", regularWrites));
+
+  assert.equal(harness.widgetFactoryCalls, 2);
+  assert.deepEqual(regularWrites, [true]);
 });
 
 test("keeps the workaround session-local and respects explicit clear-on-shrink", async () => {
-  const writes: string[] = [];
-  const explicit = createHarness("win32", "tui", async () => ({
-    getGlobalSettings: () => ({ terminal: { clearOnShrink: false } }),
-    getProjectSettings: () => ({}),
-    drainErrors: () => [],
-  }));
+  const fullscreenWrites: boolean[] = [];
+  const explicit = createHarness(
+    "win32",
+    "tui",
+    async () => ({
+      getGlobalSettings: () => ({ terminal: { clearOnShrink: false } }),
+      getProjectSettings: () => ({}),
+      drainErrors: () => [],
+    }),
+    createTui("fullscreen", fullscreenWrites),
+  );
   await explicit.emit("session_start");
 
-  const clearOnShrink: boolean[] = [];
-  explicit.mount({
-    mode: "regular",
-    setClearOnShrink(enabled: boolean) {
-      writes.push("clear-on-shrink");
-      clearOnShrink.push(enabled);
-    },
-    requestRender() {},
-  } as TUI);
+  const regularWrites: boolean[] = [];
+  explicit.switchTuiMode(createTui("regular", regularWrites));
 
-  assert.deepEqual(clearOnShrink, []);
+  assert.deepEqual(fullscreenWrites, []);
+  assert.deepEqual(regularWrites, []);
   assert.deepEqual(explicit.notifications, []);
-  assert.deepEqual(writes, []);
 });
 
 test("fails closed when settings cannot be read", async () => {
-  const harness = createHarness("win32", "tui", async () => {
-    throw new Error("malformed settings");
-  });
-  await harness.emit("session_start");
-
   const clearOnShrink: boolean[] = [];
-  harness.mount({
-    mode: "regular",
-    setClearOnShrink(enabled: boolean) {
-      clearOnShrink.push(enabled);
+  const harness = createHarness(
+    "win32",
+    "tui",
+    async () => {
+      throw new Error("malformed settings");
     },
-    requestRender() {},
-  } as TUI);
+    createTui("regular", clearOnShrink),
+  );
+  await harness.emit("session_start");
 
   assert.deepEqual(clearOnShrink, []);
 });

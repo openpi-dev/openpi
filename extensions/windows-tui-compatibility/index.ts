@@ -107,21 +107,31 @@ export function registerWindowsTuiCompatibility(
     }
 
     activeUi = ctx.ui;
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      (tui) => {
-        // The renderer can be replaced at runtime when the user switches TUI
-        // modes, so apply this when the factory receives the active renderer.
-        if (tui.mode === "regular" && enableClearOnShrink) {
-          tui.setClearOnShrink(true);
-        }
-        return {
-          render: () => [],
-          invalidate() {},
-        };
-      },
-      { placement: "belowEditor" },
-    );
+
+    function installWidget() {
+      if (activeUi !== ctx.ui) return;
+
+      ctx.ui.setWidget(
+        WIDGET_KEY,
+        (tui) => {
+          if (tui.mode === "regular" && enableClearOnShrink) {
+            tui.setClearOnShrink(true);
+          }
+          return {
+            render: () => [],
+            invalidate() {
+              // Pi remounts existing components and invalidates them after a
+              // native TUI mode switch. A component created for fullscreen
+              // can therefore reinstall itself against the new renderer.
+              if (tui.mode === "fullscreen") installWidget();
+            },
+          };
+        },
+        { placement: "belowEditor" },
+      );
+    }
+
+    installWidget();
   });
 
   pi.on("session_shutdown", cleanup);
