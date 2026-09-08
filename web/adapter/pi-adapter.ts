@@ -670,7 +670,7 @@ export class PiWebAdapter {
       summary.id === this.runtime.sessionManager.getSessionId()
         ? this.runtime.sessionManager
         : SessionManager.open(path);
-    const projected = projectEntries(manager.getBranch());
+    const projected = projectEntries(manager.getBranch(), (path) => resolve(summary.cwd, path));
     return {
       id: summary.id,
       path: summary.path,

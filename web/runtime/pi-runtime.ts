@@ -1,5 +1,6 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { createEvidenceWriteTool } from "./write-evidence.ts";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -885,6 +886,7 @@ export class PiWebRuntime implements WebRuntimeController {
       if (errors.length > 0) throw new Error(errors.join("; "));
       const created = await createAgentSessionFromServices({
         services,
+        customTools: [createEvidenceWriteTool(options.cwd)],
         sessionManager: options.sessionManager,
         sessionStartEvent: options.sessionStartEvent,
       });
@@ -1046,7 +1048,7 @@ export class PiWebRuntime implements WebRuntimeController {
       case "message_start":
         this.liveMessageKey = `live-${++this.liveMessageSequence}`;
         this.emit(event.type, {
-          message: projectMessage(event.message),
+          message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
           messageKey: this.liveMessageKey,
         });
         break;
@@ -1077,19 +1079,22 @@ export class PiWebRuntime implements WebRuntimeController {
           }
         }
         this.emit(event.type, {
-          message: projectMessage(event.message),
+          message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
           ...(this.liveMessageKey ? { messageKey: this.liveMessageKey } : {}),
         });
         if (event.type === "message_end") this.liveMessageKey = undefined;
         break;
       case "tool_execution_start":
+      case "tool_execution_update":
       case "tool_execution_end":
         this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
           toolName: event.toolName,
           toolCallId: event.toolCallId,
           ...(event.type === "tool_execution_end"
-            ? { isError: event.isError }
-            : {}),
+            ? { isError: event.isError, result: projectMessage({ ...event.result, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId, isError: event.isError }) }
+            : { call: projectMessage({ content: [{ type: "toolCall", id: event.toolCallId, name: event.toolName, arguments: event.args }] }).parts?.[0],
+                ...(event.type === "tool_execution_update" ? { result: projectMessage({ ...event.partialResult, role: "toolResult", toolName: event.toolName, toolCallId: event.toolCallId }) } : {}) }),
         });
         break;
     }

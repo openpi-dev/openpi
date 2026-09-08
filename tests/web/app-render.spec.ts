@@ -229,8 +229,9 @@ describe("OpenPI React transcript", () => {
       }),
     );
 
-    expect(container.querySelectorAll(".tool-group")).toHaveLength(2);
-    expect(screen.getAllByText(/4 (steps|个步骤)/u)).toHaveLength(2);
+    expect(container.querySelectorAll(".tool-group")).toHaveLength(1);
+    expect(screen.getAllByText(/4 (steps|个步骤)/u)).toHaveLength(1);
+    expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );

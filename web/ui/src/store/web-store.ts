@@ -7,6 +7,7 @@ import type {
 } from "../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
+import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 
 const collapsedWorkspacesStorageKey = "openpi.collapsed-workspaces";
 const sidebarCollapsedStorageKey = "openpi.sidebar-collapsed";
@@ -300,6 +301,7 @@ export function createWebStore(
         "session_switched",
         "session_created",
       ].includes(event.type);
+      if (current.cursor !== null && event.sequence <= current.cursor) return;
       set({ cursor: event.sequence });
 
       if (current.sessionSwitching && !sessionTransition) {
@@ -315,6 +317,19 @@ export function createWebStore(
         return;
       }
 
+      if (current.snapshot) {
+        const liveTools = reduceLiveTools(
+          current.snapshot.runtime.liveTools ?? [],
+          event.type,
+          detail,
+        );
+        set({
+          snapshot: {
+            ...current.snapshot,
+            runtime: { ...current.snapshot.runtime, liveTools },
+          },
+        });
+      }
       if (sessionTransition) {
         const eventCommandId = detail.commandId;
         if (

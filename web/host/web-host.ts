@@ -30,6 +30,9 @@ import {
   type WebRuntimeController,
 } from "../runtime/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
+import { reduceLiveTools } from "../protocol/live-tools.ts";
+import type { LiveToolEvidence } from "../protocol/evidence.ts";
+import { ArtifactError, ArtifactReader } from "./artifacts.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
@@ -100,6 +103,8 @@ export class WebHost {
   >();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
+  private liveTools: LiveToolEvidence[] = [];
+  private readonly artifacts: ArtifactReader;
   private port = 0;
   private readonly runtime: WebRuntimeController;
   private readonly requestedPort: number;
@@ -124,6 +129,7 @@ export class WebHost {
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
+    this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
       ? Buffer.from(options.token, "hex")
@@ -216,6 +222,8 @@ export class WebHost {
   }
 
   publish(type: string, detail?: Record<string, unknown>) {
+    if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) this.artifacts.revoke();
+    this.liveTools = reduceLiveTools(this.liveTools, type, detail ?? {});
     let event: WebEvent = {
       protocolVersion: WEB_PROTOCOL_VERSION,
       sequence: ++this.sequence,
@@ -260,6 +268,7 @@ export class WebHost {
     this.stopping = true;
     this.stopPromise = (async () => {
       this.unsubscribeCapabilities();
+      this.artifacts.dispose();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
@@ -323,6 +332,7 @@ export class WebHost {
       await this.handle(request, response);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
+      if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
           code: error.code,
@@ -425,6 +435,39 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname.startsWith("/api/artifacts/")) {
+      try { await this.adapter.requireWorkspace(this.runtime.cwd); }
+      catch { throw new ArtifactError("ARTIFACT_DENIED", 403, "File access requires an available Session workspace."); }
+    }
+    if (url.pathname === "/api/artifacts/resolve") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "File access requires POST" });
+      const body = await this.readJson(request);
+      if (typeof body.sessionId !== "string" || typeof body.reference !== "string" || body.access !== "read-file" || (body.parent !== undefined && typeof body.parent !== "string")) return this.json(response, 400, { error: "An explicit Session file-read request is required" });
+      const handle = await this.artifacts.resolveFile(body.sessionId, body.reference, body.parent);
+      return this.json(response, 200, { handle });
+    }
+    if (url.pathname === "/api/artifacts/content") {
+      const handle = url.searchParams.get("handle");
+      const sessionId = url.searchParams.get("sessionId");
+      if (!handle || !sessionId || handle.length > 100 || sessionId.length > 500) return this.json(response, 400, { error: "File handle and Session are required" });
+      if (request.method === "DELETE") {
+        this.artifacts.release(handle, sessionId);
+        return this.json(response, 200, { released: true });
+      }
+      if (request.method !== "GET") return this.json(response, 405, { error: "File content accepts GET or DELETE" });
+      const download = url.searchParams.get("download") === "1";
+      const revision = url.searchParams.get("revision") ?? undefined;
+      if (download && !/^[a-f0-9]{64}$/u.test(revision ?? "")) return this.json(response, 400, { error: "Download requires the preview content revision" });
+      const result = await this.artifacts.read(handle, sessionId, revision);
+      if (!download) return this.json(response, 200, result.preview);
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream", "Content-Length": result.bytes.length,
+        "Content-Disposition": `attachment; filename="artifact"; filename*=UTF-8''${encodeURIComponent(result.preview.artifact.name).replace(/['()*]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
+      });
+      response.end(result.bytes);
+      return;
+    }
     if (
       url.pathname === "/api/workspaces/select" &&
       request.method === "POST"
@@ -814,8 +857,14 @@ export class WebHost {
         cursor,
         preferences: { theme: loadSetupConfig().ui.webTheme },
         ...projection,
+        runtime: { ...projection.runtime, liveTools: this.liveTools },
       };
       let finalBytes = jsonByteLength(snapshot);
+      while (finalBytes > WEB_MAX_SNAPSHOT_BYTES && snapshot.runtime.liveTools?.length) {
+        snapshot.runtime.liveTools = snapshot.runtime.liveTools.slice(1);
+        snapshot.truncation.truncated = true;
+        finalBytes = jsonByteLength(snapshot);
+      }
       while (snapshot.truncation.bytes !== finalBytes) {
         snapshot.truncation.bytes = finalBytes;
         finalBytes = jsonByteLength(snapshot);

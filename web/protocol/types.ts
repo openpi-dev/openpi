@@ -1,6 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn } from "../runtime/types.ts";
+import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -83,6 +84,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  terminalReceipt?: ReturnType<typeof bashReceipt>;
   role?: string;
   toolName?: string;
   content: string;
@@ -98,7 +100,7 @@ export interface WebLiveMessage {
 export type WebMessagePart =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "toolCall"; id?: string; name: string; arguments: string };
+  | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
   truncated: boolean;
@@ -123,6 +125,7 @@ export interface WebSnapshot {
   selectedSession?: WebSessionProjection;
   models: WebModelSummary[];
   runtime: {
+    liveTools?: LiveToolEvidence[];
     status: "idle" | "running" | "unknown";
     activeTurn?: WebActiveTurn;
     capabilities: WebCapabilitySnapshot;
@@ -255,7 +258,7 @@ export function boundedDetails(value: unknown): unknown {
   return detailsProjection(value).value;
 }
 
-function projectContent(message: Record<string, unknown>) {
+function projectContent(message: Record<string, unknown>, resolvePath?: (path: string) => string | undefined) {
   const content = message.content;
   if (typeof content === "string") {
     const text = boundedTextProjection(content, WEB_MAX_TEXT);
@@ -337,11 +340,18 @@ function projectContent(message: Record<string, unknown>) {
         typeof typed.name === "string" ? typed.name : "tool",
         WEB_MAX_METADATA_TEXT,
       );
+      const evidenceArguments = isEvidenceTool(name.value) ? projectEvidenceArguments(typed.arguments) : undefined;
+      if (evidenceArguments && typeof evidenceArguments.path === "string" && !evidenceArguments.path.startsWith("~") && !evidenceArguments.path.startsWith("@")) {
+        const path = resolvePath?.(evidenceArguments.path);
+        if (path && path.length <= 4096) evidenceArguments.resolvedPath = path;
+      }
       projected = {
         type: "toolCall",
         ...(id ? { id: id.value } : {}),
         name: name.value,
         arguments: argumentsProjection.value,
+        ...(evidenceArguments ? { evidenceArguments } : {}),
+        ...((argumentsProjection.truncated || argumentsBudget.truncated || id?.truncated || name.truncated) ? { evidenceTruncated: true } : {}),
       };
       textTruncated ||=
         argumentsProjection.truncated ||
@@ -361,12 +371,12 @@ function projectContent(message: Record<string, unknown>) {
   };
 }
 
-export function projectMessage(message: unknown): WebLiveMessage {
+export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
       ? (message as Record<string, unknown>)
       : {};
-  const content = projectContent(value);
+  const content = projectContent(value, resolvePath);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -396,6 +406,7 @@ export function projectMessage(message: unknown): WebLiveMessage {
     metadataTruncated;
   return {
     role: role?.value,
+    ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
@@ -421,7 +432,7 @@ export function projectMessage(message: unknown): WebLiveMessage {
   };
 }
 
-export function projectEntry(entry: SessionEntry) {
+export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
   if (entry.type !== "message") {
     return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
   }
@@ -429,7 +440,7 @@ export function projectEntry(entry: SessionEntry) {
     type: entry.type,
     id: entry.id,
     timestamp: entry.timestamp,
-    message: projectMessage(entry.message),
+    message: projectMessage(entry.message, resolvePath),
   };
 }
 
@@ -439,14 +450,14 @@ export function jsonByteLength(value: unknown) {
   return textEncoder.encode(JSON.stringify(value)).byteLength;
 }
 
-export function projectEntries(entries: readonly SessionEntry[]) {
+export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined) {
   const retained = entries.slice(-WEB_MAX_ENTRIES);
   const projected: ReturnType<typeof projectEntry>[] = [];
   let bytes = 2;
   let messagePartsOmitted = 0;
   let messagesTruncated = 0;
   for (let index = retained.length - 1; index >= 0; index--) {
-    const entry = projectEntry(retained[index]!);
+    const entry = projectEntry(retained[index]!, resolvePath);
     const entryBytes = jsonByteLength(entry) + (projected.length > 0 ? 1 : 0);
     if (bytes + entryBytes > WEB_MAX_SELECTED_TRANSCRIPT_BYTES) break;
     projected.unshift(entry);
