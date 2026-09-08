@@ -1,0 +1,64 @@
+{
+  "source": "openpi-dev/openpi@ed9dbc1018f890fd54375f5371990ddfee8af5df",
+  "node": "v26.3.0",
+  "git": "git version 2.50.1 (Apple Git-155)",
+  "results": [
+    {
+      "flag": "assume-unchanged",
+      "before": {
+        "status": "",
+        "ignored": "",
+        "flags": "h tracked.txt\n",
+        "modifiedFileExists": true
+      },
+      "cleanup": {
+        "removed": true,
+        "branchDeleted": true,
+        "branch": "probe-assume-unchanged",
+        "baseSha": "95af7055a9aaaefa56fda469842e2183952bee24",
+        "detached": false,
+        "headSha": "95af7055a9aaaefa56fda469842e2183952bee24",
+        "commits": 0,
+        "dirty": false,
+        "untracked": false,
+        "ignored": false
+      },
+      "worktreeExistsAfter": false,
+      "modifiedFileExistsAfter": false,
+      "branchesAfter": ""
+    },
+    {
+      "flag": "skip-worktree",
+      "before": {
+        "status": "",
+        "ignored": "",
+        "flags": "S tracked.txt\n",
+        "modifiedFileExists": true
+      },
+      "cleanup": {
+        "removed": true,
+        "branchDeleted": true,
+        "branch": "probe-skip-worktree",
+        "baseSha": "95af7055a9aaaefa56fda469842e2183952bee24",
+        "detached": false,
+        "headSha": "95af7055a9aaaefa56fda469842e2183952bee24",
+        "commits": 0,
+        "dirty": false,
+        "untracked": false,
+        "ignored": false
+      },
+      "worktreeExistsAfter": false,
+      "modifiedFileExistsAfter": false,
+      "branchesAfter": ""
+    }
+  ],
+  "status": "validated-isolated-production-function-fixture",
+  "created": "2026-09-08",
+  "lastVerified": "2026-09-08",
+  "evidenceBoundary": "Synthetic Git repositories only; no third-party plugin, model, full Child/Workflow lifecycle or private project data.",
+  "relatedResearch": "PI_COMMUNITY_ECOSYSTEM_2026-09-08.md",
+  "supersedes": null,
+  "localUnpublishedReceiptSha256": "66c708bc81d39ee00d36435d0a0d9d35a7e4ffb93161c429c734a3f4e2b0b899",
+  "relatedIssue": "https://github.com/openpi-dev/openpi/issues/472",
+  "relatedPullRequest": "https://github.com/openpi-dev/openpi/pull/479"
+}

@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`PI_COMMUNITY_ECOSYSTEM_2026-09-08.md`](PI_COMMUNITY_ECOSYSTEM_2026-09-08.md) — 70 个社区包/扩展候选、固定来源、取舍与公开跟踪；包含 Worktree index flags 的隔离生产函数证据，不是插件兼容认证。
+
 - [`WEB_STARTUP_2026-09-07.md`](WEB_STARTUP_2026-09-07.md) — terminal startup feedback, browser-launch waiting, and exploratory timing limits ([#450](https://github.com/openpi-dev/openpi/issues/450)).
 
 - [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).

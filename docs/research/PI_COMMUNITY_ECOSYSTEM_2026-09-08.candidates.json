@@ -1,0 +1,1996 @@
+{
+  "status": "validated-source-observations; adoption undecided",
+  "created": "2026-09-08",
+  "lastVerified": "2026-09-08",
+  "openpiRevision": "ed9dbc1018f890fd54375f5371990ddfee8af5df",
+  "piBaseline": "0.85.1",
+  "counts": {
+    "discoveryEntries": 146,
+    "researchObservations": 74,
+    "distinctPackageOrExtensionCandidates": 70,
+    "candidatesWithImplementationSourceRead": 49
+  },
+  "countingRule": "Identical package names are merged across areas; mitsupi notify/review and pi-ext review remain facets of their parent collection. Standalone extensions in a collection can be separate candidates. A source read may be targeted; none is whole-package runtime certification.",
+  "runtimeBoundary": "No third-party plugin installed or executed. Only separate synthetic Git/OpenPI reclaim fixtures were run. Source manifest versions, npm published versions and Github HEAD are not interchangeable.",
+  "observations": [
+    {
+      "candidate": "pi-studio",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "omaclaren/pi-studio",
+        "sha": "e04fc7aa3275b0f3f69cbbc0cbc7393a58b9f4bd",
+        "description": "Extension for pi that opens local two-pane browser workspace for working with prompts, responses, Markdown/LaTeX/HTML documents, code files, and other common file types. Comment on and annotate responses and files, write, edit, and run prompts, browse prompt and response history, request critiques, and use live preview for code, Markdown/LaTeX/HTML",
+        "license": null,
+        "updated_at": "2026-09-07T00:26:03Z",
+        "pushed_at": "2026-09-07T00:25:59Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-studio",
+        "sourceURLs": [
+          "https://github.com/omaclaren/pi-studio/tree/e04fc7aa3275b0f3f69cbbc0cbc7393a58b9f4bd",
+          "https://github.com/omaclaren/pi-studio/blob/e04fc7aa3275b0f3f69cbbc0cbc7393a58b9f4bd/README.md",
+          "https://github.com/omaclaren/pi-studio/blob/e04fc7aa3275b0f3f69cbbc0cbc7393a58b9f4bd/package.json"
+        ],
+        "evidenceLevel": "source-inspected",
+        "disposition": "comment:#345;issue:anchored-feedback",
+        "mechanism": "Bounded local-resource grants, disk revisions, followed preview; do not adopt whole runtime",
+        "manifestVersion": "0.9.60",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": ">=0.84.3"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "@plannotator/pi-extension",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "backnotprop/plannotator",
+        "sha": "9c85310151feb335cb8a8e74beae79349873382d",
+        "description": "Annotate and review coding agent plans and code diffs visually, share with your team, send feedback to agents with one click.",
+        "license": "Apache-2.0",
+        "updated_at": "2026-09-07T22:40:51Z",
+        "pushed_at": "2026-09-07T18:00:20Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "@plannotator/pi-extension",
+        "sourceURLs": [
+          "https://github.com/backnotprop/plannotator/tree/9c85310151feb335cb8a8e74beae79349873382d",
+          "https://github.com/backnotprop/plannotator/blob/9c85310151feb335cb8a8e74beae79349873382d/README.md",
+          "https://github.com/backnotprop/plannotator/blob/9c85310151feb335cb8a8e74beae79349873382d/apps/pi-extension/package.json"
+        ],
+        "evidenceLevel": "source-inspected",
+        "disposition": "issue:anchored-feedback",
+        "mechanism": "Embeddable annotation UI and explicit decision/feedback projection; keep OpenPI Plan gate",
+        "manifestVersion": "0.27.12",
+        "manifestLicense": "MIT OR Apache-2.0",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": ">=0.79.1"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "@jmfederico/pi-web",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "jmfederico/pi-web",
+        "sha": "182c5ade390fc4c31189f44f0daf518817c74e71",
+        "description": "Web UI for Pi Coding Agent that keeps sessions alive in real workspaces.",
+        "license": "MIT",
+        "updated_at": "2026-09-07T18:03:17Z",
+        "pushed_at": "2026-09-07T18:02:40Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "@jmfederico/pi-web",
+        "sourceURLs": [
+          "https://github.com/jmfederico/pi-web/tree/182c5ade390fc4c31189f44f0daf518817c74e71",
+          "https://github.com/jmfederico/pi-web/blob/182c5ade390fc4c31189f44f0daf518817c74e71/README.md",
+          "https://github.com/jmfederico/pi-web/blob/182c5ade390fc4c31189f44f0daf518817c74e71/package.json"
+        ],
+        "evidenceLevel": "source-inspected",
+        "disposition": "comment:#343",
+        "mechanism": "Native UIContext request lifecycle bridge; no extra daemon/plugin plane",
+        "manifestVersion": "1.202609.0",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-agent-core": ">=0.84.0",
+          "@earendil-works/pi-ai": ">=0.84.0",
+          "@earendil-works/pi-coding-agent": ">=0.84.0 <0.85.0 || >=0.85.1"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "pi-markdown-preview",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "omaclaren/pi-markdown-preview",
+        "sha": "273bc5af58095a76c9a02f42ab642aa2e5d5f9f9",
+        "description": "Rendered markdown + LaTeX preview for pi",
+        "license": "MIT",
+        "updated_at": "2026-09-02T14:37:27Z",
+        "pushed_at": "2026-08-31T04:15:34Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-markdown-preview",
+        "sourceURLs": [
+          "https://github.com/omaclaren/pi-markdown-preview/tree/273bc5af58095a76c9a02f42ab642aa2e5d5f9f9",
+          "https://github.com/omaclaren/pi-markdown-preview/blob/273bc5af58095a76c9a02f42ab642aa2e5d5f9f9/README.md",
+          "https://github.com/omaclaren/pi-markdown-preview/blob/273bc5af58095a76c9a02f42ab642aa2e5d5f9f9/package.json"
+        ],
+        "evidenceLevel": "source-inspected",
+        "disposition": "comment:#345",
+        "mechanism": "Bounded watcher lifecycle with last-good/error/cleanup state",
+        "manifestVersion": "0.16.0",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": "*",
+          "@earendil-works/pi-tui": "*",
+          "typebox": "*"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "pi-acp",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "svkozak/pi-acp",
+        "sha": "d1cffc047ab37a096ee70ca39cfc1de463db8d12",
+        "description": "ACP adapter for pi coding agent",
+        "license": "MIT",
+        "updated_at": "2026-09-07T18:21:05Z",
+        "pushed_at": "2026-07-30T21:58:25Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-acp",
+        "sourceURLs": [
+          "https://github.com/svkozak/pi-acp/tree/d1cffc047ab37a096ee70ca39cfc1de463db8d12",
+          "https://github.com/svkozak/pi-acp/blob/d1cffc047ab37a096ee70ca39cfc1de463db8d12/README.md",
+          "https://github.com/svkozak/pi-acp/blob/d1cffc047ab37a096ee70ca39cfc1de463db8d12/package.json"
+        ],
+        "evidenceLevel": "source-inspected-delegated",
+        "disposition": "discussion-comment:#381",
+        "mechanism": "Pi RPC to ACP and native UI cancellation; interoperability untested",
+        "manifestVersion": "0.0.33",
+        "manifestLicense": "MIT",
+        "peerDependencies": null,
+        "runtimeValidated": false,
+        "detailedEvidence": "ide-research.md"
+      }
+    },
+    {
+      "candidate": "pi-agent",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "Zetaphor/pi-vscode-extension",
+        "sha": "526df5ead8e0104ea5d176bb5e6fa25e6d75844a",
+        "description": "Pi coding agent, as a VSCode extension",
+        "license": "MIT",
+        "updated_at": "2026-09-02T12:51:12Z",
+        "pushed_at": "2026-05-08T00:51:26Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-agent",
+        "sourceURLs": [
+          "https://github.com/Zetaphor/pi-vscode-extension/tree/526df5ead8e0104ea5d176bb5e6fa25e6d75844a",
+          "https://github.com/Zetaphor/pi-vscode-extension/blob/526df5ead8e0104ea5d176bb5e6fa25e6d75844a/README.md",
+          "https://github.com/Zetaphor/pi-vscode-extension/blob/526df5ead8e0104ea5d176bb5e6fa25e6d75844a/package.json"
+        ],
+        "evidenceLevel": "source-inspected-delegated",
+        "disposition": "reference:#345",
+        "mechanism": "Native editor diff projection; approval/undo boundaries unsuitable to copy",
+        "manifestVersion": "0.1.0",
+        "manifestLicense": "MIT",
+        "peerDependencies": null,
+        "runtimeValidated": false,
+        "detailedEvidence": "ide-research.md"
+      }
+    },
+    {
+      "candidate": "@tintinweb/vscode-pi-model-chat-provider",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "tintinweb/vscode-pi-model-chat-provider",
+        "sha": "95d8de3f272a1a491e36a76bba04095d0e927563",
+        "description": "VSCode Language Model Chat Provider integration for Pi coding agent, making Pi models available in VS Code's model picker for use with GitHub Copilot Chat and any extension that consumes the vscode.lm.* APIs.",
+        "license": "MIT",
+        "updated_at": "2026-09-02T08:35:29Z",
+        "pushed_at": "2026-07-23T15:35:39Z",
+        "archived": false,
+        "default_branch": "master",
+        "name": "@tintinweb/vscode-pi-model-chat-provider",
+        "sourceURLs": [
+          "https://github.com/tintinweb/vscode-pi-model-chat-provider/tree/95d8de3f272a1a491e36a76bba04095d0e927563",
+          "https://github.com/tintinweb/vscode-pi-model-chat-provider/blob/95d8de3f272a1a491e36a76bba04095d0e927563/README.md",
+          "https://github.com/tintinweb/vscode-pi-model-chat-provider/blob/95d8de3f272a1a491e36a76bba04095d0e927563/package.json"
+        ],
+        "evidenceLevel": "source-inspected-delegated",
+        "disposition": "discussion-comment:#381",
+        "mechanism": "Avoid tool re-execution; agent-as-provider and inferred identity require caution",
+        "manifestVersion": "0.2.1",
+        "manifestLicense": "MIT",
+        "peerDependencies": null,
+        "runtimeValidated": false,
+        "detailedEvidence": "ide-research.md"
+      }
+    },
+    {
+      "candidate": "pi-nvim-context",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "omaclaren/pi-nvim-context",
+        "sha": "b3d5bc991dbe125a1173850a6a5927eb632e3e73",
+        "description": "Connect Neovim to standalone Pi coding-agent sessions for explicit context sharing and model-powered editor suggestions",
+        "license": "MIT",
+        "updated_at": "2026-09-03T10:23:58Z",
+        "pushed_at": "2026-09-03T10:24:34Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-nvim-context",
+        "sourceURLs": [
+          "https://github.com/omaclaren/pi-nvim-context/tree/b3d5bc991dbe125a1173850a6a5927eb632e3e73",
+          "https://github.com/omaclaren/pi-nvim-context/blob/b3d5bc991dbe125a1173850a6a5927eb632e3e73/README.md",
+          "https://github.com/omaclaren/pi-nvim-context/blob/b3d5bc991dbe125a1173850a6a5927eb632e3e73/package.json"
+        ],
+        "evidenceLevel": "source-inspected-delegated",
+        "disposition": "discussion-comment:#381",
+        "mechanism": "Explicit selected context prefill to Pi draft; separate optional completion lifecycle",
+        "manifestVersion": "0.3.2",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "runtimeValidated": false,
+        "detailedEvidence": "ide-research.md"
+      }
+    },
+    {
+      "candidate": "pi-btw",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "dbachelder/pi-btw",
+        "sha": "4f858102706910ee9d520a9666832f3103631b61",
+        "description": null,
+        "license": "MIT",
+        "updated_at": "2026-09-04T21:48:10Z",
+        "pushed_at": "2026-06-09T22:18:08Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-btw",
+        "sourceURLs": [
+          "https://github.com/dbachelder/pi-btw/tree/4f858102706910ee9d520a9666832f3103631b61",
+          "https://github.com/dbachelder/pi-btw/blob/4f858102706910ee9d520a9666832f3103631b61/README.md",
+          "https://github.com/dbachelder/pi-btw/blob/4f858102706910ee9d520a9666832f3103631b61/package.json"
+        ],
+        "evidenceLevel": "source-inspected",
+        "disposition": "discussion:web-native-btw",
+        "mechanism": "Side context with explicit handoff; existing OpenPI btw is TUI-only; full coding tools not safe read-only default",
+        "manifestVersion": "0.4.1",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": ">=0.74.0 <1",
+          "@earendil-works/pi-coding-agent": ">=0.74.0 <1",
+          "@earendil-works/pi-tui": ">=0.74.0 <1"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "pi-ext",
+      "researchArea": "web",
+      "evidenceTier": "source",
+      "observation": {
+        "repo": "tomsej/pi-ext",
+        "sha": "e132c44b3b06f88f7fcfb67b80c91698d8c1814f",
+        "description": "Extensions, skills, and themes for Pi coding agent",
+        "license": "MIT",
+        "updated_at": "2026-09-05T16:52:54Z",
+        "pushed_at": "2026-09-03T17:02:35Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-ext",
+        "sourceURLs": [
+          "https://github.com/tomsej/pi-ext/tree/e132c44b3b06f88f7fcfb67b80c91698d8c1814f",
+          "https://github.com/tomsej/pi-ext/blob/e132c44b3b06f88f7fcfb67b80c91698d8c1814f/README.md",
+          "https://github.com/tomsej/pi-ext/blob/e132c44b3b06f88f7fcfb67b80c91698d8c1814f/package.json"
+        ],
+        "evidenceLevel": "targeted-source-inspected",
+        "disposition": "reference:#345",
+        "mechanism": "Lazy tool renderers and diff affordances; avoid overriding runtime tools",
+        "manifestVersion": "0.1.0",
+        "manifestLicense": "MIT",
+        "peerDependencies": null,
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "mitsupi",
+      "researchArea": "web",
+      "evidenceTier": "metadata",
+      "observation": {
+        "repo": "mitsuhiko/agent-stuff",
+        "sha": "122e2994adddb113c04764c5697217dae120fcc6",
+        "description": "These are commands I use with agents, mostly Claude",
+        "license": "Apache-2.0",
+        "updated_at": "2026-09-07T17:51:47Z",
+        "pushed_at": "2026-09-06T09:49:43Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "mitsupi",
+        "sourceURLs": [
+          "https://github.com/mitsuhiko/agent-stuff/tree/122e2994adddb113c04764c5697217dae120fcc6",
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/README.md",
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/package.json"
+        ],
+        "evidenceLevel": "readme-and-manifest;delegated-safety",
+        "disposition": "merge:safety-research",
+        "mechanism": "Native notify/review primitives; consolidate other agent evidence",
+        "manifestVersion": "1.6.0",
+        "manifestLicense": null,
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": "*",
+          "@earendil-works/pi-ai": "*",
+          "@earendil-works/pi-tui": "*",
+          "typebox": "*"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "pi-interactive-shell",
+      "researchArea": "web",
+      "evidenceTier": "metadata",
+      "observation": {
+        "repo": "nicobailon/pi-interactive-shell",
+        "sha": "eedb89a9e4618d7416326d9387085a756a2125ee",
+        "description": "Pi coding agent extension that allows Pi to autonomously control interactive CLIs in an observable overlay. Full PTY emulation, no  tmux, token efficient. User can take over anytime.",
+        "license": null,
+        "updated_at": "2026-09-06T23:13:15Z",
+        "pushed_at": "2026-09-05T05:29:07Z",
+        "archived": false,
+        "default_branch": "main",
+        "name": "pi-interactive-shell",
+        "sourceURLs": [
+          "https://github.com/nicobailon/pi-interactive-shell/tree/eedb89a9e4618d7416326d9387085a756a2125ee",
+          "https://github.com/nicobailon/pi-interactive-shell/blob/eedb89a9e4618d7416326d9387085a756a2125ee/README.md",
+          "https://github.com/nicobailon/pi-interactive-shell/blob/eedb89a9e4618d7416326d9387085a756a2125ee/package.json"
+        ],
+        "evidenceLevel": "readme-and-manifest;delegated-tools",
+        "disposition": "merge:tools-research",
+        "mechanism": "Visible PTY and user takeover; external spawn/monitor is broader than OpenPI invariant",
+        "manifestVersion": "0.15.2",
+        "manifestLicense": "MIT",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": "*",
+          "@earendil-works/pi-tui": "*",
+          "typebox": "*"
+        },
+        "runtimeValidated": false
+      }
+    },
+    {
+      "candidate": "pi-web-access",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-web-access",
+        "repo": "https://github.com/nicobailon/pi-web-access",
+        "sha": "811ef82a6dd04fe4abd73fa40b079aa39ee1870d",
+        "sourceUrls": [
+          "https://github.com/nicobailon/pi-web-access/blob/811ef82a6dd04fe4abd73fa40b079aa39ee1870d/README.md",
+          "https://registry.npmjs.org/pi-web-access"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "source-inspected",
+        "disposition": "keep-independent-and-discuss-evidence",
+        "reason": "已独立用户安装，search/fetch无需复制；借鉴private bounded full-content cache + passage hash/offset；拒绝把关键词claim status当事实",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@juicesharp/rpiv-web-tools",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@juicesharp/rpiv-web-tools",
+        "repo": "https://github.com/juicesharp/rpiv-mono",
+        "sha": "338b264c1ca4fd8828cc849b632f4f7ad88d2e78",
+        "sourceUrls": [
+          "https://github.com/juicesharp/rpiv-mono/blob/338b264c1ca4fd8828cc849b632f4f7ad88d2e78/packages/rpiv-web-tools/README.md",
+          "https://registry.npmjs.org/@juicesharp/rpiv-web-tools"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "alternative-no-new-issue",
+        "reason": "单次provider override与显式配置错误可比较；与现有web-access重叠",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@ollama/pi-web-search",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@ollama/pi-web-search",
+        "repo": null,
+        "sha": null,
+        "sourceUrls": [
+          "https://pi.dev/packages/@ollama/pi-web-search",
+          "https://registry.npmjs.org/@ollama/pi-web-search"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "published-tarball-source-inspected",
+        "disposition": "hold-compatibility-and-provenance",
+        "reason": "npm0.0.5实际import旧@mariozechner和@sinclair/typebox，localhost端点硬编码；README声称仓库404，不推荐",
+        "unknowns": "公开Git repo未找到；固定npm shasum c36fd7dabda15c15e01566f4c4b3dbdf5ef34af4；Pi0.85兼容未知"
+      }
+    },
+    {
+      "candidate": "pi-smart-fetch",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "pi-smart-fetch",
+        "repo": "https://github.com/Thinkscape/agent-smart-fetch",
+        "sha": "b01116124971de44f16a4477e34c06ba2ab1d0bf",
+        "sourceUrls": [
+          "https://github.com/Thinkscape/agent-smart-fetch/blob/b01116124971de44f16a4477e34c06ba2ab1d0bf/packages/pi-smart-fetch/README.md",
+          "https://registry.npmjs.org/pi-smart-fetch"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "discussion-only-if-fetch-success-gap",
+        "reason": "下载附件、batch和metadata有价值；收益须同URL盲对照，不因TLS宣传替换当前包",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-firecrawl",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@narumitw/pi-firecrawl",
+        "repo": "https://github.com/narumiruna/pi-extensions",
+        "sha": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "sourceUrls": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-firecrawl/README.md",
+          "https://registry.npmjs.org/@narumitw/pi-firecrawl"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "reference-existing-169",
+        "reason": "按需工具、无密钥network失败诊断、有界输出spill；后端覆盖与web-access重叠",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@code-yeongyu/pi-webfetch",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@code-yeongyu/pi-webfetch",
+        "repo": "https://github.com/code-yeongyu/pi-webfetch",
+        "sha": "ee045140cbaa784eec420bc0a7bc7d7eec0b7043",
+        "sourceUrls": [
+          "https://github.com/code-yeongyu/pi-webfetch/blob/ee045140cbaa784eec420bc0a7bc7d7eec0b7043/README.md",
+          "https://registry.npmjs.org/@code-yeongyu/pi-webfetch"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "defer-duplicate",
+        "reason": "5MB/120s边界清楚，但能力重叠；scoped npm名实际404",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@code-yeongyu/pi-websearch",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@code-yeongyu/pi-websearch",
+        "repo": "https://github.com/code-yeongyu/pi-websearch",
+        "sha": "ddf5f5d21de57ee3e80f1a6f96aff21a9dd34662",
+        "sourceUrls": [
+          "https://github.com/code-yeongyu/pi-websearch/blob/ddf5f5d21de57ee3e80f1a6f96aff21a9dd34662/README.md",
+          "https://registry.npmjs.org/@code-yeongyu/pi-websearch"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "defer-fork-coupled",
+        "reason": "默认OpenAI/Anthropic假设senpi内建search，不能称vanilla Pi即插即用；scoped npm名404",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "pi-mcp-adapter",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-mcp-adapter",
+        "repo": "https://github.com/nicobailon/pi-mcp-adapter",
+        "sha": "8243eba3421e301c88c047444f34ab7d5d57163e",
+        "sourceUrls": [
+          "https://github.com/nicobailon/pi-mcp-adapter/blob/8243eba3421e301c88c047444f34ab7d5d57163e/README.md",
+          "https://registry.npmjs.org/pi-mcp-adapter"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "source-inspected",
+        "disposition": "comment-existing-169",
+        "reason": "明确的factory配置隔离、runtime注册、metadata cache、broker approval、owner abort值得真实兼容试点",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "pi-agent-browser-native",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-agent-browser-native",
+        "repo": "https://github.com/fitchmultz/pi-agent-browser-native",
+        "sha": "3d4f36904ff0bc6baa24cb1116b3fe42bbc2f443",
+        "sourceUrls": [
+          "https://github.com/fitchmultz/pi-agent-browser-native/blob/3d4f36904ff0bc6baa24cb1116b3fe42bbc2f443/README.md",
+          "https://registry.npmjs.org/pi-agent-browser-native"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "source-inspected",
+        "disposition": "comment-existing-169",
+        "reason": "强对照：managed session/ref generations、artifact existence、action dispatch/observed outcome分离、cancel/cleanup；不移植全包",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "pi-chrome",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-chrome",
+        "repo": "https://github.com/tianrendong/pi-chrome",
+        "sha": "017ff4b9a639f0b8b213e58a3f30613fc38edcc8",
+        "sourceUrls": [
+          "https://github.com/tianrendong/pi-chrome/blob/017ff4b9a639f0b8b213e58a3f30613fc38edcc8/README.md",
+          "https://registry.npmjs.org/pi-chrome"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "source-inspected",
+        "disposition": "discussion-browser-choice",
+        "reason": "已登录Chrome按Session授权+owned targets可大幅减少外部工具摩擦；真实用户profile与隔离browser取舍需讨论",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-chrome-devtools",
+      "researchArea": "tools",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@narumitw/pi-chrome-devtools",
+        "repo": "https://github.com/narumiruna/pi-extensions",
+        "sha": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "sourceUrls": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-chrome-devtools/README.md",
+          "https://registry.npmjs.org/@narumitw/pi-chrome-devtools"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "primary-docs-manifest",
+        "disposition": "reference-existing-169",
+        "reason": "CDP attach/owned launch；machine-only connection配置与page tool descriptor revalidation值得对照",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "betterwright",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "betterwright",
+        "repo": "https://github.com/BetterWright/betterwright",
+        "sha": "b9f73fc8672750b7e2d67c6dc1c988a5ab2213ba",
+        "sourceUrls": [
+          "https://github.com/BetterWright/betterwright/blob/b9f73fc8672750b7e2d67c6dc1c988a5ab2213ba/README.md",
+          "https://registry.npmjs.org/betterwright"
+        ],
+        "license": "MIT",
+        "evidenceLevel": "source-inspected",
+        "disposition": "discussion-adapter-only-not-runtime",
+        "reason": "Pi原生wrapper区分login/download/proof、清理browser；内建evidence checklist+agent_end auto-followup属于预设流程，不宜整体接管OpenPI",
+        "unknowns": "未安装、未运行，与 OpenPI 的实际组合尚未验证"
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-lsp",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "narumitw-pi-lsp",
+        "name": "@narumitw/pi-lsp",
+        "repo": "https://github.com/narumiruna/pi-extensions",
+        "sha": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "license": "MIT",
+        "evidenceLevel": "source-reviewed",
+        "disposition": "existing-issue-comment",
+        "existingIssue": 163,
+        "value": "Per-request diagnostics runner with Pi Session scope, abort/drain, explicit cleanup receipt; fix preview by default.",
+        "costUnknown": "Two eager tools; no navigation; repeated cold startup cost; child/path/server trust not validated.",
+        "sources": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-lsp/src/pi-lsp.ts"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "repositoryUrl": "https://github.com/narumiruna/pi-extensions",
+        "sourceUrls": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-lsp/src/pi-lsp.ts"
+        ],
+        "reason": "Per-request diagnostics runner with Pi Session scope, abort/drain, explicit cleanup receipt; fix preview by default.",
+        "unknowns": "Two eager tools; no navigation; repeated cold startup cost; child/path/server trust not validated."
+      }
+    },
+    {
+      "candidate": "pi-lsp-client",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "pi-lsp-client",
+        "name": "pi-lsp-client",
+        "repo": "https://github.com/code-yeongyu/pi-lsp-client",
+        "sha": "1c981dfcacc456fe4ce9f4120a2f0250b54d6844",
+        "license": "MIT",
+        "evidenceLevel": "source-reviewed",
+        "disposition": "existing-issue-comment",
+        "existingIssue": 163,
+        "value": "Refcounted root/server pool with pending waiters, cancellation-aware acquire and inspectable lifecycle.",
+        "costUnknown": "Six eager tools, automatic post-edit diagnostics, global singleton lifetime versus in-process child ownership unresolved.",
+        "sources": [
+          "https://github.com/code-yeongyu/pi-lsp-client/blob/1c981dfcacc456fe4ce9f4120a2f0250b54d6844/src/lsp/manager.ts"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "repositoryUrl": "https://github.com/code-yeongyu/pi-lsp-client",
+        "sourceUrls": [
+          "https://github.com/code-yeongyu/pi-lsp-client/blob/1c981dfcacc456fe4ce9f4120a2f0250b54d6844/src/lsp/manager.ts"
+        ],
+        "reason": "Refcounted root/server pool with pending waiters, cancellation-aware acquire and inspectable lifecycle.",
+        "unknowns": "Six eager tools, automatic post-edit diagnostics, global singleton lifetime versus in-process child ownership unresolved."
+      }
+    },
+    {
+      "candidate": "pi-lens",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "pi-lens",
+        "name": "pi-lens",
+        "repo": "https://github.com/apmantza/pi-lens",
+        "sha": "d0d853218f01be917c4f2608820584a8c167253b",
+        "license": "MIT",
+        "evidenceLevel": "source-reviewed-settings-lifecycle",
+        "disposition": "existing-issue-comment",
+        "existingIssue": 163,
+        "value": "Rich semantic navigation and diagnostic evidence; explicit one-way CLI disable.",
+        "costUnknown": "Default autoformat/autofix/tests/scanners/context remain on; project mutation override; large lifecycle surface; no measured incremental value.",
+        "sources": [
+          "https://github.com/apmantza/pi-lens/blob/d0d853218f01be917c4f2608820584a8c167253b/docs/settings.md"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "repositoryUrl": "https://github.com/apmantza/pi-lens",
+        "sourceUrls": [
+          "https://github.com/apmantza/pi-lens/blob/d0d853218f01be917c4f2608820584a8c167253b/docs/settings.md"
+        ],
+        "reason": "Rich semantic navigation and diagnostic evidence; explicit one-way CLI disable.",
+        "unknowns": "Default autoformat/autofix/tests/scanners/context remain on; project mutation override; large lifecycle surface; no measured incremental value."
+      }
+    },
+    {
+      "candidate": "@code-yeongyu/pi-ast-grep",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "pi-ast-grep-code",
+        "name": "@code-yeongyu/pi-ast-grep",
+        "repo": "https://github.com/code-yeongyu/pi-ast-grep",
+        "sha": "4a7d1beee684d96a6890e5fc55710bb63fecca85",
+        "license": "MIT",
+        "evidenceLevel": "source-reviewed",
+        "disposition": "discussion",
+        "existingIssue": null,
+        "value": "Small separate structural read/rewrite tools and bounded output; rewrite previews default.",
+        "costUnknown": "Caller AbortSignal ignored; binary auto-download without checksum unless offline; no content-bound preview approval.",
+        "sources": [
+          "https://github.com/code-yeongyu/pi-ast-grep/blob/4a7d1beee684d96a6890e5fc55710bb63fecca85/src/ast-grep/tools.ts"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "repositoryUrl": "https://github.com/code-yeongyu/pi-ast-grep",
+        "sourceUrls": [
+          "https://github.com/code-yeongyu/pi-ast-grep/blob/4a7d1beee684d96a6890e5fc55710bb63fecca85/src/ast-grep/tools.ts"
+        ],
+        "reason": "Small separate structural read/rewrite tools and bounded output; rewrite previews default.",
+        "unknowns": "Caller AbortSignal ignored; binary auto-download without checksum unless offline; no content-bound preview approval."
+      }
+    },
+    {
+      "candidate": "lsp-pi",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "lsp-pi-dap",
+        "name": "lsp-pi",
+        "repo": "https://github.com/trotsky1997/pi-lsp-extension",
+        "sha": "39d56f0cdaf4b5e77ee038f0670de14cd19e228d",
+        "license": "MIT-declared-no-LICENSE-found",
+        "evidenceLevel": "source-reviewed",
+        "disposition": "existing-issue-comment",
+        "existingIssue": 168,
+        "value": "Actual Pi-native DAP tool port with structured/text state and bounded request signal.",
+        "costUnknown": "Old Pi ^0.66; eager global DAP singleton/timer and no debug Session hooks; wide attach/evaluate/memory-write surface; license notice audit required.",
+        "sources": [
+          "https://github.com/trotsky1997/pi-lsp-extension/blob/39d56f0cdaf4b5e77ee038f0670de14cd19e228d/debug.ts"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "repositoryUrl": "https://github.com/trotsky1997/pi-lsp-extension",
+        "sourceUrls": [
+          "https://github.com/trotsky1997/pi-lsp-extension/blob/39d56f0cdaf4b5e77ee038f0670de14cd19e228d/debug.ts"
+        ],
+        "reason": "Actual Pi-native DAP tool port with structured/text state and bounded request signal.",
+        "unknowns": "Old Pi ^0.66; eager global DAP singleton/timer and no debug Session hooks; wide attach/evaluate/memory-write surface; license notice audit required."
+      }
+    },
+    {
+      "candidate": "@juvio15/pi-ast-grep",
+      "researchArea": "tools",
+      "evidenceTier": "source",
+      "observation": {
+        "id": "pi-ast-grep-juvio",
+        "name": "@juvio15/pi-ast-grep",
+        "repo": "bjoernaagaard/pi-ast-grep",
+        "sha": null,
+        "license": "Apache-2.0",
+        "evidenceLevel": "published-source-integrity-verified",
+        "disposition": "discussion",
+        "existingIssue": null,
+        "value": "Compact outline, trusted-project/native UI approval, Pi file mutation queue and preview-first headless gating.",
+        "costUnknown": "Repository URL 404; six tools and default prompt promotion; module-level preview set uses arguments not immutable content; missing Trust API allows.",
+        "sources": [
+          "https://registry.npmjs.org/@juvio15/pi-ast-grep/-/pi-ast-grep-0.4.2.tgz"
+        ],
+        "runtimeValidated": false,
+        "installed": false,
+        "version": "0.4.2",
+        "integrity": "sha512-ohv9dK3Z2dTO7N+oSuCgYKD50U9gkFTmmH5wabVXB3SJNisBxlJpNmO/4kqRkvGBV/rF44YnKjdsvcroD59atQ==",
+        "repositoryStatus": "404 on 2026-09-08",
+        "catalog": "https://pi.dev/packages/@juvio15/pi-ast-grep",
+        "sourceUrls": [
+          "https://registry.npmjs.org/@juvio15/pi-ast-grep/-/pi-ast-grep-0.4.2.tgz"
+        ],
+        "reason": "Compact outline, trusted-project/native UI approval, Pi file mutation queue and preview-first headless gating.",
+        "unknowns": "Repository URL 404; six tools and default prompt promotion; module-level preview set uses arguments not immutable content; missing Trust API allows."
+      }
+    },
+    {
+      "candidate": "pi-context-prune",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-context-prune",
+        "repo": "championswimmer/pi-context-prune",
+        "version": "1.4.0",
+        "license": "MIT",
+        "sha": "92c80e6e26e3dbfcecbe16675c9e192d4dcd85af",
+        "licenseAPI": null,
+        "archived": false,
+        "pushedAt": "2026-09-04T01:43:06Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "discussion",
+        "related": "new focused reversible-context experiment; relate #190 #313",
+        "minimumMechanism": "Model-visible result projection can shrink while native Session retains original; recover through short tool refs",
+        "compatibilityBoundary": "Separate summarizer adds cost; pruner drops toolResult but keeps tool calls; provider adapter validity must be tested; duplicated resultText in custom entries; per-record recovery cap is not total request cap",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": "*",
+          "@earendil-works/pi-tui": "*",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/championswimmer/pi-context-prune/blob/92c80e6e26e3dbfcecbe16675c9e192d4dcd85af/src/pruner.ts",
+          "https://github.com/championswimmer/pi-context-prune/blob/92c80e6e26e3dbfcecbe16675c9e192d4dcd85af/src/indexer.ts",
+          "https://github.com/championswimmer/pi-context-prune/blob/92c80e6e26e3dbfcecbe16675c9e192d4dcd85af/src/query-tool.ts",
+          "https://github.com/championswimmer/pi-context-prune/blob/92c80e6e26e3dbfcecbe16675c9e192d4dcd85af/index.ts#L300-L350"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration; repo LICENSE not found"
+      }
+    },
+    {
+      "candidate": "pi-memory",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-memory",
+        "repo": "jayzeng/pi-memory",
+        "version": "0.4.2",
+        "license": "MIT",
+        "sha": "39e6b998a2279c8fad4a2c6c64e26828c1d6023e",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-08-11T06:16:03Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "existing_issue_comment",
+        "related": "#167",
+        "minimumMechanism": "Recoverable deletion before mutation, idempotent restore and explicit stale snapshot receipts",
+        "compatibilityBoundary": "Markdown storage plus optional qmd; auto qmd embedding/setup and ambient memory injection require explicit opt-in; no adoption under current memory boundary",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": ">=0.81.1",
+          "@earendil-works/pi-coding-agent": ">=0.81.1"
+        },
+        "engines": {
+          "node": ">=22.19.0"
+        },
+        "sourceURLs": [
+          "https://github.com/jayzeng/pi-memory/blob/39e6b998a2279c8fad4a2c6c64e26828c1d6023e/index.ts#L1385-L1419",
+          "https://github.com/jayzeng/pi-memory/blob/39e6b998a2279c8fad4a2c6c64e26828c1d6023e/index.ts#L1540-L1580",
+          "https://github.com/jayzeng/pi-memory/blob/39e6b998a2279c8fad4a2c6c64e26828c1d6023e/index.ts#L2113-L2123",
+          "https://github.com/jayzeng/pi-memory/blob/39e6b998a2279c8fad4a2c6c64e26828c1d6023e/index.ts#L2175-L2195"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-hermes-memory",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-hermes-memory",
+        "repo": "chandra447/pi-hermes-memory",
+        "version": "0.9.8",
+        "license": "MIT",
+        "sha": "34c6fe49f832e6a0957ce517586158a8bdde71a4",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-09-05T03:14:11Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "existing_issue_comment",
+        "related": "#167; #349",
+        "minimumMechanism": "policy-only prompts, bounded source anchors, incremental session-file index and explicit omission",
+        "compatibilityBoundary": "Native Pi hooks and session JSONL; memory policy still carries standing instructions; automatic review/consolidation and subprocess fallback are not OpenPI defaults",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": ">=0.80.6",
+          "@earendil-works/pi-coding-agent": ">=0.80.6"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/chandra447/pi-hermes-memory/blob/34c6fe49f832e6a0957ce517586158a8bdde71a4/src/prompt-context.ts",
+          "https://github.com/chandra447/pi-hermes-memory/blob/34c6fe49f832e6a0957ce517586158a8bdde71a4/src/tools/session-search-tool.ts",
+          "https://github.com/chandra447/pi-hermes-memory/blob/34c6fe49f832e6a0957ce517586158a8bdde71a4/src/store/session-anchor-search.ts",
+          "https://github.com/chandra447/pi-hermes-memory/blob/34c6fe49f832e6a0957ce517586158a8bdde71a4/src/store/session-indexer.ts"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-sessions",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "pi-sessions",
+        "repo": "thurstonsand/pi-sessions",
+        "version": "0.12.1",
+        "license": "MIT",
+        "sha": "7197e8a609a2f33dc8a3610a6cf3a4ba3823592d",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-09-06T08:27:29Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "existing_issue_comment",
+        "related": "#349 only search subset",
+        "minimumMechanism": "Find by repo/cwd/time/file touched-vs-changed evidence; search vs reachable distinction",
+        "compatibilityBoundary": "Own handoff/messaging/subagent lifecycle overlaps OpenPI; documented child --approve widens trust; Node >=24 <26; README says Pi0.82.1 but current manifest>=0.83.0",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": ">=0.83.0",
+          "@earendil-works/pi-tui": ">=0.83.0",
+          "@earendil-works/pi-agent-core": ">=0.83.0",
+          "@earendil-works/pi-coding-agent": ">=0.83.0"
+        },
+        "engines": {
+          "node": ">=24 <26"
+        },
+        "sourceURLs": [
+          "https://github.com/thurstonsand/pi-sessions/blob/7197e8a609a2f33dc8a3610a6cf3a4ba3823592d/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "@hypabolic/pi-hypa",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@hypabolic/pi-hypa",
+        "repo": "Hypabolic/Hypa",
+        "version": "0.1.14",
+        "license": "FSL-1.1-ALv2",
+        "sha": "2678616e62f1f2a8d2ae0904f88859c3f19df860",
+        "licenseAPI": "NOASSERTION",
+        "archived": false,
+        "pushedAt": "2026-08-13T01:19:35Z",
+        "readmePath": "packages/pi-hypa/README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "already_covered",
+        "related": "2026-08-09 audit reducer section",
+        "minimumMechanism": "Deterministic reducer + original artifact and provenance",
+        "compatibilityBoundary": "Already researched; current default installs binary/shim and rewrites bash input; FSL-1.1-ALv2 declaration; no new integration recommendation",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/Hypabolic/Hypa/blob/2678616e62f1f2a8d2ae0904f88859c3f19df860/packages/pi-hypa/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "@samfp/pi-memory",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@samfp/pi-memory",
+        "repo": "samfoy/pi-memory",
+        "version": "1.5.0",
+        "license": "MIT",
+        "sha": "da1f96d55706db07f39c3767b84890e89298d5f2",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-09-02T18:35:02Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "defer",
+        "related": "existing #167",
+        "minimumMechanism": "One-shot memory injection rather than per-turn prompt rewrites",
+        "compatibilityBoundary": "LLM extraction at shutdown via child pi; confidence>=0.8 is model claim not verified truth; package name distinct from jayzeng/pi-memory",
+        "peerDependencies": {
+          "@sinclair/typebox": "*",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/samfoy/pi-memory/blob/da1f96d55706db07f39c3767b84890e89298d5f2/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-session-search",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-session-search",
+        "repo": "samfoy/pi-session-search",
+        "version": "1.4.3",
+        "license": "MIT",
+        "sha": "30acb79abc225ac1907d67eeed1eeb1079890431",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-07-04T19:55:17Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "existing_issue_comment",
+        "related": "#349",
+        "minimumMechanism": "Derived FTS5 index with stable session ID, archive move handling, query/read separation",
+        "compatibilityBoundary": "Node >=24 FTS5 dependency; auto global history index not suitable Web authority default; same-size content edits skipped; semantic embeddings optional and outside current Web scope",
+        "peerDependencies": {
+          "@sinclair/typebox": "*",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": {
+          "node": ">=24"
+        },
+        "sourceURLs": [
+          "https://github.com/samfoy/pi-session-search/blob/30acb79abc225ac1907d67eeed1eeb1079890431/src/fts-index.ts#L89-L165",
+          "https://github.com/samfoy/pi-session-search/blob/30acb79abc225ac1907d67eeed1eeb1079890431/src/session-index.ts",
+          "https://github.com/samfoy/pi-session-search/blob/30acb79abc225ac1907d67eeed1eeb1079890431/src/fts5-probe.ts",
+          "https://github.com/samfoy/pi-session-search/blob/30acb79abc225ac1907d67eeed1eeb1079890431/src/reader.ts"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-usage-widget",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "pi-usage-widget",
+        "repo": "cullendotdev/pi-usage-widget",
+        "version": "0.2.1",
+        "license": "MIT",
+        "sha": "976d3dfc11bbb1a5a2cacd05d9a00963d5e15bc7",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-06-24T12:41:47Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "defer",
+        "related": "relate #313",
+        "minimumMechanism": "Usage timeline grouped provider/model/time scopes including nested sessions",
+        "compatibilityBoundary": "Operator UI reference only; all-session scanning needs scope/dedup limits; totals are normalized recorded usage not invoices; no default widget duplication",
+        "peerDependencies": {
+          "@earendil-works/pi-tui": "*",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/cullendotdev/pi-usage-widget/blob/976d3dfc11bbb1a5a2cacd05d9a00963d5e15bc7/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "@gintasz/pi-neuralyzer",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@gintasz/pi-neuralyzer",
+        "repo": "gintasz/neuralyzer",
+        "version": "0.1.1",
+        "license": "MIT",
+        "sha": "5d5cf3ea206307f31c8592d1e79f4037c00a94d0",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-08-07T09:18:33Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "do_not_adopt",
+        "related": "related #154 and existing context-pivot",
+        "minimumMechanism": "One small reset primitive",
+        "compatibilityBoundary": "Blind first-message replay loses later corrections/constraints and repeats task; OpenPI already has Pi-native Session/context-pivot; no concrete net-new need",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": ">=0.79.0"
+        },
+        "engines": {
+          "node": ">=22"
+        },
+        "sourceURLs": [
+          "https://github.com/gintasz/neuralyzer/blob/5d5cf3ea206307f31c8592d1e79f4037c00a94d0/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "context-mode",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "context-mode",
+        "repo": "mksglu/context-mode",
+        "version": "1.0.169",
+        "license": "Elastic-2.0",
+        "sha": "33f7eb90f17bbe1b7c39aa126b989b6fa73850c8",
+        "licenseAPI": "NOASSERTION",
+        "archived": false,
+        "pushedAt": "2026-09-07T12:06:52Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "do_not_adopt",
+        "related": "related #300; prior reducer investigation",
+        "minimumMechanism": "Large raw result indexed out of context, retrieve relevant slices",
+        "compatibilityBoundary": "Broad MCP runtime and routing instructions, new context/session storage; Elastic-2.0 declaration; 98% claim not OpenPI end-to-end evidence",
+        "peerDependencies": null,
+        "engines": {
+          "node": ">=22.5.0"
+        },
+        "sourceURLs": [
+          "https://github.com/mksglu/context-mode/blob/33f7eb90f17bbe1b7c39aa126b989b6fa73850c8/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-lean-ctx",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "pi-lean-ctx",
+        "repo": "yvgude/lean-ctx",
+        "version": "3.10.1",
+        "license": "Apache-2.0",
+        "sha": "e710e85a2f4782f3d8732fcda38ae9ee7a772e05",
+        "licenseAPI": "Apache-2.0",
+        "archived": false,
+        "pushedAt": "2026-09-07T20:33:46Z",
+        "readmePath": "packages/pi-lean-ctx/README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "defer",
+        "related": "prior reducer investigation",
+        "minimumMechanism": "Local deterministic source/output reduction behind bounded tools",
+        "compatibilityBoundary": "Rust runtime plus embedded MCP bridge default; additive duplicate tool surface or replacement semantics; author marks experimental, not a performance guarantee",
+        "peerDependencies": {
+          "typebox": "^1.0.0",
+          "@earendil-works/pi-tui": "*",
+          "@earendil-works/pi-coding-agent": ">=0.74.0"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/yvgude/lean-ctx/blob/e710e85a2f4782f3d8732fcda38ae9ee7a772e05/packages/pi-lean-ctx/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-memory-honcho",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "pi-memory-honcho",
+        "repo": "acsezen/pi-memory-honcho",
+        "version": "0.3.3",
+        "license": "MIT",
+        "sha": "9439404513e7650fc215bfeb30bd03bad72bd33a",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-06-20T10:32:42Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "do_not_adopt",
+        "related": "existing #167",
+        "minimumMechanism": "Explicit profile/search/context separation and health diagnostics",
+        "compatibilityBoundary": "External/self-hosted Honcho dependency; default saveMessages upload and every-turn injection; old @mariozechner peer namespace; privacy/cost/lifecycle expand scope",
+        "peerDependencies": {
+          "@sinclair/typebox": "*",
+          "@mariozechner/pi-ai": "*",
+          "@mariozechner/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/acsezen/pi-memory-honcho/blob/9439404513e7650fc215bfeb30bd03bad72bd33a/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-fold",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-fold",
+        "repo": "shaneconner/fold",
+        "version": "4.1.6",
+        "license": "MIT",
+        "sha": "7eb2ab47e291f4616ba4850e3648724fa5600a16",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-09-06T17:35:15Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "discussion",
+        "related": "same reversible-context experiment; relate #190 #313",
+        "minimumMechanism": "Stage marks without prefix mutation, commit in batches; recover exact referenced source with total byte budget",
+        "compatibilityBoundary": "Large context controller with automatic thresholds, native compaction interception and rollback; nine-action tool; learn narrow mechanism only; README benchmark not independently reproduced",
+        "peerDependencies": {
+          "@earendil-works/pi-coding-agent": ">=0.83.0 <1"
+        },
+        "engines": {
+          "node": ">=22"
+        },
+        "sourceURLs": [
+          "https://github.com/shaneconner/fold/blob/7eb2ab47e291f4616ba4850e3648724fa5600a16/extensions/active-context.ts#L3327-L3331",
+          "https://github.com/shaneconner/fold/blob/7eb2ab47e291f4616ba4850e3648724fa5600a16/extensions/active-context.ts#L3665-L3715",
+          "https://github.com/shaneconner/fold/blob/7eb2ab47e291f4616ba4850e3648724fa5600a16/extensions/lib/folding.ts#L1414-L1478",
+          "https://github.com/shaneconner/fold/blob/7eb2ab47e291f4616ba4850e3648724fa5600a16/extensions/evidence.js#L90-L122"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-cache-graph",
+      "researchArea": "context",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-cache-graph",
+        "repo": "championswimmer/pi-cache-graph",
+        "version": "1.0.2",
+        "license": "MIT",
+        "sha": "40c5ae469c3956f7aba7fadc40f64391c1c74706",
+        "licenseAPI": null,
+        "archived": false,
+        "pushedAt": "2026-08-30T17:43:13Z",
+        "readmePath": "README.md",
+        "evidenceLevel": "fixed_source_inspection",
+        "disposition": "existing_issue_comment",
+        "related": "#156; relate #313",
+        "minimumMechanism": "Separate active branch and whole-tree usage timelines and export",
+        "compatibilityBoundary": "OpenPI already has per-turn diagnostic tracker; package counts assistant only, while OpenPI also counts toolResult/compaction/branch_summary usage; no inferred provider billing facts",
+        "peerDependencies": {
+          "@earendil-works/pi-ai": "*",
+          "@earendil-works/pi-tui": "*",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/championswimmer/pi-cache-graph/blob/40c5ae469c3956f7aba7fadc40f64391c1c74706/src/session-data.ts",
+          "https://github.com/championswimmer/pi-cache-graph/blob/40c5ae469c3956f7aba7fadc40f64391c1c74706/src/cache-math.ts",
+          "https://github.com/championswimmer/pi-cache-graph/blob/40c5ae469c3956f7aba7fadc40f64391c1c74706/src/export.ts"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration; repo LICENSE not found"
+      }
+    },
+    {
+      "candidate": "gentle-engram",
+      "researchArea": "context",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "gentle-engram",
+        "repo": "Gentleman-Programming/engram",
+        "version": "0.1.11",
+        "license": "MIT",
+        "sha": "869a3fb3aecc8353d95d2a47b108075e9398ecc1",
+        "licenseAPI": "MIT",
+        "archived": false,
+        "pushedAt": "2026-09-07T11:00:14Z",
+        "readmePath": "plugin/pi/README.md",
+        "evidenceLevel": "fixed_readme_and_manifest",
+        "disposition": "defer",
+        "related": "existing #167",
+        "minimumMechanism": "Search then bounded fetch, project-scoped curated memory",
+        "compatibilityBoundary": "Native mem tools plus HTTP/MCP service and memory protocol; additional storage/service owner; cloud sync opt-in, no need to adopt to learn mechanism",
+        "peerDependencies": {
+          "pi-mcp-adapter": ">=2.5.0",
+          "@earendil-works/pi-tui": ">=0.74.0",
+          "@earendil-works/pi-coding-agent": "*"
+        },
+        "engines": null,
+        "sourceURLs": [
+          "https://github.com/Gentleman-Programming/engram/blob/869a3fb3aecc8353d95d2a47b108075e9398ecc1/plugin/pi/README.md"
+        ],
+        "runtimeValidation": "not_run; no third-party installation or execution",
+        "licenseEvidence": "npm declaration and GitHub repository metadata"
+      }
+    },
+    {
+      "candidate": "pi-vetter",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-vetter",
+        "repo": "https://github.com/jesset/pi-vetter",
+        "sha": "7e620ca5c6a3d09dba3badaab5664d0bc5ba9568",
+        "sourceURLs": [
+          "https://github.com/jesset/pi-vetter/blob/7e620ca5c6a3d09dba3badaab5664d0bc5ba9568/package.json",
+          "https://github.com/jesset/pi-vetter/blob/7e620ca5c6a3d09dba3badaab5664d0bc5ba9568/src/core/engine.ts",
+          "https://github.com/jesset/pi-vetter/blob/7e620ca5c6a3d09dba3badaab5664d0bc5ba9568/src/core/rules.ts",
+          "https://github.com/jesset/pi-vetter/blob/7e620ca5c6a3d09dba3badaab5664d0bc5ba9568/src/install/gated-installer.ts",
+          "https://github.com/jesset/pi-vetter/blob/7e620ca5c6a3d09dba3badaab5664d0bc5ba9568/src/scanners/provenance.ts"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "discussion",
+        "mechanism": "Version/integrity/file digests; baseline-aware cache; incomplete scanner evidence caps ALLOW to ASK; typed install drift outcomes.",
+        "compatibility": "Repository manifest 0.4.1; Pi peer *, dev Pi TUI ^0.84.3; Node >=22.19. No runtime compatibility test.",
+        "license": "MIT",
+        "cost": "Registry/scanner network requests; sigstore/tar dependencies; false positives and unavailable sources must remain visible.",
+        "reason": "Good artifact-bound review receipt; OpenPI has no installer now. Discuss read-only native-package diagnostics before any integration."
+      }
+    },
+    {
+      "candidate": "pi-sandbox",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-sandbox",
+        "repo": "https://github.com/carderne/pi-sandbox",
+        "sha": "079be62e8de18665cdd9b810a879d419a00a8565",
+        "sourceURLs": [
+          "https://github.com/carderne/pi-sandbox/blob/079be62e8de18665cdd9b810a879d419a00a8565/package.json",
+          "https://github.com/carderne/pi-sandbox/blob/079be62e8de18665cdd9b810a879d419a00a8565/src/extension.ts",
+          "https://github.com/carderne/pi-sandbox/blob/079be62e8de18665cdd9b810a879d419a00a8565/src/sandbox-runtime.ts",
+          "https://github.com/carderne/pi-sandbox/blob/079be62e8de18665cdd9b810a879d419a00a8565/README.md"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "discussion",
+        "mechanism": "Wrap native Bash operations in sandbox-exec/bwrap; file tools use separate path gates; session/project/global approval scope and timeout deny.",
+        "compatibility": "0.6.7; Pi ^0.80.0 does not include OpenPI Pi 0.85.1; untested current compatibility.",
+        "license": "MIT",
+        "cost": "OS/runtime/rg requirements; external fork; network proxy; concurrent Session ownership.",
+        "reason": "True bash subprocess isolation but not whole Pi process isolation. Current init failure falls back to localBash; do not transplant as fail-closed enforcement."
+      }
+    },
+    {
+      "candidate": "@gotgenes/pi-permission-system",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@gotgenes/pi-permission-system",
+        "repo": "https://github.com/gotgenes/pi-packages",
+        "sha": "6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2",
+        "sourceURLs": [
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-system/package.json",
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-system/src/authority/delegation-envelope.ts",
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-system/src/logging/log-redaction.ts",
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-system/src/logging/log-file-permissions.ts"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "comment-existing-169-and-454",
+        "mechanism": "Bound external-authorizer grants; unknown authority surface cannot grant; structural log masking and owner-only files separate from exact human approval payload.",
+        "compatibility": "31.1.2; Pi >=0.79.0 includes 0.85.1 declaratively; dev 0.79.1; OpenPI in-process child compatibility untested.",
+        "license": "MIT",
+        "cost": "tree-sitter-bash/web-tree-sitter/zod; separate policy and forwarding lifecycle.",
+        "reason": "Update Aug-09 audit with current bounded authority/diagnostic evidence; existing #169 covers compatibility seam."
+      }
+    },
+    {
+      "candidate": "@gotgenes/pi-permission-model-judge",
+      "researchArea": "safety",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@gotgenes/pi-permission-model-judge",
+        "repo": "https://github.com/gotgenes/pi-packages",
+        "sha": "6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2",
+        "sourceURLs": [
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-model-judge/package.json",
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-permission-model-judge/README.md"
+        ],
+        "evidenceLevel": "readme-and-manifest",
+        "disposition": "hold",
+        "mechanism": "Only typo-pattern-matched external-directory asks invoke model; returns deny or defer, never allow; records reason/cost.",
+        "compatibility": "Requires permission-system >=27.0.0; no OpenPI integration test.",
+        "license": "MIT",
+        "cost": "Extra model latency/cost and configured typo patterns.",
+        "reason": "Useful example of AI advice bounded by runtime. Not a general auto-approval engine; unclear user value relative to parent correction."
+      }
+    },
+    {
+      "candidate": "@aliou/pi-guardrails",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@aliou/pi-guardrails",
+        "repo": "https://github.com/aliou/pi-guardrails",
+        "sha": "e27e4bf96e18497436c2580fd9d0548bc7e2608d",
+        "sourceURLs": [
+          "https://github.com/aliou/pi-guardrails/blob/e27e4bf96e18497436c2580fd9d0548bc7e2608d/package.json",
+          "https://github.com/aliou/pi-guardrails/blob/e27e4bf96e18497436c2580fd9d0548bc7e2608d/extensions/permission-gate/index.ts",
+          "https://github.com/aliou/pi-guardrails/blob/e27e4bf96e18497436c2580fd9d0548bc7e2608d/extensions/permission-gate/grants.ts",
+          "https://github.com/aliou/pi-guardrails/blob/e27e4bf96e18497436c2580fd9d0548bc7e2608d/extensions/permission-gate/rules.ts"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "comment-existing-343",
+        "mechanism": "Permission prompt-opened/closed events in try/finally; allow-once/session/deny/stop outcomes; no UI blocks.",
+        "compatibility": "0.17.1; Pi peer *, dev 0.79.6. Downloaded repo tree lacks some manifest targets; npm artifact not checked.",
+        "license": "MIT declared in package.json; no root LICENSE found",
+        "cost": "Settings/helper dependencies and own configuration surface.",
+        "reason": "Useful UI lifecycle evidence for #343, not replacement guard nor demonstrated package-install compatibility."
+      }
+    },
+    {
+      "candidate": "filter-output",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "filter-output",
+        "repo": "https://github.com/michalvavra/agents",
+        "sha": "c355e3c358fbef4122141ee51d8887fe273ff8b6",
+        "sourceURLs": [
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/agents/pi/extensions/filter-output.ts",
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/LICENSE",
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/package.json"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "hold",
+        "mechanism": "tool_result text redaction plus whole sensitive-file suppression.",
+        "compatibility": "Imports current Pi package namespace; no tested OpenPI or minimum Pi range.",
+        "license": "MIT-0",
+        "cost": "Prefix regex maintenance; false positives; content projection diverges from original execution.",
+        "reason": "Skips isError results and .env.example; does not protect arbitrary tools, original process, network or all persistence. Learn boundary and explicit omission receipts, not blanket safety claim."
+      }
+    },
+    {
+      "candidate": "security",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "security",
+        "repo": "https://github.com/michalvavra/agents",
+        "sha": "c355e3c358fbef4122141ee51d8887fe273ff8b6",
+        "sourceURLs": [
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/agents/pi/extensions/security.ts",
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/LICENSE",
+          "https://github.com/michalvavra/agents/blob/c355e3c358fbef4122141ee51d8887fe273ff8b6/package.json"
+        ],
+        "evidenceLevel": "readme-and-source-screened",
+        "disposition": "no-action",
+        "mechanism": "Regex dangerous-command confirmations and protected write paths; no UI denies.",
+        "compatibility": "Current Pi imports; no OpenPI integration test.",
+        "license": "MIT-0",
+        "cost": "Regex coverage and overlapping guard semantics.",
+        "reason": "OpenPI already has narrow cleanup provenance guard. Not a sandbox; broadened static denylist has unproven incremental value."
+      }
+    },
+    {
+      "candidate": "permission-pi / pi-hooks permission",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "permission-pi / pi-hooks permission",
+        "repo": "https://github.com/prateekmedia/pi-hooks",
+        "sha": "5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25",
+        "sourceURLs": [
+          "https://github.com/prateekmedia/pi-hooks/blob/5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25/permission/README.md",
+          "https://github.com/prateekmedia/pi-hooks/blob/5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25/permission/package.json",
+          "https://github.com/prateekmedia/pi-hooks/blob/5590a3bacbbdd055fb49d2ca031abe2c9f3e6c25/permission/permission-core.ts"
+        ],
+        "evidenceLevel": "readme-and-source-screened",
+        "disposition": "no-action",
+        "mechanism": "Four static permission levels and most-restrictive matched command rule; print-mode blocks insufficient authority.",
+        "compatibility": "Manifest package is permission-pi 1.0.5; Pi ^0.74.0 excludes 0.85.1.",
+        "license": "MIT",
+        "cost": "Second configuration model and shell grammar maintenance.",
+        "reason": "Coarse levels encode workflow assumptions; not orthogonal enough for direct adoption."
+      }
+    },
+    {
+      "candidate": "mitsupi",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "mitsupi / notify",
+        "repo": "https://github.com/mitsuhiko/agent-stuff",
+        "sha": "122e2994adddb113c04764c5697217dae120fcc6",
+        "sourceURLs": [
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/extensions/notify.ts",
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/package.json",
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/LICENSE"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "discussion",
+        "mechanism": "agent_end triggers bounded plain-text OSC777 notification, stripping terminal/control sequences.",
+        "compatibility": "mitsupi1.6.0; Pi peer *; supported terminal-specific OSC777; no browser Notifications API.",
+        "license": "Apache-2.0",
+        "cost": "Notification permission/privacy/duplicate events for parent+children; limited terminal support.",
+        "reason": "Worth discussing attention delivery, but agent_end cannot imply Goal/Workflow success and summary may expose private text."
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-caffeinate",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@narumitw/pi-caffeinate",
+        "repo": "https://github.com/narumiruna/pi-extensions",
+        "sha": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "sourceURLs": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-caffeinate/package.json",
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-caffeinate/src/caffeinate.ts",
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-caffeinate/README.md"
+        ],
+        "evidenceLevel": "source-reviewed",
+        "disposition": "discussion",
+        "mechanism": "Acquire inhibitor on agent_start; active-turn counter; release on agent_end/shutdown; generation/abort guards asynchronous D-Bus startup and settings rollback.",
+        "compatibility": "0.49.7; Pi peer *, dev0.85.0; built dist entry and Pi TUI kit dependency; no OpenPI child test.",
+        "license": "MIT",
+        "cost": "Cross-platform OS processes/D-Bus; system/display power policy; module-level state in source.",
+        "reason": "Useful long-task QoL but process-wide/shared module state and background child ownership need proving before recommending."
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-retry",
+      "researchArea": "safety",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@narumitw/pi-retry",
+        "repo": "https://github.com/narumiruna/pi-extensions",
+        "sha": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "sourceURLs": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/deprecated/pi-retry/README.md",
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/deprecated/pi-retry/package.json"
+        ],
+        "evidenceLevel": "readme-and-manifest",
+        "disposition": "no-action-deprecated",
+        "mechanism": "Former provider-specific retry classification and stall watchdog.",
+        "compatibility": "Current repository explicitly deprecates it: Pi owns provider retry, websocket renewal and timeout settings.",
+        "license": "MIT",
+        "cost": "Duplicate watchdog may abort valid long streams.",
+        "reason": "Important discovery correction: popular listing is stale here; do not add redundant retry layer."
+      }
+    },
+    {
+      "candidate": "pi-verdict",
+      "researchArea": "safety",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-verdict",
+        "repo": "https://github.com/jesset/pi-verdict",
+        "sha": "1386a9521681b6f8e4ef1a445d6f13beb0212d57",
+        "sourceURLs": [
+          "https://github.com/jesset/pi-verdict/blob/1386a9521681b6f8e4ef1a445d6f13beb0212d57/package.json",
+          "https://github.com/jesset/pi-verdict/blob/1386a9521681b6f8e4ef1a445d6f13beb0212d57/README.md",
+          "https://github.com/jesset/pi-verdict/blob/1386a9521681b6f8e4ef1a445d6f13beb0212d57/docs/security-principles.md",
+          "https://github.com/jesset/pi-verdict/blob/1386a9521681b6f8e4ef1a445d6f13beb0212d57/extensions/pi-verdict.ts"
+        ],
+        "evidenceLevel": "source-screened",
+        "disposition": "discussion-grouped-authority",
+        "mechanism": "Deterministic deny floor then contextual model allow/ask/deny; noninteractive ask denies; explicit judgment-not-proof boundary.",
+        "compatibility": "Requires Pi >=0.84 in README; no current OpenPI integration test.",
+        "license": "MIT",
+        "cost": "Model call for uncertain tool calls; 25s timeout; prompt-policy risk and self-protection complexity.",
+        "reason": "Not a default dependency. Compare deny-only advisory option; authorization remains runtime/human-owned."
+      }
+    },
+    {
+      "candidate": "@czottmann/pi-automode",
+      "researchArea": "safety",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@czottmann/pi-automode",
+        "repo": "https://github.com/czottmann/pi-automode",
+        "sha": "d556f006bd705d4eddc5c49ce4fcc8d9b82c1657",
+        "sourceURLs": [
+          "https://github.com/czottmann/pi-automode/blob/d556f006bd705d4eddc5c49ce4fcc8d9b82c1657/package.json",
+          "https://github.com/czottmann/pi-automode/blob/d556f006bd705d4eddc5c49ce4fcc8d9b82c1657/README.md"
+        ],
+        "evidenceLevel": "readme-and-manifest",
+        "disposition": "discussion-grouped-authority",
+        "mechanism": "Deterministic guard then context classifier; read-only inspect surface backed by enforced runtime state and source-identity exemption.",
+        "compatibility": "1.16.0; Pi peer *, dev^0.84.1; declared Pi/OMP18 support, no OpenPI integration test.",
+        "license": "MIT",
+        "cost": "unbash and classifier latency/cost; another safety policy.",
+        "reason": "Read-only diagnostics worth learning; not sandbox and does not guard user ! commands."
+      }
+    },
+    {
+      "candidate": "cc-safety-net",
+      "researchArea": "safety",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "cc-safety-net",
+        "repo": "https://github.com/kenryu42/cc-safety-net",
+        "sha": "10326fac666de7ca515e3492820242eadc316916",
+        "sourceURLs": [
+          "https://github.com/kenryu42/cc-safety-net/blob/10326fac666de7ca515e3492820242eadc316916/package.json",
+          "https://github.com/kenryu42/cc-safety-net/blob/10326fac666de7ca515e3492820242eadc316916/README.md"
+        ],
+        "evidenceLevel": "readme-and-manifest",
+        "disposition": "no-action",
+        "mechanism": "Multi-agent-host pre-execution destructive-command and sensitive-file guard with Pi dist adapter.",
+        "compatibility": "2.3.3; pi.extensions dist/pi/index.js; no declared Pi peer minimum; no OpenPI acceptance.",
+        "license": "MIT",
+        "cost": "Cross-host adapters and rule maintenance; overlapping cleanup guards.",
+        "reason": "Broad host coverage is not evidence of complete OS mediation; current narrow OpenPI guard already owned."
+      }
+    },
+    {
+      "candidate": "@trim21/personal-pi-extensions",
+      "researchArea": "safety",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@trim21/personal-pi-extensions",
+        "repo": "https://github.com/trim21/pi-extensions",
+        "sha": "79d7f01c4b4c42a6125e368eefcee66c21992058",
+        "sourceURLs": [
+          "https://github.com/trim21/pi-extensions/blob/79d7f01c4b4c42a6125e368eefcee66c21992058/package.json",
+          "https://github.com/trim21/pi-extensions/blob/79d7f01c4b4c42a6125e368eefcee66c21992058/README.md"
+        ],
+        "evidenceLevel": "readme-and-manifest",
+        "disposition": "hold",
+        "mechanism": "Collection advertises bwrap/workspace guard alongside model adapters and tools.",
+        "compatibility": "0.1.0 manifest; Pi >=0.84.1, Node>=24.14; bwrap not in fetched package pi.extensions manifest.",
+        "license": "unknown: no license field or root LICENSE observed",
+        "cost": "Large collection, external binary and provider stack, license unclear.",
+        "reason": "Do not recommend whole bundle; advertised feature and shipped activation contract must be checked separately."
+      }
+    },
+    {
+      "candidate": "pi-subagents",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-subagents",
+        "repo": "nicobailon/pi-subagents",
+        "commit": "56f247ac86169cfffa1af9a4c07997c33804bf9a",
+        "sourceURLs": [
+          "https://github.com/nicobailon/pi-subagents/blob/56f247ac86169cfffa1af9a4c07997c33804bf9a/src/runs/background/notify.ts",
+          "https://github.com/nicobailon/pi-subagents/blob/56f247ac86169cfffa1af9a4c07997c33804bf9a/src/runs/background/result-delivery-ownership.ts",
+          "https://github.com/nicobailon/pi-subagents/blob/56f247ac86169cfffa1af9a4c07997c33804bf9a/src/runs/shared/spawn-budget.ts",
+          "https://github.com/nicobailon/pi-subagents/blob/56f247ac86169cfffa1af9a4c07997c33804bf9a/src/api/background-work.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "comment-existing-160",
+        "license": "MIT",
+        "version": "0.66.0",
+        "compatibility": "Pi coding-agent *; pi-ai >=0.80.0; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "@tintinweb/pi-subagents",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@tintinweb/pi-subagents",
+        "repo": "tintinweb/pi-subagents",
+        "commit": "e955e29c51b7a6cce37e1108cd2d6c57a77e151c",
+        "sourceURLs": [
+          "https://github.com/tintinweb/pi-subagents/blob/e955e29c51b7a6cce37e1108cd2d6c57a77e151c/src/agent-manager.ts",
+          "https://github.com/tintinweb/pi-subagents/blob/e955e29c51b7a6cce37e1108cd2d6c57a77e151c/src/workflow/journal.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "no-new-issue-overlap",
+        "license": "MIT",
+        "version": "0.19.0",
+        "compatibility": "Pi peers >=0.84.0; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "pi-background-tasks",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-background-tasks",
+        "repo": "ismailsaleekh/pi-background-tasks",
+        "commit": "14aa4ef382952f073bd4d540f57d6e8e3c2789a2",
+        "sourceURLs": [
+          "https://github.com/ismailsaleekh/pi-background-tasks/blob/14aa4ef382952f073bd4d540f57d6e8e3c2789a2/src/core/delegate/result-package.ts",
+          "https://github.com/ismailsaleekh/pi-background-tasks/blob/14aa4ef382952f073bd4d540f57d6e8e3c2789a2/src/core/durable-fs.ts",
+          "https://github.com/ismailsaleekh/pi-background-tasks/blob/14aa4ef382952f073bd4d540f57d6e8e3c2789a2/src/core/registry.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "comment-existing-160-196",
+        "license": "ISC",
+        "version": "2.5.0",
+        "compatibility": "Node >=22.19.0; Pi peers ^0.81.1 || ^0.82.1 || ^0.83.0 || ^0.84.0 exclude 0.85.1"
+      }
+    },
+    {
+      "candidate": "@aliou/pi-processes",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@aliou/pi-processes",
+        "repo": "aliou/pi-processes",
+        "commit": "f155117d6a0cb644b316dbf99676956400527754",
+        "sourceURLs": [
+          "https://github.com/aliou/pi-processes/blob/f155117d6a0cb644b316dbf99676956400527754/extensions/processes/notifications/service.ts",
+          "https://github.com/aliou/pi-processes/blob/f155117d6a0cb644b316dbf99676956400527754/extensions/processes/notifications/registry.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "no-new-issue-overlap",
+        "license": "MIT",
+        "version": "0.12.0",
+        "compatibility": "Node >=22.19.0; Pi peers *; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "pi-interactive-subagents",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-interactive-subagents",
+        "repo": "HazAT/pi-interactive-subagents",
+        "commit": "c100577ebf7393a11d098ad9810ec6c269dcfc30",
+        "sourceURLs": [
+          "https://github.com/HazAT/pi-interactive-subagents/blob/c100577ebf7393a11d098ad9810ec6c269dcfc30/pi-extension/subagents/activity.ts",
+          "https://github.com/HazAT/pi-interactive-subagents/blob/c100577ebf7393a11d098ad9810ec6c269dcfc30/pi-extension/subagents/status.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "research-reference-existing-196",
+        "license": "MIT",
+        "version": "3.7.2",
+        "compatibility": "Legacy @mariozechner Pi peers; requires cmux/tmux/zellij/WezTerm; no current-runtime test"
+      }
+    },
+    {
+      "candidate": "@quintinshaw/pi-dynamic-workflows",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@quintinshaw/pi-dynamic-workflows",
+        "repo": "QuintinShaw/pi-dynamic-workflows",
+        "commit": "1c0f7462aa8a007afb8112f073887590a57ea82d",
+        "sourceURLs": [
+          "https://github.com/QuintinShaw/pi-dynamic-workflows/blob/1c0f7462aa8a007afb8112f073887590a57ea82d/src/worktree.ts",
+          "https://github.com/QuintinShaw/pi-dynamic-workflows/blob/1c0f7462aa8a007afb8112f073887590a57ea82d/src/usage-limit-scheduler.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "reject-direct-adoption-refresh",
+        "license": "MIT",
+        "version": "3.10.1",
+        "compatibility": "Pi coding-agent >=0.80.8; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "pi-agent-bus",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-agent-bus",
+        "repo": "kylebrodeur/pi-agent-bus",
+        "commit": "135706d797247efeca377c4637d8f94f8857d80b",
+        "sourceURLs": [
+          "https://github.com/kylebrodeur/pi-agent-bus/blob/135706d797247efeca377c4637d8f94f8857d80b/packages/pi-agent-bus-node/src/LLMProvider.ts",
+          "https://github.com/kylebrodeur/pi-agent-bus/blob/135706d797247efeca377c4637d8f94f8857d80b/packages/pi-agent-bus-node/src/Agent.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "reject-second-agent-runtime",
+        "license": "MIT",
+        "version": "0.1.7",
+        "compatibility": "No Pi compatibility declaration in root; abstract provider plus dummy implementation"
+      }
+    },
+    {
+      "candidate": "@gintasz/pi-neuralyzer",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@gintasz/pi-neuralyzer",
+        "repo": "gintasz/neuralyzer",
+        "commit": "5d5cf3ea206307f31c8592d1e79f4037c00a94d0",
+        "sourceURLs": [
+          "https://github.com/gintasz/neuralyzer/blob/5d5cf3ea206307f31c8592d1e79f4037c00a94d0/packages/pi-neuralyzer/src/index.ts",
+          "https://github.com/gintasz/neuralyzer/blob/5d5cf3ea206307f31c8592d1e79f4037c00a94d0/packages/pi-neuralyzer/package.json"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "research-reference-existing-154",
+        "license": "MIT",
+        "version": "0.1.1",
+        "compatibility": "Node >=22; Pi >=0.79.0; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "pi-crew",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-crew",
+        "repo": "baphuongna/pi-crew",
+        "commit": "627f59c9c6891eb9c78307ca17d24907bd5dae79",
+        "sourceURLs": [
+          "https://github.com/baphuongna/pi-crew/blob/627f59c9c6891eb9c78307ca17d24907bd5dae79/src/workflows/topology-analyzer.ts",
+          "https://github.com/baphuongna/pi-crew/blob/627f59c9c6891eb9c78307ca17d24907bd5dae79/src/workflows/preflight-validator.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "research-reference-existing-197-381",
+        "license": "MIT",
+        "version": "0.10.3",
+        "compatibility": "Node >=22; Pi peers *; own workflow and broker; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "@gotgenes/pi-subagents",
+      "researchArea": "execution",
+      "evidenceTier": "metadata",
+      "observation": {
+        "name": "@gotgenes/pi-subagents",
+        "repo": "gotgenes/pi-packages",
+        "commit": "6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2",
+        "sourceURLs": [
+          "https://github.com/gotgenes/pi-packages/blob/6ee70e9f4571c2ae96b50e6105ad887c20d8d0a2/packages/pi-subagents/README.md",
+          "https://registry.npmjs.org/@gotgenes%2fpi-subagents/latest"
+        ],
+        "evidenceLevel": "readme-and-npm-metadata",
+        "disposition": "no-new-issue-overlap",
+        "license": "MIT",
+        "version": "21.4.5",
+        "compatibility": "Pi coding-agent >=0.81.0; not runtime-tested",
+        "identityCaveat": "pi.dev repo link points to stale standalone gotgenes/pi-subagents 1.0.0; npm metadata locates current monorepo"
+      }
+    },
+    {
+      "candidate": "@narumitw/pi-worktree",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "@narumitw/pi-worktree",
+        "repo": "narumiruna/pi-extensions",
+        "commit": "09d0f4d4d8d31f506e6f2478a0060be5f5c31c09",
+        "sourceURLs": [
+          "https://github.com/narumiruna/pi-extensions/blob/09d0f4d4d8d31f506e6f2478a0060be5f5c31c09/packages/pi-worktree/src/git.ts"
+        ],
+        "evidenceLevel": "source-read-and-openpi-production-reproduced",
+        "disposition": "new-P1-issue",
+        "license": "MIT",
+        "version": "0.51.7",
+        "compatibility": "Pi peers *; dev 0.85.0"
+      }
+    },
+    {
+      "candidate": "mitsupi",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "mitsupi review",
+        "repo": "mitsuhiko/agent-stuff",
+        "commit": "122e2994adddb113c04764c5697217dae120fcc6",
+        "sourceURLs": [
+          "https://github.com/mitsuhiko/agent-stuff/blob/122e2994adddb113c04764c5697217dae120fcc6/extensions/review.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "comment-existing-154",
+        "license": "Apache-2.0",
+        "version": "1.6.0",
+        "compatibility": "Pi peer *; requires UI"
+      }
+    },
+    {
+      "candidate": "pi-ext",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-ext review",
+        "repo": "tomsej/pi-ext",
+        "commit": "e132c44b3b06f88f7fcfb67b80c91698d8c1814f",
+        "sourceURLs": [
+          "https://github.com/tomsej/pi-ext/blob/e132c44b3b06f88f7fcfb67b80c91698d8c1814f/extensions/review/review.ts"
+        ],
+        "evidenceLevel": "source-read",
+        "disposition": "no-new-issue-derived-overlap",
+        "license": "Apache-2.0 (component); MIT (root)",
+        "version": "private 0.1.0",
+        "compatibility": "Pi ^0.82.0; legacy alias ^0.80.3; not runtime-tested"
+      }
+    },
+    {
+      "candidate": "pi-worktree-extension",
+      "researchArea": "execution",
+      "evidenceTier": "source",
+      "observation": {
+        "name": "pi-worktree-extension",
+        "repo": "AjayPoshak/pi-worktree-extension",
+        "commit": "50df0b2fb049e556758e6fb6b22d0f0016ff8b9b",
+        "sourceURLs": [
+          "https://github.com/AjayPoshak/pi-worktree-extension/blob/50df0b2fb049e556758e6fb6b22d0f0016ff8b9b/src/worktrees.ts"
+        ],
+        "evidenceLevel": "targeted-source-read",
+        "disposition": "observe-no-new-issue",
+        "license": "MIT",
+        "version": "1.0.7",
+        "compatibility": "Node >=22.19; Pi peers *; not runtime-tested"
+      }
+    }
+  ],
+  "relatedPullRequest": "https://github.com/openpi-dev/openpi/pull/479",
+  "publicationReceipts": [
+    {
+      "kind": "issue",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/472",
+      "number": 472,
+      "title": "bug(worktree): 自动回收会删除被 index flags 隐藏的未提交修改 [P1]"
+    },
+    {
+      "kind": "issue",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/473",
+      "number": 473,
+      "title": "feat(web): 支持从回答选区生成带来源和内容版本的反馈草稿"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 474,
+      "title": "可恢复的工具结果折叠：怎样验证它比原生 compaction 更有价值？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/474"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 475,
+      "title": "社区包风险收据：只读评估应由独立插件、Skill 还是 OpenPI 承担？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/475"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 476,
+      "title": "长任务离开屏幕后：通知与保持唤醒应绑定哪个执行事实？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/476"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 477,
+      "title": "Web 侧问：怎样呈现已有 Pi-native /btw 而不污染主上下文？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/477"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 478,
+      "title": "外部检索的来源展示：何时值得增加可回查原文的证据入口？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/478"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/343#issuecomment-5577485330",
+      "number": 343,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/345#issuecomment-5577485973",
+      "number": 345,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/169#issuecomment-5577486546",
+      "number": 169,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/163#issuecomment-5577486898",
+      "number": 163,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/168#issuecomment-5577487575",
+      "number": 168,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/349#issuecomment-5577488155",
+      "number": 349,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/156#issuecomment-5577488531",
+      "number": 156,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/167#issuecomment-5577488981",
+      "number": 167,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/160#issuecomment-5577489557",
+      "number": 160,
+      "targetState": "closed"
+    },
+    {
+      "kind": "discussion-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/discussions/381#discussioncomment-18339579",
+      "number": 381
+    }
+  ]
+}
