@@ -487,6 +487,7 @@ export class WebHost {
       });
       this.publish("session_created", {
         workspacePath,
+        sessionId: result.sessionId,
         commandId: body.commandId,
         ...(result.sessionPath ? { sessionPath: result.sessionPath } : {}),
       });

@@ -32,7 +32,10 @@ function runtimeFor(
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt: async () => ({ pendingFollowUps: 0 }),
-    newSession: async () => ({ cancelled: false }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: sessionManager.getSessionId(),
+    }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
     setModel: async () => {

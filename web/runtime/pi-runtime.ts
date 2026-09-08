@@ -715,13 +715,16 @@ export class PiWebRuntime implements WebRuntimeController {
     );
     await this.activateCandidate(replacement.runtime);
     this.hasSelectedWorkspace = true;
+    const sessionId = this.runtime.session.sessionManager.getSessionId();
     const sessionPath = this.runtime.session.sessionManager.getSessionFile();
     this.emit("session_switched", {
+      sessionId,
       ...(options?.commandId ? { commandId: options.commandId } : {}),
       ...(sessionPath ? { sessionPath } : {}),
     });
     return {
       cancelled: false,
+      sessionId,
       ...(options?.commandId ? { commandId: options.commandId } : {}),
       ...(sessionPath ? { sessionPath } : {}),
     };

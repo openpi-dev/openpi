@@ -52,6 +52,13 @@ export interface SessionMutationResult {
   sessionPath?: string;
 }
 
+export interface SessionCreationResult {
+  cancelled: boolean;
+  commandId: string;
+  sessionId: string;
+  sessionPath?: string;
+}
+
 export interface WorkspaceSelectionResult {
   cancelled?: boolean;
   path?: string;
@@ -138,7 +145,7 @@ export class WebClient {
   }
 
   createSession(workspacePath: string, commandId: string) {
-    return this.request<SessionMutationResult>("/api/sessions", {
+    return this.request<SessionCreationResult>("/api/sessions", {
       method: "POST",
       body: JSON.stringify({ workspacePath, commandId }),
     });

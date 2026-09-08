@@ -851,3 +851,90 @@ test("workspace selection survives refresh and creates the exact native Session 
     await rm(workspace, { recursive: true, force: true });
   }
 });
+
+test("a delayed creation receipt never retargets the first prompt to another tab's Session", async ({
+  page,
+}) => {
+  const workspaceA = await mkdtemp(join(tmpdir(), "openpi-issue-466-a-"));
+  const workspaceB = await mkdtemp(join(tmpdir(), "openpi-issue-466-b-"));
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: "http://127.0.0.1:57109",
+  };
+  const promptRequests: unknown[] = [];
+  let createdSessionId: string | undefined;
+  let externalSessionId: string | undefined;
+  try {
+    const importedA = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspaceA },
+    });
+    const importedB = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspaceB },
+    });
+    expect(importedA.status()).toBe(201);
+    expect(importedB.status()).toBe(201);
+    const { path: canonicalA } = await importedA.json();
+    const { path: canonicalB } = await importedB.json();
+    const workspaceNameA = canonicalA.split("/").at(-1);
+
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/prompt", async (route) => {
+      promptRequests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 202,
+        json: {
+          id: route.request().postDataJSON().commandId,
+          accepted: true,
+        },
+      });
+    });
+    await page.route("**/api/sessions", async (route) => {
+      const createdResponse = await route.fetch();
+      const created = await createdResponse.json();
+      createdSessionId = created.sessionId;
+      const external = await page.request.post("/api/sessions", {
+        headers,
+        data: {
+          workspacePath: canonicalB,
+          commandId: "external-tab-switch",
+        },
+      });
+      expect(external.status()).toBe(201);
+      externalSessionId = (await external.json()).sessionId;
+      await route.fulfill({ response: createdResponse, json: created });
+    });
+
+    await openWorkbench(page);
+    const picker = page.locator(".workspace-picker");
+    await picker.click();
+    await page
+      .getByRole("menuitem", { name: workspaceNameA, exact: true })
+      .click();
+    const composer = page.getByRole("textbox", { name: "描述任务" });
+    await composer.fill("Only edit repository A");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+
+    await expect(page.locator(".notice")).toContainText("no longer active");
+    await expect(composer).toHaveValue("Only edit repository A");
+    expect(promptRequests).toEqual([]);
+    expect(createdSessionId).toEqual(expect.any(String));
+    expect(externalSessionId).toEqual(expect.any(String));
+    expect(createdSessionId).not.toBe(externalSessionId);
+    const snapshot = await page.request.get("/api/snapshot", { headers });
+    expect((await snapshot.json()).currentSessionId).toBe(externalSessionId);
+  } finally {
+    await page.close();
+    await Promise.all(
+      [workspaceA, workspaceB].map((path) =>
+        rm(path, { recursive: true, force: true }),
+      ),
+    );
+  }
+});

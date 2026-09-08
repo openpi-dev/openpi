@@ -97,6 +97,7 @@ export interface WebSessionCreationOptions {
 export interface WebSessionCreationResult {
   cancelled: boolean;
   commandId?: string;
+  sessionId: string;
   sessionPath?: string;
 }
 
