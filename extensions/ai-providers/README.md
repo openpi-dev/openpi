@@ -46,9 +46,14 @@ interactive prompt is converted into an actual image attachment (up to 10 MiB)
 before the request is sent. The absolute path is not exposed to the model.
 
 When Pi supplies tools, the provider directs Cursor to the advertised Pi MCP
-catalog. Without tools it uses an explicit chat-only rule. Partial tool previews
-and approval-only probes never execute a tool; unknown or malformed invocations
-fail explicitly. Local HTTP/2 tests exercise a normal Pi tool lifecycle and
+catalog. Without tools it uses an explicit chat-only rule. Tool previews and
+approval-only probes never execute a tool. With Pi tools available, unsupported
+native execution requests receive an in-band protocol rejection so the model
+can correct its choice; more than three such requests in one provider call fail
+explicitly. Malformed or unadvertised Pi MCP invocations still fail closed.
+Only a caller abort signal is classified as cancellation; server cancellation
+and connection resets remain transport failures with their original errors.
+Local HTTP/2 tests exercise native rejection recovery, a normal Pi tool lifecycle and
 result replay, but account/model-specific compatibility still requires a live
 smoke test. Cursor's native execution protocol is intentionally not enabled.
 
