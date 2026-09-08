@@ -37,7 +37,8 @@ interface ComposerProps {
 }
 
 function modelIdentity(model: WebModelSummary) {
-  return `${model.label} (${model.provider}/${model.id})`;
+  const identity = `${model.provider}/${model.id}`;
+  return model.label === identity ? identity : `${model.label} (${identity})`;
 }
 
 export function Composer(props: ComposerProps) {

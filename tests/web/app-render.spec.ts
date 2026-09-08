@@ -686,3 +686,40 @@ it("shows complete model identities before workspace selection", () => {
     ).disabled,
   ).toBe(true);
 });
+
+it("does not repeat a provider identity used as the fallback model label", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-alpha",
+      id: "model-a",
+      label: "provider-alpha/model-a",
+      name: "",
+      current: true,
+    },
+  ];
+  const store = createWebStore();
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp/ws",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      actions: store.getState().actions,
+    }),
+  );
+
+  expect(
+    screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
+  ).toBe("provider-alpha/model-a");
+  expect(
+    screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
+  ).toBeNull();
+});

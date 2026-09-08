@@ -708,3 +708,70 @@ test("model picker distinguishes same-named models before choosing a directory",
   );
   expect(modelWrites).toBe(0);
 });
+
+test("same-named model selection sends the exact identity for an active Session", async ({
+  page,
+}) => {
+  let selectedIdentity = "provider-alpha/one";
+  const writes: Array<{
+    provider: string;
+    modelId: string;
+    sessionId: string;
+  }> = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.runtime.status = "idle";
+    snapshot.models = [
+      {
+        provider: "provider-alpha",
+        id: "one",
+        name: "Shared model",
+        label: "Shared model",
+        current: selectedIdentity === "provider-alpha/one",
+      },
+      {
+        provider: "provider-beta",
+        id: "two",
+        name: "Shared model",
+        label: "Shared model",
+        current: selectedIdentity === "provider-beta/two",
+      },
+    ];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/model", async (route) => {
+    const body = route.request().postDataJSON();
+    writes.push(body);
+    selectedIdentity = `${body.provider}/${body.modelId}`;
+    await route.fulfill({
+      status: 200,
+      json: {
+        provider: body.provider,
+        id: body.modelId,
+        name: "Shared model",
+        label: "Shared model",
+        current: true,
+      },
+    });
+  });
+  await openWorkbench(page);
+
+  await page
+    .getByRole("button", { name: "Shared model (provider-alpha/one)" })
+    .click();
+  await page
+    .getByRole("menuitem", { name: "Shared model (provider-beta/two)" })
+    .click();
+
+  await expect(
+    page.getByRole("button", { name: "Shared model (provider-beta/two)" }),
+  ).toBeEnabled();
+  expect(writes).toEqual([
+    {
+      provider: "provider-beta",
+      modelId: "two",
+      sessionId: expect.any(String),
+    },
+  ]);
+});
