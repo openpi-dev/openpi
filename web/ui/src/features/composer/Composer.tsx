@@ -6,10 +6,10 @@ import {
   Folder,
   Plus,
   Send,
-  Square,
   SlidersHorizontal,
+  Square,
 } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
@@ -28,6 +28,7 @@ interface ComposerProps {
   selectedWorkspace: string | null;
   sessionSwitching: boolean;
   promptAdmissionPending: boolean;
+  promptAdmissionRecovery?: WebStoreState["promptAdmissionRecovery"];
   liveRunning: boolean;
   landing: boolean;
   actions: WebStoreActions;
@@ -68,6 +69,20 @@ export function Composer(props: ComposerProps) {
   const disabled =
     props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
 
+  useEffect(() => {
+    const recovery = props.promptAdmissionRecovery;
+    if (!recovery) return;
+    setPrompt((current) => current || recovery.content);
+  }, [props.promptAdmissionRecovery]);
+
+  const clearPrompt = () => {
+    setPrompt("");
+    if (textarea.current) {
+      textarea.current.style.height = "auto";
+      textarea.current.style.overflowY = "hidden";
+    }
+  };
+
   const resize = (element: HTMLTextAreaElement) => {
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
@@ -81,12 +96,12 @@ export function Composer(props: ComposerProps) {
       return;
     }
     if (await props.actions.sendPrompt(prompt)) {
-      setPrompt("");
-      if (textarea.current) {
-        textarea.current.style.height = "auto";
-        textarea.current.style.overflowY = "hidden";
-      }
+      clearPrompt();
     }
+  };
+
+  const sendAsNew = async () => {
+    if (await props.actions.sendPromptAsNew(prompt)) clearPrompt();
   };
 
   const workspaceItems = [
@@ -182,6 +197,40 @@ export function Composer(props: ComposerProps) {
             hasChevron
           />
         </div>
+      )}
+      {props.promptAdmissionRecovery && (
+        <section className="prompt-recovery" role="alert">
+          <div>
+            <strong>{t("promptAdmissionUnknown")}</strong>
+            <span>{t("promptAdmissionUnknownDetail")}</span>
+          </div>
+          <div className="prompt-recovery-actions">
+            <button
+              type="button"
+              disabled={props.promptAdmissionRecovery.checking}
+              onClick={() => void props.actions.refreshPromptAdmission()}
+            >
+              {props.promptAdmissionRecovery.checking
+                ? t("checkingAdmission")
+                : t("checkAdmission")}
+            </button>
+            <button
+              type="button"
+              disabled={props.promptAdmissionRecovery.checking}
+              onClick={props.actions.abandonPromptAdmission}
+            >
+              {t("abandonAdmission")}
+            </button>
+            <button
+              type="button"
+              className="primary"
+              disabled={props.promptAdmissionRecovery.checking}
+              onClick={() => void sendAsNew()}
+            >
+              {t("sendAsNew")}
+            </button>
+          </div>
+        </section>
       )}
       <form
         className={`composer ${props.selectedWorkspace ? "" : "dormant"}`}
@@ -286,6 +335,7 @@ export function Composer(props: ComposerProps) {
                   !canCompose ||
                   !props.selectedWorkspace ||
                   props.promptAdmissionPending ||
+                  Boolean(props.promptAdmissionRecovery) ||
                   !prompt.trim()
                 }
               >

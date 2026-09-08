@@ -11,8 +11,8 @@ import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
-import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { App } from "../../web/ui/src/app/App.tsx";
+import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { OpenPiLogo } from "../../web/ui/src/components/OpenPiLogo.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
@@ -783,4 +783,44 @@ it("does not repeat a provider identity used as the fallback model label", () =>
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
+});
+
+it("renders explicit choices for an unknown prompt admission", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const store = createWebStore();
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      promptAdmissionRecovery: {
+        sessionId: "session",
+        content: "keep this draft",
+        commandId: "unknown-command",
+        optimisticKey: "optimistic-unknown-command",
+        checking: false,
+      },
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      actions: store.getState().actions,
+    }),
+  );
+
+  expect(screen.getByRole("alert")).toBeTruthy();
+  expect(screen.getByDisplayValue("keep this draft")).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Refresh status" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "Abandon recovery" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Send as new request" }),
+  ).toBeTruthy();
+  expect(
+    (screen.getByRole("button", { name: "Send" }) as HTMLButtonElement)
+      .disabled,
+  ).toBe(true);
 });

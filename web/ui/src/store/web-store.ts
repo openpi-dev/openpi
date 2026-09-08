@@ -2,8 +2,8 @@ import { createStore } from "zustand/vanilla";
 import type {
   WebEvent,
   WebLiveMessage,
-  WebSnapshot,
   WebModelSummary,
+  WebSnapshot,
 } from "../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
@@ -68,6 +68,14 @@ export interface LiveEntry {
   message: WebLiveMessage;
 }
 
+export interface PromptAdmissionRecovery {
+  sessionId: string;
+  content: string;
+  commandId: string;
+  optimisticKey: string;
+  checking: boolean;
+}
+
 interface SessionActivation {
   epoch: number;
   kind: "create" | "select";
@@ -105,6 +113,7 @@ export interface WebStoreState {
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   promptAdmissionPending: boolean;
+  promptAdmissionRecovery: PromptAdmissionRecovery | null;
   sessionSwitching: boolean;
   scrollToBottom: number;
   actions: WebStoreActions;
@@ -130,6 +139,9 @@ export interface WebStoreActions {
   selectModel: (value: string) => Promise<void>;
   cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
+  refreshPromptAdmission: () => Promise<void>;
+  sendPromptAsNew: (content: string) => Promise<boolean>;
+  abandonPromptAdmission: () => void;
   setQuery: (query: string) => void;
   setSearchOpen: (open: boolean) => void;
   toggleWorkspace: (path: string) => void;
@@ -306,6 +318,21 @@ export function createWebStore(
       ].includes(event.type);
       set({ cursor: event.sequence });
 
+      const recoveryCommandId = current.promptAdmissionRecovery?.commandId;
+      if (
+        typeof detail.commandId === "string" &&
+        detail.commandId === recoveryCommandId &&
+        [
+          "prompt_accepted",
+          "prompt_failed",
+          "prompt_settled",
+          "turn_started",
+          "turn_settled",
+        ].includes(event.type)
+      ) {
+        set({ promptAdmissionRecovery: null });
+      }
+
       if (current.sessionSwitching && !sessionTransition) {
         scheduleSnapshotRefresh();
         return;
@@ -360,6 +387,7 @@ export function createWebStore(
           set({
             ...resetLivePatch(),
             promptAdmissionPending: false,
+            promptAdmissionRecovery: null,
             selectedPath: typeof eventPath === "string" ? eventPath : null,
             draftModel: current.workspaceDraft ? current.draftModel : null,
             modelSelectionPending: false,
@@ -612,11 +640,11 @@ export function createWebStore(
                 : Math.max(get().cursor ?? 0, snapshot.cursor),
             activeTurn: snapshot.runtime.activeTurn ?? null,
             livePhase:
-              snapshot.runtime.status !== "running" &&
-              !get().promptAdmissionPending &&
-              !promptAdmission
-                ? "idle"
-                : get().livePhase,
+              snapshot.runtime.status === "running"
+                ? "running"
+                : !get().promptAdmissionPending && !promptAdmission
+                  ? "idle"
+                  : get().livePhase,
             liveRetry:
               snapshot.runtime.status !== "running" &&
               !get().promptAdmissionPending &&
@@ -706,6 +734,7 @@ export function createWebStore(
           ...resetLivePatch(),
           mobileSidebarOpen: false,
           promptAdmissionPending: false,
+          promptAdmissionRecovery: null,
           selectedPath: null,
           selectedWorkspace: workspacePath,
           workspaceDraft: true,
@@ -792,6 +821,7 @@ export function createWebStore(
           ...resetLivePatch(),
           mobileSidebarOpen: false,
           promptAdmissionPending: false,
+          promptAdmissionRecovery: null,
           selectedPath: path,
           sessionSwitching: true,
         });
@@ -898,6 +928,7 @@ export function createWebStore(
           !content ||
           get().sessionSwitching ||
           get().promptAdmissionPending ||
+          get().promptAdmissionRecovery ||
           get().modelSelectionPending
         ) {
           return false;
@@ -976,6 +1007,33 @@ export function createWebStore(
         } catch (error) {
           if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
             return false;
+          if (
+            error instanceof WebApiError &&
+            error.code === "COMMAND_ADMISSION_UNKNOWN" &&
+            promptAdmission?.commandId === commandId
+          ) {
+            const recovery = promptAdmission;
+            promptAdmission = null;
+            set({
+              liveRunning: false,
+              livePhase: "idle",
+              liveRetry: null,
+              notice: null,
+              promptAdmissionPending: false,
+              promptAdmissionRecovery: { ...recovery, checking: true },
+            });
+            await actions.refreshSnapshot({ resetCursor: true, epoch });
+            const currentRecovery = get().promptAdmissionRecovery;
+            if (currentRecovery?.commandId === commandId) {
+              set({
+                promptAdmissionRecovery: {
+                  ...currentRecovery,
+                  checking: false,
+                },
+              });
+            }
+            return false;
+          }
           const knownRejection =
             error instanceof WebApiError &&
             [
@@ -1012,6 +1070,52 @@ export function createWebStore(
             set({ promptAdmissionPending: false });
           }
         }
+      },
+      async refreshPromptAdmission() {
+        const recovery = get().promptAdmissionRecovery;
+        if (!recovery || recovery.checking) return;
+        set({
+          notice: null,
+          promptAdmissionRecovery: { ...recovery, checking: true },
+        });
+        await actions.refreshSnapshot({
+          resetCursor: true,
+          epoch: sessionEpoch,
+        });
+        const currentRecovery = get().promptAdmissionRecovery;
+        if (currentRecovery?.commandId === recovery.commandId) {
+          set({
+            promptAdmissionRecovery: {
+              ...currentRecovery,
+              checking: false,
+            },
+          });
+        }
+      },
+      async sendPromptAsNew(rawContent) {
+        const recovery = get().promptAdmissionRecovery;
+        if (
+          !recovery ||
+          recovery.checking ||
+          recovery.sessionId !== get().snapshot?.selectedSession?.id
+        ) {
+          return false;
+        }
+        const content = rawContent.trim() || recovery.content;
+        if (!content) return false;
+        set({ promptAdmissionRecovery: null, notice: null });
+        return actions.sendPrompt(content);
+      },
+      abandonPromptAdmission() {
+        const recovery = get().promptAdmissionRecovery;
+        if (!recovery) return;
+        set({
+          liveMessages: get().liveMessages.filter(
+            (entry) => entry.key !== recovery.optimisticKey,
+          ),
+          notice: null,
+          promptAdmissionRecovery: null,
+        });
       },
       setQuery(query) {
         set({ query });
@@ -1074,6 +1178,7 @@ export function createWebStore(
       thinkingStarts: {},
       thinkingDurations: {},
       promptAdmissionPending: false,
+      promptAdmissionRecovery: null,
       sessionSwitching: false,
       scrollToBottom: 0,
       actions,

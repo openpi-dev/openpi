@@ -3,11 +3,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
+import { Composer } from "../features/composer/Composer.tsx";
 import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { Composer } from "../features/composer/Composer.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
@@ -180,6 +180,7 @@ export function App() {
           selectedWorkspace={state.selectedWorkspace}
           sessionSwitching={state.sessionSwitching}
           promptAdmissionPending={state.promptAdmissionPending}
+          promptAdmissionRecovery={state.promptAdmissionRecovery}
           liveRunning={state.liveRunning}
           landing={landing}
           actions={actions}

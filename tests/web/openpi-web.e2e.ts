@@ -1,8 +1,8 @@
-import { AxeBuilder } from "@axe-core/playwright";
-import { expect, type Page, test } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AxeBuilder } from "@axe-core/playwright";
+import { expect, type Page, test } from "@playwright/test";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
@@ -253,6 +253,122 @@ test("restores a running turn and canonical dark theme without losing cancellati
   await expect.poll(() => cancelRequests).toEqual([turn]);
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("recovers an unknown prompt admission only after an explicit user decision", async ({
+  page,
+}, testInfo) => {
+  const sessionId = "unknown-admission-session";
+  const promptRequests: Array<{
+    commandId: string;
+    content: string;
+    retry: boolean;
+  }> = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.currentSessionId = sessionId;
+    snapshot.workspaces = [
+      { path: "/unknown-admission", name: "Recovery", current: true },
+    ];
+    snapshot.sessions = [
+      {
+        id: sessionId,
+        path: "/unknown-admission/session.jsonl",
+        cwd: "/unknown-admission",
+        name: "Recovery",
+        modified: "2026-09-08T00:00:00Z",
+        created: "2026-09-08T00:00:00Z",
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        messageCount: 0,
+      },
+    ];
+    snapshot.selectedSession = {
+      id: sessionId,
+      path: "/unknown-admission/session.jsonl",
+      cwd: "/unknown-admission",
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: ": idle\n\n",
+    }),
+  );
+  await page.route("**/api/prompt", async (route) => {
+    const body = route.request().postDataJSON() as {
+      commandId: string;
+      content: string;
+      retry: boolean;
+    };
+    promptRequests.push(body);
+    if (promptRequests.length === 1) {
+      await route.abort("failed");
+      return;
+    }
+    if (promptRequests.length === 2) {
+      await route.fulfill({
+        status: 409,
+        json: {
+          code: "COMMAND_ADMISSION_UNKNOWN",
+          error: "previous prompt admission is unknown",
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 202,
+      json: { id: body.commandId, accepted: true },
+    });
+  });
+
+  await openWorkbench(page);
+  const draft = page.getByRole("textbox", { name: "描述任务" });
+  await draft.fill("可能产生副作用的请求");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect.poll(() => promptRequests.length).toBe(1);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+
+  await expect(
+    page.getByRole("alert").filter({ hasText: "无法确认消息是否已被接收" }),
+  ).toBeVisible();
+  await expect(draft).toHaveValue("可能产生副作用的请求");
+  await expect(page.getByText("正在准备任务...", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("button", { name: "发送", exact: true }),
+  ).toBeDisabled();
+  await page.screenshot({
+    path: testInfo.outputPath("unknown-admission-recovery.png"),
+    fullPage: true,
+  });
+  expect(promptRequests[1]?.commandId).toBe(promptRequests[0]?.commandId);
+  expect(promptRequests[1]?.retry).toBe(true);
+
+  await page.getByRole("button", { name: "作为新请求发送" }).click();
+  await expect.poll(() => promptRequests.length).toBe(3);
+  expect(promptRequests[2]?.commandId).not.toBe(promptRequests[0]?.commandId);
+  expect(promptRequests[2]?.retry).toBe(false);
+  await expect(draft).toHaveValue("");
+  await expect(
+    page.getByText("无法确认消息是否已被接收", { exact: true }),
+  ).toHaveCount(0);
 });
 
 test("inspects session-scoped runtime and terminal details on desktop and mobile", async ({
