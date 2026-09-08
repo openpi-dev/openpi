@@ -815,7 +815,9 @@ it("renders explicit choices for an unknown prompt admission", () => {
   expect(screen.getByRole("alert")).toBeTruthy();
   expect(screen.getByDisplayValue("keep this draft")).toBeTruthy();
   expect(screen.queryByRole("button", { name: "Refresh status" })).toBeNull();
-  expect(screen.getByRole("button", { name: "Abandon recovery" })).toBeTruthy();
+  expect(
+    screen.getByRole("button", { name: "Don't resend for now" }),
+  ).toBeTruthy();
   expect(
     screen.getByRole("button", { name: "Send as new message" }),
   ).toBeTruthy();

@@ -104,7 +104,7 @@ const resources = {
         "It is unclear whether the last message was received.",
       promptAdmissionUnknownDetail:
         "Review the refreshed Session history and runtime status before deciding. Sending as a new message may create a duplicate message.",
-      abandonAdmission: "Abandon recovery",
+      abandonAdmission: "Don't resend for now",
       sendAsNew: "Send as new message",
       stopTurn: "Stop current turn",
       stoppingTurn: "Stopping current turn…",
@@ -270,7 +270,7 @@ const resources = {
       promptAdmissionUnknown: "无法确认上次发送的消息是否已被接收。",
       promptAdmissionUnknownDetail:
         "请先核对已刷新的会话历史和运行状态，再决定下一步。作为新消息发送可能产生重复消息。",
-      abandonAdmission: "放弃恢复",
+      abandonAdmission: "暂不重新发送",
       sendAsNew: "作为新消息发送",
       addWorkspace: "添加工作区",
       addWorkspaceMenu: "添加工作区...",
