@@ -6,7 +6,7 @@
 - Source boundary: the implementation in this record's commit, based on
   `upstream/main` at `0d17f4577fe31315fe6c95370d251bdb4e2413cf`
 - Related Issue: [#466](https://github.com/openpi-dev/openpi/issues/466)
-- Related PR: added when the implementation is published
+- Related PR: [#490](https://github.com/openpi-dev/openpi/pull/490)
 - Supersedes: none
 
 ## Problem
