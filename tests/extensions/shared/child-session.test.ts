@@ -1575,3 +1575,81 @@ test("child delegation inherits active tools and custom restrictions only narrow
   assert.deepEqual(inheritedChildToolAllowlist(parent, []), []);
   assert.deepEqual(inheritedChildToolAllowlist([], ["bash"]), []);
 });
+
+test("tools from blocked packages like pi-intercom are dynamically excluded from child allowlist and pass preflight", async () => {
+  // Simulate a parent session where pi-intercom is active alongside native tools and third-party tools
+  const parentActiveTools = [
+    "read",
+    "bash",
+    "edit",
+    "intercom",
+    "intercom_git",
+    "weather",
+  ];
+  const availableTools = [
+    { name: "read", sourceInfo: { source: "builtin" } },
+    { name: "bash", sourceInfo: { source: "builtin" } },
+    { name: "edit", sourceInfo: { source: "builtin" } },
+    { name: "weather", sourceInfo: { source: "npm:pi-weather" } },
+    { name: "intercom", sourceInfo: { source: "npm:pi-intercom" } },
+    {
+      name: "intercom_git",
+      sourceInfo: {
+        source: "git:https://github.com/nicobailon/pi-intercom",
+      },
+    },
+  ];
+
+  // 1. CHILD_EXCLUDED_TOOL_NAMES must NOT include community tool names
+  assert.equal(
+    (CHILD_EXCLUDED_TOOL_NAMES as readonly string[]).includes("intercom"),
+    false,
+    "CHILD_EXCLUDED_TOOL_NAMES must remain strictly for OpenPI package tools",
+  );
+
+  // 2. Inherited allowlist dynamically drops tools from blocked packages
+  const inherited = inheritedChildToolAllowlist(parentActiveTools, undefined, {
+    availableTools,
+  });
+  assert.deepEqual(inherited, ["read", "bash", "edit", "weather"]);
+  assert.equal(inherited.includes("intercom"), false);
+  assert.equal(inherited.includes("intercom_git"), false);
+  assert.equal(inherited.includes("weather"), true);
+
+  // 3. An explicit role allowlist naming a blocked package tool must also drop it
+  const explicitNarrowed = inheritedChildToolAllowlist(
+    parentActiveTools,
+    ["read", "intercom", "weather"],
+    { availableTools },
+  );
+  assert.deepEqual(explicitNarrowed, ["read", "weather"]);
+
+  // 4. Array shorthand for options works identically
+  const arrayShorthand = inheritedChildToolAllowlist(
+    parentActiveTools,
+    undefined,
+    availableTools,
+  );
+  assert.deepEqual(arrayShorthand, ["read", "bash", "edit", "weather"]);
+
+  // 5. Child tool policy constructed from inherited tools has no blocked tools
+  const policy = childToolPolicy(inherited);
+  assert.equal(policy.tools?.includes("intercom"), false);
+
+  // 6. bindChildSessionExtensions preflight must pass with the sanitized inherited allowlist
+  const mockChildSession = {
+    async bindExtensions() {},
+    getActiveToolNames: () => ["read", "bash", "edit", "weather"],
+    getAllTools: () => [
+      { name: "read" },
+      { name: "bash" },
+      { name: "edit" },
+      { name: "weather" },
+    ],
+    setActiveToolsByName(_names: string[]) {},
+  };
+
+  await assert.doesNotReject(
+    bindChildSessionExtensions(mockChildSession, inherited),
+  );
+});
