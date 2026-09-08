@@ -345,8 +345,11 @@ test("recovers an unknown prompt admission only after an explicit user decision"
   await page.getByRole("button", { name: "发送", exact: true }).click();
 
   await expect(
-    page.getByRole("alert").filter({ hasText: "无法确认消息是否已被接收" }),
+    page
+      .getByRole("alert")
+      .filter({ hasText: "无法确认上次发送的消息是否已被接收" }),
   ).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新状态" })).toHaveCount(0);
   await expect(draft).toHaveValue("可能产生副作用的请求");
   await expect(page.getByText("正在准备任务...", { exact: true })).toHaveCount(
     0,
@@ -361,13 +364,15 @@ test("recovers an unknown prompt admission only after an explicit user decision"
   expect(promptRequests[1]?.commandId).toBe(promptRequests[0]?.commandId);
   expect(promptRequests[1]?.retry).toBe(true);
 
-  await page.getByRole("button", { name: "作为新请求发送" }).click();
+  await page.getByRole("button", { name: "作为新消息发送" }).click();
   await expect.poll(() => promptRequests.length).toBe(3);
   expect(promptRequests[2]?.commandId).not.toBe(promptRequests[0]?.commandId);
   expect(promptRequests[2]?.retry).toBe(false);
   await expect(draft).toHaveValue("");
   await expect(
-    page.getByText("无法确认消息是否已被接收", { exact: true }),
+    page.getByText("无法确认上次发送的消息是否已被接收。", {
+      exact: true,
+    }),
   ).toHaveCount(0);
 });
 

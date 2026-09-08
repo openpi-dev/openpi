@@ -208,15 +208,6 @@ export function Composer(props: ComposerProps) {
             <button
               type="button"
               disabled={props.promptAdmissionRecovery.checking}
-              onClick={() => void props.actions.refreshPromptAdmission()}
-            >
-              {props.promptAdmissionRecovery.checking
-                ? t("checkingAdmission")
-                : t("checkAdmission")}
-            </button>
-            <button
-              type="button"
-              disabled={props.promptAdmissionRecovery.checking}
               onClick={props.actions.abandonPromptAdmission}
             >
               {t("abandonAdmission")}

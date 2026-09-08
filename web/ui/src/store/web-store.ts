@@ -139,7 +139,6 @@ export interface WebStoreActions {
   selectModel: (value: string) => Promise<void>;
   cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
-  refreshPromptAdmission: () => Promise<void>;
   sendPromptAsNew: (content: string) => Promise<boolean>;
   abandonPromptAdmission: () => void;
   setQuery: (query: string) => void;
@@ -1069,27 +1068,6 @@ export function createWebStore(
             promptAdmissionToken = null;
             set({ promptAdmissionPending: false });
           }
-        }
-      },
-      async refreshPromptAdmission() {
-        const recovery = get().promptAdmissionRecovery;
-        if (!recovery || recovery.checking) return;
-        set({
-          notice: null,
-          promptAdmissionRecovery: { ...recovery, checking: true },
-        });
-        await actions.refreshSnapshot({
-          resetCursor: true,
-          epoch: sessionEpoch,
-        });
-        const currentRecovery = get().promptAdmissionRecovery;
-        if (currentRecovery?.commandId === recovery.commandId) {
-          set({
-            promptAdmissionRecovery: {
-              ...currentRecovery,
-              checking: false,
-            },
-          });
         }
       },
       async sendPromptAsNew(rawContent) {
