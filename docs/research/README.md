@@ -16,6 +16,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`CURSOR_RELIABILITY_SUMMARY_2026-09-08.md`](CURSOR_RELIABILITY_SUMMARY_2026-09-08.md) — configs/tasks verified, remaining unreliability, before/after deltas, sample limits (exploratory; not a Benchmark).
 
+- [`CURSOR_RELIABILITY_E512_VERSION_SPLIT_2026-09-09.md`](CURSOR_RELIABILITY_E512_VERSION_SPLIT_2026-09-09.md) — pointer to the E-01..10 vs E-11..20 overlay (exploratory; not a Benchmark).
+
 - [`WEB_STARTUP_2026-09-07.md`](WEB_STARTUP_2026-09-07.md) — terminal startup feedback, browser-launch waiting, and exploratory timing limits ([#450](https://github.com/openpi-dev/openpi/issues/450)).
 
 - [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).
