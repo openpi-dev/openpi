@@ -21,6 +21,7 @@ import {
 import { fetchAntigravityModels } from "../../../extensions/ai-providers/antigravity/discovery.ts";
 import {
   convertMessages,
+  convertTools,
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
@@ -439,6 +440,77 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
       },
       required: ["pattern"],
     },
+  );
+});
+
+test("convertTools expands bounded local refs before CCA sanitization", () => {
+  const declarations = convertTools(
+    [
+      {
+        name: "structured_output",
+        description: "Return the result",
+        parameters: {
+          type: "object",
+          properties: { answer: { $ref: "#/$defs/Answer" } },
+          required: ["answer"],
+          $defs: {
+            Answer: {
+              type: "object",
+              properties: {
+                verdict: { type: "string", enum: ["pass", "fail"] },
+              },
+              required: ["verdict"],
+            },
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  assert.deepEqual(declarations?.[0]?.functionDeclarations[0]?.parameters, {
+    type: "object",
+    properties: {
+      answer: {
+        type: "object",
+        properties: { verdict: { type: "string", enum: ["pass", "fail"] } },
+        required: ["verdict"],
+      },
+    },
+    required: ["answer"],
+  });
+});
+
+test("convertTools rejects unsafe local refs before the request", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "bad",
+            description: "bad",
+            parameters: { $ref: "https://example.test/schema" },
+          } as never,
+        ],
+        true,
+      ),
+    /unsupported external \$ref/,
+  );
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "loop",
+            description: "loop",
+            parameters: {
+              $defs: { Node: { $ref: "#/$defs/Node" } },
+              $ref: "#/$defs/Node",
+            },
+          } as never,
+        ],
+        true,
+      ),
+    /recursive \$ref/,
   );
 });
 
