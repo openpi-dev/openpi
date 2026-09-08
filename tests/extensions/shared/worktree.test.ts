@@ -1,8 +1,9 @@
 import { strict as assert } from "node:assert";
-import { execFileSync } from "node:child_process";
+import childProcess, { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
 import {
   createWorktree,
@@ -293,6 +294,122 @@ describe("worktree lifecycle", () => {
     git(repo, "worktree", "remove", "--force", result.worktree.path);
     git(repo, "branch", "-D", result.worktree.branch);
   });
+
+  for (const flag of ["assume-unchanged", "skip-worktree"]) {
+    for (const changed of [false, true]) {
+      test(`preserves ${flag} index and ${changed ? "modified" : "clean"} content`, async () => {
+        const result = await createWorktree({
+          cwd: repo,
+          label: flag,
+          id: String(changed),
+        });
+        assert.ok(result.ok);
+        const wt = result.worktree;
+        const file = path.join(wt.path, "a.txt");
+        const content = changed
+          ? "only copy of local work\n"
+          : fs.readFileSync(file, "utf8");
+        fs.writeFileSync(file, content);
+        git(wt.path, "update-index", `--${flag}`, "a.txt");
+        assert.equal(git(wt.path, "status", "--porcelain"), "");
+        const indexPath = path.resolve(
+          wt.path,
+          git(wt.path, "rev-parse", "--git-path", "index").trim(),
+        );
+        const indexBefore = fs.readFileSync(indexPath);
+        const cleanup = await reclaimWorktree(repo, wt);
+        assert.equal(cleanup.removed, false);
+        assert.equal(cleanup.branchDeleted, false);
+        assert.equal(
+          cleanup.dirty,
+          undefined,
+          "hidden changes are unknown, not clean",
+        );
+        assert.match(cleanup.reason ?? "", /index flags.*may hide/);
+        assert.equal(fs.readFileSync(file, "utf8"), content);
+        assert.deepEqual(fs.readFileSync(indexPath), indexBefore);
+        assert.equal(git(repo, "rev-parse", wt.branch).trim(), wt.baseSha);
+      });
+    }
+  }
+
+  test("accepts NUL-delimited tracked paths with whitespace and newlines", async () => {
+    const result = await createWorktree({ cwd: repo, label: "paths", id: "1" });
+    assert.ok(result.ok);
+    fs.writeFileSync(
+      path.join(result.worktree.path, "space and\nnewline.txt"),
+      "fixture",
+    );
+    git(result.worktree.path, "add", "-A");
+    git(result.worktree.path, "commit", "--quiet", "-m", "unusual path");
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, true, cleanup.reason ?? "");
+    assert.equal(cleanup.branchDeleted, false);
+  });
+
+  for (const inventory of [
+    "H a.txt",
+    "X a.txt\0",
+    "H \0",
+    "H a.txt\0\0",
+    "error",
+    "overflow",
+  ]) {
+    test(`preserves when index inventory is not trustworthy: ${JSON.stringify(inventory)}`, async (t) => {
+      const result = await createWorktree({
+        cwd: repo,
+        label: "inventory",
+        id: "1",
+      });
+      assert.ok(result.ok);
+      const original = childProcess.execFile;
+      t.mock.method(
+        childProcess,
+        "execFile",
+        (...args: Parameters<typeof original>) => {
+          const [file, argv] = args;
+          if (file === "git" && Array.isArray(argv) && argv.includes("-v")) {
+            const callback = args.at(-1) as (
+              error: Error | null,
+              stdout: string,
+              stderr: string,
+            ) => void;
+            const error = inventory === "error" || inventory === "overflow";
+            callback(
+              error
+                ? new Error(
+                    inventory === "overflow"
+                      ? "stdout maxBuffer length exceeded"
+                      : "inventory unavailable",
+                  )
+                : null,
+              error ? "H a.txt\0" : inventory,
+              "",
+            );
+            return undefined;
+          }
+          return Reflect.apply(original, childProcess, args);
+        },
+      );
+      syncBuiltinESMExports();
+      t.after(() => {
+        t.mock.restoreAll();
+        syncBuiltinESMExports();
+      });
+      const cleanup = await reclaimWorktree(repo, result.worktree);
+      assert.equal(cleanup.removed, false);
+      assert.equal(cleanup.branchDeleted, false);
+      assert.match(cleanup.reason ?? "", /index/);
+      assert.equal(
+        fs.readFileSync(path.join(result.worktree.path, "a.txt"), "utf8"),
+        "hello\n",
+      );
+      assert.equal(
+        git(repo, "rev-parse", result.worktree.branch).trim(),
+        result.worktree.baseSha,
+      );
+    });
+  }
 
   test("preserves a clean detached checkout instead of guessing it is empty", async () => {
     const result = await createWorktree({
