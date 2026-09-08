@@ -25,6 +25,7 @@ export function App() {
     const snapshot = state.snapshot;
     const session = snapshot?.selectedSession;
     if (
+      state.workspaceDraft ||
       !snapshot ||
       !session ||
       state.sessionSwitching ||
@@ -42,6 +43,7 @@ export function App() {
   };
   const inspectionVisible =
     inspection &&
+    !state.workspaceDraft &&
     !state.sessionSwitching &&
     inspection.sessionId === state.snapshot?.currentSessionId &&
     inspection.sessionPath === state.snapshot?.selectedSession?.path &&
@@ -55,7 +57,9 @@ export function App() {
     return actions.stop;
   }, [actions]);
 
-  const selected = state.snapshot?.selectedSession;
+  const selected = state.workspaceDraft
+    ? undefined
+    : state.snapshot?.selectedSession;
   const hasMessages =
     selected?.entries.some(
       (entry) => entry.type === "message" && entry.message,
@@ -72,7 +76,7 @@ export function App() {
     >
       <SessionSidebar
         snapshot={state.snapshot}
-        selectedPath={state.selectedPath}
+        selectedPath={state.workspaceDraft ? null : state.selectedPath}
         selectedWorkspace={state.selectedWorkspace}
         collapsed={state.collapsed}
         query={state.query}
@@ -92,7 +96,7 @@ export function App() {
         </button>
       )}
       <main
-        className={`conversation-shell ${state.snapshot?.selectedSession ? "has-view" : ""} ${landing && view === "chat" ? "landing" : ""}`}
+        className={`conversation-shell ${selected ? "has-view" : ""} ${landing && (state.workspaceDraft || view === "chat") ? "landing" : ""}`}
       >
         <h1 className="sr-only">OpenPI</h1>
         <header className="mobile-header">
@@ -107,7 +111,7 @@ export function App() {
             {t(state.connection)}
           </span>
         </header>
-        {state.snapshot?.selectedSession && (
+        {selected && (
           <fieldset
             className="conversation-view-switch"
             aria-label={t("conversationView")}
@@ -135,9 +139,9 @@ export function App() {
               <span>{t("switchingSession")}</span>
             </div>
           </div>
-        ) : view === "trajectory" && state.snapshot?.selectedSession ? (
+        ) : view === "trajectory" && selected && state.snapshot ? (
           <Trajectory
-            key={state.snapshot.selectedSession.path}
+            key={selected.path}
             snapshot={state.snapshot}
             running={state.liveRunning}
           />
@@ -164,6 +168,7 @@ export function App() {
           />
         ) : null}
         <Composer
+          workspaceDraft={state.workspaceDraft}
           draftModel={state.draftModel}
           modelSelectionPending={state.modelSelectionPending}
           onInspect={inspect}

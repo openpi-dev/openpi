@@ -335,7 +335,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .composer textarea::placeholder { color: var(--subtle); }
 .composer-toolbar { @apply mt-2 flex min-w-0 items-center justify-end gap-2; }
 .model-picker-wrap { position: relative; z-index: 11; min-width: 0; max-width: 48%; }
-.model-picker { min-width: 150px !important; max-width: 100% !important; height: 34px !important; padding: 0 9px 0 10px !important; background: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
+.model-picker { min-width: 150px !important; max-width: 100% !important; min-height: 34px !important; height: auto !important; padding: 0 9px 0 10px !important; background: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
+.model-picker-label, .model-menu-item-label { display: block; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .model-picker:hover, .model-picker[aria-expanded="true"] { background: oklch(97% .006 249) !important; color: var(--text) !important; }
 .model-picker svg { width: 14px; height: 14px; }
 .send-button { @apply grid shrink-0 place-items-center border-0; width: 34px; height: 34px; border-radius: 50%; background: var(--sidebar); transition: background-color 140ms ease, transform 100ms ease; }

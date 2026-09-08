@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`CURSOR_NATIVE_RECOVERY_2026-09-08.md`](CURSOR_NATIVE_RECOVERY_2026-09-08.md) — bounded in-band native execution rejection, Pi-owned tools, cancellation identity, and actual child acceptance ([#234](https://github.com/openpi-dev/openpi/issues/234)).
+
 - [`WEB_STARTUP_2026-09-07.md`](WEB_STARTUP_2026-09-07.md) — terminal startup feedback, browser-launch waiting, and exploratory timing limits ([#450](https://github.com/openpi-dev/openpi/issues/450)).
 
 - [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).

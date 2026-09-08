@@ -12,6 +12,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
+import { App } from "../../web/ui/src/app/App.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { OpenPiLogo } from "../../web/ui/src/components/OpenPiLogo.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
@@ -22,6 +23,66 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(cleanup);
+
+it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
+  const initial = webStore.getState();
+  const snapshot = activeSnapshot();
+  snapshot.workspaces.push({ path: "/tmp/repo-b", name: "B", current: false });
+  snapshot.models = [
+    {
+      provider: "test",
+      id: "model",
+      name: "model",
+      label: "Draft model",
+      current: true,
+    },
+  ];
+  const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
+  const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  const send = vi.spyOn(initial.actions, "sendPrompt").mockResolvedValue(false);
+  webStore.setState({
+    snapshot,
+    selectedWorkspace: "/tmp/repo-b",
+    workspaceDraft: true,
+    sessionSwitching: false,
+    pendingFollowUpsReceipt: 4,
+    turnCancellationPending: false,
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    expect(view.container.querySelector(".landing-conversation")).toBeTruthy();
+    expect(
+      view.container.querySelector(".conversation-view-switch"),
+    ).toBeNull();
+    expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: "Draft model (test/model)",
+      }).disabled,
+    ).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("stopTurn") }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 4 })),
+    ).toBeNull();
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "Only change B" } });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("send") })),
+    );
+    expect(send).toHaveBeenCalledWith("Only change B");
+    expect(input.value).toBe("Only change B");
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    send.mockRestore();
+    webStore.setState(initial, true);
+  }
+});
 
 const truncation = {
   bytes: 0,
@@ -617,7 +678,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   expect(screen.getByText("Archived work")).toBeTruthy();
 });
 
-it("enables model choice before workspace selection and displays the draft choice", () => {
+it("shows complete model identities before workspace selection", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
   delete snapshot.selectedSession;
@@ -626,8 +687,20 @@ it("enables model choice before workspace selection and displays the draft choic
   snapshot.sessions = [];
   snapshot.runtime.status = "idle";
   snapshot.models = [
-    { provider: "test", id: "a", label: "Model A", name: "A", current: true },
-    { provider: "test", id: "b", label: "Model B", name: "B", current: false },
+    {
+      provider: "provider-alpha",
+      id: "a",
+      label: "Shared model",
+      name: "A",
+      current: true,
+    },
+    {
+      provider: "provider-beta",
+      id: "b",
+      label: "Shared model",
+      name: "B",
+      current: false,
+    },
   ];
   const store = createWebStore();
   const props = {
@@ -646,11 +719,20 @@ it("enables model choice before workspace selection and displays the draft choic
   };
   const { rerender } = renderWithI18n(createElement(Composer, props));
   const modelButton = screen.getByRole("button", {
-    name: /Model B/u,
+    name: "Shared model (provider-beta/b)",
   }) as HTMLButtonElement;
   expect(modelButton.disabled).toBe(false);
   fireEvent.click(modelButton);
-  expect(screen.getAllByText("Model A").length).toBeGreaterThan(0);
+  expect(
+    screen.getByRole("menuitem", {
+      name: "Shared model (provider-alpha/a)",
+    }),
+  ).toBeTruthy();
+  expect(
+    screen.getByRole("menuitem", {
+      name: "Shared model (provider-beta/b)",
+    }),
+  ).toBeTruthy();
   rerender(
     createElement(
       I18nextProvider,
@@ -659,7 +741,47 @@ it("enables model choice before workspace selection and displays the draft choic
     ),
   );
   expect(
-    (screen.getByRole("button", { name: /Model B/u }) as HTMLButtonElement)
-      .disabled,
+    (
+      screen.getByRole("button", {
+        name: "Shared model (provider-beta/b)",
+      }) as HTMLButtonElement
+    ).disabled,
   ).toBe(true);
+});
+
+it("does not repeat a provider identity used as the fallback model label", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-alpha",
+      id: "model-a",
+      label: "provider-alpha/model-a",
+      name: "",
+      current: true,
+    },
+  ];
+  const store = createWebStore();
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp/ws",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      actions: store.getState().actions,
+    }),
+  );
+
+  expect(
+    screen.getByRole("button", { name: "provider-alpha/model-a" }).textContent,
+  ).toBe("provider-alpha/model-a");
+  expect(
+    screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
+  ).toBeNull();
 });
