@@ -1871,5 +1871,126 @@
         "compatibility": "Node >=22.19; Pi peers *; not runtime-tested"
       }
     }
+  ],
+  "relatedPullRequest": "https://github.com/openpi-dev/openpi/pull/479",
+  "publicationReceipts": [
+    {
+      "kind": "issue",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/472",
+      "number": 472,
+      "title": "bug(worktree): 自动回收会删除被 index flags 隐藏的未提交修改 [P1]"
+    },
+    {
+      "kind": "issue",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/473",
+      "number": 473,
+      "title": "feat(web): 支持从回答选区生成带来源和内容版本的反馈草稿"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 474,
+      "title": "可恢复的工具结果折叠：怎样验证它比原生 compaction 更有价值？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/474"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 475,
+      "title": "社区包风险收据：只读评估应由独立插件、Skill 还是 OpenPI 承担？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/475"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 476,
+      "title": "长任务离开屏幕后：通知与保持唤醒应绑定哪个执行事实？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/476"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 477,
+      "title": "Web 侧问：怎样呈现已有 Pi-native /btw 而不污染主上下文？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/477"
+    },
+    {
+      "kind": "discussion",
+      "verified": true,
+      "number": 478,
+      "title": "外部检索的来源展示：何时值得增加可回查原文的证据入口？",
+      "url": "https://github.com/openpi-dev/openpi/discussions/478"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/343#issuecomment-5577485330",
+      "number": 343,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/345#issuecomment-5577485973",
+      "number": 345,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/169#issuecomment-5577486546",
+      "number": 169,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/163#issuecomment-5577486898",
+      "number": 163,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/168#issuecomment-5577487575",
+      "number": 168,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/349#issuecomment-5577488155",
+      "number": 349,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/156#issuecomment-5577488531",
+      "number": 156,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/167#issuecomment-5577488981",
+      "number": 167,
+      "targetState": "open"
+    },
+    {
+      "kind": "issue-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/issues/160#issuecomment-5577489557",
+      "number": 160,
+      "targetState": "closed"
+    },
+    {
+      "kind": "discussion-comment",
+      "verified": true,
+      "url": "https://github.com/openpi-dev/openpi/discussions/381#discussioncomment-18339579",
+      "number": 381
+    }
   ]
 }

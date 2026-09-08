@@ -58,5 +58,7 @@
   "evidenceBoundary": "Synthetic Git repositories only; no third-party plugin, model, full Child/Workflow lifecycle or private project data.",
   "relatedResearch": "PI_COMMUNITY_ECOSYSTEM_2026-09-08.md",
   "supersedes": null,
-  "localUnpublishedReceiptSha256": "66c708bc81d39ee00d36435d0a0d9d35a7e4ffb93161c429c734a3f4e2b0b899"
+  "localUnpublishedReceiptSha256": "66c708bc81d39ee00d36435d0a0d9d35a7e4ffb93161c429c734a3f4e2b0b899",
+  "relatedIssue": "https://github.com/openpi-dev/openpi/issues/472",
+  "relatedPullRequest": "https://github.com/openpi-dev/openpi/pull/479"
 }

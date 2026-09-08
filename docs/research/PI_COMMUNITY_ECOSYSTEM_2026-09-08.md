@@ -6,7 +6,7 @@
 - 范围：Web/IDE、外部工具与 MCP、Context/Memory、执行与 Worktree、安全与长任务体验。
 - 版本与证据清单：[候选清单](PI_COMMUNITY_ECOSYSTEM_2026-09-08.candidates.json)。GitHub 源码 SHA、源码 manifest 和 npm 发布版本分开记录。
 - 历史关系：补充 [2026-08-09 社区包审计](../design/PI_COMMUNITY_PACKAGE_AUDIT_2026-08-09.md)，不覆盖其历史结论；Supersedes: none。
-- 相关 Issue/Discussion/PR：见文末发布回执。所有公共跟踪项链接回本记录。
+- 相关 Issue/Discussion：见发布回执；文档 [Draft PR #479](https://github.com/openpi-dev/openpi/pull/479)。所有公共跟踪项链接回本记录。
 
 ## 结论
 
@@ -89,7 +89,29 @@ Node 26.3.0 / Git 2.50.1 的两种合成 fixture 中，直接调用生产 `recla
 
 ## 发布回执
 
-公开项在去重和回读后记录于此。研究记录与候选清单保留为独立文档变更，不改变运行时代码、默认配置或安装行为。
+已发布并逐条回读确认：**2 个新 Issue、5 篇 Ideas Discussion、9 条已有 Issue 评论、1 条已有 Discussion 评论**。已有关闭项保留关闭状态，只补充研究或回归证据。
+
+| 类型 | 主题 / 回执 |
+| --- | --- |
+| 新 Issue | [#472 bug(worktree): 自动回收会删除被 index flags 隐藏的未提交修改 [P1]](https://github.com/openpi-dev/openpi/issues/472) |
+| 新 Issue | [#473 feat(web): 支持从回答选区生成带来源和内容版本的反馈草稿](https://github.com/openpi-dev/openpi/issues/473) |
+| 新 Discussion | [#474 可恢复的工具结果折叠：怎样验证它比原生 compaction 更有价值？](https://github.com/openpi-dev/openpi/discussions/474) |
+| 新 Discussion | [#475 社区包风险收据：只读评估应由独立插件、Skill 还是 OpenPI 承担？](https://github.com/openpi-dev/openpi/discussions/475) |
+| 新 Discussion | [#476 长任务离开屏幕后：通知与保持唤醒应绑定哪个执行事实？](https://github.com/openpi-dev/openpi/discussions/476) |
+| 新 Discussion | [#477 Web 侧问：怎样呈现已有 Pi-native /btw 而不污染主上下文？](https://github.com/openpi-dev/openpi/discussions/477) |
+| 新 Discussion | [#478 外部检索的来源展示：何时值得增加可回查原文的证据入口？](https://github.com/openpi-dev/openpi/discussions/478) |
+| Issue 补充 | [#343 原生 Web 交互适配](https://github.com/openpi-dev/openpi/issues/343#issuecomment-5577485330) |
+| Issue 补充 | [#345 产物授权与版本预览](https://github.com/openpi-dev/openpi/issues/345#issuecomment-5577485973) |
+| Issue 补充 | [#169 MCP 逐调用权限与兼容试点](https://github.com/openpi-dev/openpi/issues/169#issuecomment-5577486546) |
+| Issue 补充 | [#163 LSP 单请求与共享池](https://github.com/openpi-dev/openpi/issues/163#issuecomment-5577486898) |
+| Issue 补充 | [#168 Pi 原生 DAP 候选](https://github.com/openpi-dev/openpi/issues/168#issuecomment-5577487575) |
+| Issue 补充 | [#349 会话检索源锚点与增量失效](https://github.com/openpi-dev/openpi/issues/349#issuecomment-5577488155) |
+| Issue 补充 | [#156 Cache / usage 统计口径](https://github.com/openpi-dev/openpi/issues/156#issuecomment-5577488531) |
+| Issue 补充 | [#167 可恢复删除与快照失效](https://github.com/openpi-dev/openpi/issues/167#issuecomment-5577488981) |
+| Issue 补充 | [#160 后台终态、投递与消费收据](https://github.com/openpi-dev/openpi/issues/160#issuecomment-5577489557) |
+| Discussion 补充 | [#381 ACP / Agent provider / 草稿 prefill](https://github.com/openpi-dev/openpi/discussions/381#discussioncomment-18339579) |
+
+文档变更：[Draft PR #479](https://github.com/openpi-dev/openpi/pull/479)。仓库验证：`bun run check` 通过；`bun run test` 通过（Node 1461 passed / 1 skipped / 0 failed，Web Vitest 113 passed）；JSON 可解析、相对链接和 diff whitespace 检查通过。以上检查只验证仓库文档变更的交付，不证明社区方案运行兼容或采用收益。
 
 <!-- publication-receipts -->
 
