@@ -12,6 +12,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
+import { App } from "../../web/ui/src/app/App.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { OpenPiLogo } from "../../web/ui/src/components/OpenPiLogo.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
@@ -22,6 +23,65 @@ import { i18n } from "../../web/ui/src/i18n.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(cleanup);
+
+it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
+  const initial = webStore.getState();
+  const snapshot = activeSnapshot();
+  snapshot.workspaces.push({ path: "/tmp/repo-b", name: "B", current: false });
+  snapshot.models = [
+    {
+      provider: "test",
+      id: "model",
+      name: "model",
+      label: "Draft model",
+      current: true,
+    },
+  ];
+  const start = vi.spyOn(initial.actions, "start").mockImplementation(() => {});
+  const stop = vi.spyOn(initial.actions, "stop").mockImplementation(() => {});
+  const send = vi.spyOn(initial.actions, "sendPrompt").mockResolvedValue(false);
+  webStore.setState({
+    snapshot,
+    selectedWorkspace: "/tmp/repo-b",
+    workspaceDraft: true,
+    sessionSwitching: false,
+    pendingFollowUpsReceipt: 4,
+    turnCancellationPending: false,
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    expect(view.container.querySelector(".landing-conversation")).toBeTruthy();
+    expect(
+      view.container.querySelector(".conversation-view-switch"),
+    ).toBeNull();
+    expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: "Draft model" })
+        .disabled,
+    ).toBe(false);
+    expect(
+      screen.queryByRole("button", { name: i18n.t("stopTurn") }),
+    ).toBeNull();
+    expect(
+      screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 4 })),
+    ).toBeNull();
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "Only change B" } });
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("send") })),
+    );
+    expect(send).toHaveBeenCalledWith("Only change B");
+    expect(input.value).toBe("Only change B");
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    send.mockRestore();
+    webStore.setState(initial, true);
+  }
+});
 
 const truncation = {
   bytes: 0,

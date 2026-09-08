@@ -17,6 +17,7 @@ import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 
 interface ComposerProps {
+  workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
   modelSelectionPending?: boolean;
   onInspect?: (terminalId?: string) => void;
@@ -39,14 +40,19 @@ export function Composer(props: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const selected = props.snapshot?.selectedSession;
   const active = Boolean(
-    selected?.id && selected.id === props.snapshot?.currentSessionId,
+    !props.workspaceDraft &&
+      selected?.id &&
+      selected.id === props.snapshot?.currentSessionId,
   );
   const draftSession = Boolean(
-    props.selectedWorkspace && !selected && !props.snapshot?.currentSessionId,
+    props.selectedWorkspace &&
+      (props.workspaceDraft ||
+        (!selected && !props.snapshot?.currentSessionId)),
   );
   const canCompose = active || draftSession;
   const running =
-    props.snapshot?.runtime.status === "running" || props.liveRunning;
+    !props.workspaceDraft &&
+    (props.snapshot?.runtime.status === "running" || props.liveRunning);
   const canStop =
     active &&
     running &&
@@ -117,19 +123,23 @@ export function Composer(props: ComposerProps) {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  const hint = props.turnCancellationPending
-    ? t("stoppingTurn")
-    : props.turnTerminalStatus === "cancelled"
-      ? t("stoppedTurn")
-      : props.pendingFollowUpsReceipt !== null
-        ? props.pendingFollowUpsReceipt > 0
-          ? t("pendingFollowUpsHint", { count: props.pendingFollowUpsReceipt })
-          : t("acceptedHint")
-        : canCompose
-          ? running
-            ? t("queuedHint")
-            : t("enterHint")
-          : t("activeOnlyHint");
+  const hint = props.workspaceDraft
+    ? t("enterHint")
+    : props.turnCancellationPending
+      ? t("stoppingTurn")
+      : props.turnTerminalStatus === "cancelled"
+        ? t("stoppedTurn")
+        : props.pendingFollowUpsReceipt !== null
+          ? props.pendingFollowUpsReceipt > 0
+            ? t("pendingFollowUpsHint", {
+                count: props.pendingFollowUpsReceipt,
+              })
+            : t("acceptedHint")
+          : canCompose
+            ? running
+              ? t("queuedHint")
+              : t("enterHint")
+            : t("activeOnlyHint");
 
   return (
     <div className="composer-dock">
@@ -221,7 +231,7 @@ export function Composer(props: ComposerProps) {
                   props.sessionSwitching ||
                   props.modelSelectionPending ||
                   props.promptAdmissionPending ||
-                  Boolean(selected && !active) ||
+                  Boolean(!props.workspaceDraft && selected && !active) ||
                   running ||
                   !modelItems.length,
               }}
