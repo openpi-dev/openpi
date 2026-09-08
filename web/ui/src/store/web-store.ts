@@ -733,11 +733,19 @@ export function createWebStore(
               );
             }
             set({ selectedPath: null });
-            if (
-              !(await actions.refreshSnapshot({ epoch })) ||
-              epoch !== sessionEpoch
-            )
-              return;
+            let refreshed = await actions.refreshSnapshot({ epoch });
+            if (!refreshed && epoch === sessionEpoch) {
+              // A Session event may start a newer snapshot while this
+              // authoritative creation refresh is in flight. Retry once so
+              // the receipt can still be checked against canonical Pi state.
+              refreshed = await actions.refreshSnapshot({ epoch });
+            }
+            if (epoch !== sessionEpoch) return;
+            if (!refreshed) {
+              throw new Error(
+                "The created Session could not be confirmed. Please try again.",
+              );
+            }
             const selected = get().snapshot?.selectedSession;
             // A successful HTTP response alone cannot authorize a prompt:
             // another browser may have activated a different Session meanwhile.

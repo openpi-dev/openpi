@@ -1386,6 +1386,34 @@ describe("workspace selection authority", () => {
     store.getState().actions.stop();
   });
 
+  it("rechecks creation when a newer snapshot supersedes its confirmation", async () => {
+    const { client, store } = await harness();
+    const creation = deferred<SessionMutationResult>();
+    const slowConfirmation = deferred<WebSnapshot>();
+    const active = activeSnapshot("b", sessionPath, { workspace });
+    client.creationResult = creation.promise;
+    client.snapshots.push(
+      slowConfirmation.promise,
+      Promise.resolve(active),
+      Promise.resolve(active),
+    );
+    store.getState().actions.setWorkspace(workspace);
+
+    const sending = store.getState().actions.sendPrompt("B only");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    creation.resolve({ sessionPath });
+    await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(2));
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    slowConfirmation.resolve(active);
+
+    expect(await sending).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
+    expect(store.getState().notice).toBeNull();
+    store.getState().actions.stop();
+  });
+
   it.each([
     {
       name: "cancelled creation",
