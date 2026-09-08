@@ -1,5 +1,8 @@
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, type Page, test } from "@playwright/test";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
@@ -774,4 +777,77 @@ test("same-named model selection sends the exact identity for an active Session"
       sessionId: expect.any(String),
     },
   ]);
+});
+
+test("workspace selection survives refresh and creates the exact native Session before sending", async ({
+  page,
+}, testInfo) => {
+  const workspace = await mkdtemp(join(tmpdir(), "openpi-issue-467-"));
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: "http://127.0.0.1:57109",
+  };
+  try {
+    const imported = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    expect(imported.status()).toBe(201);
+    const { path: canonicalWorkspace } = await imported.json();
+    const before = await page.request.get("/api/snapshot", { headers });
+    const initial = await before.json();
+    const workspaceName = canonicalWorkspace.split("/").at(-1);
+    const prompts: Array<{ sessionId: string; content: string }> = [];
+    // Only intercept model admission. Workspace import, snapshots and native
+    // Session creation use the isolated real Host and Pi runtime.
+    await page.route("**/api/prompt", async (route) => {
+      const body = route.request().postDataJSON();
+      prompts.push({ sessionId: body.sessionId, content: body.content });
+      await route.fulfill({
+        status: 202,
+        json: { id: body.commandId, accepted: true },
+      });
+    });
+    await openWorkbench(page);
+    const picker = page.locator(".workspace-picker");
+    await picker.click();
+    await page
+      .getByRole("menuitem", { name: workspaceName, exact: true })
+      .click();
+    await expect(picker).toHaveText(workspaceName);
+    await expect(page.locator(".model-picker")).toBeEnabled();
+    // Importing the same directory again triggers a real workspace event and
+    // refresh while the canonical Session still belongs to the original cwd.
+    const refresh = page.waitForResponse(
+      (response) => new URL(response.url()).pathname === "/api/snapshot",
+    );
+    await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspace },
+    });
+    await refresh;
+    await expect(picker).toHaveText(workspaceName);
+    await page
+      .getByRole("textbox", { name: "描述任务" })
+      .fill("Only work in the selected repository");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+    await expect.poll(() => prompts.length).toBe(1);
+    const after = await page.request.get("/api/snapshot", { headers });
+    const current = await after.json();
+    expect(current.selectedSession.cwd).toBe(canonicalWorkspace);
+    expect(current.currentSessionId).not.toBe(initial.currentSessionId);
+    expect(prompts).toEqual([
+      {
+        sessionId: current.currentSessionId,
+        content: "Only work in the selected repository",
+      },
+    ]);
+    await page.screenshot({
+      path: testInfo.outputPath("workspace-selection.png"),
+      fullPage: true,
+    });
+  } finally {
+    await page.close();
+    await rm(workspace, { recursive: true, force: true });
+  }
 });
