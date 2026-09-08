@@ -4,23 +4,23 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
 import { Value } from "typebox/value";
+import {
+  AGENT_TYPE_LIMITS,
+  type AgentType,
+  BUILT_IN_AGENT_TYPES,
+} from "../../../extensions/subagents/src/agent-types.ts";
 import { MAX_RUNNING } from "../../../extensions/subagents/src/manager.ts";
 import {
   buildAgentTypeParameterDescription,
   buildSubagentSpawnResult,
-  createSubagentSpawnToolSurface,
   createAgentTypeParameterSchema,
+  createSubagentSpawnToolSurface,
   SUBAGENT_SCHEMA_BUDGETS,
-  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS,
+  SUBAGENT_SPAWN_PROMPT_GUIDELINES,
   SUBAGENT_SPAWN_TOOL_DESCRIPTION,
   SUBAGENT_WAIT_TOOL_DESCRIPTION,
 } from "../../../extensions/subagents/src/prompt.ts";
-import {
-  AGENT_TYPE_LIMITS,
-  BUILT_IN_AGENT_TYPES,
-  type AgentType,
-} from "../../../extensions/subagents/src/agent-types.ts";
 
 function spawnSurfaceBytes(agentTypes: readonly AgentType[]) {
   const surface = createSubagentSpawnToolSurface(agentTypes);
@@ -290,6 +290,21 @@ test("interactive spawn guidance releases the turn instead of waiting on depende
   assert.match(result, /end (?:this|your) turn/i);
   assert.match(result, /automatically.*re-invoked/i);
   assert.doesNotMatch(result, /next step truly cannot proceed/i);
+});
+
+test("print-host spawn guidance requires wait and does not release the turn", () => {
+  const result = buildSubagentSpawnResult({
+    id: "sa-1",
+    title: "review",
+    harness: "pi",
+    modelLabel: "m",
+    cwd: "/repo",
+    canDeliverLater: false,
+  });
+  assert.match(result, /MUST call subagent_wait/);
+  assert.match(result, /subagent_wait\(ids: \["sa-1"\]\)/);
+  assert.doesNotMatch(result, /end your turn/i);
+  assert.doesNotMatch(result, /automatically re-invoked/i);
 });
 
 test("blocking wait is reserved for an explicit synchronous contract", () => {
