@@ -321,7 +321,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 }
 
 .composer-dock { @apply flex flex-col items-center gap-2; padding: 12px 24px 22px; }
-.prompt-recovery { @apply flex w-full items-center justify-between gap-4; max-width: 840px; padding: 10px 12px; border: 1px solid oklch(74% .11 78); border-radius: 8px; background: oklch(98% .025 88); color: var(--text); font-size: 12px; }
+.prompt-recovery { @apply mx-auto flex w-full items-center justify-between gap-4; max-width: 840px; padding: 10px 12px; border: 1px solid oklch(74% .11 78); border-radius: 8px; background: oklch(98% .025 88); color: var(--text); font-size: 12px; }
 .prompt-recovery > div:first-child { @apply flex min-w-0 flex-col gap-0.5; }
 .prompt-recovery strong { font-size: 13px; }
 .prompt-recovery span { color: var(--muted); }
@@ -330,10 +330,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .prompt-recovery-actions button:hover:not(:disabled) { background: oklch(93% .025 82); color: var(--text); }
 .prompt-recovery-actions button.primary { background: var(--text); color: var(--page); }
 .prompt-recovery-actions button:disabled { opacity: .55; }
-@container conversation-shell (max-width: 640px) {
-  .prompt-recovery { @apply items-stretch; flex-direction: column; }
-  .prompt-recovery-actions { @apply flex-wrap justify-end; }
-}
 .landing .composer-dock { @apply absolute inset-x-0 z-10 w-full items-stretch; top: calc(50% - 81px); padding: 0 24px; }
 .workspace-picker-row { @apply relative mx-auto flex w-full min-w-0 items-center; max-width: 840px; padding-left: 15px; }
 .workspace-picker { max-width: 260px !important; height: 36px !important; border-radius: 18px !important; background: transparent !important; color: var(--text) !important; box-shadow: none !important; }
@@ -396,6 +392,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .message-row.assistant, .conversation-running { width: calc(100% - 24px); }
   .turn-rail { display: none; }
   .composer-dock { padding: 10px 12px 12px; }
+  .prompt-recovery { @apply items-stretch; flex-direction: column; }
+  .prompt-recovery-actions { @apply flex-wrap justify-end; }
   .landing .composer-dock { top: calc(50% - 74px); padding: 0 12px; }
   .landing-welcome { transform: translateY(-96px); }
   .composer { min-height: 104px; }
