@@ -8,6 +8,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import { URL } from "node:url";
+import { resolve } from "node:path";
 import { promisify } from "node:util";
 import {
   subscribeWebCapabilities,
@@ -15,7 +16,10 @@ import {
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
-import { PiWebAdapter } from "../adapter/pi-adapter.ts";
+import {
+  PiWebAdapter,
+  WebSessionDeletionError,
+} from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
   WEB_MAX_EVENT_BYTES,
@@ -519,6 +523,34 @@ export class WebHost {
       await this.adapter.unarchiveSession(path);
       this.publish("session_unarchived", { sessionPath: path });
       return this.json(response, 200, { path, archived: false });
+    }
+    if (url.pathname === "/api/sessions" && request.method === "DELETE") {
+      const path = url.searchParams.get("path");
+      const confirmation = url.searchParams.get("confirm");
+      if (!path)
+        return this.json(response, 400, { error: "session path is required" });
+      try {
+        const session = await this.adapter.requireSession(path);
+        const canonical = resolve(session.path);
+        if (confirmation !== canonical) {
+          return this.json(response, 400, {
+            code: "CONFIRMATION_REQUIRED",
+            error: "Confirm the exact canonical Session path before deletion",
+            path: canonical,
+          });
+        }
+        const deletedPath = await this.adapter.deleteSession(canonical);
+        this.publish("session_deleted", { sessionPath: deletedPath });
+        return this.json(response, 200, { path: deletedPath, deleted: true });
+      } catch (error) {
+        if (error instanceof WebSessionDeletionError) {
+          return this.json(response, error.statusCode, {
+            code: error.code,
+            error: error.message,
+          });
+        }
+        throw error;
+      }
     }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);

@@ -702,6 +702,24 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
+  isSessionOwned(sessionId: string, sessionPath?: string) {
+    const runtimes = new Set([
+      this.runtime,
+      ...this.retainedRuntimes,
+      ...this.candidateRuntimes,
+    ]);
+    return [...runtimes].some((runtime) => {
+      const manager = runtime.session.sessionManager;
+      if (manager.getSessionId() === sessionId) return true;
+      const ownedPath = manager.getSessionFile();
+      return (
+        sessionPath !== undefined &&
+        ownedPath !== undefined &&
+        resolve(ownedPath) === resolve(sessionPath)
+      );
+    });
+  }
+
   private async createNewSession(
     workspacePath: string,
     options?: WebSessionCreationOptions,

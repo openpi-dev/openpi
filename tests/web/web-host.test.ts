@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -111,6 +111,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     get sessionManager() {
       return sessionManager;
     },
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -844,6 +848,10 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     workspaceSelected: false,
     sessionDirectory: root,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -943,6 +951,10 @@ test("returns accepted only after Pi admits the prompt", async () => {
     sessionDirectory: cwd,
     cwd,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -1070,13 +1082,18 @@ function testRuntime(
   sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
     pendingFollowUps: 0,
   }),
+  sessionDirectory = cwd,
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
     workspaceSelected: true,
-    sessionDirectory: cwd,
+    sessionDirectory,
     cwd,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -1132,13 +1149,71 @@ test("classifies invalid and oversized JSON bodies as client errors", async () =
     const oversizedBody = await fetch(`${launched.origin}/api/workspaces`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "x".repeat(16 * 1024) }),
+      body: JSON.stringify({ path: "x".repeat(32 * 1024) }),
     });
     assert.equal(oversizedBody.status, 413);
     assert.deepEqual(await oversizedBody.json(), {
       code: "REQUEST_BODY_TOO_LARGE",
       error: "request body is too large",
       maxBytes: 16 * 1024,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("requires exact reviewed confirmation before deleting a persisted Session", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-host-"));
+  const sessionDirectory = join(cwd, "sessions");
+  await mkdir(sessionDirectory);
+  const candidate = SessionManager.create(cwd, sessionDirectory);
+  candidate.appendMessage({ role: "user", content: "delete me", timestamp: 1 });
+  candidate.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  const sessionPath = candidate.getSessionFile();
+  assert.ok(sessionPath);
+  const { host, launched, headers } = await startTestHost(
+    testRuntime(cwd, undefined, sessionDirectory),
+  );
+  try {
+    const target = `${launched.origin}/api/sessions?path=${encodeURIComponent(sessionPath)}`;
+    const bare = await fetch(target, { method: "DELETE", headers });
+    assert.equal(bare.status, 400);
+    assert.deepEqual(await bare.json(), {
+      code: "CONFIRMATION_REQUIRED",
+      error: "Confirm the exact canonical Session path before deletion",
+      path: sessionPath,
+    });
+    await readFile(sessionPath);
+    const wrong = await fetch(`${target}&confirm=wrong`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(wrong.status, 400);
+    const confirmed = await fetch(
+      `${target}&confirm=${encodeURIComponent(sessionPath)}`,
+      { method: "DELETE", headers },
+    );
+    assert.equal(confirmed.status, 200);
+    assert.deepEqual(await confirmed.json(), {
+      path: sessionPath,
+      deleted: true,
     });
   } finally {
     await host.stop();

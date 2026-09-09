@@ -1,5 +1,5 @@
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
+import { basename, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
@@ -18,6 +18,16 @@ import {
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
 import type { WebRuntimeController } from "../runtime/types.ts";
+
+export class WebSessionDeletionError extends Error {
+  readonly code = "SESSION_CONFLICT" as const;
+  readonly statusCode = 409 as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WebSessionDeletionError";
+  }
+}
 
 type WorkspaceStateSnapshot = {
   importedWorkspaces: Set<string>;
@@ -290,6 +300,37 @@ export class PiWebAdapter {
       const session = await this.requireSession(path);
       draft.delete(resolve(session.path));
     });
+  }
+
+  async deleteSession(path: string) {
+    await this.ensureWorkspaceStateLoaded();
+    await this.ensureArchivesLoaded();
+    const session = await this.requireSession(path);
+    const canonical = resolve(session.path);
+    if (this.runtime.isSessionOwned(session.id, canonical)) {
+      throw new WebSessionDeletionError(
+        "Cannot delete a Session owned by a live Web runtime",
+      );
+    }
+    const sessionDirectory = resolve(this.runtime.sessionDirectory);
+    const relativePath = relative(sessionDirectory, canonical);
+    if (
+      !relativePath ||
+      isAbsolute(relativePath) ||
+      relativePath === ".." ||
+      relativePath.startsWith(`..${sep}`) ||
+      !canonical.endsWith(".jsonl")
+    ) {
+      throw new Error("Session target is outside the Web Session directory");
+    }
+    await rm(canonical);
+    await this.enqueueArchiveMutation((draft) => {
+      draft.delete(canonical);
+    });
+    await this.enqueueWorkspaceMutation((draft) => {
+      draft.ungroupedSessions.delete(canonical);
+    });
+    return canonical;
   }
 
   async removeWorkspace(path: string) {

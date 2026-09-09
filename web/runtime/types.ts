@@ -106,6 +106,7 @@ export interface WebRuntimeController {
   readonly workspaceSelected: boolean;
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
+  isSessionOwned(sessionId: string, sessionPath?: string): boolean;
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;

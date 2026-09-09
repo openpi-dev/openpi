@@ -28,6 +28,10 @@ function runtimeFor(
     workspaceSelected: true,
     sessionDirectory,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -254,6 +258,90 @@ test("first archive mutation preserves previously persisted archive metadata", a
       new Set(persisted),
       new Set([existing, resolve(currentPath)]),
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("deletes a persisted non-active session and cleans derived metadata", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const candidate = SessionManager.create(root, sessionDirectory);
+    persistSession(candidate, "delete me", 2);
+    const candidatePath = candidate.getSessionFile();
+    assert.ok(candidatePath);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    await adapter.archiveSession(candidatePath);
+    await adapter.removeWorkspace(root);
+
+    const deletedPath = await adapter.deleteSession(candidatePath);
+    assert.equal(deletedPath, candidatePath);
+    await assert.rejects(readFile(candidatePath));
+    const archived = JSON.parse(
+      await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
+    ) as string[];
+    assert.equal(archived.includes(candidatePath), false);
+    const workspaceState = JSON.parse(
+      await readFile(join(sessionDirectory, "workspace-state.json"), "utf8"),
+    ) as { ungroupedSessions: string[] };
+    assert.equal(
+      workspaceState.ungroupedSessions.includes(candidatePath),
+      false,
+    );
+    assert.equal(
+      (await adapter.listSessions()).some(
+        (session) => session.path === candidatePath,
+      ),
+      false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to delete the active session", async () => {
+  const root = await mkdtemp(
+    join(tmpdir(), "openpi-web-session-delete-active-"),
+  );
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    await assert.rejects(
+      adapter.deleteSession(`current:${current.getSessionId()}`),
+      /live Web runtime/u,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to delete a Session retained by a live runtime", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-live-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const candidate = SessionManager.create(root, sessionDirectory);
+    persistSession(candidate, "retained", 2);
+    const candidatePath = candidate.getSessionFile();
+    assert.ok(candidatePath);
+    const runtime = runtimeFor(root, sessionDirectory, current);
+    runtime.isSessionOwned = () => true;
+    const adapter = new PiWebAdapter(runtime);
+    await assert.rejects(
+      adapter.deleteSession(candidatePath),
+      /live Web runtime/u,
+    );
+    await readFile(candidatePath);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
