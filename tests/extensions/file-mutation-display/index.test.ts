@@ -54,7 +54,7 @@ async function withSession(
     sessionManager: SessionManager.inMemory(cwd),
   });
   try {
-    await session.bindExtensions({ mode: "print" });
+    await session.bindExtensions({ mode: "tui" });
     await run(session, cwd);
   } finally {
     session.dispose();

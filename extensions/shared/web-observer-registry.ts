@@ -6,6 +6,12 @@ export type WebCapabilityKind =
 export const WEB_MAX_CAPABILITY_ITEMS = 32;
 const WEB_MAX_ACTIVITY_TEXT = 160;
 const WEB_MAX_WORKFLOW_AGENTS_SCANNED = 1_024;
+const WEB_MAX_CAPABILITY_ID = 160;
+const WEB_MAX_TERMINAL_COMMAND_BYTES = 4 * 1024;
+const WEB_MAX_TERMINAL_CWD_BYTES = 2 * 1024;
+const WEB_MAX_TERMINAL_ERROR_BYTES = 2 * 1024;
+const WEB_MAX_TERMINAL_STDOUT_BYTES = 16 * 1024;
+const WEB_MAX_TERMINAL_STDERR_BYTES = 8 * 1024;
 
 export interface WebSubagentActivity {
   readonly id: string;
@@ -43,6 +49,42 @@ export interface WebBackgroundTerminalActivity {
   readonly signal?: string;
 }
 
+export interface WebBackgroundTerminalOutput {
+  readonly text: string;
+  readonly totalBytes: number;
+  readonly retainedBytes: number;
+  readonly omittedBytes: number;
+  readonly truncated: boolean;
+  readonly recoveryAvailable: boolean;
+}
+
+export interface WebBackgroundTerminalDetail {
+  readonly kind: "background-terminals";
+  readonly id: string;
+  readonly title: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly pid?: number;
+  readonly status: WebBackgroundTerminalActivity["status"];
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly timeoutAt?: number;
+  readonly exitCode?: number;
+  readonly signal?: string;
+  readonly errorText?: string;
+  readonly stdout: WebBackgroundTerminalOutput;
+  readonly stderr: WebBackgroundTerminalOutput;
+  readonly truncated: boolean;
+}
+
+export type WebCapabilityDetail = WebBackgroundTerminalDetail;
+
+export type WebCapabilityDetailReceipt =
+  | { readonly status: "found"; readonly detail: WebCapabilityDetail }
+  | { readonly status: "invalid" }
+  | { readonly status: "missing" }
+  | { readonly status: "unavailable" };
+
 export interface WebCapabilityProjection<
   Item =
     | WebSubagentActivity
@@ -64,6 +106,7 @@ export interface WebCapabilitySnapshot {
 export interface WebCapabilityProvider {
   readonly kind: WebCapabilityKind;
   readonly snapshot: () => WebCapabilityProjection;
+  readonly detail?: (id: string) => WebCapabilityDetail | undefined;
   readonly subscribe?: (listener: () => void) => () => void;
 }
 
@@ -79,6 +122,53 @@ function boundedActivityText(value: string): BoundedActivityText {
   return {
     value: `${value.slice(0, WEB_MAX_ACTIVITY_TEXT - 1)}…`,
     truncated: true,
+  };
+}
+
+interface BoundedUtf8Text {
+  readonly value: string;
+  readonly bytes: number;
+  readonly truncated: boolean;
+}
+
+function boundedUtf8Tail(value: string, maxBytes: number): BoundedUtf8Text {
+  const encoded = new TextEncoder().encode(value);
+  if (encoded.byteLength <= maxBytes) {
+    return { value, bytes: encoded.byteLength, truncated: false };
+  }
+  let start = encoded.byteLength - maxBytes;
+  while (start < encoded.byteLength && (encoded[start]! & 0xc0) === 0x80) {
+    start++;
+  }
+  const retained = encoded.slice(start);
+  return {
+    value: new TextDecoder().decode(retained),
+    bytes: retained.byteLength,
+    truncated: true,
+  };
+}
+
+function projectTerminalOutput(
+  source: {
+    readonly modelSafeText: string;
+    readonly totalBytes: number;
+    readonly truncatedBytes: number;
+    readonly spillPath?: string;
+  },
+  maxBytes: number,
+): WebBackgroundTerminalOutput {
+  const text = boundedUtf8Tail(source.modelSafeText, maxBytes);
+  const omittedBytes = Math.max(
+    source.truncatedBytes,
+    source.totalBytes - text.bytes,
+  );
+  return {
+    text: text.value,
+    totalBytes: source.totalBytes,
+    retainedBytes: text.bytes,
+    omittedBytes,
+    truncated: text.truncated || source.truncatedBytes > 0,
+    recoveryAvailable: source.spillPath !== undefined,
   };
 }
 
@@ -258,6 +348,77 @@ export function projectBackgroundTerminalCapability(
   });
 }
 
+export function projectBackgroundTerminalDetail(source: {
+  readonly id: string;
+  readonly title: string;
+  readonly command: string;
+  readonly cwd: string;
+  readonly pid?: number;
+  readonly status: WebBackgroundTerminalActivity["status"];
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly timeoutAt?: number;
+  readonly exitCode?: number;
+  readonly signal?: string;
+  readonly errorText?: string;
+  readonly stdout: {
+    readonly modelSafeText: string;
+    readonly totalBytes: number;
+    readonly truncatedBytes: number;
+    readonly spillPath?: string;
+  };
+  readonly stderr: {
+    readonly modelSafeText: string;
+    readonly totalBytes: number;
+    readonly truncatedBytes: number;
+    readonly spillPath?: string;
+  };
+}): WebBackgroundTerminalDetail {
+  const title = boundedActivityText(source.title);
+  const command = boundedUtf8Tail(
+    source.command,
+    WEB_MAX_TERMINAL_COMMAND_BYTES,
+  );
+  const cwd = boundedUtf8Tail(source.cwd, WEB_MAX_TERMINAL_CWD_BYTES);
+  const signal = source.signal ? boundedActivityText(source.signal) : undefined;
+  const errorText = source.errorText
+    ? boundedUtf8Tail(source.errorText, WEB_MAX_TERMINAL_ERROR_BYTES)
+    : undefined;
+  const stdout = projectTerminalOutput(
+    source.stdout,
+    WEB_MAX_TERMINAL_STDOUT_BYTES,
+  );
+  const stderr = projectTerminalOutput(
+    source.stderr,
+    WEB_MAX_TERMINAL_STDERR_BYTES,
+  );
+  return {
+    kind: "background-terminals",
+    id: source.id,
+    title: title.value,
+    command: command.value,
+    cwd: cwd.value,
+    ...(source.pid !== undefined ? { pid: source.pid } : {}),
+    status: source.status,
+    createdAt: source.createdAt,
+    ...(source.settledAt !== undefined ? { settledAt: source.settledAt } : {}),
+    ...(source.timeoutAt !== undefined ? { timeoutAt: source.timeoutAt } : {}),
+    ...(source.exitCode !== undefined ? { exitCode: source.exitCode } : {}),
+    ...(signal ? { signal: signal.value } : {}),
+    ...(errorText ? { errorText: errorText.value } : {}),
+    stdout,
+    stderr,
+    truncated:
+      title.truncated ||
+      command.truncated ||
+      cwd.truncated ||
+      signal?.truncated === true ||
+      errorText?.truncated === true ||
+      stdout.truncated ||
+      stderr.truncated,
+  };
+}
+
 /** The Pi SessionManager object itself is the capability-lifetime identity. */
 export type WebCapabilityScope = object;
 
@@ -383,6 +544,27 @@ export function webCapabilitySnapshot(
   return Object.fromEntries(
     [...scopedProviders].map(([kind, provider]) => [kind, provider.snapshot()]),
   );
+}
+
+export function webCapabilityDetail(
+  scope: WebCapabilityScope,
+  kind: WebCapabilityKind,
+  id: string,
+): WebCapabilityDetailReceipt {
+  if (
+    id.length === 0 ||
+    id.length > WEB_MAX_CAPABILITY_ID ||
+    /[\u0000-\u001f\u007f]/u.test(id)
+  ) {
+    return { status: "invalid" };
+  }
+  const provider = providers.get(scope)?.get(kind);
+  if (!provider?.detail) return { status: "unavailable" };
+  const detail = provider.detail(id);
+  if (!detail) return { status: "missing" };
+  if (detail.kind !== kind || detail.id !== id)
+    return { status: "unavailable" };
+  return { status: "found", detail };
 }
 
 export function notifyWebCapabilities(scope: WebCapabilityScope) {

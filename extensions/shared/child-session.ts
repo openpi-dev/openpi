@@ -550,6 +550,20 @@ export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   );
 }
 
+/** Project the parent's active surface into a child; a role can only narrow it.
+ * Active tools are a visibility choice, not a filesystem/network sandbox.
+ * Inactive tools are not implicitly activated by delegation.
+ */
+export function inheritedChildToolAllowlist(
+  parentTools: readonly string[],
+  roleTools?: readonly string[],
+) {
+  const allowed = roleTools === undefined ? undefined : new Set(roleTools);
+  return effectiveChildToolAllowlist([...new Set(parentTools)])!.filter(
+    (name) => allowed === undefined || allowed.has(name),
+  );
+}
+
 export function childToolPolicy(tools?: readonly string[]) {
   const effectiveTools = effectiveChildToolAllowlist(tools);
   return {

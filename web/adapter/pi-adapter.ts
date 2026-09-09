@@ -1,4 +1,5 @@
 import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { basename, join, resolve } from "node:path";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
@@ -39,12 +40,16 @@ export interface ArchivedSessionQuery {
 
 interface ArchivedSessionCursor {
   readonly version: 1;
-  readonly sessionId: string;
-  readonly query: string;
+  readonly sessionPath: string;
+  readonly queryHash: string;
 }
 
 function encodeArchivedSessionCursor(cursor: ArchivedSessionCursor) {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function archivedQueryHash(query: string) {
+  return createHash("sha256").update(query).digest("hex");
 }
 
 function decodeArchivedSessionCursor(value: string) {
@@ -57,12 +62,11 @@ function decodeArchivedSessionCursor(value: string) {
       typeof parsed !== "object" ||
       Array.isArray(parsed) ||
       (parsed as { version?: unknown }).version !== 1 ||
-      typeof (parsed as { sessionId?: unknown }).sessionId !== "string" ||
-      (parsed as { sessionId: string }).sessionId.length === 0 ||
-      (parsed as { sessionId: string }).sessionId.length > 160 ||
-      typeof (parsed as { query?: unknown }).query !== "string" ||
-      (parsed as { query: string }).query.length >
-        WEB_MAX_ARCHIVED_SESSION_QUERY
+      typeof (parsed as { sessionPath?: unknown }).sessionPath !== "string" ||
+      (parsed as { sessionPath: string }).sessionPath.length === 0 ||
+      (parsed as { sessionPath: string }).sessionPath.length > 320 ||
+      typeof (parsed as { queryHash?: unknown }).queryHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test((parsed as { queryHash: string }).queryHash)
     ) {
       return undefined;
     }
@@ -353,6 +357,9 @@ export class PiWebAdapter {
     );
     const scanned = allSessions.slice(0, WEB_MAX_ARCHIVED_SESSION_SCAN);
     const normalizedQuery = query.normalize("NFKC").toLocaleLowerCase();
+    if (normalizedQuery.length > WEB_MAX_ARCHIVED_SESSION_QUERY) {
+      return { status: "invalid" as const };
+    }
     const matches = scanned.filter((session) => {
       if (!this.archivedSessions.has(resolve(session.path))) return false;
       if (!normalizedQuery) return true;
@@ -371,11 +378,11 @@ export class PiWebAdapter {
     if (options.cursor !== undefined) {
       const cursor = decodeArchivedSessionCursor(options.cursor);
       if (!cursor) return { status: "invalid" as const };
-      if (cursor.query !== normalizedQuery) {
+      if (cursor.queryHash !== archivedQueryHash(normalizedQuery)) {
         return { status: "stale_cursor" as const };
       }
       const cursorIndex = matches.findIndex(
-        (session) => session.id === cursor.sessionId,
+        (session) => session.path === cursor.sessionPath,
       );
       if (cursorIndex < 0) return { status: "stale_cursor" as const };
       start = cursorIndex + 1;
@@ -410,8 +417,8 @@ export class PiWebAdapter {
         ? {
             nextCursor: encodeArchivedSessionCursor({
               version: 1,
-              sessionId: sessions.at(-1)!.id,
-              query: normalizedQuery,
+              sessionPath: sessions.at(-1)!.path,
+              queryHash: archivedQueryHash(normalizedQuery),
             }),
           }
         : {}),
@@ -423,6 +430,14 @@ export class PiWebAdapter {
         maxScanned: WEB_MAX_ARCHIVED_SESSION_SCAN,
       },
     };
+  }
+
+  async unarchiveSession(path: string) {
+    await this.ensureArchivesLoaded();
+    await this.enqueueArchiveMutation(async (draft) => {
+      const session = await this.requireSession(path);
+      draft.delete(resolve(session.path));
+    });
   }
 
   async removeWorkspace(path: string) {
@@ -462,6 +477,7 @@ export class PiWebAdapter {
     // only the Web projection below is retained and bounded.
     const sorted = allSessions;
     const currentId = this.runtime.sessionManager.getSessionId();
+    const currentFile = this.runtime.sessionManager.getSessionFile();
     const pinned = new Set(
       sorted
         .filter(
@@ -482,6 +498,10 @@ export class PiWebAdapter {
         id: session.id,
         path: session.path,
         cwd: resolve(session.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: session.id === currentId && currentFile !== undefined && resolve(session.path) === resolve(currentFile) ? ("web" as const) : ("none" as const),
+        readOnly: false as const,
         ...(session.name
           ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
           : {}),
@@ -519,6 +539,10 @@ export class PiWebAdapter {
         id: currentId,
         path: currentPath,
         cwd: resolve(this.runtime.cwd),
+        source: "web-session" as const,
+        origin: "web" as const,
+        controller: "web" as const,
+        readOnly: false as const,
         ...(this.runtime.sessionManager.getSessionName()
           ? {
               name: boundedText(

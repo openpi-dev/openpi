@@ -701,3 +701,17 @@ test("replayed calls raise the backstop instead of killing a resumed run", async
     /exceeded its agent request budget/,
   );
 });
+
+test("sandbox preserves an explicit working_dir for child admission", async () => {
+  let selected: unknown;
+  await run(
+    'return await agent("inspect", { working_dir: "../other-project" });',
+    {
+      onAgent: async (_prompt, options) => {
+        selected = options.working_dir;
+        return { ok: true, output: "done" };
+      },
+    },
+  );
+  assert.equal(selected, "../other-project");
+});

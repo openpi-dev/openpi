@@ -10,9 +10,11 @@ import type {
   Model,
   SimpleStreamOptions,
   TextContent,
+  ToolCall,
 } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
 import { emptyUsage } from "../usage.ts";
+import { ConnectFrameReader } from "./connect-frame-reader.ts";
 import {
   CURSOR_API_URL,
   CURSOR_CLIENT_VERSION,
@@ -35,6 +37,7 @@ import {
   CursorRuleSchema,
   CursorRuleTypeGlobalSchema,
   CursorRuleTypeSchema,
+  CursorToolCallSchema,
   ExecClientControlMessageSchema,
   ExecClientMessageSchema,
   ExecClientStreamCloseSchema,
@@ -44,6 +47,15 @@ import {
   KvClientMessageSchema,
   type KvServerMessage,
   KvServerMessageSchema,
+  McpArgsSchema,
+  McpImageContentSchema,
+  McpRejectedSchema,
+  McpResultSchema,
+  McpSuccessSchema,
+  McpTextContentSchema,
+  McpToolCallSchema,
+  McpToolResultContentItemSchema,
+  McpToolResultSchema,
   type ModelDetails,
   ModelDetailsSchema,
   RequestContextResultSchema,
@@ -59,14 +71,21 @@ import {
   UserMessageActionSchema,
   UserMessageSchema,
 } from "./proto.ts";
-import { create, fromBinary, toBinary } from "./protobuf.ts";
+import { create, encodeJsonValue, fromBinary, toBinary } from "./protobuf.ts";
 import { connectCursorHttp2 } from "./proxy.ts";
+import {
+  buildCursorTools,
+  CURSOR_PI_PROVIDER,
+  CURSOR_PI_TOOLS_SYSTEM_PROMPT,
+  decodeCursorTool,
+} from "./tool-bridge.ts";
 
 const CONNECT_END_STREAM_FLAG = 0b00000010;
 const CONNECT_COMPRESSED_FLAG = 0b00000001;
 const MAX_CONNECT_FRAME_BYTES = 16 * 1024 * 1024;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const PROXY_TUNNEL_TIMEOUT_MS = 30_000;
+const MAX_NATIVE_EXEC_REJECTIONS = 3;
 
 export const CURSOR_CHAT_ONLY_SYSTEM_PROMPT =
   "This Cursor provider is running in chat-only mode. No filesystem, shell, code modification, MCP, web, or user-interaction tools are available. Never emit tool calls or interaction queries. Images attached to the user message are already available for direct analysis. If required information is unavailable, explain the limitation in text instead of attempting a tool.";
@@ -199,14 +218,42 @@ function rootPromptContent(
 
 function assistantRootContent(
   message: Extract<Message, { role: "assistant" }>,
+  results: Map<string, Extract<Message, { role: "toolResult" }>>,
 ) {
   const content: Array<Record<string, unknown>> = [];
   for (const item of message.content) {
     if (item.type === "text" && item.text) {
       content.push({ type: "text", text: item.text });
+    } else if (
+      item.type === "toolCall" &&
+      results.get(item.id)?.toolName === item.name
+    ) {
+      content.push({
+        type: "tool-call",
+        toolCallId: item.id,
+        toolName: item.name,
+        args: item.arguments,
+      });
     }
   }
   return content;
+}
+
+function pairedToolResults(messages: Message[], end: number) {
+  const calls = new Map<string, string>();
+  const results = new Map<string, Extract<Message, { role: "toolResult" }>>();
+  for (const message of messages.slice(0, end < 0 ? undefined : end)) {
+    if (message.role === "assistant") {
+      for (const part of message.content)
+        if (part.type === "toolCall") calls.set(part.id, part.name);
+    } else if (
+      message.role === "toolResult" &&
+      calls.get(message.toolCallId) === message.toolName
+    ) {
+      results.set(message.toolCallId, message);
+    }
+  }
+  return results;
 }
 
 function buildHistoryRootPrompt(
@@ -215,6 +262,7 @@ function buildHistoryRootPrompt(
   activeUserIndex: number,
 ): Uint8Array[] {
   const entries: Uint8Array[] = [];
+  const results = pairedToolResults(messages, activeUserIndex);
   for (let index = 0; index < messages.length; index++) {
     if (index === activeUserIndex) break;
     const message = messages[index];
@@ -224,13 +272,29 @@ function buildHistoryRootPrompt(
       if (content.length === 0) continue;
       value = { role: "user", content };
     } else if (message.role === "assistant") {
-      const content = assistantRootContent(message);
+      const content = assistantRootContent(message, results);
       if (content.length === 0) continue;
       value = { role: "assistant", content };
     } else {
-      // Chat-only mode never replays assistant tool calls. Replaying only the
-      // matching tool result would create an invalid orphan in Cursor history.
-      continue;
+      if (results.get(message.toolCallId) !== message) continue;
+      value = {
+        role: "tool",
+        id: message.toolCallId,
+        content: [
+          {
+            type: "tool-result",
+            toolCallId: message.toolCallId,
+            toolName: message.toolName,
+            result: message.content.some((part) => part.type === "image")
+              ? rootPromptContent(message.content)
+              : message.content
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("\n"),
+            ...(message.isError ? { isError: true } : {}),
+          },
+        ],
+      };
     }
     entries.push(
       storeBlob(store, new TextEncoder().encode(JSON.stringify(value))),
@@ -242,13 +306,17 @@ function buildHistoryRootPrompt(
 function buildSystemPrompt(
   systemPrompt: Context["systemPrompt"],
   store: CursorBlobStore,
+  hasTools = false,
 ): Uint8Array[] {
   const prompts = systemPrompt
     ? Array.isArray(systemPrompt)
       ? systemPrompt
       : [systemPrompt]
     : ["You are a helpful assistant."];
-  return [...prompts, CURSOR_CHAT_ONLY_SYSTEM_PROMPT].map((prompt) =>
+  return [
+    ...prompts,
+    hasTools ? CURSOR_PI_TOOLS_SYSTEM_PROMPT : CURSOR_CHAT_ONLY_SYSTEM_PROMPT,
+  ].map((prompt) =>
     storeBlob(
       store,
       new TextEncoder().encode(
@@ -260,11 +328,12 @@ function buildSystemPrompt(
 
 /**
  * Cursor asks for these rules over the exec channel before generating text.
- * They are global rules only; the chat-only provider intentionally returns an
- * empty MCP tool list and never forwards `context.tools`.
+ * These rules keep Cursor-native tools disabled. The request-context response
+ * advertises only the active Pi tools through the MCP protocol bridge.
  */
 export function buildCursorRequestContextRules(
   systemPrompt: Context["systemPrompt"],
+  hasTools = false,
 ): CursorRule[] {
   const rules: CursorRule[] = systemPrompt?.trim()
     ? [
@@ -283,8 +352,10 @@ export function buildCursorRequestContextRules(
     : [];
   rules.push(
     create(CursorRuleSchema, {
-      fullPath: "/pi/cursor-chat-only.mdc",
-      content: CURSOR_CHAT_ONLY_SYSTEM_PROMPT,
+      fullPath: hasTools ? "/pi/cursor-tools.mdc" : "/pi/cursor-chat-only.mdc",
+      content: hasTools
+        ? CURSOR_PI_TOOLS_SYSTEM_PROMPT
+        : CURSOR_CHAT_ONLY_SYSTEM_PROMPT,
       source: 2,
       type: create(CursorRuleTypeSchema, {
         type: { case: "global", value: create(CursorRuleTypeGlobalSchema, {}) },
@@ -300,6 +371,7 @@ function buildHistoryTurns(
   activeUserIndex: number,
 ): Uint8Array[] {
   const turns: Uint8Array[] = [];
+  const results = pairedToolResults(messages, activeUserIndex);
   const end = activeUserIndex >= 0 ? activeUserIndex : messages.length;
   let index = 0;
   while (index < end) {
@@ -331,6 +403,68 @@ function buildHistoryTurns(
                         text: item.text,
                       }),
                     },
+                  }),
+                ),
+              ),
+            );
+          } else if (item.type === "toolCall") {
+            const result = results.get(item.id);
+            if (!result || result.toolName !== item.name) continue;
+            const args = Object.fromEntries(
+              Object.entries(item.arguments).map(([key, value]) => [
+                key,
+                encodeJsonValue(JSON.parse(JSON.stringify(value))),
+              ]),
+            );
+            const tool = create(CursorToolCallSchema, {
+              toolCallId: item.id,
+              tool: {
+                case: "mcpToolCall",
+                value: create(McpToolCallSchema, {
+                  args: create(McpArgsSchema, {
+                    name: item.name,
+                    toolName: item.name,
+                    providerIdentifier: CURSOR_PI_PROVIDER,
+                    toolCallId: item.id,
+                    args,
+                  }),
+                  result: create(McpToolResultSchema, {
+                    result: {
+                      case: "success",
+                      value: create(McpSuccessSchema, {
+                        isError: result.isError,
+                        content: result.content.map((part) =>
+                          create(McpToolResultContentItemSchema, {
+                            content:
+                              part.type === "text"
+                                ? {
+                                    case: "text",
+                                    value: create(McpTextContentSchema, {
+                                      text: part.text,
+                                    }),
+                                  }
+                                : {
+                                    case: "image",
+                                    value: create(McpImageContentSchema, {
+                                      data: Buffer.from(part.data, "base64"),
+                                      mimeType: part.mimeType,
+                                    }),
+                                  },
+                          }),
+                        ),
+                      }),
+                    },
+                  }),
+                }),
+              },
+            });
+            steps.push(
+              storeBlob(
+                store,
+                toBinary(
+                  ConversationStepSchema,
+                  create(ConversationStepSchema, {
+                    message: { case: "toolCall", value: tool },
                   }),
                 ),
               ),
@@ -414,11 +548,14 @@ export async function buildCursorRequest(
   options?: SimpleStreamOptions,
 ): Promise<CursorRequestBuild> {
   const store: CursorBlobStore = new Map();
-  const activeIndex = lastUserIndex(context.messages);
+  const activeIndex =
+    context.messages.at(-1)?.role === "user"
+      ? lastUserIndex(context.messages)
+      : -1;
   const active = activeIndex >= 0 ? context.messages[activeIndex] : undefined;
   const activeContent = active?.role === "user" ? active.content : undefined;
   const rootPromptMessagesJson = [
-    ...buildSystemPrompt(context.systemPrompt, store),
+    ...buildSystemPrompt(context.systemPrompt, store, !!context.tools?.length),
     ...buildHistoryRootPrompt(context.messages, store, activeIndex),
   ];
   const state = create(ConversationStateStructureSchema, {
@@ -543,18 +680,7 @@ function errorFromEndStream(data: Uint8Array): Error | undefined {
   }
 }
 
-function isAbortError(
-  error: unknown,
-  signal: AbortSignal | undefined,
-): boolean {
-  return (
-    Boolean(signal?.aborted) ||
-    (error instanceof Error &&
-      /aborted|cancelled|canceled/i.test(error.message))
-  );
-}
-
-/** Cursor AgentService/Run, deliberately chat-only (no context.tools advertisement or Pi tool calls). */
+/** Cursor AgentService/Run with Pi-owned tool execution across provider turns. */
 export function streamCursor(
   model: Model<Api>,
   context: Context,
@@ -586,6 +712,9 @@ export function streamCursor(
     let turnEnded = false;
     let terminalError: Error | undefined;
     let finished = false;
+    const pendingCalls = new Map<string, ToolCall>();
+    let handingOffTools = false;
+    let nativeExecRejections = 0;
 
     const closeBlocks = () => {
       if (currentText) {
@@ -614,9 +743,9 @@ export function streamCursor(
       if (finished) return;
       finished = true;
       closeBlocks();
-      output.stopReason = isAbortError(error, options?.signal)
-        ? "aborted"
-        : "error";
+      // Peer resets and server cancellation messages are transport failures.
+      // Only the caller's signal establishes a locally requested interruption.
+      output.stopReason = options?.signal?.aborted ? "aborted" : "error";
       output.errorMessage =
         error instanceof Error ? error.message : String(error);
       stream.push({
@@ -696,14 +825,19 @@ export function streamCursor(
           h2Request?.close(http2.constants.NGHTTP2_CANCEL);
         }, requestTimeoutMs);
       };
-      let frameBuffer: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+      const frames = new ConnectFrameReader(MAX_CONNECT_FRAME_BYTES);
       const processFrame = (flags: number, bytes: Uint8Array) => {
+        if (handingOffTools || terminalError) return;
         if ((flags & CONNECT_COMPRESSED_FLAG) !== 0) {
           throw new Error("Compressed Cursor Connect frames are unsupported");
         }
         if ((flags & CONNECT_END_STREAM_FLAG) !== 0) {
           terminalError = errorFromEndStream(bytes);
-          if (terminalError) h2Request?.close();
+          if (terminalError) {
+            // Preserve the server's error before close emits an aborted event.
+            settle(terminalError);
+            h2Request?.close();
+          }
           return;
         }
         const message = fromBinary(AgentServerMessageSchema, bytes);
@@ -715,8 +849,11 @@ export function streamCursor(
                 case: "success",
                 value: create(RequestContextSuccessSchema, {
                   requestContext: create(RequestContextSchema, {
-                    rules: buildCursorRequestContextRules(context.systemPrompt),
-                    tools: [],
+                    rules: buildCursorRequestContextRules(
+                      context.systemPrompt,
+                      !!context.tools?.length,
+                    ),
+                    tools: buildCursorTools(context.tools),
                   }),
                 }),
               },
@@ -734,6 +871,60 @@ export function streamCursor(
             );
             return;
           }
+          if (exec.message.case === "mcpArgs") {
+            const args = exec.message.value;
+            if (args.smartModeApprovalOnly) {
+              // A probe must not become a tool call or preauthorize Pi execution.
+              const reply = create(AgentClientMessageSchema, {
+                message: {
+                  case: "execClientMessage",
+                  value: create(ExecClientMessageSchema, {
+                    id: exec.id,
+                    execId: exec.execId,
+                    message: {
+                      case: "mcpResult",
+                      value: create(McpResultSchema, {
+                        result: {
+                          case: "rejected",
+                          value: create(McpRejectedSchema, {
+                            reason:
+                              "Pi must evaluate permissions when executing the tool; approval-only probes cannot authorize execution.",
+                          }),
+                        },
+                      }),
+                    },
+                  }),
+                },
+              });
+              h2Request?.write(
+                frameConnectMessage(toBinary(AgentClientMessageSchema, reply)),
+              );
+              return;
+            }
+            const call = decodeCursorTool(args, context.tools);
+            if (
+              context.messages.some((message) =>
+                message.role === "toolResult"
+                  ? message.toolCallId === call.id
+                  : message.role === "assistant" &&
+                    message.content.some(
+                      (part) => part.type === "toolCall" && part.id === call.id,
+                    ),
+              )
+            ) {
+              throw new Error(
+                "Cursor attempted to replay a tool call identity already present in Pi history",
+              );
+            }
+            const previous = pendingCalls.get(call.id);
+            if (previous && JSON.stringify(previous) !== JSON.stringify(call)) {
+              throw new Error(
+                "Cursor repeated a tool call identity with different arguments",
+              );
+            }
+            pendingCalls.set(call.id, call);
+            return;
+          }
           const throwReply = create(AgentClientMessageSchema, {
             message: {
               case: "execClientControlMessage",
@@ -742,8 +933,9 @@ export function streamCursor(
                   case: "throw",
                   value: create(ExecClientThrowSchema, {
                     id: exec.id,
-                    error:
-                      "Cursor tools are not available in this chat-only provider",
+                    error: context.tools?.length
+                      ? "Cursor-native execution is unavailable; use advertised Pi MCP tools"
+                      : "Cursor tools are not available in this chat-only provider",
                     errorCode: "UNIMPLEMENTED",
                   }),
                 },
@@ -762,19 +954,35 @@ export function streamCursor(
             },
           });
           const error = new Error(
-            "Cursor requested a tool that is unavailable in chat-only mode",
+            context.tools?.length
+              ? "Cursor requested unsupported native execution outside Pi"
+              : "Cursor requested a tool that is unavailable in chat-only mode",
           );
-          terminalError = error;
           if (!h2Request) {
             settle(error);
             return;
+          }
+          // Like OMP's sendExecClientThrow, reject this exec frame in band.
+          // streamClose closes the rejected exec, not AgentService/Run: the
+          // model may recover by requesting one of the advertised Pi tools.
+          const recover =
+            Boolean(context.tools?.length) &&
+            ++nativeExecRejections <= MAX_NATIVE_EXEC_REJECTIONS;
+          if (!recover) {
+            terminalError = context.tools?.length
+              ? new Error(
+                  `Cursor native execution recovery limit (${MAX_NATIVE_EXEC_REJECTIONS}) exceeded; last exec id ${exec.id}`,
+                )
+              : error;
           }
           h2Request.write(
             frameConnectMessage(toBinary(AgentClientMessageSchema, throwReply)),
           );
           h2Request.write(
             frameConnectMessage(toBinary(AgentClientMessageSchema, closeReply)),
-            () => settle(error),
+            () => {
+              if (!recover) settle(terminalError);
+            },
           );
           return;
         }
@@ -784,10 +992,24 @@ export function streamCursor(
         }
         if (message.message.case === "interactionQuery") {
           throw new Error(
-            `Cursor interaction query ${message.message.value.query.case ?? "unknown"} is unavailable in chat-only mode`,
+            `Cursor interaction query ${message.message.value.query.case ?? "unknown"} is unavailable ${context.tools?.length ? "outside Pi's interaction lifecycle" : "in chat-only mode"}`,
           );
         }
         if (message.message.case !== "interactionUpdate") return;
+        const update = message.message.value;
+        if (
+          context.tools?.length &&
+          (update.message.case === "partialToolCall" ||
+            update.message.case === "toolCallStarted" ||
+            update.message.case === "toolCallCompleted" ||
+            update.message.case === "toolCallDelta")
+        ) {
+          // Only exec mcpArgs is an invocation. UI previews may be partial,
+          // duplicated, or emitted for approval probes, and never execute.
+          // Native previews are not an execution request either. Wait for its
+          // exec frame so we can reject it with the correct protocol identity.
+          return;
+        }
         processInteraction(
           message.message.value,
           output,
@@ -813,22 +1035,39 @@ export function streamCursor(
         );
       };
       const processData = (chunk: Buffer) => {
-        frameBuffer =
-          frameBuffer.length === 0
-            ? chunk
-            : Buffer.concat([frameBuffer, chunk]);
-        while (frameBuffer.length >= 5) {
-          const size = frameBuffer.readUInt32BE(1);
-          if (size > MAX_CONNECT_FRAME_BYTES) {
-            throw new Error(
-              `Cursor Connect frame exceeds ${MAX_CONNECT_FRAME_BYTES} bytes`,
-            );
+        frames.push(chunk, processFrame);
+        // Preserve tool batching while a complete header awaits its body.
+        if (frames.awaitingPayload) return;
+        if (pendingCalls.size > 0 && !handingOffTools) {
+          if (terminalError) throw terminalError;
+          if (options?.signal?.aborted)
+            throw new Error("Cursor request aborted");
+          closeBlocks();
+          for (const call of pendingCalls.values()) {
+            const contentIndex = output.content.length;
+            output.content.push(call);
+            stream.push({
+              type: "toolcall_start",
+              contentIndex,
+              partial: output,
+            });
+            stream.push({
+              type: "toolcall_delta",
+              contentIndex,
+              delta: JSON.stringify(call.arguments),
+              partial: output,
+            });
+            stream.push({
+              type: "toolcall_end",
+              contentIndex,
+              toolCall: call,
+              partial: output,
+            });
           }
-          if (frameBuffer.length < size + 5) return;
-          const flags = frameBuffer[0]!;
-          const data = frameBuffer.subarray(5, size + 5);
-          frameBuffer = frameBuffer.subarray(size + 5);
-          processFrame(flags, data);
+          output.stopReason = "toolUse";
+          handingOffTools = true;
+          turnEnded = true;
+          settle();
         }
       };
 
@@ -907,7 +1146,7 @@ export function streamCursor(
           .then(() => {
             if (!responseSeen)
               throw new Error("Cursor response headers were not received");
-            if (frameBuffer.length !== 0)
+            if (frames.incomplete)
               throw new Error("Incomplete Cursor Connect frame");
             settle();
           })
@@ -967,7 +1206,12 @@ export function streamCursor(
       output.usage.totalTokens = output.usage.input + output.usage.output;
       stream.push({
         type: "done",
-        reason: output.stopReason === "length" ? "length" : "stop",
+        reason:
+          output.stopReason === "toolUse"
+            ? "toolUse"
+            : output.stopReason === "length"
+              ? "length"
+              : "stop",
         message: output,
       });
       stream.end();
