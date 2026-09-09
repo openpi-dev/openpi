@@ -598,6 +598,7 @@ Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和
 | `/sessions`                | 搜索、预览与切换 Session                       |
 | `/plan [目标]`             | 只读调研；Plan Ready 后显式选择实施方式        |
 | `/cron ...`                | 为当前 Session 安排一次或周期性 Prompt         |
+| `/usage [选项]`            | 查看已登录模型服务订阅配额与余额（Cursor / Codex / Antigravity） |
 | `/lg` / `/pr`              | 浏览 Diff（`/lg` 仅 TUI）/ 显式刷新当前分支 PR |
 | `/copy-all`                | 复制当前分支可见对话                           |
 
@@ -702,6 +703,7 @@ extensions/
 ├── sessions/              # Session 搜索与切换
 ├── suggestions/           # Ephemeral next-action suggestion
 ├── ui-customization/      # Header、Footer、Terminal title
+├── usage/                 # /usage 订阅配额与剩余额度查询
 └── shared/                # Child policy、配置、Worktree、终端清洗
 
 bin/openpi.js              # 独立 Web CLI 入口
