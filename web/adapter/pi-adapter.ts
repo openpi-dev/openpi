@@ -1,6 +1,19 @@
-import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, join, resolve } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  lstat,
+  open,
+  readFile,
+  readdir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  getAgentDir,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
 import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
@@ -37,6 +50,175 @@ type WorkspaceStateSnapshot = {
   ungroupedSessions: Set<string>;
   restoreInitialWorkspace: boolean;
 };
+
+const TERMINAL_DISCOVERY_MAX_BYTES = 256 * 1024;
+const TERMINAL_DISCOVERY_MAX_FILES = WEB_MAX_SESSIONS;
+
+type ReadOnlyTerminalSessionInfo = {
+  id: string;
+  path: string;
+  cwd: string;
+  name?: string;
+  modified: Date;
+  created: Date;
+  messageCount: number;
+  firstMessage: string;
+};
+
+function defaultTerminalSessionDirectory(cwd: string) {
+  const resolvedCwd = resolve(cwd);
+  const encoded = `--${resolvedCwd.replace(/^[/\\]/u, "").replace(/[/\\:]/gu, "-")}--`;
+  return join(getAgentDir(), "sessions", encoded);
+}
+
+function containedPath(parent: string, candidate: string) {
+  const child = relative(parent, candidate);
+  return (
+    child.length > 0 &&
+    child !== ".." &&
+    !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+    !isAbsolute(child)
+  );
+}
+
+function terminalTextContent(message: Record<string, unknown>) {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        !!part &&
+        typeof part === "object" &&
+        (part as Record<string, unknown>).type === "text" &&
+        typeof (part as Record<string, unknown>).text === "string",
+    )
+    .map((part) => part.text)
+    .join(" ");
+}
+
+async function readTerminalSessionInfo(
+  filePath: string,
+  modified: Date,
+): Promise<ReadOnlyTerminalSessionInfo | undefined> {
+  let fileStat;
+  try {
+    fileStat = await lstat(filePath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) return undefined;
+  } catch {
+    return undefined;
+  }
+
+  let handle;
+  try {
+    handle = await open(filePath, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    const length = Math.min(fileStat.size, TERMINAL_DISCOVERY_MAX_BYTES);
+    const bytes = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, 0);
+    const text = bytes.toString("utf8", 0, bytesRead);
+    const lines = text.split(/\r?\n/u);
+    if (bytesRead < fileStat.size) lines.pop();
+
+    let header: Record<string, unknown> | undefined;
+    let name: string | undefined;
+    let firstMessage = "";
+    let messageCount = 0;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const entry = value as Record<string, unknown>;
+      if (!header) {
+        if (entry.type !== "session" || typeof entry.id !== "string") {
+          return undefined;
+        }
+        header = entry;
+        continue;
+      }
+      if (entry.type === "session_info") {
+        const entryName = entry.name;
+        name = typeof entryName === "string" ? entryName.trim() || undefined : name;
+        continue;
+      }
+      if (entry.type !== "message") continue;
+      messageCount++;
+      const message = entry.message;
+      if (
+        !firstMessage &&
+        message &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        (message as Record<string, unknown>).role === "user"
+      ) {
+        firstMessage = terminalTextContent(message as Record<string, unknown>);
+      }
+    }
+    if (!header || typeof header.cwd !== "string") return undefined;
+    const created =
+      typeof header.timestamp === "string" && !Number.isNaN(Date.parse(header.timestamp))
+        ? new Date(header.timestamp)
+        : modified;
+    return {
+      id: header.id as string,
+      path: filePath,
+      cwd: resolve(header.cwd),
+      ...(name ? { name } : {}),
+      modified,
+      created,
+      messageCount,
+      firstMessage: firstMessage || "(no messages)",
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function listTerminalSessionInfo(workspace: string) {
+  const directory = defaultTerminalSessionDirectory(workspace);
+  let entries;
+  try {
+    entries = await readdir(directory, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const candidates = await Promise.all(
+    entries
+      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
+      .map(async (entry) => {
+        const path = join(directory, entry.name);
+        try {
+          const fileStat = await stat(path);
+          return { path, modified: fileStat.mtime };
+        } catch {
+          return undefined;
+        }
+      }),
+  );
+  const infos = await Promise.all(
+    candidates
+      .filter((candidate): candidate is { path: string; modified: Date } => !!candidate)
+      .sort((left, right) => right.modified.getTime() - left.modified.getTime())
+      .slice(0, TERMINAL_DISCOVERY_MAX_FILES)
+      .map((candidate) => readTerminalSessionInfo(candidate.path, candidate.modified)),
+  );
+  return infos
+    .filter(
+      (session): session is ReadOnlyTerminalSessionInfo =>
+        !!session && session.cwd === workspace,
+    )
+    .sort((left, right) => right.modified.getTime() - left.modified.getTime());
+}
 
 export class PiWebAdapter {
   private readonly runtime: WebRuntimeController;
@@ -474,8 +656,7 @@ export class PiWebAdapter {
     const query = options.query?.trim().toLocaleLowerCase() ?? "";
     const cursor = options.cursor ?? 0;
     const limit = options.limit ?? 50;
-    const sessions = (await SessionManager.list(workspace))
-      .filter((session) => resolve(session.cwd) === workspace)
+    const sessions = (await listTerminalSessionInfo(workspace))
       .filter((session) => {
         if (!query) return true;
         return [session.name, session.cwd, session.firstMessage].some((value) =>
@@ -514,12 +695,22 @@ export class PiWebAdapter {
   async getReadOnlyTerminalSession(path: string) {
     const workspace = await this.requireSelectedWorkspace();
     const canonical = resolve(path);
-    const session = (await SessionManager.list(workspace)).find(
-      (candidate) =>
-        resolve(candidate.path) === canonical &&
-        resolve(candidate.cwd) === workspace,
-    );
+    const directory = defaultTerminalSessionDirectory(workspace);
+    let session: ReadOnlyTerminalSessionInfo | undefined;
+    if (containedPath(directory, canonical)) {
+      try {
+        session = await readTerminalSessionInfo(
+          canonical,
+          (await stat(canonical)).mtime,
+        );
+      } catch {
+        session = undefined;
+      }
+    }
     if (!session) {
+      throw new WebReadOnlySessionError("Terminal Session is not available");
+    }
+    if (session.cwd !== workspace) {
       throw new WebReadOnlySessionError("Terminal Session is not available");
     }
     const preview = await loadSessionPreviewData(session.path);

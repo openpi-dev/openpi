@@ -160,6 +160,12 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
     persistSession(terminal, "terminal history", 2);
     const terminalPath = terminal.getSessionFile();
     assert.ok(terminalPath);
+    const unrelatedWorkspace = join(root, "unrelated-workspace");
+    await mkdir(unrelatedWorkspace);
+    const unrelated = SessionManager.create(unrelatedWorkspace);
+    persistSession(unrelated, "unrelated-only-token", 3);
+    const unrelatedPath = unrelated.getSessionFile();
+    assert.ok(unrelatedPath);
     const adapter = new PiWebAdapter(
       runtimeFor(root, sessionDirectory, current),
     );
@@ -170,6 +176,7 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
     try {
       const listed = await adapter.listReadOnlyTerminalSessions({ limit: 1 });
       assert.equal(listed.total, 1);
+      assert.equal("allMessagesText" in listed.sessions[0]!, false);
       assert.deepEqual(listed.sessions[0], {
         id: terminal.getSessionId(),
         path: terminalPath,
@@ -186,6 +193,20 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
       assert.equal(inspected.readOnly, true);
       assert.equal(inspected.source, "pi-default");
       assert.equal(inspected.preview.messages.length, 2);
+      assert.equal(
+        (
+          await adapter.listReadOnlyTerminalSessions({
+            query: "unrelated-only-token",
+          })
+        ).total,
+        0,
+      );
+      await assert.rejects(
+        adapter.getReadOnlyTerminalSession(unrelatedPath),
+        (error: unknown) =>
+          error instanceof Error &&
+          (error as { code?: string }).code === "SESSION_NOT_FOUND",
+      );
     } finally {
       SessionManager.listAll = listAll;
     }
