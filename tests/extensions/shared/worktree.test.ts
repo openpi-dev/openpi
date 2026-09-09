@@ -5,6 +5,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
+
+const bunNodeTestMockUnsupported =
+  typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
 import {
   createWorktree,
   formatWorktreeCleanupWarning,
@@ -355,7 +358,8 @@ describe("worktree lifecycle", () => {
     "error",
     "overflow",
   ]) {
-    test(`preserves when index inventory is not trustworthy: ${JSON.stringify(inventory)}`, async (t) => {
+    const inventoryTest = bunNodeTestMockUnsupported ? test.skip : test;
+    inventoryTest(`preserves when index inventory is not trustworthy: ${JSON.stringify(inventory)}`, async (t) => {
       const result = await createWorktree({
         cwd: repo,
         label: "inventory",
