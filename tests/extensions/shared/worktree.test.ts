@@ -299,6 +299,34 @@ describe("worktree lifecycle", () => {
   });
 
   for (const flag of ["assume-unchanged", "skip-worktree"]) {
+    test(`without the inventory gate Git deletes ${flag} hidden work`, async () => {
+      const result = await createWorktree({
+        cwd: repo,
+        label: "ablation",
+        id: flag,
+      });
+      assert.ok(result.ok);
+      const wt = result.worktree;
+      const file = path.join(wt.path, "a.txt");
+      const original = fs.readFileSync(file, "utf8");
+      fs.writeFileSync(file, "only copy of hidden work\n");
+      git(wt.path, "update-index", `--${flag}`, "a.txt");
+      assert.equal(git(wt.path, "status", "--porcelain"), "");
+      assert.equal(git(wt.path, "diff"), "");
+      assert.equal(
+        git(wt.path, "ls-files", "-t", "--", "a.txt"),
+        flag === "assume-unchanged" ? "H a.txt\n" : "S a.txt\n",
+      );
+      assert.equal(
+        git(wt.path, "ls-files", "-v", "-z", "--", "a.txt"),
+        flag === "assume-unchanged" ? "h a.txt\0" : "S a.txt\0",
+      );
+      git(repo, "worktree", "remove", wt.path);
+      assert.equal(fs.existsSync(file), false);
+      assert.equal(git(repo, "show", `${wt.branch}:a.txt`), original);
+      git(repo, "branch", "-D", wt.branch);
+    });
+
     for (const changed of [false, true]) {
       test(`preserves ${flag} index and ${changed ? "modified" : "clean"} content`, async () => {
         const result = await createWorktree({
@@ -335,6 +363,19 @@ describe("worktree lifecycle", () => {
       });
     }
   }
+
+  test("without the inventory gate Git still refuses visible dirty work", async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "ablation",
+      id: "visible",
+    });
+    assert.ok(result.ok);
+    const file = path.join(result.worktree.path, "a.txt");
+    fs.writeFileSync(file, "visible local work\n");
+    assert.throws(() => git(repo, "worktree", "remove", result.worktree.path));
+    assert.equal(fs.readFileSync(file, "utf8"), "visible local work\n");
+  });
 
   test("accepts NUL-delimited tracked paths with whitespace and newlines", {
     skip: process.platform === "win32",
@@ -374,6 +415,10 @@ describe("worktree lifecycle", () => {
           id: "1",
         });
         assert.ok(result.ok);
+        const originalContent = fs.readFileSync(
+          path.join(result.worktree.path, "a.txt"),
+          "utf8",
+        );
         const original = childProcess.execFile;
         t.mock.method(
           childProcess,
@@ -381,6 +426,7 @@ describe("worktree lifecycle", () => {
           (...args: Parameters<typeof original>) => {
             const [file, argv] = args;
             if (file === "git" && Array.isArray(argv) && argv.includes("-v")) {
+              assert.deepEqual(argv.slice(-3), ["ls-files", "-v", "-z"]);
               const callback = args.at(-1) as (
                 error: Error | null,
                 stdout: string,
@@ -414,7 +460,7 @@ describe("worktree lifecycle", () => {
         assert.match(cleanup.reason ?? "", /index/);
         assert.equal(
           fs.readFileSync(path.join(result.worktree.path, "a.txt"), "utf8"),
-          "hello\n",
+          originalContent,
         );
         assert.equal(
           git(repo, "rev-parse", result.worktree.branch).trim(),
