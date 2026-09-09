@@ -3,7 +3,8 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-export async function openBrowser(url: string) {
+export async function openBrowser(url: string, signal?: AbortSignal) {
+  if (signal?.aborted) return false;
   const command =
     process.platform === "darwin"
       ? "open"
@@ -12,7 +13,11 @@ export async function openBrowser(url: string) {
         : "xdg-open";
   const args = process.platform === "win32" ? ["/c", "start", "", url] : [url];
   try {
-    await execFileAsync(command, args);
+    await execFileAsync(command, args, {
+      timeout: 3000,
+      killSignal: "SIGKILL",
+      signal,
+    });
     return true;
   } catch {
     return false;

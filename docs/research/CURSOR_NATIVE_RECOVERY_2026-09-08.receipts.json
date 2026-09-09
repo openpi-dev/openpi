@@ -1,0 +1,57 @@
+[
+  {
+    "source": "fcee687712220c8c32a18a6c334eb2b9f98a857c",
+    "model": "cursor-grok-4.6-high-fast",
+    "scenario": "ordinary",
+    "elapsedMs": 10361,
+    "requests": 2,
+    "nativeRejections": 0,
+    "toolEvents": [
+      {
+        "type": "tool_end",
+        "name": "read",
+        "isError": false
+      },
+      {
+        "type": "tool_end",
+        "name": "bash",
+        "isError": false
+      }
+    ],
+    "outcome": "Completed",
+    "error": null,
+    "finalMatches": true,
+    "cleanup": null,
+    "wire": []
+  },
+  {
+    "source": "fcee687712220c8c32a18a6c334eb2b9f98a857c",
+    "model": "cursor-grok-4.6-high-fast",
+    "scenario": "native",
+    "elapsedMs": 15507,
+    "requests": 2,
+    "nativeRejections": 1,
+    "toolEvents": [
+      {
+        "type": "tool_end",
+        "name": "read",
+        "isError": false
+      },
+      {
+        "type": "tool_end",
+        "name": "bash",
+        "isError": false
+      }
+    ],
+    "outcome": "Completed",
+    "error": null,
+    "finalMatches": true,
+    "cleanup": null,
+    "wire": [
+      {
+        "type": "native_rejection",
+        "id": 1
+      }
+    ]
+  }
+]
