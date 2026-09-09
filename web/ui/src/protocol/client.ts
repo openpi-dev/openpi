@@ -49,6 +49,7 @@ export interface CommandReceipt {
 export interface SessionMutationResult {
   cancelled?: boolean;
   path?: string;
+  sessionPath?: string;
 }
 
 export interface WorkspaceSelectionResult {
