@@ -77,6 +77,12 @@ test("the generated agent_type schema exposes a compact, enforced role index", (
   assert.match(description, /implementer.*medium-high reasoning/);
   assert.match(description, /reviewer.*high reasoning/);
   assert.match(description, /advisor.*high reasoning/);
+  for (const name of ["explorer", "implementer", "reviewer", "advisor"]) {
+    assert.match(
+      description,
+      new RegExp(`${name}[^\\n]*\\[inherited-tools\\]`),
+    );
+  }
   assert.doesNotMatch(description, /default reasoning_effort/);
   assert.match(description, /parent-only.*read-only/);
   assert.doesNotMatch(description, /only: read/);

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -14,6 +14,35 @@ import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
+
+// Use a raw document request: fetch always sets Sec-Fetch-Mode to cors.
+function documentRequest(url: string, headers: Record<string, string> = {}) {
+  return new Promise<Response>((resolve, reject) => {
+    const request = httpRequest(url, { headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined)
+            responseHeaders.set(
+              name,
+              Array.isArray(value) ? value.join(", ") : value,
+            );
+        }
+        resolve(
+          new Response(Buffer.concat(chunks), {
+            status: response.statusCode,
+            headers: responseHeaders,
+          }),
+        );
+      });
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
 
 test("serves workspaces through a runtime isolated from terminal sessions", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-host-"));
@@ -35,6 +64,39 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       truncated: false,
     }),
   });
+  const unregisterTerminalDetails = registerWebCapability(sessionManager, {
+    kind: "background-terminals",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) =>
+      id === "bt-test"
+        ? {
+            kind: "background-terminals",
+            id,
+            title: "server",
+            command: "run-server",
+            cwd,
+            status: "running",
+            createdAt: 1,
+            stdout: {
+              text: "ready",
+              totalBytes: 5,
+              retainedBytes: 5,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            stderr: {
+              text: "",
+              totalBytes: 0,
+              retainedBytes: 0,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            truncated: false,
+          }
+        : undefined,
+  });
   const prompts: string[] = [];
   const creationCommandIds: string[] = [];
   let newSessions = 0;
@@ -49,6 +111,9 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     get sessionManager() {
       return sessionManager;
     },
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -84,6 +149,34 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         current: false,
       },
     ],
+    getProjectTrustStatus: () => ({
+      source: "pi-project-trust",
+      workspace: runtimeCwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    }),
+    listProviderAuth: () => ({
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
+    }),
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -99,7 +192,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       disposed = true;
     },
   };
-  const host = new WebHost({ runtime });
+  const host = new WebHost({
+    runtime,
+    allowedOrigins: ["http://127.0.0.1:59999"],
+  });
 
   try {
     await host.start();
@@ -110,37 +206,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
-    const deletable = SessionManager.create(cwd, cwd);
-    deletable.appendMessage({
-      role: "user",
-      content: "deletable session",
-      timestamp: 1,
-    });
-    deletable.appendMessage({
-      role: "assistant",
-      content: [],
-      api: "openai-responses",
-      provider: "fixture",
-      model: "fixture",
-      usage: {
-        input: 0,
-        output: 0,
-        cacheRead: 0,
-        cacheWrite: 0,
-        totalTokens: 0,
-        cost: {
-          input: 0,
-          output: 0,
-          cacheRead: 0,
-          cacheWrite: 0,
-          total: 0,
-        },
-      },
-      stopReason: "stop",
-      timestamp: 1,
-    });
 
-    const page = await fetch(`${launched.origin}/`);
+    const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
     assert.match(
       page.headers.get("content-security-policy") || "",
@@ -148,148 +215,146 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     );
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
-    assert.match(pageHtml, /<script src="\/marked\.js"><\/script>/);
-    assert.match(pageHtml, /<script src="\/app\.js" defer><\/script>/);
+    assert.match(pageHtml, /<div id="root"><\/div>/);
+    assert.ok(
+      pageHtml.includes(`<meta name="openpi-web-token" content="${token}">`),
+    );
+    assert.equal(
+      page.headers.get("cross-origin-resource-policy"),
+      "same-origin",
+    );
+    assert.equal(page.headers.get("x-frame-options"), "DENY");
+    const blockedHeaders: Record<string, string>[] = [
+      { "Sec-Fetch-Site": "cross-site" },
+      { "Sec-Fetch-Site": "same-site" },
+      { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin" },
+      { "Sec-Fetch-Dest": "script" },
+      { Referer: "https://attacker.example/" },
+      { Origin: "https://attacker.example" },
+      { Origin: "http://127.0.0.1:59999" },
+    ];
+    for (const headers of blockedHeaders) {
+      const blocked = await documentRequest(`${launched.origin}/`, headers);
+      assert.equal(blocked.status, 403);
+      assert.ok(!(await blocked.text()).includes(token));
+    }
+    const navigation = await documentRequest(`${launched.origin}/`, {
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    });
+    assert.equal(navigation.status, 200);
+    assert.equal((await fetch(`${launched.origin}/api/snapshot`)).status, 401);
     assert.match(
       pageHtml,
-      /aria-label="New session"|class="new-session-button"/,
+      /<script type="module"[^>]*src="\/app\.js"><\/script>/,
     );
-    assert.match(
-      pageHtml,
-      /id="import-workspace"[^>]*aria-label="Add workspace"/,
-    );
-    assert.match(pageHtml, /id="workspaces"/);
-    assert.match(pageHtml, /id="connection-state"/);
-    assert.match(pageHtml, /id="composer"/);
-    assert.match(pageHtml, /id="prompt-input"/);
-    assert.match(pageHtml, /id="send-prompt"/);
-    assert.match(pageHtml, /id="model-picker"/);
-    assert.match(pageHtml, /id="composer-hint"/);
-    assert.match(pageHtml, /id="select-workspace" class="workspace-picker"/);
-    assert.match(
-      pageHtml,
-      /class="composer-dock">[\s\S]*id="select-workspace"[\s\S]*id="composer"/,
-    );
-    assert.doesNotMatch(pageHtml, /landing-context/);
-    assert.doesNotMatch(pageHtml, /class="context-picker"/);
-    assert.doesNotMatch(pageHtml, /aria-label="Search"/);
-    assert.match(pageHtml, /id="workspace-menu"/);
-    assert.match(pageHtml, /Rename workspace/);
-    assert.match(pageHtml, /Remove from sidebar/);
-    assert.doesNotMatch(pageHtml, /theme-picker-trigger|data-theme-value/);
-    assert.doesNotMatch(pageHtml, /settings-dialog|language-picker/u);
+    assert.match(pageHtml, /<link rel="stylesheet"[^>]*href="\/styles\.css">/);
+    assert.match(pageHtml, /href="\/favicon\.svg"/);
+    assert.doesNotMatch(pageHtml, /marked\.js|https?:\/\//u);
 
     const app = await fetch(`${launched.origin}/app.js`);
     assert.equal(app.status, 200);
+    assert.match(app.headers.get("content-type") || "", /javascript/);
     const appSource = await app.text();
-    assert.doesNotMatch(
-      appSource,
-      /\$\("(?:workspace-path|workspace-dialog|close-workspace-dialog|cancel-workspace|workspace-form)"\)|importWorkspace/,
-    );
-    assert.match(appSource, /collapseButton\?\.addEventListener\("click"/);
-    assert.match(appSource, /aria-expanded="\$\{!collapsed\}"/);
-    assert.doesNotMatch(appSource, /icon\("conversation"/);
-    assert.match(appSource, /session-title.*session-time/s);
-    assert.match(appSource, /data-workspace-action="more"/);
-    assert.match(appSource, /data-workspace-action="new"/);
-    assert.doesNotMatch(appSource, /workspace-count/);
-    assert.match(appSource, /if \(!shell\) \{/);
-    assert.match(
-      appSource,
-      /new-session-button[\s\S]*?createSession\(state\.selectedWorkspace\)/,
-    );
-    assert.match(appSource, /data-session-action="menu"/);
-    assert.match(appSource, /archiveSession\(path\)/);
-    assert.match(appSource, /method: "PATCH"/);
-    assert.match(appSource, /message\.parts/);
-    assert.match(appSource, /message-row assistant detail-only/);
-    assert.match(
-      appSource,
-      /typeof message\.content === "string" \? message\.content\.trim\(\)/,
-    );
-    assert.match(appSource, /conversation-running/);
-    assert.match(appSource, /visibleUngroupedSessions/);
-    assert.match(appSource, /workspaceDeleteConfirm/);
-    assert.match(appSource, /workspace-delete-dialog/);
-    assert.match(appSource, /runtime-activity/);
-    assert.match(appSource, /runtime_changed/);
-    assert.match(appSource, /sessionStorage\.setItem/);
-    assert.match(appSource, /history\.replaceState/);
+    assert.ok(!appSource.includes(token));
+    assert.match(appSource, /OpenPI Web root is missing/);
+    assert.match(appSource, /openpi\.web\.token/);
     assert.match(appSource, /\/events\?cursor=/);
+    assert.match(appSource, /workspaceDeleteConfirm/);
+    assert.match(appSource, /activity-card/);
     assert.doesNotMatch(appSource, /localStorage|openpi\.archived-sessions/);
-    assert.match(appSource, /applyThemePreference/);
-    assert.doesNotMatch(appSource, /message-edit-input|enterMessageEdit/);
     assert.doesNotMatch(appSource, /language-picker|open-settings/u);
-
-    const marked = await fetch(`${launched.origin}/marked.js`);
-    assert.equal(marked.status, 200);
-    assert.match(marked.headers.get("content-type") || "", /javascript/);
-    assert.match(await marked.text(), /marked v18/);
 
     const styles = await fetch(`${launched.origin}/styles.css`);
     assert.equal(styles.status, 200);
     const stylesSource = await styles.text();
+    assert.match(stylesSource, /\.landing \.conversation/);
+    assert.match(stylesSource, /\.composer\.dormant/);
+    assert.match(stylesSource, /\.activity-card/);
     assert.match(
       stylesSource,
-      /\.landing \.conversation, \.landing \.composer-dock \{ grid-area: 1 \/ 1; \}/,
+      /@media\s*\((?:max-width:\s*760px|width\s*<=\s*760px)\)/,
     );
-    assert.match(
-      stylesSource,
-      /\.landing \.composer-dock \{[\s\S]*?align-self: center;/,
+    assert.match(stylesSource, /prefers-reduced-motion/);
+
+    const favicon = await fetch(`${launched.origin}/favicon.svg`);
+    assert.equal(favicon.status, 200);
+    assert.match(favicon.headers.get("content-type") || "", /svg/);
+
+    const removedLegacyAsset = await fetch(`${launched.origin}/marked.js`);
+    assert.equal(removedLegacyAsset.status, 401);
+
+    let thinkingReads = 0;
+    runtime.getThinkingState = () => {
+      thinkingReads++;
+      return { level: "high", available: ["off", "high"] };
+    };
+    assert.equal((await fetch(`${launched.origin}/api/thinking`)).status, 401);
+    assert.equal(thinkingReads, 0);
+    const thinkingResponse = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await thinkingResponse.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "high",
+      available: ["off", "high"],
+    });
+    assert.equal(thinkingReads, 1);
+    delete runtime.getThinkingState;
+    const unknownThinking = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await unknownThinking.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+    });
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+        )
+      ).status,
+      401,
     );
-    assert.match(stylesSource, /\.workbench-header \{\s*display: none;\s*\}/);
-    assert.match(
-      stylesSource,
-      /@media \(max-width: 760px\) \{\s*\.workbench-header \{[^}]*backdrop-filter: none;[^}]*-webkit-backdrop-filter: none;/,
+
+    const trustGetter = runtime.getProjectTrustStatus;
+    assert.ok(trustGetter);
+    let trustReads = 0;
+    runtime.getProjectTrustStatus = () => {
+      trustReads++;
+      return trustGetter();
+    };
+    assert.equal((await fetch(`${launched.origin}/api/trust`)).status, 401);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/trust`, {
+          headers: { ...authorized, Origin: "https://untrusted.example" },
+        })
+      ).status,
+      403,
     );
-    assert.match(
-      stylesSource,
-      /\.composer\.dormant \{[^}]*border-style: dashed/,
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/trust`, {
+          method: "POST",
+          headers: authorized,
+        })
+      ).status,
+      405,
     );
-    assert.match(
-      stylesSource,
-      /\.composer\.dormant:hover \{[^}]*border-color:/,
+    assert.equal(trustReads, 0);
+    delete runtime.getProjectTrustStatus;
+    const unavailableTrust = await fetch(`${launched.origin}/api/trust`, {
+      headers: authorized,
+    });
+    assert.equal(unavailableTrust.status, 501);
+    assert.equal(
+      (await unavailableTrust.json()).code,
+      "PROJECT_TRUST_STATUS_UNAVAILABLE",
     );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker-row \{[^}]*width: min\(780px, 100%\)/,
-    );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker-row \{[^}]*margin: 0 auto[^}]*padding-left: 15px/,
-    );
-    assert.match(
-      stylesSource,
-      /\.workspace-picker \{[^}]*width: fit-content[^}]*padding: 0 10px 0 0/,
-    );
-    assert.match(
-      stylesSource,
-      /\.composer-toolbar \{[^}]*justify-content: flex-end/,
-    );
-    assert.match(stylesSource, /\.composer-hint \{ display: none; \}/);
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \{ width: min\(780px, calc\(100% - 48px\)\); \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \.message-content \{ width: 100%; max-width: none; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.assistant \.message-details \{ width: min\(760px, calc\(100% - 4px\)\); margin-right: auto; margin-left: auto; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.detail-only \{ padding: 12px 0; \}/,
-    );
-    assert.match(
-      stylesSource,
-      /\.message-row\.detail-only \.message-details \{ margin: 0 auto; \}/,
-    );
-    assert.match(stylesSource, /\.workspace-delete-dialog/);
-    assert.match(stylesSource, /\.runtime-activity \{/);
-    assert.match(stylesSource, /:root\[data-theme="dark"\]/);
+    runtime.getProjectTrustStatus = trustGetter;
 
     const unauthorized = await fetch(`${launched.origin}/api/snapshot`);
     assert.equal(unauthorized.status, 401);
@@ -326,6 +391,106 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     assert.equal(modelsResponse.status, 200);
     assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const trustResponse = await fetch(`${launched.origin}/api/trust`, {
+      headers: authorized,
+    });
+    assert.equal(trustResponse.status, 200);
+    assert.deepEqual(await trustResponse.json(), {
+      source: "pi-project-trust",
+      workspace: cwd,
+      state: "restricted",
+      decision: "undecided",
+      projectResources: true,
+      sessionTrusted: false,
+      refreshRequired: false,
+    });
+    const providerAuthResponse = await fetch(
+      `${launched.origin}/api/providers/auth-status`,
+      { headers: authorized },
+    );
+    assert.equal(providerAuthResponse.status, 200);
+    assert.deepEqual(await providerAuthResponse.json(), {
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
+    });
+    for (const route of [
+      "/api/thinking",
+      "/api/trust",
+      "/api/providers/auth-status",
+      "/api/capabilities/detail?kind=background-terminals&id=bt-test",
+    ]) {
+      const separator = route.includes("?") ? "&" : "?";
+      const mismatched = await fetch(
+        `${launched.origin}${route}${separator}sessionId=another-session`,
+        { headers: authorized },
+      );
+      assert.equal(mismatched.status, 409);
+      assert.equal((await mismatched.json()).code, "SESSION_CHANGED");
+    }
+    const scopedDetail = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
+      { headers: authorized },
+    );
+    assert.equal(scopedDetail.status, 200);
+    assert.equal(
+      (await scopedDetail.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
+    const terminalDetailResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+      { headers: authorized },
+    );
+    assert.equal(terminalDetailResponse.status, 200);
+    assert.deepEqual((await terminalDetailResponse.json()).detail, {
+      kind: "background-terminals",
+      id: "bt-test",
+      title: "server",
+      command: "run-server",
+      cwd,
+      status: "running",
+      createdAt: 1,
+      stdout: {
+        text: "ready",
+        totalBytes: 5,
+        retainedBytes: 5,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      stderr: {
+        text: "",
+        totalBytes: 0,
+        retainedBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      truncated: false,
+    });
+    const staleTerminalResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-missing`,
+      { headers: authorized },
+    );
+    assert.equal(staleTerminalResponse.status, 404);
+    assert.deepEqual(await staleTerminalResponse.json(), {
+      code: "CAPABILITY_NOT_FOUND",
+      error: "capability resource was not found in the active Session",
+    });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
       headers: authorized,
@@ -431,10 +596,6 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     });
     const currentSessionPath = listedSessions.sessions[0]?.path;
     assert.ok(currentSessionPath);
-    const deletableSessionPath = listedSessions.sessions.find(
-      (session) => session.path !== currentSessionPath,
-    )?.path;
-    assert.equal(deletableSessionPath, deletable.getSessionFile());
     const sessionRename = await fetch(`${launched.origin}/api/sessions`, {
       method: "PATCH",
       headers: authorized,
@@ -459,32 +620,36 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       true,
     );
 
-    const deleteActive = await fetch(
-      `${launched.origin}/api/sessions?path=${encodeURIComponent(currentSessionPath)}`,
-      { method: "DELETE", headers: authorized },
-    );
-    assert.equal(deleteActive.status, 409);
-    assert.deepEqual(await deleteActive.json(), {
-      code: "SESSION_CONFLICT",
-      error: "Cannot delete the active Session",
-    });
-    const deleteSession = await fetch(
-      `${launched.origin}/api/sessions?path=${encodeURIComponent(deletableSessionPath!)}`,
-      { method: "DELETE", headers: authorized },
-    );
-    assert.equal(deleteSession.status, 200);
-    assert.deepEqual(await deleteSession.json(), {
-      path: deletableSessionPath,
-      deleted: true,
-    });
-    const afterDelete = (await (
-      await fetch(`${launched.origin}/api/sessions`, { headers: authorized })
-    ).json()) as { sessions: Array<{ path: string }> };
+    const unarchiveUrl = `${launched.origin}/api/sessions/unarchive?path=${encodeURIComponent(currentSessionPath)}`;
+    assert.equal((await fetch(unarchiveUrl, { method: "POST" })).status, 401);
     assert.equal(
-      afterDelete.sessions.some(
-        (session) => session.path === deletableSessionPath,
-      ),
-      false,
+      (
+        await fetch(`${launched.origin}/api/sessions/unarchive`, {
+          method: "POST",
+          headers: authorized,
+        })
+      ).status,
+      400,
+    );
+    const unarchiveResponse = await fetch(unarchiveUrl, {
+      method: "POST",
+      headers: authorized,
+    });
+    assert.equal(unarchiveResponse.status, 200);
+    assert.deepEqual(await unarchiveResponse.json(), {
+      path: currentSessionPath,
+      archived: false,
+    });
+    const restoredSnapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, {
+        headers: authorized,
+      })
+    ).json()) as { sessions: Array<{ path: string; archived?: boolean }> };
+    assert.equal(
+      restoredSnapshot.sessions.find(
+        (session) => session.path === currentSessionPath,
+      )?.archived,
+      undefined,
     );
 
     const wrongSession = await fetch(`${launched.origin}/api/prompt`, {
@@ -662,6 +827,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   } finally {
     await host.stop();
     assert.equal(disposed, true);
+    unregisterTerminalDetails();
     unregister();
     await Promise.all(
       [cwd, imported].map((path) => rm(path, { recursive: true, force: true })),
@@ -681,6 +847,9 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     workspaceSelected: false,
     sessionDirectory: root,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -780,6 +949,9 @@ test("returns accepted only after Pi admits the prompt", async () => {
     sessionDirectory: cwd,
     cwd,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -907,13 +1079,17 @@ function testRuntime(
   sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
     pendingFollowUps: 0,
   }),
+  sessionDirectory = cwd,
 ) {
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
     workspaceSelected: true,
-    sessionDirectory: cwd,
+    sessionDirectory,
     cwd,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -969,7 +1145,7 @@ test("classifies invalid and oversized JSON bodies as client errors", async () =
     const oversizedBody = await fetch(`${launched.origin}/api/workspaces`, {
       method: "POST",
       headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({ path: "x".repeat(16 * 1024) }),
+      body: JSON.stringify({ path: "x".repeat(32 * 1024) }),
     });
     assert.equal(oversizedBody.status, 413);
     assert.deepEqual(await oversizedBody.json(), {
@@ -977,6 +1153,61 @@ test("classifies invalid and oversized JSON bodies as client errors", async () =
       error: "request body is too large",
       maxBytes: 16 * 1024,
     });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("requires exact reviewed confirmation before deleting a persisted Session", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-host-"));
+  const sessionDirectory = join(cwd, "sessions");
+  await mkdir(sessionDirectory);
+  const candidate = SessionManager.create(cwd, sessionDirectory);
+  candidate.appendMessage({ role: "user", content: "delete me", timestamp: 1 });
+  candidate.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  const sessionPath = candidate.getSessionFile();
+  assert.ok(sessionPath);
+  const { host, launched, headers } = await startTestHost(
+    testRuntime(cwd, undefined, sessionDirectory),
+  );
+  try {
+    const target = `${launched.origin}/api/sessions?path=${encodeURIComponent(sessionPath)}`;
+    const bare = await fetch(target, { method: "DELETE", headers });
+    assert.equal(bare.status, 400);
+    assert.deepEqual(await bare.json(), {
+      code: "CONFIRMATION_REQUIRED",
+      error: "Confirm the exact canonical Session path before deletion",
+      path: sessionPath,
+    });
+    await readFile(sessionPath);
+    const wrong = await fetch(`${target}&confirm=wrong`, {
+      method: "DELETE",
+      headers,
+    });
+    assert.equal(wrong.status, 400);
+    const confirmed = await fetch(
+      `${target}&confirm=${encodeURIComponent(sessionPath)}`,
+      { method: "DELETE", headers },
+    );
+    assert.equal(confirmed.status, 200);
+    assert.deepEqual(await confirmed.json(), { path: sessionPath, deleted: true });
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

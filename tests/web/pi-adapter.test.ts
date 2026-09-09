@@ -28,6 +28,9 @@ function runtimeFor(
     workspaceSelected: true,
     sessionDirectory,
     sessionManager,
+    isSessionOwned: (sessionId, sessionPath) =>
+      sessionManager.getSessionId() === sessionId ||
+      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -103,9 +106,33 @@ test("snapshot pins current and selected sessions while bounding the projection"
         (session) => session.id === current.getSessionId(),
       ),
     );
+    const currentSummary = snapshot.sessions.find(
+      (session) => session.id === current.getSessionId(),
+    );
+    assert.deepEqual(
+      {
+        source: currentSummary?.source,
+        origin: currentSummary?.origin,
+        controller: currentSummary?.controller,
+        readOnly: currentSummary?.readOnly,
+      },
+      {
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+      },
+    );
     assert.ok(
       snapshot.sessions.some((session) => session.path === selectedPath),
     );
+    const selectedSummary = snapshot.sessions.find(
+      (session) => session.path === selectedPath,
+    );
+    assert.equal(selectedSummary?.source, "web-session");
+    assert.equal(selectedSummary?.origin, "web");
+    assert.equal(selectedSummary?.controller, "none");
+    assert.equal(selectedSummary?.readOnly, false);
     assert.equal(snapshot.selectedSession?.path, selectedPath);
     assert.equal(
       (
@@ -289,8 +316,31 @@ test("refuses to delete the active session", async () => {
     );
     await assert.rejects(
       adapter.deleteSession(`current:${current.getSessionId()}`),
-      /active Session/u,
+      /live Web runtime/u,
     );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("refuses to delete a Session retained by a live runtime", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-delete-live-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    await mkdir(sessionDirectory, { recursive: true });
+    const current = SessionManager.inMemory(root);
+    const candidate = SessionManager.create(root, sessionDirectory);
+    persistSession(candidate, "retained", 2);
+    const candidatePath = candidate.getSessionFile();
+    assert.ok(candidatePath);
+    const runtime = runtimeFor(root, sessionDirectory, current);
+    runtime.isSessionOwned = () => true;
+    const adapter = new PiWebAdapter(runtime);
+    await assert.rejects(
+      adapter.deleteSession(candidatePath),
+      /live Web runtime/u,
+    );
+    await readFile(candidatePath);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
@@ -692,6 +742,63 @@ test("initialize fails closed without exposing or retrying uncommitted state", a
         (workspace) => workspace.path === resolve(root),
       ),
       false,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("Session provenance targets the current file even when a copied file retains its id", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-provenance-"));
+  try {
+    const directory = join(root, "sessions");
+    const manager = SessionManager.create(root, directory);
+    persistSession(manager, "original", 1);
+    const original = manager.getSessionFile();
+    assert.ok(original);
+    const copy = join(directory, "copied.jsonl");
+    await writeFile(copy, await readFile(original));
+    const adapter = new PiWebAdapter(runtimeFor(root, directory, manager));
+    const { sessions } = await adapter.listSessionProjection();
+    assert.equal(sessions.find((s) => s.path === copy)?.controller, "none");
+    assert.deepEqual(
+      sessions.filter((s) => s.controller === "web").map((s) => s.path),
+      [original],
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("unarchive is idempotent across restart and preserves canonical Session data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-unarchive-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const manager = SessionManager.create(root, sessionDirectory);
+    persistSession(manager, "keep original history", 1);
+    const path = manager.getSessionFile();
+    assert.ok(path);
+    const original = await readFile(path, "utf8");
+    const runtime = runtimeFor(root, sessionDirectory, manager);
+    const adapter = new PiWebAdapter(runtime);
+    await adapter.archiveSession(path);
+    assert.equal((await adapter.requireSession(path)).archived, true);
+    await Promise.all([
+      adapter.unarchiveSession(path),
+      adapter.unarchiveSession(path),
+    ]);
+    const restored = await new PiWebAdapter(runtime).requireSession(path);
+    assert.equal(restored.archived, undefined);
+    assert.equal(restored.cwd, root);
+    assert.equal(await readFile(path, "utf8"), original);
+    const metadata = await readFile(
+      join(sessionDirectory, "archived-sessions.json"),
+      "utf8",
+    );
+    await assert.rejects(adapter.unarchiveSession(join(root, "missing.jsonl")));
+    assert.equal(
+      await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
+      metadata,
     );
   } finally {
     await rm(root, { recursive: true, force: true });

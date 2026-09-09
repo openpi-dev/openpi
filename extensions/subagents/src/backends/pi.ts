@@ -25,6 +25,7 @@ import {
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
 import { resolveAgentModel } from "../agent-types.ts";
+import { toolPreview } from "./tool-preview.ts";
 import type {
   SubagentBackend,
   SubagentCleanupReceipt,
@@ -118,27 +119,6 @@ function safeJson(value: unknown): string | undefined {
   }
 }
 
-/** First non-empty line of a tool result-ish value (v1 liveToolPreview). */
-function toolPreview(value: unknown): string | undefined {
-  if (typeof value === "string") {
-    return value
-      .split("\n")
-      .find((line) => line.trim())
-      ?.trim();
-  }
-  if (!value || typeof value !== "object") return undefined;
-  const content = (value as { content?: unknown }).content;
-  if (!Array.isArray(content)) return undefined;
-  for (const part of content) {
-    if (!part || typeof part !== "object") continue;
-    const record = part as { type?: unknown; text?: unknown };
-    if (record.type !== "text" || typeof record.text !== "string") continue;
-    const firstLine = record.text.split("\n").find((line) => line.trim());
-    if (firstLine) return firstLine.trim();
-  }
-  return undefined;
-}
-
 function assistantParts(msg: AssistantMessage): TranscriptPart[] {
   const parts: TranscriptPart[] = [];
   for (const part of msg.content) {
@@ -215,42 +195,70 @@ const makePiSession = (
             capturedStructured = encodeStructuredResult(value);
           });
 
+    // Own the session before asynchronous startup. Interruption can happen
+    // before the normal backend finalizer has been installed.
+    let acquiringSession: AgentSession | undefined;
+    let startupOwned = true;
+    const cleanupStartup = () =>
+      acquiringSession
+        ? shutdownAndDisposeChildSession(acquiringSession, {
+            abort: true,
+            timeoutMs: options.shutdownTimeoutMs,
+          })
+        : Promise.resolve();
+    yield* Effect.addFinalizer(() =>
+      Effect.promise(async () => {
+        if (startupOwned) await cleanupStartup();
+      }),
+    );
+
     const session = yield* Effect.tryPromise({
-      try: async () => {
-        const appendSystemPrompt = [
-          ...(task.appendSystemPrompt ?? []),
-          ...(structuredOutputTool
-            ? [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION]
-            : []),
-        ];
-        const { loader, settingsManager } = await createChildResources({
-          cwd: task.cwd,
-          projectTrusted: task.parent.projectTrusted,
-          ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
-        });
-        const { session } = await (
-          options.sessionFactory ?? createAgentSession
-        )({
-          cwd: task.cwd,
-          sessionManager: SessionManager.create(task.cwd),
-          settingsManager,
-          resourceLoader: loader,
-          model,
-          thinkingLevel,
-          ...(structuredOutputTool
-            ? { customTools: [structuredOutputTool] }
-            : {}),
-          ...childToolPolicy(
-            childToolsWithStructuredOutput(
-              task.tools,
-              structuredOutputTool !== undefined,
-            ),
-          ),
-        });
-        // Start child extension session hooks/resources in headless mode.
-        // A rejection here would otherwise leak the freshly created session:
-        // the scope finalizer that owns cleanup is only registered later.
+      try: async (signal) => {
+        const checkCancelled = () => {
+          if (signal.aborted)
+            throw signal.reason ?? new Error("Subagent startup cancelled");
+        };
+        const onCancelled = () => {
+          void cleanupStartup().catch(() => {});
+        };
+        signal.addEventListener("abort", onCancelled, { once: true });
         try {
+          checkCancelled();
+          const appendSystemPrompt = [
+            ...(task.appendSystemPrompt ?? []),
+            ...(structuredOutputTool
+              ? [STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION]
+              : []),
+          ];
+          const { loader, settingsManager } = await createChildResources({
+            cwd: task.cwd,
+            projectTrusted: task.parent.projectTrusted,
+            ...(appendSystemPrompt.length > 0 ? { appendSystemPrompt } : {}),
+          });
+          checkCancelled();
+          const { session } = await (
+            options.sessionFactory ?? createAgentSession
+          )({
+            cwd: task.cwd,
+            sessionManager: SessionManager.create(task.cwd),
+            settingsManager,
+            resourceLoader: loader,
+            model,
+            thinkingLevel,
+            ...(structuredOutputTool
+              ? { customTools: [structuredOutputTool] }
+              : {}),
+            ...childToolPolicy(
+              childToolsWithStructuredOutput(
+                task.tools,
+                structuredOutputTool !== undefined,
+              ),
+            ),
+          });
+          acquiringSession = session;
+          checkCancelled();
+          // Never start extension binding for a factory that completed after
+          // cancellation. Already-running hooks retain bounded cleanup ownership.
           await bindChildSessionExtensions(
             session,
             childToolsWithStructuredOutput(
@@ -258,13 +266,14 @@ const makePiSession = (
               structuredOutputTool !== undefined,
             ),
           );
+          checkCancelled();
+          return session;
         } catch (error) {
-          await shutdownAndDisposeChildSession(session, {
-            timeoutMs: options.shutdownTimeoutMs,
-          });
+          await cleanupStartup();
           throw error;
+        } finally {
+          signal.removeEventListener("abort", onCancelled);
         }
-        return session;
       },
       catch: (error) => new SpawnError({ message: boundedError(error) }),
     });
@@ -649,6 +658,8 @@ const makePiSession = (
         Queue.endUnsafe(events);
       }),
     );
+
+    startupOwned = false;
 
     /** Start a fresh run (v1 manager.run): fire-and-forget, errors -> events. */
     const startRun = (text: string) => {
