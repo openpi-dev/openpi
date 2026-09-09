@@ -558,6 +558,94 @@ test("dashboard list projection leaves side artifacts unloaded", () => {
   }
 });
 
+test("dashboard list budget measures large inline history that is actually retained", () => {
+  const runId = "wf_1a11ce";
+  const startedAt = Date.now() + 10_000;
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: SESSION,
+      status: "completed",
+      startedAt,
+      finishedAt: startedAt + 1_000,
+      phases: [],
+      agents: [],
+      result: "x".repeat(8 * 1024 * 1024),
+    }),
+  );
+  try {
+    const projection = loadRunEntryProjection(
+      new Map(),
+      SESSION,
+      new Set(),
+      startedAt,
+    );
+    assert.deepEqual(projection.entries, []);
+    assert.equal(projection.omittedRuns, 1);
+    assert.ok(projection.omittedBytes > 2 * 1024 * 1024);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("hydrating a report does not inflate the compact list projection", () => {
+  const runId = "wf_1a11d0";
+  const startedAt = Date.now() + 15_000;
+  const dir = join(agentDir, "workflows", runId);
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(
+    join(dir, "workflow.json"),
+    JSON.stringify({
+      runId,
+      sessionId: SESSION,
+      status: "completed",
+      startedAt,
+      finishedAt: startedAt + 1_000,
+      phases: [{ title: "work" }],
+      agents: [],
+      result: "[stored in result.json]",
+      resultArtifact: "result.json",
+    }),
+  );
+  const fullResult = {
+    values: Array.from({ length: 40 }, () => "x".repeat(60_000)),
+  };
+  writeFileSync(join(dir, "result.json"), JSON.stringify(fullResult));
+
+  const dashboard = new WorkflowDashboard(
+    { terminal: { rows: 20 }, requestRender() {} } as unknown as TUI,
+    {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme,
+    {
+      matches: () => false,
+      getKeys: () => ["esc"],
+    } as unknown as KeybindingsManager,
+    () => new Map(),
+    SESSION,
+    new Set(),
+    startedAt,
+    () => {},
+  );
+  try {
+    dashboard.handleInput("l");
+    dashboard.handleInput("s");
+    const state = dashboard as unknown as {
+      entries: Array<{ details: WorkflowDetails }>;
+      current?: { details: WorkflowDetails };
+    };
+    assert.equal(state.entries[0]?.details.result, "[stored in result.json]");
+    assert.deepEqual(state.current?.details.result, fullResult);
+  } finally {
+    dashboard.dispose();
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("dashboard projection bounds unpinned history and keeps an explicit run", () => {
   const oldest = "wf_a001";
   const middle = "wf_b002";

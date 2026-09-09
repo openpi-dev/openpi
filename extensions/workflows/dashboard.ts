@@ -1188,7 +1188,9 @@ export class WorkflowDashboard {
   private hydrateCurrent() {
     const entry = this.current;
     if (!entry || entry.live || this.hydratedRunIds.has(entry.runId)) return;
-    hydrateRunArtifacts(entry.runId, entry.details);
+    const details = structuredClone(entry.details);
+    hydrateRunArtifacts(entry.runId, details);
+    this.current = { ...entry, details };
     this.hydratedRunIds.add(entry.runId);
   }
 
