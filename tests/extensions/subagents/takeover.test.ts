@@ -238,14 +238,19 @@ test("takeover scroll indicator lives in its rule without changing overlay heigh
     () => {},
   );
   try {
-    const pinned = view.render(80);
-    assert.equal(pinned.length, 20);
-    assert.doesNotMatch(pinned.join("\n"), /↓ \d+/);
+    // Opening a takeover on an existing transcript starts at its beginning, so
+    // the hidden remainder is reported below.
+    const opened = view.render(80);
+    assert.equal(opened.length, 20);
+    assert.match(opened.join("\n"), /output 0/);
+    assert.match(opened.join("\n"), /↓ \d+/);
+    assert.doesNotMatch(opened.join("\n"), /↑ \d+/);
 
-    view.handleInput("tui.editor.pageUp");
+    // The indicator rides its rule: paging keeps the overlay exactly as tall.
+    view.handleInput("tui.editor.pageDown");
     const scrolled = view.render(80);
-    assert.equal(scrolled.length, pinned.length);
-    assert.match(scrolled.join("\n"), /↓ \d+/);
+    assert.equal(scrolled.length, opened.length);
+    assert.match(scrolled.join("\n"), /↑ \d+/);
     assert.doesNotMatch(scrolled.join("\n"), /lines below/);
   } finally {
     view.dispose();

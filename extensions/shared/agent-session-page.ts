@@ -82,6 +82,12 @@ export class AgentSessionPage implements Component, Focusable {
   private rowCount = 0;
   private viewportSize = 1;
   private toolsExpanded: boolean;
+  /**
+   * Whether the opening anchor has been decided. A page opens on a transcript
+   * that already exists, so the first render is the only moment that can tell
+   * "output produced before I looked" from "output arriving while I watch".
+   */
+  private anchored = false;
 
   private _focused = false;
   get focused() {
@@ -246,6 +252,17 @@ export class AgentSessionPage implements Component, Focusable {
     });
     this.rowCount = transcript.length;
     this.viewportSize = transcriptCapacity;
+    // A child page opens on work that already happened. Following the end would
+    // start a long answer partway through, hiding its beginning, so the first
+    // render anchors at the start of anything that already overflows. A page
+    // that opens on a short or empty transcript keeps following, so streaming
+    // output still scrolls into view as it arrives.
+    if (!this.anchored) {
+      this.anchored = true;
+      if (transcript.length > transcriptCapacity) {
+        this.viewport.scrollToTop(transcript.length, transcriptCapacity);
+      }
+    }
     this.viewport.reconcile(transcript.length, transcriptCapacity);
 
     const lines = [

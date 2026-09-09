@@ -715,9 +715,14 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
   try {
     dashboard.handleInput("right");
     dashboard.handleInput("right");
+    // A transcript page opens on the start of work that already happened.
+    const opened = dashboard.render(80).join("\n");
+    assert.match(opened, /line 0\b/);
+    assert.doesNotMatch(opened, /line 39/);
+
+    dashboard.handleInput("G");
     const pinned = dashboard.render(80).join("\n");
     assert.match(pinned, /line 39/);
-    assert.doesNotMatch(pinned, /line 0\b/);
 
     dashboard.handleInput("k");
     const paused = dashboard.render(80);
