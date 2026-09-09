@@ -3,8 +3,8 @@
  *
  * The field numbers and message names are vendored from
  * oh-my-pi@eab72e88e4, packages/catalog/src/discovery/cursor-proto.ts
- * (MIT). Only the chat, image, model-discovery, and exec-rejection messages
- * used by this chat-only provider are retained. Unknown fields are skipped by
+ * (MIT). Only the chat, image, model-discovery, and Pi MCP bridge messages
+ * used by this provider are retained. Unknown fields are skipped by
  * the local protobuf codec so newer Cursor messages remain forward-compatible.
  */
 
@@ -297,7 +297,8 @@ export interface ConversationStep extends ProtoMessage {
   message:
     | { case: undefined; value?: undefined }
     | { case: "assistantMessage"; value: AssistantMessage }
-    | { case: "thinkingMessage"; value: ThinkingMessage };
+    | { case: "thinkingMessage"; value: ThinkingMessage }
+    | { case: "toolCall"; value: CursorToolCall };
 }
 
 export const ConversationStepSchema: MessageCodec<ConversationStep> =
@@ -306,6 +307,12 @@ export const ConversationStepSchema: MessageCodec<ConversationStep> =
       kind: "oneof",
       name: "message",
       variants: [
+        {
+          no: 2,
+          name: "toolCall",
+          kind: "message",
+          T: () => CursorToolCallSchema,
+        },
         {
           no: 1,
           name: "assistantMessage",
@@ -556,11 +563,77 @@ export const CursorRuleSchema: MessageCodec<CursorRule> = pb<CursorRule>(
   ],
 );
 
-/** Empty definitions deliberately make the request-context tool list empty. */
-export interface McpToolDefinition extends ProtoMessage {}
+export interface McpToolDefinition extends ProtoMessage {
+  name: string;
+  providerIdentifier: string;
+  toolName: string;
+  description: string;
+  inputSchema: Uint8Array;
+  inputSchemaJson?: string;
+}
 
 export const McpToolDefinitionSchema: MessageCodec<McpToolDefinition> =
-  pb<McpToolDefinition>("agent.v1.McpToolDefinition", []);
+  pb<McpToolDefinition>("agent.v1.McpToolDefinition", [
+    { no: 1, name: "name", kind: "string" },
+    { no: 4, name: "providerIdentifier", kind: "string" },
+    { no: 5, name: "toolName", kind: "string" },
+    { no: 2, name: "description", kind: "string" },
+    { no: 3, name: "inputSchema", kind: "bytes" },
+    { no: 6, name: "inputSchemaJson", kind: "string", optional: true },
+  ]);
+
+export interface McpArgs extends ProtoMessage {
+  name: string;
+  args: Record<string, Uint8Array>;
+  toolCallId: string;
+  providerIdentifier: string;
+  toolName: string;
+  smartModeApprovalOnly: boolean;
+  skipApproval: boolean;
+  serverIdentifier: string;
+}
+
+export const McpArgsSchema: MessageCodec<McpArgs> = pb<McpArgs>(
+  "agent.v1.McpArgs",
+  [
+    { no: 1, name: "name", kind: "string" },
+    { no: 2, name: "args", kind: "map", K: "string", V: "bytes" },
+    { no: 3, name: "toolCallId", kind: "string" },
+    { no: 4, name: "providerIdentifier", kind: "string" },
+    { no: 5, name: "toolName", kind: "string" },
+    { no: 7, name: "smartModeApprovalOnly", kind: "bool" },
+    { no: 8, name: "skipApproval", kind: "bool" },
+    { no: 9, name: "serverIdentifier", kind: "string" },
+  ],
+);
+
+export interface McpRejected extends ProtoMessage {
+  reason: string;
+  isReadonly: boolean;
+}
+
+export const McpRejectedSchema: MessageCodec<McpRejected> = pb<McpRejected>(
+  "agent.v1.McpRejected",
+  [
+    { no: 1, name: "reason", kind: "string" },
+    { no: 2, name: "isReadonly", kind: "bool" },
+  ],
+);
+
+export interface McpToolCall extends ProtoMessage {
+  result?: McpToolResult;
+  args?: McpArgs;
+  description?: string;
+}
+
+export const McpToolCallSchema: MessageCodec<McpToolCall> = pb<McpToolCall>(
+  "agent.v1.McpToolCall",
+  [
+    { no: 2, name: "result", kind: "message", T: () => McpToolResultSchema },
+    { no: 1, name: "args", kind: "message", T: () => McpArgsSchema },
+    { no: 3, name: "description", kind: "string", optional: true },
+  ],
+);
 
 export interface RequestContext extends ProtoMessage {
   rules: CursorRule[];
@@ -677,7 +750,8 @@ export interface ExecClientMessage extends ProtoMessage {
   execId: string;
   message:
     | { case: undefined; value?: undefined }
-    | { case: "requestContextResult"; value: RequestContextResult };
+    | { case: "requestContextResult"; value: RequestContextResult }
+    | { case: "mcpResult"; value: McpResult };
 }
 
 export const ExecClientMessageSchema: MessageCodec<ExecClientMessage> =
@@ -688,6 +762,12 @@ export const ExecClientMessageSchema: MessageCodec<ExecClientMessage> =
       kind: "oneof",
       name: "message",
       variants: [
+        {
+          no: 11,
+          name: "mcpResult",
+          kind: "message",
+          T: () => McpResultSchema,
+        },
         {
           no: 10,
           name: "requestContextResult",
@@ -756,7 +836,8 @@ export interface ExecServerMessage extends ProtoMessage {
   execId: string;
   message:
     | { case: undefined; value?: undefined }
-    | { case: "requestContextArgs"; value: RequestContextArgs };
+    | { case: "requestContextArgs"; value: RequestContextArgs }
+    | { case: "mcpArgs"; value: McpArgs };
 }
 
 export const ExecServerMessageSchema: MessageCodec<ExecServerMessage> =
@@ -767,6 +848,7 @@ export const ExecServerMessageSchema: MessageCodec<ExecServerMessage> =
       kind: "oneof",
       name: "message",
       variants: [
+        { no: 11, name: "mcpArgs", kind: "message", T: () => McpArgsSchema },
         {
           no: 10,
           name: "requestContextArgs",
@@ -940,7 +1022,7 @@ export const InteractionUpdateSchema: MessageCodec<InteractionUpdate> =
           no: 15,
           name: "toolCallDelta",
           kind: "message",
-          T: () => ToolInteractionUpdateSchema,
+          T: () => InteractionQueryPayloadSchema,
         },
         {
           no: 2,
@@ -988,10 +1070,57 @@ export const InteractionUpdateSchema: MessageCodec<InteractionUpdate> =
     },
   ]);
 
-export interface ToolInteractionUpdate extends ProtoMessage {}
+export interface ToolInteractionUpdate extends ProtoMessage {
+  callId?: string;
+  toolCall?: CursorToolCall;
+  argsTextDelta?: string;
+}
 
 export const ToolInteractionUpdateSchema: MessageCodec<ToolInteractionUpdate> =
-  pb<ToolInteractionUpdate>("agent.v1.ToolInteractionUpdate", []);
+  pb<ToolInteractionUpdate>("agent.v1.ToolInteractionUpdate", [
+    { no: 1, name: "callId", kind: "string" },
+    { no: 2, name: "toolCall", kind: "message", T: () => CursorToolCallSchema },
+    { no: 3, name: "argsTextDelta", kind: "string" },
+  ]);
+
+// Only the MCP branch is supported. Unknown native tool variants remain unknown
+// and are rejected by the provider rather than executed outside Pi.
+export interface CursorToolCall extends ProtoMessage {
+  toolCallId?: string;
+  tool:
+    | { case: undefined; value?: undefined }
+    | { case: "mcpToolCall"; value: McpToolCall };
+}
+export const CursorToolCallSchema = pb<CursorToolCall>("agent.v1.ToolCall", [
+  { no: 57, name: "toolCallId", kind: "string", optional: true },
+  {
+    kind: "oneof",
+    name: "tool",
+    variants: [
+      {
+        no: 15,
+        name: "mcpToolCall",
+        kind: "message",
+        T: () => McpToolCallSchema,
+      },
+    ],
+  },
+]);
+
+export interface McpResult extends ProtoMessage {
+  result:
+    | { case: undefined; value?: undefined }
+    | { case: "rejected"; value: McpRejected };
+}
+export const McpResultSchema = pb<McpResult>("agent.v1.McpResult", [
+  {
+    kind: "oneof",
+    name: "result",
+    variants: [
+      { no: 3, name: "rejected", kind: "message", T: () => McpRejectedSchema },
+    ],
+  },
+]);
 
 export interface TextDeltaUpdate extends ProtoMessage {
   text: string;
@@ -1062,3 +1191,81 @@ export const GetUsableModelsResponseSchema: MessageCodec<GetUsableModelsResponse
       repeat: true,
     },
   ]);
+
+export interface McpSuccess extends ProtoMessage {
+  content: McpToolResultContentItem[];
+  isError: boolean;
+}
+
+export const McpSuccessSchema: MessageCodec<McpSuccess> = pb<McpSuccess>(
+  "agent.v1.McpSuccess",
+  [
+    {
+      no: 1,
+      name: "content",
+      kind: "message",
+      T: () => McpToolResultContentItemSchema,
+      repeat: true,
+    },
+    { no: 2, name: "isError", kind: "bool" },
+  ],
+);
+
+export interface McpTextContent extends ProtoMessage {
+  text: string;
+}
+
+export const McpTextContentSchema: MessageCodec<McpTextContent> =
+  pb<McpTextContent>("agent.v1.McpTextContent", [
+    { no: 1, name: "text", kind: "string" },
+  ]);
+
+export interface McpImageContent extends ProtoMessage {
+  data: Uint8Array;
+  mimeType: string;
+}
+
+export const McpImageContentSchema: MessageCodec<McpImageContent> =
+  pb<McpImageContent>("agent.v1.McpImageContent", [
+    { no: 1, name: "data", kind: "bytes" },
+    { no: 2, name: "mimeType", kind: "string" },
+  ]);
+
+export interface McpToolResultContentItem extends ProtoMessage {
+  content:
+    | { case: undefined; value?: undefined }
+    | { case: "text"; value: McpTextContent }
+    | { case: "image"; value: McpImageContent };
+}
+
+export const McpToolResultContentItemSchema: MessageCodec<McpToolResultContentItem> =
+  pb<McpToolResultContentItem>("agent.v1.McpToolResultContentItem", [
+    {
+      kind: "oneof",
+      name: "content",
+      variants: [
+        { no: 1, name: "text", kind: "message", T: () => McpTextContentSchema },
+        {
+          no: 2,
+          name: "image",
+          kind: "message",
+          T: () => McpImageContentSchema,
+        },
+      ],
+    },
+  ]);
+
+export interface McpToolResult extends ProtoMessage {
+  result:
+    | { case: undefined; value?: undefined }
+    | { case: "success"; value: McpSuccess };
+}
+export const McpToolResultSchema = pb<McpToolResult>("agent.v1.McpToolResult", [
+  {
+    kind: "oneof",
+    name: "result",
+    variants: [
+      { no: 1, name: "success", kind: "message", T: () => McpSuccessSchema },
+    ],
+  },
+]);

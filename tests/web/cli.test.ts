@@ -83,9 +83,6 @@ function waitForPublishedMarker(
 
 const entrypoint = new URL("../../bin/openpi.js", import.meta.url);
 const entrypointPath = fileURLToPath(entrypoint);
-const staticAssetsPath = fileURLToPath(
-  new URL("../../web/host/static-assets.ts", import.meta.url),
-);
 const resolverPath = fileURLToPath(
   new URL("../../web/host/pi-coding-agent-entry.ts", import.meta.url),
 );
@@ -159,10 +156,6 @@ test("installed CLI loads TypeScript Web modules through its package loader", as
     await mkdir(join(packageRoot, "web", "runtime"), { recursive: true });
     await copyStandaloneLoader(packageRoot);
     await writeOfficialPeer(temporaryRoot);
-    await cp(
-      staticAssetsPath,
-      join(packageRoot, "web", "host", "static-assets.ts"),
-    );
     await writeFile(
       join(packageRoot, "package.json"),
       JSON.stringify({ type: "module" }),
@@ -177,10 +170,7 @@ test("installed CLI loads TypeScript Web modules through its package loader", as
     );
     await writeFile(
       join(packageRoot, "web", "host", "web-host.ts"),
-      `import { readFile } from "node:fs/promises";
-import { MARKED_BROWSER_URL } from "./static-assets.ts";
-
-export class WebHost {
+      `export class WebHost {
   origin = "http://127.0.0.1:12345";
   url = "http://127.0.0.1:12345/#token=test";
   timer: ReturnType<typeof setInterval> | undefined;
@@ -190,7 +180,6 @@ export class WebHost {
     }
   }
   async start(): Promise<void> {
-    await readFile(MARKED_BROWSER_URL);
     if (process.env.OPENPI_CLI_KEEPALIVE === "1") {
       this.timer = setInterval(() => undefined, 1_000);
     }

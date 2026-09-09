@@ -141,11 +141,11 @@ export const SUBAGENT_SPAWN_PROMPT_GUIDELINES = [
 /** Model-facing schema descriptions for subagent_spawn task and execution options. */
 export const SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS = {
   prompt:
-    "Task prompt for the subagent. Must be self-contained: include all needed context, file paths, and what to report back.",
+    "Self-contained task: include needed context, file paths, and expected report.",
   name: "Short human-readable name shown in listings and the UI",
   harness: 'Optional; "pi" is the only harness and the default.',
   workingDir:
-    "Trusted child working directory; defaults to the current directory",
+    "Child cwd, absolute or relative to parent. Target project trust is checked separately.",
   isolation:
     'Use "worktree" for concurrent writers and tell the child to commit. See the Subagents Skill for lifecycle details.',
   model:
