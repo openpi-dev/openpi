@@ -64,6 +64,48 @@ test("artifact reads bind Session, canonical file, content revision and explicit
   }
 });
 
+test("absolute paths through the Session root alias remain scoped to its canonical workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifact-alias-"));
+  const workspace = join(root, "workspace");
+  const alias = join(root, "workspace-alias");
+  const outside = join(root, "outside");
+  await mkdir(workspace);
+  await mkdir(outside);
+  await writeFile(join(workspace, "report.md"), "report");
+  await writeFile(join(outside, "secret.md"), "private");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await symlink(workspace, alias, linkType);
+  const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: alias }));
+  try {
+    for (const reference of [
+      join(alias, "report.md"),
+      join(workspace, "report.md"),
+      "./report.md",
+    ]) {
+      const handle = await reader.resolveFile("s", reference);
+      const result = await reader.read(handle, "s");
+      assert.equal(result.preview.text, "report");
+      assert.equal(
+        result.preview.artifact.path,
+        await realpath(join(workspace, "report.md")),
+      );
+      reader.release(handle, "s");
+    }
+    await symlink(outside, join(workspace, "escape"), linkType);
+    await assert.rejects(
+      reader.resolveFile("s", join(alias, "escape", "secret.md")),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.resolveFile("s", join(alias, "..", "outside", "secret.md")),
+      code("ARTIFACT_DENIED"),
+    );
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("artifact paths reject traversal, encodings, junctions, directories and missing files", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-artifacts-boundary-"));
   const workspace = join(root, "workspace");

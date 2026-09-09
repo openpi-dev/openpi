@@ -54,10 +54,14 @@ export class ArtifactReader {
     if (/[\x00-\x1f\x7f]/u.test(decoded) || /^(?:\\\\|\/\/)/u.test(decoded) || /:/u.test(decoded.replace(/^[a-z]:[\\/]/iu, ""))) throw denied();
     const root = await realpath(scope.cwd);
     const requested = resolve(base ?? root, decoded);
-    if (!inside(root, requested)) throw denied();
+    // The Session cwd may use a Windows 8.3 alias. Accept either spelling of
+    // this exact root, then verify descendants and canonical containment.
+    const sessionRoot = resolve(scope.cwd);
+    const requestedRoot = inside(root, requested) ? root : inside(sessionRoot, requested) ? sessionRoot : undefined;
+    if (!requestedRoot) throw denied();
     // Reject links/junctions throughout the descendant path, not just its leaf.
-    let part = root;
-    for (const segment of relative(root, requested).split(sep)) {
+    let part = requestedRoot;
+    for (const segment of relative(requestedRoot, requested).split(sep)) {
       part = resolve(part, segment);
       const info = await lstat(part);
       if (info.isSymbolicLink()) throw denied();
