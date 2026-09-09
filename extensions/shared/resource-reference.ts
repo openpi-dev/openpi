@@ -109,7 +109,11 @@ function containedPath(root: string, candidate: string) {
   );
 }
 
-function inspectOwnedFile(rootValue: string, fileValue: string) {
+function inspectOwnedFile(
+  rootValue: string,
+  fileValue: string,
+  allowMissingFile = false,
+) {
   const root = path.resolve(rootValue);
   const file = path.resolve(fileValue);
   if (
@@ -148,6 +152,20 @@ function inspectOwnedFile(rootValue: string, fileValue: string) {
     }
     return { ok: true as const, root, file, stat: lstatSync(file) };
   } catch (error) {
+    if (
+      allowMissingFile &&
+      (error as NodeJS.ErrnoException).code === "ENOENT"
+    ) {
+      try {
+        const parent = path.dirname(file);
+        const parentStat = lstatSync(parent);
+        if (parentStat.isDirectory() && !parentStat.isSymbolicLink()) {
+          return { ok: true as const, root, file, stat: undefined };
+        }
+      } catch {
+        // Fall through to the ordinary missing/unsafe result.
+      }
+    }
     return {
       ok: false as const,
       failure:
@@ -158,8 +176,12 @@ function inspectOwnedFile(rootValue: string, fileValue: string) {
   }
 }
 
-function resourceRevision(file: string) {
+function resourceRevisionFile(file: string) {
   return createHash("sha256").update(readFileSync(file)).digest("hex");
+}
+
+function resourceRevisionContent(content: string) {
+  return createHash("sha256").update(content).digest("hex");
 }
 
 export function createOwnerFileResourceRef(options: {
@@ -172,6 +194,12 @@ export function createOwnerFileResourceRef(options: {
   readonly sourceCoverage: string;
   readonly lifetime: OpenPiResourceLifetime;
   readonly expectedByteLength?: number;
+  /**
+   * Content that is about to be written atomically. This lets a producer
+   * publish an exact reference before the target file exists while retaining
+   * the same owner-root and path checks as an already-written file.
+   */
+  readonly content?: string;
 }) {
   if (
     !safeIdentity(options.owner.id) ||
@@ -184,17 +212,31 @@ export function createOwnerFileResourceRef(options: {
   ) {
     throw new Error("Invalid owner-bound resource identity");
   }
-  const inspected = inspectOwnedFile(options.root, options.file);
+  const inspected = inspectOwnedFile(
+    options.root,
+    options.file,
+    options.content !== undefined,
+  );
   if (!inspected.ok) {
     throw new Error(`Cannot publish resource reference: ${inspected.failure}`);
   }
+  const byteLength =
+    options.content !== undefined
+      ? Buffer.byteLength(options.content)
+      : inspected.stat?.size;
+  if (byteLength === undefined) {
+    throw new Error("Cannot publish resource reference: missing");
+  }
   if (
     options.expectedByteLength !== undefined &&
-    inspected.stat.size !== options.expectedByteLength
+    byteLength !== options.expectedByteLength
   ) {
     throw new Error("Cannot publish resource reference: stale-resource");
   }
-  const revision = resourceRevision(inspected.file);
+  const revision =
+    options.content !== undefined
+      ? resourceRevisionContent(options.content)
+      : resourceRevisionFile(inspected.file);
   return {
     version: OPENPI_RESOURCE_REF_VERSION,
     owner: { ...options.owner },
@@ -203,7 +245,7 @@ export function createOwnerFileResourceRef(options: {
       revision,
       path: inspected.file,
       mediaType: options.mediaType,
-      byteLength: inspected.stat.size,
+      byteLength,
       completeness: options.completeness,
       sourceCoverage: options.sourceCoverage,
     },
@@ -268,6 +310,13 @@ export function resolveOwnerFileResourceRef(
       message: `Resource cannot be resolved: ${inspected.failure}`,
     };
   }
+  if (!inspected.stat) {
+    return {
+      ok: false,
+      failure: "missing",
+      message: "Resource cannot be resolved: missing",
+    };
+  }
   if (inspected.stat.size !== ref.resource.byteLength) {
     return {
       ok: false,
@@ -275,7 +324,7 @@ export function resolveOwnerFileResourceRef(
       message: "Resource bytes no longer match the published reference",
     };
   }
-  const revision = resourceRevision(inspected.file);
+  const revision = resourceRevisionFile(inspected.file);
   if (revision !== ref.resource.revision) {
     return {
       ok: false,

@@ -582,6 +582,9 @@ export function persistWorkflowJson(
           completeness: resource.completeness,
           sourceCoverage: resource.sourceCoverage,
           lifetime: "workflow-run",
+          content: artifactWrites.find(
+            (artifact) => artifact.name === resource.file,
+          )?.content,
         }),
       ];
     } catch {
