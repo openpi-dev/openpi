@@ -75,6 +75,33 @@ test("uses Claude-style lavender with a contrast-safe light variant", () => {
   );
 });
 
+test("shimmer phase changes only the keyword colors", () => {
+  const first = colorCapabilityKeyword(
+    "workflow",
+    { colorMode: "truecolor", light: false },
+    0,
+  );
+  const second = colorCapabilityKeyword(
+    "workflow",
+    { colorMode: "truecolor", light: false },
+    0.4,
+  );
+  assert.notEqual(first, second);
+  assert.match(first, /^\u001b\[38;2;\d+;\d+;\d+m/u);
+  assert.equal(
+    first.replace(/\u001b\[38;2;\d+;\d+;\d+m/gu, "").replace("\u001b[39m", ""),
+    "workflow",
+  );
+  assert.equal(
+    colorCapabilityKeyword(
+      "workflow",
+      { colorMode: "256color", light: false },
+      0.4,
+    ),
+    "\u001b[38;5;183mworkflow\u001b[39m",
+  );
+});
+
 test("highlights capability names only when shared intent authorizes them", () => {
   const reserved = editor("subagent, workflow");
   assert.deepEqual(reserved.highlighted.render(120), [

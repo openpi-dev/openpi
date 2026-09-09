@@ -32,7 +32,7 @@ file:line references. You cannot modify files — do not attempt to.
 | ------------------ | -------- | ------------------------------------------------------------------------------------ |
 | `name`             | yes      | `[a-z0-9-]`, ≤64 chars, and must equal the filename stem.                            |
 | `description`      | yes      | Shown to the parent model when it picks a type. ≤1024 chars.                         |
-| `tools`            | no       | Tool allowlist. **Omit to inherit the normal tool set.**                             |
+| `tools`            | no       | Tool allowlist. **Omit to inherit active parent child-eligible tools.**                             |
 | `model`            | no       | `provider/model-id`, or a bare id resolved against the current provider; ≤256 chars. |
 | `reasoning_effort` | no       | `off`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max`.                           |
 | body               | no       | Appended to the child's system prompt. ≤16384 chars.                                 |
@@ -50,16 +50,15 @@ file with the same name.
 
 | Role          | Tools                                                               | Relative effort guidance | Purpose                                                |
 | ------------- | ------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------ |
-| `explorer`    | `read grep find ls fd rg git_show git_diff git_log`                 | Moderate                 | Read-only codebase tracing; increase for harder tasks. |
-| `implementer` | `read bash edit write grep find ls fd rg git_show git_diff git_log` | Medium-high              | Focused implementation; adjust for scope and risk.     |
-| `reviewer`    | `read grep find ls fd rg git_show git_diff git_log`                 | High                     | Read-only correctness, safety, and regression review.  |
-| `advisor`     | `read grep find ls fd rg git_show git_diff git_log`                 | High                     | Deep read-only analysis and technical advice.          |
+| `explorer`    | Active parent child-eligible tools                 | Moderate                 | Read-only codebase tracing; increase for harder tasks. |
+| `implementer` | Active parent child-eligible tools | Medium-high              | Focused implementation; adjust for scope and risk.     |
+| `reviewer`    | Active parent child-eligible tools                 | High                     | Read-only correctness, safety, and regression review.  |
+| `advisor`     | Active parent child-eligible tools                 | High                     | Deep read-only analysis and technical advice.          |
 
 These are relative selection hints, not fixed Pi thinking levels. Built-ins set
 no model or reasoning-effort default. An explicit user requirement takes
 priority; otherwise the parent model chooses from levels supported by the
-resolved child model according to the role and task difficulty. Their tool
-allowlists still intersect with plan mode and the child denylist.
+resolved child model according to the role and task difficulty. Custom role allowlists intersect with active parent tools, Plan Mode, and the child denylist. Built-in read-only task guidance is a role instruction, not a filesystem sandbox. Existing custom role files are never widened automatically.
 
 ## Discovery
 

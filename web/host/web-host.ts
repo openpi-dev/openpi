@@ -11,6 +11,7 @@ import { URL } from "node:url";
 import { promisify } from "node:util";
 import {
   subscribeWebCapabilities,
+  webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
@@ -29,10 +30,9 @@ import {
   type WebRuntimeController,
 } from "../runtime/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
-import { MARKED_BROWSER_URL } from "./static-assets.ts";
 
 const HOST = "127.0.0.1";
-const UI_ROOT = new URL("../ui/", import.meta.url);
+const UI_ROOT = new URL("../dist/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
@@ -367,13 +367,36 @@ export class WebHost {
       return;
     }
     if (url.pathname === "/" && request.method === "GET") {
-      const body = await readFile(new URL("index.html", UI_ROOT));
+      // The credential is issued only to the exact local document origin.
+      // allowedOrigins remains an API compatibility option, not a bootstrap grant.
+      const site = request.headers["sec-fetch-site"];
+      const destination = request.headers["sec-fetch-dest"];
+      const mode = request.headers["sec-fetch-mode"];
+      let foreignReferrer = false;
+      if (request.headers.referer) {
+        try { foreignReferrer = new URL(request.headers.referer).origin !== this.origin; }
+        catch { foreignReferrer = true; }
+      }
+      if (
+        (request.headers.origin && request.headers.origin !== this.origin) ||
+        (site !== undefined && site !== "none" && site !== "same-origin") ||
+        (destination !== undefined && destination !== "document") ||
+        (mode !== undefined && mode !== "navigate") || foreignReferrer
+      ) {
+        return this.json(response, 403, { error: "Open the local Web address directly in your browser." });
+      }
+      const template = await readFile(new URL("index.html", UI_ROOT), "utf8");
+      const body = template.replace("<head>", `<head><meta name="openpi-web-token" content="${this.token.toString("hex")}">`);
       response.writeHead(200, {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
           "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "Cross-Origin-Opener-Policy": "same-origin",
+        "X-Frame-Options": "DENY",
+        "X-Content-Type-Options": "nosniff",
       });
       response.end(body);
       return;
@@ -381,22 +404,20 @@ export class WebHost {
     if (
       url.pathname === "/styles.css" ||
       url.pathname === "/app.js" ||
-      url.pathname === "/marked.js"
+      url.pathname === "/favicon.svg"
     ) {
       if (request.method !== "GET")
         return this.json(response, 405, {
           error: "static assets accept GET only",
         });
       const file = url.pathname.slice(1);
-      const body = await readFile(
-        file === "marked.js"
-          ? MARKED_BROWSER_URL
-          : new URL(file, UI_ROOT),
-      );
+      const body = await readFile(new URL(file, UI_ROOT));
       response.writeHead(200, {
         "Content-Type": file.endsWith(".css")
           ? "text/css; charset=utf-8"
-          : "text/javascript; charset=utf-8",
+          : file.endsWith(".svg")
+            ? "image/svg+xml; charset=utf-8"
+            : "text/javascript; charset=utf-8",
         "Cache-Control": "no-store",
       });
       response.end(body);
@@ -491,6 +512,13 @@ export class WebHost {
       await this.adapter.archiveSession(path);
       this.publish("session_archived", { sessionPath: path });
       return this.json(response, 200, { path, archived: true });
+    }
+    if (url.pathname === "/api/sessions/unarchive" && request.method === "POST") {
+      const path = url.searchParams.get("path");
+      if (!path) return this.json(response, 400, { error: "session path is required" });
+      await this.adapter.unarchiveSession(path);
+      this.publish("session_unarchived", { sessionPath: path });
+      return this.json(response, 200, { path, archived: false });
     }
     if (url.pathname === "/api/sessions/select" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -673,6 +701,17 @@ export class WebHost {
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
+    const diagnosticSession = url.searchParams.get("sessionId");
+    if (
+      diagnosticSession !== null &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail"].includes(url.pathname) &&
+      diagnosticSession !== this.runtime.sessionManager.getSessionId()
+    ) {
+      return this.json(response, 409, {
+        code: "SESSION_CHANGED",
+        error: "The active Session changed. Reopen the panel to inspect it.",
+      });
+    }
     if (url.pathname === "/events") return this.eventsStream(request, response);
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
@@ -686,6 +725,57 @@ export class WebHost {
     }
     if (url.pathname === "/api/models")
       return this.json(response, 200, { models: this.runtime.listModels() });
+    if (url.pathname === "/api/trust") {
+      if (!this.runtime.getProjectTrustStatus) {
+        return this.json(response, 501, {
+          code: "PROJECT_TRUST_STATUS_UNAVAILABLE",
+          error: "project Trust status is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.getProjectTrustStatus());
+    }
+    if (url.pathname === "/api/capabilities/detail") {
+      const kind = url.searchParams.get("kind");
+      const id = url.searchParams.get("id");
+      if (
+        (kind !== "subagents" &&
+          kind !== "workflows" &&
+          kind !== "background-terminals") ||
+        id === null
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_CAPABILITY_DETAIL_TARGET",
+          error: "a supported capability kind and exact id are required",
+        });
+      }
+      const receipt = webCapabilityDetail(
+        this.runtime.sessionManager,
+        kind,
+        id,
+      );
+      if (receipt.status === "invalid") {
+        return this.json(response, 400, {
+          code: "INVALID_CAPABILITY_DETAIL_TARGET",
+          error: "a supported capability kind and exact id are required",
+        });
+      }
+      if (receipt.status === "unavailable") {
+        return this.json(response, 404, {
+          code: "CAPABILITY_DETAILS_UNAVAILABLE",
+          error: "capability details are unavailable for the active Session",
+        });
+      }
+      if (receipt.status === "missing") {
+        return this.json(response, 404, {
+          code: "CAPABILITY_NOT_FOUND",
+          error: "capability resource was not found in the active Session",
+        });
+      }
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        detail: receipt.detail,
+      });
+    }
     if (url.pathname === "/api/capabilities")
       return this.json(response, 200, {
         sessionId: this.runtime.sessionManager.getSessionId(),
@@ -698,6 +788,20 @@ export class WebHost {
         sessionId: this.runtime.sessionManager.getSessionId(),
         workspaceSelected: this.runtime.workspaceSelected,
         models: this.runtime.listModels().filter((model) => model.current),
+      });
+    if (url.pathname === "/api/providers/auth-status") {
+      if (!this.runtime.listProviderAuth) {
+        return this.json(response, 501, {
+          code: "PROVIDER_AUTH_STATUS_UNAVAILABLE",
+          error: "provider authentication status is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.listProviderAuth());
+    }
+    if (url.pathname === "/api/thinking")
+      return this.json(response, 200, {
+        sessionId: this.runtime.sessionManager.getSessionId(),
+        ...(this.runtime.getThinkingState?.() ?? { level: "unknown", available: [] }),
       });
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;

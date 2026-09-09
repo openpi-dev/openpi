@@ -1,11 +1,11 @@
 import { readFile, stat } from "node:fs/promises";
 import { basename, isAbsolute } from "node:path";
+import type { ImageContent } from "@earendil-works/pi-ai/compat";
 import type {
   ExtensionContext,
   InputEvent,
   InputEventResult,
 } from "@earendil-works/pi-coding-agent";
-import type { ImageContent } from "@earendil-works/pi-ai/compat";
 
 const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
 
@@ -58,8 +58,7 @@ function detectImageMimeType(
 
 /**
  * Pi's TUI represents a clipboard image as a leading local path. Cursor's
- * chat-only provider cannot ask a native read-file tool to resolve that path,
- * so convert an explicit leading image path into the same ImageContent shape
+ * provider does not execute Cursor-native read-file tools, so convert an explicit leading image path into the same ImageContent shape
  * used by CLI/RPC attachments before the agent turn starts.
  */
 export async function transformCursorImageInput(

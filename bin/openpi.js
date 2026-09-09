@@ -61,12 +61,15 @@ if (noWorkspace && workspaceArgs.length > 0) {
 let host;
 let runtime;
 let stopping;
+const browserAbort = new AbortController();
 const stop = () => {
+  browserAbort.abort();
   stopping ??= host?.stop() ?? runtime?.dispose() ?? Promise.resolve();
   return stopping;
 };
 
 try {
+  console.error("Starting OpenPI Web Workbench…");
   const bootstrap = createJiti(import.meta.url);
   const { missingPiCodingAgentDiagnostic, resolveStandaloneJitiAliases } =
     await bootstrap.import("../web/host/pi-coding-agent-entry.ts");
@@ -123,18 +126,27 @@ try {
     ...(runtime.workspaceSelected === true ? { cwd: runtime.cwd } : {}),
     origin: host.origin,
   });
-  const opened = noOpen ? false : await openBrowser(host.url);
   if (noWorkspace) {
     console.log(
       formatWebReadyScreen({
         origin: host.origin,
         url: host.url,
-        opened,
+        opened: noOpen ? false : "pending",
       }),
     );
   } else {
     console.log(`OpenPI Web Workbench is running at ${host.origin}`);
-    if (!opened) console.log(`Open this URL in a browser: ${host.url}`);
+    if (noOpen) console.log(`Open this URL in a browser: ${host.url}`);
+  }
+  if (!noOpen) {
+    const opened = await openBrowser(host.url, browserAbort.signal);
+    if (!browserAbort.signal.aborted) {
+      console.log(
+        opened
+          ? "Browser open requested."
+          : `Browser did not open. Open this URL: ${host.url}`,
+      );
+    }
   }
 } catch (error) {
   let cleanupError;
