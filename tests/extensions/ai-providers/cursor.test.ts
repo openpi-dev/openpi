@@ -1704,3 +1704,223 @@ test("Cursor transport rejects EOF in partial headers and payloads", async () =>
       );
   }
 });
+
+function unsupportedNativeExec(id = 71) {
+  return frameServerMessage(
+    create(AgentServerMessageSchema, {
+      message: {
+        case: "execServerMessage",
+        value: create(ExecServerMessageSchema, {
+          id,
+          execId: `native-${id}`,
+          message: { case: undefined },
+        }),
+      },
+    }),
+  );
+}
+
+function completedText(text: string) {
+  return Buffer.concat([
+    responseUpdate(
+      create(InteractionUpdateSchema, {
+        message: {
+          case: "textDelta",
+          value: create(TextDeltaUpdateSchema, { text }),
+        },
+      }),
+    ),
+    responseUpdate(
+      create(InteractionUpdateSchema, {
+        message: {
+          case: "turnEnded",
+          value: create(TurnEndedUpdateSchema, {}),
+        },
+      }),
+    ),
+  ]);
+}
+
+test("Cursor rejects native execution in band and recovers through a real Pi tool roundtrip", {
+  timeout: 3000,
+}, async () => {
+  let requests = 0;
+  let executions = 0;
+  const rejected: number[] = [];
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest") {
+        requests++;
+        if (requests === 1) {
+          for (const kind of [
+            "partialToolCall",
+            "toolCallStarted",
+            "toolCallDelta",
+            "toolCallCompleted",
+          ] as const) {
+            peer.write(
+              responseUpdate(
+                create(InteractionUpdateSchema, {
+                  message: {
+                    case: kind,
+                    value: {
+                      callId: "native-preview",
+                      toolCall: create(CursorToolCallSchema, {
+                        tool: { case: undefined },
+                      }),
+                    },
+                  },
+                }),
+              ),
+            );
+          }
+          peer.write(unsupportedNativeExec());
+        } else {
+          assert.equal(executions, 1);
+          peer.end(completedText("Pi result received."));
+        }
+      } else if (message.case === "execClientControlMessage") {
+        const control = message.value.message;
+        if (control.case === "throw") {
+          assert.equal(control.value.errorCode, "UNIMPLEMENTED");
+          assert.match(control.value.error ?? "", /Pi MCP tools/);
+          rejected.push(control.value.id!);
+        } else if (control.case === "streamClose") {
+          assert.equal(control.value.id, 71);
+          peer.write(mcpExec());
+        }
+      }
+    });
+  });
+  servers.push(server);
+  const agent = new Agent({
+    initialState: {
+      model: localModel(server.baseUrl),
+      tools: [
+        {
+          ...LOOKUP,
+          label: "Lookup",
+          execute: async () => {
+            executions++;
+            return {
+              content: [{ type: "text", text: "Actual Pi result" }],
+              details: {},
+            };
+          },
+        },
+      ],
+    },
+    getApiKey: () => "token",
+    streamFn: (model, context, options) =>
+      streamCursor(model, context, options),
+  });
+  await agent.prompt("Look up the page.");
+  assert.deepEqual(rejected, [71]);
+  assert.equal(requests, 2);
+  assert.equal(executions, 1);
+  assert.equal(agent.state.messages.at(-1)?.role, "assistant");
+  const last = agent.state.messages.at(-1) as AssistantMessage;
+  assert.equal(last.stopReason, "stop");
+  assert.deepEqual(last.content, [
+    { type: "text", text: "Pi result received." },
+  ]);
+});
+
+test("Cursor bounds repeated native execution rejection without exposing a Pi call", {
+  timeout: 3000,
+}, async () => {
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest")
+        peer.write(
+          Buffer.concat([
+            ...[1, 2, 3, 4].map(unsupportedNativeExec),
+            mcpExec(),
+          ]),
+        );
+    });
+  });
+  servers.push(server);
+  const events = await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      { ...CONTEXT, tools: [LOOKUP] },
+      { apiKey: "token" },
+    ),
+  );
+  const last = events.at(-1);
+  assert.ok(last?.type === "error");
+  assert.equal(last.reason, "error");
+  assert.match(last.error.errorMessage ?? "", /native.*recovery limit.*3/i);
+  assert.equal(
+    events.some((event) => event.type === "toolcall_end"),
+    false,
+  );
+});
+
+test("Cursor cancellation remains caller cancellation after a native rejection", {
+  timeout: 3000,
+}, async () => {
+  const controller = new AbortController();
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest") peer.write(unsupportedNativeExec());
+      if (
+        message.case === "execClientControlMessage" &&
+        message.value.message.case === "streamClose"
+      )
+        controller.abort();
+    });
+  });
+  servers.push(server);
+  const events = await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      { ...CONTEXT, tools: [LOOKUP] },
+      { apiKey: "token", signal: controller.signal },
+    ),
+  );
+  const last = events.at(-1);
+  assert.ok(last?.type === "error");
+  assert.equal(last.reason, "aborted");
+});
+
+test("Cursor server cancellation is a transport failure rather than caller cancellation", {
+  timeout: 3000,
+}, async () => {
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest")
+        peer.end(
+          frameConnectMessage(
+            Buffer.from(
+              JSON.stringify({
+                error: {
+                  code: "canceled",
+                  message: "Upstream response aborted",
+                },
+              }),
+            ),
+            2,
+          ),
+        );
+    });
+  });
+  servers.push(server);
+  const controller = new AbortController();
+  const events = await collectEvents(
+    streamCursor(localModel(server.baseUrl), CONTEXT, {
+      apiKey: "token",
+      signal: controller.signal,
+    }),
+  );
+  const last = events.at(-1);
+  assert.ok(last?.type === "error");
+  assert.equal(controller.signal.aborted, false);
+  assert.equal(last.reason, "error");
+  assert.match(last.error.errorMessage ?? "", /Upstream response aborted/);
+});

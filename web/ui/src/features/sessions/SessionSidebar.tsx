@@ -4,6 +4,7 @@ import type { DropdownMenuOption } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Archive,
+  ArchiveRestore,
   ChevronsLeft,
   MoreHorizontal,
   Plus,
@@ -69,6 +70,25 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const searchInput = useRef<HTMLInputElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
   const snapshot = props.snapshot;
+  const [archived, setArchived] = useState(false);
+  const [archiveCollapsed, setArchiveCollapsed] = useState<Set<string>>(
+    new Set(),
+  );
+  const [restoring, setRestoring] = useState<Set<string>>(new Set());
+  const restoreInFlight = useRef(new Set<string>());
+  const [restoreError, setRestoreError] = useState(false);
+  const restore = async (path: string) => {
+    if (restoreInFlight.current.has(path)) return;
+    restoreInFlight.current.add(path);
+    setRestoring(new Set(restoreInFlight.current));
+    setRestoreError(false);
+    try {
+      if (!(await props.actions.unarchiveSession(path))) setRestoreError(true);
+    } finally {
+      restoreInFlight.current.delete(path);
+      setRestoring(new Set(restoreInFlight.current));
+    }
+  };
 
   useEffect(() => {
     if (props.searchOpen) searchInput.current?.focus();
@@ -84,7 +104,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     const visible = (workspacePath?: string) =>
       (snapshot?.sessions ?? []).filter(
         (session) =>
-          !session.archived &&
+          Boolean(session.archived) === archived &&
           (workspacePath === "__ungrouped__"
             ? session.ungrouped
             : session.cwd === workspacePath && !session.ungrouped) &&
@@ -93,8 +113,21 @@ export function SessionSidebar(props: SessionSidebarProps) {
               .toLowerCase()
               .includes(query)),
       );
+    const workspaces = [...(snapshot?.workspaces ?? [])];
+    for (const session of snapshot?.sessions ?? []) {
+      if (
+        !session.ungrouped &&
+        !workspaces.some((workspace) => workspace.path === session.cwd)
+      ) {
+        workspaces.push({
+          path: session.cwd,
+          name: session.cwd,
+          current: false,
+        });
+      }
+    }
     return [
-      ...(snapshot?.workspaces ?? []).map((workspace) => ({
+      ...workspaces.map((workspace) => ({
         ...workspace,
         sessions: visible(workspace.path),
         ungrouped: false,
@@ -107,9 +140,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
         ungrouped: true,
       },
     ].filter(
-      (group) => group.sessions.length > 0 || (!group.ungrouped && !query),
+      (group) =>
+        group.sessions.length > 0 || (!archived && !group.ungrouped && !query),
     );
-  }, [props.query, snapshot, t]);
+  }, [archived, props.query, snapshot, t]);
 
   const openEdit = (target: EditTarget) => {
     setDraft(target.name);
@@ -203,10 +237,48 @@ export function SessionSidebar(props: SessionSidebarProps) {
         </div>
       </div>
 
+      <fieldset
+        className="session-view-switch"
+        aria-label={t("conversationViews")}
+      >
+        <button
+          type="button"
+          aria-pressed={!archived}
+          onClick={() => setArchived(false)}
+        >
+          {t("currentConversations")}
+        </button>
+        <button
+          type="button"
+          aria-pressed={archived}
+          onClick={() => setArchived(true)}
+        >
+          {t("archivedConversations")}
+        </button>
+      </fieldset>
+      {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
+      {Boolean(
+        snapshot?.truncation.sessionsOmitted ||
+          snapshot?.truncation.workspacesOmitted,
+      ) && (
+        <p className="sidebar-scope-note">
+          {t("loadedHistoryBounded", {
+            sessions: snapshot?.truncation.sessionsOmitted,
+            workspaces: snapshot?.truncation.workspacesOmitted,
+          })}
+        </p>
+      )}
+      {restoreError && (
+        <p className="sidebar-scope-note" role="alert">
+          {t("restoreFailed")}
+        </p>
+      )}
       <div className="workspace-tree">
         {grouped.length ? (
           grouped.map((group) => {
-            const collapsed = props.collapsed.has(group.path);
+            const collapsed = (
+              archived ? archiveCollapsed : props.collapsed
+            ).has(group.path);
             return (
               <section
                 className={`workspace-group ${collapsed ? "collapsed" : ""}`}
@@ -220,7 +292,16 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     title={
                       group.path === "__ungrouped__" ? undefined : group.path
                     }
-                    onClick={() => props.actions.toggleWorkspace(group.path)}
+                    onClick={() => {
+                      if (!archived) props.actions.toggleWorkspace(group.path);
+                      else
+                        setArchiveCollapsed((previous) => {
+                          const next = new Set(previous);
+                          if (next.has(group.path)) next.delete(group.path);
+                          else next.add(group.path);
+                          return next;
+                        });
+                    }}
                   >
                     <span className="workspace-toggle" aria-hidden="true">
                       <span className="workspace-chevron">⌄</span>
@@ -314,11 +395,21 @@ export function SessionSidebar(props: SessionSidebarProps) {
                                 }),
                             },
                             {
-                              id: "archive",
-                              label: t("archiveConversation"),
-                              icon: <Archive />,
+                              id: archived ? "restore" : "archive",
+                              label: restoring.has(session.path)
+                                ? t("restoringConversation")
+                                : t(
+                                    archived
+                                      ? "restoreConversation"
+                                      : "archiveConversation",
+                                  ),
+                              icon: archived ? <ArchiveRestore /> : <Archive />,
                               onClick: () =>
-                                void props.actions.archiveSession(session.path),
+                                archived
+                                  ? void restore(session.path)
+                                  : void props.actions.archiveSession(
+                                      session.path,
+                                    ),
                             },
                           ]}
                         />
@@ -333,7 +424,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
           })
         ) : (
           <div className="empty">
-            {props.query ? t("noMatching") : t("noSessions")}
+            {props.query
+              ? t("noMatching")
+              : t(archived ? "noLoadedArchives" : "noSessions")}
           </div>
         )}
       </div>

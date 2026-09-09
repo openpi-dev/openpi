@@ -18,13 +18,20 @@ function Chip({
   kind,
   label,
   status,
+  onClick,
 }: {
   kind: string;
   label: string;
   status: Status;
+  onClick?: () => void;
 }) {
+  const Tag = onClick ? "button" : "span";
   return (
-    <span className={`activity-chip ${kind} ${status}`}>
+    <Tag
+      className={`activity-chip ${kind} ${status}`}
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+    >
       {status === "running" ? (
         <i className="activity-chip-dot" />
       ) : status === "done" ? (
@@ -35,11 +42,17 @@ function Chip({
         <span className="activity-chip-glyph">?</span>
       )}
       <span className="activity-chip-text">{label}</span>
-    </span>
+    </Tag>
   );
 }
 
-export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
+export function ActivityBar({
+  snapshot,
+  onInspectTerminal,
+}: {
+  snapshot: WebSnapshot | null;
+  onInspectTerminal?: (id: string) => void;
+}) {
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
   const running = [
@@ -61,6 +74,7 @@ export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
     kind: string;
     label: string;
     status: Status;
+    onClick?: () => void;
   }> = [];
   for (const workflow of capabilities?.workflows?.items ?? []) {
     const settled = workflow.agents.total - workflow.agents.running;
@@ -92,6 +106,9 @@ export function ActivityBar({ snapshot }: { snapshot: WebSnapshot | null }) {
     const elapsed = formatElapsedMs(terminal.createdAt, terminal.settledAt);
     chips.push({
       key: `terminal-${terminal.id}`,
+      onClick: onInspectTerminal
+        ? () => onInspectTerminal(terminal.id)
+        : undefined,
       kind: "terminal",
       label: `${terminal.title || terminal.id}${elapsed ? ` · ${elapsed}` : ""}`,
       status: canonicalStatus(terminal.status),

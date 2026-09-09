@@ -3,6 +3,7 @@ import type {
   WebEvent,
   WebLiveMessage,
   WebSnapshot,
+  WebModelSummary,
 } from "../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
@@ -27,6 +28,7 @@ const refreshEventTypes = new Set([
   "workspace_renamed",
   "session_renamed",
   "session_archived",
+  "session_unarchived",
   "session_created",
   "prompt_accepted",
   "runtime_changed",
@@ -79,10 +81,16 @@ export interface WebStoreState {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+  draftModel: WebModelSummary | null;
+  modelSelectionPending: boolean;
   snapshot: WebSnapshot | null;
   cursor: number | null;
   selectedPath: string | null;
   selectedWorkspace: string | null;
+  // A workspace draft is operator intent, not the canonical Pi Session's cwd.
+  // Keep it through snapshots/failures until native creation is confirmed or
+  // the operator explicitly opens an existing Session.
+  workspaceDraft: boolean;
   collapsed: Set<string>;
   sidebarCollapsed: boolean;
   mobileSidebarOpen: boolean;
@@ -114,10 +122,11 @@ export interface WebStoreActions {
   setWorkspace: (path: string | null) => void;
   renameWorkspace: (path: string, name: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
-  createSession: (workspacePath: string) => Promise<void>;
+  createSession: (workspacePath: string) => Promise<boolean>;
   selectSession: (path: string) => Promise<void>;
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
+  unarchiveSession: (path: string) => Promise<boolean>;
   selectModel: (value: string) => Promise<void>;
   cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
@@ -212,6 +221,59 @@ export function createWebStore(
       });
     };
 
+    const applyModel = async (
+      model: { provider: string; id: string },
+      epoch: number,
+      sessionId: string,
+    ) => {
+      if (get().modelSelectionPending) return false;
+      set({ modelSelectionPending: true });
+      try {
+        const result = await client.selectModel(
+          model.provider,
+          model.id,
+          sessionId,
+        );
+        if (
+          epoch !== sessionEpoch ||
+          sessionId !== get().snapshot?.selectedSession?.id
+        )
+          return false;
+        if (
+          result.provider !== model.provider ||
+          result.id !== model.id ||
+          !result.current
+        ) {
+          throw new Error(
+            "Model selection was not confirmed. Please select a model again.",
+          );
+        }
+        if (
+          !(await get().actions.refreshSnapshot({ epoch })) ||
+          epoch !== sessionEpoch ||
+          sessionId !== get().snapshot?.selectedSession?.id
+        )
+          return false;
+        const current = get().snapshot?.models.find((item) => item.current);
+        if (current?.provider !== model.provider || current.id !== model.id) {
+          throw new Error(
+            "The Session model changed. Please select a model again.",
+          );
+        }
+        set({ draftModel: null, notice: null });
+        return true;
+      } catch (error) {
+        if (
+          epoch === sessionEpoch &&
+          sessionId === get().snapshot?.selectedSession?.id
+        )
+          showError(error);
+        return false;
+      } finally {
+        if (epoch === sessionEpoch) set({ modelSelectionPending: false });
+      }
+    };
+
     const scheduleSnapshotRefresh = (delay = 160) => {
       if (refreshInFlight) {
         refreshPending = true;
@@ -299,6 +361,8 @@ export function createWebStore(
             ...resetLivePatch(),
             promptAdmissionPending: false,
             selectedPath: typeof eventPath === "string" ? eventPath : null,
+            draftModel: current.workspaceDraft ? current.draftModel : null,
+            modelSelectionPending: false,
             sessionSwitching: true,
           });
           void get()
@@ -528,11 +592,13 @@ export function createWebStore(
           )
             ? get().selectedWorkspace
             : undefined;
-          const selectedWorkspace = snapshot.workspaces.some(
-            (workspace) => workspace.path === selectedSessionWorkspace,
-          )
-            ? selectedSessionWorkspace
-            : (activeWorkspace ?? retainedWorkspace ?? null);
+          const selectedWorkspace = get().workspaceDraft
+            ? get().selectedWorkspace
+            : snapshot.workspaces.some(
+                  (workspace) => workspace.path === selectedSessionWorkspace,
+                )
+              ? selectedSessionWorkspace
+              : (activeWorkspace ?? retainedWorkspace ?? null);
           const shouldReset = options.resetCursor;
           set({
             ...(shouldReset ? resetLivePatch() : {}),
@@ -578,18 +644,33 @@ export function createWebStore(
         }
       },
       async chooseWorkspace() {
+        const epoch = sessionEpoch;
         try {
           const result = await client.chooseWorkspace();
+          if (epoch !== sessionEpoch) return;
           if (result.cancelled || !result.path) return;
-          set({ selectedWorkspace: result.path });
+          actions.setWorkspace(result.path);
           await actions.refreshSnapshot();
         } catch (error) {
-          showError(error);
+          if (epoch === sessionEpoch) showError(error);
         }
       },
       setWorkspace(path) {
-        set({ selectedWorkspace: path });
-        void actions.refreshSnapshot();
+        const current = get();
+        if (path === current.selectedWorkspace && !current.sessionSwitching)
+          return;
+        ++sessionEpoch;
+        promptAdmissionToken = null;
+        promptAdmission = null;
+        set({
+          ...resetLivePatch(),
+          selectedWorkspace: path,
+          workspaceDraft: true,
+          sessionSwitching: false,
+          modelSelectionPending: false,
+          promptAdmissionPending: false,
+          notice: null,
+        });
       },
       async renameWorkspace(path, name) {
         try {
@@ -614,7 +695,7 @@ export function createWebStore(
         }
       },
       async createSession(workspacePath) {
-        if (!workspacePath) return;
+        if (!workspacePath || get().modelSelectionPending) return false;
         const epoch = ++sessionEpoch;
         const commandId =
           globalThis.crypto?.randomUUID?.() ??
@@ -627,8 +708,10 @@ export function createWebStore(
           promptAdmissionPending: false,
           selectedPath: null,
           selectedWorkspace: workspacePath,
+          workspaceDraft: true,
           sessionSwitching: true,
         });
+        let created = false;
         const creation = sessionSelectionTail.then(async () => {
           if (epoch !== sessionEpoch) return;
           sessionActivation = {
@@ -639,10 +722,47 @@ export function createWebStore(
             observedPath: null,
           };
           try {
-            await client.createSession(workspacePath, commandId);
+            const receipt = await client.createSession(
+              workspacePath,
+              commandId,
+            );
             if (epoch !== sessionEpoch) return;
+            if (receipt.cancelled || !receipt.sessionPath) {
+              throw new Error(
+                "Session creation was not confirmed. Please try again.",
+              );
+            }
             set({ selectedPath: null });
-            await actions.refreshSnapshot({ epoch });
+            let refreshed = await actions.refreshSnapshot({ epoch });
+            if (!refreshed && epoch === sessionEpoch) {
+              // A Session event may start a newer snapshot while this
+              // authoritative creation refresh is in flight. Retry once so
+              // the receipt can still be checked against canonical Pi state.
+              refreshed = await actions.refreshSnapshot({ epoch });
+            }
+            if (epoch !== sessionEpoch) return;
+            if (!refreshed) {
+              throw new Error(
+                "The created Session could not be confirmed. Please try again.",
+              );
+            }
+            const selected = get().snapshot?.selectedSession;
+            // A successful HTTP response alone cannot authorize a prompt:
+            // another browser may have activated a different Session meanwhile.
+            if (
+              !selected ||
+              selected.path !== receipt.sessionPath ||
+              selected.cwd !== workspacePath ||
+              selected.id !== get().snapshot?.currentSessionId
+            ) {
+              throw new Error(
+                "The created Session is no longer active in the selected workspace. Please try again.",
+              );
+            }
+            set({ workspaceDraft: false, notice: null });
+            const draft = get().draftModel;
+            const sessionId = selected.id;
+            created = !draft || (await applyModel(draft, epoch, sessionId));
           } catch (error) {
             if (epoch !== sessionEpoch) return;
             set({ selectedPath: null });
@@ -656,9 +776,15 @@ export function createWebStore(
         });
         sessionSelectionTail = creation.catch(() => undefined);
         await creation;
+        return created && epoch === sessionEpoch;
       },
       async selectSession(path) {
         if (!path) return;
+        set({
+          workspaceDraft: false,
+          draftModel: null,
+          modelSelectionPending: false,
+        });
         const epoch = ++sessionEpoch;
         promptAdmissionToken = null;
         promptAdmission = null;
@@ -708,32 +834,45 @@ export function createWebStore(
           showError(error);
         }
       },
+      async unarchiveSession(path) {
+        const epoch = sessionEpoch;
+        try {
+          await client.unarchiveSession(path);
+          if (epoch !== sessionEpoch) return true;
+          return await actions.refreshSnapshot({ epoch });
+        } catch (error) {
+          if (epoch === sessionEpoch) showError(error);
+          return false;
+        }
+      },
       async selectModel(value) {
         const [provider, ...idParts] = value.split("/");
         const modelId = idParts.join("/");
-        const epoch = sessionEpoch;
-        const sessionId = get().snapshot?.selectedSession?.id;
-        if (!provider || !modelId || !sessionId || get().sessionSwitching)
+        const state = get();
+        if (
+          !provider ||
+          !modelId ||
+          state.sessionSwitching ||
+          state.modelSelectionPending ||
+          state.promptAdmissionPending ||
+          (!state.workspaceDraft &&
+            (state.liveRunning || state.snapshot?.runtime.status === "running"))
+        )
           return;
-        try {
-          await client.selectModel(provider, modelId, sessionId);
-          if (
-            epoch !== sessionEpoch ||
-            sessionId !== get().snapshot?.selectedSession?.id
-          ) {
-            return;
-          }
-          await actions.refreshSnapshot({ epoch });
-        } catch (error) {
-          if (
-            epoch !== sessionEpoch ||
-            sessionId !== get().snapshot?.selectedSession?.id
-          ) {
-            return;
-          }
-          showError(error);
-          await actions.refreshSnapshot({ epoch });
+        const sessionId = state.snapshot?.selectedSession?.id;
+        if (
+          state.workspaceDraft ||
+          (!sessionId && !state.snapshot?.currentSessionId)
+        ) {
+          const model = state.snapshot?.models.find(
+            (item) => item.provider === provider && item.id === modelId,
+          );
+          if (model) set({ draftModel: model, notice: null });
+          return;
         }
+        if (!sessionId || sessionId !== state.snapshot?.currentSessionId)
+          return;
+        await applyModel({ provider, id: modelId }, sessionEpoch, sessionId);
       },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
@@ -758,21 +897,39 @@ export function createWebStore(
           !workspace ||
           !content ||
           get().sessionSwitching ||
-          get().promptAdmissionPending
+          get().promptAdmissionPending ||
+          get().modelSelectionPending
         ) {
           return false;
         }
-        if (!get().snapshot?.selectedSession?.id)
-          await actions.createSession(workspace);
+        const creating =
+          get().workspaceDraft || !get().snapshot?.selectedSession?.id;
+        if (creating && !(await actions.createSession(workspace))) return false;
+        if (creating && get().draftModel) return false;
         const sessionId = get().snapshot?.selectedSession?.id;
         if (
           !sessionId ||
+          get().workspaceDraft ||
+          get().selectedWorkspace !== workspace ||
+          get().snapshot?.selectedSession?.cwd !== workspace ||
+          sessionId !== get().snapshot?.currentSessionId ||
           get().sessionSwitching ||
           get().promptAdmissionPending
         ) {
           return false;
         }
         const epoch = sessionEpoch;
+        const draft = get().draftModel;
+        if (draft && !(await applyModel(draft, epoch, sessionId))) return false;
+        if (
+          epoch !== sessionEpoch ||
+          sessionId !== get().snapshot?.selectedSession?.id ||
+          sessionId !== get().snapshot?.currentSessionId ||
+          get().workspaceDraft ||
+          get().selectedWorkspace !== workspace ||
+          get().snapshot?.selectedSession?.cwd !== workspace
+        )
+          return false;
         const admission = ++promptAdmissionSequence;
         const retrying =
           promptAdmission?.sessionId === sessionId &&
@@ -900,6 +1057,9 @@ export function createWebStore(
       cursor: null,
       selectedPath: null,
       selectedWorkspace: null,
+      workspaceDraft: false,
+      draftModel: null,
+      modelSelectionPending: false,
       collapsed: readStringSet(collapsedWorkspacesStorageKey),
       sidebarCollapsed: readBoolean(sidebarCollapsedStorageKey),
       mobileSidebarOpen: false,

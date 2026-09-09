@@ -1,4 +1,7 @@
-import type { WebSnapshot } from "../../../protocol/types.ts";
+import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
+import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
+import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type { WebModelSummary, WebSnapshot } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -14,15 +17,21 @@ export class WebApiError extends Error {
 }
 
 function readToken() {
+  const pageToken = document.querySelector<HTMLMetaElement>(
+    'meta[name="openpi-web-token"]',
+  )?.content;
   const fragmentToken = new URLSearchParams(location.hash.slice(1)).get(
     "token",
   );
-  if (fragmentToken) {
-    try {
-      window.sessionStorage.setItem(tokenStorageKey, fragmentToken);
-    } catch {}
+  const token =
+    pageToken && /^[a-f0-9]{64}$/i.test(pageToken) ? pageToken : fragmentToken;
+  if (fragmentToken)
     history.replaceState(null, "", `${location.pathname}${location.search}`);
-    return fragmentToken;
+  if (token) {
+    try {
+      window.sessionStorage.setItem(tokenStorageKey, token);
+    } catch {}
+    return token;
   }
   try {
     return window.sessionStorage.getItem(tokenStorageKey);
@@ -40,6 +49,7 @@ export interface CommandReceipt {
 export interface SessionMutationResult {
   cancelled?: boolean;
   path?: string;
+  sessionPath?: string;
 }
 
 export interface WorkspaceSelectionResult {
@@ -155,8 +165,47 @@ export class WebClient {
     );
   }
 
+  unarchiveSession(path: string) {
+    return this.request<{ path: string; archived: false }>(
+      `/api/sessions/unarchive?path=${encodeURIComponent(path)}`,
+      { method: "POST" },
+    );
+  }
+
+  thinking(sessionId: string, signal: AbortSignal) {
+    return this.request<{
+      sessionId: string;
+      level: string;
+      available: readonly string[];
+    }>(`/api/thinking?sessionId=${encodeURIComponent(sessionId)}`, { signal });
+  }
+
+  trust(sessionId: string, signal: AbortSignal) {
+    return this.request<WebProjectTrustStatus>(
+      `/api/trust?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  providerAuth(sessionId: string, signal: AbortSignal) {
+    return this.request<WebProviderAuthProjection>(
+      `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{
+      sessionId: string;
+      detail: WebBackgroundTerminalDetail;
+    }>(
+      `/api/capabilities/detail?kind=background-terminals&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
   selectModel(provider: string, modelId: string, sessionId: string) {
-    return this.request<CommandReceipt>("/api/model", {
+    return this.request<WebModelSummary>("/api/model", {
       method: "POST",
       body: JSON.stringify({ provider, modelId, sessionId }),
     });
