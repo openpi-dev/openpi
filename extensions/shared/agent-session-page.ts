@@ -279,16 +279,28 @@ export class AgentSessionPage implements Component, Focusable {
     while (body.length < bodyHeight) body.push("");
     lines.push(...body.slice(0, bodyHeight));
 
+    const linesAbove = this.viewport.linesAbove(
+      transcript.length,
+      transcriptCapacity,
+    );
+    const linesBelow = this.viewport.linesBelow(
+      transcript.length,
+      transcriptCapacity,
+    );
+    // Both directions are reported. Opening a child page follows the end, which
+    // scrolls the beginning of a long answer out of view; without an "above"
+    // marker that output looks lost rather than merely off-screen.
+    const overflowNote = [
+      linesAbove > 0 ? `↑ ${linesAbove}` : "",
+      linesBelow > 0 ? `↓ ${linesBelow}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     lines.push(
       this.rule(
         width,
         this.theme.fg("borderAccent", "─"),
-        this.viewport.followingEnd
-          ? ""
-          : this.theme.fg(
-              "dim",
-              `↓ ${this.viewport.linesBelow(transcript.length, transcriptCapacity)}`,
-            ),
+        overflowNote ? this.theme.fg("dim", overflowNote) : "",
       ),
     );
     const keys = (binding: Parameters<KeybindingsManager["getKeys"]>[0]) =>

@@ -184,3 +184,62 @@ test("a child page inherits an expanded parent state on its first render", () =>
     /output-marker/,
   );
 });
+
+test("a child page reports an answer's opening scrolled above the viewport", () => {
+  // A /btw answer longer than one screen: the page follows the end, so the
+  // opening is off-screen and the reader must be told it exists.
+  const long: AgentSessionPageState = {
+    id: "btw-1",
+    title: "by the way",
+    status: "done",
+    document: {
+      items: [
+        { kind: "user", text: "two questions" },
+        {
+          kind: "assistant",
+          parts: [
+            {
+              type: "text",
+              text: Array.from(
+                { length: 60 },
+                (_, index) => `answer line ${index}`,
+              ).join("\n\n"),
+            },
+          ],
+        },
+      ],
+    },
+  };
+
+  const page = new AgentSessionPage(tui(20), theme, keybindings, {
+    getState: () => long,
+    close() {},
+  });
+  const opened = page.render(80);
+  const openedText = stripVTControlCharacters(opened.join("\n"));
+
+  // The overlay still owns exactly the terminal rows it was given.
+  assert.equal(opened.length, 20);
+  assert.match(openedText, /↑ \d+/);
+  assert.doesNotMatch(openedText, /↓ \d+/);
+
+  // Jumping to the top inverts which side is hidden, without resizing the page.
+  page.handleInput("g");
+  const atTop = page.render(80);
+  const atTopText = stripVTControlCharacters(atTop.join("\n"));
+  assert.equal(atTop.length, 20);
+  assert.match(atTopText, /answer line 0/);
+  assert.match(atTopText, /↓ \d+/);
+  assert.doesNotMatch(atTopText, /↑ \d+/);
+});
+
+test("a child page whose transcript fits shows no overflow markers", () => {
+  const page = new AgentSessionPage(tui(24), theme, keybindings, {
+    getState: state,
+    close() {},
+  });
+
+  const text = stripVTControlCharacters(page.render(60).join("\n"));
+  assert.doesNotMatch(text, /↑ \d+/);
+  assert.doesNotMatch(text, /↓ \d+/);
+});
