@@ -1,22 +1,19 @@
 import type { ProviderUsageReport } from "./types.ts";
 
 interface CacheEntry {
+  identity: string;
   report: ProviderUsageReport;
   expiresAt: number;
 }
 
+/** One entry per provider, scoped to one extension runtime and resolved identity. */
 export class UsageCache {
   private readonly entries = new Map<string, CacheEntry>();
-  private readonly defaultTtlMs: number;
 
-  constructor(defaultTtlMs = 60_000) {
-    this.defaultTtlMs = defaultTtlMs;
-  }
-
-  get(providerId: string, now = Date.now()): ProviderUsageReport | undefined {
+  get(providerId: string, identity: string, now = Date.now()) {
     const entry = this.entries.get(providerId);
     if (!entry) return undefined;
-    if (now >= entry.expiresAt) {
+    if (entry.identity !== identity || now >= entry.expiresAt) {
       this.entries.delete(providerId);
       return undefined;
     }
@@ -25,39 +22,16 @@ export class UsageCache {
 
   set(
     providerId: string,
+    identity: string,
     report: ProviderUsageReport,
-    ttlMs = this.defaultTtlMs,
     now = Date.now(),
-  ): void {
-    this.entries.set(providerId, {
-      report,
-      expiresAt: now + ttlMs,
-    });
+  ) {
+    if (report.error || report.warning || report.meters.length === 0) return;
+    this.entries.set(providerId, { identity, report, expiresAt: now + 60_000 });
   }
 
-  getAll(now = Date.now()): ProviderUsageReport[] {
-    const results: ProviderUsageReport[] = [];
-    for (const [id, entry] of this.entries.entries()) {
-      if (now >= entry.expiresAt) {
-        this.entries.delete(id);
-      } else {
-        results.push(entry.report);
-      }
-    }
-    return results;
-  }
-
-  invalidate(providerId?: string): void {
-    if (providerId) {
-      this.entries.delete(providerId);
-    } else {
-      this.entries.clear();
-    }
-  }
-
-  size(): number {
-    return this.entries.size;
+  invalidate(providerId?: string) {
+    if (providerId) this.entries.delete(providerId);
+    else this.entries.clear();
   }
 }
-
-export const globalUsageCache = new UsageCache();

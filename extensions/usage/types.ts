@@ -1,11 +1,14 @@
+import type { ModelAuth } from "@earendil-works/pi-ai";
+
 export type UsageStatus = "ok" | "warning" | "exhausted" | "unknown";
 
 export interface QuotaMeter {
   id: string;
   name: string;
-  usedPercent: number;
+  usedPercent?: number;
   usedText?: string;
   limitText?: string;
+  remainingText?: string;
   resetsAt?: number;
   status: UsageStatus;
 }
@@ -18,6 +21,7 @@ export interface ProviderUsageReport {
   meters: QuotaMeter[];
   fetchedAt: number;
   error?: string;
+  warning?: string;
 }
 
 export interface UsageFetchContext {
@@ -28,18 +32,9 @@ export interface UsageFetchContext {
 export interface ProviderUsageAdapter {
   readonly id: string;
   readonly displayName: string;
-
-  /**
-   * Determine whether this adapter can fetch usage given the raw credential
-   * object stored in auth.json for this provider.
-   */
-  supports(credential: unknown): boolean;
-
-  /**
-   * Fetch usage quota information and convert it into a normalized report.
-   */
+  /** Request auth resolved by Pi; adapters never read or refresh stored credentials. */
   fetchUsage(
-    credential: unknown,
+    auth: ModelAuth,
     ctx: UsageFetchContext,
   ): Promise<ProviderUsageReport>;
 }

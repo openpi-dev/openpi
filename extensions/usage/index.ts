@@ -1,205 +1,220 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
+import { createHash } from "node:crypto";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
-import { Container, Text } from "@earendil-works/pi-tui";
-import { globalUsageCache } from "./cache.ts";
+import { Key, matchesKey, Text, truncateToWidth } from "@earendil-works/pi-tui";
+import { UsageCache } from "./cache.ts";
 import { redactIdentifier, renderUsageReport } from "./formatters.ts";
-import { globalAdapterRegistry } from "./providers/registry.ts";
-import type { ProviderUsageReport, UsageFetchContext } from "./types.ts";
+import { DEFAULT_ADAPTERS } from "./providers/registry.ts";
+import { safeUsageError, waitForUsage } from "./providers/utils.ts";
+import type { ProviderUsageReport } from "./types.ts";
 
-export function resolveAuthStore(): Record<string, unknown> {
-  const agentDir =
-    process.env.PI_CODING_AGENT_DIR || path.join(os.homedir(), ".pi/agent");
-  const authPath = path.join(agentDir, "auth.json");
+const USAGE_HELP = "Usage: /usage [--refresh|-f] [--redact|-r] [--json|-j]";
 
-  try {
-    if (!fs.existsSync(authPath)) return {};
-    const content = fs.readFileSync(authPath, "utf8");
-    const parsed = JSON.parse(content);
-    if (typeof parsed !== "object" || parsed === null) return {};
-
-    // Only read keys relevant to registered usage adapters
-    const supported = new Set(globalAdapterRegistry.getAll().map((a) => a.id));
-    const store: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(parsed)) {
-      if (supported.has(k)) {
-        store[k] = v;
-      }
-    }
-    return store;
-  } catch {
-    return {};
-  }
-}
-
-export interface ParsedUsageArgs {
-  refresh: boolean;
-  redact: boolean;
-  json: boolean;
-}
-
-export function parseUsageArgs(args: string): ParsedUsageArgs {
+export function parseUsageArgs(args: string) {
   const tokens = args.split(/\s+/).filter(Boolean);
-  const refresh = tokens.some((t) => t === "-f" || t === "--refresh");
-  const redact = tokens.some((t) => t === "-r" || t === "--redact");
-  const json = tokens.some((t) => t === "-j" || t === "--json");
-  return { refresh, redact, json };
+  const allowed = new Set([
+    "-f",
+    "--refresh",
+    "-r",
+    "--redact",
+    "-j",
+    "--json",
+  ]);
+  if (tokens.some((token) => !allowed.has(token))) throw new Error(USAGE_HELP);
+  return {
+    refresh: tokens.some((token) => token === "-f" || token === "--refresh"),
+    redact: tokens.some((token) => token === "-r" || token === "--redact"),
+    json: tokens.some((token) => token === "-j" || token === "--json"),
+  };
 }
 
 export async function collectUsageReports(options: {
-  authStore: Record<string, unknown>;
+  modelRegistry: Pick<
+    ExtensionCommandContext["modelRegistry"],
+    "getProviderAuth"
+  >;
+  cache: UsageCache;
   refresh?: boolean;
   signal?: AbortSignal;
 }): Promise<ProviderUsageReport[]> {
-  const { authStore, refresh = false, signal } = options;
-  const matched =
-    globalAdapterRegistry.resolveAdaptersWithCredentials(authStore);
-
-  if (matched.length === 0) {
-    return [];
-  }
-
-  const reports: ProviderUsageReport[] = [];
-  const fetchTasks: Promise<ProviderUsageReport>[] = [];
-
-  for (const { adapter, credential } of matched) {
-    if (!refresh) {
-      const cached = globalUsageCache.get(adapter.id);
-      if (cached) {
-        reports.push(cached);
-        continue;
-      }
-    }
-
-    // Wrap with timeout signal
-    const fetchPromise = (async () => {
-      const timeoutSignal = AbortSignal.timeout(6000);
+  const { modelRegistry, cache, refresh, signal } = options;
+  const reports = await Promise.all(
+    DEFAULT_ADAPTERS.map(async (adapter) => {
+      const deadline = AbortSignal.timeout(15_000);
       const effectiveSignal = signal
-        ? AbortSignal.any([signal, timeoutSignal])
-        : timeoutSignal;
-      const ctx: UsageFetchContext = {
-        fetch: globalThis.fetch,
-        signal: effectiveSignal,
-      };
-
+        ? AbortSignal.any([signal, deadline])
+        : deadline;
       try {
-        const report = await adapter.fetchUsage(credential, ctx);
-        // Do not cache failed reports so transient network errors are not stuck for 60s
-        if (!report.error) {
-          globalUsageCache.set(adapter.id, report);
+        effectiveSignal.throwIfAborted();
+        // Pi owns storage, refresh and credential locking. Its compatibility facade
+        // has no signal argument; stop waiting on cancellation without caching a late result.
+        const resolved = await waitForUsage(
+          modelRegistry.getProviderAuth(adapter.id),
+          effectiveSignal,
+        );
+        if (!resolved) {
+          cache.invalidate(adapter.id);
+          return undefined;
         }
+        const auth = resolved.auth;
+        const identity = createHash("sha256")
+          .update(
+            JSON.stringify([
+              auth.apiKey,
+              auth.baseUrl,
+              Object.entries(auth.headers ?? {}).sort(([a], [b]) =>
+                a.localeCompare(b),
+              ),
+            ]),
+          )
+          .digest("hex");
+        if (refresh) cache.invalidate(adapter.id);
+        const cached = cache.get(adapter.id, identity);
+        if (cached) return cached;
+        const report = await waitForUsage(
+          adapter.fetchUsage(auth, {
+            fetch: globalThis.fetch,
+            signal: effectiveSignal,
+          }),
+          effectiveSignal,
+        );
+        effectiveSignal.throwIfAborted();
+        cache.set(adapter.id, identity, report);
         return report;
-      } catch (err) {
+      } catch (error) {
+        cache.invalidate(adapter.id);
         return {
           providerId: adapter.id,
           displayName: adapter.displayName,
           meters: [],
           fetchedAt: Date.now(),
-          error: err instanceof Error ? err.message : String(err),
-        };
+          error: safeUsageError(error, effectiveSignal),
+        } satisfies ProviderUsageReport;
       }
-    })();
-
-    fetchTasks.push(fetchPromise);
-  }
-
-  if (fetchTasks.length > 0) {
-    const settled = await Promise.allSettled(fetchTasks);
-    for (const result of settled) {
-      if (result.status === "fulfilled") {
-        reports.push(result.value);
-      }
-    }
-  }
-
-  // Stable sort by adapter id
-  reports.sort((a, b) => a.providerId.localeCompare(b.providerId));
-  return reports;
+    }),
+  );
+  return reports
+    .filter((report): report is ProviderUsageReport => report !== undefined)
+    .sort((a, b) => a.providerId.localeCompare(b.providerId));
 }
 
 export default function usage(pi: ExtensionAPI) {
+  const cache = new UsageCache();
   pi.registerCommand("usage", {
-    description: "Show model provider subscription quota and limits",
+    description:
+      "Show provider subscription quota snapshots (not session token usage)",
     handler: async (args: string, ctx: ExtensionCommandContext) => {
-      const flags = parseUsageArgs(args);
-      if (flags.refresh) {
-        globalUsageCache.invalidate();
-      }
-
-      const authStore = resolveAuthStore();
-      const reports = await collectUsageReports({
-        authStore,
-        refresh: flags.refresh,
-        signal: ctx.signal,
-      });
-
-      if (reports.length === 0) {
-        const msg =
-          "No supported authenticated providers found (cursor, google-antigravity, openai-codex).\nUse '/login <provider>' to authenticate.";
-        if (ctx.hasUI) {
-          ctx.ui.notify(msg, "warning");
-        } else {
-          console.log(msg);
-        }
+      let flags: ReturnType<typeof parseUsageArgs>;
+      try {
+        flags = parseUsageArgs(args);
+      } catch {
+        if (ctx.hasUI) ctx.ui.notify(USAGE_HELP, "warning");
+        else console.log(USAGE_HELP);
         return;
       }
-
-      if (flags.json) {
-        const outputReports = flags.redact
-          ? reports.map((r) => ({
-              ...r,
-              accountIdentifier: redactIdentifier(r.accountIdentifier),
-            }))
-          : reports;
-        const jsonStr = JSON.stringify(outputReports, null, 2);
-        if (ctx.mode === "tui" && ctx.hasUI) {
-          ctx.ui.notify(jsonStr, "info");
-        } else {
-          console.log(jsonStr);
-        }
-        return;
-      }
-
-      const rendered = renderUsageReport(reports, {
-        redact: flags.redact,
-        useColor: ctx.mode === "tui",
-      });
-
-      if (ctx.mode === "tui" && ctx.hasUI) {
-        // Render via custom overlay
-        await ctx.ui.custom<void>((_tui, theme, _keybindings, done) => {
-          const container = new Container();
-          const helpText = theme.fg("muted", "  Press Enter or Esc to close");
-          const text = new Text(`${rendered}\n\n${helpText}`, 1, 0);
-          container.addChild(text);
-
-          let closed = false;
-          const close = () => {
-            if (closed) return;
-            closed = true;
-            done();
-          };
-
-          return {
-            render(width: number): string[] {
-              return container.render(width);
-            },
-            invalidate(): void {
-              container.invalidate();
-            },
-            handleInput(_data: string): boolean {
-              close();
-              return true;
-            },
-          };
+      const controller = new AbortController();
+      const signal = ctx.signal
+        ? AbortSignal.any([ctx.signal, controller.signal])
+        : controller.signal;
+      const isTui = ctx.hasUI && ctx.mode === "tui";
+      const stopListening = isTui
+        ? ctx.ui.onTerminalInput((data) => {
+            if (
+              matchesKey(data, Key.escape) ||
+              matchesKey(data, Key.ctrl("c"))
+            ) {
+              controller.abort();
+              return { consume: true };
+            }
+            return undefined;
+          })
+        : undefined;
+      if (isTui) ctx.ui.setStatus("usage", "Fetching quota · Esc cancels");
+      let reports: ProviderUsageReport[];
+      try {
+        reports = await collectUsageReports({
+          modelRegistry: ctx.modelRegistry,
+          cache,
+          refresh: flags.refresh,
+          signal,
         });
-      } else {
-        console.log(rendered);
+      } finally {
+        stopListening?.();
+        if (isTui) ctx.ui.setStatus("usage", undefined);
       }
+      if (signal.aborted) return;
+      const output = flags.json
+        ? JSON.stringify(
+            flags.redact
+              ? reports.map((report) => ({
+                  ...report,
+                  accountIdentifier: report.accountIdentifier
+                    ? redactIdentifier(report.accountIdentifier)
+                    : undefined,
+                }))
+              : reports,
+            null,
+            2,
+          )
+        : renderUsageReport(reports, {
+            redact: flags.redact,
+            useColor: ctx.mode === "tui",
+          });
+      if (!ctx.hasUI) {
+        console.log(output);
+        return;
+      }
+      if (ctx.mode !== "tui") {
+        ctx.ui.notify(output, "info");
+        return;
+      }
+
+      await ctx.ui.custom<void>(
+        (tui, theme, _keybindings, done) => {
+          const text = new Text(output, 0, 0);
+          let offset = 0;
+          let rowCount = 0;
+          let visible = 1;
+          return {
+            render(width: number) {
+              const rows = text.render(Math.max(1, width));
+              rowCount = rows.length;
+              visible = Math.max(1, Math.floor(tui.terminal.rows * 0.8) - 1);
+              offset = Math.max(0, Math.min(offset, rowCount - visible));
+              const footer = theme.fg(
+                "muted",
+                `${offset + 1}-${Math.min(rowCount, offset + visible)}/${rowCount} · ↑/↓ PgUp/PgDn · Enter/Esc close`,
+              );
+              return [
+                ...rows.slice(offset, offset + visible),
+                truncateToWidth(footer, Math.max(1, width)),
+              ];
+            },
+            invalidate() {
+              text.invalidate();
+            },
+            handleInput(data: string) {
+              if (matchesKey(data, Key.escape) || matchesKey(data, Key.enter)) {
+                done();
+                return;
+              }
+              if (matchesKey(data, Key.up)) offset--;
+              else if (matchesKey(data, Key.down)) offset++;
+              else if (matchesKey(data, Key.pageUp)) offset -= visible;
+              else if (matchesKey(data, Key.pageDown)) offset += visible;
+              else if (matchesKey(data, Key.home)) offset = 0;
+              else if (matchesKey(data, Key.end))
+                offset = Math.max(0, rowCount - visible);
+              else return;
+              offset = Math.max(0, Math.min(offset, rowCount - visible));
+              tui.requestRender();
+            },
+          };
+        },
+        { overlay: true, overlayOptions: { width: "90%", maxHeight: "80%" } },
+      );
     },
   });
 }

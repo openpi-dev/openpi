@@ -1,160 +1,129 @@
+import { decodeApiKey } from "../../ai-providers/antigravity/credentials.ts";
 import type {
   ProviderUsageAdapter,
   ProviderUsageReport,
   QuotaMeter,
-  UsageFetchContext,
 } from "../types.ts";
-import { computeUsageStatus, parseTimestamp } from "./utils.ts";
+import {
+  asRecord,
+  fetchUsageJson,
+  finiteNumber,
+  parseTimestamp,
+  safeUsageError,
+  UsageRequestError,
+} from "./utils.ts";
 
-const ANTIGRAVITY_ENDPOINTS = [
+const ENDPOINTS = [
   "https://daily-cloudcode-pa.googleapis.com",
   "https://cloudcode-pa.googleapis.com",
 ];
 
-interface QuotaBucket {
-  bucketId?: string;
-  displayName?: string;
-  window?: string;
-  remainingFraction?: number;
-  resetTime?: string;
-}
-
-interface QuotaGroup {
-  displayName?: string;
-  buckets?: QuotaBucket[];
-}
-
 export const googleAntigravityAdapter: ProviderUsageAdapter = {
   id: "google-antigravity",
   displayName: "Google Antigravity",
-
-  supports(credential: unknown): boolean {
-    if (typeof credential !== "object" || credential === null) return false;
-    const cred = credential as Record<string, unknown>;
-    return Boolean(cred.access || cred.accessToken);
-  },
-
-  async fetchUsage(
-    credential: unknown,
-    ctx: UsageFetchContext,
-  ): Promise<ProviderUsageReport> {
-    const cred = credential as Record<string, unknown>;
-    const token = (cred.access ?? cred.accessToken) as string;
-    const projectId = (cred.projectId as string | undefined) ?? "";
-    const email = cred.email as string | undefined;
-    const fetchedAt = Date.now();
-
-    const headers = {
-      Authorization: `Bearer ${token}`,
-      "Content-Type": "application/json",
-      "User-Agent": "GoogleCloudCode/1.0",
+  async fetchUsage(auth, ctx) {
+    const { token, projectId } = decodeApiKey(auth.apiKey ?? "");
+    const report: ProviderUsageReport = {
+      providerId: "google-antigravity",
+      displayName: "Google Antigravity",
+      accountIdentifier: projectId ? `proj:${projectId}` : undefined,
+      meters: [],
+      fetchedAt: Date.now(),
     };
-    const body = JSON.stringify({ project: projectId });
-
-    let summaryData: { groups?: QuotaGroup[]; buckets?: QuotaBucket[] } | null =
-      null;
-    let lastError: string | undefined;
-
-    for (const endpoint of ANTIGRAVITY_ENDPOINTS) {
+    if (!token || !projectId)
+      return {
+        ...report,
+        error:
+          "Antigravity token or project is unavailable. Use /login google-antigravity.",
+      };
+    let data: Record<string, unknown> | undefined;
+    let lastError: unknown;
+    for (const endpoint of ENDPOINTS) {
       try {
-        const res = await ctx.fetch(
+        data = await fetchUsageJson(
           `${endpoint}/v1internal:retrieveUserQuotaSummary`,
           {
             method: "POST",
-            headers,
-            body,
-            signal: ctx.signal,
+            headers: {
+              Authorization: `Bearer ${token}`,
+              "Content-Type": "application/json",
+              "User-Agent": "GoogleCloudCode/1.0",
+            },
+            body: JSON.stringify({ project: projectId }),
           },
+          ctx,
         );
-        if (res.ok) {
-          summaryData = (await res.json()) as {
-            groups?: QuotaGroup[];
-            buckets?: QuotaBucket[];
-          };
+        break;
+      } catch (error) {
+        lastError = error;
+        if (ctx.signal?.aborted) break;
+        // Do not retry invalid credentials against another host.
+        if (
+          error instanceof UsageRequestError &&
+          error.status !== 404 &&
+          error.status !== 429 &&
+          error.status < 500
+        )
           break;
+      }
+    }
+    if (!data)
+      return { ...report, error: safeUsageError(lastError, ctx.signal) };
+    report.fetchedAt = Date.now();
+    const groups = Array.isArray(data.groups) ? data.groups : [];
+    const grouped = groups.some((value) => {
+      const group = asRecord(value);
+      return Array.isArray(group?.buckets) && group.buckets.length > 0;
+    });
+    const sources = grouped ? groups : [{ buckets: data.buckets }];
+    let incomplete = false;
+    for (const source of sources) {
+      const group = asRecord(source);
+      if (!group || !Array.isArray(group.buckets)) {
+        incomplete = true;
+        continue;
+      }
+      for (const value of group.buckets) {
+        const bucket = asRecord(value);
+        if (!bucket) {
+          incomplete = true;
+          continue;
         }
-        lastError = `HTTP ${res.status} ${res.statusText}`;
-      } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        if (bucket.disabled === true) continue;
+        const name =
+          typeof bucket.displayName === "string"
+            ? bucket.displayName
+            : typeof bucket.window === "string"
+              ? bucket.window
+              : "Quota Window";
+        const groupName =
+          typeof group.displayName === "string" ? group.displayName : undefined;
+        const meter: QuotaMeter = {
+          id:
+            typeof bucket.bucketId === "string"
+              ? bucket.bucketId
+              : `quota-${report.meters.length}`,
+          name: groupName ? `${groupName} (${name})` : name,
+          resetsAt: parseTimestamp(bucket.resetTime),
+          status: "unknown",
+        };
+        const fraction = finiteNumber(bucket.remainingFraction);
+        const remaining = finiteNumber(bucket.remainingAmount);
+        if (fraction !== undefined && fraction >= 0 && fraction <= 1) {
+          meter.usedPercent = (1 - fraction) * 100;
+          // Status follows the source fraction, never display rounding.
+          meter.status =
+            fraction === 0 ? "exhausted" : fraction <= 0.2 ? "warning" : "ok";
+        } else if (remaining !== undefined && remaining >= 0) {
+          meter.remainingText = `${remaining} (unit not supplied)`;
+          meter.status = remaining === 0 ? "exhausted" : "unknown";
+        } else incomplete = true;
+        report.meters.push(meter);
       }
     }
-
-    if (!summaryData) {
-      return {
-        providerId: "google-antigravity",
-        displayName: "Google Antigravity",
-        accountIdentifier:
-          email || (projectId ? `proj:${projectId}` : undefined),
-        meters: [],
-        fetchedAt,
-        error: lastError ?? "Failed to retrieve quota from Google Cloud Code",
-      };
-    }
-
-    const meters: QuotaMeter[] = [];
-
-    // Format groups (e.g. Gemini Models, Claude and GPT models)
-    if (Array.isArray(summaryData.groups)) {
-      for (const group of summaryData.groups) {
-        const groupName = group.displayName ?? "Model Quota";
-        for (const bucket of group.buckets ?? []) {
-          if (bucket.remainingFraction === undefined) continue;
-          const remaining = Math.max(
-            0,
-            Math.min(1, Number(bucket.remainingFraction)),
-          );
-          const usedPercent = Math.round((1 - remaining) * 100);
-          const resetsAt = parseTimestamp(bucket.resetTime);
-
-          // Clean window label
-          let windowLabel = bucket.window ?? "quota";
-          if (
-            bucket.displayName &&
-            bucket.displayName.toLowerCase().includes("five hour")
-          ) {
-            windowLabel = "5-Hour";
-          } else if (
-            bucket.displayName &&
-            bucket.displayName.toLowerCase().includes("weekly")
-          ) {
-            windowLabel = "Weekly";
-          }
-
-          meters.push({
-            id: bucket.bucketId ?? `${groupName}-${windowLabel}`,
-            name: `${groupName} (${windowLabel})`,
-            usedPercent,
-            resetsAt,
-            status: computeUsageStatus(usedPercent),
-          });
-        }
-      }
-    } else if (Array.isArray(summaryData.buckets)) {
-      for (const bucket of summaryData.buckets) {
-        if (bucket.remainingFraction === undefined) continue;
-        const remaining = Math.max(
-          0,
-          Math.min(1, Number(bucket.remainingFraction)),
-        );
-        const usedPercent = Math.round((1 - remaining) * 100);
-        const resetsAt = parseTimestamp(bucket.resetTime);
-        meters.push({
-          id: bucket.bucketId ?? "quota",
-          name: bucket.displayName ?? "Quota Window",
-          usedPercent,
-          resetsAt,
-          status: computeUsageStatus(usedPercent),
-        });
-      }
-    }
-
-    return {
-      providerId: "google-antigravity",
-      displayName: "Google Antigravity",
-      accountIdentifier: email || (projectId ? `proj:${projectId}` : undefined),
-      planName: "Cloud Code Assist",
-      meters,
-      fetchedAt,
-    };
+    if (incomplete || report.meters.length === 0)
+      report.warning =
+        "Some quota data is unavailable or unrecognized; availability cannot be determined from this snapshot.";
+    return report;
   },
 };

@@ -2,111 +2,57 @@ import type {
   ProviderUsageAdapter,
   ProviderUsageReport,
   QuotaMeter,
-  UsageFetchContext,
 } from "../types.ts";
 import {
+  asRecord,
   computeUsageStatus,
   decodeJwtPayload,
+  fetchUsageJson,
+  finiteNumber,
   parseTimestamp,
+  safeUsageError,
 } from "./utils.ts";
 
-export function extractCursorUserId(token: string): string | undefined {
+export function extractCursorUserId(token: string) {
   const payload = decodeJwtPayload(token);
-  if (!payload || typeof payload.sub !== "string") return undefined;
-  const parts = payload.sub.split("|");
-  return (parts.length > 1 ? parts.at(-1) : payload.sub)?.trim() || undefined;
+  return typeof payload?.sub === "string"
+    ? payload.sub.split("|").at(-1)?.trim() || undefined
+    : undefined;
 }
 
 export const cursorAdapter: ProviderUsageAdapter = {
   id: "cursor",
   displayName: "Cursor",
-
-  supports(credential: unknown): boolean {
-    if (typeof credential !== "object" || credential === null) return false;
-    const cred = credential as Record<string, unknown>;
-    return Boolean(cred.access || cred.accessToken || cred.key);
-  },
-
-  async fetchUsage(
-    credential: unknown,
-    ctx: UsageFetchContext,
-  ): Promise<ProviderUsageReport> {
-    const cred = credential as Record<string, unknown>;
-    const token = (cred.access ?? cred.accessToken ?? cred.key) as string;
-    const fetchedAt = Date.now();
-
+  async fetchUsage(auth, ctx) {
+    const token = auth.apiKey ?? "";
     const userId = extractCursorUserId(token);
-    if (!userId) {
+    const report: ProviderUsageReport = {
+      providerId: "cursor",
+      displayName: "Cursor",
+      accountIdentifier: userId,
+      meters: [],
+      fetchedAt: Date.now(),
+    };
+    if (!userId)
       return {
-        providerId: "cursor",
-        displayName: "Cursor",
-        meters: [],
-        fetchedAt,
-        error: "Unable to parse user ID from Cursor access token.",
+        ...report,
+        error: "Unable to identify the Cursor account. Use /login cursor.",
       };
-    }
-
-    const sessionCookie = `WorkosCursorSessionToken=${encodeURIComponent(`${userId}::${token}`)}`;
     const headers = {
       Accept: "application/json",
-      Cookie: sessionCookie,
+      Cookie: `WorkosCursorSessionToken=${encodeURIComponent(`${userId}::${token}`)}`,
       "User-Agent": "Mozilla/5.0",
     };
-
-    let summaryPayload: Record<string, unknown> | null = null;
-    let email: string | undefined;
-
-    try {
-      const [summaryRes, meRes] = await Promise.allSettled([
-        ctx.fetch("https://cursor.com/api/usage-summary", {
-          headers,
-          signal: ctx.signal,
-        }),
-        ctx.fetch("https://cursor.com/api/auth/me", {
-          headers,
-          signal: ctx.signal,
-        }),
-      ]);
-
-      if (summaryRes.status === "fulfilled" && summaryRes.value.ok) {
-        summaryPayload = (await summaryRes.value.json()) as Record<
-          string,
-          unknown
-        >;
-      }
-
-      if (meRes.status === "fulfilled" && meRes.value.ok) {
-        try {
-          const meData = (await meRes.value.json()) as Record<string, unknown>;
-          if (typeof meData.email === "string") {
-            email = meData.email;
-          }
-        } catch {
-          // me failure should not discard a successful summary
-        }
-      }
-    } catch (err) {
-      return {
-        providerId: "cursor",
-        displayName: "Cursor",
-        meters: [],
-        fetchedAt,
-        error: err instanceof Error ? err.message : String(err),
-      };
-    }
-
-    if (!summaryPayload) {
-      return {
-        providerId: "cursor",
-        displayName: "Cursor",
-        accountIdentifier: email,
-        meters: [],
-        fetchedAt,
-        error: "Failed to fetch usage summary from cursor.com",
-      };
-    }
-
-    // Determine reset time
+    const [summary, me] = await Promise.allSettled([
+      fetchUsageJson("https://cursor.com/api/usage-summary", { headers }, ctx),
+      fetchUsageJson("https://cursor.com/api/auth/me", { headers }, ctx),
+    ]);
+    if (me.status === "fulfilled" && typeof me.value.email === "string")
+      report.accountIdentifier = me.value.email;
+    if (summary.status === "rejected")
+      return { ...report, error: safeUsageError(summary.reason, ctx.signal) };
+    report.fetchedAt = Date.now();
+    const data = summary.value;
     let resetsAt: number | undefined;
     for (const key of [
       "billingCycleEnd",
@@ -114,106 +60,82 @@ export const cursorAdapter: ProviderUsageAdapter = {
       "nextReset",
       "resetsAt",
     ]) {
-      const parsed = parseTimestamp(summaryPayload[key]);
-      if (parsed !== undefined) {
-        resetsAt = parsed;
-        break;
-      }
+      resetsAt = parseTimestamp(data[key]);
+      if (resetsAt !== undefined) break;
     }
-
-    const meters: QuotaMeter[] = [];
-    const indUsage = summaryPayload.individualUsage as
-      | Record<string, unknown>
-      | undefined;
-    const plan = indUsage?.plan as Record<string, unknown> | undefined;
-    const overall = indUsage?.overall as Record<string, unknown> | undefined;
-    const onDemand = indUsage?.onDemand as Record<string, unknown> | undefined;
-
+    const individual = asRecord(data.individualUsage);
+    const plan = asRecord(individual?.plan);
+    let incomplete = false;
     if (plan && plan.enabled !== false) {
-      const autoPct =
-        typeof plan.autoPercentUsed === "number"
-          ? plan.autoPercentUsed
-          : undefined;
-      const apiPct =
-        typeof plan.apiPercentUsed === "number"
-          ? plan.apiPercentUsed
-          : undefined;
-
-      if (autoPct !== undefined) {
-        meters.push({
-          id: "cursor-models",
-          name: "Cursor Models",
-          usedPercent: Math.max(0, autoPct),
+      // Cursor's own percentages are authoritative; cents have a different denominator.
+      for (const [field, id, name] of [
+        ["autoPercentUsed", "cursor-models", "Cursor Models"],
+        ["apiPercentUsed", "other-models", "Other Models"],
+      ]) {
+        if (plan[field] === undefined) continue;
+        const value = finiteNumber(plan[field]);
+        const pct = value !== undefined && value >= 0 ? value : undefined;
+        if (pct === undefined) incomplete = true;
+        report.meters.push({
+          id,
+          name,
+          usedPercent: pct,
           resetsAt,
-          status: computeUsageStatus(autoPct),
+          status: computeUsageStatus(pct),
         });
       }
-
-      if (apiPct !== undefined) {
-        meters.push({
-          id: "other-models",
-          name: "Other Models",
-          usedPercent: Math.max(0, apiPct),
-          resetsAt,
-          status: computeUsageStatus(apiPct),
-        });
-      }
-
-      if (autoPct === undefined && apiPct === undefined) {
-        const totalPct =
-          typeof plan.totalPercentUsed === "number"
-            ? plan.totalPercentUsed
-            : undefined;
-        if (totalPct !== undefined) {
-          meters.push({
+      if (report.meters.length === 0) {
+        const value = finiteNumber(plan.totalPercentUsed);
+        if (value !== undefined && value >= 0)
+          report.meters.push({
             id: "plan-total",
             name: "Included Quota",
-            usedPercent: Math.max(0, totalPct),
+            usedPercent: value,
             resetsAt,
-            status: computeUsageStatus(totalPct),
+            status: computeUsageStatus(value),
           });
-        }
-      }
-    } else if (overall && overall.enabled !== false) {
-      const used = Number(overall.used);
-      const limit = Number(overall.limit);
-      if (!Number.isNaN(used) && !Number.isNaN(limit) && limit > 0) {
-        const pct = (used / limit) * 100;
-        meters.push({
-          id: "overall-usage",
-          name: "Personal Usage",
-          usedPercent: pct,
-          usedText: `$${(used / 100).toFixed(2)}`,
-          limitText: `$${(limit / 100).toFixed(2)}`,
-          resetsAt,
-          status: computeUsageStatus(pct),
-        });
+        else incomplete = true;
       }
     }
-
-    if (onDemand && onDemand.enabled !== false) {
-      const used = Number(onDemand.used);
-      const limit = Number(onDemand.limit);
-      if (!Number.isNaN(used) && !Number.isNaN(limit) && limit > 0) {
-        const pct = (used / limit) * 100;
-        meters.push({
-          id: "on-demand",
-          name: "On-Demand (Over)",
-          usedPercent: pct,
-          usedText: `$${(used / 100).toFixed(2)}`,
-          limitText: `$${(limit / 100).toFixed(2)}`,
-          resetsAt,
-          status: computeUsageStatus(pct),
-        });
+    const moneyPools =
+      report.meters.length === 0
+        ? [
+            ["overall", "Personal Usage"],
+            ["onDemand", "On-Demand"],
+          ]
+        : [["onDemand", "On-Demand"]];
+    for (const [key, name] of moneyPools) {
+      const pool = asRecord(individual?.[key]);
+      if (!pool || pool.enabled === false) continue;
+      const used = finiteNumber(pool.used);
+      const limit = finiteNumber(pool.limit);
+      if (used === undefined || used < 0) {
+        incomplete = true;
+        continue;
       }
+      const pct =
+        limit !== undefined && limit > 0 ? (used / limit) * 100 : undefined;
+      const meter: QuotaMeter = {
+        id: key === "onDemand" ? "on-demand" : "overall-usage",
+        name,
+        usedPercent: pct,
+        usedText: `$${(used / 100).toFixed(2)}`,
+        limitText:
+          limit !== undefined && limit > 0
+            ? `$${(limit / 100).toFixed(2)}`
+            : undefined,
+        remainingText:
+          limit !== undefined && limit > 0
+            ? `$${(Math.max(0, limit - used) / 100).toFixed(2)}`
+            : undefined,
+        resetsAt,
+        status: computeUsageStatus(pct),
+      };
+      report.meters.push(meter);
     }
-
-    return {
-      providerId: "cursor",
-      displayName: "Cursor",
-      accountIdentifier: email,
-      meters,
-      fetchedAt,
-    };
+    if (incomplete || report.meters.length === 0)
+      report.warning =
+        "Some quota data is unavailable or unrecognized; availability cannot be determined from this snapshot.";
+    return report;
   },
 };
