@@ -87,6 +87,10 @@ export interface WebStoreState {
   cursor: number | null;
   selectedPath: string | null;
   selectedWorkspace: string | null;
+  // A workspace draft is operator intent, not the canonical Pi Session's cwd.
+  // Keep it through snapshots/failures until native creation is confirmed or
+  // the operator explicitly opens an existing Session.
+  workspaceDraft: boolean;
   collapsed: Set<string>;
   sidebarCollapsed: boolean;
   mobileSidebarOpen: boolean;
@@ -357,7 +361,7 @@ export function createWebStore(
             ...resetLivePatch(),
             promptAdmissionPending: false,
             selectedPath: typeof eventPath === "string" ? eventPath : null,
-            draftModel: null,
+            draftModel: current.workspaceDraft ? current.draftModel : null,
             modelSelectionPending: false,
             sessionSwitching: true,
           });
@@ -588,11 +592,13 @@ export function createWebStore(
           )
             ? get().selectedWorkspace
             : undefined;
-          const selectedWorkspace = snapshot.workspaces.some(
-            (workspace) => workspace.path === selectedSessionWorkspace,
-          )
-            ? selectedSessionWorkspace
-            : (activeWorkspace ?? retainedWorkspace ?? null);
+          const selectedWorkspace = get().workspaceDraft
+            ? get().selectedWorkspace
+            : snapshot.workspaces.some(
+                  (workspace) => workspace.path === selectedSessionWorkspace,
+                )
+              ? selectedSessionWorkspace
+              : (activeWorkspace ?? retainedWorkspace ?? null);
           const shouldReset = options.resetCursor;
           set({
             ...(shouldReset ? resetLivePatch() : {}),
@@ -638,18 +644,33 @@ export function createWebStore(
         }
       },
       async chooseWorkspace() {
+        const epoch = sessionEpoch;
         try {
           const result = await client.chooseWorkspace();
+          if (epoch !== sessionEpoch) return;
           if (result.cancelled || !result.path) return;
-          set({ selectedWorkspace: result.path });
+          actions.setWorkspace(result.path);
           await actions.refreshSnapshot();
         } catch (error) {
-          showError(error);
+          if (epoch === sessionEpoch) showError(error);
         }
       },
       setWorkspace(path) {
-        set({ selectedWorkspace: path });
-        void actions.refreshSnapshot();
+        const current = get();
+        if (path === current.selectedWorkspace && !current.sessionSwitching)
+          return;
+        ++sessionEpoch;
+        promptAdmissionToken = null;
+        promptAdmission = null;
+        set({
+          ...resetLivePatch(),
+          selectedWorkspace: path,
+          workspaceDraft: true,
+          sessionSwitching: false,
+          modelSelectionPending: false,
+          promptAdmissionPending: false,
+          notice: null,
+        });
       },
       async renameWorkspace(path, name) {
         try {
@@ -687,6 +708,7 @@ export function createWebStore(
           promptAdmissionPending: false,
           selectedPath: null,
           selectedWorkspace: workspacePath,
+          workspaceDraft: true,
           sessionSwitching: true,
         });
         let created = false;
@@ -700,17 +722,46 @@ export function createWebStore(
             observedPath: null,
           };
           try {
-            await client.createSession(workspacePath, commandId);
+            const receipt = await client.createSession(
+              workspacePath,
+              commandId,
+            );
             if (epoch !== sessionEpoch) return;
+            if (receipt.cancelled || !receipt.sessionPath) {
+              throw new Error(
+                "Session creation was not confirmed. Please try again.",
+              );
+            }
             set({ selectedPath: null });
+            let refreshed = await actions.refreshSnapshot({ epoch });
+            if (!refreshed && epoch === sessionEpoch) {
+              // A Session event may start a newer snapshot while this
+              // authoritative creation refresh is in flight. Retry once so
+              // the receipt can still be checked against canonical Pi state.
+              refreshed = await actions.refreshSnapshot({ epoch });
+            }
+            if (epoch !== sessionEpoch) return;
+            if (!refreshed) {
+              throw new Error(
+                "The created Session could not be confirmed. Please try again.",
+              );
+            }
+            const selected = get().snapshot?.selectedSession;
+            // A successful HTTP response alone cannot authorize a prompt:
+            // another browser may have activated a different Session meanwhile.
             if (
-              !(await actions.refreshSnapshot({ epoch })) ||
-              epoch !== sessionEpoch
-            )
-              return;
+              !selected ||
+              selected.path !== receipt.sessionPath ||
+              selected.cwd !== workspacePath ||
+              selected.id !== get().snapshot?.currentSessionId
+            ) {
+              throw new Error(
+                "The created Session is no longer active in the selected workspace. Please try again.",
+              );
+            }
+            set({ workspaceDraft: false, notice: null });
             const draft = get().draftModel;
-            const sessionId = get().snapshot?.selectedSession?.id;
-            if (!sessionId) return;
+            const sessionId = selected.id;
             created = !draft || (await applyModel(draft, epoch, sessionId));
           } catch (error) {
             if (epoch !== sessionEpoch) return;
@@ -729,7 +780,11 @@ export function createWebStore(
       },
       async selectSession(path) {
         if (!path) return;
-        set({ draftModel: null, modelSelectionPending: false });
+        set({
+          workspaceDraft: false,
+          draftModel: null,
+          modelSelectionPending: false,
+        });
         const epoch = ++sessionEpoch;
         promptAdmissionToken = null;
         promptAdmission = null;
@@ -800,12 +855,15 @@ export function createWebStore(
           state.sessionSwitching ||
           state.modelSelectionPending ||
           state.promptAdmissionPending ||
-          state.liveRunning ||
-          state.snapshot?.runtime.status === "running"
+          (!state.workspaceDraft &&
+            (state.liveRunning || state.snapshot?.runtime.status === "running"))
         )
           return;
         const sessionId = state.snapshot?.selectedSession?.id;
-        if (!sessionId && !state.snapshot?.currentSessionId) {
+        if (
+          state.workspaceDraft ||
+          (!sessionId && !state.snapshot?.currentSessionId)
+        ) {
           const model = state.snapshot?.models.find(
             (item) => item.provider === provider && item.id === modelId,
           );
@@ -844,12 +902,17 @@ export function createWebStore(
         ) {
           return false;
         }
-        const creating = !get().snapshot?.selectedSession?.id;
+        const creating =
+          get().workspaceDraft || !get().snapshot?.selectedSession?.id;
         if (creating && !(await actions.createSession(workspace))) return false;
         if (creating && get().draftModel) return false;
         const sessionId = get().snapshot?.selectedSession?.id;
         if (
           !sessionId ||
+          get().workspaceDraft ||
+          get().selectedWorkspace !== workspace ||
+          get().snapshot?.selectedSession?.cwd !== workspace ||
+          sessionId !== get().snapshot?.currentSessionId ||
           get().sessionSwitching ||
           get().promptAdmissionPending
         ) {
@@ -860,7 +923,11 @@ export function createWebStore(
         if (draft && !(await applyModel(draft, epoch, sessionId))) return false;
         if (
           epoch !== sessionEpoch ||
-          sessionId !== get().snapshot?.selectedSession?.id
+          sessionId !== get().snapshot?.selectedSession?.id ||
+          sessionId !== get().snapshot?.currentSessionId ||
+          get().workspaceDraft ||
+          get().selectedWorkspace !== workspace ||
+          get().snapshot?.selectedSession?.cwd !== workspace
         )
           return false;
         const admission = ++promptAdmissionSequence;
@@ -990,6 +1057,7 @@ export function createWebStore(
       cursor: null,
       selectedPath: null,
       selectedWorkspace: null,
+      workspaceDraft: false,
       draftModel: null,
       modelSelectionPending: false,
       collapsed: readStringSet(collapsedWorkspacesStorageKey),
