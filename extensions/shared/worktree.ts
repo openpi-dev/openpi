@@ -193,7 +193,10 @@ export async function createWorktree(options: {
   /** Link the repo's node_modules in, so the child can build and test. */
   linkNodeModules?: boolean;
 }): Promise<WorktreeResult> {
-  const gitDir = await resolveGitCommonDir(options.cwd);
+  const resolvedGitDir = await resolveGitCommonDir(options.cwd);
+  const gitDir = resolvedGitDir
+    ? path.resolve(options.cwd, resolvedGitDir)
+    : resolvedGitDir;
   if (!gitDir) {
     return { ok: false, reason: `not a git repository: ${options.cwd}` };
   }

@@ -161,6 +161,7 @@ describe("worktree lifecycle", () => {
   before(() => {
     repo = fs.mkdtempSync(path.join(os.tmpdir(), "pi-worktree-test-"));
     git(repo, "init", "--quiet", "--initial-branch=main", ".");
+    git(repo, "config", "core.autocrlf", "false");
     fs.writeFileSync(path.join(repo, "a.txt"), "hello\n");
     fs.mkdirSync(path.join(repo, "node_modules", "dep"), { recursive: true });
     fs.writeFileSync(
