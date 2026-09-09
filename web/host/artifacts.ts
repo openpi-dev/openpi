@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, realpath, stat } from "node:fs/promises";
-import { basename, dirname, isAbsolute, relative, resolve, sep } from "node:path";
+import { basename, dirname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { ARTIFACT_MAX_BYTES, ARTIFACT_PREVIEW_BYTES, ARTIFACT_PREVIEW_LINES, type ArtifactMetadata } from "../protocol/artifacts.ts";
 
 const MAX_HANDLES = 64;
@@ -54,20 +54,38 @@ export class ArtifactReader {
     if (/[\x00-\x1f\x7f]/u.test(decoded) || /^(?:\\\\|\/\/)/u.test(decoded) || /:/u.test(decoded.replace(/^[a-z]:[\\/]/iu, ""))) throw denied();
     const root = await realpath(scope.cwd);
     const requested = resolve(base ?? root, decoded);
-    // The Session cwd may use a Windows 8.3 alias. Accept either spelling of
-    // this exact root, then verify descendants and canonical containment.
-    const sessionRoot = resolve(scope.cwd);
-    const requestedRoot = inside(root, requested) ? root : inside(sessionRoot, requested) ? sessionRoot : undefined;
-    if (!requestedRoot) throw denied();
-    // Reject links/junctions throughout the descendant path, not just its leaf.
-    let part = requestedRoot;
-    for (const segment of relative(requestedRoot, requested).split(sep)) {
+    // Find the actual workspace boundary, including Windows short-name aliases
+    // in any ancestor. Never follow a link below that boundary.
+    const volumeRoot = parse(requested).root;
+    let part = volumeRoot;
+    let path = await realpath(part);
+    let reachedRoot = relative(root, path) === "";
+    for (const segment of relative(volumeRoot, requested).split(sep)) {
       part = resolve(part, segment);
-      const info = await lstat(part);
-      if (info.isSymbolicLink()) throw denied();
+      try {
+        const info = await lstat(part, { bigint: true });
+        if (reachedRoot && info.isSymbolicLink()) throw denied();
+        path = await realpath(part);
+        if (!reachedRoot && relative(root, path) === "") {
+          // An explicitly selected junction root is allowed; another junction
+          // pointing at the root is not an additional grant. Compare identity,
+          // so alternate 8.3 spellings of the selected junction still work.
+          if (info.isSymbolicLink()) {
+            const selected = await lstat(scope.cwd, { bigint: true });
+            if (!selected.isSymbolicLink() || selected.dev !== info.dev || selected.ino !== info.ino) throw denied();
+          }
+          reachedRoot = true;
+        } else if (reachedRoot && !inside(root, path)) {
+          throw denied();
+        }
+      } catch (error) {
+        // Missing files within the verified workspace retain their exact error.
+        // Unverified/outside paths never disclose their filesystem state.
+        if (!reachedRoot) throw denied();
+        throw error;
+      }
     }
-    const path = await realpath(requested);
-    if (!inside(root, path)) throw denied();
+    if (!reachedRoot || !inside(root, path)) throw denied();
     return { path, requested };
   }
 
