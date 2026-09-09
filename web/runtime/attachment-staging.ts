@@ -18,6 +18,7 @@ export interface WebAttachmentStagingLimits {
   readonly maxAttachmentBytes: number;
   readonly maxTotalBytes: number;
   readonly maxStagedBytes: number;
+  readonly maxStagedBatches: number;
   readonly maxSettledReceipts: number;
   /** Age after which an abandoned store root is removed at startup. */
   readonly stagingTtlMs?: number;
@@ -27,6 +28,7 @@ const DEFAULT_STAGING_TTL_MS = 60 * 60 * 1000;
 const MAX_ATTACHMENT_NAME_BYTES = 256;
 const MAX_ATTACHMENT_MIME_BYTES = 256;
 const OWNER_MARKER_SUFFIX = ".owner";
+const ACTIVE_STORE_DIRECTORIES = new Set<string>();
 
 export interface WebAttachmentBinding {
   readonly workspace: string;
@@ -119,6 +121,7 @@ function validateLimits(limits: WebAttachmentStagingLimits) {
   assertPositiveInteger(limits.maxAttachmentBytes, "maxAttachmentBytes");
   assertPositiveInteger(limits.maxTotalBytes, "maxTotalBytes");
   assertPositiveInteger(limits.maxStagedBytes, "maxStagedBytes");
+  assertPositiveInteger(limits.maxStagedBatches, "maxStagedBatches");
   assertPositiveInteger(limits.maxSettledReceipts, "maxSettledReceipts");
   if (
     limits.stagingTtlMs !== undefined &&
@@ -232,6 +235,7 @@ export class WebAttachmentStagingStore {
         }
         if (
           candidateStat.isDirectory() &&
+          !ACTIVE_STORE_DIRECTORIES.has(candidate) &&
           !ownedByLiveProcess &&
           now - candidateStat.mtimeMs > ttl
         ) {
@@ -249,6 +253,7 @@ export class WebAttachmentStagingStore {
       JSON.stringify({ pid: process.pid }),
       { mode: 0o600 },
     );
+    ACTIVE_STORE_DIRECTORIES.add(directory);
     return new WebAttachmentStagingStore(directory, limits);
   }
 
@@ -261,6 +266,15 @@ export class WebAttachmentStagingStore {
     return this.exclusive(async () => {
       this.assertOpen();
       validateBinding(binding);
+      const activeBatchCount = [...this.records.values()].filter(
+        (record) => record.status === "staged",
+      ).length;
+      if (activeBatchCount >= this.limits.maxStagedBatches) {
+        throw new WebAttachmentStagingError(
+          "STORE_LIMIT",
+          "attachment staging store batch limit exceeded",
+        );
+      }
       const totalBytes = this.validatePayloads(payloads);
       if (this.stagedBytes + totalBytes > this.limits.maxStagedBytes) {
         throw new WebAttachmentStagingError(
@@ -386,6 +400,8 @@ export class WebAttachmentStagingStore {
     this.closing = true;
     this.disposePromise = this.exclusive(async () => {
       await rm(this.directory, { recursive: true, force: true });
+      await rm(`${this.directory}${OWNER_MARKER_SUFFIX}`, { force: true });
+      ACTIVE_STORE_DIRECTORIES.delete(this.directory);
       this.records.clear();
       this.stagedBytes = 0;
     });

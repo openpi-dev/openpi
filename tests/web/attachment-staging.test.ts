@@ -24,6 +24,7 @@ const limits: WebAttachmentStagingLimits = {
   maxAttachmentBytes: 8,
   maxTotalBytes: 12,
   maxStagedBytes: 16,
+  maxStagedBatches: 4,
   maxSettledReceipts: 2,
   stagingTtlMs: 60 * 60 * 1000,
 };
@@ -166,6 +167,35 @@ test("enforces count, per-file, aggregate, and store-wide byte bounds", async ()
   }
 });
 
+test("bounds active zero-byte batches independently of payload bytes", async () => {
+  const value = await fixture();
+  try {
+    for (let index = 0; index < limits.maxStagedBatches; index += 1) {
+      await value.store.stage({ ...binding, commandId: `empty-${index}` }, [
+        {
+          name: "empty",
+          mime: "application/octet-stream",
+          bytes: Buffer.alloc(0),
+        },
+      ]);
+    }
+    await assert.rejects(
+      value.store.stage({ ...binding, commandId: "empty-overflow" }, [
+        {
+          name: "empty",
+          mime: "application/octet-stream",
+          bytes: Buffer.alloc(0),
+        },
+      ]),
+      (error) =>
+        error instanceof WebAttachmentStagingError &&
+        error.code === "STORE_LIMIT",
+    );
+  } finally {
+    await value.cleanup();
+  }
+});
+
 test("bounds display metadata and removes abandoned roots at startup", async () => {
   const parent = await mkdtemp(join(tmpdir(), "openpi-attachment-ttl-"));
   try {
@@ -196,6 +226,35 @@ test("bounds display metadata and removes abandoned roots at startup", async () 
     await assert.rejects(lstat(abandoned));
     await store.dispose();
   } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
+test("does not reclaim an aged store that is still owned", async () => {
+  const parent = await mkdtemp(join(tmpdir(), "openpi-attachment-owned-"));
+  const first = await WebAttachmentStagingStore.create(parent, {
+    ...limits,
+    stagingTtlMs: 1_000,
+  });
+  try {
+    const batch = await first.stage(binding, [
+      { name: "kept", mime: "text/plain", bytes: Buffer.from("payload") },
+    ]);
+    const [storeDirectory] = await readdir(parent);
+    const old = new Date(Date.now() - 10_000);
+    await utimes(join(parent, storeDirectory), old, old);
+
+    const second = await WebAttachmentStagingStore.create(parent, {
+      ...limits,
+      stagingTtlMs: 1_000,
+    });
+    try {
+      assert.equal((await first.consume(batch.id, binding)).status, "consumed");
+    } finally {
+      await second.dispose();
+    }
+  } finally {
+    await first.dispose();
     await rm(parent, { recursive: true, force: true });
   }
 });
@@ -249,6 +308,7 @@ test("discard and host disposal remove private staged artifacts", async () => {
   ]);
   await value.store.dispose();
   await assert.rejects(lstat(storePath));
+  assert.deepEqual(await readdir(value.parent), []);
   await assert.rejects(
     value.store.stage(binding, [
       { name: "c", mime: "text/plain", bytes: Buffer.from("c") },
