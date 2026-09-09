@@ -2,6 +2,8 @@
 
 Research records preserve sourced investigation and distinguish observations, inferences, recommendations, and unknowns. They are not accepted Decisions or proof of runtime behavior by themselves.
 
+New governed records start from [`TEMPLATE.md`](TEMPLATE.md), retain the required metadata, and link back to their source Issue. The checker currently enforces this contract for `docs/research` and `docs/benchmarks`; the architecture, design, and Decision categories remain documented but are not yet scanned by that checker. Only the explicitly enumerated historical records below are exempt from frontmatter; a new record without frontmatter fails the governance check.
+
 ## Source-verified designs
 
 - [`WEB_TRAJECTORY_2026-09-07.md`](WEB_TRAJECTORY_2026-09-07.md) — saved Session trajectory, exact-request capture boundary, and bounded browser inspection ([#446](https://github.com/openpi-dev/openpi/issues/446)).

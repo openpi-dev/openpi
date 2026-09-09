@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Web trajectory evidence projection
+related-issues: #446, #76
+related-prs: none
+supersedes: none
+---
+
 # Web trajectory evidence boundary
 
 - Status: source-verified design; deterministic implementation validation belongs to the linked PR. Not a performance benchmark or provider acceptance result.
@@ -19,6 +29,22 @@ Pi's `context` event precedes `convertToLlm`; `before_agent_start` exposes an as
 The trajectory is a browser-only projection of the already loaded saved records. It preserves repeated text, pairs tools only with unique matching IDs and names, keeps unmatched results, and leaves outcomes unknown when evidence is absent. The graph encodes record order, not dependency or parallel execution. It opens on the last 50 nodes and reveals earlier loaded nodes on demand. Only selected evidence is expanded. Existing snapshot refresh events supply saved updates; in-flight text remains in Chat.
 
 Existing Chat's content-based live deduplication and synthesized live timestamps are unsuitable as an audit source. This implementation does not reuse that merger or silently change Chat behavior. It also adds no full-history scan, endpoint, model tool, request capture, persistence, timer or provider implementation.
+
+## Verified facts
+
+The source review establishes the bounded trajectory projection and its evidence omissions.
+
+## Inferences
+
+The projection is suitable for the recorded browser inspection boundary but cannot attest to final provider payloads or complete execution history.
+
+## Recommendations
+
+Keep future request inspection behind a separately bounded native capture with explicit source and sensitivity rules.
+
+## Unknowns
+
+Historical full requests, complete tool durations, and final wire payloads remain unknown.
 
 ## Deferred and unknown
 
