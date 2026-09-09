@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { getAntigravityUserAgent } from "../../../extensions/ai-providers/antigravity/oauth.ts";
 import {
   cursorAdapter,
   extractCursorUserId,
@@ -123,6 +124,10 @@ test("Antigravity reuses resolved token/project, preserves groups and retries a 
   );
   for (const { init } of calls) {
     assert.equal(init?.method, "POST");
+    assert.equal(
+      new Headers(init?.headers).get("User-Agent"),
+      getAntigravityUserAgent(),
+    );
     assert.equal(
       new Headers(init?.headers).get("Authorization"),
       "Bearer fake-antigravity",

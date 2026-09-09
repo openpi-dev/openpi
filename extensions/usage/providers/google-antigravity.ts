@@ -1,4 +1,5 @@
 import { decodeApiKey } from "../../ai-providers/antigravity/credentials.ts";
+import { getAntigravityUserAgent } from "../../ai-providers/antigravity/oauth.ts";
 import type {
   ProviderUsageAdapter,
   ProviderUsageReport,
@@ -47,7 +48,7 @@ export const googleAntigravityAdapter: ProviderUsageAdapter = {
             headers: {
               Authorization: `Bearer ${token}`,
               "Content-Type": "application/json",
-              "User-Agent": "GoogleCloudCode/1.0",
+              "User-Agent": getAntigravityUserAgent(),
             },
             body: JSON.stringify({ project: projectId }),
           },
