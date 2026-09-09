@@ -336,27 +336,25 @@ describe("worktree lifecycle", () => {
     }
   }
 
-  test(
-    "accepts NUL-delimited tracked paths with whitespace and newlines",
-    { skip: process.platform === "win32" },
-    async () => {
-      const result = await createWorktree({
-        cwd: repo,
-        label: "paths",
-        id: "1",
-      });
-      assert.ok(result.ok);
-      fs.writeFileSync(
-        path.join(result.worktree.path, "space and\nnewline.txt"),
-        "fixture",
-      );
-      git(result.worktree.path, "add", "-A");
-      git(result.worktree.path, "commit", "--quiet", "-m", "unusual path");
-      const cleanup = await reclaimWorktree(repo, result.worktree);
-      assert.equal(cleanup.removed, true, cleanup.reason ?? "");
-      assert.equal(cleanup.branchDeleted, false);
-    },
-  );
+  test("accepts NUL-delimited tracked paths with whitespace and newlines", {
+    skip: process.platform === "win32",
+  }, async () => {
+    const result = await createWorktree({
+      cwd: repo,
+      label: "paths",
+      id: "1",
+    });
+    assert.ok(result.ok);
+    fs.writeFileSync(
+      path.join(result.worktree.path, "space and\nnewline.txt"),
+      "fixture",
+    );
+    git(result.worktree.path, "add", "-A");
+    git(result.worktree.path, "commit", "--quiet", "-m", "unusual path");
+    const cleanup = await reclaimWorktree(repo, result.worktree);
+    assert.equal(cleanup.removed, true, cleanup.reason ?? "");
+    assert.equal(cleanup.branchDeleted, false);
+  });
 
   for (const inventory of [
     "H a.txt",
