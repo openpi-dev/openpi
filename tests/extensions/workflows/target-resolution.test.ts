@@ -49,6 +49,13 @@ test("run target resolution prefers exact ids and bounds ambiguous or missing er
   ]);
   assert.equal(caseCollision.ok, false);
   assert.match(caseCollision.error, /ambiguous/i);
+  assert.deepEqual(
+    resolveWorkflowRunTarget("wf_ABCD", ["wf_abcd", "wf_ABCD"]),
+    {
+      ok: true,
+      runId: "wf_ABCD",
+    },
+  );
 
   const ambiguous = resolveWorkflowRunTarget("a", candidates);
   assert.equal(ambiguous.ok, false);
@@ -179,6 +186,22 @@ test("an ambiguous short suffix cannot stop or inspect either active run", async
         uncertain: 0,
         total: 0,
       });
+    }
+
+    for (const [index, runId] of runIds.slice(0, 2).entries()) {
+      const target =
+        index === 0 ? runId.toUpperCase() : runId.slice(3).toUpperCase();
+      const inspected = (await status.execute("status-case", {
+        runId: target,
+      })) as {
+        details: { runs: Array<{ runId: string; status: string }> };
+      };
+      assert.equal(inspected.details.runs[0]?.runId, runId);
+      assert.equal(inspected.details.runs[0]?.status, "running");
+      const stopped = (await stop.execute("stop-case", { runId: target })) as {
+        details: { runId: string; status: string };
+      };
+      assert.deepEqual(stopped.details, { runId, status: "aborting" });
     }
   } finally {
     for (const handler of handlers.get("session_shutdown") ?? []) {
