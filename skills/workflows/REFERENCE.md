@@ -14,8 +14,10 @@ The `workflow` script is an async JavaScript function body executed in a restric
 
 `await agent(prompt, options)` runs one child and always resolves to `{ ok, output, structured?, ref?, acceptance?, acceptanceWarning?, error? }`. Check `ok` before reading output. Children receive normal trust-aware resources but cannot recursively orchestrate or ask the user.
 
-Useful options include `agent_type`, `label`, `phase`, `schema`, `model`, `provider`, `effort`, `isolation`, `operator`, and `inputs`. The legacy `acceptance` option remains readable only during the 0.x migration window described below.
+Useful options include `agent_type`, `label`, `phase`, `schema`, `model`, `provider`, `effort`, `working_dir`, `isolation`, `operator`, and `inputs`. The legacy `acceptance` option remains readable only during the 0.x migration window described below.
 
+- Set `working_dir` when tools must run in another repository. Relative paths resolve against the parent cwd; prompt text alone does not change it. The directory must exist. Project resource trust is checked for the target independently.
+- Built-in roles inherit currently active parent child-eligible tools, including shell/network when available. Explicit custom tool lists only narrow this surface. Built-ins with inherited tools execute for real on resume; custom bounded read-only calls retain the replay filesystem boundary below.
 - Prefer a matching `agent_type`. Model precedence is explicit model/provider, type file, configured built-in role, then parent. Effort precedence is explicit effort, type default, then parent.
 - `schema` validates structured output. Use it whenever later workflow logic branches on fields.
 - `acceptance` is deprecated since OpenPI 0.5 and scheduled for removal in 1.0. Compatibility calls still return the child-authored ledger with `authority: "model-self-attestation"` and a migration warning, but it never determines `ok`. Use ordinary `schema` for findings, then let the parent evaluate them alongside runtime-observed exit codes, test receipts, file fingerprints, and tool results. Old DSL, journals, and artifacts remain readable during 0.x.

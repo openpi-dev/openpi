@@ -308,7 +308,7 @@ function containsRmReference(command: string) {
     }
     decoded += character;
   }
-  return /(^|[^A-Za-z0-9_.-])(?:\/[A-Za-z0-9_.-]+)*\/?rm(?=$|[^A-Za-z0-9_.-])/u.test(
+  return /(^|[^A-Za-z0-9_.-])(?:\/[A-Za-z0-9_.-]+\/)*rm(?=$|[^A-Za-z0-9_.-])/u.test(
     decoded,
   );
 }
