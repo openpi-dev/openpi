@@ -1,4 +1,6 @@
 import assert from "node:assert/strict";
+import fsPromises from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import {
   mkdir,
   mkdtemp,
@@ -147,7 +149,7 @@ test("snapshot pins current and selected sessions while bounding the projection"
   }
 });
 
-test("discovers default Pi sessions as bounded read-only projections", async () => {
+test("discovers default Pi sessions as bounded read-only projections", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-history-"));
   const sessionDirectory = join(root, "web-sessions");
   const agentDirectory = join(root, "pi-agent");
@@ -163,9 +165,31 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
     const unrelatedWorkspace = join(root, "unrelated-workspace");
     await mkdir(unrelatedWorkspace);
     const unrelated = SessionManager.create(unrelatedWorkspace);
-    persistSession(unrelated, "unrelated-only-token", 3);
+    persistSession(unrelated, "unrelated first message", 3);
+    unrelated.appendMessage({
+      role: "user",
+      content: "unrelated-only-token",
+      timestamp: 4,
+    });
     const unrelatedPath = unrelated.getSessionFile();
     assert.ok(unrelatedPath);
+    const fileBefore = await readFile(terminalPath);
+    const originalOpen = fsPromises.open;
+    const openedPaths: string[] = [];
+    t.mock.method(
+      fsPromises,
+      "open",
+      (...args: Parameters<typeof originalOpen>) => {
+        openedPaths.push(String(args[0]));
+        assert.notEqual(String(args[0]), unrelatedPath);
+        return originalOpen(...args);
+      },
+    );
+    syncBuiltinESMExports();
+    t.after(() => {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
     const adapter = new PiWebAdapter(
       runtimeFor(root, sessionDirectory, current),
     );
@@ -193,6 +217,8 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
       assert.equal(inspected.readOnly, true);
       assert.equal(inspected.source, "pi-default");
       assert.equal(inspected.preview.messages.length, 2);
+      assert.equal("allMessagesText" in inspected, false);
+      assert.ok(openedPaths.includes(terminalPath));
       assert.equal(
         (
           await adapter.listReadOnlyTerminalSessions({
@@ -207,10 +233,113 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
           error instanceof Error &&
           (error as { code?: string }).code === "SESSION_NOT_FOUND",
       );
+      const cancelled = AbortSignal.abort();
+      const opensBefore = openedPaths.length;
+      await assert.rejects(
+        adapter.getReadOnlyTerminalSession(terminalPath, { signal: cancelled }),
+        { name: "AbortError" },
+      );
+      await assert.rejects(
+        adapter.listReadOnlyTerminalSessions({ signal: cancelled }),
+        { name: "AbortError" },
+      );
+      assert.equal(openedPaths.length, opensBefore);
+
+      const controller = new AbortController();
+      let targetOpens = 0;
+      t.mock.method(
+        fsPromises,
+        "open",
+        async (...args: Parameters<typeof originalOpen>) => {
+          const handle = await originalOpen(...args);
+          if (String(args[0]) === terminalPath && ++targetOpens === 2) {
+            const read = handle.read.bind(handle);
+            t.mock.method(
+              handle,
+              "read",
+              async (...readArgs: Parameters<typeof read>) => {
+                const result = await read(...readArgs);
+                controller.abort();
+                return result;
+              },
+            );
+          }
+          return handle;
+        },
+      );
+      syncBuiltinESMExports();
+      await assert.rejects(
+        adapter.getReadOnlyTerminalSession(terminalPath, {
+          signal: controller.signal,
+        }),
+        { name: "AbortError" },
+      );
+      assert.equal(
+        targetOpens,
+        2,
+        "cancellation occurs during the preview, after metadata admission",
+      );
     } finally {
       SessionManager.listAll = listAll;
     }
     assert.equal((await SessionManager.listAll(sessionDirectory)).length, 0);
+    assert.deepEqual(await readFile(terminalPath), fileBefore);
+    assert.equal(
+      (await adapter.listSessions()).some(
+        (session) => session.path === terminalPath,
+      ),
+      false,
+    );
+    assert.equal(
+      (await adapter.getSnapshot()).currentSessionId,
+      current.getSessionId(),
+    );
+    const hidden = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    await hidden.removeWorkspace(root);
+    const unboundRuntime = {
+      ...runtimeFor(root, sessionDirectory, current),
+      workspaceSelected: false,
+    };
+    const unbound = new PiWebAdapter(unboundRuntime);
+    const originalReaddir = fsPromises.readdir;
+    t.mock.method(
+      fsPromises,
+      "readdir",
+      (...args: Parameters<typeof originalReaddir>) => {
+        assert.ok(
+          !String(args[0]).startsWith(agentDirectory),
+          "unavailable workspace must not walk the default store",
+        );
+        return originalReaddir(...args);
+      },
+    );
+    syncBuiltinESMExports();
+    await assert.rejects(hidden.listReadOnlyTerminalSessions());
+    await assert.rejects(unbound.listReadOnlyTerminalSessions());
+
+    const firstKept = terminal.appendMessage({
+      role: "user",
+      content: "kept after compaction",
+      timestamp: 5,
+    });
+    terminal.appendCompaction("summary before kept window", firstKept, 100);
+    const compacted = await adapter.getReadOnlyTerminalSession(terminalPath);
+    assert.ok(
+      JSON.stringify(compacted.preview.messages).includes(
+        "kept after compaction",
+      ),
+    );
+    assert.ok(
+      !JSON.stringify(compacted.preview.messages).includes("terminal history"),
+    );
+    assert.ok(compacted.preview.messages.length <= 80);
+    assert.ok(compacted.preview.retainedBytes <= 1024 * 1024);
+    await assert.rejects(
+      readFile(join(sessionDirectory, "archived-sessions.json")),
+      { code: "ENOENT" },
+    );
   } finally {
     if (previousAgentDirectory === undefined) {
       delete process.env.PI_CODING_AGENT_DIR;

@@ -912,6 +912,7 @@ test("serves terminal Sessions through a read-only bounded endpoint", async () =
     assert.equal(page.sessions[0]?.source, "pi-default");
     assert.equal(page.sessions[0]?.origin, "terminal");
     assert.equal(page.sessions[0]?.readOnly, true);
+    assert.equal(JSON.stringify(page).includes("allMessagesText"), false);
     assert.equal(
       (
         await fetch(
@@ -958,6 +959,25 @@ test("serves terminal Sessions through a read-only bounded endpoint", async () =
     assert.equal(details.readOnly, true);
     assert.equal(details.preview.messages.length, 2);
     assert.ok(details.preview.retainedBytes > 0);
+    assert.equal(JSON.stringify(details).includes("allMessagesText"), false);
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      const rejected = await fetch(`${launched.origin}/api/terminal-sessions`, {
+        method,
+        headers,
+      });
+      assert.equal(rejected.status, 405);
+    }
+    const capabilities = await fetch(`${launched.origin}/api/capabilities`, {
+      headers,
+    });
+    assert.equal(
+      (await capabilities.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
+    const webSessions = await fetch(`${launched.origin}/api/sessions`, {
+      headers,
+    });
+    assert.ok(!JSON.stringify(await webSessions.json()).includes("pi-default"));
   } finally {
     await host.stop();
     if (previousAgentDirectory === undefined) {

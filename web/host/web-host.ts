@@ -749,13 +749,18 @@ export class WebHost {
           error: "limit must be an integer from 1 to 100",
         });
       }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      const signal = AbortSignal.any([controller.signal, this.chooserAbort.signal]);
       try {
         const path = url.searchParams.get("path");
         if (path) {
           return this.json(
             response,
             200,
-            await this.adapter.getReadOnlyTerminalSession(path),
+            await this.adapter.getReadOnlyTerminalSession(path, { signal }),
           );
         }
         return this.json(
@@ -765,6 +770,7 @@ export class WebHost {
             query,
             cursor: cursor.value,
             limit,
+            signal,
           }),
         );
       } catch (error) {
@@ -775,6 +781,9 @@ export class WebHost {
           });
         }
         throw error;
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
       }
     }
     if (url.pathname === "/api/models")

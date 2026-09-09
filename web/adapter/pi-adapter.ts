@@ -100,7 +100,9 @@ function terminalTextContent(message: Record<string, unknown>) {
 async function readTerminalSessionInfo(
   filePath: string,
   modified: Date,
+  signal?: AbortSignal,
 ): Promise<ReadOnlyTerminalSessionInfo | undefined> {
+  signal?.throwIfAborted();
   let fileStat;
   try {
     fileStat = await lstat(filePath);
@@ -116,9 +118,11 @@ async function readTerminalSessionInfo(
     return undefined;
   }
   try {
+    signal?.throwIfAborted();
     const length = Math.min(fileStat.size, TERMINAL_DISCOVERY_MAX_BYTES);
     const bytes = Buffer.allocUnsafe(length);
     const { bytesRead } = await handle.read(bytes, 0, length, 0);
+    signal?.throwIfAborted();
     const text = bytes.toString("utf8", 0, bytesRead);
     const lines = text.split(/\r?\n/u);
     if (bytesRead < fileStat.size) lines.pop();
@@ -184,7 +188,8 @@ async function readTerminalSessionInfo(
   }
 }
 
-async function listTerminalSessionInfo(workspace: string) {
+async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
   const directory = defaultTerminalSessionDirectory(workspace);
   let entries;
   try {
@@ -196,6 +201,7 @@ async function listTerminalSessionInfo(workspace: string) {
     entries
       .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
       .map(async (entry) => {
+        signal?.throwIfAborted();
         const path = join(directory, entry.name);
         try {
           const fileStat = await stat(path);
@@ -210,7 +216,7 @@ async function listTerminalSessionInfo(workspace: string) {
       .filter((candidate): candidate is { path: string; modified: Date } => !!candidate)
       .sort((left, right) => right.modified.getTime() - left.modified.getTime())
       .slice(0, TERMINAL_DISCOVERY_MAX_FILES)
-      .map((candidate) => readTerminalSessionInfo(candidate.path, candidate.modified)),
+      .map((candidate) => readTerminalSessionInfo(candidate.path, candidate.modified, signal)),
   );
   return infos
     .filter(
@@ -650,19 +656,21 @@ export class PiWebAdapter {
   }
 
   async listReadOnlyTerminalSessions(
-    options: { query?: string; cursor?: number; limit?: number } = {},
+    options: { query?: string; cursor?: number; limit?: number; signal?: AbortSignal } = {},
   ) {
+    options.signal?.throwIfAborted();
     const workspace = await this.requireSelectedWorkspace();
     const query = options.query?.trim().toLocaleLowerCase() ?? "";
     const cursor = options.cursor ?? 0;
     const limit = options.limit ?? 50;
-    const sessions = (await listTerminalSessionInfo(workspace))
+    const sessions = (await listTerminalSessionInfo(workspace, options.signal))
       .filter((session) => {
         if (!query) return true;
         return [session.name, session.cwd, session.firstMessage].some((value) =>
           value?.toLocaleLowerCase().includes(query),
         );
       });
+    options.signal?.throwIfAborted();
     const page = sessions.slice(cursor, cursor + limit);
     return {
       sessions: page.map((session) => ({
@@ -692,7 +700,8 @@ export class PiWebAdapter {
     };
   }
 
-  async getReadOnlyTerminalSession(path: string) {
+  async getReadOnlyTerminalSession(path: string, options: { signal?: AbortSignal } = {}) {
+    options.signal?.throwIfAborted();
     const workspace = await this.requireSelectedWorkspace();
     const canonical = resolve(path);
     const directory = defaultTerminalSessionDirectory(workspace);
@@ -702,8 +711,10 @@ export class PiWebAdapter {
         session = await readTerminalSessionInfo(
           canonical,
           (await stat(canonical)).mtime,
+          options.signal,
         );
       } catch {
+        options.signal?.throwIfAborted();
         session = undefined;
       }
     }
@@ -713,7 +724,8 @@ export class PiWebAdapter {
     if (session.cwd !== workspace) {
       throw new WebReadOnlySessionError("Terminal Session is not available");
     }
-    const preview = await loadSessionPreviewData(session.path);
+    const preview = await loadSessionPreviewData(session.path, options);
+    options.signal?.throwIfAborted();
     return {
       id: session.id,
       path: session.path,
