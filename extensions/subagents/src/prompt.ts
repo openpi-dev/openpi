@@ -7,6 +7,7 @@ import { SUBAGENT_ROLE_NAMES } from "../../shared/subagent-roles.ts";
 import { type AgentType, READ_ONLY_AGENT_TOOLS } from "./agent-types.ts";
 import { BACKEND_NAMES, REASONING_EFFORTS } from "./domain.ts";
 import { MAX_RUNNING } from "./manager.ts";
+import { buildNonInteractiveSpawnContinuation } from "./print-host.ts";
 
 export const SUBAGENT_SCHEMA_BUDGETS = Object.freeze({
   rolePurposeBytes: 240,
@@ -218,6 +219,8 @@ export function buildSubagentSpawnResult(options: {
   tools?: readonly string[];
   worktreeBranch?: string;
   structured?: boolean;
+  /** False for print/RPC hosts that cannot re-invoke after agent_settled. */
+  canDeliverLater?: boolean;
 }) {
   const typeNote = options.agentTypeName
     ? ` Agent type "${options.agentTypeName}" applied.`
@@ -240,8 +243,12 @@ export function buildSubagentSpawnResult(options: {
   const structuredNote = options.structured
     ? " This run must finish with the requested validated structured result."
     : "";
+  const header = `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}${structuredNote}\n`;
+  if (options.canDeliverLater === false) {
+    return `${header}${buildNonInteractiveSpawnContinuation(options.id)}`;
+  }
   return (
-    `Spawned subagent ${options.id} "${options.title}" (${options.harness}: ${options.modelLabel}, ${options.cwd}).${typeNote}${toolNote}${worktreeNote}${structuredNote}\n` +
+    header +
     `It runs in the background — keep working on independent work. If none remains in an interactive session, briefly tell the user it is still running and end your turn; its result is delivered automatically and you are automatically re-invoked when it finishes. Do not poll or call subagent_wait merely because a later step depends on it. ` +
     `Use subagent_wait(ids: ["${options.id}"]) only if the user explicitly asked you to keep the current response open for this result, or a non-interactive automation must return it in the same invocation; subagent_cancel stops it, subagent_check peeks at a running one, subagent_list shows all.`
   );

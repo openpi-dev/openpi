@@ -10,6 +10,14 @@ Research records preserve sourced investigation and distinguish observations, in
 
 - [`CURSOR_NATIVE_RECOVERY_2026-09-08.md`](CURSOR_NATIVE_RECOVERY_2026-09-08.md) — bounded in-band native execution rejection, Pi-owned tools, cancellation identity, and actual child acceptance ([#234](https://github.com/openpi-dev/openpi/issues/234)).
 
+- [`CURSOR_RELIABILITY_BASELINE_2026-09-08.md`](CURSOR_RELIABILITY_BASELINE_2026-09-08.md) — isolated v0.8.1 experiment baseline, Cursor Grok availability probes, and first parent-cell evidence (exploratory; not a Benchmark).
+
+- [`CURSOR_RELIABILITY_PROGRESS_2026-09-08.md`](CURSOR_RELIABILITY_PROGRESS_2026-09-08.md) — live matrix progress, failure classification, #512 before/after, and remaining cells (exploratory; not a Benchmark).
+
+- [`CURSOR_RELIABILITY_SUMMARY_2026-09-08.md`](CURSOR_RELIABILITY_SUMMARY_2026-09-08.md) — configs/tasks verified, remaining unreliability, before/after deltas, sample limits (exploratory; not a Benchmark).
+
+- [`CURSOR_RELIABILITY_E512_VERSION_SPLIT_2026-09-09.md`](CURSOR_RELIABILITY_E512_VERSION_SPLIT_2026-09-09.md) — pointer to the E-01..10 vs E-11..20 overlay (exploratory; not a Benchmark).
+
 - [`WEB_STARTUP_2026-09-07.md`](WEB_STARTUP_2026-09-07.md) — terminal startup feedback, browser-launch waiting, and exploratory timing limits ([#450](https://github.com/openpi-dev/openpi/issues/450)).
 
 - [`WEB_STREAMING_MARKDOWN_2026-09-07.md`](WEB_STREAMING_MARKDOWN_2026-09-07.md) — unchanged historical Markdown parsing during streaming, bounded React component reuse and deterministic regression evidence ([#434](https://github.com/openpi-dev/openpi/issues/434)).

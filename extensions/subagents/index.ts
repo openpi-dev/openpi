@@ -60,8 +60,8 @@ import {
   inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
-import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -118,6 +118,11 @@ import {
 } from "./src/id-sequence.ts";
 import { SubagentManager, type SubagentManagerShape } from "./src/manager.ts";
 import {
+  buildPrintHostPendingFollowUp,
+  canDeliverLaterFromHost,
+  printHostNeedsFollowUp,
+} from "./src/print-host.ts";
+import {
   buildSubagentResultDisplayMessage,
   buildSubagentResultMessage,
   buildSubagentSendResult,
@@ -145,8 +150,8 @@ import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
   runTool,
-  SubagentToolInterruptedError,
   type SubagentRuntime,
+  SubagentToolInterruptedError,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
@@ -547,7 +552,33 @@ export default function (
     // delivery coordinator batches results that settled while it was busy.
     deliver: dispatchResults,
   });
-  pi.on("agent_settled", () => resultDelivery.parentSettled());
+  const runningDirectIds = new Set<string>();
+  let printHostBarrierCount = 0;
+  const hostCanDeliverLater = () =>
+    sessionContext
+      ? canDeliverLaterFromHost({
+          hasUI: sessionContext.hasUI,
+          mode: sessionContext.mode,
+        })
+      : true;
+  pi.on("agent_settled", () => {
+    resultDelivery.parentSettled();
+    if (
+      !printHostNeedsFollowUp(hostCanDeliverLater(), runningDirectIds.size) ||
+      printHostBarrierCount >= 2
+    ) {
+      return;
+    }
+    printHostBarrierCount += 1;
+    pi.sendMessage(
+      {
+        customType: "subagent-print-barrier",
+        content: buildPrintHostPendingFollowUp([...runningDirectIds]),
+        display: false,
+      },
+      { deliverAs: "followUp", triggerTurn: true },
+    );
+  });
   const registerStableToolFamily = () =>
     patchOwnedTools(pi, "subagents", {
       enable: OPENPI_TOOL_SURFACE.subagents.entry,
@@ -708,6 +739,7 @@ export default function (
   };
 
   const onSettled = (snap: SubagentSnapshot, consumed: boolean) => {
+    if (snap.origin !== "btw") runningDirectIds.delete(snap.id);
     // A shutdown can settle children while disposing their scopes. Never
     // append into a session whose extension runtime is already closing.
     if (!sessionContext) return;
@@ -745,6 +777,8 @@ export default function (
     registerStableToolFamily();
     sessionContext = ctx;
     settledAcknowledgedAt = 0;
+    printHostBarrierCount = 0;
+    runningDirectIds.clear();
     if (ctx.hasUI) ui = ctx.ui;
     installSubagentNavigation(ctx);
     updateSubagentWidget();
@@ -1033,6 +1067,7 @@ export default function (
         throw error;
       }
       persistId(snap.id);
+      if (snap.origin !== "btw") runningDirectIds.add(snap.id);
 
       return {
         content: [
@@ -1044,6 +1079,7 @@ export default function (
               harness,
               modelLabel: snap.meta.modelLabel ?? "?",
               cwd: childCwd,
+              canDeliverLater: hostCanDeliverLater(),
               ...(worktree ? { worktreeBranch: worktree.branch } : {}),
               ...(agentType ? { agentTypeName: agentType.name } : {}),
               ...(childTools ? { tools: childTools } : {}),
