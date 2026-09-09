@@ -6,8 +6,7 @@ import * as path from "node:path";
 import { syncBuiltinESMExports } from "node:module";
 import { after, before, describe, test } from "node:test";
 
-const bunNodeTestMockUnsupported =
-  typeof (globalThis as { Bun?: unknown }).Bun !== "undefined";
+const bunNodeTestMockUnsupported = typeof process.versions.bun === "string";
 import {
   createWorktree,
   formatWorktreeCleanupWarning,
@@ -359,60 +358,63 @@ describe("worktree lifecycle", () => {
     "overflow",
   ]) {
     const inventoryTest = bunNodeTestMockUnsupported ? test.skip : test;
-    inventoryTest(`preserves when index inventory is not trustworthy: ${JSON.stringify(inventory)}`, async (t) => {
-      const result = await createWorktree({
-        cwd: repo,
-        label: "inventory",
-        id: "1",
-      });
-      assert.ok(result.ok);
-      const original = childProcess.execFile;
-      t.mock.method(
-        childProcess,
-        "execFile",
-        (...args: Parameters<typeof original>) => {
-          const [file, argv] = args;
-          if (file === "git" && Array.isArray(argv) && argv.includes("-v")) {
-            const callback = args.at(-1) as (
-              error: Error | null,
-              stdout: string,
-              stderr: string,
-            ) => void;
-            const error = inventory === "error" || inventory === "overflow";
-            callback(
-              error
-                ? new Error(
-                    inventory === "overflow"
-                      ? "stdout maxBuffer length exceeded"
-                      : "inventory unavailable",
-                  )
-                : null,
-              error ? "H a.txt\0" : inventory,
-              "",
-            );
-            return undefined;
-          }
-          return Reflect.apply(original, childProcess, args);
-        },
-      );
-      syncBuiltinESMExports();
-      t.after(() => {
-        t.mock.restoreAll();
+    inventoryTest(
+      `preserves when index inventory is not trustworthy: ${JSON.stringify(inventory)}`,
+      async (t) => {
+        const result = await createWorktree({
+          cwd: repo,
+          label: "inventory",
+          id: "1",
+        });
+        assert.ok(result.ok);
+        const original = childProcess.execFile;
+        t.mock.method(
+          childProcess,
+          "execFile",
+          (...args: Parameters<typeof original>) => {
+            const [file, argv] = args;
+            if (file === "git" && Array.isArray(argv) && argv.includes("-v")) {
+              const callback = args.at(-1) as (
+                error: Error | null,
+                stdout: string,
+                stderr: string,
+              ) => void;
+              const error = inventory === "error" || inventory === "overflow";
+              callback(
+                error
+                  ? new Error(
+                      inventory === "overflow"
+                        ? "stdout maxBuffer length exceeded"
+                        : "inventory unavailable",
+                    )
+                  : null,
+                error ? "H a.txt\0" : inventory,
+                "",
+              );
+              return undefined;
+            }
+            return Reflect.apply(original, childProcess, args);
+          },
+        );
         syncBuiltinESMExports();
-      });
-      const cleanup = await reclaimWorktree(repo, result.worktree);
-      assert.equal(cleanup.removed, false);
-      assert.equal(cleanup.branchDeleted, false);
-      assert.match(cleanup.reason ?? "", /index/);
-      assert.equal(
-        fs.readFileSync(path.join(result.worktree.path, "a.txt"), "utf8"),
-        "hello\n",
-      );
-      assert.equal(
-        git(repo, "rev-parse", result.worktree.branch).trim(),
-        result.worktree.baseSha,
-      );
-    });
+        t.after(() => {
+          t.mock.restoreAll();
+          syncBuiltinESMExports();
+        });
+        const cleanup = await reclaimWorktree(repo, result.worktree);
+        assert.equal(cleanup.removed, false);
+        assert.equal(cleanup.branchDeleted, false);
+        assert.match(cleanup.reason ?? "", /index/);
+        assert.equal(
+          fs.readFileSync(path.join(result.worktree.path, "a.txt"), "utf8"),
+          "hello\n",
+        );
+        assert.equal(
+          git(repo, "rev-parse", result.worktree.branch).trim(),
+          result.worktree.baseSha,
+        );
+      },
+    );
   }
 
   test("preserves a clean detached checkout instead of guessing it is empty", async () => {
