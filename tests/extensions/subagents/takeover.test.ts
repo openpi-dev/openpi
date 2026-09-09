@@ -82,6 +82,60 @@ function dashboard(subs: SubagentSnapshot[], rows = 30) {
   );
 }
 
+test("takeover forwards wheel events and releases mouse capture on close", () => {
+  const writes: string[] = [];
+  const host = {
+    mode: "regular",
+    terminal: { rows: 20, write: (data: string) => writes.push(data) },
+    requestRender() {},
+  } as unknown as TUI;
+  let closed = false;
+  const view = new TakeoverView(
+    host,
+    theme,
+    keys,
+    "wheel",
+    model([
+      snap("wheel", "done", {
+        transcript: Array.from({ length: 60 }, (_, i) => ({
+          kind: "assistant" as const,
+          parts: [{ type: "text" as const, text: `wheel row ${i}` }],
+        })),
+      }),
+    ]),
+    () => {
+      closed = true;
+    },
+  );
+  try {
+    view.focused = true;
+    assert.match(view.render(80).join("\n"), /wheel row 0\b/);
+    assert.equal(
+      view.handleMouse({
+        type: "wheel",
+        button: "none",
+        x: 10,
+        y: 10,
+        screenX: 10,
+        screenY: 10,
+        width: 80,
+        height: 20,
+        shift: false,
+        alt: false,
+        ctrl: false,
+        wheelDelta: 6,
+      })?.handled,
+      true,
+    );
+    assert.doesNotMatch(view.render(80).join("\n"), /wheel row 0\b/);
+    view.handleInput("tui.select.cancel");
+    assert.equal(closed, true);
+    assert.equal(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+  } finally {
+    view.dispose();
+  }
+});
+
 test("picker and takeover display text cannot inject terminal controls", () => {
   assert.equal(
     sanitizeSubagentDisplayLine(

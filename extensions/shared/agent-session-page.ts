@@ -2,7 +2,12 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import type {
+  Component,
+  Focusable,
+  TUI,
+  TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import {
   Key,
   matchesKey,
@@ -88,6 +93,8 @@ export class AgentSessionPage implements Component, Focusable {
    * "output produced before I looked" from "output arriving while I watch".
    */
   private anchored = false;
+  private mouseReporting = false;
+  private disposed = false;
 
   private _focused = false;
   get focused() {
@@ -95,6 +102,16 @@ export class AgentSessionPage implements Component, Focusable {
   }
   set focused(value: boolean) {
     this._focused = value;
+    // In regular mode the terminal otherwise scrolls its own history, exposing
+    // the parent above a partially visible child page. Fullscreen Pi already
+    // owns mouse reporting and dispatches normalized events to handleMouse.
+    const capture = value && !this.disposed && this.tui.mode === "regular";
+    if (capture !== this.mouseReporting) {
+      this.mouseReporting = capture;
+      this.tui.terminal.write(
+        capture ? "\x1b[?1000h\x1b[?1006h" : "\x1b[?1000l\x1b[?1006l",
+      );
+    }
   }
 
   constructor(
@@ -112,6 +129,14 @@ export class AgentSessionPage implements Component, Focusable {
   }
 
   handleInput(data: string) {
+    const mouse = /^\x1b\[<(\d+);\d+;\d+([Mm])$/.exec(data);
+    if (mouse) {
+      const button = Number(mouse[1]);
+      if (mouse[2] === "M" && (button & 64) !== 0 && (button & 3) < 2) {
+        this.scroll((button & 1) === 0 ? -SCROLL_STEP : SCROLL_STEP);
+      }
+      return;
+    }
     const state = this.source.getState();
     if (this.keybindings.matches(data, "app.tools.expand")) {
       this.toolsExpanded = !this.toolsExpanded;
@@ -188,6 +213,22 @@ export class AgentSessionPage implements Component, Focusable {
       this.tui.requestRender();
       return;
     }
+  }
+
+  private scroll(delta: number) {
+    this.viewport.scrollBy(delta, this.rowCount, this.viewportSize);
+    this.tui.requestRender();
+  }
+
+  handleMouse(event: TuiMouseEvent) {
+    if (event.type !== "wheel") return;
+    this.scroll(event.wheelDelta ?? 0);
+    return { handled: true };
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.focused = false;
   }
 
   private rule(width: number, left = "", right = "") {
@@ -304,9 +345,8 @@ export class AgentSessionPage implements Component, Focusable {
       transcript.length,
       transcriptCapacity,
     );
-    // Both directions are reported. Opening a child page follows the end, which
-    // scrolls the beginning of a long answer out of view; without an "above"
-    // marker that output looks lost rather than merely off-screen.
+    // Both directions are reported so hidden output is discoverable whether
+    // the reader is at the opening, following new output, or paused between.
     const overflowNote = [
       linesAbove > 0 ? `↑ ${linesAbove}` : "",
       linesBelow > 0 ? `↓ ${linesBelow}` : "",

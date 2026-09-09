@@ -39,6 +39,112 @@ function tui(rows: number) {
   return { terminal: { rows }, requestRender() {} } as unknown as TUI;
 }
 
+test("regular child page captures wheel scrolling only while focused", () => {
+  const writes: string[] = [];
+  const host = {
+    mode: "regular",
+    terminal: { rows: 20, write: (data: string) => writes.push(data) },
+    requestRender() {},
+  } as unknown as TUI;
+  const rows = Array.from({ length: 60 }, (_, index) => `mouse row ${index}`);
+  const page = new AgentSessionPage(host, theme, keybindings, {
+    getState: () => ({
+      id: "mouse",
+      title: "mouse",
+      status: "running",
+      document: {
+        items: [
+          {
+            kind: "assistant",
+            parts: [{ type: "text", text: rows.join("\n\n") }],
+          },
+        ],
+      },
+    }),
+    close() {},
+  });
+  const render = () => stripVTControlCharacters(page.render(80).join("\n"));
+  try {
+    assert.equal(writes.length, 0);
+    page.focused = true;
+    page.focused = true;
+    assert.deepEqual(writes, ["\x1b[?1000h\x1b[?1006h"]);
+    assert.match(render(), /mouse row 0\b/);
+    page.handleInput("\x1b[<65;10;10M");
+    assert.doesNotMatch(render(), /mouse row 0\b/);
+    page.handleInput("\x1b[<64;10;10M");
+    assert.match(render(), /mouse row 0\b/);
+    // Wheel-up pauses following, even if output subsequently grows.
+    rows.push("new tail");
+    assert.match(render(), /mouse row 0\b/);
+    page.handleInput("G");
+    assert.match(render(), /new tail/);
+    page.focused = false;
+    assert.equal(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+    page.focused = true;
+  } finally {
+    page.dispose();
+  }
+  assert.equal(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+  const count = writes.length;
+  page.dispose();
+  page.focused = true;
+  assert.equal(writes.length, count);
+});
+
+test("fullscreen child page uses host mouse dispatch without changing terminal modes", () => {
+  const host = {
+    mode: "fullscreen",
+    terminal: {
+      rows: 20,
+      write() {
+        assert.fail("fullscreen host owns mouse modes");
+      },
+    },
+    requestRender() {},
+  } as unknown as TUI;
+  const page = new AgentSessionPage(host, theme, keybindings, {
+    getState: () => ({
+      ...state(),
+      document: {
+        items: [
+          {
+            kind: "assistant",
+            parts: [
+              {
+                type: "text",
+                text: Array.from({ length: 60 }, (_, i) => `wheel ${i}`).join(
+                  "\n\n",
+                ),
+              },
+            ],
+          },
+        ],
+      },
+    }),
+    close() {},
+  });
+  page.focused = true;
+  assert.match(page.render(80).join("\n"), /wheel 0\b/);
+  const result = page.handleMouse({
+    type: "wheel",
+    button: "none",
+    x: 10,
+    y: 10,
+    screenX: 10,
+    screenY: 10,
+    width: 80,
+    height: 20,
+    shift: false,
+    alt: false,
+    ctrl: false,
+    wheelDelta: 6,
+  });
+  assert.equal(result?.handled, true);
+  assert.doesNotMatch(page.render(80).join("\n"), /wheel 0\b/);
+  page.dispose();
+});
+
 function state(): AgentSessionPageState {
   return {
     id: "child-1",
@@ -185,7 +291,7 @@ test("a child page inherits an expanded parent state on its first render", () =>
   );
 });
 
-test("a child page reports an answer's opening scrolled above the viewport", () => {
+test("a child page reports output hidden in either direction", () => {
   // A /btw answer longer than one screen: the page opens at the beginning, so
   // the end is what sits off-screen and must be reported.
   const long: AgentSessionPageState = {

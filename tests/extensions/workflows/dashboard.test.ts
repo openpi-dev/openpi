@@ -654,6 +654,7 @@ test("direct workflow navigation drills right and returns left through every lev
 });
 
 test("Workflow transcript follows, pauses on its top row, and resumes", () => {
+  const mouseModes: string[] = [];
   const transcript = Array.from({ length: 40 }, (_, index) => ({
     role: "assistant" as const,
     text: `line ${index}`,
@@ -690,7 +691,8 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
   writeRun(details.runId, details.startedAt);
   const dashboard = new WorkflowDashboard(
     {
-      terminal: { rows: 20 },
+      mode: "regular",
+      terminal: { rows: 20, write: (data: string) => mouseModes.push(data) },
       requestRender() {},
     } as unknown as TUI,
     {
@@ -713,9 +715,11 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
   );
 
   try {
+    dashboard.focused = true;
     dashboard.handleInput("right");
     dashboard.handleInput("right");
     // A transcript page opens on the start of work that already happened.
+    assert.equal(mouseModes.at(-1), "\x1b[?1000h\x1b[?1006h");
     const opened = dashboard.render(80).join("\n");
     assert.match(opened, /line 0\b/);
     assert.doesNotMatch(opened, /line 39/);
@@ -724,7 +728,20 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
     const pinned = dashboard.render(80).join("\n");
     assert.match(pinned, /line 39/);
 
-    dashboard.handleInput("k");
+    dashboard.handleMouse({
+      type: "wheel",
+      button: "none",
+      x: 10,
+      y: 10,
+      screenX: 10,
+      screenY: 10,
+      width: 80,
+      height: 20,
+      shift: false,
+      alt: false,
+      ctrl: false,
+      wheelDelta: -6,
+    });
     const paused = dashboard.render(80);
     const anchor = paused.find((line) => /line \d+/.test(line));
     assert.ok(anchor);
@@ -745,6 +762,8 @@ test("Workflow transcript follows, pauses on its top row, and resumes", () => {
     const resumed = dashboard.render(80).join("\n");
     assert.match(resumed, /line 44/);
     assert.doesNotMatch(resumed, /↓ \d+/);
+    dashboard.handleInput("h");
+    assert.equal(mouseModes.at(-1), "\x1b[?1000l\x1b[?1006l");
   } finally {
     dashboard.dispose();
   }
