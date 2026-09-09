@@ -363,6 +363,7 @@ function sameIdentity(before: Stats, after: Stats) {
 async function scanSessionFile(
   session: WebTranscriptSearchSession,
   canonicalPath: string,
+  authorizedIdentity: Stats,
   tokens: string[],
   byteBudget: number,
   limits: WebTranscriptSearchLimits,
@@ -375,7 +376,10 @@ async function scanSessionFile(
     const beforePath = await stat(canonicalPath);
     handle = await open(canonicalPath, "r");
     const before = await handle.stat();
-    if (!sameIdentity(beforePath, before)) {
+    if (
+      !sameIdentity(authorizedIdentity, before) ||
+      !sameIdentity(beforePath, before)
+    ) {
       return { status: "changed", bytes: bytesConsumed };
     }
     const readLimit = Math.min(before.size, byteBudget, limits.maxFileBytes);
@@ -600,6 +604,7 @@ export async function searchWebTranscripts(
     const scanned = await scanSessionFile(
       session,
       canonicalPath,
+      info,
       tokens,
       remainingBytes,
       limits,
