@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI child acquisition and progress projection
+related-issues: #428
+related-prs: #429
+supersedes: none
+---
+
 # Child acquisition and progress reliability audit
 
 - Status: validated for deterministic defect reproduction; repair acceptance is recorded in the linked PR
@@ -56,3 +66,19 @@ Small after-values approach timer/JIT noise. The useful result is removal of who
 Regression tests exercise production Effect cancellation and the real Git worktree lifecycle, plus byte-pressure error retention and first-line preview behavior. `bun run check` passed. Standard `bun run test` passed 1446 Node tests with one platform skip and 30 Vitest tests. Two independent reviews are clean after closing the interrupted-startup worktree classification gap. Remote CI status is recorded in the PR. No paid model calls are needed to reproduce these deterministic runtime defects.
 
 A separate synthetic Cursor transport probe identified repeated copying while accumulating a large fragmented Connect frame. It is outside this bounded child acquisition/progress repair, as are speculative Graph recomputation and renderer-retention concerns without a completed failure proof. This record is a diagnostic investigation, not a formal throughput Benchmark or an assertion that every possible performance issue was resolved.
+
+## Verified facts
+
+The deterministic tests and bounded probes described above establish the recorded lifecycle and projection observations at the source boundary.
+
+## Inferences
+
+The repair interpretation is limited to the mechanisms reproduced by those tests; timing measurements are not generalized performance claims.
+
+## Recommendations
+
+Keep child ownership, cancellation, and progress projection within their existing Pi lifecycle seams and rerun the linked PR validation when those seams change.
+
+## Unknowns
+
+Provider-specific behavior, installed-runtime acceptance, and unmeasured workload limits remain outside this record.

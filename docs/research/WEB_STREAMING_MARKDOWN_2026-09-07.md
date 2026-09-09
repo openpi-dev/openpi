@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Web streaming Markdown rendering
+related-issues: #434
+related-prs: none
+supersedes: none
+---
+
 # Web streaming Markdown reuse
 
 - Status: validated for the deterministic component regression below; not a timing benchmark.
@@ -27,3 +37,19 @@ Only Markdown rendering reuse changes. Sanitization, GFM, soft breaks, URL check
 This is an invocation-count regression, not a browser timing or memory benchmark. It does not establish an end-to-end speedup, reduce the production bundle, eliminate list reconstruction or avoid parsing a growing live reply. React can legitimately render again after remounting or other lifecycle changes. A future change that gives Markdown additional inputs must retain React's normal prop comparison or explicitly account for those inputs.
 
 Reproduce the focused evidence with `bunx vitest run tests/web/markdown-streaming.spec.ts tests/web/app-render.spec.ts`. Required full checks and browser/CI receipts belong to the linked PR; a package build or merge does not establish installed-runtime acceptance.
+
+## Verified facts
+
+The component regression establishes the reported Markdown invocation counts and update boundaries.
+
+## Inferences
+
+The reuse boundary removes repeated historical parsing in the covered render path but is not an end-to-end browser performance measurement.
+
+## Recommendations
+
+Retain normal React prop comparison and update the regression whenever Markdown receives additional inputs.
+
+## Unknowns
+
+Installed-runtime latency, memory behavior, and provider acceptance remain outside this record.

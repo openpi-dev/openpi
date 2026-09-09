@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Workflow dashboard refresh and history projection
+related-issues: #420
+related-prs: #422
+supersedes: none
+---
+
 # Workflow dashboard refresh investigation
 
 - Status: validated at the source and regression-test boundary
@@ -56,3 +66,19 @@ changes from other processes become visible on reopening the dashboard. This
 record does not claim real-terminal acceptance after reload, release publication,
 or elimination of every performance bottleneck. Private sessions, transcripts and
 raw process samples remain outside the repository.
+
+## Verified facts
+
+The dashboard regression tests establish the bounded refresh and selected-detail hydration behavior described above.
+
+## Inferences
+
+The scoped cache and event-boundary changes address the reproduced spinner workload without proving elimination of all dashboard cost.
+
+## Recommendations
+
+Keep full history scans outside the spinner tick and retain explicit hydration for the selected run.
+
+## Unknowns
+
+Installed-runtime behavior, cross-process reload latency, and unrelated terminal bottlenecks remain unknown.
