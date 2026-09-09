@@ -679,23 +679,23 @@ test("model picker distinguishes same-named models before choosing a directory",
   await modelPicker.focus();
   await page.keyboard.press("Enter");
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",
     }),
   ).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeFocused();
@@ -764,7 +764,7 @@ test("same-named model selection sends the exact identity for an active Session"
     .getByRole("button", { name: "Shared model (provider-alpha/one)" })
     .click();
   await page
-    .getByRole("menuitem", { name: "Shared model (provider-beta/two)" })
+    .getByRole("option", { name: "Shared model (provider-beta/two)" })
     .click();
 
   await expect(
@@ -777,6 +777,119 @@ test("same-named model selection sends the exact identity for an active Session"
       sessionId: expect.any(String),
     },
   ]);
+});
+
+test("finds and selects a model omitted from the bounded snapshot", async ({
+  page,
+}) => {
+  const visibleModels = Array.from({ length: 250 }, (_, index) => ({
+    provider: "fixture",
+    id: `visible-${index}`,
+    name: `Visible ${index}`,
+    label: `Visible ${index}`,
+    current: index === 0,
+  }));
+  const hiddenModel = {
+    provider: "provider-hidden",
+    id: "needle-251",
+    name: "Needle 251",
+    label: "Needle 251",
+    current: false,
+  };
+  const searchRequests: URL[] = [];
+  const modelWrites: Array<{
+    provider: string;
+    modelId: string;
+    sessionId: string;
+  }> = [];
+  let activeSessionId: string | undefined;
+  let selectedIdentity = "fixture/visible-0";
+
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    activeSessionId = snapshot.currentSessionId;
+    snapshot.runtime.status = "idle";
+    snapshot.models =
+      selectedIdentity === "provider-hidden/needle-251"
+        ? [
+            { ...hiddenModel, current: true },
+            ...visibleModels.slice(0, 249).map((model) => ({
+              ...model,
+              current: false,
+            })),
+          ]
+        : visibleModels;
+    snapshot.truncation.modelsOmitted = 1;
+    snapshot.truncation.truncated = true;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/models?**", async (route) => {
+    searchRequests.push(new URL(route.request().url()));
+    await route.fulfill({
+      status: 200,
+      json: {
+        models: [hiddenModel],
+        totalAvailable: 251,
+        totalMatches: 1,
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          maxResults: 50,
+          maxBytes: 64 * 1024,
+          bytes: 128,
+        },
+      },
+    });
+  });
+  await page.route("**/api/model", async (route) => {
+    const body = route.request().postDataJSON();
+    modelWrites.push(body);
+    selectedIdentity = `${body.provider}/${body.modelId}`;
+    await route.fulfill({
+      status: 200,
+      json: { ...hiddenModel, current: true },
+    });
+  });
+  await openWorkbench(page);
+
+  expect(activeSessionId).toBeTruthy();
+  await page
+    .getByRole("button", { name: "Visible 0 (fixture/visible-0)" })
+    .click();
+  await expect(
+    page.getByText("当前显示 250 个模型，还有 1 个可用；搜索即可查找。"),
+  ).toBeVisible();
+  const hiddenOption = page.getByRole("option", {
+    name: "Needle 251 (provider-hidden/needle-251)",
+  });
+  await expect(hiddenOption).toHaveCount(0);
+
+  await page
+    .getByPlaceholder("搜索服务商、模型名称或 ID...")
+    .fill("needle-251");
+  await expect(hiddenOption).toBeVisible();
+
+  expect(searchRequests).toHaveLength(1);
+  expect(searchRequests[0]?.searchParams.get("query")).toBe("needle-251");
+  expect(searchRequests[0]?.searchParams.get("limit")).toBe("50");
+  expect(searchRequests[0]?.searchParams.get("sessionId")).toBe(
+    activeSessionId,
+  );
+
+  await hiddenOption.click();
+  expect(modelWrites).toEqual([
+    {
+      provider: "provider-hidden",
+      modelId: "needle-251",
+      sessionId: activeSessionId,
+    },
+  ]);
+  await expect(
+    page.getByRole("button", {
+      name: "Needle 251 (provider-hidden/needle-251)",
+    }),
+  ).toBeEnabled();
 });
 
 test("workspace selection survives refresh and creates the exact native Session before sending", async ({

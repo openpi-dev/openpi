@@ -387,7 +387,53 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       headers: authorized,
     });
     assert.equal(modelsResponse.status, 200);
-    assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const modelsBody = (await modelsResponse.json()) as {
+      models: Array<{ provider: string; id: string }>;
+      totalMatches: number;
+      truncation: { matchesOmitted: number };
+    };
+    assert.deepEqual(modelsBody.models, snapshot.models);
+    assert.equal(modelsBody.totalMatches, snapshot.models.length);
+    assert.equal(modelsBody.truncation.matchesOmitted, 0);
+    const filteredModels = await fetch(
+      `${launched.origin}/api/models?query=other&limit=1`,
+      { headers: authorized },
+    );
+    assert.equal(filteredModels.status, 200);
+    assert.deepEqual((await filteredModels.json()).models, [
+      snapshot.models[1],
+    ]);
+    const invalidQuery = await fetch(
+      `${launched.origin}/api/models?query=${"x".repeat(201)}`,
+      { headers: authorized },
+    );
+    assert.equal(invalidQuery.status, 400);
+    assert.equal((await invalidQuery.json()).code, "INVALID_MODEL_QUERY");
+    for (const invalidLimit of ["0", "51", "nope"]) {
+      const invalidLimitResponse = await fetch(
+        `${launched.origin}/api/models?limit=${invalidLimit}`,
+        { headers: authorized },
+      );
+      assert.equal(invalidLimitResponse.status, 400);
+      assert.equal(
+        (await invalidLimitResponse.json()).code,
+        "INVALID_MODEL_LIMIT",
+      );
+    }
+    const staleModelSession = await fetch(
+      `${launched.origin}/api/models?query=other&sessionId=another-session`,
+      { headers: authorized },
+    );
+    assert.equal(staleModelSession.status, 409);
+    assert.equal((await staleModelSession.json()).code, "SESSION_CHANGED");
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/models`, {
+          headers: { Authorization: "Bearer invalid" },
+        })
+      ).status,
+      401,
+    );
     const trustResponse = await fetch(`${launched.origin}/api/trust`, {
       headers: authorized,
     });

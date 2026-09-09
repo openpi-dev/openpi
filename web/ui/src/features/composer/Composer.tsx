@@ -2,7 +2,6 @@ import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Check,
-  ChevronDown,
   Folder,
   Plus,
   Send,
@@ -11,18 +10,17 @@ import {
 } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type {
-  WebModelSummary,
-  WebSnapshot,
-} from "../../../../protocol/types.ts";
+import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { workspaceName } from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
+import { ModelPicker } from "./ModelPicker.tsx";
 
 interface ComposerProps {
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
   modelSelectionPending?: boolean;
+  modelSearch?: WebStoreState["modelSearch"];
   onInspect?: (terminalId?: string) => void;
   snapshot: WebSnapshot | null;
   selectedWorkspace: string | null;
@@ -37,14 +35,19 @@ interface ComposerProps {
   pendingFollowUpsReceipt: number | null;
 }
 
-function modelIdentity(model: WebModelSummary) {
-  const identity = `${model.provider}/${model.id}`;
-  return model.label === identity ? identity : `${model.label} (${identity})`;
-}
-
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState("");
+  const modelSearch =
+    props.modelSearch ??
+    ({
+      query: "",
+      status: "idle",
+      models: [],
+      totalMatches: 0,
+      matchesOmitted: 0,
+      error: null,
+    } satisfies WebStoreState["modelSearch"]);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const selected = props.snapshot?.selectedSession;
   const active = Boolean(
@@ -110,25 +113,6 @@ export function Composer(props: ComposerProps) {
     props.draftModel ??
     props.snapshot?.models.find((model) => model.current) ??
     props.snapshot?.models[0];
-  const currentModelLabel = currentModel
-    ? modelIdentity(currentModel)
-    : t("noModels");
-  const modelItems = (props.snapshot?.models ?? []).map((model) => ({
-    id: `${model.provider}/${model.id}`,
-    label: (
-      <span className="model-menu-item-label">{modelIdentity(model)}</span>
-    ),
-    endContent: (
-      props.draftModel
-        ? props.draftModel.provider === model.provider &&
-          props.draftModel.id === model.id
-        : model.current
-    ) ? (
-      <Check />
-    ) : undefined,
-    onClick: () =>
-      void props.actions.selectModel(`${model.provider}/${model.id}`),
-  }));
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
     : props.landing
@@ -232,32 +216,17 @@ export function Composer(props: ComposerProps) {
             </button>
           )}
           <div className="model-picker-wrap">
-            <DropdownMenu
-              className="model-menu"
-              button={{
-                label: currentModelLabel,
-                children: currentModel ? (
-                  <span className="model-picker-label">
-                    {currentModelLabel}
-                  </span>
-                ) : undefined,
-                endContent: <ChevronDown />,
-                size: "sm",
-                variant: "ghost",
-                className: "model-picker",
-                isDisabled:
-                  props.sessionSwitching ||
-                  props.modelSelectionPending ||
-                  props.promptAdmissionPending ||
-                  Boolean(!props.workspaceDraft && selected && !active) ||
-                  running ||
-                  !modelItems.length,
-              }}
-              items={modelItems}
-              menuWidth={320}
-              placement="above"
-              alignment="end"
-              hasChevron={false}
+            <ModelPicker
+              snapshot={props.snapshot}
+              currentModel={currentModel}
+              draftModel={props.draftModel}
+              modelSearch={modelSearch}
+              modelSelectionPending={Boolean(props.modelSelectionPending)}
+              promptAdmissionPending={props.promptAdmissionPending}
+              sessionSwitching={props.sessionSwitching}
+              liveRunning={running}
+              workspaceDraft={Boolean(props.workspaceDraft)}
+              actions={props.actions}
             />
           </div>
           {canStop ? (

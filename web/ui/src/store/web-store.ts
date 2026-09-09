@@ -83,6 +83,7 @@ export interface WebStoreState {
   pendingFollowUpsReceipt: number | null;
   draftModel: WebModelSummary | null;
   modelSelectionPending: boolean;
+  modelSearch: ModelSearchState;
   snapshot: WebSnapshot | null;
   cursor: number | null;
   selectedPath: string | null;
@@ -128,6 +129,8 @@ export interface WebStoreActions {
   archiveSession: (path: string) => Promise<void>;
   unarchiveSession: (path: string) => Promise<boolean>;
   selectModel: (value: string) => Promise<void>;
+  searchModels: (query: string) => Promise<void>;
+  clearModelSearch: () => void;
   cancelActiveTurn: () => Promise<void>;
   sendPrompt: (content: string) => Promise<boolean>;
   setQuery: (query: string) => void;
@@ -136,6 +139,15 @@ export interface WebStoreActions {
   toggleSidebar: (narrow: boolean) => void;
   closeMobileSidebar: () => void;
   clearNotice: () => void;
+}
+
+export interface ModelSearchState {
+  query: string;
+  status: "idle" | "loading" | "ready" | "error";
+  models: WebModelSummary[];
+  totalMatches: number;
+  matchesOmitted: number;
+  error: string | null;
 }
 
 export interface WebStoreDependencies {
@@ -176,6 +188,8 @@ export function createWebStore(
   let refreshInFlight = false;
   let refreshPending = false;
   let streamController: AbortController | null = null;
+  let modelSearchController: AbortController | null = null;
+  let modelSearchGeneration = 0;
   const terminalPromptIds = new Set<string>();
   const completedActivationIds = new Set<string>();
 
@@ -200,6 +214,22 @@ export function createWebStore(
     thinkingStarts: {},
     thinkingDurations: {},
   });
+
+  const resetModelSearch = (): { modelSearch: ModelSearchState } => {
+    modelSearchGeneration++;
+    modelSearchController?.abort();
+    modelSearchController = null;
+    return {
+      modelSearch: {
+        query: "",
+        status: "idle",
+        models: [],
+        totalMatches: 0,
+        matchesOmitted: 0,
+        error: null,
+      },
+    };
+  };
 
   const promptAcceptedLivePatch = (
     settled: boolean,
@@ -600,6 +630,8 @@ export function createWebStore(
               ? selectedSessionWorkspace
               : (activeWorkspace ?? retainedWorkspace ?? null);
           const shouldReset = options.resetCursor;
+          const sessionChanged =
+            get().snapshot?.currentSessionId !== snapshot.currentSessionId;
           set({
             ...(shouldReset ? resetLivePatch() : {}),
             connection:
@@ -633,6 +665,7 @@ export function createWebStore(
               currentSession?.path ?? snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
             snapshot,
+            ...(sessionChanged ? resetModelSearch() : {}),
           });
           return true;
         } catch (error) {
@@ -664,6 +697,7 @@ export function createWebStore(
         promptAdmission = null;
         set({
           ...resetLivePatch(),
+          ...resetModelSearch(),
           selectedWorkspace: path,
           workspaceDraft: true,
           sessionSwitching: false,
@@ -704,6 +738,7 @@ export function createWebStore(
         promptAdmission = null;
         set({
           ...resetLivePatch(),
+          ...resetModelSearch(),
           mobileSidebarOpen: false,
           promptAdmissionPending: false,
           selectedPath: null,
@@ -781,6 +816,7 @@ export function createWebStore(
       async selectSession(path) {
         if (!path) return;
         set({
+          ...resetModelSearch(),
           workspaceDraft: false,
           draftModel: null,
           modelSelectionPending: false,
@@ -864,15 +900,85 @@ export function createWebStore(
           state.workspaceDraft ||
           (!sessionId && !state.snapshot?.currentSessionId)
         ) {
-          const model = state.snapshot?.models.find(
-            (item) => item.provider === provider && item.id === modelId,
-          );
+          const model = [
+            ...(state.snapshot?.models ?? []),
+            ...state.modelSearch.models,
+          ].find((item) => item.provider === provider && item.id === modelId);
           if (model) set({ draftModel: model, notice: null });
           return;
         }
         if (!sessionId || sessionId !== state.snapshot?.currentSessionId)
           return;
         await applyModel({ provider, id: modelId }, sessionEpoch, sessionId);
+      },
+      async searchModels(query) {
+        const normalized = query.trim();
+        if (!normalized) {
+          set(resetModelSearch());
+          return;
+        }
+        modelSearchController?.abort();
+        const controller = new AbortController();
+        modelSearchController = controller;
+        const generation = ++modelSearchGeneration;
+        const epoch = sessionEpoch;
+        const sessionId = get().snapshot?.currentSessionId;
+        set({
+          modelSearch: {
+            query: normalized,
+            status: "loading",
+            models: [],
+            totalMatches: 0,
+            matchesOmitted: 0,
+            error: null,
+          },
+        });
+        try {
+          const result = await client.searchModels(
+            normalized,
+            sessionId,
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted ||
+            epoch !== sessionEpoch ||
+            generation !== modelSearchGeneration
+          )
+            return;
+          set({
+            modelSearch: {
+              query: normalized,
+              status: "ready",
+              models: result.models,
+              totalMatches: result.totalMatches,
+              matchesOmitted: result.truncation.matchesOmitted,
+              error: null,
+            },
+          });
+        } catch (error) {
+          if (
+            controller.signal.aborted ||
+            epoch !== sessionEpoch ||
+            generation !== modelSearchGeneration
+          )
+            return;
+          set({
+            modelSearch: {
+              query: normalized,
+              status: "error",
+              models: [],
+              totalMatches: 0,
+              matchesOmitted: 0,
+              error: error instanceof Error ? error.message : String(error),
+            },
+          });
+        } finally {
+          if (modelSearchController === controller)
+            modelSearchController = null;
+        }
+      },
+      clearModelSearch() {
+        set(resetModelSearch());
       },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
@@ -1060,6 +1166,14 @@ export function createWebStore(
       workspaceDraft: false,
       draftModel: null,
       modelSelectionPending: false,
+      modelSearch: {
+        query: "",
+        status: "idle",
+        models: [],
+        totalMatches: 0,
+        matchesOmitted: 0,
+        error: null,
+      },
       collapsed: readStringSet(collapsedWorkspacesStorageKey),
       sidebarCollapsed: readBoolean(sidebarCollapsedStorageKey),
       mobileSidebarOpen: false,

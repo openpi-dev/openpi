@@ -21,8 +21,11 @@ import {
   WEB_MAX_ARCHIVED_SESSION_PAGE,
   WEB_MAX_EVENT_BYTES,
   WEB_MAX_EVENTS,
+  WEB_MAX_MODEL_QUERY,
+  WEB_MAX_MODEL_SEARCH_RESULTS,
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_PROTOCOL_VERSION,
+  type WebModelSearchResult,
   type WebEvent,
   type WebSnapshot,
 } from "../protocol/types.ts";
@@ -767,7 +770,59 @@ export class WebHost {
       });
     }
     if (url.pathname === "/api/models")
-      return this.json(response, 200, { models: this.runtime.listModels() });
+      {
+        const query = url.searchParams.get("query") ?? "";
+        const limitText = url.searchParams.get("limit");
+        const limit = limitText === null ? WEB_MAX_MODEL_SEARCH_RESULTS : Number(limitText);
+        const sessionId = url.searchParams.get("sessionId");
+        if (query.length > WEB_MAX_MODEL_QUERY) {
+          return this.json(response, 400, {
+            code: "INVALID_MODEL_QUERY",
+            error: `model query must be at most ${WEB_MAX_MODEL_QUERY} characters`,
+          });
+        }
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > WEB_MAX_MODEL_SEARCH_RESULTS) {
+          return this.json(response, 400, {
+            code: "INVALID_MODEL_LIMIT",
+            error: `model limit must be an integer between 1 and ${WEB_MAX_MODEL_SEARCH_RESULTS}`,
+          });
+        }
+        if (
+          sessionId !== null &&
+          sessionId !== this.runtime.sessionManager.getSessionId()
+        ) {
+          return this.json(response, 409, {
+            code: "SESSION_CHANGED",
+            error: "The active Session changed. Refresh the model list.",
+          });
+        }
+        const result: WebModelSearchResult = this.runtime.searchModels
+          ? this.runtime.searchModels(query, limit)
+          : (() => {
+              const models = this.runtime
+                .listModels()
+                .filter((model) =>
+                  [model.provider, model.id, model.name, model.label]
+                    .join(" ")
+                    .toLocaleLowerCase()
+                    .includes(query.toLocaleLowerCase()),
+                )
+                .slice(0, limit);
+              return {
+                models,
+                totalAvailable: this.runtime.listModels().length,
+                totalMatches: models.length,
+                truncation: {
+                  truncated: false,
+                  matchesOmitted: 0,
+                  maxResults: limit,
+                  maxBytes: 0,
+                  bytes: jsonByteLength({ models }),
+                },
+              };
+            })();
+        return this.json(response, 200, result);
+      }
     if (url.pathname === "/api/trust") {
       if (!this.runtime.getProjectTrustStatus) {
         return this.json(response, 501, {

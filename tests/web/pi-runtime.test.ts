@@ -598,6 +598,90 @@ test("model selection and Session activation are serialized", async () => {
   ]);
 });
 
+test("model search matches provider and identity fields within a bounded result", () => {
+  const models = Array.from({ length: 75 }, (_, index) => ({
+    provider: index % 2 === 0 ? "alpha" : "beta",
+    id: `model-${index}`,
+    name: index === 70 ? "Long Context" : `Model ${index}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[70] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("long context", 5);
+  assert.equal(result.totalAvailable, 75);
+  assert.equal(result.totalMatches, 1);
+  assert.equal(result.truncation.matchesOmitted, 0);
+  assert.deepEqual(result.models[0], {
+    provider: "alpha",
+    id: "model-70",
+    name: "Long Context",
+    label: "Long Context",
+    current: true,
+  });
+});
+
+test("model search reports count truncation separately from the available total", () => {
+  const models = Array.from({ length: 75 }, (_, index) => ({
+    provider: "fixture",
+    id: `model-${index}`,
+    name: `Model ${index}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[0] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("model", 5);
+  assert.equal(result.totalAvailable, 75);
+  assert.equal(result.totalMatches, 75);
+  assert.equal(result.models.length, 5);
+  assert.equal(result.truncation.matchesOmitted, 70);
+  assert.equal(result.truncation.truncated, true);
+});
+
+test("model search enforces the byte budget after the result count budget", () => {
+  const models = Array.from({ length: 50 }, (_, index) => ({
+    provider: `provider-${index}-${"p".repeat(500)}`,
+    id: `model-${index}-${"i".repeat(500)}`,
+    name: `Model ${index} ${"n".repeat(500)}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[0] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("provider", 50);
+  assert.ok(result.models.length < 50);
+  assert.ok(result.truncation.matchesOmitted > 0);
+  assert.ok(result.truncation.bytes <= result.truncation.maxBytes);
+});
+
 test("a delayed model selection cannot target a newly activated Session", async () => {
   const switchStarted = deferred();
   const allowSwitch = deferred();

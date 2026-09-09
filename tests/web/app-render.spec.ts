@@ -22,7 +22,10 @@ import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx"
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
@@ -723,12 +726,12 @@ it("shows complete model identities before workspace selection", () => {
   expect(modelButton.disabled).toBe(false);
   fireEvent.click(modelButton);
   expect(
-    screen.getByRole("menuitem", {
+    screen.getByRole("option", {
       name: "Shared model (provider-alpha/a)",
     }),
   ).toBeTruthy();
   expect(
-    screen.getByRole("menuitem", {
+    screen.getByRole("option", {
       name: "Shared model (provider-beta/b)",
     }),
   ).toBeTruthy();
@@ -783,4 +786,238 @@ it("does not repeat a provider identity used as the fallback model label", () =>
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
+});
+
+it("debounces bounded model search when the snapshot omitted models", async () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 2,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const searchModels = vi.fn(async (_query: string) => {});
+  const selectModel = vi.fn(async (_value: string) => {});
+  const actions = {
+    ...baseStore.getState().actions,
+    searchModels,
+    selectModel,
+  };
+  const initialSearch = baseStore.getState().modelSearch;
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions,
+    modelSearch: initialSearch,
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  expect(
+    screen.getByText(
+      "Showing 1 models. 2 more are available; search to find them.",
+    ),
+  ).toBeTruthy();
+  const searchInput = screen.getByPlaceholderText(
+    "Search provider, model name, or ID...",
+  );
+  fireEvent.change(searchInput, { target: { value: "h" } });
+  fireEvent.change(searchInput, { target: { value: "hidden" } });
+  expect(searchModels).not.toHaveBeenCalled();
+  await act(() => vi.advanceTimersByTimeAsync(249));
+  expect(searchModels).not.toHaveBeenCalled();
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(searchModels).toHaveBeenCalledOnce();
+  expect(searchModels).toHaveBeenCalledWith("hidden");
+
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        modelSearch: {
+          ...initialSearch,
+          query: "hidden",
+          status: "ready",
+          models: [
+            {
+              provider: "provider-hidden",
+              id: "hidden/model",
+              name: "Hidden model",
+              label: "Hidden model",
+              current: false,
+            },
+          ],
+          totalMatches: 1,
+        },
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("option", {
+      name: "Hidden model (provider-hidden/hidden/model)",
+    }),
+  );
+  expect(selectModel).toHaveBeenCalledWith("provider-hidden/hidden/model");
+  vi.useRealTimers();
+});
+
+it("cancels a pending model search when the picker closes", async () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 1,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const searchModels = vi.fn(async (_query: string) => {});
+  const actions = {
+    ...baseStore.getState().actions,
+    searchModels,
+  };
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      actions,
+      modelSearch: baseStore.getState().modelSearch,
+    }),
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  const searchInput = screen.getByPlaceholderText(
+    "Search provider, model name, or ID...",
+  );
+  fireEvent.change(searchInput, { target: { value: "hidden" } });
+  fireEvent.keyDown(searchInput, { key: "Escape" });
+  await act(() => vi.advanceTimersByTimeAsync(250));
+
+  expect(searchModels).not.toHaveBeenCalled();
+});
+
+it("shows empty and error feedback for bounded model search", () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 1,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const initialSearch = baseStore.getState().modelSearch;
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions: baseStore.getState().actions,
+    modelSearch: initialSearch,
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  fireEvent.change(
+    screen.getByPlaceholderText("Search provider, model name, or ID..."),
+    { target: { value: "missing" } },
+  );
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        modelSearch: {
+          ...initialSearch,
+          query: "missing",
+          status: "ready",
+          totalMatches: 0,
+        },
+      }),
+    ),
+  );
+  expect(screen.getByText("No matching models")).toBeTruthy();
+
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        modelSearch: {
+          ...initialSearch,
+          query: "missing",
+          status: "error",
+          error: "Model lookup failed",
+        },
+      }),
+    ),
+  );
+  expect(screen.getByRole("alert").textContent).toBe("Model lookup failed");
 });
