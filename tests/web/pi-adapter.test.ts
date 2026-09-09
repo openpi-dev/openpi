@@ -163,25 +163,32 @@ test("discovers default Pi sessions as bounded read-only projections", async () 
     const adapter = new PiWebAdapter(
       runtimeFor(root, sessionDirectory, current),
     );
-
-    const listed = await adapter.listReadOnlyTerminalSessions({ limit: 1 });
-    assert.equal(listed.total, 1);
-    assert.deepEqual(listed.sessions[0], {
-      id: terminal.getSessionId(),
-      path: terminalPath,
-      cwd: root,
-      modified: listed.sessions[0]?.modified,
-      created: listed.sessions[0]?.created,
-      messageCount: 2,
-      firstMessage: "terminal history",
-      source: "pi-default",
-      origin: "terminal",
-      readOnly: true,
-    });
-    const inspected = await adapter.getReadOnlyTerminalSession(terminalPath);
-    assert.equal(inspected.readOnly, true);
-    assert.equal(inspected.source, "pi-default");
-    assert.equal(inspected.preview.messages.length, 2);
+    const listAll = SessionManager.listAll;
+    SessionManager.listAll = async () => {
+      throw new Error("unrelated Session discovery must not be used");
+    };
+    try {
+      const listed = await adapter.listReadOnlyTerminalSessions({ limit: 1 });
+      assert.equal(listed.total, 1);
+      assert.deepEqual(listed.sessions[0], {
+        id: terminal.getSessionId(),
+        path: terminalPath,
+        cwd: root,
+        modified: listed.sessions[0]?.modified,
+        created: listed.sessions[0]?.created,
+        messageCount: 2,
+        firstMessage: "terminal history",
+        source: "pi-default",
+        origin: "terminal",
+        readOnly: true,
+      });
+      const inspected = await adapter.getReadOnlyTerminalSession(terminalPath);
+      assert.equal(inspected.readOnly, true);
+      assert.equal(inspected.source, "pi-default");
+      assert.equal(inspected.preview.messages.length, 2);
+    } finally {
+      SessionManager.listAll = listAll;
+    }
     assert.equal((await SessionManager.listAll(sessionDirectory)).length, 0);
   } finally {
     if (previousAgentDirectory === undefined) {

@@ -234,6 +234,18 @@ export class PiWebAdapter {
     return canonical;
   }
 
+  private async requireSelectedWorkspace() {
+    await this.ensureWorkspaceStateLoaded();
+    const workspace = resolve(this.runtime.cwd);
+    if (
+      this.runtime.workspaceSelected !== true ||
+      this.hiddenWorkspaces.has(workspace)
+    ) {
+      throw new Error("Workspace is not available");
+    }
+    return workspace;
+  }
+
   async requireSession(path: string) {
     await this.ensureWorkspaceStateLoaded();
     const sessions = await this.listSessions(path);
@@ -458,11 +470,11 @@ export class PiWebAdapter {
   async listReadOnlyTerminalSessions(
     options: { query?: string; cursor?: number; limit?: number } = {},
   ) {
-    const workspace = await this.requireWorkspace(this.runtime.cwd);
+    const workspace = await this.requireSelectedWorkspace();
     const query = options.query?.trim().toLocaleLowerCase() ?? "";
     const cursor = options.cursor ?? 0;
     const limit = options.limit ?? 50;
-    const sessions = (await SessionManager.listAll())
+    const sessions = (await SessionManager.list(workspace))
       .filter((session) => resolve(session.cwd) === workspace)
       .filter((session) => {
         if (!query) return true;
@@ -500,9 +512,9 @@ export class PiWebAdapter {
   }
 
   async getReadOnlyTerminalSession(path: string) {
-    const workspace = await this.requireWorkspace(this.runtime.cwd);
+    const workspace = await this.requireSelectedWorkspace();
     const canonical = resolve(path);
-    const session = (await SessionManager.listAll()).find(
+    const session = (await SessionManager.list(workspace)).find(
       (candidate) =>
         resolve(candidate.path) === canonical &&
         resolve(candidate.cwd) === workspace,
