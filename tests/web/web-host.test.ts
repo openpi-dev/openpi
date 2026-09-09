@@ -113,7 +113,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     },
     isSessionOwned: (sessionId, sessionPath) =>
       sessionManager.getSessionId() === sessionId ||
-      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -849,7 +850,8 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     sessionManager,
     isSessionOwned: (sessionId, sessionPath) =>
       sessionManager.getSessionId() === sessionId ||
-      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -951,7 +953,8 @@ test("returns accepted only after Pi admits the prompt", async () => {
     sessionManager,
     isSessionOwned: (sessionId, sessionPath) =>
       sessionManager.getSessionId() === sessionId ||
-      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => false,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -1089,7 +1092,8 @@ function testRuntime(
     sessionManager,
     isSessionOwned: (sessionId, sessionPath) =>
       sessionManager.getSessionId() === sessionId ||
-      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
@@ -1207,7 +1211,10 @@ test("requires exact reviewed confirmation before deleting a persisted Session",
       { method: "DELETE", headers },
     );
     assert.equal(confirmed.status, 200);
-    assert.deepEqual(await confirmed.json(), { path: sessionPath, deleted: true });
+    assert.deepEqual(await confirmed.json(), {
+      path: sessionPath,
+      deleted: true,
+    });
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

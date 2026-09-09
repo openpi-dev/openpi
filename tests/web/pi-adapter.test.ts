@@ -30,7 +30,8 @@ function runtimeFor(
     sessionManager,
     isSessionOwned: (sessionId, sessionPath) =>
       sessionManager.getSessionId() === sessionId ||
-      (sessionPath !== undefined && sessionManager.getSessionFile() === sessionPath),
+      (sessionPath !== undefined &&
+        sessionManager.getSessionFile() === sessionPath),
     isIdle: () => true,
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
