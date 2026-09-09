@@ -1,0 +1,48 @@
+name: Web 体验反馈 / Web experience feedback
+description: 报告不顺手的操作、界面问题或改进建议；无需技术方案。
+title: "[Web UX] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢帮助改进 OpenPI Web！可以用中文或英文填写，不需要先提出实现方案。
+        Thanks for helping improve OpenPI Web. Chinese and English feedback are welcome; no technical solution is required.
+
+        总任务与已有讨论：[Web UI/UX #455](https://github.com/openpi-dev/openpi/issues/455)。相同问题可直接补充原讨论，维护者会协助关联子任务。
+        请遮挡截图中的凭据、私人路径及会话内容。Please redact sensitive information before posting.
+  - type: textarea
+    id: goal
+    attributes:
+      label: 想完成什么？ / What were you trying to do?
+      placeholder: 例如：先选择模型，再选择目录并开始一个新会话。
+    validations:
+      required: true
+  - type: textarea
+    id: experience
+    attributes:
+      label: 哪里不顺手？ / What happened?
+      description: 描述操作过程、困惑或实际结果。Tell us the steps, confusion, or actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: 希望怎样表现？ / What did you expect?
+      description: 不确定解决方式也没关系，描述理想体验即可。Describe the experience you hoped for.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图或参考 / Screenshots or references (optional)
+      description: 可粘贴截图、录屏链接或参考产品中的具体交互，不要求视觉完全一致。
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境 / Environment (optional)
+      placeholder: "OpenPI version, browser, OS, viewport; npm or source checkout if known"
+  - type: markdown
+    attributes:
+      value: |
+        维护者会确认复现、影响与是否重复；被接受的开发任务会补充范围和验收标准。
+        想参与实现，请先在对应任务留言确认认领，避免重复 PR。提交反馈不要求承担开发工作。

@@ -84,6 +84,8 @@ function harness(
   const dependencies: WebCommandDependencies = {
     entrypoint: "/package/bin/openpi.js",
     spawn(commandName, args, spawnOptions) {
+      assert.equal(clearCalls, 1);
+      assert.match(forwardedStderr, /Starting OpenPI Web Workbench/u);
       spawnCalls++;
       spawnEnvs.push(spawnOptions.env);
       assert.equal(commandName, process.execPath);

@@ -217,3 +217,39 @@ it.each([200, 503])(
     expect(vi.getTimerCount()).toBe(0);
   },
 );
+
+it("prefers the current page credential over stale links and storage", () => {
+  const current = "a".repeat(64);
+  const meta = document.createElement("meta");
+  meta.name = "openpi-web-token";
+  meta.content = current;
+  document.head.append(meta);
+  history.replaceState(null, "", "/#token=old-link");
+  sessionStorage.setItem("openpi.web.token", "old-storage");
+  try {
+    expect(new WebClient().token).toBe(current);
+    expect(location.hash).toBe("");
+    expect(sessionStorage.getItem("openpi.web.token")).toBe(current);
+    vi.spyOn(Storage.prototype, "getItem").mockImplementation(() => {
+      throw new Error("disabled");
+    });
+    vi.spyOn(Storage.prototype, "setItem").mockImplementation(() => {
+      throw new Error("disabled");
+    });
+    expect(new WebClient().token).toBe(current);
+  } finally {
+    meta.remove();
+    vi.restoreAllMocks();
+    sessionStorage.clear();
+  }
+});
+
+it("retains the fragment entry for the separate Vite developer page", () => {
+  history.replaceState(null, "", "/#token=legacy-development");
+  try {
+    expect(new WebClient().token).toBe("legacy-development");
+    expect(location.hash).toBe("");
+  } finally {
+    sessionStorage.clear();
+  }
+});

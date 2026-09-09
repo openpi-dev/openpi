@@ -682,3 +682,38 @@ test("Session provenance targets the current file even when a copied file retain
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("unarchive is idempotent across restart and preserves canonical Session data", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-unarchive-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const manager = SessionManager.create(root, sessionDirectory);
+    persistSession(manager, "keep original history", 1);
+    const path = manager.getSessionFile();
+    assert.ok(path);
+    const original = await readFile(path, "utf8");
+    const runtime = runtimeFor(root, sessionDirectory, manager);
+    const adapter = new PiWebAdapter(runtime);
+    await adapter.archiveSession(path);
+    assert.equal((await adapter.requireSession(path)).archived, true);
+    await Promise.all([
+      adapter.unarchiveSession(path),
+      adapter.unarchiveSession(path),
+    ]);
+    const restored = await new PiWebAdapter(runtime).requireSession(path);
+    assert.equal(restored.archived, undefined);
+    assert.equal(restored.cwd, root);
+    assert.equal(await readFile(path, "utf8"), original);
+    const metadata = await readFile(
+      join(sessionDirectory, "archived-sessions.json"),
+      "utf8",
+    );
+    await assert.rejects(adapter.unarchiveSession(join(root, "missing.jsonl")));
+    assert.equal(
+      await readFile(join(sessionDirectory, "archived-sessions.json"), "utf8"),
+      metadata,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

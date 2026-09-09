@@ -15,6 +15,35 @@ import {
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 
+// Use a raw document request: fetch always sets Sec-Fetch-Mode to cors.
+function documentRequest(url: string, headers: Record<string, string> = {}) {
+  return new Promise<Response>((resolve, reject) => {
+    const request = httpRequest(url, { headers }, (response) => {
+      const chunks: Buffer[] = [];
+      response.on("data", (chunk: Buffer) => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const responseHeaders = new Headers();
+        for (const [name, value] of Object.entries(response.headers)) {
+          if (value !== undefined)
+            responseHeaders.set(
+              name,
+              Array.isArray(value) ? value.join(", ") : value,
+            );
+        }
+        resolve(
+          new Response(Buffer.concat(chunks), {
+            status: response.statusCode,
+            headers: responseHeaders,
+          }),
+        );
+      });
+    });
+    request.on("error", reject);
+    request.end();
+  });
+}
+
 test("serves workspaces through a runtime isolated from terminal sessions", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-host-"));
   const imported = await mkdtemp(join(tmpdir(), "openpi-web-import-"));
@@ -34,6 +63,39 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       omitted: 0,
       truncated: false,
     }),
+  });
+  const unregisterTerminalDetails = registerWebCapability(sessionManager, {
+    kind: "background-terminals",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) =>
+      id === "bt-test"
+        ? {
+            kind: "background-terminals",
+            id,
+            title: "server",
+            command: "run-server",
+            cwd,
+            status: "running",
+            createdAt: 1,
+            stdout: {
+              text: "ready",
+              totalBytes: 5,
+              retainedBytes: 5,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            stderr: {
+              text: "",
+              totalBytes: 0,
+              retainedBytes: 0,
+              omittedBytes: 0,
+              truncated: false,
+              recoveryAvailable: false,
+            },
+            truncated: false,
+          }
+        : undefined,
   });
   const prompts: string[] = [];
   const creationCommandIds: string[] = [];
@@ -93,6 +155,25 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       sessionTrusted: false,
       refreshRequired: false,
     }),
+    listProviderAuth: () => ({
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
+    }),
     setModel: async () => {
       throw new WebRuntimeRequestError(
         "Model is not available",
@@ -108,7 +189,10 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       disposed = true;
     },
   };
-  const host = new WebHost({ runtime });
+  const host = new WebHost({
+    runtime,
+    allowedOrigins: ["http://127.0.0.1:59999"],
+  });
 
   try {
     await host.start();
@@ -120,7 +204,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       "Content-Type": "application/json",
     };
 
-    const page = await fetch(`${launched.origin}/`);
+    const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
     assert.match(
       page.headers.get("content-security-policy") || "",
@@ -129,6 +213,35 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(page.headers.get("referrer-policy"), "no-referrer");
     const pageHtml = await page.text();
     assert.match(pageHtml, /<div id="root"><\/div>/);
+    assert.ok(
+      pageHtml.includes(`<meta name="openpi-web-token" content="${token}">`),
+    );
+    assert.equal(
+      page.headers.get("cross-origin-resource-policy"),
+      "same-origin",
+    );
+    assert.equal(page.headers.get("x-frame-options"), "DENY");
+    const blockedHeaders: Record<string, string>[] = [
+      { "Sec-Fetch-Site": "cross-site" },
+      { "Sec-Fetch-Site": "same-site" },
+      { "Sec-Fetch-Dest": "iframe", "Sec-Fetch-Site": "same-origin" },
+      { "Sec-Fetch-Dest": "script" },
+      { Referer: "https://attacker.example/" },
+      { Origin: "https://attacker.example" },
+      { Origin: "http://127.0.0.1:59999" },
+    ];
+    for (const headers of blockedHeaders) {
+      const blocked = await documentRequest(`${launched.origin}/`, headers);
+      assert.equal(blocked.status, 403);
+      assert.ok(!(await blocked.text()).includes(token));
+    }
+    const navigation = await documentRequest(`${launched.origin}/`, {
+      "Sec-Fetch-Site": "none",
+      "Sec-Fetch-Mode": "navigate",
+      "Sec-Fetch-Dest": "document",
+    });
+    assert.equal(navigation.status, 200);
+    assert.equal((await fetch(`${launched.origin}/api/snapshot`)).status, 401);
     assert.match(
       pageHtml,
       /<script type="module"[^>]*src="\/app\.js"><\/script>/,
@@ -141,6 +254,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(app.status, 200);
     assert.match(app.headers.get("content-type") || "", /javascript/);
     const appSource = await app.text();
+    assert.ok(!appSource.includes(token));
     assert.match(appSource, /OpenPI Web root is missing/);
     assert.match(appSource, /openpi\.web\.token/);
     assert.match(appSource, /\/events\?cursor=/);
@@ -167,6 +281,40 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
 
     const removedLegacyAsset = await fetch(`${launched.origin}/marked.js`);
     assert.equal(removedLegacyAsset.status, 401);
+
+    let thinkingReads = 0;
+    runtime.getThinkingState = () => {
+      thinkingReads++;
+      return { level: "high", available: ["off", "high"] };
+    };
+    assert.equal((await fetch(`${launched.origin}/api/thinking`)).status, 401);
+    assert.equal(thinkingReads, 0);
+    const thinkingResponse = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await thinkingResponse.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "high",
+      available: ["off", "high"],
+    });
+    assert.equal(thinkingReads, 1);
+    delete runtime.getThinkingState;
+    const unknownThinking = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.deepEqual(await unknownThinking.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+    });
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+        )
+      ).status,
+      401,
+    );
 
     const trustGetter = runtime.getProjectTrustStatus;
     assert.ok(trustGetter);
@@ -252,6 +400,93 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       projectResources: true,
       sessionTrusted: false,
       refreshRequired: false,
+    });
+    const providerAuthResponse = await fetch(
+      `${launched.origin}/api/providers/auth-status`,
+      { headers: authorized },
+    );
+    assert.equal(providerAuthResponse.status, 200);
+    assert.deepEqual(await providerAuthResponse.json(), {
+      providers: [
+        {
+          id: "fixture",
+          name: "Fixture",
+          authMethods: ["api_key"],
+          configured: true,
+          source: "environment",
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 250,
+      },
+    });
+    for (const route of [
+      "/api/thinking",
+      "/api/trust",
+      "/api/providers/auth-status",
+      "/api/capabilities/detail?kind=background-terminals&id=bt-test",
+    ]) {
+      const separator = route.includes("?") ? "&" : "?";
+      const mismatched = await fetch(
+        `${launched.origin}${route}${separator}sessionId=another-session`,
+        { headers: authorized },
+      );
+      assert.equal(mismatched.status, 409);
+      assert.equal((await mismatched.json()).code, "SESSION_CHANGED");
+    }
+    const scopedDetail = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
+      { headers: authorized },
+    );
+    assert.equal(scopedDetail.status, 200);
+    assert.equal(
+      (await scopedDetail.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
+    const terminalDetailResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-test`,
+      { headers: authorized },
+    );
+    assert.equal(terminalDetailResponse.status, 200);
+    assert.deepEqual((await terminalDetailResponse.json()).detail, {
+      kind: "background-terminals",
+      id: "bt-test",
+      title: "server",
+      command: "run-server",
+      cwd,
+      status: "running",
+      createdAt: 1,
+      stdout: {
+        text: "ready",
+        totalBytes: 5,
+        retainedBytes: 5,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      stderr: {
+        text: "",
+        totalBytes: 0,
+        retainedBytes: 0,
+        omittedBytes: 0,
+        truncated: false,
+        recoveryAvailable: false,
+      },
+      truncated: false,
+    });
+    const staleTerminalResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=background-terminals&id=bt-missing`,
+      { headers: authorized },
+    );
+    assert.equal(staleTerminalResponse.status, 404);
+    assert.deepEqual(await staleTerminalResponse.json(), {
+      code: "CAPABILITY_NOT_FOUND",
+      error: "capability resource was not found in the active Session",
     });
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
@@ -380,6 +615,38 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         (session) => session.path === currentSessionPath,
       )?.archived,
       true,
+    );
+
+    const unarchiveUrl = `${launched.origin}/api/sessions/unarchive?path=${encodeURIComponent(currentSessionPath)}`;
+    assert.equal((await fetch(unarchiveUrl, { method: "POST" })).status, 401);
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/sessions/unarchive`, {
+          method: "POST",
+          headers: authorized,
+        })
+      ).status,
+      400,
+    );
+    const unarchiveResponse = await fetch(unarchiveUrl, {
+      method: "POST",
+      headers: authorized,
+    });
+    assert.equal(unarchiveResponse.status, 200);
+    assert.deepEqual(await unarchiveResponse.json(), {
+      path: currentSessionPath,
+      archived: false,
+    });
+    const restoredSnapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, {
+        headers: authorized,
+      })
+    ).json()) as { sessions: Array<{ path: string; archived?: boolean }> };
+    assert.equal(
+      restoredSnapshot.sessions.find(
+        (session) => session.path === currentSessionPath,
+      )?.archived,
+      undefined,
     );
 
     const wrongSession = await fetch(`${launched.origin}/api/prompt`, {
@@ -557,6 +824,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   } finally {
     await host.stop();
     assert.equal(disposed, true);
+    unregisterTerminalDetails();
     unregister();
     await Promise.all(
       [cwd, imported].map((path) => rm(path, { recursive: true, force: true })),

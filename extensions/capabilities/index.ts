@@ -85,6 +85,29 @@ export function createCapabilitiesExtension(
   },
 ) {
   return function capabilities(pi: ExtensionAPI) {
+    let shimmerPhase = 0;
+    let shimmerTimer: ReturnType<typeof setInterval> | undefined;
+    let shimmerActive = false;
+
+    const stopShimmer = () => {
+      if (shimmerTimer !== undefined) clearInterval(shimmerTimer);
+      shimmerTimer = undefined;
+      shimmerActive = false;
+    };
+
+    const setShimmerActive = (active: boolean, requestRender: () => void) => {
+      shimmerActive = active;
+      if (!active) {
+        stopShimmer();
+        return;
+      }
+      shimmerTimer ??= setInterval(() => {
+        if (!shimmerActive) return;
+        shimmerPhase = (shimmerPhase + 0.08) % 1;
+        requestRender();
+      }, 120);
+    };
+
     const reconcileDiscoveryGateway = () => {
       const adaptive =
         dependencies.loadConfig().capabilities.discovery === "adaptive";
@@ -98,6 +121,8 @@ export function createCapabilitiesExtension(
     pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, reconcileDiscoveryGateway);
 
     pi.on("session_start", (_event, ctx) => {
+      stopShimmer();
+      shimmerPhase = 0;
       resetOpenPiToolSurface(
         pi,
         dependencies.sourcePath
@@ -108,17 +133,27 @@ export function createCapabilitiesExtension(
       registerEditorLayer(pi, ctx, {
         id: "capability-intent-highlight",
         order: 150,
-        wrap: (base, _tui, _theme, keybindings) =>
-          new CapabilityIntentHighlightEditor(base, keybindings, (text) =>
-            colorCapabilityKeyword(text, {
-              colorMode: ctx.ui.theme.getColorMode(),
-              light: isLightNamedTheme(ctx.ui.theme.name),
-            }),
-          ),
+        wrap: (base, tui, _theme, keybindings) => {
+          return new CapabilityIntentHighlightEditor(
+            base,
+            keybindings,
+            (text) =>
+              colorCapabilityKeyword(
+                text,
+                {
+                  colorMode: ctx.ui.theme.getColorMode(),
+                  light: isLightNamedTheme(ctx.ui.theme.name),
+                },
+                shimmerPhase,
+              ),
+            (active) => setShimmerActive(active, () => tui.requestRender()),
+          );
+        },
       });
     });
 
     pi.on("session_shutdown", () => {
+      stopShimmer();
       removeEditorLayer(pi, "capability-intent-highlight");
     });
 

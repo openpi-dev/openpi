@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebEvent, WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebEvent,
+  WebModelSummary,
+  WebSnapshot,
+} from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
   type SessionMutationResult,
@@ -141,11 +145,16 @@ class FakeClient extends WebClient {
   workspaceResult: Promise<WorkspaceSelectionResult> = Promise.resolve({
     cancelled: true,
   });
-  creationResult: Promise<SessionMutationResult> = Promise.resolve({});
+  creationResult: Promise<SessionMutationResult> = Promise.resolve({
+    sessionPath: "/tmp/ws/session.jsonl",
+  });
   selectionResults: Array<Promise<SessionMutationResult>> = [];
-  modelResult: Promise<CommandReceipt> = Promise.resolve({
-    id: "model-1",
-    accepted: true,
+  modelResult: Promise<WebModelSummary> = Promise.resolve({
+    provider: "test",
+    id: "model",
+    label: "Test model",
+    name: "model",
+    current: true,
   });
   promptResult: Promise<CommandReceipt> = Promise.resolve({
     id: "prompt-1",
@@ -789,7 +798,7 @@ describe("OpenPI Web store", () => {
         sessionPath: "/tmp/ws/created.jsonl",
       }),
     );
-    creation.resolve({});
+    creation.resolve({ sessionPath: "/tmp/ws/created.jsonl" });
     await creating;
 
     const prompt = deferred<CommandReceipt>();
@@ -849,7 +858,7 @@ describe("OpenPI Web store", () => {
       Promise.resolve(snapshot()),
       Promise.resolve(activeSnapshot("session-2", "/tmp/ws/b.jsonl")),
     );
-    const model = deferred<CommandReceipt>();
+    const model = deferred<WebModelSummary>();
     client.modelResult = model.promise;
     client.selectionResults.push(Promise.resolve({}));
     const store = createWebStore(client);
@@ -889,6 +898,9 @@ describe("OpenPI Web store", () => {
       ),
     );
     client.workspaceResult = Promise.resolve({ path: workspace });
+    client.creationResult = Promise.resolve({
+      sessionPath: `${workspace}/session.jsonl`,
+    });
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
 
@@ -903,6 +915,54 @@ describe("OpenPI Web store", () => {
     ]);
     expect(store.getState().selectedWorkspace).toBe(workspace);
     expect(store.getState().selectedPath).toBe(`${workspace}/session.jsonl`);
+    store.getState().actions.stop();
+  });
+
+  it("keeps an explicit workspace choice across snapshots of the old empty Session", async () => {
+    const client = new FakeClient();
+    const initial = snapshot();
+    initial.workspaces.push({ path: "/tmp/repo-b", name: "B", current: false });
+    client.snapshots.push(
+      Promise.resolve(initial),
+      Promise.resolve(initial),
+      Promise.resolve(initial),
+    );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    store.getState().actions.setWorkspace("/tmp/repo-b");
+    await store.getState().actions.refreshSnapshot();
+
+    expect(store.getState().selectedWorkspace).toBe("/tmp/repo-b");
+    expect(store.getState().snapshot?.selectedSession?.cwd).toBe("/tmp/ws");
+    expect(client.creations).toEqual([]);
+    expect(client.prompts).toEqual([]);
+  });
+
+  it("creates a Session in the chosen workspace before sending from an old empty Session", async () => {
+    const client = new FakeClient();
+    client.creationResult = Promise.resolve({
+      sessionPath: "/tmp/repo-b/session.jsonl",
+    });
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(
+        activeSnapshot("session-b", "/tmp/repo-b/session.jsonl", {
+          workspace: "/tmp/repo-b",
+        }),
+      ),
+    );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.setWorkspace("/tmp/repo-b");
+
+    expect(await store.getState().actions.sendPrompt("work in B")).toBe(true);
+    expect(client.creations).toEqual([
+      { workspacePath: "/tmp/repo-b", commandId: expect.any(String) },
+    ]);
+    expect(client.prompts).toEqual([
+      { sessionId: "session-b", content: "work in B" },
+    ]);
     store.getState().actions.stop();
   });
 
@@ -1099,5 +1159,354 @@ describe("OpenPI Web store", () => {
     store.getState().actions.toggleSidebar(false);
     expect(store.getState().sidebarCollapsed).toBe(true);
     expect(store.getState().mobileSidebarOpen).toBe(false);
+  });
+});
+
+it("restores the exact archived path without selecting it and refreshes canonical state", async () => {
+  const client = new FakeClient();
+  const restore = vi
+    .spyOn(client, "unarchiveSession")
+    .mockResolvedValue({ path: "/tmp/ws/saved.jsonl", archived: false });
+  const next = snapshot("Restored");
+  client.snapshots.push(Promise.resolve(next));
+  const store = createWebStore(client);
+  expect(
+    await store.getState().actions.unarchiveSession("/tmp/ws/saved.jsonl"),
+  ).toBe(true);
+  expect(restore).toHaveBeenCalledWith("/tmp/ws/saved.jsonl");
+  expect(client.selections).toEqual([]);
+  expect(store.getState().snapshot?.sessions[0]?.name).toBe("Restored");
+});
+
+it("keeps archive restoration failure observable without pretending to refresh", async () => {
+  const client = new FakeClient();
+  vi.spyOn(client, "unarchiveSession").mockRejectedValue(
+    new Error("archive write failed"),
+  );
+  const store = createWebStore(client);
+  expect(
+    await store.getState().actions.unarchiveSession("/tmp/ws/saved.jsonl"),
+  ).toBe(false);
+  expect(store.getState().notice).toBe("archive write failed");
+  expect(client.snapshotPaths).toEqual([]);
+});
+
+describe("draft model selection", () => {
+  function draftHarness() {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    const initial = snapshot();
+    delete initial.selectedSession;
+    delete initial.currentSessionId;
+    initial.sessions = [];
+    initial.workspaces = [];
+    store.setState({ snapshot: initial });
+    return { client, store };
+  }
+
+  it("selects before a workspace without creating or mutating a Session and retains it after chooser cancellation", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    await store.getState().actions.chooseWorkspace();
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(client.creations).toHaveLength(0);
+    expect(client.modelSelections).toHaveLength(0);
+    expect(store.getState().selectedWorkspace).toBeNull();
+  });
+
+  it("waits for confirmed model selection before the first prompt and ignores duplicate sends", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
+    const selected = deferred<WebModelSummary>();
+    client.modelResult = selected.promise;
+    const sending = store.getState().actions.sendPrompt("hello");
+    await vi.waitFor(() => expect(client.modelSelections).toHaveLength(1));
+    expect(client.prompts).toHaveLength(0);
+    expect(await store.getState().actions.sendPrompt("duplicate")).toBe(false);
+    selected.resolve(snapshot().models[0]!);
+    expect(await sending).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toEqual([
+      { sessionId: "session-1", content: "hello" },
+    ]);
+    expect(store.getState().draftModel).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("blocks fallback on unavailable model and retries using the already-created Session", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.modelResult = Promise.resolve(snapshot().models[0]!);
+    vi.spyOn(client, "selectModel").mockRejectedValueOnce(
+      new WebApiError("Model unavailable", 400, "MODEL_NOT_AVAILABLE"),
+    );
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(store.getState().notice).toBe("Model unavailable");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    store.getState().actions.stop();
+  });
+
+  it("keeps the draft and blocks sending when the refreshed Session has a different model", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    const changed = snapshot();
+    changed.models = [{ ...changed.models[0]!, id: "other" }];
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(changed),
+    );
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(store.getState().notice).toContain("model changed");
+  });
+
+  it("rejects a confirmation from a different provider instead of sending with a same-named model", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.modelResult = Promise.resolve({
+      ...snapshot().models[0]!,
+      provider: "other",
+    });
+    expect(await store.getState().actions.sendPrompt("hello")).toBe(false);
+    expect(client.prompts).toHaveLength(0);
+    expect(store.getState().draftModel?.provider).toBe("test");
+    expect(store.getState().notice).toContain("not confirmed");
+  });
+
+  it("never sends to a newer selected Session after draft creation is superseded", async () => {
+    const { client, store } = draftHarness();
+    await store.getState().actions.selectModel("test/model");
+    store.setState({ selectedWorkspace: "/tmp/ws" });
+    const creation = deferred<SessionMutationResult>();
+    client.creationResult = creation.promise;
+    const sending = store.getState().actions.sendPrompt("hello");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    client.snapshots.push(
+      Promise.resolve(activeSnapshot("other", "/tmp/ws/other.jsonl")),
+    );
+    const selecting = store
+      .getState()
+      .actions.selectSession("/tmp/ws/other.jsonl");
+    creation.resolve({});
+    expect(await sending).toBe(false);
+    await selecting;
+    expect(client.prompts).toHaveLength(0);
+    expect(client.modelSelections).toHaveLength(0);
+    expect(store.getState().draftModel).toBeNull();
+  });
+});
+
+describe("workspace selection authority", () => {
+  const workspace = "/tmp/repo-b";
+  const sessionPath = `${workspace}/session.jsonl`;
+
+  async function harness() {
+    const client = new FakeClient();
+    const initial = snapshot();
+    initial.workspaces.push({ path: workspace, name: "B", current: false });
+    client.snapshots.push(Promise.resolve(initial));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    return { client, initial, store };
+  }
+
+  it("ignores stale snapshots, blocks duplicate sends, and waits for the exact B Session", async () => {
+    const { client, initial, store } = await harness();
+    const stale = deferred<WebSnapshot>();
+    client.snapshots.push(stale.promise);
+    const refreshing = store.getState().actions.refreshSnapshot();
+    store.getState().actions.setWorkspace(workspace);
+    stale.resolve(initial);
+    expect(await refreshing).toBe(false);
+    expect(store.getState().selectedWorkspace).toBe(workspace);
+
+    const creation = deferred<SessionMutationResult>();
+    client.creationResult = creation.promise;
+    client.snapshots.push(
+      Promise.resolve(activeSnapshot("b", sessionPath, { workspace })),
+    );
+    const sending = store.getState().actions.sendPrompt("B only");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    expect(store.getState().sessionSwitching).toBe(true);
+    expect(await store.getState().actions.sendPrompt("duplicate")).toBe(false);
+    expect(client.prompts).toEqual([]);
+    creation.resolve({ sessionPath });
+    expect(await sending).toBe(true);
+    expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
+    store.getState().actions.stop();
+  });
+
+  it("retains an imported workspace even when an existing Session stays current", async () => {
+    const { client, initial, store } = await harness();
+    client.workspaceResult = Promise.resolve({ path: workspace });
+    client.snapshots.push(Promise.resolve(initial), Promise.resolve(initial));
+    await store.getState().actions.chooseWorkspace();
+    await store.getState().actions.refreshSnapshot();
+    expect(store.getState().selectedWorkspace).toBe(workspace);
+    expect(store.getState().workspaceDraft).toBe(true);
+    expect(client.creations).toEqual([]);
+    expect(client.prompts).toEqual([]);
+  });
+
+  it("retains B on creation failure and retries without falling back to A", async () => {
+    const { client, initial, store } = await harness();
+    store.getState().actions.setWorkspace(workspace);
+    client.creationResult = Promise.reject(new Error("creation failed"));
+    client.snapshots.push(Promise.resolve(initial));
+    expect(await store.getState().actions.sendPrompt("B only")).toBe(false);
+    expect(store.getState().notice).toBe("creation failed");
+    expect(store.getState().selectedWorkspace).toBe(workspace);
+    expect(store.getState().workspaceDraft).toBe(true);
+    expect(client.prompts).toEqual([]);
+
+    client.creationResult = Promise.resolve({ sessionPath });
+    client.snapshots.push(
+      Promise.resolve(activeSnapshot("b", sessionPath, { workspace })),
+    );
+    expect(await store.getState().actions.sendPrompt("B only")).toBe(true);
+    expect(
+      client.creations.every((call) => call.workspacePath === workspace),
+    ).toBe(true);
+    expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
+    store.getState().actions.stop();
+  });
+
+  it("rechecks creation when a newer snapshot supersedes its confirmation", async () => {
+    const { client, store } = await harness();
+    const creation = deferred<SessionMutationResult>();
+    const slowConfirmation = deferred<WebSnapshot>();
+    const active = activeSnapshot("b", sessionPath, { workspace });
+    client.creationResult = creation.promise;
+    client.snapshots.push(
+      slowConfirmation.promise,
+      Promise.resolve(active),
+      Promise.resolve(active),
+    );
+    store.getState().actions.setWorkspace(workspace);
+
+    const sending = store.getState().actions.sendPrompt("B only");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    creation.resolve({ sessionPath });
+    await vi.waitFor(() => expect(client.snapshotPaths).toHaveLength(2));
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    slowConfirmation.resolve(active);
+
+    expect(await sending).toBe(true);
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
+    expect(store.getState().notice).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it.each([
+    {
+      name: "cancelled creation",
+      receipt: { cancelled: true },
+      next: snapshot(),
+    },
+    { name: "missing creation identity", receipt: {}, next: snapshot() },
+    { name: "different workspace", receipt: { sessionPath }, next: snapshot() },
+    {
+      name: "different Session in B",
+      receipt: { sessionPath },
+      next: activeSnapshot("other", `${workspace}/other.jsonl`, { workspace }),
+    },
+  ])(
+    "blocks $name without clearing the workspace draft",
+    async ({ receipt, next }) => {
+      const { client, store } = await harness();
+      store.getState().actions.setWorkspace(workspace);
+      client.creationResult = Promise.resolve(receipt);
+      client.snapshots.push(Promise.resolve(next), Promise.resolve(next));
+      expect(await store.getState().actions.sendPrompt("B only")).toBe(false);
+      expect(client.prompts).toEqual([]);
+      expect(store.getState().selectedWorkspace).toBe(workspace);
+      expect(store.getState().workspaceDraft).toBe(true);
+      expect(store.getState().notice).toBeTruthy();
+    },
+  );
+
+  it("does not overwrite a newer workspace intent with a late folder chooser result", async () => {
+    const { client, store } = await harness();
+    const chooser = deferred<WorkspaceSelectionResult>();
+    client.workspaceResult = chooser.promise;
+    const choosing = store.getState().actions.chooseWorkspace();
+    store.getState().actions.setWorkspace(workspace);
+    chooser.resolve({ path: "/tmp/old-choice" });
+    await choosing;
+    expect(store.getState().selectedWorkspace).toBe(workspace);
+    expect(client.creations).toEqual([]);
+  });
+
+  it("never sends an in-flight B draft after the user chooses C", async () => {
+    const { client, store } = await harness();
+    const creation = deferred<SessionMutationResult>();
+    client.creationResult = creation.promise;
+    store.getState().actions.setWorkspace(workspace);
+    const sending = store.getState().actions.sendPrompt("B only");
+    await vi.waitFor(() => expect(client.creations).toHaveLength(1));
+    store.getState().actions.setWorkspace("/tmp/repo-c");
+    creation.resolve({ sessionPath });
+    expect(await sending).toBe(false);
+    expect(store.getState().selectedWorkspace).toBe("/tmp/repo-c");
+    expect(store.getState().workspaceDraft).toBe(true);
+    expect(client.prompts).toEqual([]);
+  });
+
+  it("clears workspace intent only when the user explicitly opens a Session", async () => {
+    const { client, initial, store } = await harness();
+    store.getState().actions.setWorkspace(workspace);
+    client.snapshots.push(Promise.resolve(initial));
+    await store.getState().actions.selectSession(initial.selectedSession!.path);
+    expect(store.getState().workspaceDraft).toBe(false);
+    expect(store.getState().selectedWorkspace).toBe("/tmp/ws");
+    expect(client.creations).toEqual([]);
+  });
+
+  it("choosing the original directory from another draft does not resume its old Session", async () => {
+    const { client, initial, store } = await harness();
+    store.getState().actions.setWorkspace(workspace);
+    store.getState().actions.setWorkspace("/tmp/ws");
+    client.snapshots.push(Promise.resolve(initial));
+    await store.getState().actions.refreshSnapshot();
+    expect(store.getState().selectedWorkspace).toBe("/tmp/ws");
+    expect(store.getState().workspaceDraft).toBe(true);
+    const createdPath = "/tmp/ws/fresh.jsonl";
+    client.creationResult = Promise.resolve({ sessionPath: createdPath });
+    client.snapshots.push(
+      Promise.resolve(activeSnapshot("fresh", createdPath)),
+    );
+    expect(await store.getState().actions.sendPrompt("new task")).toBe(true);
+    expect(client.prompts).toEqual([
+      { sessionId: "fresh", content: "new task" },
+    ]);
+    store.getState().actions.stop();
+  });
+
+  it("keeps draft model selection local despite a running Session in A", async () => {
+    const { client, initial, store } = await harness();
+    initial.runtime.status = "running";
+    store.setState({ snapshot: initial, liveRunning: true });
+    store.getState().actions.setWorkspace(workspace);
+    await store.getState().actions.selectModel("test/model");
+    expect(store.getState().draftModel?.id).toBe("model");
+    expect(client.modelSelections).toEqual([]);
+    expect(client.creations).toEqual([]);
   });
 });
