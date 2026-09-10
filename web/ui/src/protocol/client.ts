@@ -1,7 +1,11 @@
 import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
-import type { WebModelSummary, WebSnapshot } from "../../../protocol/types.ts";
+import type {
+  WebCommandDiscoveryResult,
+  WebModelSummary,
+  WebSnapshot,
+} from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -190,6 +194,13 @@ export class WebClient {
   providerAuth(sessionId: string, signal: AbortSignal) {
     return this.request<WebProviderAuthProjection>(
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  commands(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebCommandDiscoveryResult>(
+      `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

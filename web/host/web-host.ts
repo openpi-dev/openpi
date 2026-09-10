@@ -714,6 +714,39 @@ export class WebHost {
       });
     }
     if (url.pathname === "/events") return this.eventsStream(request, response);
+    if (url.pathname === "/api/commands") {
+      if (
+        diagnosticSession === null ||
+        diagnosticSession.length === 0 ||
+        diagnosticSession.length > 128 ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_COMMAND_DISCOVERY_REQUEST",
+          error: "the active Session id is required",
+        });
+      }
+      if (diagnosticSession !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Reopen command discovery.",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before discovering commands",
+        });
+      }
+      if (!this.runtime.listCommands) {
+        return this.json(response, 501, {
+          code: "COMMAND_DISCOVERY_UNAVAILABLE",
+          error: "Pi command discovery is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.listCommands());
+    }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
       return this.json(response, 200, {

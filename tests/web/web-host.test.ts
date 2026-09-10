@@ -1127,6 +1127,108 @@ async function startTestHost(runtime: WebRuntimeController) {
   return { host, launched, headers };
 }
 
+test("serves Session-bound command discovery with fail-closed request validation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-commands-"));
+  const runtime = testRuntime(cwd);
+  let workspaceSelected = true;
+  Object.defineProperty(runtime, "workspaceSelected", {
+    configurable: true,
+    get: () => workspaceSelected,
+  });
+  runtime.listCommands = () => ({
+    commands: [
+      {
+        name: "review",
+        description: "Review the current change",
+        source: "prompt",
+        availability: "available",
+        argumentHint: "[arguments]",
+      },
+    ],
+    totalAvailable: 1,
+    truncation: {
+      truncated: false,
+      commandsOmitted: 0,
+      maxCommands: 250,
+      maxBytes: 64 * 1024,
+      bytes: 256,
+    },
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const sessionId = runtime.sessionManager.getSessionId();
+  try {
+    assert.equal(
+      (await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`))
+        .status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      405,
+    );
+    for (const suffix of [
+      "",
+      "?sessionId=",
+      `?sessionId=${sessionId}&extra=true`,
+      `?sessionId=${sessionId}&sessionId=${sessionId}`,
+    ]) {
+      const response = await fetch(`${launched.origin}/api/commands${suffix}`, {
+        headers,
+      });
+      assert.equal(response.status, 400);
+      assert.equal(
+        (await response.json()).code,
+        "INVALID_COMMAND_DISCOVERY_REQUEST",
+      );
+    }
+    const stale = await fetch(
+      `${launched.origin}/api/commands?sessionId=stale-session`,
+      { headers },
+    );
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, "SESSION_CHANGED");
+
+    workspaceSelected = false;
+    const noWorkspace = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(noWorkspace.status, 409);
+    assert.equal((await noWorkspace.json()).code, "WORKSPACE_REQUIRED");
+
+    workspaceSelected = true;
+    const listCommands = runtime.listCommands;
+    delete runtime.listCommands;
+    const unavailable = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(unavailable.status, 501);
+    assert.equal(
+      (await unavailable.json()).code,
+      "COMMAND_DISCOVERY_UNAVAILABLE",
+    );
+    runtime.listCommands = listCommands;
+
+    const response = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.match(body, /"name":"review"/u);
+    assert.doesNotMatch(body, /sourceInfo|\/private\/|private-fixture/u);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("classifies invalid and oversized JSON bodies as client errors", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
   const { host, launched, headers } = await startTestHost(testRuntime(cwd));

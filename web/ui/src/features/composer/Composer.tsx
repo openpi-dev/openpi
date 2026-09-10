@@ -9,7 +9,7 @@ import {
   Square,
   SlidersHorizontal,
 } from "lucide-react";
-import { type FormEvent, useRef, useState } from "react";
+import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
@@ -18,6 +18,12 @@ import type {
 import { workspaceName } from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
+import {
+  filterWebCommands,
+  SlashCommandMenu,
+  slashCommandListId,
+  slashCommandOptionId,
+} from "./SlashCommandMenu.tsx";
 
 interface ComposerProps {
   workspaceDraft?: boolean;
@@ -35,6 +41,7 @@ interface ComposerProps {
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
+  commandDiscovery?: WebStoreState["commandDiscovery"];
 }
 
 function modelIdentity(model: WebModelSummary) {
@@ -45,7 +52,12 @@ function modelIdentity(model: WebModelSummary) {
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState("");
+  const [cursor, setCursor] = useState(0);
+  const [composerFocused, setComposerFocused] = useState(false);
+  const [menuDismissed, setMenuDismissed] = useState(false);
+  const [activeCommand, setActiveCommand] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const commandMenuWasOpen = useRef(false);
   const selected = props.snapshot?.selectedSession;
   const active = Boolean(
     !props.workspaceDraft &&
@@ -67,6 +79,60 @@ export function Composer(props: ComposerProps) {
     Boolean(props.activeTurn ?? props.snapshot?.runtime.activeTurn);
   const disabled =
     props.sessionSwitching || (!canCompose && Boolean(props.selectedWorkspace));
+  const commandDiscovery = props.commandDiscovery ?? {
+    sessionId: null,
+    status: "idle" as const,
+    commands: [],
+    totalAvailable: 0,
+    commandsOmitted: 0,
+    error: null,
+  };
+  const slashStage = /^\/[^\s/]*$/u.test(prompt) && cursor > 0;
+  const commandMenuOpen =
+    composerFocused &&
+    slashStage &&
+    !menuDismissed &&
+    canCompose &&
+    !props.sessionSwitching;
+  const commandSessionId = active ? selected?.id : null;
+  const commandQuery = slashStage ? prompt.slice(1) : "";
+  const filteredCommands = useMemo(
+    () => filterWebCommands(commandDiscovery.commands, commandQuery),
+    [commandQuery, commandDiscovery.commands],
+  );
+  const commandListVisible =
+    commandMenuOpen &&
+    !props.workspaceDraft &&
+    commandDiscovery.status === "ready" &&
+    filteredCommands.length > 0;
+
+  useEffect(() => {
+    const opened = commandMenuOpen && !commandMenuWasOpen.current;
+    commandMenuWasOpen.current = commandMenuOpen;
+    if (
+      !commandMenuOpen ||
+      props.workspaceDraft ||
+      !commandSessionId ||
+      (commandDiscovery.status !== "idle" &&
+        !(opened && commandDiscovery.status === "error"))
+    ) {
+      return;
+    }
+    void props.actions.discoverCommands();
+  }, [
+    commandDiscovery.status,
+    commandMenuOpen,
+    props.actions,
+    props.workspaceDraft,
+    commandSessionId,
+  ]);
+
+  useEffect(() => {
+    const firstAvailable = filteredCommands.findIndex(
+      (command) => command.availability === "available",
+    );
+    setActiveCommand(firstAvailable >= 0 ? firstAvailable : 0);
+  }, [filteredCommands]);
 
   const resize = (element: HTMLTextAreaElement) => {
     element.style.height = "auto";
@@ -85,6 +151,31 @@ export function Composer(props: ComposerProps) {
       if (textarea.current) {
         textarea.current.style.height = "auto";
         textarea.current.style.overflowY = "hidden";
+      }
+    }
+  };
+
+  const completeCommand = (command: (typeof filteredCommands)[number]) => {
+    if (command.availability !== "available") return;
+    const value = `/${command.name} `;
+    setPrompt(value);
+    setCursor(value.length);
+    setMenuDismissed(true);
+    queueMicrotask(() => {
+      textarea.current?.focus();
+      textarea.current?.setSelectionRange(value.length, value.length);
+    });
+  };
+
+  const moveCommand = (offset: number) => {
+    if (!filteredCommands.length) return;
+    let next = activeCommand;
+    for (let index = 0; index < filteredCommands.length; index++) {
+      next =
+        (next + offset + filteredCommands.length) % filteredCommands.length;
+      if (filteredCommands[next]?.availability === "available") {
+        setActiveCommand(next);
+        return;
       }
     }
   };
@@ -202,12 +293,52 @@ export function Composer(props: ComposerProps) {
           disabled={disabled}
           readOnly={!props.selectedWorkspace}
           aria-label={t("describeTask")}
+          aria-autocomplete="list"
+          aria-controls={commandListVisible ? slashCommandListId : undefined}
+          aria-activedescendant={
+            commandListVisible && filteredCommands[activeCommand]
+              ? slashCommandOptionId(activeCommand)
+              : undefined
+          }
           placeholder={placeholder}
           onChange={(event) => {
             setPrompt(event.target.value);
+            setCursor(event.target.selectionStart);
+            setMenuDismissed(false);
             resize(event.currentTarget);
           }}
+          onClick={(event) => setCursor(event.currentTarget.selectionStart)}
+          onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
+          onFocus={() => {
+            setComposerFocused(true);
+            setMenuDismissed(false);
+          }}
+          onBlur={() => setComposerFocused(false)}
           onKeyDown={(event) => {
+            if (commandMenuOpen) {
+              if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+                event.preventDefault();
+                moveCommand(event.key === "ArrowDown" ? 1 : -1);
+                return;
+              }
+              if (event.key === "Escape") {
+                event.preventDefault();
+                setMenuDismissed(true);
+                return;
+              }
+              if (
+                (event.key === "Tab" ||
+                  (event.key === "Enter" && !event.shiftKey)) &&
+                !event.nativeEvent.isComposing
+              ) {
+                const command = filteredCommands[activeCommand];
+                if (command) {
+                  event.preventDefault();
+                  completeCommand(command);
+                  return;
+                }
+              }
+            }
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
@@ -218,6 +349,17 @@ export function Composer(props: ComposerProps) {
             }
           }}
         />
+        {commandMenuOpen && (
+          <SlashCommandMenu
+            activeIndex={activeCommand}
+            commandDiscovery={commandDiscovery}
+            commands={filteredCommands}
+            draft={Boolean(props.workspaceDraft)}
+            preferBelow={props.landing}
+            onComplete={completeCommand}
+            onSelect={setActiveCommand}
+          />
+        )}
         <div className="composer-toolbar">
           {props.onInspect && (
             <button
