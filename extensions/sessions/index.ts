@@ -47,9 +47,9 @@ import {
   type PreviewBlock,
   type PreviewMessageLike,
   parseLimit,
-  selectSessionStatsWindow,
   type SessionInfoLike,
   type SessionPreview,
+  selectSessionStatsWindow,
 } from "./sessions.js";
 
 const DEFAULT_VISIBLE = 12;
@@ -62,8 +62,13 @@ const isPrintable = (data: string): boolean => {
   return code >= 32 && code !== 127;
 };
 
+const isVisibleSession = (session: SessionInfoLike): boolean =>
+  !session.name?.startsWith("btw:") && !session.name?.startsWith("by the way:");
+
 const sortSessions = (sessions: SessionInfoLike[]): SessionInfoLike[] =>
-  [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  [...sessions]
+    .filter(isVisibleSession)
+    .sort((a, b) => b.modified.getTime() - a.modified.getTime());
 
 const formatPlainLine = (session: SessionInfoLike): string => {
   const label = buildSessionLabel(session);

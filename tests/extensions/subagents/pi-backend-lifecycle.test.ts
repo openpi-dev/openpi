@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { readFile, rm, mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -11,8 +11,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { Effect, Layer, ManagedRuntime, Stream } from "effect";
 import type {
-  SubagentCleanupReceipt,
   SubagentBackend,
+  SubagentCleanupReceipt,
   SubagentSession,
 } from "../../../extensions/subagents/src/backend.ts";
 import { BackendRegistry } from "../../../extensions/subagents/src/backend.ts";
@@ -346,6 +346,33 @@ test("a direct structured subagent fails when it never submits", async () => {
   assert.equal(settled.outcome._tag, "Failed");
   if (settled.outcome._tag !== "Failed") return;
   assert.match(settled.outcome.errorText, /without calling structured_output/);
+});
+
+test("by-the-way spawns use in-memory sessions without persisting to disk", async () => {
+  let createdSessionManager: any;
+  const fixtures = harnessFactory();
+  const backend = makePiBackend({
+    sessionFactory: async (options) => {
+      createdSessionManager = options.sessionManager;
+      return fixtures.factory(options);
+    },
+    shutdownTimeoutMs: 50,
+  });
+
+  await spawnDirect(
+    backend,
+    task("an ephemeral aside", { origin: "btw" }),
+    () => {
+      const harness = fixtures.harnesses[0];
+      assert.ok(harness);
+      harness.emitAssistant("answer");
+      harness.emit({ type: "agent_settled" });
+      harness.resolvePrompt();
+    },
+  );
+
+  assert.ok(createdSessionManager);
+  assert.equal(createdSessionManager.isPersisted(), false);
 });
 
 test("prompt rejection wins over an earlier agent_settled event", async () => {
