@@ -690,7 +690,7 @@ export default function (
     const isAborted =
       snap.errorText?.toLowerCase().includes("abort") ||
       snap.errorText?.toLowerCase().includes("cancel");
-    const output = (snap.answer ?? truncatedOutput(snap))?.trim();
+    const output = truncatedOutput(snap)?.trim();
     if (snap.status === "error" && (!output || isAborted)) {
       if (!isAborted) {
         ui?.notify(`by the way “${snap.title}” failed`, "error");

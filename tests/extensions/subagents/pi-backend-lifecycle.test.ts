@@ -353,7 +353,7 @@ test("by-the-way spawns use in-memory sessions without persisting to disk", asyn
   const fixtures = harnessFactory();
   const backend = makePiBackend({
     sessionFactory: async (options) => {
-      createdSessionManager = options.sessionManager;
+      if (options) createdSessionManager = options.sessionManager;
       return fixtures.factory(options);
     },
     shutdownTimeoutMs: 50,
