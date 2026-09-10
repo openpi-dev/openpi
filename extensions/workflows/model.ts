@@ -331,7 +331,7 @@ export function resolveWorkflowRunTarget(
     if (exactMatches.length > 1) {
       return {
         ok: false,
-        error: `Workflow run suffix "${sanitizeLine(trimmed, 80)}" is ambiguous. Matches: ${boundedRunList(exactMatches.map((candidate) => candidate.runId))}. Use a longer suffix or full run id.`,
+        error: `Workflow run id "${sanitizeLine(trimmed, 80)}" is ambiguous by case. Matches: ${boundedRunList(exactMatches.map((candidate) => candidate.runId))}. Use the exact case of the canonical run id.`,
       } as const;
     }
   }

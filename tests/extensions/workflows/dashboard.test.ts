@@ -746,10 +746,11 @@ test("referenced history still obeys the dashboard projection bound", () => {
   }
 });
 
-test("dashboard pinning matches run ids case-insensitively", () => {
+test("dashboard pinning retains only the exact canonical id across case collisions", () => {
   const runId = "wf_ABCD";
   const startedAt = Date.now() + 60_000;
   writeRun(runId, startedAt);
+  writeRun("wf_abcd", startedAt);
   try {
     const projection = loadRunEntryProjection(
       new Map(),
@@ -757,18 +758,19 @@ test("dashboard pinning matches run ids case-insensitively", () => {
       new Set(),
       startedAt,
       new Map(),
-      { initialRunId: "WF_ABCD", maxRuns: 0, maxBytes: 0 },
+      { initialRunId: runId, maxRuns: 0, maxBytes: 0 },
     );
     assert.deepEqual(
       projection.entries.map((entry) => entry.runId),
       [runId],
     );
-    assert.equal(projection.omittedRuns, 0);
+    assert.equal(projection.omittedRuns, 1);
   } finally {
     rmSync(join(agentDir, "workflows", runId), {
       recursive: true,
       force: true,
     });
+    rmSync(join(agentDir, "workflows", "wf_abcd"), { recursive: true, force: true });
   }
 });
 

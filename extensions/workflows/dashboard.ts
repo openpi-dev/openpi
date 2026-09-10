@@ -761,8 +761,7 @@ export function loadRunEntryProjection(
     recoverStaleWorkflowDetails(details);
     addEntry(
       { runId, details, live: false },
-      options.initialRunId !== undefined &&
-        runId.toLowerCase() === options.initialRunId.toLowerCase(),
+      runId === options.initialRunId,
     );
   }
 
