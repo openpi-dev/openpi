@@ -11,6 +11,8 @@ import {
   type ResolvedPaths,
   type SessionShutdownEvent,
   SettingsManager,
+  type SourceInfo,
+  type ToolInfo,
 } from "@earendil-works/pi-coding-agent";
 import {
   OPENPI_OWNER_SOURCE_PATHS,
@@ -164,6 +166,47 @@ function createPiIntercomPackageMatcher(options: {
       installedPathMatches.set(resolvedPath, installedPathMatch);
     }
     return installedPathMatch;
+  };
+}
+
+/** Use Pi's scoped package identity for both resources and inherited tools.
+ * A local single-file source must be resolved as a file, not as its containing
+ * baseDir: only the file lookup walks up to the owning package manifest.
+ */
+function createBlockedChildPackagePolicy(options: {
+  cwd: string;
+  agentDir: string;
+}) {
+  const packageManager = new DefaultPackageManager({
+    ...options,
+    settingsManager: SettingsManager.inMemory(),
+  });
+  const matches = createPiIntercomPackageMatcher(options);
+  return (sourceInfo: Omit<SourceInfo, "path">) => {
+    if (
+      !sourceInfo ||
+      !sourceInfo.source ||
+      !["package", "top-level"].includes(sourceInfo.origin) ||
+      !["user", "project", "temporary"].includes(sourceInfo.scope)
+    ) {
+      throw new Error(
+        "Cannot verify child package identity: missing source metadata",
+      );
+    }
+    if (sourceInfo.origin !== "package" || sourceInfo.scope === "temporary") {
+      return false;
+    }
+    const installedPath =
+      packageManager.getInstalledPath(sourceInfo.source, sourceInfo.scope) ??
+      sourceInfo.baseDir;
+    // A canonical blocked source can be denied even if it has disappeared.
+    if (matches(sourceInfo.source, installedPath)) return true;
+    if (!installedPath) {
+      throw new Error(
+        `Cannot verify child package identity from ${sourceInfo.source}`,
+      );
+    }
+    return false;
   };
 }
 
@@ -351,13 +394,16 @@ function blockedPackageSources(
   resolvedPaths: ResolvedPaths,
   options: { cwd: string; agentDir: string },
 ) {
-  const isPiIntercomPackage = createPiIntercomPackageMatcher(options);
+  const isBlocked = createBlockedChildPackagePolicy(options);
   const blocked = {
     user: new Set<string>(),
     project: new Set<string>(),
   };
+  // Configured packages can be absent in offline mode. Match their canonical
+  // identity without demanding loaded-tool provenance from an unloaded package.
+  const matches = createPiIntercomPackageMatcher(options);
   for (const configured of packageManager.listConfiguredPackages()) {
-    if (isPiIntercomPackage(configured.source, configured.installedPath)) {
+    if (matches(configured.source, configured.installedPath)) {
       blocked[configured.scope].add(configured.source);
     }
   }
@@ -370,11 +416,7 @@ function blockedPackageSources(
   ];
   for (const resource of resources) {
     const { metadata } = resource;
-    if (
-      metadata.origin !== "package" ||
-      metadata.scope === "temporary" ||
-      !isPiIntercomPackage(metadata.source, metadata.baseDir)
-    ) {
+    if (metadata.scope === "temporary" || !isBlocked(metadata)) {
       continue;
     }
     blocked[metadata.scope].add(metadata.source);
@@ -550,103 +592,38 @@ export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   );
 }
 
-export type ChildToolDescriptor = {
-  name: string;
-  sourceInfo?: {
-    path?: string;
-    source?: string;
-    baseDir?: string;
-    scope?: string;
-    origin?: string;
-  };
-};
-
-export interface ChildToolInheritanceOptions {
-  availableTools?: readonly ChildToolDescriptor[];
-  cwd?: string;
-  agentDir?: string;
-}
-
-function isChildToolDescriptorList(
-  options: unknown,
-): options is readonly ChildToolDescriptor[] {
-  return Array.isArray(options);
-}
-
-/**
- * Checks whether a tool originates from a package that is blocked from child sessions.
- * Currently, pi-intercom packages are blocked (via blockedPackageSources) to avoid
- * process.env session cross-wiring in concurrent child sessions (#128).
- */
-export function isBlockedChildTool(
-  tool: ChildToolDescriptor,
-  options: { cwd?: string; agentDir?: string } = {},
-) {
-  if (!tool.sourceInfo) return false;
-  const { source, baseDir, path: toolFilePath } = tool.sourceInfo;
-  if (
-    source === "builtin" ||
-    source === "sdk" ||
-    (toolFilePath && toolFilePath.startsWith("<"))
-  ) {
-    return false;
-  }
-  const isPiIntercomPackage = createPiIntercomPackageMatcher({
-    cwd: options.cwd ?? process.cwd(),
-    agentDir: options.agentDir ?? getAgentDir(),
-  });
-  const candidatePath = baseDir ?? toolFilePath;
-  try {
-    return isPiIntercomPackage(source ?? "", candidatePath);
-  } catch {
-    if (
-      source &&
-      (source === "npm:pi-intercom" || source.includes("pi-intercom"))
-    ) {
-      return true;
-    }
-    if (candidatePath && candidatePath.includes("pi-intercom")) {
-      return true;
-    }
-    return false;
-  }
-}
-
 /** Project the parent's active surface into a child; a role can only narrow it.
  * Active tools are a visibility choice, not a filesystem/network sandbox.
- * Inactive tools are not implicitly activated by delegation.
- * Tools registered by packages that are blocked from child sessions (e.g. pi-intercom)
- * are dynamically dropped during inheritance when availableTools metadata is provided.
+ * Inactive tools are not implicitly activated by delegation. Pi supplies the
+ * provenance for every inherited tool; unverifiable identities stop startup.
  */
 export function inheritedChildToolAllowlist(
   parentTools: readonly string[],
-  roleTools?: readonly string[],
-  options?: ChildToolInheritanceOptions | readonly ChildToolDescriptor[],
+  roleTools: readonly string[] | undefined,
+  options: {
+    availableTools: readonly Pick<ToolInfo, "name" | "sourceInfo">[];
+    cwd: string;
+  },
 ) {
   const allowed = roleTools === undefined ? undefined : new Set(roleTools);
-  const optionsObj: ChildToolInheritanceOptions = isChildToolDescriptorList(
-    options,
-  )
-    ? { availableTools: options }
-    : (options ?? {});
-
-  const blockedTools = new Set<string>();
-  if (optionsObj.availableTools) {
-    for (const tool of optionsObj.availableTools) {
-      if (
-        isBlockedChildTool(tool, {
-          cwd: optionsObj.cwd,
-          agentDir: optionsObj.agentDir,
-        })
-      ) {
-        blockedTools.add(tool.name);
-      }
-    }
-  }
-
+  const available = new Map(
+    options.availableTools.map((tool) => [tool.name, tool]),
+  );
+  const isBlocked = createBlockedChildPackagePolicy({
+    cwd: options.cwd,
+    agentDir: getAgentDir(),
+  });
   return effectiveChildToolAllowlist([...new Set(parentTools)])!.filter(
-    (name) =>
-      !blockedTools.has(name) && (allowed === undefined || allowed.has(name)),
+    (name) => {
+      if (allowed && !allowed.has(name)) return false;
+      const tool = available.get(name);
+      if (!tool) {
+        throw new Error(
+          `Cannot verify child tool provenance for ${JSON.stringify(name)}`,
+        );
+      }
+      return !isBlocked(tool.sourceInfo);
+    },
   );
 }
 

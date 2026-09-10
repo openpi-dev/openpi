@@ -1648,7 +1648,7 @@ export default function workflows(
           pi.getActiveTools(),
           agentType?.tools,
           {
-            availableTools: pi.getAllTools?.(),
+            availableTools: pi.getAllTools(),
             cwd: ctx.cwd,
           },
         );

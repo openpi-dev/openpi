@@ -16,6 +16,7 @@ import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSession,
+  createSyntheticSourceInfo,
   DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
@@ -888,6 +889,76 @@ test("child resources exclude pi-intercom npm, Git, and local packages without m
     for (const marker of executionMarkers) {
       assert.equal(await readFile(marker, "utf8"), "executed");
     }
+
+    // Exercise inheritance with Pi's actual parent metadata, including the
+    // nested single-file package and an unrelated tool also named intercom.
+    const parentLoader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager: SettingsManager.create(cwd, agentDir, {
+        projectTrusted: true,
+      }),
+    });
+    await parentLoader.reload();
+    const { session: parent } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: parentLoader,
+      sessionManager: SessionManager.inMemory(cwd),
+    });
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    try {
+      await parent.bindExtensions({ mode: "print" });
+      const parentTools = parent.getActiveToolNames();
+      for (const name of packageToolNames)
+        assert.ok(parentTools.includes(name));
+      const options = { cwd, availableTools: parent.getAllTools() };
+      const inherited = inheritedChildToolAllowlist(
+        parentTools,
+        undefined,
+        options,
+      );
+      for (const name of packageToolNames)
+        assert.equal(inherited.includes(name), false);
+      assert.ok(
+        inherited.includes("intercom"),
+        "unrelated same-name tool survives",
+      );
+      assert.ok(inherited.includes("ordinary_manifestless"));
+      assert.ok(inherited.includes("project_intercom_path_fixture"));
+      assert.deepEqual(
+        inheritedChildToolAllowlist(
+          parentTools,
+          ["read", "intercom_single_file"],
+          options,
+        ),
+        ["read"],
+      );
+      const { session: child } = await createAgentSession({
+        cwd,
+        agentDir,
+        resourceLoader: trusted.loader,
+        settingsManager: trusted.settingsManager,
+        sessionManager: SessionManager.inMemory(cwd),
+        ...childToolPolicy(inherited),
+      });
+      try {
+        await bindChildSessionExtensions(child, inherited);
+        assert.deepEqual(
+          child.getActiveToolNames().sort(),
+          [...inherited].sort(),
+        );
+        assert.deepEqual(parent.getActiveToolNames(), parentTools);
+      } finally {
+        await shutdownAndDisposeChildSession(child);
+      }
+    } finally {
+      await shutdownAndDisposeChildSession(parent);
+      if (previousAgentDir === undefined)
+        delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
   });
 });
 
@@ -1188,6 +1259,25 @@ test("unverifiable local package identities fail closed before factory execution
         /Cannot verify child package identity/,
       );
       await assert.rejects(readFile(executionMarker));
+      assert.throws(
+        () =>
+          inheritedChildToolAllowlist(["fixture"], undefined, {
+            cwd,
+            availableTools: [
+              {
+                name: "fixture",
+                sourceInfo: {
+                  path: path.join(packageDir, "extensions", "index.ts"),
+                  source: packageDir,
+                  baseDir: packageDir,
+                  scope: "user",
+                  origin: "package",
+                },
+              },
+            ],
+          }),
+        /Cannot verify child package identity/,
+      );
     });
   }
 });
@@ -1558,98 +1648,39 @@ test("git-info exclusion: ENOENT degrades, other errors fail closed", async () =
 
 test("child delegation inherits active tools and custom restrictions only narrow", () => {
   const parent = ["read", "bash", "web_search", "workflow", "subagent_spawn"];
-  assert.deepEqual(inheritedChildToolAllowlist(parent), [
+  const options = {
+    cwd: process.cwd(),
+    availableTools: parent.map((name) => ({
+      name,
+      sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+    })),
+  };
+  assert.deepEqual(inheritedChildToolAllowlist(parent, undefined, options), [
     "read",
     "bash",
     "web_search",
   ]);
   assert.deepEqual(
-    inheritedChildToolAllowlist(parent, [
-      "read",
-      "rg",
-      "web_search",
-      "workflow",
-    ]),
+    inheritedChildToolAllowlist(
+      parent,
+      ["read", "rg", "web_search", "workflow"],
+      options,
+    ),
     ["read", "web_search"],
   );
-  assert.deepEqual(inheritedChildToolAllowlist(parent, []), []);
-  assert.deepEqual(inheritedChildToolAllowlist([], ["bash"]), []);
-});
-
-test("tools from blocked packages like pi-intercom are dynamically excluded from child allowlist and pass preflight", async () => {
-  // Simulate a parent session where pi-intercom is active alongside native tools and third-party tools
-  const parentActiveTools = [
-    "read",
-    "bash",
-    "edit",
-    "intercom",
-    "intercom_git",
-    "weather",
-  ];
-  const availableTools = [
-    { name: "read", sourceInfo: { source: "builtin" } },
-    { name: "bash", sourceInfo: { source: "builtin" } },
-    { name: "edit", sourceInfo: { source: "builtin" } },
-    { name: "weather", sourceInfo: { source: "npm:pi-weather" } },
-    { name: "intercom", sourceInfo: { source: "npm:pi-intercom" } },
-    {
-      name: "intercom_git",
-      sourceInfo: {
-        source: "git:https://github.com/nicobailon/pi-intercom",
-      },
-    },
-  ];
-
-  // 1. CHILD_EXCLUDED_TOOL_NAMES must NOT include community tool names
-  assert.equal(
-    (CHILD_EXCLUDED_TOOL_NAMES as readonly string[]).includes("intercom"),
-    false,
-    "CHILD_EXCLUDED_TOOL_NAMES must remain strictly for OpenPI package tools",
+  assert.deepEqual(inheritedChildToolAllowlist(parent, [], options), []);
+  assert.deepEqual(inheritedChildToolAllowlist([], ["bash"], options), []);
+  assert.throws(
+    () => inheritedChildToolAllowlist(["missing"], undefined, options),
+    /Cannot verify child tool provenance/,
   );
-
-  // 2. Inherited allowlist dynamically drops tools from blocked packages
-  const inherited = inheritedChildToolAllowlist(parentActiveTools, undefined, {
-    availableTools,
-  });
-  assert.deepEqual(inherited, ["read", "bash", "edit", "weather"]);
-  assert.equal(inherited.includes("intercom"), false);
-  assert.equal(inherited.includes("intercom_git"), false);
-  assert.equal(inherited.includes("weather"), true);
-
-  // 3. An explicit role allowlist naming a blocked package tool must also drop it
-  const explicitNarrowed = inheritedChildToolAllowlist(
-    parentActiveTools,
-    ["read", "intercom", "weather"],
-    { availableTools },
-  );
-  assert.deepEqual(explicitNarrowed, ["read", "weather"]);
-
-  // 4. Array shorthand for options works identically
-  const arrayShorthand = inheritedChildToolAllowlist(
-    parentActiveTools,
-    undefined,
-    availableTools,
-  );
-  assert.deepEqual(arrayShorthand, ["read", "bash", "edit", "weather"]);
-
-  // 5. Child tool policy constructed from inherited tools has no blocked tools
-  const policy = childToolPolicy(inherited);
-  assert.equal(policy.tools?.includes("intercom"), false);
-
-  // 6. bindChildSessionExtensions preflight must pass with the sanitized inherited allowlist
-  const mockChildSession = {
-    async bindExtensions() {},
-    getActiveToolNames: () => ["read", "bash", "edit", "weather"],
-    getAllTools: () => [
-      { name: "read" },
-      { name: "bash" },
-      { name: "edit" },
-      { name: "weather" },
-    ],
-    setActiveToolsByName(_names: string[]) {},
-  };
-
-  await assert.doesNotReject(
-    bindChildSessionExtensions(mockChildSession, inherited),
+  assert.throws(
+    () =>
+      inheritedChildToolAllowlist(["read"], undefined, {
+        cwd: process.cwd(),
+        // Verify the runtime boundary even if a broken caller violates Pi's type.
+        availableTools: [{ name: "read", sourceInfo: undefined! }],
+      }),
+    /Cannot verify child package identity/,
   );
 });

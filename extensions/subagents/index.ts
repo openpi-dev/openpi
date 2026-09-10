@@ -941,7 +941,7 @@ export default function (
         pi.getActiveTools(),
         requestedChildTools,
         {
-          availableTools: pi.getAllTools?.(),
+          availableTools: pi.getAllTools(),
           cwd: ctx.cwd,
         },
       );
