@@ -29,6 +29,7 @@ interface ComposerProps {
   sessionSwitching: boolean;
   promptAdmissionPending: boolean;
   promptAdmissionRecovery?: WebStoreState["promptAdmissionRecovery"];
+  promptAdmissionResolution?: WebStoreState["promptAdmissionResolution"];
   liveRunning: boolean;
   landing: boolean;
   actions: WebStoreActions;
@@ -74,6 +75,19 @@ export function Composer(props: ComposerProps) {
     if (!recovery) return;
     setPrompt((current) => current || recovery.content);
   }, [props.promptAdmissionRecovery]);
+
+  useEffect(() => {
+    const resolution = props.promptAdmissionResolution;
+    if (!resolution) return;
+    if (prompt === resolution.content) {
+      setPrompt("");
+      if (textarea.current) {
+        textarea.current.style.height = "auto";
+        textarea.current.style.overflowY = "hidden";
+      }
+    }
+    props.actions.acknowledgePromptAdmissionResolution(resolution.commandId);
+  }, [prompt, props.actions, props.promptAdmissionResolution]);
 
   const clearPrompt = () => {
     setPrompt("");
@@ -202,23 +216,44 @@ export function Composer(props: ComposerProps) {
         <section className="prompt-recovery" role="alert">
           <div>
             <strong>{t("promptAdmissionUnknown")}</strong>
-            <span>{t("promptAdmissionUnknownDetail")}</span>
+            <span>
+              {props.promptAdmissionRecovery.phase === "checking"
+                ? t("promptAdmissionCheckingDetail")
+                : props.promptAdmissionRecovery.phase === "verification-failed"
+                  ? t("promptAdmissionVerificationFailedDetail")
+                  : t("promptAdmissionUnknownDetail")}
+            </span>
           </div>
           <div className="prompt-recovery-actions">
             <button
               type="button"
-              disabled={props.promptAdmissionRecovery.checking}
+              disabled={props.promptAdmissionRecovery.phase === "submitting"}
               onClick={props.actions.abandonPromptAdmission}
             >
               {t("abandonAdmission")}
             </button>
+            {props.promptAdmissionRecovery.phase === "verification-failed" && (
+              <button
+                type="button"
+                onClick={() =>
+                  void props.actions.checkPromptAdmissionRecovery()
+                }
+              >
+                {t("retryAdmissionCheck")}
+              </button>
+            )}
             <button
               type="button"
               className="primary"
-              disabled={props.promptAdmissionRecovery.checking}
+              disabled={
+                props.promptAdmissionRecovery.phase !== "ready" ||
+                !prompt.trim()
+              }
               onClick={() => void sendAsNew()}
             >
-              {t("sendAsNew")}
+              {props.promptAdmissionRecovery.phase === "submitting"
+                ? t("sendingAsNew")
+                : t("sendAsNew")}
             </button>
           </div>
         </section>
@@ -327,6 +362,7 @@ export function Composer(props: ComposerProps) {
                   !props.selectedWorkspace ||
                   props.promptAdmissionPending ||
                   Boolean(props.promptAdmissionRecovery) ||
+                  Boolean(props.promptAdmissionResolution) ||
                   !prompt.trim()
                 }
               >

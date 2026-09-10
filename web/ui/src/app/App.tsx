@@ -181,6 +181,7 @@ export function App() {
           sessionSwitching={state.sessionSwitching}
           promptAdmissionPending={state.promptAdmissionPending}
           promptAdmissionRecovery={state.promptAdmissionRecovery}
+          promptAdmissionResolution={state.promptAdmissionResolution}
           liveRunning={state.liveRunning}
           landing={landing}
           actions={actions}
