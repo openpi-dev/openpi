@@ -206,3 +206,13 @@ test("tool updates replace snapshots, final results resist replay, caches are bo
   );
   assert.deepEqual(reduceLiveTools(tools, "session_switched", {}), []);
 });
+test("successful foreground completion does not invent an exit code or complete background jobs", () => {
+  const result = projectMessage({ content: "done", isError: false });
+  const foreground = projectToolEvidence(call("bash"), result);
+  assert.equal(foreground.processState, "returned");
+  assert.equal(foreground.exitCode, undefined);
+  assert.equal(
+    projectToolEvidence(call("bg_start"), result).processState,
+    "unknown",
+  );
+});

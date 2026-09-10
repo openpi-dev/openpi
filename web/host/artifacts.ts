@@ -28,6 +28,10 @@ function inside(root: string, path: string) {
 interface Scope { sessionId: string; cwd: string }
 interface Grant { scope: Scope; path: string; requested: string; touched: number }
 
+function metadataIdentity(info: import("node:fs").BigIntStats) {
+  return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
+}
+
 /** An explicit authenticated file-open request grants one read-only file.
  * No directory grants, persistence, background reads, or model-facing tools. */
 export class ArtifactReader {
@@ -116,6 +120,18 @@ export class ArtifactReader {
     return grant;
   }
 
+  async metadata(handle: string, sessionId: string) {
+    const grant = this.requireGrant(handle, sessionId);
+    try {
+      const current = await this.canonical(grant.scope, grant.requested);
+      if (current.path !== grant.path) throw denied();
+      const info = await lstat(current.path, { bigint: true });
+      if (!info.isFile()) throw denied();
+      this.assertScope(grant.scope);
+      return { identity: metadataIdentity(info) };
+    } catch (error) { throw this.classify(error); }
+  }
+
   async read(handle: string, sessionId: string, expectedRevision?: string) {
     const grant = this.requireGrant(handle, sessionId);
     if (this.reads >= MAX_READS) throw new ArtifactError("ARTIFACT_BUSY", 429, "File reads are busy. Try again shortly.");
@@ -148,7 +164,7 @@ export class ArtifactReader {
         const textual = (TEXT_EXTENSIONS.test(grant.path) || !basename(grant.path).includes(".")) && !bytes.subarray(0, ARTIFACT_PREVIEW_BYTES).includes(0);
         const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported" };
         const text = textual ? bytes.subarray(0, ARTIFACT_PREVIEW_BYTES).toString("utf8").replace(/\ufffd$/u, "").split("\n").slice(0, ARTIFACT_PREVIEW_LINES).join("\n") : undefined;
-        return { bytes, preview: { artifact, text, truncated: textual && (length > ARTIFACT_PREVIEW_BYTES || (text?.split("\n").length ?? 0) >= ARTIFACT_PREVIEW_LINES) } };
+        return { bytes, preview: { artifact, identity: metadataIdentity(after), text, truncated: textual && (length > ARTIFACT_PREVIEW_BYTES || (text?.split("\n").length ?? 0) >= ARTIFACT_PREVIEW_LINES) } };
       } finally { await file.close(); }
     } catch (error) { throw this.classify(error); }
     finally { this.reads--; }

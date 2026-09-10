@@ -63,6 +63,8 @@ export function ArtifactProvider({
     let parent = request.parent;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let stopped = false;
+    let identity: string | undefined;
+    let delay = 2_000;
     closeButton.current?.focus();
     const update = async () => {
       if (document.visibilityState === "hidden") {
@@ -87,23 +89,38 @@ export function ArtifactProvider({
           void client.releaseArtifact(sessionId, handle).catch(() => undefined);
           return;
         }
+        if (identity) {
+          const metadata = await client.artifactMetadata(
+            sessionId,
+            handle,
+            controller.signal,
+          );
+          if (metadata.identity === identity) {
+            if (!stopped) setError(null);
+            delay = Math.min(delay * 2, 30_000);
+            return;
+          }
+        }
         const next = await client.artifactPreview(
           sessionId,
           handle,
           controller.signal,
         );
         if (!stopped) {
+          identity = next.identity;
+          delay = 2_000;
           setPreview(next);
           setError(null);
         }
       } catch (reason) {
+        delay = Math.min(delay * 2, 30_000);
         if (!stopped)
           setError(
             reason instanceof Error ? reason.message : "Unable to read file",
           );
       } finally {
         // One outstanding read per open preview. No server watcher survives it.
-        if (!stopped) timer = setTimeout(update, 2_000);
+        if (!stopped) timer = setTimeout(update, delay);
       }
     };
     void update();

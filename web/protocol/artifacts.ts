@@ -11,6 +11,7 @@ export interface ArtifactMetadata {
   preview: "text" | "unsupported";
 }
 export interface ArtifactPreview {
+  identity?: string;
   artifact: ArtifactMetadata;
   text?: string;
   truncated: boolean;

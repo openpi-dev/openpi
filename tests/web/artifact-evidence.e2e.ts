@@ -231,10 +231,12 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     const writeCard = page
       .locator(".tool-evidence-card")
       .filter({ has: page.locator("summary strong", { hasText: "write" }) });
-    await expect(writeCard).toContainText("File created");
+    await expect(writeCard).toContainText(
+      "reading the previous contents was not authorized",
+    );
     await expect(
       writeCard.getByRole("figure", { name: "Change diff" }),
-    ).toContainText("+1 # First report");
+    ).toHaveCount(0);
     await expect(
       page.getByRole("figure", { name: "Test evidence" }),
     ).toContainText("1 failed");

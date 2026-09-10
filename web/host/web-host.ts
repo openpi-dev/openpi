@@ -456,6 +456,8 @@ export class WebHost {
       }
       if (request.method !== "GET") return this.json(response, 405, { error: "File content accepts GET or DELETE" });
       const download = url.searchParams.get("download") === "1";
+      if (url.searchParams.get("metadata") === "1" && !download)
+        return this.json(response, 200, await this.artifacts.metadata(handle, sessionId));
       const revision = url.searchParams.get("revision") ?? undefined;
       if (download && !/^[a-f0-9]{64}$/u.test(revision ?? "")) return this.json(response, 400, { error: "Download requires the preview content revision" });
       const result = await this.artifacts.read(handle, sessionId, revision);

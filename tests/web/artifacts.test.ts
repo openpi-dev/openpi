@@ -29,6 +29,14 @@ test("artifact reads bind Session, canonical file, content revision and explicit
     const handle = await reader.resolveFile(sessionId, "./report%20space.md");
     const first = await reader.read(handle, sessionId);
     assert.equal(first.preview.text, "# revision one");
+    assert.equal(
+      (await reader.metadata(handle, sessionId)).identity,
+      first.preview.identity,
+    );
+    await assert.rejects(
+      reader.metadata(handle, "other"),
+      code("ARTIFACT_EXPIRED"),
+    );
     // Windows temporary directories may use an 8.3 alias (e.g. RUNNER~1).
     assert.equal(first.preview.artifact.path, await realpath(path));
     assert.equal(
@@ -36,6 +44,10 @@ test("artifact reads bind Session, canonical file, content revision and explicit
       createHash("sha256").update(first.bytes).digest("hex"),
     );
     await writeFile(path, "# revision two");
+    assert.notEqual(
+      (await reader.metadata(handle, sessionId)).identity,
+      first.preview.identity,
+    );
     await assert.rejects(
       reader.read(handle, sessionId, first.preview.artifact.revision),
       code("ARTIFACT_CHANGED"),

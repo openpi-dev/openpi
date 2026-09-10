@@ -140,6 +140,13 @@ export class WebClient {
     });
   }
 
+  artifactMetadata(sessionId: string, handle: string, signal?: AbortSignal) {
+    return this.request<{ identity: string }>(
+      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle, metadata: "1" })}`,
+      { signal },
+    );
+  }
+
   artifactPreview(sessionId: string, handle: string, signal?: AbortSignal) {
     return this.request<ArtifactPreview>(
       `/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,

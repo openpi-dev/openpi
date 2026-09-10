@@ -7,59 +7,34 @@ import { createEvidenceWriteTool } from "../../web/runtime/write-evidence.ts";
 import { projectMessage } from "../../web/protocol/types.ts";
 import { projectToolEvidence } from "../../web/protocol/evidence.ts";
 
-test("write records creation, overwrite and unchanged evidence in canonical results", async () => {
+test("write never discloses previous contents or invents change evidence", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-write-evidence-"));
   try {
+    const path = join(cwd, "report.txt");
+    await writeFile(path, "private old contents");
     const tool = createEvidenceWriteTool(cwd);
-    const path = join(cwd, "new", "report.txt");
-    const run = (content: string) =>
-      tool.execute(
+    for (const content of ["replacement", "replacement", ""]) {
+      const result = await tool.execute(
         "write",
         { path, content },
         undefined,
         undefined,
         undefined!,
       );
-    const created = await run("apple\nbanana\ncherry\n");
-    assert.equal(created.details?.change, "created");
-    assert.match(created.details?.diff ?? "", /\+1 apple/);
-    const overwritten = await run("apple\norange\ncherry\n");
-    assert.equal(overwritten.details?.change, "overwritten");
-    assert.match(overwritten.details?.diff ?? "", /-2 banana/);
-    assert.match(overwritten.details?.diff ?? "", /\+2 orange/);
-    assert.equal(await readFile(path, "utf8"), "apple\norange\ncherry\n");
-    const unchanged = await run("apple\norange\ncherry\n");
-    assert.equal(unchanged.details?.change, "unchanged");
-    assert.equal(unchanged.details?.diff, "");
-    const call = projectMessage({
-      content: [
-        { type: "toolCall", id: "write", name: "write", arguments: { path } },
-      ],
-    }).parts![0];
-    assert.equal(call.type, "toolCall");
-    if (call.type !== "toolCall") throw new Error("missing call");
-    const persisted = JSON.parse(
-      JSON.stringify({
-        role: "toolResult",
-        toolCallId: "write",
-        toolName: "write",
-        ...overwritten,
-        isError: false,
-      }),
-    );
-    assert.equal(
-      projectToolEvidence(call, projectMessage(persisted)).diff,
-      overwritten.details?.diff,
-    );
-    await run("");
-    assert.equal((await run("")).details?.change, "unchanged");
-    const controls = await run("\u001b[31mred\u001b[0m\n");
-    assert.match(controls.details?.diff ?? "", /\u001b\[31m/);
-    const controlView = projectToolEvidence(
-      call,
-      projectMessage({ ...controls, isError: false }),
-    );
-    assert.doesNotMatch(controlView.diff ?? "", /\u001b/);
+      assert.equal(await readFile(path, "utf8"), content);
+      assert.ok(result.details?.evidenceUnavailable);
+      assert.doesNotMatch(JSON.stringify(result), /private old contents/);
+      const view = projectToolEvidence(
+        {
+          type: "toolCall",
+          name: "write",
+          arguments: JSON.stringify({ path }),
+        },
+        projectMessage({ ...result, isError: false }),
+      );
+      assert.equal(view.diff, undefined);
+      assert.equal(view.change, undefined);
+    }
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
@@ -88,11 +63,11 @@ test("bounded evidence does not block large, binary or unreadable comparisons; n
   }
 });
 
-test("concurrent writes capture the previous queued write, not a shared before-image", async () => {
+test("concurrent writes retain native queue behavior without old contents", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-write-evidence-"));
   try {
-    const tool = createEvidenceWriteTool(cwd);
     const path = join(cwd, "report.txt");
+    const tool = createEvidenceWriteTool(cwd);
     const results = await Promise.all(
       ["first", "second"].map((content) =>
         tool.execute(
@@ -104,10 +79,9 @@ test("concurrent writes capture the previous queued write, not a shared before-i
         ),
       ),
     );
-    assert.equal(results[0].details?.change, "created");
-    assert.equal(results[1].details?.change, "overwritten");
-    assert.match(results[1].details?.diff ?? "", /-1 first/);
-    assert.match(results[1].details?.diff ?? "", /\+1 second/);
+    assert.equal(await readFile(path, "utf8"), "second");
+    for (const result of results)
+      assert.ok(result.details?.evidenceUnavailable);
   } finally {
     await rm(cwd, { recursive: true, force: true });
   }
