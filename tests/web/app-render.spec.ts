@@ -853,12 +853,31 @@ it("debounces bounded model search when the snapshot omitted models", async () =
   expect(searchModels).toHaveBeenCalledOnce();
   expect(searchModels).toHaveBeenCalledWith("hidden");
 
+  const refreshedSnapshot = {
+    ...snapshot,
+    generatedAt: "2026-09-03T00:00:01Z",
+  };
   rerender(
     createElement(
       I18nextProvider,
       { i18n },
       createElement(Composer, {
         ...props,
+        snapshot: refreshedSnapshot,
+      }),
+    ),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  expect(searchModels).toHaveBeenCalledTimes(2);
+  expect(searchModels).toHaveBeenLastCalledWith("hidden");
+
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: refreshedSnapshot,
         modelSearch: {
           ...initialSearch,
           query: "hidden",

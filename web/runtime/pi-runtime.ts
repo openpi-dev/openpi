@@ -29,13 +29,7 @@ import {
   WebRuntimeRequestError,
 } from "./types.ts";
 import {
-  boundedText,
-  jsonByteLength,
   projectMessage,
-  WEB_MAX_MODEL_QUERY,
-  WEB_MAX_MODEL_SEARCH_BYTES,
-  WEB_MAX_MODEL_SEARCH_RESULTS,
-  type WebModelSearchResult,
 } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
@@ -50,6 +44,7 @@ import {
 import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
+import { projectWebModelSearch } from "./model-discovery.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -378,52 +373,8 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
-  searchModels(query: string, limit = WEB_MAX_MODEL_SEARCH_RESULTS): WebModelSearchResult {
-    const normalizedQuery = query.trim().slice(0, WEB_MAX_MODEL_QUERY).toLocaleLowerCase();
-    const terms = normalizedQuery.split(/\s+/u).filter(Boolean);
-    const allModels = this.listModels();
-    const matches = allModels.filter((model) => {
-      const haystack = [model.provider, model.id, model.name, model.label]
-        .join(" ")
-        .toLocaleLowerCase();
-      return terms.every((term) => haystack.includes(term));
-    });
-    const maxResults = Math.max(
-      1,
-      Math.min(WEB_MAX_MODEL_SEARCH_RESULTS, Math.trunc(limit)),
-    );
-    const models: typeof matches = [];
-    for (const model of matches) {
-      if (models.length >= maxResults) break;
-      const projected = {
-        ...model,
-        provider: boundedText(model.provider, 500),
-        id: boundedText(model.id, 500),
-        name: boundedText(model.name, 500),
-        label: boundedText(model.label, 500),
-      };
-      if (
-        jsonByteLength({
-          models: [...models, projected],
-        }) > WEB_MAX_MODEL_SEARCH_BYTES
-      ) {
-        break;
-      }
-      models.push(projected);
-    }
-    const matchesOmitted = matches.length - models.length;
-    return {
-      models,
-      totalAvailable: allModels.length,
-      totalMatches: matches.length,
-      truncation: {
-        truncated: matchesOmitted > 0,
-        matchesOmitted,
-        maxResults,
-        maxBytes: WEB_MAX_MODEL_SEARCH_BYTES,
-        bytes: jsonByteLength({ models }),
-      },
-    };
+  searchModels(query: string, limit?: number) {
+    return projectWebModelSearch(this.listModels(), query, limit);
   }
 
   listProviderAuth(): WebProviderAuthProjection {

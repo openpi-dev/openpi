@@ -9,6 +9,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerWebCapability } from "../../extensions/shared/web-observer-registry.ts";
 import { WebHost } from "../../web/host/web-host.ts";
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -146,6 +147,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         current: false,
       },
     ],
+    searchModels: (query, limit) =>
+      projectWebModelSearch(runtime.listModels(), query, limit),
     getProjectTrustStatus: () => ({
       source: "pi-project-trust",
       workspace: runtimeCwd,
@@ -387,14 +390,21 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       headers: authorized,
     });
     assert.equal(modelsResponse.status, 200);
-    const modelsBody = (await modelsResponse.json()) as {
+    const modelsText = await modelsResponse.text();
+    const modelsBody = JSON.parse(modelsText) as {
       models: Array<{ provider: string; id: string }>;
       totalMatches: number;
-      truncation: { matchesOmitted: number };
+      truncation: {
+        bytes: number;
+        matchesOmitted: number;
+        maxBytes: number;
+      };
     };
     assert.deepEqual(modelsBody.models, snapshot.models);
     assert.equal(modelsBody.totalMatches, snapshot.models.length);
     assert.equal(modelsBody.truncation.matchesOmitted, 0);
+    assert.equal(Buffer.byteLength(modelsText), modelsBody.truncation.bytes);
+    assert.ok(modelsBody.truncation.bytes <= modelsBody.truncation.maxBytes);
     const filteredModels = await fetch(
       `${launched.origin}/api/models?query=other&limit=1`,
       { headers: authorized },
@@ -924,6 +934,7 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("workspace required");
     },
@@ -1024,6 +1035,7 @@ test("returns accepted only after Pi admits the prompt", async () => {
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("Model is not available");
     },
@@ -1154,6 +1166,7 @@ function testRuntime(
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("Model is not available");
     },

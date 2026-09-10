@@ -336,6 +336,8 @@ export function createWebStore(
       ].includes(event.type);
       set({ cursor: event.sequence });
 
+      if (event.type === "runtime_changed") set(resetModelSearch());
+
       if (current.sessionSwitching && !sessionTransition) {
         scheduleSnapshotRefresh();
         return;
@@ -630,8 +632,6 @@ export function createWebStore(
               ? selectedSessionWorkspace
               : (activeWorkspace ?? retainedWorkspace ?? null);
           const shouldReset = options.resetCursor;
-          const sessionChanged =
-            get().snapshot?.currentSessionId !== snapshot.currentSessionId;
           set({
             ...(shouldReset ? resetLivePatch() : {}),
             connection:
@@ -665,7 +665,7 @@ export function createWebStore(
               currentSession?.path ?? snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
             snapshot,
-            ...(sessionChanged ? resetModelSearch() : {}),
+            ...resetModelSearch(),
           });
           return true;
         } catch (error) {
@@ -922,6 +922,7 @@ export function createWebStore(
         modelSearchController = controller;
         const generation = ++modelSearchGeneration;
         const epoch = sessionEpoch;
+        const catalogGeneration = snapshotGeneration;
         const sessionId = get().snapshot?.currentSessionId;
         set({
           modelSearch: {
@@ -942,6 +943,7 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
+            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;
@@ -959,6 +961,7 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
+            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;

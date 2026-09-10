@@ -45,14 +45,15 @@ export function ModelPicker(props: ModelPickerProps) {
       : []
     : snapshotModels;
   const searchModels = props.actions.searchModels;
+  const snapshotGeneration = props.snapshot?.generatedAt;
 
   useEffect(() => {
-    if (!normalizedQuery) return;
+    if (!normalizedQuery || !snapshotGeneration) return;
     const timer = window.setTimeout(() => {
       void searchModels(normalizedQuery);
     }, MODEL_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [normalizedQuery, searchModels]);
+  }, [normalizedQuery, searchModels, snapshotGeneration]);
 
   const resetSearch = () => {
     setQuery("");

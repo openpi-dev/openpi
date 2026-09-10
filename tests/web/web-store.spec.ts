@@ -421,6 +421,96 @@ describe("OpenPI Web store", () => {
     });
   });
 
+  it("clears model search results when a new snapshot is accepted for the same Session", async () => {
+    const client = new FakeClient();
+    const refreshed = snapshot();
+    refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(refreshed),
+    );
+    client.modelSearchResults.push(
+      Promise.resolve({
+        models: [
+          {
+            provider: "test",
+            id: "search-only-model",
+            name: "Search only model",
+            label: "Search only model",
+            current: false,
+          },
+        ],
+        totalAvailable: 251,
+        totalMatches: 1,
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          maxResults: 50,
+          maxBytes: 64 * 1024,
+          bytes: 200,
+        },
+      }),
+    );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    await store.getState().actions.searchModels("search-only");
+    expect(store.getState().modelSearch.status).toBe("ready");
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+
+    expect(store.getState().snapshot?.currentSessionId).toBe("session-1");
+    expect(store.getState().modelSearch).toEqual({
+      query: "",
+      status: "idle",
+      models: [],
+      totalMatches: 0,
+      matchesOmitted: 0,
+      error: null,
+    });
+  });
+
+  it("rejects a model search result from an older same-Session snapshot generation", async () => {
+    const client = new FakeClient();
+    const refreshed = snapshot();
+    refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(refreshed),
+    );
+    const result = deferred<WebModelSearchResult>();
+    client.modelSearchResults.push(result.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    const searching = store.getState().actions.searchModels("search-only");
+    await vi.waitFor(() => expect(client.modelSearchQueries).toHaveLength(1));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    result.resolve({
+      models: [
+        {
+          provider: "test",
+          id: "stale-model",
+          name: "Stale model",
+          label: "Stale model",
+          current: false,
+        },
+      ],
+      totalAvailable: 251,
+      totalMatches: 1,
+      truncation: {
+        truncated: false,
+        matchesOmitted: 0,
+        maxResults: 50,
+        maxBytes: 64 * 1024,
+        bytes: 200,
+      },
+    });
+    await searching;
+
+    expect(store.getState().modelSearch.status).toBe("idle");
+    expect(store.getState().modelSearch.models).toEqual([]);
+  });
+
   it("falls back to the canonical active Session when a selected transcript is stale", async () => {
     const client = new FakeClient();
     const stale = activeSnapshot("session-2", "/tmp/ws/current.jsonl");

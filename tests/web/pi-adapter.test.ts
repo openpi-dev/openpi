@@ -16,6 +16,7 @@ import {
   WEB_MAX_SESSIONS,
   WEB_MAX_SNAPSHOT_BYTES,
 } from "../../web/protocol/types.ts";
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
 
 function runtimeFor(
@@ -35,6 +36,7 @@ function runtimeFor(
     newSession: async () => ({ cancelled: false }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("Model is not available");
     },

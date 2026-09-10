@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import {
   type WebRuntimeEvent,
@@ -659,8 +660,8 @@ test("model search reports count truncation separately from the available total"
 
 test("model search enforces the byte budget after the result count budget", () => {
   const models = Array.from({ length: 50 }, (_, index) => ({
-    provider: `provider-${index}-${"p".repeat(500)}`,
-    id: `model-${index}-${"i".repeat(500)}`,
+    provider: `provider-${index}-${"p".repeat(700)}`,
+    id: `model-${index}-${"i".repeat(700)}`,
     name: `Model ${index} ${"n".repeat(500)}`,
   }));
   const harness = Object.create(PiWebRuntime.prototype) as {
@@ -680,6 +681,9 @@ test("model search enforces the byte budget after the result count budget", () =
   assert.ok(result.models.length < 50);
   assert.ok(result.truncation.matchesOmitted > 0);
   assert.ok(result.truncation.bytes <= result.truncation.maxBytes);
+  assert.equal(result.models[0]?.provider, models[0]?.provider);
+  assert.equal(result.models[0]?.id, models[0]?.id);
+  assert.equal(result.truncation.bytes, jsonByteLength(result));
 });
 
 test("a delayed model selection cannot target a newly activated Session", async () => {

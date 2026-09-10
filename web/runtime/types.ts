@@ -125,7 +125,7 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
-  searchModels?(query: string, limit?: number): WebModelSearchResult;
+  searchModels(query: string, limit?: number): WebModelSearchResult;
   listProviderAuth?(): WebProviderAuthProjection;
   getThinkingState?(): { level: string; available: readonly string[] };
   setModel(
