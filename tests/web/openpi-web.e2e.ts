@@ -796,13 +796,14 @@ test("workspace selection survives refresh and creates the exact native Session 
     const { path: canonicalWorkspace } = await imported.json();
     const before = await page.request.get("/api/snapshot", { headers });
     const initial = await before.json();
-    const workspaceName = canonicalWorkspace.split("/").at(-1);
+    const workspaceName = canonicalWorkspace.split(/[\\/]/u).at(-1);
     const prompts: Array<{ sessionId: string; content: string }> = [];
     // Only intercept model admission. Workspace import, snapshots and native
     // Session creation use the isolated real Host and Pi runtime.
     await page.route("**/api/prompt", async (route) => {
       const body = route.request().postDataJSON();
       prompts.push({ sessionId: body.sessionId, content: body.content });
+      await new Promise((resolve) => setTimeout(resolve, 150));
       await route.fulfill({
         status: 202,
         json: { id: body.commandId, accepted: true },
@@ -827,11 +828,11 @@ test("workspace selection survives refresh and creates the exact native Session 
     });
     await refresh;
     await expect(picker).toHaveText(workspaceName);
-    await page
-      .getByRole("textbox", { name: "描述任务" })
-      .fill("Only work in the selected repository");
-    await page.getByRole("button", { name: "发送", exact: true }).click();
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("Only work in the selected repository");
+    await Promise.all([input.press("Enter"), input.press("Enter")]);
     await expect.poll(() => prompts.length).toBe(1);
+    await expect(input).toHaveValue("");
     const after = await page.request.get("/api/snapshot", { headers });
     const current = await after.json();
     expect(current.selectedSession.cwd).toBe(canonicalWorkspace);

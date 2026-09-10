@@ -52,11 +52,14 @@ export function Composer(props: ComposerProps) {
     props.selectedPath === undefined
       ? (selected?.path ?? null)
       : props.selectedPath;
+  const sessionPath =
+    selected?.cwd === props.selectedWorkspace ? selectedPath : null;
   const draftScope =
-    selectedPath ??
+    sessionPath ??
     (props.selectedWorkspace ? `new:${props.selectedWorkspace}` : "none");
   const draftScopeRef = useRef(draftScope);
   const draftRevision = useRef(0);
+  const transferDraftToCreatedSession = useRef(false);
   const pendingSubmission = useRef<{
     revision: number;
     scope: string;
@@ -90,12 +93,27 @@ export function Composer(props: ComposerProps) {
 
     const submission = pendingSubmission.current;
     const createdSession =
-      submission?.canTransferToCreatedSession &&
-      submission.scope === previousScope &&
-      Boolean(selectedPath) &&
-      props.snapshot?.selectedSession?.path === selectedPath;
+      !props.workspaceDraft &&
+      (transferDraftToCreatedSession.current ||
+        (submission?.canTransferToCreatedSession &&
+          submission.scope === previousScope)) &&
+      Boolean(sessionPath) &&
+      props.snapshot?.selectedSession?.path === sessionPath &&
+      props.snapshot?.selectedSession?.cwd === props.selectedWorkspace;
     if (createdSession) {
-      submission.scope = draftScope;
+      if (submission?.canTransferToCreatedSession)
+        submission.scope = draftScope;
+      transferDraftToCreatedSession.current = false;
+      return;
+    }
+
+    const startingNewSession =
+      props.workspaceDraft &&
+      props.selectedWorkspace &&
+      draftScope === `new:${props.selectedWorkspace}` &&
+      props.snapshot?.selectedSession?.cwd === props.selectedWorkspace;
+    if (startingNewSession) {
+      transferDraftToCreatedSession.current = true;
       return;
     }
 
@@ -104,7 +122,14 @@ export function Composer(props: ComposerProps) {
     if (submission?.scope === previousScope) {
       submission.canTransferToCreatedSession = false;
     }
-  }, [draftScope, props.snapshot?.selectedSession?.path, selectedPath]);
+  }, [
+    draftScope,
+    props.snapshot?.selectedSession?.path,
+    props.snapshot?.selectedSession?.cwd,
+    props.selectedWorkspace,
+    props.workspaceDraft,
+    sessionPath,
+  ]);
 
   const resize = (element: HTMLTextAreaElement) => {
     element.style.height = "auto";
@@ -114,6 +139,7 @@ export function Composer(props: ComposerProps) {
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (pendingSubmission.current) return;
     if (!props.selectedWorkspace) {
       await props.actions.chooseWorkspace();
       return;

@@ -919,6 +919,147 @@ it("clears an old session draft without letting its late send clear the new one"
   expect(input.value).toBe("new session");
 });
 
+it("clears an active Session draft when switching to another workspace", () => {
+  const store = createWebStore();
+  const snapshot = activeSnapshot();
+  snapshot.workspaces = [
+    { path: "/tmp", name: "A", current: true },
+    { path: "/tmp/other", name: "B", current: false },
+  ];
+  const props = {
+    snapshot,
+    selectedPath: "/tmp/session",
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions: store.getState().actions,
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "Session A draft" } });
+
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        selectedWorkspace: "/tmp/other",
+        workspaceDraft: true,
+        selectedPath: "/tmp/session",
+      }),
+    ),
+  );
+
+  expect(input.value).toBe("");
+});
+
+it("transfers an unsent draft through manual new-session creation", () => {
+  const store = createWebStore();
+  const snapshot = activeSnapshot();
+  const props = {
+    snapshot,
+    selectedPath: "/tmp/session",
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    actions: store.getState().actions,
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "keep this draft" } });
+
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        workspaceDraft: true,
+        selectedPath: null,
+        sessionSwitching: true,
+      }),
+    ),
+  );
+  expect(input.value).toBe("keep this draft");
+
+  const createdSnapshot = {
+    ...snapshot,
+    currentSessionId: "created-session",
+    selectedSession: {
+      ...snapshot.selectedSession!,
+      id: "created-session",
+      path: "/tmp/created-session",
+    },
+  };
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: createdSnapshot,
+        selectedPath: "/tmp/created-session",
+        sessionSwitching: false,
+      }),
+    ),
+  );
+  expect(input.value).toBe("keep this draft");
+});
+
+it("ignores a rapid second Enter while admission is pending", async () => {
+  const result = deferred<boolean>();
+  const store = createWebStore();
+  const sendPrompt = vi.fn(() => result.promise);
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      actions: { ...store.getState().actions, sendPrompt },
+    }),
+  );
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "once" } });
+  fireEvent.keyDown(input, {
+    key: "Enter",
+    nativeEvent: { isComposing: false },
+  });
+  fireEvent.keyDown(input, {
+    key: "Enter",
+    nativeEvent: { isComposing: false },
+  });
+
+  expect(sendPrompt).toHaveBeenCalledOnce();
+  await act(async () => {
+    result.resolve(true);
+    await result.promise;
+  });
+  expect(input.value).toBe("");
+});
+
 it("transfers a new-session draft until its first send is accepted", async () => {
   const result = deferred<boolean>();
   const store = createWebStore();
