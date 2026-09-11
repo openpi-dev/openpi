@@ -5,9 +5,10 @@
     "": {
       "name": "@tt-a1i/openpi",
       "dependencies": {
-        "@effect/platform-node": "^4.0.0-beta.99",
+        "@effect/platform-node": "4.0.0-beta.103",
+        "@effect/platform-node-shared": "4.0.0-beta.103",
         "acorn": "^8.17.0",
-        "effect": "^4.0.0-beta.99",
+        "effect": "4.0.0-beta.103",
         "jiti": "2.7.0",
         "undici": "8.9.0",
       },
@@ -20,7 +21,7 @@
         "@earendil-works/pi-coding-agent": "^0.85.1",
         "@earendil-works/pi-tui": "^0.85.1",
         "@effect/tsgo": "^0.24.2",
-        "@effect/vitest": "^4.0.0-beta.99",
+        "@effect/vitest": "4.0.0-beta.103",
         "@playwright/test": "1.62.1",
         "@stylexjs/stylex": "0.19.0",
         "@tailwindcss/vite": "4.3.3",
