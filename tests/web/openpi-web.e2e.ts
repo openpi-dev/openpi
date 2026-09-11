@@ -223,6 +223,9 @@ for (const width of [320, 390]) {
     await expect(menu).toBeFocused();
     await expect(sidebar).toBeVisible();
     await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "重命名工作区" }),
+    ).toBeFocused();
     await page.keyboard.press("Enter");
     const dialog = page.getByRole("dialog", { name: "重命名工作区" });
     await expect(
