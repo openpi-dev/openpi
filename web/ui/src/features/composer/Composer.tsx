@@ -48,6 +48,7 @@ export function Composer(props: ComposerProps) {
   const { t } = useTranslation();
   const [prompt, setPrompt] = useState("");
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const restoredRecoveryCommandId = useRef<string | null>(null);
   const selected = props.snapshot?.selectedSession;
   const active = Boolean(
     !props.workspaceDraft &&
@@ -72,6 +73,9 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     const recovery = props.promptAdmissionRecovery;
+    const commandId = recovery?.commandId ?? null;
+    if (restoredRecoveryCommandId.current === commandId) return;
+    restoredRecoveryCommandId.current = commandId;
     if (!recovery) return;
     setPrompt((current) => current || recovery.content);
   }, [props.promptAdmissionRecovery]);
@@ -79,7 +83,7 @@ export function Composer(props: ComposerProps) {
   useEffect(() => {
     const resolution = props.promptAdmissionResolution;
     if (!resolution) return;
-    if (prompt === resolution.content) {
+    if (prompt.trim() === resolution.content) {
       setPrompt("");
       if (textarea.current) {
         textarea.current.style.height = "auto";
