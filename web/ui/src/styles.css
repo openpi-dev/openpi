@@ -339,6 +339,20 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .model-picker-label, .model-menu-item-label { display: block; min-width: 0; overflow-wrap: anywhere; white-space: normal; }
 .model-picker:hover, .model-picker[aria-expanded="true"] { background: oklch(97% .006 249) !important; color: var(--text) !important; }
 .model-picker svg { width: 14px; height: 14px; }
+.thinking-picker-wrap { position: relative; z-index: 11; flex: 0 0 auto; }
+.thinking-picker { width: 34px !important; min-width: 34px !important; height: 34px !important; min-height: 34px !important; padding: 0 !important; border-radius: 50% !important; background: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
+.thinking-picker:hover, .thinking-picker[aria-expanded="true"] { background: oklch(97% .006 249) !important; color: var(--text) !important; }
+.thinking-picker:disabled { opacity: .55; }
+.thinking-picker svg { width: 17px; height: 17px; }
+.thinking-picker-wrap[data-level="off"] .thinking-picker { color: var(--subtle) !important; }
+.thinking-picker-wrap[data-level="minimal"] .thinking-picker { color: oklch(58% .06 249) !important; }
+.thinking-picker-wrap[data-level="low"] .thinking-picker { color: oklch(55% .09 249) !important; }
+.thinking-picker-wrap[data-level="medium"] .thinking-picker { color: oklch(52% .11 168) !important; }
+.thinking-picker-wrap[data-level="high"] .thinking-picker { color: oklch(52% .13 74) !important; }
+.thinking-picker-wrap[data-level="xhigh"] .thinking-picker, .thinking-picker-wrap[data-level="max"] .thinking-picker { color: oklch(48% .16 32) !important; }
+.thinking-picker-wrap[data-warning="true"] .thinking-picker { color: var(--warning) !important; }
+.thinking-picker-wrap[data-pending="true"] .thinking-picker { animation: thinking-picker-pulse 1.1s ease-in-out infinite; }
+@keyframes thinking-picker-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
 .send-button { @apply grid shrink-0 place-items-center border-0; width: 34px; height: 34px; border-radius: 50%; background: var(--sidebar); transition: background-color 140ms ease, transform 100ms ease; }
 .send-button:hover:not(:disabled) { background: var(--sidebar-hover); }
 .send-button:active:not(:disabled) { transform: scale(.92); }
@@ -389,6 +403,12 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .notice { bottom: 12px; width: calc(100% - 24px); }
 }
 
+@media (max-width: 520px) {
+  .composer-toolbar { gap: 5px; }
+  .model-picker-wrap { max-width: 100%; flex: 1 1 auto; }
+  .model-picker { min-width: 0 !important; }
+}
+
 @media (any-pointer: coarse) {
   .session-row > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
   .session-row .session-time { visibility: hidden; }
@@ -403,6 +423,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .landing-brand .pixel-mark i { background-color: currentColor; }
   .landing-brand .pixel-mark i::after { opacity: 0; }
   .status-mark.running i, .activity-chip-dot, .conversation-running-dot { animation: none; }
+  .thinking-picker-wrap[data-pending="true"] .thinking-picker { animation: none; }
 }
 
 /* Resolve the canonical Pi theme without a second browser preference. */
@@ -421,6 +442,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 :root[data-theme="dark"] :is(.new-session-button:hover, .message-details summary:hover, .tool-group > summary:hover, .message-actions button:hover, .turn-tick:hover) { background: var(--sidebar-hover); border-color: var(--border); }
 :root[data-theme="dark"] :is(.turn-rail:hover, .turn-rail:focus-within) { background: var(--page); }
 :root[data-theme="dark"] .model-picker:hover, :root[data-theme="dark"] .model-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
+:root[data-theme="dark"] .thinking-picker:hover, :root[data-theme="dark"] .thinking-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
 
 .session-view-switch {
   border: 0;

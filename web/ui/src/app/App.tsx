@@ -171,6 +171,7 @@ export function App() {
           workspaceDraft={state.workspaceDraft}
           draftModel={state.draftModel}
           modelSelectionPending={state.modelSelectionPending}
+          thinkingPendingLevel={state.thinkingPendingLevel}
           onInspect={inspect}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}

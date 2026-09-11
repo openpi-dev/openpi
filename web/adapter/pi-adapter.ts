@@ -5,6 +5,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
   boundedText,
+  boundThinkingProjection,
   jsonByteLength,
   projectEntries,
   projectEntry,
@@ -22,7 +23,10 @@ import {
   type WebSnapshotTruncation,
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
-import type { WebRuntimeController } from "../runtime/types.ts";
+import type {
+  WebRuntimeController,
+  WebThinkingProjection,
+} from "../runtime/types.ts";
 
 type WorkspaceStateSnapshot = {
   importedWorkspaces: Set<string>;
@@ -643,6 +647,7 @@ export class PiWebAdapter {
       name: boundedText(model.name, WEB_MAX_SESSION_PREVIEW),
       label: boundedText(model.label, WEB_MAX_SESSION_PREVIEW),
     }));
+    const thinking = this.safeThinking();
     const snapshot = {
       ...(this.runtime.workspaceSelected === true
         ? { currentSessionId: this.runtime.sessionManager.getSessionId() }
@@ -650,6 +655,7 @@ export class PiWebAdapter {
       workspaces,
       sessions,
       models,
+      ...(thinking ? { thinking } : {}),
       ...(selectedSession ? { selectedSession } : {}),
       runtime: {
         status: this.runtime.isIdle()
@@ -764,6 +770,16 @@ export class PiWebAdapter {
       snapshot.truncation.modelsOmitted++;
     }
     snapshot.truncation.truncated = true;
+  }
+
+  private safeThinking(): WebThinkingProjection | undefined {
+    if (!this.runtime.getThinkingState) return undefined;
+    try {
+      return boundThinkingProjection(this.runtime.getThinkingState());
+    } catch {
+      // An optional diagnostic must never break /api/snapshot.
+      return undefined;
+    }
   }
 
   private captureWorkspaceState(): WorkspaceStateSnapshot {

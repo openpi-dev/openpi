@@ -1474,3 +1474,265 @@ test("toolUse message_end without a terminal result settles as uncertain", () =>
     ],
   );
 });
+
+type ThinkingHarness = {
+  runtime: { session: ReturnType<typeof thinkingSession>["session"] };
+  listeners: Set<(event: WebRuntimeEvent) => void>;
+  controllerMutation: Promise<void>;
+  runtimeOperations: Set<Promise<void>>;
+  disposed: boolean;
+  hasSelectedWorkspace: boolean;
+  thinkingMutationInFlight: boolean;
+  thinkingMutationPending?: {
+    level: string;
+    options?: { expectedSessionId?: string };
+    waiters: Array<{
+      resolve: (projection: {
+        level: string;
+        available: readonly string[];
+        supported: boolean;
+      }) => void;
+      reject: (error: unknown) => void;
+    }>;
+  };
+  retainRuntimeReference: (runtime: unknown) => void;
+  getThinkingState: PiWebRuntime["getThinkingState"];
+  setThinkingLevel: PiWebRuntime["setThinkingLevel"];
+};
+
+function thinkingSession(
+  initial: {
+    sessionId?: string;
+    level?: string;
+    available?: string[];
+    supported?: boolean;
+    apply?: boolean;
+  } = {},
+) {
+  const state = {
+    sessionId: initial.sessionId ?? "session-a",
+    level: initial.level ?? "off",
+    available: initial.available ?? ["off", "low", "medium", "high"],
+    supported: initial.supported ?? true,
+    apply: initial.apply ?? true,
+    calls: [] as string[],
+  };
+  const session = {
+    get thinkingLevel() {
+      return state.level;
+    },
+    sessionManager: { getSessionId: () => state.sessionId },
+    getAvailableThinkingLevels: () => [...state.available],
+    supportsThinking: () => state.supported,
+    setThinkingLevel(level: string) {
+      state.calls.push(level);
+      if (state.apply && state.available.includes(level)) state.level = level;
+    },
+  };
+  return { session, state };
+}
+
+function thinkingHarness(
+  session: ReturnType<typeof thinkingSession>["session"],
+) {
+  let retained = 0;
+  const harness = Object.create(
+    PiWebRuntime.prototype,
+  ) as unknown as ThinkingHarness;
+  harness.runtime = { session };
+  harness.listeners = new Set();
+  harness.controllerMutation = Promise.resolve();
+  harness.runtimeOperations = new Set();
+  harness.disposed = false;
+  harness.hasSelectedWorkspace = true;
+  harness.thinkingMutationInFlight = false;
+  harness.retainRuntimeReference = () => {
+    retained += 1;
+  };
+  return { harness, retained: () => retained };
+}
+
+test("thinking state projects the Pi supported flag", () => {
+  const reasoning = thinkingSession({
+    level: "high",
+    available: ["off", "high"],
+    supported: true,
+  });
+  const reasoningHarness = thinkingHarness(reasoning.session).harness;
+  assert.deepEqual(reasoningHarness.getThinkingState(), {
+    level: "high",
+    available: ["off", "high"],
+    supported: true,
+  });
+
+  const nonReasoning = thinkingSession({
+    level: "off",
+    available: ["off"],
+    supported: false,
+  });
+  const nonReasoningHarness = thinkingHarness(nonReasoning.session).harness;
+  assert.deepEqual(nonReasoningHarness.getThinkingState(), {
+    level: "off",
+    available: ["off"],
+    supported: false,
+  });
+});
+
+test("setThinkingLevel applies and confirms an available level without retaining", async () => {
+  const fixture = thinkingSession();
+  const { harness, retained } = thinkingHarness(fixture.session);
+  const projection = await harness.setThinkingLevel("high", {
+    expectedSessionId: "session-a",
+  });
+  assert.deepEqual(projection, {
+    level: "high",
+    available: ["off", "low", "medium", "high"],
+    supported: true,
+  });
+  assert.deepEqual(fixture.state.calls, ["high"]);
+  assert.equal(fixture.state.level, "high");
+  assert.equal(retained(), 0);
+});
+
+test("setThinkingLevel rejects a mismatched expected Session", async () => {
+  const fixture = thinkingSession();
+  const { harness } = thinkingHarness(fixture.session);
+  await assert.rejects(
+    harness.setThinkingLevel("high", { expectedSessionId: "session-b" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebRuntimeRequestError);
+      assert.equal(error.code, "SESSION_CONFLICT");
+      assert.equal(error.statusCode, 409);
+      return true;
+    },
+  );
+  assert.deepEqual(fixture.state.calls, []);
+});
+
+test("setThinkingLevel rejects unavailable and unsupported levels", async () => {
+  const unavailable = thinkingSession({ available: ["off", "low"] });
+  const first = thinkingHarness(unavailable.session).harness;
+  await assert.rejects(first.setThinkingLevel("high"), (error: unknown) => {
+    assert.ok(error instanceof WebRuntimeRequestError);
+    assert.equal(error.code, "THINKING_LEVEL_NOT_AVAILABLE");
+    assert.equal(error.statusCode, 400);
+    return true;
+  });
+  assert.deepEqual(unavailable.state.calls, []);
+
+  const unsupported = thinkingSession({ supported: false, available: ["off"] });
+  const second = thinkingHarness(unsupported.session).harness;
+  await assert.rejects(second.setThinkingLevel("off"), (error: unknown) => {
+    assert.ok(error instanceof WebRuntimeRequestError);
+    assert.equal(error.code, "THINKING_LEVEL_NOT_AVAILABLE");
+    return true;
+  });
+  assert.deepEqual(unsupported.state.calls, []);
+});
+
+test("setThinkingLevel fails closed when Pi does not confirm the level", async () => {
+  const fixture = thinkingSession({ apply: false });
+  const { harness } = thinkingHarness(fixture.session);
+  await assert.rejects(
+    harness.setThinkingLevel("high"),
+    /Thinking level selection was not confirmed/u,
+  );
+  assert.deepEqual(fixture.state.calls, ["high"]);
+});
+
+test("thinking_level_changed projects the active session and level", () => {
+  const fixture = thinkingSession({ sessionId: "session-a" });
+  const { harness } = thinkingHarness(fixture.session);
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: ThinkingHarness,
+        session: unknown,
+        event: { type: string; level?: string },
+      ): void;
+    }
+  ).projectEvent;
+  projectEvent.call(harness, fixture.session, {
+    type: "thinking_level_changed",
+    level: "high",
+  });
+  assert.deepEqual(events, [
+    {
+      type: "thinking_level_changed",
+      detail: { sessionId: "session-a", level: "high" },
+    },
+  ]);
+});
+
+test("concurrent thinking selections coalesce to the last target", async () => {
+  const fixture = thinkingSession({
+    available: ["off", "low", "medium", "high"],
+  });
+  const { harness, retained } = thinkingHarness(fixture.session);
+  const results = await Promise.all([
+    harness.setThinkingLevel("low"),
+    harness.setThinkingLevel("medium"),
+    harness.setThinkingLevel("high"),
+    harness.setThinkingLevel("medium"),
+    harness.setThinkingLevel("high"),
+  ]);
+
+  assert.ok(
+    fixture.state.calls.length <= 2,
+    `expected at most two writes, saw ${fixture.state.calls.join(",")}`,
+  );
+  assert.equal(fixture.state.calls.includes("medium"), false);
+  assert.equal(fixture.state.calls.at(-1), "high");
+  assert.equal(fixture.state.level, "high");
+  assert.equal(results.at(-1)?.level, "high");
+  assert.equal(retained(), 0);
+});
+
+test("a merged thinking selection rejects callers whose expected session changed", async () => {
+  const fixture = thinkingSession({
+    sessionId: "session-a",
+    available: ["off", "low", "minimal", "high"],
+  });
+  const { harness } = thinkingHarness(fixture.session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+
+  // Two callers enqueue valid expectations while the mutation is gated, then
+  // the active Session changes before the merged write can apply.
+  const first = harness.setThinkingLevel("high", {
+    expectedSessionId: "session-a",
+  });
+  const second = harness.setThinkingLevel("low", {
+    expectedSessionId: "session-a",
+  });
+  fixture.state.sessionId = "session-b";
+  const third = harness.setThinkingLevel("minimal", {
+    expectedSessionId: "session-b",
+  });
+
+  gate.resolve();
+  const [firstResult, secondResult, thirdResult] = await Promise.allSettled([
+    first,
+    second,
+    third,
+  ]);
+
+  assert.equal(firstResult.status, "rejected");
+  assert.equal(secondResult.status, "rejected");
+  assert.equal(thirdResult.status, "fulfilled");
+  for (const result of [firstResult, secondResult]) {
+    if (result.status === "rejected") {
+      const error = result.reason as WebRuntimeRequestError;
+      assert.equal(error.code, "SESSION_CONFLICT");
+      assert.equal(error.statusCode, 409);
+    }
+  }
+  assert.equal(
+    thirdResult.status === "fulfilled" ? thirdResult.value.level : "",
+    "minimal",
+  );
+  // Only the still-active Session's intent is written.
+  assert.deepEqual(fixture.state.calls, ["minimal"]);
+});

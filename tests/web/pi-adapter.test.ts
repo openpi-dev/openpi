@@ -875,3 +875,58 @@ test("unarchive is idempotent across restart and preserves canonical Session dat
     await rm(root, { recursive: true, force: true });
   }
 });
+
+test("snapshot projects a bounded thinking state without a revision", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-thinking-bounds-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.inMemory(root);
+    const runtime: WebRuntimeController = {
+      ...runtimeFor(root, sessionDirectory, current),
+      getThinkingState: () => ({
+        level: "l".repeat(900),
+        available: Array.from(
+          { length: 20 },
+          (_, index) => `level-${index}-${"a".repeat(600)}`,
+        ),
+        supported: true,
+      }),
+    };
+    const snapshot = await new PiWebAdapter(runtime).getSnapshot();
+
+    assert.ok(snapshot.thinking);
+    assert.equal(snapshot.thinking.level.length, 500);
+    assert.equal(snapshot.thinking.available.length, 16);
+    assert.ok(
+      snapshot.thinking.available.every((level) => level.length <= 500),
+    );
+    assert.equal(snapshot.thinking.supported, true);
+    assert.equal("revision" in snapshot.thinking, false);
+    assert.ok(snapshot.truncation.bytes <= WEB_MAX_SNAPSHOT_BYTES);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("a throwing or absent thinking getter is omitted without failing the snapshot", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-thinking-fail-open-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.inMemory(root);
+    const throwing: WebRuntimeController = {
+      ...runtimeFor(root, sessionDirectory, current),
+      getThinkingState: () => {
+        throw new Error("thinking state exploded");
+      },
+    };
+    const thrown = await new PiWebAdapter(throwing).getSnapshot();
+    assert.equal(thrown.thinking, undefined);
+
+    const absent = await new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    ).getSnapshot();
+    assert.equal(absent.thinking, undefined);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

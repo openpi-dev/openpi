@@ -5,6 +5,7 @@ import type {
   WebEvent,
   WebModelSummary,
   WebSnapshot,
+  WebThinkingState,
 } from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
@@ -160,6 +161,16 @@ class FakeClient extends WebClient {
     id: "prompt-1",
     accepted: true,
   });
+  thinkingResult: Promise<WebThinkingState & { sessionId: string }> =
+    Promise.resolve({
+      sessionId: "session-1",
+      level: "medium",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 1,
+    });
+  setThinkingResults: Array<Promise<WebThinkingState & { sessionId: string }>> =
+    [];
   creations: Array<{ commandId: string; workspacePath: string }> = [];
   selections: string[] = [];
   modelSelections: Array<{
@@ -168,6 +179,8 @@ class FakeClient extends WebClient {
     sessionId: string;
   }> = [];
   prompts: Array<{ sessionId: string; content: string }> = [];
+  thinkingRequests: string[] = [];
+  thinkings: Array<{ sessionId: string; level: string }> = [];
 
   override snapshot(path?: string | null) {
     this.snapshotPaths.push(path);
@@ -203,6 +216,24 @@ class FakeClient extends WebClient {
   ) {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
+  }
+
+  override thinking(sessionId: string, _signal: AbortSignal) {
+    this.thinkingRequests.push(sessionId);
+    return this.thinkingResult;
+  }
+
+  override setThinkingLevel(sessionId: string, level: string) {
+    this.thinkings.push({ sessionId, level });
+    const queued = this.setThinkingResults.shift();
+    if (queued) return queued;
+    return Promise.resolve({
+      sessionId,
+      level,
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 1_000 + this.thinkings.length,
+    });
   }
 }
 
@@ -1508,5 +1539,697 @@ describe("workspace selection authority", () => {
     expect(store.getState().draftModel?.id).toBe("model");
     expect(client.modelSelections).toEqual([]);
     expect(client.creations).toEqual([]);
+  });
+});
+
+function withThinking(
+  next: WebSnapshot,
+  thinking: Partial<NonNullable<WebSnapshot["thinking"]>> = {},
+) {
+  next.thinking = {
+    level: "medium",
+    available: ["off", "minimal", "low", "medium", "high"],
+    supported: true,
+    revision: 1,
+    ...thinking,
+  };
+  return next;
+}
+
+describe("thinking level selection", () => {
+  async function harness(
+    thinking: Partial<NonNullable<WebSnapshot["thinking"]>> = {},
+  ) {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(withThinking(snapshot(), thinking)));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    return { client, store };
+  }
+
+  it("sends nothing for the confirmed level and applies a changed level once", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 4 });
+
+    store.getState().actions.selectThinking("medium");
+    expect(client.thinkings).toEqual([]);
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+
+    store.getState().actions.selectThinking("high");
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+    ]);
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 1_001,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("keeps a newer pending intent while a selection is in flight", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+
+    store.getState().actions.selectThinking("low");
+    store.getState().actions.selectThinking("low");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+    ]);
+    store.getState().actions.selectThinking("high");
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+    expect(client.thinkings).toHaveLength(1);
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+      { sessionId: "session-1", level: "high" },
+    ]);
+    expect(store.getState().snapshot?.thinking?.level).toBe("high");
+    store.getState().actions.stop();
+  });
+
+  it("clears pending on a Session switch without touching the new Session", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+    client.selectionResults.push(Promise.resolve({}));
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(activeSnapshot("session-2", "/tmp/ws/b.jsonl"), {
+          level: "medium",
+          revision: 5,
+        }),
+      ),
+    );
+
+    store.getState().actions.selectThinking("low");
+    expect(store.getState().thinkingPendingLevel).toBe("low");
+    await store.getState().actions.selectSession("/tmp/ws/b.jsonl");
+
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+    expect(store.getState().selectedPath).toBe("/tmp/ws/b.jsonl");
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(store.getState().snapshot?.currentSessionId).toBe("session-2");
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "medium",
+      revision: 5,
+    });
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+    ]);
+    store.getState().actions.stop();
+  });
+
+  it("resets pending when the operator selects a different model", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+    const model = deferred<WebModelSummary>();
+    client.modelResult = model.promise;
+    const changed = withThinking(snapshot(), { level: "low", revision: 6 });
+    changed.models = [
+      {
+        provider: "test",
+        id: "other",
+        name: "other",
+        label: "Other model",
+        current: true,
+      },
+    ];
+    client.snapshots.push(Promise.resolve(changed));
+
+    store.getState().actions.selectThinking("high");
+    const selecting = store.getState().actions.selectModel("test/other");
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+
+    model.resolve({
+      provider: "test",
+      id: "other",
+      name: "other",
+      label: "Other model",
+      current: true,
+    });
+    await selecting;
+    first.resolve({
+      sessionId: "session-1",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 6,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("clears pending, surfaces the failure, and reconciles over GET", async () => {
+    const { client, store } = await harness();
+    client.setThinkingResults.push(Promise.reject(new Error("network down")));
+    client.thinkingResult = Promise.resolve({
+      sessionId: "session-1",
+      level: "medium",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 8,
+    });
+
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().notice).toBe("network down"),
+    );
+    await vi.waitFor(() =>
+      expect(store.getState().snapshot?.thinking?.revision).toBe(8),
+    );
+
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+    expect(client.thinkingRequests).toEqual(["session-1"]);
+    store.getState().actions.stop();
+  });
+
+  it("surfaces a Host 501 thinking-control error as a notice", async () => {
+    const { client, store } = await harness();
+    client.setThinkingResults.push(
+      Promise.reject(
+        new WebApiError(
+          "thinking control is unavailable",
+          501,
+          "THINKING_CONTROL_UNAVAILABLE",
+        ),
+      ),
+    );
+
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().notice).toBe("thinking control is unavailable"),
+    );
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("does not regress when a stale snapshot arrives after a POST patch", async () => {
+    const { client, store } = await harness();
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking?.level).toBe("high");
+
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(snapshot(), { level: "minimal", revision: 2 }),
+      ),
+    );
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 1_001,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("keeps the newest snapshot revision even before a selection", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 10 });
+    client.snapshots.push(
+      Promise.resolve(withThinking(snapshot(), { level: "low", revision: 4 })),
+    );
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "medium",
+      revision: 10,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("clears the revision gate on a cursor reset after a host restart", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 1_001,
+    });
+    store.getState().actions.stop();
+
+    // A restarted host restarts its sequence, so the revision floor resets.
+    client.snapshots.push(
+      Promise.resolve(withThinking(snapshot(), { level: "low", revision: 0 })),
+    );
+    expect(
+      await store.getState().actions.refreshSnapshot({ resetCursor: true }),
+    ).toBe(true);
+
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 0,
+    });
+  });
+
+  it("does not resurrect an accepted level when a snapshot omits thinking", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+    });
+    store.getState().actions.stop();
+
+    client.snapshots.push(Promise.resolve(snapshot()));
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().snapshot?.thinking).toBeUndefined();
+  });
+
+  it("adopts the new Session projection even when its revision is lower", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 40 });
+    store.getState().actions.selectThinking("high");
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking?.revision).toBe(1_001);
+    store.getState().actions.stop();
+
+    client.selectionResults.push(Promise.resolve({}));
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(activeSnapshot("session-2", "/tmp/ws/b.jsonl"), {
+          level: "low",
+          revision: 5,
+        }),
+      ),
+    );
+    await store.getState().actions.selectSession("/tmp/ws/b.jsonl");
+
+    expect(store.getState().snapshot?.currentSessionId).toBe("session-2");
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 5,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("accepts an equal-revision snapshot projection", async () => {
+    const { client, store } = await harness({ level: "medium", revision: 10 });
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(snapshot(), { level: "high", revision: 10 }),
+      ),
+    );
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 10,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("drops a superseded flush instead of posting a duplicate for the new Session", async () => {
+    const { client, store } = await harness();
+    const superseded = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(superseded.promise);
+
+    store.getState().actions.selectThinking("high");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+    ]);
+
+    client.selectionResults.push(Promise.resolve({}));
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(activeSnapshot("session-2", "/tmp/ws/b.jsonl"), {
+          level: "medium",
+          revision: 5,
+        }),
+      ),
+    );
+    await store.getState().actions.selectSession("/tmp/ws/b.jsonl");
+
+    const newer = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(newer.promise);
+    store.getState().actions.selectThinking("low");
+    expect(store.getState().thinkingPendingLevel).toBe("low");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+      { sessionId: "session-2", level: "low" },
+    ]);
+
+    // The superseded session-1 POST settles after the newer flush is in flight.
+    superseded.resolve({
+      sessionId: "session-1",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    // Exactly one POST per intent: the superseded flush is dropped.
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+      { sessionId: "session-2", level: "low" },
+    ]);
+    expect(store.getState().thinkingPendingLevel).toBe("low");
+
+    newer.resolve({
+      sessionId: "session-2",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 8,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 8,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("ignores a stale thinking_level_changed while a POST is in flight", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(
+      Promise.resolve(withThinking(snapshot(), { revision: 10 })),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+
+    const pending = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(pending.promise);
+    store.getState().actions.selectThinking("high");
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+
+    stream.emit(
+      runtimeEvent(5, "thinking_level_changed", {
+        sessionId: "session-1",
+        level: "low",
+      }),
+    );
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "medium",
+      revision: 10,
+    });
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+    ]);
+
+    pending.resolve({
+      sessionId: "session-1",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 20,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 20,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("keeps the newer accepted value when an older success resolves late", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+    client.selectionResults.push(Promise.resolve({}));
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(activeSnapshot("session-2", "/tmp/ws/b.jsonl"), {
+          level: "medium",
+          revision: 5,
+        }),
+      ),
+    );
+
+    store.getState().actions.selectThinking("low");
+    await store.getState().actions.selectSession("/tmp/ws/b.jsonl");
+    const second = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(second.promise);
+    store.getState().actions.selectThinking("high");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+      { sessionId: "session-2", level: "high" },
+    ]);
+
+    second.resolve({
+      sessionId: "session-2",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 8,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().snapshot?.thinking?.revision).toBe(8),
+    );
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 8,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("keeps a newer Session intent when the superseded success resolves first", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+    client.selectionResults.push(Promise.resolve({}));
+    client.snapshots.push(
+      Promise.resolve(
+        withThinking(activeSnapshot("session-2", "/tmp/ws/b.jsonl"), {
+          level: "medium",
+          revision: 5,
+        }),
+      ),
+    );
+
+    store.getState().actions.selectThinking("low");
+    await store.getState().actions.selectSession("/tmp/ws/b.jsonl");
+    const second = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(second.promise);
+    store.getState().actions.selectThinking("high");
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+
+    // The superseded session-1 flush is dropped; the in-flight session-2 flush
+    // still owns the newer intent and no duplicate POST is issued.
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+      { sessionId: "session-2", level: "high" },
+    ]);
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+
+    second.resolve({
+      sessionId: "session-2",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 8,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().snapshot?.thinking?.level).toBe("high"),
+    );
+    expect(store.getState().thinkingPendingLevel).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("applies a local thinking_level_changed patch with its revision", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(withThinking(snapshot())));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+
+    stream.emit(
+      runtimeEvent(9, "thinking_level_changed", {
+        sessionId: "session-1",
+        level: "high",
+      }),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "high",
+      revision: 9,
+    });
+
+    stream.emit(
+      runtimeEvent(10, "thinking_level_changed", {
+        sessionId: "session-1",
+        level: "low",
+      }),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 10,
+    });
+
+    stream.emit(
+      runtimeEvent(3, "thinking_level_changed", {
+        sessionId: "session-1",
+        level: "medium",
+      }),
+    );
+    expect(store.getState().snapshot?.thinking).toMatchObject({
+      level: "low",
+      revision: 10,
+    });
+    store.getState().actions.stop();
+  });
+
+  it("ignores thinking_level_changed when the snapshot has no projection", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+
+    stream.emit(
+      runtimeEvent(9, "thinking_level_changed", {
+        sessionId: "session-1",
+        level: "high",
+      }),
+    );
+
+    expect(store.getState().snapshot?.thinking).toBeUndefined();
+    expect(store.getState().notice).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("converges to the last intent in a burst", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+
+    for (const level of ["low", "high", "minimal", "low", "high"]) {
+      store.getState().actions.selectThinking(level);
+    }
+    expect(store.getState().thinkingPendingLevel).toBe("high");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "low" },
+    ]);
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "low",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+    expect(store.getState().snapshot?.thinking?.level).toBe("high");
+    expect(client.thinkings.length).toBeLessThanOrEqual(2);
+    store.getState().actions.stop();
+  });
+
+  it("terminates after jittering between two levels", async () => {
+    const { client, store } = await harness();
+    for (let index = 0; index < 50; index += 1) {
+      store.getState().actions.selectThinking(index % 2 === 0 ? "low" : "high");
+      await Promise.resolve();
+    }
+    await vi.waitFor(() =>
+      expect(store.getState().thinkingPendingLevel).toBeNull(),
+    );
+
+    expect(store.getState().snapshot?.thinking?.level).toBe("high");
+    expect(client.thinkings.length).toBeLessThanOrEqual(51);
+    store.getState().actions.stop();
+  });
+
+  it("does not deadlock or send again after stop while a POST is in flight", async () => {
+    const { client, store } = await harness();
+    const first = deferred<WebThinkingState & { sessionId: string }>();
+    client.setThinkingResults.push(first.promise);
+
+    store.getState().actions.selectThinking("high");
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+    ]);
+    store.getState().actions.stop();
+
+    first.resolve({
+      sessionId: "session-1",
+      level: "high",
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+    await new Promise((resolve) => window.setTimeout(resolve, 0));
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+    ]);
+
+    store.getState().actions.selectThinking("low");
+    await vi.waitFor(() =>
+      expect(store.getState().snapshot?.thinking?.level).toBe("low"),
+    );
+    expect(client.thinkings).toEqual([
+      { sessionId: "session-1", level: "high" },
+      { sessionId: "session-1", level: "low" },
+    ]);
+    store.getState().actions.stop();
   });
 });

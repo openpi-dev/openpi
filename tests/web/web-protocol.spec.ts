@@ -253,3 +253,49 @@ it("retains the fragment entry for the separate Vite developer page", () => {
     sessionStorage.clear();
   }
 });
+
+it("posts a thinking level and reads the thinking projection", async () => {
+  const fetcher = vi.fn(async (_path: string, options: RequestInit) => {
+    const body =
+      options.method === "POST"
+        ? {
+            sessionId: "s",
+            level: "high",
+            available: ["low", "high"],
+            supported: true,
+            revision: 7,
+          }
+        : {
+            sessionId: "s",
+            level: "low",
+            available: ["low", "high"],
+            supported: true,
+            revision: 3,
+          };
+    return new Response(JSON.stringify(body), { status: 200 });
+  });
+  vi.stubGlobal("fetch", fetcher);
+  const client = new WebClient();
+
+  const read = await client.thinking("s", new AbortController().signal);
+  const written = await client.setThinkingLevel("s", "high");
+
+  expect(read).toMatchObject({
+    sessionId: "s",
+    supported: true,
+    revision: 3,
+  });
+  expect(written).toMatchObject({
+    sessionId: "s",
+    level: "high",
+    revision: 7,
+  });
+  const post = fetcher.mock.calls.find(
+    ([, options]) => options?.method === "POST",
+  );
+  expect(post?.[0]).toBe("/api/thinking");
+  expect(JSON.parse(String(post?.[1]?.body))).toEqual({
+    sessionId: "s",
+    level: "high",
+  });
+});

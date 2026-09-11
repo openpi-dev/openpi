@@ -3,6 +3,10 @@ import { expect, type Page, test } from "@playwright/test";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import {
+  installThinkingFixture,
+  MOCK_SESSION_ID,
+} from "./thinking-e2e-support.ts";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
@@ -50,6 +54,28 @@ test("production workbench is local, keyboard-operable, and accessible", async (
       { timeout: 1_500 },
     )
     .not.toBe("0");
+
+  const thinkingPicker = page.locator(".thinking-picker");
+  await expect(thinkingPicker).toBeVisible();
+  await expect(thinkingPicker).toBeDisabled();
+  await expect(thinkingPicker).toHaveAttribute("aria-label", "暂不支持思考");
+  expect(
+    await page.evaluate(() => {
+      const model = document.querySelector(".model-picker");
+      const thinking = document.querySelector(".thinking-picker");
+      if (!model || !thinking) return null;
+      return {
+        sameToolbar: Boolean(
+          model.closest(".composer-toolbar") &&
+            thinking.closest(".composer-toolbar"),
+        ),
+        thinkingAfterModel: Boolean(
+          model.compareDocumentPosition(thinking) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      };
+    }),
+  ).toEqual({ sameToolbar: true, thinkingAfterModel: true });
 
   const workspaceMenu = page.getByRole("button", {
     name: "Workspace options",
@@ -850,4 +876,206 @@ test("workspace selection survives refresh and creates the exact native Session 
     await page.close();
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test.describe("thinking picker", () => {
+  test("opens with a section heading and marks the confirmed level", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await expect(picker).toBeEnabled();
+    await picker.click();
+    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
+    await expect(
+      page
+        .getByRole("menuitem", { name: "off", exact: true })
+        .locator("svg.lucide-check"),
+    ).toHaveCount(1);
+  });
+
+  test("selecting the confirmed level issues no write", async ({ page }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "off", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "off",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([]);
+  });
+
+  test("selecting another level issues exactly one write and confirms it", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "high",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "high" },
+    ]);
+  });
+
+  test("is keyboard-operable and cancels with Escape", async ({ page }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await picker.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "off", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(
+      page.getByRole("menuitem", { name: "low", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "low",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "low" },
+    ]);
+
+    await picker.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    expect(fixture.posts).toHaveLength(1);
+  });
+
+  test("keeps the last intent when the first write is in flight", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    fixture.holdNextPost();
+    await picker.click();
+    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await expect.poll(() => fixture.posts.length, { timeout: 5_000 }).toBe(1);
+
+    await picker.click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "true",
+    );
+    fixture.releaseHeldPost();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "high",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "low" },
+      { sessionId: MOCK_SESSION_ID, level: "high" },
+    ]);
+  });
+
+  test("surfaces a notice and reconciles after a failed write", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    fixture.failNextPost(500, { error: "Mock thinking failure" });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Mock thinking failure",
+    );
+    await expect.poll(() => fixture.getCount()).toBe(1);
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "off",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+  });
+
+  test("surfaces a notice when thinking control is unavailable", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    fixture.failNextPost(501, {
+      code: "THINKING_CONTROL_UNAVAILABLE",
+      error: "thinking control is unavailable",
+    });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "thinking control is unavailable",
+    );
+  });
+
+  test("warns when the confirmed level is outside the supported set", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page, {
+      level: "medium",
+      available: ["off", "low", "high"],
+    });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await expect(
+      page.locator('.thinking-picker-wrap[data-warning="true"]'),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /当前确认的思考等级/ }),
+    ).toBeVisible();
+  });
+
+  test("locks the picker while a turn is running", async ({ page }) => {
+    await installThinkingFixture(page, { runtimeStatus: "running" });
+    await openWorkbench(page);
+    await expect(page.locator(".thinking-picker")).toBeDisabled();
+  });
+
+  test("keeps the toolbar inside a narrow viewport", async ({ page }) => {
+    await installThinkingFixture(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkbench(page);
+    await expect(page.locator(".thinking-picker")).toBeVisible();
+    const width = await page.evaluate(() => ({
+      client: document.body.clientWidth,
+      scroll: document.body.scrollWidth,
+    }));
+    expect(width.scroll).toBeLessThanOrEqual(width.client);
+  });
+
+  test("has an accessible trigger and an accessible open menu", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await expect(picker).toHaveAccessibleName(/思考等级.*off/);
+    await picker.click();
+    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(accessibility.violations).toEqual([]);
+  });
 });

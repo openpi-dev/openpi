@@ -123,6 +123,7 @@
     "build:web": "vite build --config web/vite.config.mjs",
     "check:web": "node --check scripts/dev-web.mjs && node --check web/vite.config.mjs && tsc --noEmit --project web/ui/tsconfig.json && bun run build:web",
     "test:web:e2e": "bun run build:web && playwright test --config tests/web/playwright.config.ts",
+    "test:web:e2e:provider": "bun run build:web && playwright test --config tests/web/playwright.provider.config.ts",
     "benchmark:workflow-child-startup": "node --experimental-strip-types scripts/benchmark-workflow-child-startup.mjs",
     "test": "node scripts/run-tests.mjs",
     "provenance": "node scripts/provenance.mjs"

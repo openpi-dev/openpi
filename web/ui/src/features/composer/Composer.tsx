@@ -1,13 +1,14 @@
 import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
+  Brain,
   Check,
   ChevronDown,
   Folder,
   Plus,
   Send,
-  Square,
   SlidersHorizontal,
+  Square,
 } from "lucide-react";
 import { type FormEvent, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
@@ -23,6 +24,7 @@ interface ComposerProps {
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
   modelSelectionPending?: boolean;
+  thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
   onInspect?: (terminalId?: string) => void;
   snapshot: WebSnapshot | null;
   selectedWorkspace: string | null;
@@ -136,23 +138,74 @@ export function Composer(props: ComposerProps) {
       : active
         ? t("promptMessage")
         : t("promptReadonly");
-  const hint = props.workspaceDraft
-    ? t("enterHint")
-    : props.turnCancellationPending
-      ? t("stoppingTurn")
-      : props.turnTerminalStatus === "cancelled"
-        ? t("stoppedTurn")
-        : props.pendingFollowUpsReceipt !== null
-          ? props.pendingFollowUpsReceipt > 0
-            ? t("pendingFollowUpsHint", {
-                count: props.pendingFollowUpsReceipt,
-              })
-            : t("acceptedHint")
-          : canCompose
-            ? running
-              ? t("queuedHint")
-              : t("enterHint")
-            : t("activeOnlyHint");
+  const thinking = props.snapshot?.thinking;
+  const confirmed = thinking?.level ?? null;
+  const pending = props.thinkingPendingLevel ?? null;
+  const shown = pending ?? confirmed;
+  const supported = thinking?.supported ?? false;
+  const weak = thinking ? !thinking.available.includes(confirmed ?? "") : false;
+  const thinkingItems = (thinking?.available ?? []).map((lvl) => ({
+    id: lvl,
+    label: lvl,
+    endContent: lvl === shown ? <Check /> : undefined,
+    onClick: () => void props.actions.selectThinking(lvl),
+  }));
+  const thinkingDisabledReason = !thinking
+    ? null
+    : !supported
+      ? "thinkingUnsupportedHint"
+      : props.workspaceDraft
+        ? "thinkingDraftHint"
+        : !active
+          ? "thinkingInactiveHint"
+          : running
+            ? "thinkingLockedRunning"
+            : props.modelSelectionPending
+              ? "thinkingModelPendingHint"
+              : null;
+  const thinkingAria = !supported
+    ? t("thinkingUnsupported")
+    : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}`;
+  const thinkingMenuItems = thinking
+    ? [
+        ...(weak
+          ? [
+              {
+                id: "thinking-level-mismatch",
+                label: t("thinkingLevelMismatch"),
+                isDisabled: true,
+              },
+              { type: "divider" as const },
+            ]
+          : []),
+        {
+          type: "section" as const,
+          id: "thinking-level",
+          title: t("thinkingLevel"),
+          items: thinkingItems,
+        },
+      ]
+    : [];
+  const hint =
+    props.thinkingPendingLevel !== null
+      ? t("thinkingPendingHint")
+      : props.workspaceDraft
+        ? t("enterHint")
+        : props.turnCancellationPending
+          ? t("stoppingTurn")
+          : props.turnTerminalStatus === "cancelled"
+            ? t("stoppedTurn")
+            : props.pendingFollowUpsReceipt !== null
+              ? props.pendingFollowUpsReceipt > 0
+                ? t("pendingFollowUpsHint", {
+                    count: props.pendingFollowUpsReceipt,
+                  })
+                : t("acceptedHint")
+              : canCompose
+                ? running
+                  ? t("queuedHint")
+                  : t("enterHint")
+                : t("activeOnlyHint");
 
   return (
     <div className="composer-dock">
@@ -260,6 +313,37 @@ export function Composer(props: ComposerProps) {
               hasChevron={false}
             />
           </div>
+          {thinking && (
+            <div
+              className="thinking-picker-wrap"
+              data-level={confirmed ?? "none"}
+              data-pending={pending !== null}
+              data-warning={weak}
+              title={
+                thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
+              }
+            >
+              <DropdownMenu
+                className="thinking-menu"
+                button={{
+                  label: thinkingAria,
+                  icon: <Brain />,
+                  isIconOnly: true,
+                  size: "sm",
+                  variant: "ghost",
+                  className: "thinking-picker",
+                  isDisabled:
+                    thinkingDisabledReason !== null ||
+                    thinkingItems.length === 0,
+                }}
+                items={thinkingMenuItems}
+                menuWidth={220}
+                placement="above"
+                alignment="end"
+                hasChevron={false}
+              />
+            </div>
+          )}
           {canStop ? (
             <Tooltip content={t("stopTurn")} placement="above">
               <button
@@ -283,6 +367,7 @@ export function Composer(props: ComposerProps) {
                 disabled={
                   props.sessionSwitching ||
                   props.modelSelectionPending ||
+                  props.thinkingPendingLevel !== null ||
                   !canCompose ||
                   !props.selectedWorkspace ||
                   props.promptAdmissionPending ||
