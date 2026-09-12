@@ -1,12 +1,19 @@
 import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
-import type { WebModelSummary, WebSnapshot } from "../../../protocol/types.ts";
 import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
 } from "../../../protocol/artifacts.ts";
+import {
+  WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebModelSearchResult,
+  type WebModelSummary,
+  type WebSnapshot,
+  type WebThinkingState,
+  type WebCommandDiscoveryResult,
+} from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -262,11 +269,20 @@ export class WebClient {
   }
 
   thinking(sessionId: string, signal: AbortSignal) {
-    return this.request<{
-      sessionId: string;
-      level: string;
-      available: readonly string[];
-    }>(`/api/thinking?sessionId=${encodeURIComponent(sessionId)}`, { signal });
+    return this.request<WebThinkingState & { sessionId: string }>(
+      `/api/thinking?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  setThinkingLevel(sessionId: string, level: string) {
+    return this.request<WebThinkingState & { sessionId: string }>(
+      "/api/thinking",
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionId, level }),
+      },
+    );
   }
 
   trust(sessionId: string, signal: AbortSignal) {
@@ -279,6 +295,13 @@ export class WebClient {
   providerAuth(sessionId: string, signal: AbortSignal) {
     return this.request<WebProviderAuthProjection>(
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  commands(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebCommandDiscoveryResult>(
+      `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }
@@ -297,6 +320,17 @@ export class WebClient {
     return this.request<WebModelSummary>("/api/model", {
       method: "POST",
       body: JSON.stringify({ provider, modelId, sessionId }),
+    });
+  }
+
+  searchModels(query: string, sessionId?: string, signal?: AbortSignal) {
+    const params = new URLSearchParams({
+      query,
+      limit: String(WEB_MAX_MODEL_SEARCH_RESULTS),
+    });
+    if (sessionId) params.set("sessionId", sessionId);
+    return this.request<WebModelSearchResult>(`/api/models?${params}`, {
+      signal,
     });
   }
 

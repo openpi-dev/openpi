@@ -67,11 +67,16 @@ import {
   type WorkflowLogEntry,
   workflowGraphRecords,
 } from "./model.ts";
+import { measureWorkflowDetailsBytes } from "./retention.ts";
 import { writeFileAtomic } from "./serialization.ts";
 import { WorkflowTranscriptAdapter } from "./transcript.ts";
 
 const NOTICE_TTL_MS = 4000;
 const MIN_HEIGHT = 10;
+// This is a UI projection bound. It is deliberately independent from the
+// session-memory settled-run retention policy; disk remains canonical.
+const DEFAULT_WORKFLOW_DASHBOARD_MAX_RUNS = 32;
+const DEFAULT_WORKFLOW_DASHBOARD_MAX_BYTES = 2 * 1024 * 1024;
 
 function wrapSelection(index: number, delta: number, length: number): number {
   if (length === 0) return 0;
@@ -82,6 +87,23 @@ export interface RunEntry {
   runId: string;
   details: WorkflowDetails;
   live: boolean;
+}
+
+export interface RunEntryLoadOptions {
+  /** Explicitly opened runs remain visible even when the list is bounded. */
+  initialRunId?: string;
+  /** Maximum number of non-pinned persisted entries kept in the list. */
+  maxRuns?: number;
+  /** Maximum serialized UTF-8 bytes kept by non-pinned persisted entries. */
+  maxBytes?: number;
+}
+
+export interface RunEntryLoadResult {
+  entries: RunEntry[];
+  /** Persisted entries omitted by the dashboard projection bound. */
+  omittedRuns: number;
+  /** Serialized bytes belonging to omitted persisted entries. */
+  omittedBytes: number;
 }
 
 function runsDir(): string {
@@ -613,7 +635,36 @@ export function sessionWorkflowRunIds(ctx: ExtensionContext): Set<string> {
   return runIds;
 }
 
-export function loadRunEntries(
+function configuredLimit(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+) {
+  if (value === undefined) return fallback;
+  if (!Number.isSafeInteger(value) || value < 0)
+    throw new RangeError(`${name} must be a non-negative safe integer`);
+  return value;
+}
+
+function compareRunEntries(a: RunEntry, b: RunEntry) {
+  return (
+    b.details.startedAt - a.details.startedAt || a.runId.localeCompare(b.runId)
+  );
+}
+
+function measureRunEntryBytes(details: WorkflowDetails) {
+  try {
+    return measureWorkflowDetailsBytes(details);
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Build the bounded dashboard list without hydrating result/transcript
+ * artifacts. Details are loaded lazily when the user opens a run.
+ */
+export function loadRunEntryProjection(
   active: Map<string, WorkflowDetails>,
   sessionId: string,
   referencedRunIds: ReadonlySet<string>,
@@ -621,17 +672,60 @@ export function loadRunEntries(
   startedSince = 0,
   /** Bounded settled projections used only if canonical disk state is unreadable. */
   retained: ReadonlyMap<string, WorkflowDetails> = new Map(),
-): RunEntry[] {
-  const entries: RunEntry[] = [];
+  options: RunEntryLoadOptions = {},
+): RunEntryLoadResult {
+  const maxRuns = configuredLimit(
+    options.maxRuns,
+    DEFAULT_WORKFLOW_DASHBOARD_MAX_RUNS,
+    "maxRuns",
+  );
+  const maxBytes = configuredLimit(
+    options.maxBytes,
+    DEFAULT_WORKFLOW_DASHBOARD_MAX_BYTES,
+    "maxBytes",
+  );
+  const pinned = new Map<string, RunEntry>();
+  const bounded: { entry: RunEntry; bytes: number }[] = [];
+  let boundedBytes = 0;
+  let omittedRuns = 0;
+  let omittedBytes = 0;
+
+  const omit = (bytes: number | undefined) => {
+    omittedRuns++;
+    if (bytes !== undefined) omittedBytes += bytes;
+  };
+
+  const addBounded = (entry: RunEntry) => {
+    const bytes = measureRunEntryBytes(entry.details);
+    if (bytes === undefined) {
+      omit(undefined);
+      return;
+    }
+    bounded.push({ entry, bytes });
+    bounded.sort((a, b) => compareRunEntries(a.entry, b.entry));
+    boundedBytes += bytes;
+    while (bounded.length > maxRuns || boundedBytes > maxBytes) {
+      const oldest = bounded.pop();
+      if (!oldest) break;
+      boundedBytes -= oldest.bytes;
+      omit(oldest.bytes);
+    }
+  };
+
+  const addEntry = (entry: RunEntry, keepPinned: boolean) => {
+    if (keepPinned) pinned.set(entry.runId, entry);
+    else addBounded(entry);
+  };
+
   const runIds = new Set([
     ...listPersistedRunIds(),
-    ...retained.keys(),
     ...active.keys(),
+    ...retained.keys(),
   ]);
   for (const runId of runIds) {
     const live = active.get(runId);
     if (live) {
-      entries.push({ runId, details: live, live: true });
+      addEntry({ runId, details: live, live: true }, true);
       continue;
     }
     // Reject unrelated history before normalizing potentially large inline
@@ -661,10 +755,39 @@ export function loadRunEntries(
     ) {
       continue;
     }
+    // A session reference makes a cross-session run eligible, but it remains
+    // subject to the dashboard bound. Only active runs and the explicit target
+    // are pinned so a long session cannot defeat count/byte limits.
     recoverStaleWorkflowDetails(details);
-    entries.push({ runId, details, live: false });
+    addEntry({ runId, details, live: false }, runId === options.initialRunId);
   }
-  return entries.sort((a, b) => b.details.startedAt - a.details.startedAt);
+
+  return {
+    entries: [
+      ...pinned.values(),
+      ...bounded.map((candidate) => candidate.entry),
+    ].sort(compareRunEntries),
+    omittedRuns,
+    omittedBytes,
+  };
+}
+
+export function loadRunEntries(
+  active: Map<string, WorkflowDetails>,
+  sessionId: string,
+  referencedRunIds: ReadonlySet<string>,
+  startedSince = 0,
+  retained: ReadonlyMap<string, WorkflowDetails> = new Map(),
+  options: RunEntryLoadOptions = {},
+): RunEntry[] {
+  return loadRunEntryProjection(
+    active,
+    sessionId,
+    referencedRunIds,
+    startedSince,
+    retained,
+    options,
+  ).entries;
 }
 
 export function workflowGraphSummary(
@@ -797,6 +920,7 @@ export class WorkflowDashboard {
   private transcriptPage?: AgentSessionPage;
   private current?: RunEntry;
   private openedDirectly = false;
+  private omittedRuns = 0;
   private notice?: string;
   private noticeAt = 0;
   private disposed = false;
@@ -812,6 +936,7 @@ export class WorkflowDashboard {
   private close: () => void;
   private onAbort?: (runId: string) => boolean;
   private initialToolsExpanded: boolean;
+  private initialRunId?: string;
 
   constructor(
     tui: TUI,
@@ -838,22 +963,31 @@ export class WorkflowDashboard {
     this.close = close;
     this.onAbort = onAbort;
     this.initialToolsExpanded = initialToolsExpanded;
+    const initialResolution = initialRunId
+      ? resolveWorkflowRunTarget(initialRunId, [
+          ...listPersistedRunIds(),
+          ...this.getActive().keys(),
+          ...this.getRetained().keys(),
+        ])
+      : undefined;
+    this.initialRunId = initialResolution?.ok
+      ? initialResolution.runId
+      : undefined;
     this.refresh();
-    if (initialRunId) {
-      const resolution = resolveWorkflowRunTarget(
-        initialRunId,
-        this.entries.map((entry) => entry.runId),
-      );
-      if (resolution.ok) {
+    if (initialResolution) {
+      if (initialResolution.ok) {
         const entry = this.entries.find(
-          (candidate) => candidate.runId === resolution.runId,
+          (candidate) => candidate.runId === initialResolution.runId,
         );
         if (entry) {
           this.listIndex = this.entries.indexOf(entry);
           this.enterEntry(entry, true);
+        } else {
+          this.notice = `Workflow run ${initialResolution.runId} could not be read.`;
+          this.noticeAt = Date.now();
         }
       } else {
-        this.notice = resolution.error;
+        this.notice = initialResolution.error;
         this.noticeAt = Date.now();
       }
     }
@@ -902,13 +1036,20 @@ export class WorkflowDashboard {
     const active = this.getActive();
     const retained = this.getRetained();
     if (!this.historyLoaded) {
-      this.entries = loadRunEntries(
+      const pinnedRunId =
+        this.view === "list"
+          ? this.initialRunId
+          : (this.current?.runId ?? this.initialRunId);
+      const projection = loadRunEntryProjection(
         active,
         this.sessionId,
         this.referencedRunIds,
         this.startedSince,
         retained,
+        { initialRunId: pinnedRunId },
       );
+      this.entries = projection.entries;
+      this.omittedRuns = projection.omittedRuns;
       this.historyLoaded = true;
     } else {
       // Animation ticks reuse historical projections. Only a newly settled run
@@ -956,9 +1097,43 @@ export class WorkflowDashboard {
       for (const [runId, details] of active) {
         entries.set(runId, { runId, details, live: true });
       }
-      this.entries = [...entries.values()].sort(
-        (a, b) => b.details.startedAt - a.details.startedAt,
-      );
+      const pinnedRunId =
+        this.view === "list"
+          ? this.initialRunId
+          : (this.current?.runId ?? this.initialRunId);
+      const pinned: RunEntry[] = [];
+      const bounded: { entry: RunEntry; bytes: number }[] = [];
+      let boundedBytes = 0;
+      for (const entry of entries.values()) {
+        if (
+          entry.live ||
+          (pinnedRunId !== undefined && entry.runId === pinnedRunId)
+        ) {
+          pinned.push(entry);
+          continue;
+        }
+        const bytes = measureRunEntryBytes(entry.details);
+        if (bytes === undefined) {
+          this.omittedRuns++;
+          continue;
+        }
+        bounded.push({ entry, bytes });
+        boundedBytes += bytes;
+      }
+      bounded.sort((a, b) => compareRunEntries(a.entry, b.entry));
+      while (
+        bounded.length > DEFAULT_WORKFLOW_DASHBOARD_MAX_RUNS ||
+        boundedBytes > DEFAULT_WORKFLOW_DASHBOARD_MAX_BYTES
+      ) {
+        const oldest = bounded.pop();
+        if (!oldest) break;
+        boundedBytes -= oldest.bytes;
+        this.omittedRuns++;
+      }
+      this.entries = [
+        ...pinned,
+        ...bounded.map((candidate) => candidate.entry),
+      ].sort(compareRunEntries);
     }
     for (const runId of retained.keys()) this.seenRetainedRunIds.add(runId);
     if (selected) {
@@ -973,7 +1148,20 @@ export class WorkflowDashboard {
       const refreshed = this.entries.find(
         (e) => e.runId === this.current?.runId,
       );
-      if (refreshed) this.current = refreshed;
+      if (refreshed) {
+        if (!this.current.live && !refreshed.live) {
+          // Keep the selected detail's already-hydrated artifacts while the
+          // list projection is refreshed from compact metadata.
+          this.current = { ...refreshed, details: this.current.details };
+        } else if (this.current.live && !refreshed.live) {
+          // A live run may settle while its detail view is open. Keep the
+          // compact projection until a transcript or report is requested.
+          this.current = refreshed;
+          this.hydratedRunIds.delete(refreshed.runId);
+        } else {
+          this.current = refreshed;
+        }
+      }
     }
     if (this.view === "transcript") this.hydrateCurrent();
     if (this.notice && Date.now() - this.noticeAt > NOTICE_TTL_MS)
@@ -1014,7 +1202,9 @@ export class WorkflowDashboard {
   private hydrateCurrent() {
     const entry = this.current;
     if (!entry || entry.live || this.hydratedRunIds.has(entry.runId)) return;
-    hydrateRunArtifacts(entry.runId, entry.details);
+    const details = structuredClone(entry.details);
+    hydrateRunArtifacts(entry.runId, details);
+    this.current = { ...entry, details };
     this.hydratedRunIds.add(entry.runId);
   }
 
@@ -1244,16 +1434,24 @@ export class WorkflowDashboard {
   private renderList(width: number, height: number): string[] {
     const theme = this.theme;
     const lines: string[] = [];
+    const omittedNotice =
+      this.omittedRuns > 0
+        ? theme.fg(
+            "dim",
+            `${this.omittedRuns} run${this.omittedRuns === 1 ? "" : "s"} omitted from this view; full artifacts remain on disk.`,
+          )
+        : undefined;
     lines.push(
       screenTitleLine(
         theme,
         "Workflows",
-        `${this.entries.length} run${this.entries.length === 1 ? "" : "s"}`,
+        `${this.entries.length} run${this.entries.length === 1 ? "" : "s"}${this.omittedRuns > 0 ? ` · ${this.omittedRuns} omitted` : ""}`,
         width,
       ),
     );
+    if (omittedNotice) lines.push(omittedNotice);
 
-    const panelHeight = height - 2;
+    const panelHeight = Math.max(1, height - 2 - (omittedNotice ? 1 : 0));
     const bodyHeight = Math.max(0, panelHeight - 2);
 
     if (this.entries.length === 0) {

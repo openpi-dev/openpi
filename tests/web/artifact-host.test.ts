@@ -1,3 +1,4 @@
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import assert from "node:assert/strict";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -11,6 +12,8 @@ test("artifact HTTP access authenticates, binds a Session, serves exact revision
   const cwd = await mkdtemp(join(tmpdir(), "openpi-artifact-http-"));
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
+    searchModels: (query, limit) =>
+      projectWebModelSearch(runtime.listModels(), query, limit),
     cwd,
     workspaceSelected: true,
     sessionManager,

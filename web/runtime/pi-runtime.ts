@@ -25,11 +25,15 @@ import {
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
+  type WebThinkingProjection,
+  type WebThinkingSelectionOptions,
   type WebTurnCancellationOptions,
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import { projectMessage } from "../protocol/types.ts";
+import {
+  projectMessage,
+} from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
   applyHttpProxySettings,
@@ -41,8 +45,14 @@ import {
   type WebHostLease,
 } from "./web-host-lease.ts";
 import {
+  commandsForServices,
+  createCommandDiscoveryBridge,
+  registerCommandDiscoveryBridge,
+} from "./command-discovery.ts";
+import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
+import { projectWebModelSearch } from "./model-discovery.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -123,6 +133,15 @@ export class PiWebRuntime implements WebRuntimeController {
   >();
   private controllerMutation: Promise<void> = Promise.resolve();
   private promptAdmission: Promise<void> = Promise.resolve();
+  private thinkingMutationInFlight = false;
+  private thinkingMutationPending?: {
+    level: string;
+    waiters: Array<{
+      resolve: (projection: WebThinkingProjection) => void;
+      reject: (error: unknown) => void;
+      expectedSessionId?: string;
+    }>;
+  };
   private activePromptTrace?: PromptTrace;
   private readonly pendingPromptTraces: PromptTrace[] = [];
   private nextTurnEpoch = 0;
@@ -371,6 +390,16 @@ export class PiWebRuntime implements WebRuntimeController {
     }));
   }
 
+  searchModels(query: string, limit?: number) {
+    return projectWebModelSearch(this.listModels(), query, limit);
+  }
+
+  listCommands() {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    return commandsForServices(this.runtime.services);
+  }
+
   listProviderAuth(): WebProviderAuthProjection {
     const modelRuntime = this.runtime.services.modelRuntime;
     const allProviders = modelRuntime.getProviders();
@@ -498,8 +527,118 @@ export class PiWebRuntime implements WebRuntimeController {
   }
 
   getThinkingState() {
+    this.assertActive();
     const session = this.runtime.session;
-    return { level: session.thinkingLevel, available: session.getAvailableThinkingLevels() };
+    return {
+      level: session.thinkingLevel,
+      available: session.getAvailableThinkingLevels(),
+      supported: session.supportsThinking(),
+    };
+  }
+
+  setThinkingLevel(level: string, options?: WebThinkingSelectionOptions) {
+    const expectedSessionId = options?.expectedSessionId;
+    // Validate each caller at enqueue so a stale Session cannot influence, or
+    // be silently resolved through, another Session's merged write.
+    if (
+      expectedSessionId !== undefined &&
+      expectedSessionId !== this.runtime.session.sessionManager.getSessionId()
+    ) {
+      return Promise.reject(this.thinkingSessionConflictError());
+    }
+    return new Promise<WebThinkingProjection>((resolve, reject) => {
+      const waiter = { resolve, reject, expectedSessionId };
+      const pending = this.thinkingMutationPending;
+      if (pending) {
+        // Merge-to-latest: a newer target overwrites the queued one and all
+        // waiters resolve from the single authoritative write that follows.
+        pending.level = level;
+        pending.waiters.push(waiter);
+        return;
+      }
+      this.thinkingMutationPending = { level, waiters: [waiter] };
+      void this.drainThinkingMutations();
+    });
+  }
+
+  private thinkingSessionConflictError() {
+    return new WebRuntimeRequestError(
+      "Only the active Web session accepts thinking changes",
+      "SESSION_CONFLICT",
+      409,
+    );
+  }
+
+  private async drainThinkingMutations() {
+    if (this.thinkingMutationInFlight) return;
+    this.thinkingMutationInFlight = true;
+    try {
+      while (this.thinkingMutationPending) {
+        const pending = this.thinkingMutationPending;
+        this.thinkingMutationPending = undefined;
+        try {
+          // Validate every merged caller against the active Session inside the
+          // serialized mutation, so a caller whose Session changed after
+          // enqueue gets its own 409 instead of another Session's result.
+          const outcome = await this.serializeControllerMutation(async () => {
+            this.assertActive();
+            this.assertWorkspaceSelected();
+            const activeSessionId =
+              this.runtime.session.sessionManager.getSessionId();
+            const accepted = pending.waiters.filter(
+              (waiter) =>
+                waiter.expectedSessionId === undefined ||
+                waiter.expectedSessionId === activeSessionId,
+            );
+            if (accepted.length === 0) return undefined;
+            return {
+              accepted,
+              projection: await this.applyThinkingSelection(pending.level),
+            };
+          });
+          if (!outcome) {
+            const conflict = this.thinkingSessionConflictError();
+            for (const waiter of pending.waiters) waiter.reject(conflict);
+            continue;
+          }
+          for (const waiter of pending.waiters) {
+            if (outcome.accepted.includes(waiter)) {
+              waiter.resolve(outcome.projection);
+            } else {
+              waiter.reject(this.thinkingSessionConflictError());
+            }
+          }
+        } catch (error) {
+          traceWeb("thinking_selection_failed", {
+            level: pending.level,
+            error: errorText(error),
+          });
+          for (const waiter of pending.waiters) waiter.reject(error);
+        }
+      }
+    } finally {
+      this.thinkingMutationInFlight = false;
+    }
+  }
+
+  private async applyThinkingSelection(level: string) {
+    const agentRuntime = this.runtime;
+    const available = agentRuntime.session.getAvailableThinkingLevels();
+    const match = available.find((item) => item === level);
+    if (!match || !agentRuntime.session.supportsThinking()) {
+      throw new WebRuntimeRequestError(
+        "Thinking level is not available for the current model",
+        "THINKING_LEVEL_NOT_AVAILABLE",
+        400,
+      );
+    }
+    // Pi's setThinkingLevel is synchronous and clamps only to available
+    // levels, which were matched above. No retainRuntimeReference is needed.
+    agentRuntime.session.setThinkingLevel(match);
+    if (agentRuntime.session.thinkingLevel !== level) {
+      throw new Error("Thinking level selection was not confirmed");
+    }
+    return this.getThinkingState();
   }
 
   async sendPrompt(content: string, options?: WebPromptOptions) {
@@ -868,12 +1007,17 @@ export class PiWebRuntime implements WebRuntimeController {
         );
         ownsDispatcherLease = true;
       }
+      const commandDiscovery = createCommandDiscoveryBridge();
       const services = await createAgentSessionServices({
         cwd: options.cwd,
         agentDir: options.agentDir,
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
+        resourceLoaderOptions: {
+          extensionFactories: [commandDiscovery.extension],
+        },
       });
+      registerCommandDiscoveryBridge(services, commandDiscovery);
       const extensionErrors = services.resourceLoader
         .getExtensions()
         .errors.map(({ path, error }) => `Failed to load extension "${path}": ${error}`);
@@ -1036,6 +1180,12 @@ export class PiWebRuntime implements WebRuntimeController {
         this.pendingPromptTraces.length = 0;
         this.emit(event.type, {
           sessionId: session.sessionManager.getSessionId(),
+        });
+        break;
+      case "thinking_level_changed":
+        this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
+          level: event.level,
         });
         break;
       case "auto_retry_start":

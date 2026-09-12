@@ -1,6 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
-import type { WebActiveTurn } from "../runtime/types.ts";
+import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
@@ -18,8 +18,17 @@ export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
 export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
 export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
 export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
+export const WEB_MAX_MODEL_SEARCH_RESULTS = 50;
+export const WEB_MAX_MODEL_SEARCH_BYTES = 64 * 1024;
+export const WEB_MAX_MODEL_QUERY = 200;
+export const WEB_MAX_COMMANDS = 250;
+export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
+export const WEB_MAX_COMMAND_NAME = 160;
+export const WEB_MAX_COMMAND_DESCRIPTION = 500;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+export const WEB_MAX_THINKING_LEVEL = 500;
+export const WEB_MAX_THINKING_LEVELS = 16;
 
 export interface WebEvent {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
@@ -61,6 +70,39 @@ export interface WebModelSummary {
   name: string;
   label: string;
   current: boolean;
+}
+
+export interface WebModelSearchResult {
+  models: WebModelSummary[];
+  totalAvailable: number;
+  totalMatches: number;
+  truncation: {
+    truncated: boolean;
+    matchesOmitted: number;
+    maxResults: number;
+    maxBytes: number;
+    bytes: number;
+  };
+}
+
+export interface WebCommandSummary {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
+  availability: "available" | "unsupported";
+  argumentHint?: string;
+}
+
+export interface WebCommandDiscoveryResult {
+  commands: WebCommandSummary[];
+  totalAvailable: number;
+  truncation: {
+    truncated: boolean;
+    commandsOmitted: number;
+    maxCommands: number;
+    maxBytes: number;
+    bytes: number;
+  };
 }
 
 export interface WebProjectionTruncation {
@@ -115,6 +157,33 @@ export interface WebSnapshotTruncation {
   bytes: number;
 }
 
+export interface WebThinkingState {
+  readonly level: string;
+  readonly available: readonly string[];
+  /** false before a model is selected or for non-reasoning models. */
+  readonly supported: boolean;
+  /** Host-assigned monotonic value (SSE sequence); newer wins. */
+  readonly revision: number;
+}
+
+/**
+ * Bounds a runtime thinking projection at the wire boundary. Shared by the
+ * adapter snapshot and the host's GET/POST /api/thinking responses so an
+ * unbounded runtime projection can never reach the client. `revision` is
+ * host-assigned and deliberately excluded here.
+ */
+export function boundThinkingProjection(
+  projection: WebThinkingProjection,
+): Omit<WebThinkingState, "revision"> {
+  return {
+    level: projection.level.slice(0, WEB_MAX_THINKING_LEVEL),
+    available: projection.available
+      .slice(0, WEB_MAX_THINKING_LEVELS)
+      .map((level) => level.slice(0, WEB_MAX_THINKING_LEVEL)),
+    supported: projection.supported === true,
+  };
+}
+
 export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
   generatedAt: string;
@@ -128,6 +197,8 @@ export interface WebSnapshot {
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
   models: WebModelSummary[];
+  /** Optional diagnostic; absent when the runtime cannot report it. */
+  thinking?: WebThinkingState;
   runtime: {
     liveTools?: LiveToolEvidence[];
     status: "idle" | "running" | "unknown";

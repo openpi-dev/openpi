@@ -1,3 +1,4 @@
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import { AxeBuilder } from "@axe-core/playwright";
 import { expect, test } from "@playwright/test";
 import {
@@ -161,6 +162,8 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
   assistant("[Report](./report%20space.md)\n\n[Missing](./missing.md)");
   const listeners = new Set<(event: WebRuntimeEvent) => void>();
   const runtime: WebRuntimeController = {
+    searchModels: (query, limit) =>
+      projectWebModelSearch(runtime.listModels(), query, limit),
     cwd,
     workspaceSelected: true,
     sessionDirectory: cwd,

@@ -317,11 +317,13 @@ function ThinkingEvidence({
   start,
   duration,
   active,
+  level,
 }: {
   body: string;
   start?: number;
   duration?: number;
   active: boolean;
+  level?: string;
 }) {
   const { t } = useTranslation();
   const elapsed = useElapsed(start, active);
@@ -330,7 +332,13 @@ function ThinkingEvidence({
     <EvidenceDetails
       body={body}
       icon={<Lightbulb />}
-      name={active ? t("thinkingActive") : t("thinkingDone")}
+      name={
+        active
+          ? level
+            ? t("thinkingActiveLevel", { level })
+            : t("thinkingActive")
+          : t("thinkingDone")
+      }
       status={active ? "running" : "done"}
       summary={settled ? `· ${settled}` : undefined}
       thinking
@@ -700,6 +708,9 @@ export function Transcript(props: TranscriptProps) {
                     <ThinkingEvidence
                       body={part.text}
                       active={isLive}
+                      level={
+                        isLive ? props.snapshot.thinking?.level : undefined
+                      }
                       start={props.thinkingStarts[entry.key]}
                       duration={props.thinkingDurations[entry.key]}
                     />
@@ -842,6 +853,7 @@ export function Transcript(props: TranscriptProps) {
     entries,
     props.liveRunning,
     props.onResend,
+    props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.thinkingStarts,
     props.snapshot.runtime.liveTools,
