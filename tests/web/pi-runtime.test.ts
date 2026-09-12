@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import {
   type WebRuntimeEvent,
@@ -598,6 +599,93 @@ test("model selection and Session activation are serialized", async () => {
   ]);
 });
 
+test("model search matches provider and identity fields within a bounded result", () => {
+  const models = Array.from({ length: 75 }, (_, index) => ({
+    provider: index % 2 === 0 ? "alpha" : "beta",
+    id: `model-${index}`,
+    name: index === 70 ? "Long Context" : `Model ${index}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[70] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("long context", 5);
+  assert.equal(result.totalAvailable, 75);
+  assert.equal(result.totalMatches, 1);
+  assert.equal(result.truncation.matchesOmitted, 0);
+  assert.deepEqual(result.models[0], {
+    provider: "alpha",
+    id: "model-70",
+    name: "Long Context",
+    label: "Long Context",
+    current: true,
+  });
+});
+
+test("model search reports count truncation separately from the available total", () => {
+  const models = Array.from({ length: 75 }, (_, index) => ({
+    provider: "fixture",
+    id: `model-${index}`,
+    name: `Model ${index}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[0] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("model", 5);
+  assert.equal(result.totalAvailable, 75);
+  assert.equal(result.totalMatches, 75);
+  assert.equal(result.models.length, 5);
+  assert.equal(result.truncation.matchesOmitted, 70);
+  assert.equal(result.truncation.truncated, true);
+});
+
+test("model search enforces the byte budget after the result count budget", () => {
+  const models = Array.from({ length: 50 }, (_, index) => ({
+    provider: `provider-${index}-${"p".repeat(700)}`,
+    id: `model-${index}-${"i".repeat(700)}`,
+    name: `Model ${index} ${"n".repeat(500)}`,
+  }));
+  const harness = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model?: (typeof models)[number] };
+      services: { modelRuntime: { getAvailableSnapshot: () => typeof models } };
+    };
+    listModels: PiWebRuntime["listModels"];
+    searchModels: PiWebRuntime["searchModels"];
+  };
+  harness.runtime = {
+    session: { model: models[0] },
+    services: { modelRuntime: { getAvailableSnapshot: () => models } },
+  };
+
+  const result = harness.searchModels!("provider", 50);
+  assert.ok(result.models.length < 50);
+  assert.ok(result.truncation.matchesOmitted > 0);
+  assert.ok(result.truncation.bytes <= result.truncation.maxBytes);
+  assert.equal(result.models[0]?.provider, models[0]?.provider);
+  assert.equal(result.models[0]?.id, models[0]?.id);
+  assert.equal(result.truncation.bytes, jsonByteLength(result));
+});
+
 test("a delayed model selection cannot target a newly activated Session", async () => {
   const switchStarted = deferred();
   const allowSwitch = deferred();
@@ -1127,7 +1215,7 @@ test("dispose waits for pending candidate creation and cleans it before releasin
   }
 });
 
-test("new session projects its command id and activated session path", async () => {
+test("new session projects its command id and stable activated identity", async () => {
   const active = lifecycleRuntime(lifecycleSession("session-a", false));
   const candidateSession = lifecycleSession("session-b", false, 0);
   Object.assign(candidateSession.sessionManager, {
@@ -1162,12 +1250,31 @@ test("new session projects its command id and activated session path", async () 
     assert.deepEqual(result, {
       cancelled: false,
       commandId: "create-command",
+      sessionId: "session-b",
       sessionPath: "/tmp/session-b.jsonl",
     });
+    const eventCount = events.length;
+    const replay = await harness.newSession(process.cwd(), {
+      commandId: "create-command",
+    });
+    assert.deepEqual(replay, { ...result, replayed: true });
+    assert.equal(
+      events.length,
+      eventCount,
+      "receipt replay must not activate another Session",
+    );
+    await assert.rejects(
+      harness.newSession("/different-workspace", {
+        commandId: "create-command",
+      }),
+      /another workspace/,
+    );
+
     assert.deepEqual(events.at(-1), {
       type: "session_switched",
       detail: {
         commandId: "create-command",
+        sessionId: "session-b",
         sessionPath: "/tmp/session-b.jsonl",
       },
     });
@@ -1473,4 +1580,266 @@ test("toolUse message_end without a terminal result settles as uncertain", () =>
       },
     ],
   );
+});
+
+type ThinkingHarness = {
+  runtime: { session: ReturnType<typeof thinkingSession>["session"] };
+  listeners: Set<(event: WebRuntimeEvent) => void>;
+  controllerMutation: Promise<void>;
+  runtimeOperations: Set<Promise<void>>;
+  disposed: boolean;
+  hasSelectedWorkspace: boolean;
+  thinkingMutationInFlight: boolean;
+  thinkingMutationPending?: {
+    level: string;
+    options?: { expectedSessionId?: string };
+    waiters: Array<{
+      resolve: (projection: {
+        level: string;
+        available: readonly string[];
+        supported: boolean;
+      }) => void;
+      reject: (error: unknown) => void;
+    }>;
+  };
+  retainRuntimeReference: (runtime: unknown) => void;
+  getThinkingState: PiWebRuntime["getThinkingState"];
+  setThinkingLevel: PiWebRuntime["setThinkingLevel"];
+};
+
+function thinkingSession(
+  initial: {
+    sessionId?: string;
+    level?: string;
+    available?: string[];
+    supported?: boolean;
+    apply?: boolean;
+  } = {},
+) {
+  const state = {
+    sessionId: initial.sessionId ?? "session-a",
+    level: initial.level ?? "off",
+    available: initial.available ?? ["off", "low", "medium", "high"],
+    supported: initial.supported ?? true,
+    apply: initial.apply ?? true,
+    calls: [] as string[],
+  };
+  const session = {
+    get thinkingLevel() {
+      return state.level;
+    },
+    sessionManager: { getSessionId: () => state.sessionId },
+    getAvailableThinkingLevels: () => [...state.available],
+    supportsThinking: () => state.supported,
+    setThinkingLevel(level: string) {
+      state.calls.push(level);
+      if (state.apply && state.available.includes(level)) state.level = level;
+    },
+  };
+  return { session, state };
+}
+
+function thinkingHarness(
+  session: ReturnType<typeof thinkingSession>["session"],
+) {
+  let retained = 0;
+  const harness = Object.create(
+    PiWebRuntime.prototype,
+  ) as unknown as ThinkingHarness;
+  harness.runtime = { session };
+  harness.listeners = new Set();
+  harness.controllerMutation = Promise.resolve();
+  harness.runtimeOperations = new Set();
+  harness.disposed = false;
+  harness.hasSelectedWorkspace = true;
+  harness.thinkingMutationInFlight = false;
+  harness.retainRuntimeReference = () => {
+    retained += 1;
+  };
+  return { harness, retained: () => retained };
+}
+
+test("thinking state projects the Pi supported flag", () => {
+  const reasoning = thinkingSession({
+    level: "high",
+    available: ["off", "high"],
+    supported: true,
+  });
+  const reasoningHarness = thinkingHarness(reasoning.session).harness;
+  assert.deepEqual(reasoningHarness.getThinkingState(), {
+    level: "high",
+    available: ["off", "high"],
+    supported: true,
+  });
+
+  const nonReasoning = thinkingSession({
+    level: "off",
+    available: ["off"],
+    supported: false,
+  });
+  const nonReasoningHarness = thinkingHarness(nonReasoning.session).harness;
+  assert.deepEqual(nonReasoningHarness.getThinkingState(), {
+    level: "off",
+    available: ["off"],
+    supported: false,
+  });
+});
+
+test("setThinkingLevel applies and confirms an available level without retaining", async () => {
+  const fixture = thinkingSession();
+  const { harness, retained } = thinkingHarness(fixture.session);
+  const projection = await harness.setThinkingLevel("high", {
+    expectedSessionId: "session-a",
+  });
+  assert.deepEqual(projection, {
+    level: "high",
+    available: ["off", "low", "medium", "high"],
+    supported: true,
+  });
+  assert.deepEqual(fixture.state.calls, ["high"]);
+  assert.equal(fixture.state.level, "high");
+  assert.equal(retained(), 0);
+});
+
+test("setThinkingLevel rejects a mismatched expected Session", async () => {
+  const fixture = thinkingSession();
+  const { harness } = thinkingHarness(fixture.session);
+  await assert.rejects(
+    harness.setThinkingLevel("high", { expectedSessionId: "session-b" }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebRuntimeRequestError);
+      assert.equal(error.code, "SESSION_CONFLICT");
+      assert.equal(error.statusCode, 409);
+      return true;
+    },
+  );
+  assert.deepEqual(fixture.state.calls, []);
+});
+
+test("setThinkingLevel rejects unavailable and unsupported levels", async () => {
+  const unavailable = thinkingSession({ available: ["off", "low"] });
+  const first = thinkingHarness(unavailable.session).harness;
+  await assert.rejects(first.setThinkingLevel("high"), (error: unknown) => {
+    assert.ok(error instanceof WebRuntimeRequestError);
+    assert.equal(error.code, "THINKING_LEVEL_NOT_AVAILABLE");
+    assert.equal(error.statusCode, 400);
+    return true;
+  });
+  assert.deepEqual(unavailable.state.calls, []);
+
+  const unsupported = thinkingSession({ supported: false, available: ["off"] });
+  const second = thinkingHarness(unsupported.session).harness;
+  await assert.rejects(second.setThinkingLevel("off"), (error: unknown) => {
+    assert.ok(error instanceof WebRuntimeRequestError);
+    assert.equal(error.code, "THINKING_LEVEL_NOT_AVAILABLE");
+    return true;
+  });
+  assert.deepEqual(unsupported.state.calls, []);
+});
+
+test("setThinkingLevel fails closed when Pi does not confirm the level", async () => {
+  const fixture = thinkingSession({ apply: false });
+  const { harness } = thinkingHarness(fixture.session);
+  await assert.rejects(
+    harness.setThinkingLevel("high"),
+    /Thinking level selection was not confirmed/u,
+  );
+  assert.deepEqual(fixture.state.calls, ["high"]);
+});
+
+test("thinking_level_changed projects the active session and level", () => {
+  const fixture = thinkingSession({ sessionId: "session-a" });
+  const { harness } = thinkingHarness(fixture.session);
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: ThinkingHarness,
+        session: unknown,
+        event: { type: string; level?: string },
+      ): void;
+    }
+  ).projectEvent;
+  projectEvent.call(harness, fixture.session, {
+    type: "thinking_level_changed",
+    level: "high",
+  });
+  assert.deepEqual(events, [
+    {
+      type: "thinking_level_changed",
+      detail: { sessionId: "session-a", level: "high" },
+    },
+  ]);
+});
+
+test("concurrent thinking selections coalesce to the last target", async () => {
+  const fixture = thinkingSession({
+    available: ["off", "low", "medium", "high"],
+  });
+  const { harness, retained } = thinkingHarness(fixture.session);
+  const results = await Promise.all([
+    harness.setThinkingLevel("low"),
+    harness.setThinkingLevel("medium"),
+    harness.setThinkingLevel("high"),
+    harness.setThinkingLevel("medium"),
+    harness.setThinkingLevel("high"),
+  ]);
+
+  assert.ok(
+    fixture.state.calls.length <= 2,
+    `expected at most two writes, saw ${fixture.state.calls.join(",")}`,
+  );
+  assert.equal(fixture.state.calls.includes("medium"), false);
+  assert.equal(fixture.state.calls.at(-1), "high");
+  assert.equal(fixture.state.level, "high");
+  assert.equal(results.at(-1)?.level, "high");
+  assert.equal(retained(), 0);
+});
+
+test("a merged thinking selection rejects callers whose expected session changed", async () => {
+  const fixture = thinkingSession({
+    sessionId: "session-a",
+    available: ["off", "low", "minimal", "high"],
+  });
+  const { harness } = thinkingHarness(fixture.session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+
+  // Two callers enqueue valid expectations while the mutation is gated, then
+  // the active Session changes before the merged write can apply.
+  const first = harness.setThinkingLevel("high", {
+    expectedSessionId: "session-a",
+  });
+  const second = harness.setThinkingLevel("low", {
+    expectedSessionId: "session-a",
+  });
+  fixture.state.sessionId = "session-b";
+  const third = harness.setThinkingLevel("minimal", {
+    expectedSessionId: "session-b",
+  });
+
+  gate.resolve();
+  const [firstResult, secondResult, thirdResult] = await Promise.allSettled([
+    first,
+    second,
+    third,
+  ]);
+
+  assert.equal(firstResult.status, "rejected");
+  assert.equal(secondResult.status, "rejected");
+  assert.equal(thirdResult.status, "fulfilled");
+  for (const result of [firstResult, secondResult]) {
+    if (result.status === "rejected") {
+      const error = result.reason as WebRuntimeRequestError;
+      assert.equal(error.code, "SESSION_CONFLICT");
+      assert.equal(error.statusCode, 409);
+    }
+  }
+  assert.equal(
+    thirdResult.status === "fulfilled" ? thirdResult.value.level : "",
+    "minimal",
+  );
+  // Only the still-active Session's intent is written.
+  assert.deepEqual(fixture.state.calls, ["minimal"]);
 });

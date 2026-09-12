@@ -4,6 +4,10 @@ import { expect, type Page, test } from "@playwright/test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import {
+  installThinkingFixture,
+  MOCK_SESSION_ID,
+} from "./thinking-e2e-support.ts";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
@@ -52,6 +56,26 @@ test("production workbench is local, keyboard-operable, and accessible", async (
     )
     .not.toBe("0");
 
+  const thinkingPicker = page.locator(".thinking-picker");
+  await expect(thinkingPicker).toBeVisible();
+  expect(
+    await page.evaluate(() => {
+      const model = document.querySelector(".model-picker");
+      const thinking = document.querySelector(".thinking-picker");
+      if (!model || !thinking) return null;
+      return {
+        sameToolbar: Boolean(
+          model.closest(".composer-toolbar") &&
+            thinking.closest(".composer-toolbar"),
+        ),
+        thinkingAfterModel: Boolean(
+          model.compareDocumentPosition(thinking) &
+            Node.DOCUMENT_POSITION_FOLLOWING,
+        ),
+      };
+    }),
+  ).toEqual({ sameToolbar: true, thinkingAfterModel: true });
+
   const workspaceMenu = page.getByRole("button", {
     name: "Workspace options",
   });
@@ -97,6 +121,155 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   expect(turnRailLayout.railLeft).toBeGreaterThanOrEqual(
     turnRailLayout.messageRight,
   );
+});
+
+test("discovers and completes Pi commands without submitting unsupported commands", async ({
+  page,
+}) => {
+  let commandReads = 0;
+  const prompts: unknown[] = [];
+  await page.route("**/api/commands?**", async (route) => {
+    commandReads++;
+    expect(
+      new URL(route.request().url()).searchParams.get("sessionId"),
+    ).toBeTruthy();
+    await route.fulfill({
+      status: 200,
+      json: {
+        commands: [
+          {
+            name: "extension:setup",
+            description: "Configure the package",
+            source: "extension",
+            availability: "unsupported",
+          },
+          {
+            name: "review",
+            description: "Review the current change",
+            source: "prompt",
+            availability: "available",
+            argumentHint: "[arguments]",
+          },
+          {
+            name: "release",
+            description: "Prepare a release",
+            source: "skill",
+            availability: "available",
+            argumentHint: "[arguments]",
+          },
+          {
+            name: "analyze",
+            description: "Analyze the current change",
+            source: "prompt",
+            availability: "available",
+          },
+          {
+            name: "deploy",
+            description: "Prepare a deployment",
+            source: "skill",
+            availability: "available",
+          },
+          {
+            name: "inspect",
+            description: "Inspect the workspace",
+            source: "prompt",
+            availability: "available",
+          },
+          {
+            name: "optimize",
+            description: "Optimize the implementation",
+            source: "skill",
+            availability: "available",
+          },
+        ],
+        totalAvailable: 7,
+        truncation: {
+          truncated: false,
+          commandsOmitted: 0,
+          maxCommands: 250,
+          maxBytes: 65_536,
+          bytes: 512,
+        },
+      },
+    });
+  });
+  await page.route("**/api/prompt", async (route) => {
+    prompts.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      json: { id: "unexpected-prompt", accepted: true },
+    });
+  });
+  await openWorkbench(page);
+
+  const input = page.getByRole("textbox", { name: "描述任务" });
+  await input.fill("/");
+  const listbox = page.getByRole("listbox", { name: "斜杠命令" });
+  await expect(listbox).toBeVisible();
+  await expect(page.locator(".conversation-shell")).toHaveClass(/\blanding\b/u);
+  await expect(listbox.getByRole("option")).toHaveText([
+    /\/review/u,
+    /\/release/u,
+    /\/analyze/u,
+    /\/deploy/u,
+    /\/inspect/u,
+    /\/optimize/u,
+    /\/extension:setup/u,
+  ]);
+  const menu = page.locator(".slash-command-menu");
+  const menuBox = await menu.boundingBox();
+  const composerBox = await page.locator(".composer").boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(menuBox!.height).toBeLessThanOrEqual(225);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(
+    composerBox!.y + composerBox!.height + 7,
+  );
+
+  for (let index = 0; index < 5; index++) await input.press("ArrowDown");
+  const selectedOption = listbox.getByRole("option", { selected: true });
+  await expect(selectedOption).toContainText("/optimize");
+  await expect
+    .poll(() => menu.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  const selectedBox = await selectedOption.boundingBox();
+  const scrolledMenuBox = await menu.boundingBox();
+  expect(selectedBox).not.toBeNull();
+  expect(scrolledMenuBox).not.toBeNull();
+  expect(selectedBox!.y).toBeGreaterThanOrEqual(scrolledMenuBox!.y);
+  expect(selectedBox!.y + selectedBox!.height).toBeLessThanOrEqual(
+    scrolledMenuBox!.y + scrolledMenuBox!.height,
+  );
+
+  await page.locator(".composer-dock").evaluate((element) => {
+    element.style.top = "calc(100% - 160px)";
+    window.dispatchEvent(new Event("resize"));
+  });
+  await expect(menu).toHaveAttribute("data-placement", "above");
+  const flippedMenuBox = await menu.boundingBox();
+  const shiftedComposerBox = await page.locator(".composer").boundingBox();
+  expect(flippedMenuBox).not.toBeNull();
+  expect(shiftedComposerBox).not.toBeNull();
+  expect(flippedMenuBox!.y + flippedMenuBox!.height).toBeLessThanOrEqual(
+    shiftedComposerBox!.y - 7,
+  );
+  const extension = page.getByRole("option", { name: /\/extension:setup/u });
+  await expect(extension).toBeDisabled();
+  await expect(extension).toContainText("当前 Web 不支持");
+
+  await input.fill("/rev");
+  await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
+  await input.press("Enter");
+  await expect(input).toHaveValue("/review ");
+  expect(prompts).toEqual([]);
+  expect(commandReads).toBe(1);
+
+  await input.fill("/");
+  await page.getByRole("option", { name: /\/release/u }).click();
+  await expect(input).toHaveValue("/release ");
+  expect(prompts).toEqual([]);
+  expect(commandReads).toBe(1);
+  await expect(page.locator("body")).not.toContainText("/private/project");
 });
 
 test.describe("touch viewport", () => {
@@ -451,6 +624,127 @@ test("restores a running turn and canonical dark theme without losing cancellati
   await expect.poll(() => cancelRequests).toEqual([turn]);
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+});
+
+test("recovers an unknown prompt admission only after an explicit user decision", async ({
+  page,
+}, testInfo) => {
+  const sessionId = "unknown-admission-session";
+  const promptRequests: Array<{
+    commandId: string;
+    content: string;
+    retry: boolean;
+  }> = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.currentSessionId = sessionId;
+    snapshot.workspaces = [
+      { path: "/unknown-admission", name: "Recovery", current: true },
+    ];
+    snapshot.sessions = [
+      {
+        id: sessionId,
+        path: "/unknown-admission/session.jsonl",
+        cwd: "/unknown-admission",
+        name: "Recovery",
+        modified: "2026-09-08T00:00:00Z",
+        created: "2026-09-08T00:00:00Z",
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        messageCount: 0,
+      },
+    ];
+    snapshot.selectedSession = {
+      id: sessionId,
+      path: "/unknown-admission/session.jsonl",
+      cwd: "/unknown-admission",
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: ": idle\n\n",
+    }),
+  );
+  await page.route("**/api/prompt", async (route) => {
+    const body = route.request().postDataJSON() as {
+      commandId: string;
+      content: string;
+      retry: boolean;
+    };
+    promptRequests.push(body);
+    if (promptRequests.length === 1) {
+      await route.abort("failed");
+      return;
+    }
+    if (promptRequests.length === 2) {
+      await route.fulfill({
+        status: 409,
+        json: {
+          code: "COMMAND_ADMISSION_UNKNOWN",
+          error: "previous prompt admission is unknown",
+        },
+      });
+      return;
+    }
+    await route.fulfill({
+      status: 202,
+      json: { id: body.commandId, accepted: true },
+    });
+  });
+
+  await openWorkbench(page);
+  const draft = page.getByRole("textbox", { name: "描述任务" });
+  await draft.fill("可能产生副作用的请求");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect.poll(() => promptRequests.length).toBe(1);
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+
+  await expect(
+    page
+      .getByRole("alert")
+      .filter({ hasText: "无法确认上次发送的消息是否已被接收" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "刷新状态" })).toHaveCount(0);
+  await expect(draft).toHaveValue("可能产生副作用的请求");
+  await expect(page.getByText("正在准备任务...", { exact: true })).toHaveCount(
+    0,
+  );
+  await expect(
+    page.getByRole("button", { name: "发送", exact: true }),
+  ).toBeDisabled();
+  await page.screenshot({
+    path: testInfo.outputPath("unknown-admission-recovery.png"),
+    fullPage: true,
+  });
+  expect(promptRequests[1]?.commandId).toBe(promptRequests[0]?.commandId);
+  expect(promptRequests[1]?.retry).toBe(true);
+
+  await page.getByRole("button", { name: "作为新消息发送" }).click();
+  await expect.poll(() => promptRequests.length).toBe(3);
+  expect(promptRequests[2]?.commandId).not.toBe(promptRequests[0]?.commandId);
+  expect(promptRequests[2]?.retry).toBe(false);
+  await expect(draft).toHaveValue("");
+  await expect(
+    page.getByText("无法确认上次发送的消息是否已被接收。", {
+      exact: true,
+    }),
+  ).toHaveCount(0);
 });
 
 test("inspects session-scoped runtime and terminal details on desktop and mobile", async ({
@@ -877,23 +1171,23 @@ test("model picker distinguishes same-named models before choosing a directory",
   await modelPicker.focus();
   await page.keyboard.press("Enter");
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeVisible();
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",
     }),
   ).toBeFocused();
   await page.keyboard.press("ArrowDown");
   await expect(
-    page.getByRole("menuitem", {
+    page.getByRole("option", {
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeFocused();
@@ -962,7 +1256,7 @@ test("same-named model selection sends the exact identity for an active Session"
     .getByRole("button", { name: "Shared model (provider-alpha/one)" })
     .click();
   await page
-    .getByRole("menuitem", { name: "Shared model (provider-beta/two)" })
+    .getByRole("option", { name: "Shared model (provider-beta/two)" })
     .click();
 
   await expect(
@@ -975,6 +1269,119 @@ test("same-named model selection sends the exact identity for an active Session"
       sessionId: expect.any(String),
     },
   ]);
+});
+
+test("finds and selects a model omitted from the bounded snapshot", async ({
+  page,
+}) => {
+  const visibleModels = Array.from({ length: 250 }, (_, index) => ({
+    provider: "fixture",
+    id: `visible-${index}`,
+    name: `Visible ${index}`,
+    label: `Visible ${index}`,
+    current: index === 0,
+  }));
+  const hiddenModel = {
+    provider: "provider-hidden",
+    id: "needle-251",
+    name: "Needle 251",
+    label: "Needle 251",
+    current: false,
+  };
+  const searchRequests: URL[] = [];
+  const modelWrites: Array<{
+    provider: string;
+    modelId: string;
+    sessionId: string;
+  }> = [];
+  let activeSessionId: string | undefined;
+  let selectedIdentity = "fixture/visible-0";
+
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    activeSessionId = snapshot.currentSessionId;
+    snapshot.runtime.status = "idle";
+    snapshot.models =
+      selectedIdentity === "provider-hidden/needle-251"
+        ? [
+            { ...hiddenModel, current: true },
+            ...visibleModels.slice(0, 249).map((model) => ({
+              ...model,
+              current: false,
+            })),
+          ]
+        : visibleModels;
+    snapshot.truncation.modelsOmitted = 1;
+    snapshot.truncation.truncated = true;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/models?**", async (route) => {
+    searchRequests.push(new URL(route.request().url()));
+    await route.fulfill({
+      status: 200,
+      json: {
+        models: [hiddenModel],
+        totalAvailable: 251,
+        totalMatches: 1,
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          maxResults: 50,
+          maxBytes: 64 * 1024,
+          bytes: 128,
+        },
+      },
+    });
+  });
+  await page.route("**/api/model", async (route) => {
+    const body = route.request().postDataJSON();
+    modelWrites.push(body);
+    selectedIdentity = `${body.provider}/${body.modelId}`;
+    await route.fulfill({
+      status: 200,
+      json: { ...hiddenModel, current: true },
+    });
+  });
+  await openWorkbench(page);
+
+  expect(activeSessionId).toBeTruthy();
+  await page
+    .getByRole("button", { name: "Visible 0 (fixture/visible-0)" })
+    .click();
+  await expect(
+    page.getByText("当前显示 250 个模型，还有 1 个可用；搜索即可查找。"),
+  ).toBeVisible();
+  const hiddenOption = page.getByRole("option", {
+    name: "Needle 251 (provider-hidden/needle-251)",
+  });
+  await expect(hiddenOption).toHaveCount(0);
+
+  await page
+    .getByPlaceholder("搜索服务商、模型名称或 ID...")
+    .fill("needle-251");
+  await expect(hiddenOption).toBeVisible();
+
+  expect(searchRequests).toHaveLength(1);
+  expect(searchRequests[0]?.searchParams.get("query")).toBe("needle-251");
+  expect(searchRequests[0]?.searchParams.get("limit")).toBe("50");
+  expect(searchRequests[0]?.searchParams.get("sessionId")).toBe(
+    activeSessionId,
+  );
+
+  await hiddenOption.click();
+  expect(modelWrites).toEqual([
+    {
+      provider: "provider-hidden",
+      modelId: "needle-251",
+      sessionId: activeSessionId,
+    },
+  ]);
+  await expect(
+    page.getByRole("button", {
+      name: "Needle 251 (provider-hidden/needle-251)",
+    }),
+  ).toBeEnabled();
 });
 
 test("workspace selection survives refresh and creates the exact native Session before sending", async ({
@@ -1049,4 +1456,303 @@ test("workspace selection survives refresh and creates the exact native Session 
     await page.close();
     await rm(workspace, { recursive: true, force: true });
   }
+});
+
+test("a delayed creation receipt never retargets the first prompt to another tab's Session", async ({
+  page,
+}) => {
+  const workspaceA = await mkdtemp(join(tmpdir(), "openpi-issue-466-a-"));
+  const workspaceB = await mkdtemp(join(tmpdir(), "openpi-issue-466-b-"));
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Origin: "http://127.0.0.1:57109",
+  };
+  const promptRequests: unknown[] = [];
+  let createdSessionId: string | undefined;
+  let externalSessionId: string | undefined;
+  try {
+    const importedA = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspaceA },
+    });
+    const importedB = await page.request.post("/api/workspaces", {
+      headers,
+      data: { path: workspaceB },
+    });
+    expect(importedA.status()).toBe(201);
+    expect(importedB.status()).toBe(201);
+    const { path: canonicalA } = await importedA.json();
+    const { path: canonicalB } = await importedB.json();
+    const workspaceNameA = canonicalA.split("/").at(-1);
+
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/prompt", async (route) => {
+      promptRequests.push(route.request().postDataJSON());
+      await route.fulfill({
+        status: 202,
+        json: {
+          id: route.request().postDataJSON().commandId,
+          accepted: true,
+        },
+      });
+    });
+    await page.route("**/api/sessions", async (route) => {
+      const createdResponse = await route.fetch();
+      const created = await createdResponse.json();
+      createdSessionId = created.sessionId;
+      const external = await page.request.post("/api/sessions", {
+        headers,
+        data: {
+          workspacePath: canonicalB,
+          commandId: "external-tab-switch",
+        },
+      });
+      expect(external.status()).toBe(201);
+      externalSessionId = (await external.json()).sessionId;
+      await route.fulfill({ response: createdResponse, json: created });
+    });
+
+    await openWorkbench(page);
+    const picker = page.locator(".workspace-picker");
+    await picker.click();
+    await page
+      .getByRole("menuitem", { name: workspaceNameA, exact: true })
+      .click();
+    const composer = page.getByRole("textbox", { name: "描述任务" });
+    await composer.fill("Only edit repository A");
+    await page.getByRole("button", { name: "发送", exact: true }).click();
+
+    await expect(page.locator(".notice")).toContainText("no longer active");
+    await expect(composer).toHaveValue("Only edit repository A");
+    expect(promptRequests).toEqual([]);
+    expect(createdSessionId).toEqual(expect.any(String));
+    expect(externalSessionId).toEqual(expect.any(String));
+    expect(createdSessionId).not.toBe(externalSessionId);
+    const snapshot = await page.request.get("/api/snapshot", { headers });
+    expect((await snapshot.json()).currentSessionId).toBe(externalSessionId);
+  } finally {
+    await page.close();
+    await Promise.all(
+      [workspaceA, workspaceB].map((path) =>
+        rm(path, { recursive: true, force: true }),
+      ),
+    );
+  }
+});
+
+test.describe("thinking picker", () => {
+  test("disables thinking when the runtime reports it unsupported", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page, { supported: false, available: [] });
+    await openWorkbench(page);
+    const thinkingPicker = page.locator(".thinking-picker");
+    await expect(thinkingPicker).toBeDisabled();
+    await expect(thinkingPicker).toHaveAttribute("aria-label", "暂不支持思考");
+  });
+
+  test("opens with a section heading and marks the confirmed level", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await expect(picker).toBeEnabled();
+    await picker.click();
+    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
+    await expect(
+      page
+        .getByRole("menuitem", { name: "off", exact: true })
+        .locator("svg.lucide-check"),
+    ).toHaveCount(1);
+  });
+
+  test("selecting the confirmed level issues no write", async ({ page }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "off", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "off",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([]);
+  });
+
+  test("selecting another level issues exactly one write and confirms it", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "high",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "high" },
+    ]);
+  });
+
+  test("is keyboard-operable and cancels with Escape", async ({ page }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await picker.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "off", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("ArrowDown");
+    await expect(
+      page.getByRole("menuitem", { name: "low", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "low",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "low" },
+    ]);
+
+    await picker.focus();
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("menu")).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("menu")).toHaveCount(0);
+    expect(fixture.posts).toHaveLength(1);
+  });
+
+  test("keeps the last intent when the first write is in flight", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    fixture.holdNextPost();
+    await picker.click();
+    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await expect.poll(() => fixture.posts.length, { timeout: 5_000 }).toBe(1);
+
+    await picker.click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "true",
+    );
+    fixture.releaseHeldPost();
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "high",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+    expect(fixture.posts).toEqual([
+      { sessionId: MOCK_SESSION_ID, level: "low" },
+      { sessionId: MOCK_SESSION_ID, level: "high" },
+    ]);
+  });
+
+  test("surfaces a notice and reconciles after a failed write", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    fixture.failNextPost(500, { error: "Mock thinking failure" });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "high", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "Mock thinking failure",
+    );
+    await expect.poll(() => fixture.getCount()).toBe(1);
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-level",
+      "off",
+    );
+    await expect(page.locator(".thinking-picker-wrap")).toHaveAttribute(
+      "data-pending",
+      "false",
+    );
+  });
+
+  test("surfaces a notice when thinking control is unavailable", async ({
+    page,
+  }) => {
+    const fixture = await installThinkingFixture(page);
+    fixture.failNextPost(501, {
+      code: "THINKING_CONTROL_UNAVAILABLE",
+      error: "thinking control is unavailable",
+    });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await page.getByRole("menuitem", { name: "low", exact: true }).click();
+    await expect(page.getByRole("alert")).toContainText(
+      "thinking control is unavailable",
+    );
+  });
+
+  test("warns when the confirmed level is outside the supported set", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page, {
+      level: "medium",
+      available: ["off", "low", "high"],
+    });
+    await openWorkbench(page);
+    await page.locator(".thinking-picker").click();
+    await expect(
+      page.locator('.thinking-picker-wrap[data-warning="true"]'),
+    ).toBeVisible();
+    await expect(
+      page.getByRole("menuitem", { name: /当前确认的思考等级/ }),
+    ).toBeVisible();
+  });
+
+  test("locks the picker while a turn is running", async ({ page }) => {
+    await installThinkingFixture(page, { runtimeStatus: "running" });
+    await openWorkbench(page);
+    await expect(page.locator(".thinking-picker")).toBeDisabled();
+  });
+
+  test("keeps the toolbar inside a narrow viewport", async ({ page }) => {
+    await installThinkingFixture(page);
+    await page.setViewportSize({ width: 390, height: 844 });
+    await openWorkbench(page);
+    await expect(page.locator(".thinking-picker")).toBeVisible();
+    const width = await page.evaluate(() => ({
+      client: document.body.clientWidth,
+      scroll: document.body.scrollWidth,
+    }));
+    expect(width.scroll).toBeLessThanOrEqual(width.client);
+  });
+
+  test("has an accessible trigger and an accessible open menu", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page);
+    await openWorkbench(page);
+    const picker = page.locator(".thinking-picker");
+    await expect(picker).toHaveAccessibleName(/思考等级.*off/);
+    await picker.click();
+    await expect(page.getByRole("group", { name: "思考等级" })).toBeVisible();
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(accessibility.violations).toEqual([]);
+  });
 });

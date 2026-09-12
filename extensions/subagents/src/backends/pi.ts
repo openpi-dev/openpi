@@ -24,8 +24,27 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import type { Cause, Scope } from "effect";
 import { Effect, Queue, Stream } from "effect";
+import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
+import {
+  bindChildSessionExtensions,
+  CHILD_SHUTDOWN_TIMEOUT_MS,
+  childToolPolicy,
+  createChildResources,
+  shutdownAndDisposeChildSession,
+} from "../../../shared/child-session.ts";
+import {
+  childToolsWithStructuredOutput,
+  createStructuredOutputTool,
+  type EncodedStructuredResult,
+  encodeStructuredResult,
+  STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
+} from "../../../shared/structured-output.ts";
+import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
+import {
+  formatWorktreeCleanupWarning,
+  reclaimWorktree,
+} from "../../../shared/worktree.ts";
 import { resolveAgentModel } from "../agent-types.ts";
-import { toolPreview } from "./tool-preview.ts";
 import type {
   SubagentBackend,
   SubagentCleanupReceipt,
@@ -38,27 +57,8 @@ import type {
   TranscriptPart,
 } from "../domain.ts";
 import { SendError, SpawnError } from "../domain.ts";
-import { createToolCallTimeoutGuard } from "../../../shared/tool-call-timeout.ts";
-import {
-  bindChildSessionExtensions,
-  CHILD_SHUTDOWN_TIMEOUT_MS,
-  childToolPolicy,
-  createChildResources,
-  shutdownAndDisposeChildSession,
-} from "../../../shared/child-session.ts";
-import {
-  formatWorktreeCleanupWarning,
-  reclaimWorktree,
-} from "../../../shared/worktree.ts";
-import { AgentToolRenderLedger } from "../../../shared/agent-tool-renderer.ts";
-import {
-  childToolsWithStructuredOutput,
-  createStructuredOutputTool,
-  encodeStructuredResult,
-  type EncodedStructuredResult,
-  STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
-} from "../../../shared/structured-output.ts";
 import { persistStructuredResultArtifact } from "../result-artifact.ts";
+import { toolPreview } from "./tool-preview.ts";
 
 const DIRECT_WORKTREE_CLEANUP_TIMEOUT_MS = 4_000;
 const PARTIAL_TEXT_MAX_LENGTH = 128 * 1_024;
@@ -240,7 +240,10 @@ const makePiSession = (
             options.sessionFactory ?? createAgentSession
           )({
             cwd: task.cwd,
-            sessionManager: SessionManager.create(task.cwd),
+            sessionManager:
+              task.origin === "btw"
+                ? SessionManager.inMemory(task.cwd)
+                : SessionManager.create(task.cwd),
             settingsManager,
             resourceLoader: loader,
             model,

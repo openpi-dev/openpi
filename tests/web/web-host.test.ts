@@ -9,6 +9,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerWebCapability } from "../../extensions/shared/web-observer-registry.ts";
 import { WebHost } from "../../web/host/web-host.ts";
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -126,6 +127,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       for (const listener of listeners) listener({ type: "session_start" });
       return {
         cancelled: false,
+        sessionId: sessionManager.getSessionId(),
         ...(options?.commandId ? { commandId: options.commandId } : {}),
       };
     },
@@ -146,6 +148,8 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         current: false,
       },
     ],
+    searchModels: (query, limit) =>
+      projectWebModelSearch(runtime.listModels(), query, limit),
     getProjectTrustStatus: () => ({
       source: "pi-project-trust",
       workspace: runtimeCwd,
@@ -285,10 +289,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     let thinkingReads = 0;
     runtime.getThinkingState = () => {
       thinkingReads++;
-      return { level: "high", available: ["off", "high"] };
+      return { level: "high", available: ["off", "high"], supported: true };
     };
     assert.equal((await fetch(`${launched.origin}/api/thinking`)).status, 401);
     assert.equal(thinkingReads, 0);
+    const thinkingRevision = (host as unknown as { sequence: number }).sequence;
     const thinkingResponse = await fetch(`${launched.origin}/api/thinking`, {
       headers: authorized,
     });
@@ -296,8 +301,27 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       sessionId: sessionManager.getSessionId(),
       level: "high",
       available: ["off", "high"],
+      supported: true,
+      revision: thinkingRevision,
     });
     assert.equal(thinkingReads, 1);
+    const thinkingSnapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers: authorized })
+    ).json()) as {
+      cursor: number;
+      thinking?: {
+        level: string;
+        available: string[];
+        supported: boolean;
+        revision: number;
+      };
+    };
+    assert.deepEqual(thinkingSnapshot.thinking, {
+      level: "high",
+      available: ["off", "high"],
+      supported: true,
+      revision: thinkingSnapshot.cursor,
+    });
     delete runtime.getThinkingState;
     const unknownThinking = await fetch(`${launched.origin}/api/thinking`, {
       headers: authorized,
@@ -306,7 +330,24 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       sessionId: sessionManager.getSessionId(),
       level: "unknown",
       available: [],
+      supported: false,
+      revision: thinkingRevision,
     });
+    runtime.getThinkingState = () => {
+      throw new Error("thinking state exploded");
+    };
+    const thrownThinking = await fetch(`${launched.origin}/api/thinking`, {
+      headers: authorized,
+    });
+    assert.equal(thrownThinking.status, 200);
+    assert.deepEqual(await thrownThinking.json(), {
+      sessionId: sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+      supported: false,
+      revision: thinkingRevision,
+    });
+    delete runtime.getThinkingState;
     assert.equal(
       (
         await fetch(
@@ -387,7 +428,60 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       headers: authorized,
     });
     assert.equal(modelsResponse.status, 200);
-    assert.deepEqual((await modelsResponse.json()).models, snapshot.models);
+    const modelsText = await modelsResponse.text();
+    const modelsBody = JSON.parse(modelsText) as {
+      models: Array<{ provider: string; id: string }>;
+      totalMatches: number;
+      truncation: {
+        bytes: number;
+        matchesOmitted: number;
+        maxBytes: number;
+      };
+    };
+    assert.deepEqual(modelsBody.models, snapshot.models);
+    assert.equal(modelsBody.totalMatches, snapshot.models.length);
+    assert.equal(modelsBody.truncation.matchesOmitted, 0);
+    assert.equal(Buffer.byteLength(modelsText), modelsBody.truncation.bytes);
+    assert.ok(modelsBody.truncation.bytes <= modelsBody.truncation.maxBytes);
+    const filteredModels = await fetch(
+      `${launched.origin}/api/models?query=other&limit=1`,
+      { headers: authorized },
+    );
+    assert.equal(filteredModels.status, 200);
+    assert.deepEqual((await filteredModels.json()).models, [
+      snapshot.models[1],
+    ]);
+    const invalidQuery = await fetch(
+      `${launched.origin}/api/models?query=${"x".repeat(201)}`,
+      { headers: authorized },
+    );
+    assert.equal(invalidQuery.status, 400);
+    assert.equal((await invalidQuery.json()).code, "INVALID_MODEL_QUERY");
+    for (const invalidLimit of ["0", "51", "nope"]) {
+      const invalidLimitResponse = await fetch(
+        `${launched.origin}/api/models?limit=${invalidLimit}`,
+        { headers: authorized },
+      );
+      assert.equal(invalidLimitResponse.status, 400);
+      assert.equal(
+        (await invalidLimitResponse.json()).code,
+        "INVALID_MODEL_LIMIT",
+      );
+    }
+    const staleModelSession = await fetch(
+      `${launched.origin}/api/models?query=other&sessionId=another-session`,
+      { headers: authorized },
+    );
+    assert.equal(staleModelSession.status, 409);
+    assert.equal((await staleModelSession.json()).code, "SESSION_CHANGED");
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/models`, {
+          headers: { Authorization: "Bearer invalid" },
+        })
+      ).status,
+      401,
+    );
     const trustResponse = await fetch(`${launched.origin}/api/trust`, {
       headers: authorized,
     });
@@ -766,7 +860,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       }),
     });
     assert.equal(importedSession.status, 201);
-    assert.equal((await importedSession.json()).commandId, "create-imported");
+    assert.deepEqual(await importedSession.json(), {
+      cancelled: false,
+      commandId: "create-imported",
+      sessionId: sessionManager.getSessionId(),
+    });
     assert.equal(runtimeCwd, importedWorkspace.path);
 
     const newSession = await fetch(`${launched.origin}/api/sessions`, {
@@ -775,10 +873,46 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       body: JSON.stringify({ workspacePath: cwd, commandId: "create-current" }),
     });
     assert.equal(newSession.status, 201);
-    assert.equal((await newSession.json()).commandId, "create-current");
+    assert.deepEqual(await newSession.json(), {
+      cancelled: false,
+      commandId: "create-current",
+      sessionId: sessionManager.getSessionId(),
+    });
     assert.equal(runtimeCwd, cwd);
     assert.equal(newSessions, 2);
     assert.deepEqual(creationCommandIds, ["create-imported", "create-current"]);
+    const beforeReplay = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers: authorized })
+    ).json()) as { cursor: number };
+    const originalNewSession = runtime.newSession;
+    runtime.newSession = async (_workspacePath, options) => ({
+      cancelled: false,
+      replayed: true,
+      commandId: options?.commandId,
+      sessionId: "older-session",
+    });
+    try {
+      const replay = await fetch(`${launched.origin}/api/sessions`, {
+        method: "POST",
+        headers: authorized,
+        body: JSON.stringify({
+          workspacePath: importedWorkspace.path,
+          commandId: "create-imported",
+        }),
+      });
+      assert.equal(replay.status, 201);
+      const afterReplay = (await (
+        await fetch(`${launched.origin}/api/snapshot`, { headers: authorized })
+      ).json()) as { cursor: number };
+      assert.equal(
+        afterReplay.cursor,
+        beforeReplay.cursor,
+        "a replay is not a new Session transition",
+      );
+      assert.equal(runtimeCwd, cwd);
+    } finally {
+      runtime.newSession = originalNewSession;
+    }
 
     const removeActive = await fetch(
       `${launched.origin}/api/workspaces?path=${encodeURIComponent(cwd)}`,
@@ -856,6 +990,167 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
+test("serves terminal Sessions through a read-only bounded endpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-host-"));
+  const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "pi-agent");
+  const sessionManager = SessionManager.inMemory(root);
+  const terminal = SessionManager.create(root);
+  terminal.appendMessage({
+    role: "user",
+    content: "terminal endpoint",
+    timestamp: 1,
+  });
+  terminal.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  const runtime: WebRuntimeController = {
+    cwd: root,
+    workspaceSelected: true,
+    sessionDirectory: join(root, "web-sessions"),
+    sessionManager,
+    isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
+    sendPrompt: async () => ({ pendingFollowUps: 0 }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: runtime.sessionManager.getSessionId(),
+    }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
+    setModel: async () => {
+      throw new Error("not available");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {},
+  };
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}` };
+    const listed = await fetch(
+      `${launched.origin}/api/terminal-sessions?limit=1`,
+      {
+        headers,
+      },
+    );
+    assert.equal(listed.status, 200);
+    const page = (await listed.json()) as {
+      sessions: Array<{
+        path: string;
+        source: string;
+        origin: string;
+        readOnly: boolean;
+      }>;
+      total: number;
+    };
+    assert.equal(page.total, 1);
+    assert.equal(page.sessions[0]?.path, terminal.getSessionFile());
+    assert.equal(page.sessions[0]?.source, "pi-default");
+    assert.equal(page.sessions[0]?.origin, "terminal");
+    assert.equal(page.sessions[0]?.readOnly, true);
+    assert.equal(JSON.stringify(page).includes("allMessagesText"), false);
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/terminal-sessions?query=${"x".repeat(201)}`,
+          { headers },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?cursor=nope`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?limit=101`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    const missing = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(join(root, "missing.jsonl"))}`,
+      { headers },
+    );
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), {
+      code: "SESSION_NOT_FOUND",
+      error: "Terminal Session is not available",
+    });
+    const inspected = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(terminal.getSessionFile()!)}`,
+      { headers },
+    );
+    assert.equal(inspected.status, 200);
+    const details = (await inspected.json()) as {
+      readOnly: boolean;
+      preview: { messages: unknown[]; retainedBytes: number };
+    };
+    assert.equal(details.readOnly, true);
+    assert.equal(details.preview.messages.length, 2);
+    assert.ok(details.preview.retainedBytes > 0);
+    assert.equal(JSON.stringify(details).includes("allMessagesText"), false);
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      const rejected = await fetch(`${launched.origin}/api/terminal-sessions`, {
+        method,
+        headers,
+      });
+      assert.equal(rejected.status, 405);
+    }
+    const capabilities = await fetch(`${launched.origin}/api/capabilities`, {
+      headers,
+    });
+    assert.equal(
+      (await capabilities.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
+    const webSessions = await fetch(`${launched.origin}/api/sessions`, {
+      headers,
+    });
+    assert.ok(!JSON.stringify(await webSessions.json()).includes("pi-default"));
+  } finally {
+    await host.stop();
+    if (previousAgentDirectory === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-host-"));
   const bootstrap = join(root, ".bootstrap-workspace");
@@ -875,9 +1170,13 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
       prompts++;
       return { pendingFollowUps: 0 };
     },
-    newSession: async () => ({ cancelled: false }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: sessionManager.getSessionId(),
+    }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("workspace required");
     },
@@ -975,9 +1274,13 @@ test("returns accepted only after Pi admits the prompt", async () => {
       await promptAdmitted;
       return { pendingFollowUps: 0 };
     },
-    newSession: async () => ({ cancelled: false }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: sessionManager.getSessionId(),
+    }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("Model is not available");
     },
@@ -1089,6 +1392,363 @@ test("returns an exact receipt for a turn-bound cancellation", async () => {
   }
 });
 
+test("thinking selection validates its body and returns the applied projection", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-post-"));
+  const runtime = testRuntime(cwd);
+  const applied: string[] = [];
+  runtime.getThinkingState = () => ({
+    level: "off",
+    available: ["off", "low", "high"],
+    supported: true,
+  });
+  runtime.setThinkingLevel = async (level, options) => {
+    applied.push(level);
+    return {
+      level,
+      available: ["off", "low", "high"],
+      supported: true,
+    };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const missingSession = await fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ level: "high" }),
+    });
+    assert.equal(missingSession.status, 400);
+    assert.deepEqual(await missingSession.json(), {
+      error: "sessionId and a valid level are required",
+    });
+
+    const invalidLevel = await fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        level: "ultra",
+      }),
+    });
+    assert.equal(invalidLevel.status, 400);
+    assert.equal(applied.length, 0);
+
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        level: "high",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: runtime.sessionManager.getSessionId(),
+      level: "high",
+      available: ["off", "low", "high"],
+      supported: true,
+      revision,
+    });
+    assert.deepEqual(applied, ["high"]);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("thinking selection requires a workspace and available runtime control", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-gates-"));
+  const headers = { "Content-Type": "application/json" };
+  try {
+    const unbound: WebRuntimeController = {
+      ...testRuntime(cwd),
+      workspaceSelected: false,
+      setThinkingLevel: async () => ({
+        level: "high",
+        available: ["off", "high"],
+        supported: true,
+      }),
+    };
+    const unboundHost = await startTestHost(unbound);
+    try {
+      const workspace = await fetch(
+        `${unboundHost.launched.origin}/api/thinking`,
+        {
+          method: "POST",
+          headers: { ...unboundHost.headers, ...headers },
+          body: JSON.stringify({
+            sessionId: unbound.sessionManager.getSessionId(),
+            level: "high",
+          }),
+        },
+      );
+      assert.equal(workspace.status, 409);
+      assert.equal((await workspace.json()).code, "WORKSPACE_REQUIRED");
+    } finally {
+      await unboundHost.host.stop();
+    }
+
+    const unavailable = testRuntime(cwd);
+    const unavailableHost = await startTestHost(unavailable);
+    try {
+      const response = await fetch(
+        `${unavailableHost.launched.origin}/api/thinking`,
+        {
+          method: "POST",
+          headers: { ...unavailableHost.headers, ...headers },
+          body: JSON.stringify({
+            sessionId: unavailable.sessionManager.getSessionId(),
+            level: "high",
+          }),
+        },
+      );
+      assert.equal(response.status, 501);
+      assert.deepEqual(await response.json(), {
+        code: "THINKING_CONTROL_UNAVAILABLE",
+        error: "thinking control is unavailable",
+      });
+    } finally {
+      await unavailableHost.host.stop();
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("GET /api/thinking degrades instead of failing when the getter throws", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-throw-"));
+  const runtime = testRuntime(cwd);
+  runtime.getThinkingState = () => {
+    throw new Error("thinking state exploded");
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: runtime.sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+      supported: false,
+      revision,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("GET /api/thinking degrades when the session manager cannot report an id", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-session-"));
+  const runtime = testRuntime(cwd);
+  runtime.getThinkingState = () => ({
+    level: "high",
+    available: ["off", "high"],
+    supported: true,
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const getSessionId = runtime.sessionManager.getSessionId.bind(
+    runtime.sessionManager,
+  );
+  runtime.sessionManager.getSessionId = () => {
+    throw new Error("session manager exploded");
+  };
+  try {
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: "",
+      level: "unknown",
+      available: [],
+      supported: false,
+      revision,
+    });
+  } finally {
+    runtime.sessionManager.getSessionId = getSessionId;
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("GET /api/thinking bounds an oversized projection at the host boundary", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-get-bounds-"));
+  const runtime = testRuntime(cwd);
+  const oversizedLevels = Array.from(
+    { length: 30 },
+    (_, index) => `level-${index}-${"a".repeat(600)}`,
+  );
+  runtime.getThinkingState = () => ({
+    level: "l".repeat(900),
+    available: oversizedLevels,
+    supported: true,
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: runtime.sessionManager.getSessionId(),
+      level: "l".repeat(500),
+      available: oversizedLevels
+        .slice(0, 16)
+        .map((level) => level.slice(0, 500)),
+      supported: true,
+      revision,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("GET /api/thinking returns the unknown fallback when the getter is absent", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-absent-"));
+  const runtime = testRuntime(cwd);
+  delete runtime.getThinkingState;
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: runtime.sessionManager.getSessionId(),
+      level: "unknown",
+      available: [],
+      supported: false,
+      revision,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/thinking bounds an oversized projection at the host boundary", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-post-bounds-"));
+  const runtime = testRuntime(cwd);
+  const oversizedLevels = Array.from(
+    { length: 30 },
+    (_, index) => `level-${index}-${"a".repeat(600)}`,
+  );
+  runtime.setThinkingLevel = async () => ({
+    level: "l".repeat(900),
+    available: oversizedLevels,
+    supported: true,
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const revision = (host as unknown as { sequence: number }).sequence;
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        level: "high",
+      }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), {
+      sessionId: runtime.sessionManager.getSessionId(),
+      level: "l".repeat(500),
+      available: oversizedLevels
+        .slice(0, 16)
+        .map((level) => level.slice(0, 500)),
+      supported: true,
+      revision,
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("POST /api/thinking reports unavailable levels for a non-reasoning model", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-unsupported-"));
+  const runtime = testRuntime(cwd);
+  runtime.setThinkingLevel = async () => {
+    throw new WebRuntimeRequestError(
+      "Thinking level is not available for the current model",
+      "THINKING_LEVEL_NOT_AVAILABLE",
+      400,
+    );
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const response = await fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        level: "high",
+      }),
+    });
+    assert.equal(response.status, 400);
+    assert.deepEqual(await response.json(), {
+      code: "THINKING_LEVEL_NOT_AVAILABLE",
+      error: "Thinking level is not available for the current model",
+    });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop waits for an in-flight thinking selection before disposal", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-thinking-lease-"));
+  const runtime = testRuntime(cwd);
+  let disposeCalls = 0;
+  runtime.dispose = async () => {
+    disposeCalls++;
+  };
+  let started!: () => void;
+  const startedBarrier = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  let release!: () => void;
+  const selectionBarrier = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  runtime.setThinkingLevel = async (level) => {
+    started();
+    await selectionBarrier;
+    return { level, available: ["off", level], supported: true };
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const request = fetch(`${launched.origin}/api/thinking`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId: runtime.sessionManager.getSessionId(),
+        level: "high",
+      }),
+    });
+    await startedBarrier;
+    const stopping = host.stop();
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    assert.equal(disposeCalls, 0);
+    release();
+    await stopping;
+    assert.equal(disposeCalls, 1);
+    assert.equal((await request).status, 200);
+  } finally {
+    release();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 function testRuntime(
   cwd: string,
   sendPrompt: WebRuntimeController["sendPrompt"] = async () => ({
@@ -1105,9 +1765,13 @@ function testRuntime(
     getActiveTurn: () => undefined,
     cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
     sendPrompt,
-    newSession: async () => ({ cancelled: false }),
+    newSession: async () => ({
+      cancelled: false,
+      sessionId: sessionManager.getSessionId(),
+    }),
     switchSession: async () => ({ cancelled: false }),
     listModels: () => [],
+    searchModels: (query, limit) => projectWebModelSearch([], query, limit),
     setModel: async () => {
       throw new Error("Model is not available");
     },
@@ -1126,6 +1790,108 @@ async function startTestHost(runtime: WebRuntimeController) {
   const headers = { Authorization: `Bearer ${token}` };
   return { host, launched, headers };
 }
+
+test("serves Session-bound command discovery with fail-closed request validation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-commands-"));
+  const runtime = testRuntime(cwd);
+  let workspaceSelected = true;
+  Object.defineProperty(runtime, "workspaceSelected", {
+    configurable: true,
+    get: () => workspaceSelected,
+  });
+  runtime.listCommands = () => ({
+    commands: [
+      {
+        name: "review",
+        description: "Review the current change",
+        source: "prompt",
+        availability: "available",
+        argumentHint: "[arguments]",
+      },
+    ],
+    totalAvailable: 1,
+    truncation: {
+      truncated: false,
+      commandsOmitted: 0,
+      maxCommands: 250,
+      maxBytes: 64 * 1024,
+      bytes: 256,
+    },
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const sessionId = runtime.sessionManager.getSessionId();
+  try {
+    assert.equal(
+      (await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`))
+        .status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      405,
+    );
+    for (const suffix of [
+      "",
+      "?sessionId=",
+      `?sessionId=${sessionId}&extra=true`,
+      `?sessionId=${sessionId}&sessionId=${sessionId}`,
+    ]) {
+      const response = await fetch(`${launched.origin}/api/commands${suffix}`, {
+        headers,
+      });
+      assert.equal(response.status, 400);
+      assert.equal(
+        (await response.json()).code,
+        "INVALID_COMMAND_DISCOVERY_REQUEST",
+      );
+    }
+    const stale = await fetch(
+      `${launched.origin}/api/commands?sessionId=stale-session`,
+      { headers },
+    );
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, "SESSION_CHANGED");
+
+    workspaceSelected = false;
+    const noWorkspace = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(noWorkspace.status, 409);
+    assert.equal((await noWorkspace.json()).code, "WORKSPACE_REQUIRED");
+
+    workspaceSelected = true;
+    const listCommands = runtime.listCommands;
+    delete runtime.listCommands;
+    const unavailable = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(unavailable.status, 501);
+    assert.equal(
+      (await unavailable.json()).code,
+      "COMMAND_DISCOVERY_UNAVAILABLE",
+    );
+    runtime.listCommands = listCommands;
+
+    const response = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.match(body, /"name":"review"/u);
+    assert.doesNotMatch(body, /sourceInfo|\/private\/|private-fixture/u);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 test("classifies invalid and oversized JSON bodies as client errors", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));

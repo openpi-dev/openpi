@@ -15,12 +15,18 @@ import {
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
-import { PiWebAdapter } from "../adapter/pi-adapter.ts";
+import {
+  PiWebAdapter,
+  WebReadOnlySessionError,
+} from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
+  boundThinkingProjection,
   WEB_MAX_ARCHIVED_SESSION_PAGE,
   WEB_MAX_EVENT_BYTES,
   WEB_MAX_EVENTS,
+  WEB_MAX_MODEL_QUERY,
+  WEB_MAX_MODEL_SEARCH_RESULTS,
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
@@ -31,6 +37,9 @@ import {
   type WebRuntimeController,
 } from "../runtime/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
+import { reduceLiveTools } from "../protocol/live-tools.ts";
+import type { LiveToolEvidence } from "../protocol/evidence.ts";
+import { ArtifactError, ArtifactReader } from "./artifacts.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
@@ -42,6 +51,15 @@ const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
 const SERVER_CLOSE_DRAIN_MS = 500;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 5_000;
 const MAX_PROMPT_ADMISSIONS = 128;
+const THINKING_LEVELS = new Set([
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "max",
+]);
 const execFileAsync = promisify(execFile);
 
 type PromptAdmissionResponse = {
@@ -101,6 +119,8 @@ export class WebHost {
   >();
   private readonly events: WebEvent[] = [];
   private sequence = 0;
+  private liveTools: LiveToolEvidence[] = [];
+  private readonly artifacts: ArtifactReader;
   private port = 0;
   private readonly runtime: WebRuntimeController;
   private readonly requestedPort: number;
@@ -125,6 +145,7 @@ export class WebHost {
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
+    this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
       ? Buffer.from(options.token, "hex")
@@ -217,6 +238,8 @@ export class WebHost {
   }
 
   publish(type: string, detail?: Record<string, unknown>) {
+    if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) this.artifacts.revoke();
+    this.liveTools = reduceLiveTools(this.liveTools, type, detail ?? {});
     let event: WebEvent = {
       protocolVersion: WEB_PROTOCOL_VERSION,
       sequence: ++this.sequence,
@@ -261,6 +284,7 @@ export class WebHost {
     this.stopping = true;
     this.stopPromise = (async () => {
       this.unsubscribeCapabilities();
+      this.artifacts.dispose();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
@@ -324,6 +348,7 @@ export class WebHost {
       await this.handle(request, response);
     } catch (error) {
       if (response.destroyed || response.writableEnded) return;
+      if (error instanceof ArtifactError) return this.json(response, error.statusCode, { code: error.code, error: error.message });
       if (error instanceof WebRequestError) {
         return this.json(response, error.statusCode, {
           code: error.code,
@@ -346,7 +371,8 @@ export class WebHost {
     if (pathname === "/api/turns/cancel") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
-      pathname === "/api/model";
+      pathname === "/api/model" ||
+      pathname === "/api/thinking";
   }
 
   private async drainLeaseSensitiveRequests() {
@@ -426,6 +452,41 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname.startsWith("/api/artifacts/")) {
+      try { await this.adapter.requireWorkspace(this.runtime.cwd); }
+      catch { throw new ArtifactError("ARTIFACT_DENIED", 403, "File access requires an available Session workspace."); }
+    }
+    if (url.pathname === "/api/artifacts/resolve") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "File access requires POST" });
+      const body = await this.readJson(request);
+      if (typeof body.sessionId !== "string" || typeof body.reference !== "string" || body.access !== "read-file" || (body.parent !== undefined && typeof body.parent !== "string")) return this.json(response, 400, { error: "An explicit Session file-read request is required" });
+      const handle = await this.artifacts.resolveFile(body.sessionId, body.reference, body.parent);
+      return this.json(response, 200, { handle });
+    }
+    if (url.pathname === "/api/artifacts/content") {
+      const handle = url.searchParams.get("handle");
+      const sessionId = url.searchParams.get("sessionId");
+      if (!handle || !sessionId || handle.length > 100 || sessionId.length > 500) return this.json(response, 400, { error: "File handle and Session are required" });
+      if (request.method === "DELETE") {
+        this.artifacts.release(handle, sessionId);
+        return this.json(response, 200, { released: true });
+      }
+      if (request.method !== "GET") return this.json(response, 405, { error: "File content accepts GET or DELETE" });
+      const download = url.searchParams.get("download") === "1";
+      if (url.searchParams.get("metadata") === "1" && !download)
+        return this.json(response, 200, await this.artifacts.metadata(handle, sessionId));
+      const revision = url.searchParams.get("revision") ?? undefined;
+      if (download && !/^[a-f0-9]{64}$/u.test(revision ?? "")) return this.json(response, 400, { error: "Download requires the preview content revision" });
+      const result = await this.artifacts.read(handle, sessionId, revision);
+      if (!download) return this.json(response, 200, result.preview);
+      response.writeHead(200, {
+        "Content-Type": "application/octet-stream", "Content-Length": result.bytes.length,
+        "Content-Disposition": `attachment; filename="artifact"; filename*=UTF-8''${encodeURIComponent(result.preview.artifact.name).replace(/['()*]/gu, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`,
+        "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff", "Cross-Origin-Resource-Policy": "same-origin",
+      });
+      response.end(result.bytes);
+      return;
+    }
     if (
       url.pathname === "/api/workspaces/select" &&
       request.method === "POST"
@@ -486,8 +547,9 @@ export class WebHost {
       const result = await this.runtime.newSession(workspacePath, {
         commandId: body.commandId,
       });
-      this.publish("session_created", {
+      if (!result.replayed) this.publish("session_created", {
         workspacePath,
+        sessionId: result.sessionId,
         commandId: body.commandId,
         ...(result.sessionPath ? { sessionPath: result.sessionPath } : {}),
       });
@@ -699,6 +761,51 @@ export class WebHost {
         cursor: this.sequence,
       });
     }
+    if (url.pathname === "/api/thinking" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (
+        typeof body.sessionId !== "string" ||
+        body.sessionId.length > 256 ||
+        typeof body.level !== "string" ||
+        !THINKING_LEVELS.has(body.level)
+      ) {
+        return this.json(response, 400, {
+          error: "sessionId and a valid level are required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using the Web runtime",
+        });
+      }
+      if (!this.runtime.setThinkingLevel) {
+        return this.json(response, 501, {
+          code: "THINKING_CONTROL_UNAVAILABLE",
+          error: "thinking control is unavailable",
+        });
+      }
+      try {
+        const projection = await this.runtime.setThinkingLevel(body.level, {
+          expectedSessionId: body.sessionId,
+        });
+        return this.json(response, 200, {
+          sessionId: body.sessionId,
+          ...boundThinkingProjection(projection),
+          revision: this.sequence,
+        });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(
+          error,
+          "THINKING_SELECTION_FAILED",
+          "thinking selection failed",
+        );
+        return this.json(response, failure.status, {
+          code: failure.code,
+          error: failure.error,
+        });
+      }
+    }
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
@@ -714,6 +821,39 @@ export class WebHost {
       });
     }
     if (url.pathname === "/events") return this.eventsStream(request, response);
+    if (url.pathname === "/api/commands") {
+      if (
+        diagnosticSession === null ||
+        diagnosticSession.length === 0 ||
+        diagnosticSession.length > 128 ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_COMMAND_DISCOVERY_REQUEST",
+          error: "the active Session id is required",
+        });
+      }
+      if (diagnosticSession !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Reopen command discovery.",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before discovering commands",
+        });
+      }
+      if (!this.runtime.listCommands) {
+        return this.json(response, 501, {
+          code: "COMMAND_DISCOVERY_UNAVAILABLE",
+          error: "Pi command discovery is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.listCommands());
+    }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
       return this.json(response, 200, {
@@ -723,6 +863,66 @@ export class WebHost {
           sessionsOmitted: projection.omitted,
         },
       });
+    }
+    if (url.pathname === "/api/terminal-sessions") {
+      const query = url.searchParams.get("query") ?? "";
+      if (query.length > 200) {
+        return this.json(response, 400, {
+          code: "QUERY_TOO_LONG",
+          error: "query must be at most 200 characters",
+        });
+      }
+      const cursor = this.parseCursor(url.searchParams.get("cursor"));
+      if (cursor.invalid) {
+        return this.json(response, 400, {
+          code: "INVALID_CURSOR",
+          error: "cursor must be a non-negative integer",
+        });
+      }
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? 50 : Number(rawLimit);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        return this.json(response, 400, {
+          code: "INVALID_LIMIT",
+          error: "limit must be an integer from 1 to 100",
+        });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      const signal = AbortSignal.any([controller.signal, this.chooserAbort.signal]);
+      try {
+        const path = url.searchParams.get("path");
+        if (path) {
+          return this.json(
+            response,
+            200,
+            await this.adapter.getReadOnlyTerminalSession(path, { signal }),
+          );
+        }
+        return this.json(
+          response,
+          200,
+          await this.adapter.listReadOnlyTerminalSessions({
+            query,
+            cursor: cursor.value,
+            limit,
+            signal,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof WebReadOnlySessionError) {
+          return this.json(response, error.statusCode, {
+            code: error.code,
+            error: error.message,
+          });
+        }
+        throw error;
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
     }
     if (url.pathname === "/api/sessions/archived") {
       const rawLimit = url.searchParams.get("limit");
@@ -767,7 +967,35 @@ export class WebHost {
       });
     }
     if (url.pathname === "/api/models")
-      return this.json(response, 200, { models: this.runtime.listModels() });
+      {
+        const query = url.searchParams.get("query") ?? "";
+        const limitText = url.searchParams.get("limit");
+        const limit = limitText === null ? WEB_MAX_MODEL_SEARCH_RESULTS : Number(limitText);
+        const sessionId = url.searchParams.get("sessionId");
+        if (query.length > WEB_MAX_MODEL_QUERY) {
+          return this.json(response, 400, {
+            code: "INVALID_MODEL_QUERY",
+            error: `model query must be at most ${WEB_MAX_MODEL_QUERY} characters`,
+          });
+        }
+        if (!Number.isSafeInteger(limit) || limit < 1 || limit > WEB_MAX_MODEL_SEARCH_RESULTS) {
+          return this.json(response, 400, {
+            code: "INVALID_MODEL_LIMIT",
+            error: `model limit must be an integer between 1 and ${WEB_MAX_MODEL_SEARCH_RESULTS}`,
+          });
+        }
+        if (
+          sessionId !== null &&
+          sessionId !== this.runtime.sessionManager.getSessionId()
+        ) {
+          return this.json(response, 409, {
+            code: "SESSION_CHANGED",
+            error: "The active Session changed. Refresh the model list.",
+          });
+        }
+        const result = this.runtime.searchModels(query, limit);
+        return this.json(response, 200, result);
+      }
     if (url.pathname === "/api/trust") {
       if (!this.runtime.getProjectTrustStatus) {
         return this.json(response, 501, {
@@ -841,11 +1069,32 @@ export class WebHost {
       }
       return this.json(response, 200, this.runtime.listProviderAuth());
     }
-    if (url.pathname === "/api/thinking")
-      return this.json(response, 200, {
-        sessionId: this.runtime.sessionManager.getSessionId(),
-        ...(this.runtime.getThinkingState?.() ?? { level: "unknown", available: [] }),
-      });
+    if (url.pathname === "/api/thinking") {
+      let sessionId = "";
+      try {
+        sessionId = this.runtime.sessionManager.getSessionId();
+        const projection = this.runtime.getThinkingState?.();
+        return this.json(response, 200, {
+          sessionId,
+          ...(projection
+            ? boundThinkingProjection(projection)
+            : {
+                level: "unknown",
+                available: [],
+                supported: false,
+              }),
+          revision: this.sequence,
+        });
+      } catch {
+        return this.json(response, 200, {
+          sessionId,
+          level: "unknown",
+          available: [],
+          supported: false,
+          revision: this.sequence,
+        });
+      }
+    }
     if (url.pathname === "/api/snapshot") {
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
@@ -857,8 +1106,17 @@ export class WebHost {
         cursor,
         preferences: { theme: loadSetupConfig().ui.webTheme },
         ...projection,
+        runtime: { ...projection.runtime, liveTools: this.liveTools },
+        thinking: projection.thinking
+          ? { ...projection.thinking, revision: this.sequence }
+          : undefined,
       };
       let finalBytes = jsonByteLength(snapshot);
+      while (finalBytes > WEB_MAX_SNAPSHOT_BYTES && snapshot.runtime.liveTools?.length) {
+        snapshot.runtime.liveTools = snapshot.runtime.liveTools.slice(1);
+        snapshot.truncation.truncated = true;
+        finalBytes = jsonByteLength(snapshot);
+      }
       while (snapshot.truncation.bytes !== finalBytes) {
         snapshot.truncation.bytes = finalBytes;
         finalBytes = jsonByteLength(snapshot);
