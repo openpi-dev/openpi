@@ -788,6 +788,38 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     assert.equal(runtimeCwd, cwd);
     assert.equal(newSessions, 2);
     assert.deepEqual(creationCommandIds, ["create-imported", "create-current"]);
+    const beforeReplay = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers: authorized })
+    ).json()) as { cursor: number };
+    const originalNewSession = runtime.newSession;
+    runtime.newSession = async (_workspacePath, options) => ({
+      cancelled: false,
+      replayed: true,
+      commandId: options?.commandId,
+      sessionId: "older-session",
+    });
+    try {
+      const replay = await fetch(`${launched.origin}/api/sessions`, {
+        method: "POST",
+        headers: authorized,
+        body: JSON.stringify({
+          workspacePath: importedWorkspace.path,
+          commandId: "create-imported",
+        }),
+      });
+      assert.equal(replay.status, 201);
+      const afterReplay = (await (
+        await fetch(`${launched.origin}/api/snapshot`, { headers: authorized })
+      ).json()) as { cursor: number };
+      assert.equal(
+        afterReplay.cursor,
+        beforeReplay.cursor,
+        "a replay is not a new Session transition",
+      );
+      assert.equal(runtimeCwd, cwd);
+    } finally {
+      runtime.newSession = originalNewSession;
+    }
 
     const removeActive = await fetch(
       `${launched.origin}/api/workspaces?path=${encodeURIComponent(cwd)}`,

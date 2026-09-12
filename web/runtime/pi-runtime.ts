@@ -24,6 +24,7 @@ import {
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
+  type WebSessionCreationResult,
   type WebTurnCancellationOptions,
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
@@ -696,10 +697,24 @@ export class PiWebRuntime implements WebRuntimeController {
     return await requestAdmission;
   }
 
+  private sessionCreationReceipts?: Map<string, { workspacePath: string; result: WebSessionCreationResult }>;
+
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {
-    return this.serializeControllerMutation(() =>
-      this.createNewSession(workspacePath, options),
-    );
+    return this.serializeControllerMutation(async () => {
+      this.assertActive();
+      const commandId = options?.commandId;
+      const receipts = this.sessionCreationReceipts ??= new Map();
+      const previous = commandId ? receipts.get(commandId) : undefined;
+      if (previous) {
+        if (previous.workspacePath !== workspacePath) throw new Error("Session creation command belongs to another workspace");
+        return { ...previous.result, replayed: true };
+      }
+      // Do not evict receipts: forgetting a command would permit duplicate creation.
+      if (commandId && receipts.size >= 1024) throw new Error("Session creation receipt limit reached; select an existing Session or restart the Web host");
+      const result = await this.createNewSession(workspacePath, options);
+      if (commandId) receipts.set(commandId, { workspacePath, result: { ...result } });
+      return result;
+    });
   }
 
   private async createNewSession(

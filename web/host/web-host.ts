@@ -486,7 +486,7 @@ export class WebHost {
       const result = await this.runtime.newSession(workspacePath, {
         commandId: body.commandId,
       });
-      this.publish("session_created", {
+      if (!result.replayed) this.publish("session_created", {
         workspacePath,
         sessionId: result.sessionId,
         commandId: body.commandId,

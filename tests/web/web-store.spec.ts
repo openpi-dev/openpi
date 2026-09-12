@@ -1523,6 +1523,32 @@ describe("workspace selection authority", () => {
     expect(client.prompts).toEqual([]);
   });
 
+  it("reuses the creation command after activation succeeded but its response was lost", async () => {
+    const { client, store } = await harness();
+    store.getState().actions.setWorkspace(workspace);
+    const activated = activeSnapshot("b", sessionPath, { workspace });
+    client.creationResult = async () => {
+      throw new Error("response lost");
+    };
+    client.snapshots.push(Promise.resolve(activated));
+    expect(await store.getState().actions.sendPrompt("B only")).toBe(false);
+    const originalCommand = client.creations[0]!.commandId;
+    client.creationResult = async (commandId) => ({
+      cancelled: false,
+      commandId,
+      sessionId: "b",
+      sessionPath,
+    });
+    client.snapshots.push(Promise.resolve(activated));
+    expect(await store.getState().actions.sendPrompt("B only")).toBe(true);
+    expect(client.creations.map((call) => call.commandId)).toEqual([
+      originalCommand,
+      originalCommand,
+    ]);
+    expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
+    store.getState().actions.stop();
+  });
+
   it("retains B on creation failure and retries without falling back to A", async () => {
     const { client, initial, store } = await harness();
     store.getState().actions.setWorkspace(workspace);
@@ -1549,6 +1575,9 @@ describe("workspace selection authority", () => {
     expect(
       client.creations.every((call) => call.workspacePath === workspace),
     ).toBe(true);
+    expect(new Set(client.creations.map((call) => call.commandId)).size).toBe(
+      1,
+    );
     expect(client.prompts).toEqual([{ sessionId: "b", content: "B only" }]);
     store.getState().actions.stop();
   });

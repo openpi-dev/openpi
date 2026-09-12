@@ -178,6 +178,7 @@ export function createWebStore(
     optimisticKey: string;
   } | null = null;
   let sessionActivation: SessionActivation | null = null;
+  let creationRetry: { workspacePath: string; commandId: string } | null = null;
   let sessionSelectionTail = Promise.resolve();
   let refreshTimer: number | null = null;
   let refreshInFlight = false;
@@ -683,6 +684,7 @@ export function createWebStore(
         if (path === current.selectedWorkspace && !current.sessionSwitching)
           return;
         ++sessionEpoch;
+        creationRetry = null;
         promptAdmissionToken = null;
         promptAdmission = null;
         set({
@@ -721,8 +723,12 @@ export function createWebStore(
         if (!workspacePath || get().modelSelectionPending) return null;
         const epoch = ++sessionEpoch;
         const commandId =
+          (creationRetry?.workspacePath === workspacePath
+            ? creationRetry.commandId
+            : undefined) ??
           globalThis.crypto?.randomUUID?.() ??
           `web-create-${Date.now()}-${epoch}`;
+        creationRetry = { workspacePath, commandId };
         promptAdmissionToken = null;
         promptAdmission = null;
         set({
@@ -804,6 +810,7 @@ export function createWebStore(
               return;
             }
             created = target;
+            creationRetry = null;
           } catch (error) {
             if (epoch !== sessionEpoch) return;
             set({ selectedPath: null });
@@ -821,6 +828,7 @@ export function createWebStore(
       },
       async selectSession(path) {
         if (!path) return;
+        creationRetry = null;
         set({
           workspaceDraft: false,
           draftModel: null,

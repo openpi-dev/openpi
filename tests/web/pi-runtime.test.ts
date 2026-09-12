@@ -1165,6 +1165,23 @@ test("new session projects its command id and stable activated identity", async 
       sessionId: "session-b",
       sessionPath: "/tmp/session-b.jsonl",
     });
+    const eventCount = events.length;
+    const replay = await harness.newSession(process.cwd(), {
+      commandId: "create-command",
+    });
+    assert.deepEqual(replay, { ...result, replayed: true });
+    assert.equal(
+      events.length,
+      eventCount,
+      "receipt replay must not activate another Session",
+    );
+    await assert.rejects(
+      harness.newSession("/different-workspace", {
+        commandId: "create-command",
+      }),
+      /another workspace/,
+    );
+
     assert.deepEqual(events.at(-1), {
       type: "session_switched",
       detail: {
