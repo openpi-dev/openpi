@@ -32,6 +32,12 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
+import {
+  projectBackgroundTerminalDetail,
+  projectBackgroundTerminalCapability,
+  registerWebCapability,
+} from "../shared/web-observer-registry.ts";
 import type { TerminalSnapshot } from "./src/domain.ts";
 import {
   MAX_RUNNING,
@@ -96,11 +102,17 @@ export default function (pi: ExtensionAPI) {
   let runtime: TerminalRuntime | undefined;
   let managerPromise: Promise<TerminalManagerShape> | undefined;
   let managerForHooks: TerminalManagerShape | undefined;
+  let unregisterWebCapability: (() => void) | undefined;
   let sessionContext: ExtensionContext | undefined;
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   let startReservations = 0;
-  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>({
+    owner: () =>
+      sessionContext
+        ? completionOwnerFor(sessionContext.sessionManager)
+        : undefined,
+  });
   const hideLifecycleTools = () =>
     patchOwnedTools(pi, "background", {
       disable: OPENPI_TOOL_SURFACE.background.deferred,
@@ -116,10 +128,27 @@ export default function (pi: ExtensionAPI) {
 
   /** Resolve the manager service once per runtime and wire the extension hooks. */
   const getManager = () => {
+    const scope = sessionContext?.sessionManager;
     managerPromise ??= getRuntime()
       .runPromise(TerminalManager)
       .then((manager) => {
         managerForHooks = manager;
+        unregisterWebCapability?.();
+        unregisterWebCapability =
+          scope && sessionContext?.sessionManager === scope
+            ? registerWebCapability(scope, {
+                kind: "background-terminals",
+                snapshot: () =>
+                  projectBackgroundTerminalCapability(manager.view.list()),
+                detail: (id) => {
+                  const terminal = manager.view.get(id);
+                  return terminal
+                    ? projectBackgroundTerminalDetail(terminal)
+                    : undefined;
+                },
+                subscribe: (listener) => manager.view.subscribe(listener),
+              })
+            : undefined;
         manager.view.setOnSettled(onSettled);
         unsubStatus?.();
         unsubStatus = manager.view.subscribe(() => updateWidget(manager));
@@ -229,6 +258,7 @@ export default function (pi: ExtensionAPI) {
   const flushResults = (wake: boolean) => {
     const snaps = resultDelivery.drain(MAX_RUNNING);
     if (!deliverResults(snaps, wake)) resultDelivery.restore(snaps);
+    else resultDelivery.acknowledge(snaps);
   };
 
   const idleResultBatcher = createIdleResultBatcher({
@@ -314,6 +344,8 @@ export default function (pi: ExtensionAPI) {
     ui = undefined;
     const closing = runtime;
     runtime = undefined;
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
     managerPromise = undefined;
     managerForHooks = undefined;
     await closing?.dispose();

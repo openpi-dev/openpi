@@ -26,11 +26,14 @@
  * may predate the plan and still hold the full tool set.
  */
 
-import type {
-  ExtensionAPI,
-  ExtensionCommandContext,
-  ExtensionContext,
+import {
+  getMarkdownTheme,
+  keyHint,
+  type ExtensionAPI,
+  type ExtensionCommandContext,
+  type ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { Markdown, Text, truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 import {
   PLAN_MODE_CHANNEL,
@@ -46,6 +49,8 @@ import { planBashDecision } from "./bash-policy.ts";
 
 export const MAX_READY_PLAN_CHARS = 50_000;
 export const MAX_READY_PLAN_UTF8_BYTES = 48_000;
+/** Preview lines shown in the collapsed plan_ready result. */
+const PLAN_PREVIEW_LINES = 10;
 export const PLAN_MODE_STATE_ENTRY = "my-pi-setup-plan-mode-state";
 
 export type PersistedPlanModeState =
@@ -449,6 +454,72 @@ export default function planMode(pi: ExtensionAPI) {
         details: { status: "ready" as const, plan },
         terminate: true,
       };
+    },
+    /**
+     * Render a completed plan for the TUI. Collapsed shows the line count
+     * plus a bounded preview (PLAN_PREVIEW_LINES) with an expand hint;
+     * expanded renders the full plan as Markdown. Pi only reflects the
+     * expanded flag — it never truncates custom renderer output, so this
+     * renderer owns the collapsed/expanded contract.
+     */
+    renderResult(result, { expanded }, theme) {
+      const plan = (result.details as { plan?: string } | undefined)?.plan;
+      if (!plan) {
+        // Failed invocations (not in plan mode, empty plan, size cap, abort)
+        // produce {content:[{text:reason}], details:{}} from agent-loop's
+        // createErrorToolResult; surface the real reason instead of a
+        // placeholder, mirroring subagent_spawn's fallback.
+        const first = result.content?.[0];
+        return new Text(
+          first?.type === "text"
+            ? first.text
+            : theme.fg("muted", "(no plan content)"),
+          0,
+          0,
+        );
+      }
+      if (!expanded) {
+        // Bound the collapsed preview by rendered rows, not source lines: a
+        // single long source line wraps into many terminal rows at narrow
+        // widths, so render the body at the caller's width, keep the first
+        // PLAN_PREVIEW_LINES rows, and truncate every row to the viewport
+        // width (same contract as renderWaitResult's fixedRows).
+        const body = new Text(
+          plan
+            .split("\n")
+            .map((line) => theme.fg("toolOutput", line))
+            .join("\n"),
+          0,
+          0,
+        );
+        return {
+          render(width: number) {
+            const bodyRows = body.render(width);
+            const shown = bodyRows.slice(0, PLAN_PREVIEW_LINES);
+            const hidden = bodyRows.length - shown.length;
+            const header = theme.fg(
+              "muted",
+              `Plan ready · ${plan.split("\n").length} lines`,
+            );
+            const rows = [header, ...shown];
+            if (hidden > 0) {
+              // The hint gets its own row: tucking it into the header tail
+              // lets a narrow viewport clip it away along with the rest of
+              // the header, hiding the expand affordance exactly when the
+              // preview is clipped.
+              rows.push(keyHint("app.tools.expand", "to expand"));
+              rows.push(theme.fg("muted", `... (${hidden} more rows)`));
+            }
+            return rows.map((row) => truncateToWidth(row, Math.max(1, width)));
+          },
+          invalidate() {
+            body.invalidate();
+          },
+        };
+      }
+      // A plan is prose to read, not source to inspect. Without a renderer the
+      // TUI falls back to plain text and shows raw Markdown syntax.
+      return new Markdown(plan, 0, 0, getMarkdownTheme());
     },
   });
 

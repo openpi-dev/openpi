@@ -1,7 +1,8 @@
 import { readdirSync, readFileSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
+import { parseDocument } from "yaml";
 
-const root = resolve("docs");
+const root = resolve("docs/decisions");
 const requiredDecisionFields = [
   "decision-status",
   "created",
@@ -22,33 +23,30 @@ function markdownFiles(directory) {
 }
 
 function frontmatter(text) {
-  const match = text.match(/^---\n([\s\S]*?)\n---\n/);
+  const match = text.match(/^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/);
   if (!match) return null;
-  return new Map(
-    match[1]
-      .split("\n")
-      .map((line) => line.match(/^([\w-]+):\s*(.*)$/))
-      .filter(Boolean)
-      .map(([, key, value]) => [key, value.trim()]),
-  );
+  const document = parseDocument(match[1], { uniqueKeys: true });
+  if (document.errors.length) return null;
+  const value = document.toJS({ maxAliasCount: 20 });
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
 }
 
-const files = markdownFiles(root);
-const decisions = files.filter(
-  (file) =>
-    file.includes(`${join("docs", "decisions")}${"/"}`) &&
-    !["README.md", "TEMPLATE.md"].includes(file.split("/").pop()),
+const decisions = markdownFiles(root).filter((file) =>
+  ![join(root, "README.md"), join(root, "TEMPLATE.md")].includes(file),
 );
 const errors = [];
 
 for (const file of decisions) {
-  const metadata = frontmatter(readFileSync(file, "utf8"));
+  let metadata;
+  try { metadata = frontmatter(readFileSync(file, "utf8")); } catch { metadata = null; }
   if (!metadata) {
     errors.push(`${relative(process.cwd(), file)}: missing YAML frontmatter`);
     continue;
   }
   for (const field of requiredDecisionFields) {
-    if (!metadata.get(field)) errors.push(`${relative(process.cwd(), file)}: missing ${field}`);
+    const value = metadata[field];
+    const present = typeof value === "string" ? value.trim().length > 0 : Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0);
+    if (!present) errors.push(`${relative(process.cwd(), file)}: missing ${field}`);
   }
 }
 

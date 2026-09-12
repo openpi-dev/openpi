@@ -45,6 +45,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["total agent calls"],
   },
   {
+    path: "ui.webTheme",
+    writerTokens: ["params.ui_web_theme"],
+    statusTokens: ["config.ui.webTheme"],
+    readmeTerms: ["Web 主题"],
+    setupTerms: ["Web theme"],
+  },
+  {
     path: "ui.showHeader",
     writerTokens: ["params.ui_show_header"],
     statusTokens: ["config.ui.showHeader"],

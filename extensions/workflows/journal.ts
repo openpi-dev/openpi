@@ -38,6 +38,148 @@ export interface WorkflowJournal {
   readonly entries: readonly JournalEntry[];
 }
 
+interface EncodedJournalEntry {
+  readonly entry: JournalEntry;
+  /** The entry formatted at the indentation used inside the journal array. */
+  readonly json: string;
+  readonly bytes: number;
+}
+
+const JOURNAL_PREFIX = `{
+  "version": ${JOURNAL_VERSION},
+  "entries": [
+`;
+const JOURNAL_SUFFIX = "\n  ]\n}";
+const JOURNAL_SEPARATOR = ",\n";
+const JOURNAL_EMPTY = JSON.stringify(
+  { version: JOURNAL_VERSION, entries: [] },
+  null,
+  2,
+);
+const JOURNAL_PREFIX_BYTES = Buffer.byteLength(JOURNAL_PREFIX, "utf8");
+const JOURNAL_SUFFIX_BYTES = Buffer.byteLength(JOURNAL_SUFFIX, "utf8");
+const JOURNAL_SEPARATOR_BYTES = Buffer.byteLength(JOURNAL_SEPARATOR, "utf8");
+const JOURNAL_EMPTY_BYTES = Buffer.byteLength(JOURNAL_EMPTY, "utf8");
+
+function encodeJournalEntry(entry: JournalEntry): EncodedJournalEntry {
+  // JSON.stringify on an array serializes an undefined element as null. The
+  // public type only permits objects, but retaining that fallback keeps this
+  // helper's behavior total if a malformed caller reaches it at runtime.
+  const json = JSON.stringify(entry, null, 2) ?? "null";
+  const indented = `    ${json.replaceAll("\n", "\n    ")}`;
+  return {
+    entry,
+    json: indented,
+    bytes: Buffer.byteLength(indented, "utf8"),
+  };
+}
+
+function journalBytes(entryCount: number, entryBytes: number) {
+  if (entryCount === 0) return JOURNAL_EMPTY_BYTES;
+  return (
+    JOURNAL_PREFIX_BYTES +
+    entryBytes +
+    JOURNAL_SUFFIX_BYTES +
+    (entryCount - 1) * JOURNAL_SEPARATOR_BYTES
+  );
+}
+
+/**
+ * Incrementally bounded journal storage for a running Workflow.
+ *
+ * Each entry is encoded once when appended. The active queue uses a head
+ * cursor, so dropping old entries only subtracts their already-known byte
+ * contribution. `toJson()` assembles the complete canonical artifact without
+ * re-stringifying each entry or repeatedly measuring the whole suffix.
+ */
+export interface WorkflowJournalAccumulator {
+  readonly bytes: number;
+  readonly dropped: number;
+  readonly length: number;
+  append(entry: JournalEntry): void;
+  toJournal(): WorkflowJournal;
+  toJson(): string;
+}
+
+export function createJournalAccumulator(
+  maxBytes = JOURNAL_MAX_BYTES,
+): WorkflowJournalAccumulator {
+  if (!Number.isSafeInteger(maxBytes) || maxBytes < JOURNAL_EMPTY_BYTES) {
+    throw new RangeError(
+      `Journal byte budget must be at least ${JOURNAL_EMPTY_BYTES} bytes`,
+    );
+  }
+
+  let queue: Array<EncodedJournalEntry | undefined> = [];
+  let head = 0;
+  let entryBytes = 0;
+  let dropped = 0;
+
+  const activeLength = () => queue.length - head;
+  const activeBytes = () => journalBytes(activeLength(), entryBytes);
+
+  const compact = () => {
+    // Release the encoded payload immediately when it is evicted. Compact the
+    // sparse prefix only occasionally so eviction remains amortized O(1).
+    if (head === queue.length) {
+      queue = [];
+      head = 0;
+      return;
+    }
+    if (head >= 64 && head * 2 >= queue.length) {
+      queue = queue.slice(head);
+      head = 0;
+    }
+  };
+
+  return {
+    get bytes() {
+      return activeBytes();
+    },
+    get dropped() {
+      return dropped;
+    },
+    get length() {
+      return activeLength();
+    },
+    append(entry) {
+      const encoded = encodeJournalEntry(entry);
+      queue.push(encoded);
+      entryBytes += encoded.bytes;
+
+      while (activeLength() > 0 && activeBytes() > maxBytes) {
+        const oldest = queue[head];
+        if (!oldest) break;
+        queue[head] = undefined;
+        head++;
+        entryBytes -= oldest.bytes;
+        dropped++;
+      }
+      compact();
+    },
+    toJournal() {
+      const entries: JournalEntry[] = [];
+      for (let index = head; index < queue.length; index++) {
+        const encoded = queue[index];
+        if (encoded) entries.push(encoded.entry);
+      }
+      return {
+        version: JOURNAL_VERSION,
+        entries,
+      };
+    },
+    toJson() {
+      if (activeLength() === 0) return JOURNAL_EMPTY;
+      const entries: string[] = [];
+      for (let index = head; index < queue.length; index++) {
+        const encoded = queue[index];
+        if (encoded) entries.push(encoded.json);
+      }
+      return JOURNAL_PREFIX + entries.join(JOURNAL_SEPARATOR) + JOURNAL_SUFFIX;
+    },
+  };
+}
+
 /**
  * Only semantic options change what an agent produces, so only these are
  * hashed. Callers pass their whole options object; `label` and `phase` are
@@ -146,19 +288,12 @@ export type ReplayCache = ReturnType<typeof createReplayCache>;
  * journal that serializes to a useless preview string.
  */
 export function boundedJournal(entries: readonly JournalEntry[]) {
-  const size = (kept: readonly JournalEntry[]) =>
-    Buffer.byteLength(
-      JSON.stringify({ version: JOURNAL_VERSION, entries: kept }, null, 2),
-      "utf8",
-    );
-
-  let kept = [...entries];
-  let dropped = 0;
-  while (kept.length > 0 && size(kept) > JOURNAL_MAX_BYTES) {
-    kept = kept.slice(1);
-    dropped++;
-  }
-  return { journal: { version: JOURNAL_VERSION, entries: kept }, dropped };
+  const accumulator = createJournalAccumulator();
+  for (const entry of entries) accumulator.append(entry);
+  return {
+    journal: accumulator.toJournal(),
+    dropped: accumulator.dropped,
+  };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -77,6 +77,12 @@ test("the generated agent_type schema exposes a compact, enforced role index", (
   assert.match(description, /implementer.*medium-high reasoning/);
   assert.match(description, /reviewer.*high reasoning/);
   assert.match(description, /advisor.*high reasoning/);
+  for (const name of ["explorer", "implementer", "reviewer", "advisor"]) {
+    assert.match(
+      description,
+      new RegExp(`${name}[^\\n]*\\[inherited-tools\\]`),
+    );
+  }
   assert.doesNotMatch(description, /default reasoning_effort/);
   assert.match(description, /parent-only.*read-only/);
   assert.doesNotMatch(description, /only: read/);
@@ -113,6 +119,24 @@ test("an explicit user-selected reasoning level remains available", () => {
     Value.Check(schema, { ...task, reasoning_effort: "unsupported" }),
     false,
   );
+});
+
+test("output_schema is optional and validates the schema container", () => {
+  const schema =
+    createSubagentSpawnToolSurface(BUILT_IN_AGENT_TYPES).parameters;
+  const task = { prompt: "Review", name: "review" };
+  assert.equal(Value.Check(schema, task), true);
+  assert.equal(
+    Value.Check(schema, {
+      ...task,
+      output_schema: {
+        type: "object",
+        properties: { verdict: { type: "string" } },
+      },
+    }),
+    true,
+  );
+  assert.equal(Value.Check(schema, { ...task, output_schema: [] }), false);
 });
 
 test("the default spawn surface stays within its resident budget", () => {

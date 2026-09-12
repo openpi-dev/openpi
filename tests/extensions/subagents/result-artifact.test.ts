@@ -12,6 +12,7 @@ import path from "node:path";
 import test from "node:test";
 import {
   persistResultArtifact,
+  persistStructuredResultArtifact,
   projectResult,
 } from "../../../extensions/subagents/src/result-artifact.ts";
 
@@ -139,8 +140,32 @@ test("content-addressed artifacts are exact, private, and reusable", async () =>
 
     assert.equal(first, second);
     assert.equal(await readFile(first, "utf8"), content);
-    assert.equal((await lstat(first)).mode & 0o777, 0o600);
+    if (process.platform !== "win32") {
+      assert.equal((await lstat(first)).mode & 0o777, 0o600);
+    }
     assert.equal(path.basename(first).length, 68);
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("structured artifacts use an immutable JSON identity", async () => {
+  const agentDir = await mkdtemp(
+    path.join(tmpdir(), "openpi-structured-result-artifact-"),
+  );
+  try {
+    const content = '{"verdict":"pass"}';
+    const first = persistStructuredResultArtifact(agentDir, content);
+    const second = persistStructuredResultArtifact(agentDir, content);
+    const stat = await lstat(first);
+    assert.equal(first, second);
+    assert.match(first, /\.json$/);
+    assert.equal(await readFile(first, "utf8"), content);
+    assert.ok(stat.isFile());
+    assert.equal(stat.isSymbolicLink(), false);
+    if (process.platform !== "win32") {
+      assert.equal(stat.mode & 0o777, 0o600);
+    }
   } finally {
     await rm(agentDir, { recursive: true, force: true });
   }
@@ -150,7 +175,11 @@ test("artifact persistence refuses a symlinked cache component", async () => {
   const agentDir = await mkdtemp(path.join(tmpdir(), "openpi-result-symlink-"));
   const outside = await mkdtemp(path.join(tmpdir(), "openpi-result-outside-"));
   try {
-    await symlink(outside, path.join(agentDir, "cache"));
+    await symlink(
+      outside,
+      path.join(agentDir, "cache"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
     assert.throws(
       () => persistResultArtifact(agentDir, "do not write outside"),
       /Unsafe result artifact directory/,
@@ -178,6 +207,23 @@ test("artifact persistence refuses an existing file with the wrong content", asy
     assert.throws(
       () => persistResultArtifact(agentDir, content),
       /Result artifact collision/,
+    );
+  } finally {
+    await rm(agentDir, { recursive: true, force: true });
+  }
+});
+
+test("structured artifact persistence refuses an existing file with the wrong content", async () => {
+  const agentDir = await mkdtemp(
+    path.join(tmpdir(), "openpi-structured-result-collision-"),
+  );
+  try {
+    const content = '{"verdict":"pass"}';
+    const artifactPath = persistStructuredResultArtifact(agentDir, content);
+    await writeFile(artifactPath, '{"verdict":"tampered"}', "utf8");
+    assert.throws(
+      () => persistStructuredResultArtifact(agentDir, content),
+      /Structured result artifact collision/,
     );
   } finally {
     await rm(agentDir, { recursive: true, force: true });

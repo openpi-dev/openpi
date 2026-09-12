@@ -69,6 +69,8 @@ export interface SpawnTask {
   readonly tools?: readonly string[];
   /** Agent type that supplied the above, for the session label. */
   readonly agentTypeName?: string;
+  /** Optional JSON Schema for one terminating, validated child result. */
+  readonly outputSchema?: unknown;
   /**
    * Isolated git worktree this child runs in, created by the tool layer. The
    * backend only reclaims it when the session scope closes; it does not know
@@ -142,7 +144,11 @@ export interface QueuedMessage {
 // --- Events ------------------------------------------------------------------
 
 export type RunOutcome =
-  | { readonly _tag: "Completed"; readonly finalText: string }
+  | {
+      readonly _tag: "Completed";
+      readonly finalText: string;
+      readonly structuredResult?: StructuredSubagentResult;
+    }
   | {
       readonly _tag: "Failed";
       readonly errorText: string;
@@ -232,8 +238,17 @@ export interface SubagentSnapshot {
   readonly queued: ReadonlyArray<QueuedMessage>;
   /** Final text of the most recent completed run (v1 `finalOutput`). */
   readonly finalText: string;
+  /** Present only when this run supplied and satisfied output_schema. */
+  readonly structuredResult?: StructuredSubagentResult;
   /** Count of finalized assistant messages (for subagent_check). */
   readonly turns: number;
+}
+
+export interface StructuredSubagentResult {
+  readonly value: unknown;
+  readonly json: string;
+  readonly byteLength: number;
+  readonly artifactPath: string;
 }
 
 /** Final text, or the live streaming buffer while a run is active (v1 `latestOutput`). */

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { resolve } from "node:path";
 import test from "node:test";
 
 import { AgentTranscriptRenderer } from "../../../extensions/shared/agent-transcript.ts";
@@ -173,4 +174,35 @@ test("neighbour changes alter output (context.token participates in the cache ke
   assert.match(pending, /Reading/);
   assert.match(completed, COMPLETED);
   assert.notEqual(pending, completed, "cache must not serve a stale phase");
+});
+
+test("cached tool paths follow the document working directory", () => {
+  const childCwd = resolve("child-a");
+  const otherCwd = resolve("child-b");
+  const items: AgentTranscriptItem[] = [
+    {
+      kind: "assistant",
+      parts: [
+        {
+          type: "toolCall",
+          toolId: "path",
+          name: "read",
+          argsPreview: JSON.stringify({ path: resolve(childCwd, "file.ts") }),
+        },
+      ],
+    },
+    result("path"),
+  ];
+  const renderer = new AgentTranscriptRenderer();
+  const initial = renderer.render({ items, cwd: childCwd }, 160, theme);
+  for (const cwd of [otherCwd, undefined, childCwd]) {
+    const warm = renderer.render({ items, cwd }, 160, theme);
+    const cold = new AgentTranscriptRenderer().render(
+      { items, cwd },
+      160,
+      theme,
+    );
+    assert.deepEqual(warm, cold, "cached paths must match the current cwd");
+    if (cwd === otherCwd) assert.notDeepEqual(warm, initial);
+  }
 });

@@ -13,6 +13,10 @@ import {
 } from "../../shared/below-editor-navigation.ts";
 
 const FAKE_CURSOR_PATTERN = /\u001b\[7m \u001b\[(?:0|27)m/;
+// Conservative idle-row band for terminal-owned CJK IME preedit. Pi's editor
+// contract exposes only committed input, never a composition event, so the
+// reservation cannot shrink to the frames that actually need it. A 1-cell
+// hardware-cursor pad lets long preedit cover or truncate the ghost.
 const IME_PREEDIT_MIN_COLUMNS = 12;
 const IME_PREEDIT_MAX_COLUMNS = 32;
 const GHOST_MIN_COLUMNS = 8;
@@ -96,10 +100,12 @@ function ghostGeometry(lines: readonly string[], width: number) {
     .replaceAll(CURSOR_MARKER, "");
   const prefix = `${beforeCursor}${cursor[0]}`;
   const remaining = Math.max(0, width - visibleWidth(prefix));
-  // One terminal cell must remain after the hidden hardware cursor. At
-  // narrower widths, suppress the ghost rather than placing the cursor at the
-  // terminal's out-of-range column width.
-  if (remaining <= GHOST_MIN_COLUMNS) return undefined;
+  // Keep enough cells for a readable ghost and a conservative IME preedit
+  // band. At narrower widths, suppress the ghost rather than placing the
+  // hidden hardware cursor at the terminal's out-of-range column width.
+  if (remaining < GHOST_MIN_COLUMNS + IME_PREEDIT_MIN_COLUMNS) {
+    return undefined;
+  }
 
   const desiredPreedit = Math.min(
     IME_PREEDIT_MAX_COLUMNS,
