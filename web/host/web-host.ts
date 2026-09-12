@@ -40,6 +40,7 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
+import { loadWorkspaceChanges } from "./workspace-changes.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
@@ -486,6 +487,51 @@ export class WebHost {
       });
       response.end(result.bytes);
       return;
+    }
+    if (url.pathname === "/api/workspace-changes") {
+      if (request.method !== "GET")
+        return this.json(response, 405, {
+          error: "workspace changes accept GET only",
+        });
+      const sessionId = url.searchParams.get("sessionId");
+      if (
+        sessionId === null ||
+        sessionId.length === 0 ||
+        sessionId.length > 128 ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_WORKSPACE_CHANGES_REQUEST",
+          error: "the active Session id is required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before reading workspace changes",
+        });
+      }
+      if (sessionId !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Refresh the workspace changes.",
+        });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      try {
+        return this.json(
+          response,
+          200,
+          await loadWorkspaceChanges(this.runtime.cwd, sessionId, controller.signal),
+        );
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
     }
     if (
       url.pathname === "/api/workspaces/select" &&

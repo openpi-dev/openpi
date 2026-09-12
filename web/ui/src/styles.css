@@ -524,6 +524,28 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .conversation-view-switch button { border:0; background:transparent; color:var(--muted); padding:7px 14px; border-radius:6px; cursor:pointer; }
 .conversation-view-switch button[aria-pressed="true"] { color:var(--text); background:var(--page); box-shadow:0 1px 3px #0001; }
 .trajectory { display:flex; flex-direction:column; padding:66px 28px 22px; overflow:auto; }
+.workspace-changes { display:flex; flex-direction:column; min-height:0; overflow:hidden; padding:22px 28px; gap:12px; }
+.workspace-changes-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-shrink:0; }
+.workspace-changes-heading h2 { margin:0 0 6px; font-size:20px; }
+.workspace-changes-subtitle { margin:0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.workspace-changes-meta { display:grid; grid-template-columns:100px minmax(0,1fr); gap:6px 16px; margin:0; color:var(--muted); font-size:12px; flex-shrink:0; }
+.workspace-changes-meta dd { margin:0; color:var(--text); overflow-wrap:anywhere; }
+.workspace-changes-body { display:grid; grid-template-columns:minmax(220px,34%) minmax(0,1fr); gap:18px; min-height:0; flex:1; }
+.workspace-changes-list { min-height:0; overflow:auto; padding-right:2px; }
+.workspace-change-file { display:flex; width:100%; min-width:0; align-items:flex-start; justify-content:space-between; gap:10px; padding:9px 10px; border:1px solid transparent; border-radius:8px; background:transparent; color:var(--text); text-align:left; cursor:pointer; }
+.workspace-change-file:hover { background:var(--sidebar-hover); }
+.workspace-change-file[aria-pressed="true"] { border-color:var(--border); background:var(--sidebar-hover); }
+.workspace-change-file-main { display:flex; min-width:0; flex:1; flex-direction:column; gap:2px; }
+.workspace-change-file-main strong { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:12px; font-weight:600; }
+.workspace-change-file-main small { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--muted); font-size:11px; }
+.workspace-change-file-meta { display:flex; flex-shrink:0; flex-direction:column; align-items:flex-end; color:var(--muted); font-size:11px; }
+.workspace-change-detail { min-width:0; min-height:0; overflow:auto; padding:14px; border:1px solid var(--border); border-radius:10px; background:var(--sidebar-hover); }
+.workspace-change-detail header { display:flex; justify-content:space-between; gap:12px; margin-bottom:12px; }
+.workspace-change-detail h3 { margin:0; overflow-wrap:anywhere; font-size:14px; }
+.workspace-change-detail p { margin:4px 0 0; color:var(--muted); font-size:12px; overflow-wrap:anywhere; }
+.workspace-change-detail pre { max-height:100%; margin:0; overflow:auto; white-space:pre; font:12px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace; }
+.workspace-changes-warning { padding:8px 10px; border-left:2px solid var(--warning); color:var(--text); font-size:12px; overflow-wrap:anywhere; }
+.workspace-changes-updated { margin:0; color:var(--muted); font-size:11px; flex-shrink:0; }
 .trajectory-heading h2 { margin:0 0 8px; font-size:20px; }
 .trajectory-heading p { color:var(--muted); font-size:12px; margin:6px 0; }
 .trajectory-overview { display:flex; gap:6px; padding:14px 0; flex-shrink:0; overflow-x:auto; }
@@ -568,7 +590,7 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .artifact-revision { color:var(--muted); }
 .artifact-link-path { font-size:11px; color:var(--muted); text-decoration:none; }
 .trajectory-load { padding:10px; color:var(--text); background:transparent; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; cursor:pointer; }
-@media(max-width:700px) { .trajectory { padding:66px 16px 16px; } .trajectory-body { grid-template-columns:1fr; gap:16px; } .trajectory-ledger { max-height:200px; overflow:auto; } .trajectory-inspector { position:static; padding:16px; } .conversation-view-switch { margin-left:16px; } }
+@media(max-width:700px) { .trajectory { padding:66px 16px 16px; } .trajectory-body { grid-template-columns:1fr; gap:16px; } .trajectory-ledger { max-height:200px; overflow:auto; } .trajectory-inspector { position:static; padding:16px; } .conversation-view-switch { margin-left:16px; } .workspace-changes { padding:16px; } .workspace-changes-body { grid-template-columns:1fr; grid-template-rows:minmax(120px,30%) minmax(0,1fr); gap:12px; } .workspace-change-detail { padding:12px; } }
 
 /* Keep navigation and evidence independently reachable while browsing long ledgers. */
 .conversation-shell.has-view:not(.landing) { grid-template-rows:auto minmax(0,1fr) auto; }

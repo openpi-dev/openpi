@@ -27,6 +27,9 @@ export const WEB_MAX_COMMAND_NAME = 160;
 export const WEB_MAX_COMMAND_DESCRIPTION = 500;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+export const WEB_MAX_WORKSPACE_CHANGE_FILES = 250;
+export const WEB_MAX_WORKSPACE_CHANGE_DIFF_BYTES = 512 * 1024;
+export const WEB_MAX_WORKSPACE_CHANGE_TOTAL_DIFF_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_THINKING_LEVEL = 500;
 export const WEB_MAX_THINKING_LEVELS = 16;
 
@@ -62,6 +65,50 @@ export interface WebWorkspaceSummary {
   path: string;
   name: string;
   current: boolean;
+}
+
+export type WebWorkspaceChangeStatus =
+  | "added"
+  | "copied"
+  | "deleted"
+  | "modified"
+  | "renamed"
+  | "unmerged"
+  | "untracked";
+
+export interface WebWorkspaceChange {
+  path: string;
+  previousPath?: string;
+  status: WebWorkspaceChangeStatus;
+  additions: number | null;
+  deletions: number | null;
+  binary: boolean;
+  diff: string;
+  diffStatus: "text" | "binary" | "unavailable";
+  truncated: boolean;
+  error?: string;
+}
+
+export interface WebWorkspaceChanges {
+  sessionId: string;
+  cwd: string;
+  repositoryRoot?: string;
+  checkedAt: string;
+  status: "clean" | "changed" | "not-repository" | "unavailable";
+  baseline:
+    | { kind: "head"; commit: string }
+    | { kind: "empty-tree" }
+    | undefined;
+  files: WebWorkspaceChange[];
+  truncation: {
+    truncated: boolean;
+    filesOmitted: number;
+    statusTruncated: boolean;
+    diffsTruncated: number;
+    maxFiles: number;
+    maxDiffBytes: number;
+  };
+  error?: string;
 }
 
 export interface WebModelSummary {

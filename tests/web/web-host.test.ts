@@ -1791,6 +1791,66 @@ async function startTestHost(runtime: WebRuntimeController) {
   return { host, launched, headers };
 }
 
+test("serves Session-bound workspace changes and rejects stale requests", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-workspace-changes-"));
+  const runtime = testRuntime(cwd);
+  const { host, launched, headers } = await startTestHost(runtime);
+  const sessionId = runtime.sessionManager.getSessionId();
+  try {
+    const response = await fetch(
+      `${launched.origin}/api/workspace-changes?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      checkedAt: string;
+      [key: string]: unknown;
+    };
+    const { checkedAt, ...stableBody } = body;
+    assert.match(checkedAt, /^\d{4}-\d{2}-\d{2}T/u);
+    assert.deepEqual(stableBody, {
+      sessionId,
+      cwd,
+      status: "not-repository",
+      files: [],
+      truncation: {
+        truncated: false,
+        filesOmitted: 0,
+        statusTruncated: false,
+        diffsTruncated: 0,
+        maxFiles: 250,
+        maxDiffBytes: 2 * 1024 * 1024,
+      },
+    });
+    assert.equal(
+      (await fetch(`${launched.origin}/api/workspace-changes`, { headers }))
+        .status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/workspace-changes?sessionId=stale`,
+          { headers },
+        )
+      ).status,
+      409,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/workspace-changes`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      405,
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("serves Session-bound command discovery with fail-closed request validation", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-commands-"));
   const runtime = testRuntime(cwd);

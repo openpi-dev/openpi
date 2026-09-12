@@ -10,7 +10,10 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import type {
+  WebSnapshot,
+  WebWorkspaceChanges,
+} from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
@@ -19,6 +22,7 @@ import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx"
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
+import { WorkspaceChanges } from "../../web/ui/src/features/workspace/WorkspaceChanges.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
@@ -85,6 +89,65 @@ it("keeps a workspace draft separate from the old Session UI and retains text af
     stop.mockRestore();
     send.mockRestore();
     webStore.setState(initial, true);
+  }
+});
+
+it("renders bounded workspace changes and switches the inspected file", async () => {
+  const changes: WebWorkspaceChanges = {
+    sessionId: "session-1",
+    cwd: "/tmp/ws",
+    repositoryRoot: "/tmp/ws",
+    checkedAt: "2026-09-12T09:00:00Z",
+    status: "changed",
+    baseline: { kind: "head", commit: "abc123" },
+    files: [
+      {
+        path: "src/app.ts",
+        status: "modified",
+        additions: 2,
+        deletions: 1,
+        binary: false,
+        diff: "@@ -1 +1 @@\n-before\n+after",
+        diffStatus: "text",
+        truncated: false,
+      },
+      {
+        path: "assets/logo.bin",
+        status: "untracked",
+        additions: null,
+        deletions: null,
+        binary: true,
+        diff: "",
+        diffStatus: "binary",
+        truncated: false,
+      },
+    ],
+    truncation: {
+      truncated: false,
+      filesOmitted: 0,
+      statusTruncated: false,
+      diffsTruncated: 0,
+      maxFiles: 250,
+      maxDiffBytes: 2 * 1024 * 1024,
+    },
+  };
+  const request = vi
+    .spyOn(WebClient.prototype, "workspaceChanges")
+    .mockResolvedValue(changes);
+  const view = renderWithI18n(
+    createElement(WorkspaceChanges, { sessionId: "session-1", cwd: "/tmp/ws" }),
+  );
+  try {
+    expect(await screen.findAllByText("src/app.ts")).toHaveLength(2);
+    expect(screen.getByText(/\+after/u)).toBeTruthy();
+    fireEvent.click(screen.getByRole("button", { name: /assets\/logo\.bin/u }));
+    expect(
+      screen.getByText("Binary file; no textual diff is available."),
+    ).toBeTruthy();
+    expect(request).toHaveBeenCalledWith("session-1", expect.any(AbortSignal));
+  } finally {
+    view.unmount();
+    request.mockRestore();
   }
 });
 
