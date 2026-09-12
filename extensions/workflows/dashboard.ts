@@ -759,10 +759,7 @@ export function loadRunEntryProjection(
     // subject to the dashboard bound. Only active runs and the explicit target
     // are pinned so a long session cannot defeat count/byte limits.
     recoverStaleWorkflowDetails(details);
-    addEntry(
-      { runId, details, live: false },
-      runId === options.initialRunId,
-    );
+    addEntry({ runId, details, live: false }, runId === options.initialRunId);
   }
 
   return {

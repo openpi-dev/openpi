@@ -770,7 +770,10 @@ test("dashboard pinning retains only the exact canonical id across case collisio
       recursive: true,
       force: true,
     });
-    rmSync(join(agentDir, "workflows", "wf_abcd"), { recursive: true, force: true });
+    rmSync(join(agentDir, "workflows", "wf_abcd"), {
+      recursive: true,
+      force: true,
+    });
   }
 });
 
