@@ -61,13 +61,26 @@ if (noWorkspace && workspaceArgs.length > 0) {
 let host;
 let runtime;
 let stopping;
+const browserAbort = new AbortController();
 const stop = () => {
+  browserAbort.abort();
   stopping ??= host?.stop() ?? runtime?.dispose() ?? Promise.resolve();
   return stopping;
 };
 
 try {
-  const jiti = createJiti(import.meta.url);
+  console.error("Starting OpenPI Web Workbench…");
+  const bootstrap = createJiti(import.meta.url);
+  const { missingPiCodingAgentDiagnostic, resolveStandaloneJitiAliases } =
+    await bootstrap.import("../web/host/pi-coding-agent-entry.ts");
+  const aliases = resolveStandaloneJitiAliases({
+    fromUrl: import.meta.url,
+  });
+  if (!aliases["@earendil-works/pi-coding-agent"]) {
+    console.error(missingPiCodingAgentDiagnostic());
+    process.exit(1);
+  }
+  const jiti = createJiti(import.meta.url, { alias: aliases });
   const [browserModule, hostModule, runtimeModule, statusModule, traceModule] =
     await Promise.all([
       jiti.import("../web/host/browser-launcher.ts"),
@@ -95,36 +108,45 @@ try {
       : {}),
   });
   await host.start();
+  const onStopSignal = () => {
+    void stop().then(
+      () => process.exit(0),
+      (error) => {
+        console.error(
+          `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
+        );
+        process.exit(1);
+      },
+    );
+  };
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    process.once(signal, onStopSignal);
+  }
   traceWeb("web_started", {
     ...(runtime.workspaceSelected === true ? { cwd: runtime.cwd } : {}),
     origin: host.origin,
   });
-  const opened = noOpen ? false : await openBrowser(host.url);
   if (noWorkspace) {
     console.log(
       formatWebReadyScreen({
         origin: host.origin,
         url: host.url,
-        opened,
+        opened: noOpen ? false : "pending",
       }),
     );
   } else {
     console.log(`OpenPI Web Workbench is running at ${host.origin}`);
-    if (!opened) console.log(`Open this URL in a browser: ${host.url}`);
+    if (noOpen) console.log(`Open this URL in a browser: ${host.url}`);
   }
-
-  for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.once(signal, () => {
-      void stop().then(
-        () => process.exit(0),
-        (error) => {
-          console.error(
-            `Failed to stop OpenPI Web Workbench: ${error instanceof Error ? error.message : String(error)}`,
-          );
-          process.exit(1);
-        },
+  if (!noOpen) {
+    const opened = await openBrowser(host.url, browserAbort.signal);
+    if (!browserAbort.signal.aborted) {
+      console.log(
+        opened
+          ? "Browser open requested."
+          : `Browser did not open. Open this URL: ${host.url}`,
       );
-    });
+    }
   }
 } catch (error) {
   let cleanupError;

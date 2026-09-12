@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
+import type { WebActiveTurn } from "../runtime/types.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -12,6 +13,10 @@ export const WEB_MAX_MESSAGE_PARTS = 64;
 export const WEB_MAX_SESSIONS = 500;
 export const WEB_MAX_WORKSPACES = 250;
 export const WEB_MAX_MODELS = 250;
+export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
+export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
+export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
+export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 
@@ -27,6 +32,13 @@ export interface WebSessionSummary {
   id: string;
   path: string;
   cwd: string;
+  /** Classification of this Web directory projection, not original creation history. */
+  source: "web-session";
+  origin: "web";
+  /** Current runtime only; not a global ownership lock. */
+  controller: "web" | "none";
+  /** Existing operation admission rules still apply. */
+  readOnly: false;
   name?: string;
   modified: string;
   created: string;
@@ -105,6 +117,9 @@ export interface WebSnapshot {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
   generatedAt: string;
   cursor: number;
+  preferences: {
+    theme: "system" | "light" | "dark";
+  };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
   workspaces: WebWorkspaceSummary[];
@@ -113,6 +128,7 @@ export interface WebSnapshot {
   models: WebModelSummary[];
   runtime: {
     status: "idle" | "running" | "unknown";
+    activeTurn?: WebActiveTurn;
     capabilities: WebCapabilitySnapshot;
   };
   truncation: WebSnapshotTruncation;

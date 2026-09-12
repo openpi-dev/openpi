@@ -82,6 +82,60 @@ function dashboard(subs: SubagentSnapshot[], rows = 30) {
   );
 }
 
+test("takeover forwards wheel events and releases mouse capture on close", () => {
+  const writes: string[] = [];
+  const host = {
+    mode: "regular",
+    terminal: { rows: 20, write: (data: string) => writes.push(data) },
+    requestRender() {},
+  } as unknown as TUI;
+  let closed = false;
+  const view = new TakeoverView(
+    host,
+    theme,
+    keys,
+    "wheel",
+    model([
+      snap("wheel", "done", {
+        transcript: Array.from({ length: 60 }, (_, i) => ({
+          kind: "assistant" as const,
+          parts: [{ type: "text" as const, text: `wheel row ${i}` }],
+        })),
+      }),
+    ]),
+    () => {
+      closed = true;
+    },
+  );
+  try {
+    view.focused = true;
+    assert.match(view.render(80).join("\n"), /wheel row 0\b/);
+    assert.equal(
+      view.handleMouse({
+        type: "wheel",
+        button: "none",
+        x: 10,
+        y: 10,
+        screenX: 10,
+        screenY: 10,
+        width: 80,
+        height: 20,
+        shift: false,
+        alt: false,
+        ctrl: false,
+        wheelDelta: 6,
+      })?.handled,
+      true,
+    );
+    assert.doesNotMatch(view.render(80).join("\n"), /wheel row 0\b/);
+    view.handleInput("tui.select.cancel");
+    assert.equal(closed, true);
+    assert.equal(writes.at(-1), "\x1b[?1000l\x1b[?1006l");
+  } finally {
+    view.dispose();
+  }
+});
+
 test("picker and takeover display text cannot inject terminal controls", () => {
   assert.equal(
     sanitizeSubagentDisplayLine(
@@ -238,14 +292,19 @@ test("takeover scroll indicator lives in its rule without changing overlay heigh
     () => {},
   );
   try {
-    const pinned = view.render(80);
-    assert.equal(pinned.length, 20);
-    assert.doesNotMatch(pinned.join("\n"), /↓ \d+/);
+    // Opening a takeover on an existing transcript starts at its beginning, so
+    // the hidden remainder is reported below.
+    const opened = view.render(80);
+    assert.equal(opened.length, 20);
+    assert.match(opened.join("\n"), /output 0/);
+    assert.match(opened.join("\n"), /↓ \d+/);
+    assert.doesNotMatch(opened.join("\n"), /↑ \d+/);
 
-    view.handleInput("tui.editor.pageUp");
+    // The indicator rides its rule: paging keeps the overlay exactly as tall.
+    view.handleInput("tui.editor.pageDown");
     const scrolled = view.render(80);
-    assert.equal(scrolled.length, pinned.length);
-    assert.match(scrolled.join("\n"), /↓ \d+/);
+    assert.equal(scrolled.length, opened.length);
+    assert.match(scrolled.join("\n"), /↑ \d+/);
     assert.doesNotMatch(scrolled.join("\n"), /lines below/);
   } finally {
     view.dispose();

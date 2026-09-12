@@ -15,11 +15,17 @@ import {
   hasTrustRequiringProjectResources,
 } from "@earendil-works/pi-coding-agent";
 import {
+  type WebActiveTurn,
   type WebModelSelectionOptions,
   type WebPromptOptions,
+  type WebPromptAdmissionReceipt,
+  type WebProviderAuthProjection,
+  type WebProviderAuthSource,
   type WebRuntimeController,
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
+  type WebTurnCancellationOptions,
+  type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
 import { projectMessage } from "../protocol/types.ts";
@@ -33,9 +39,25 @@ import {
   acquireWebHostLease,
   type WebHostLease,
 } from "./web-host-lease.ts";
+import {
+  projectWebTrustStatus,
+} from "./trust-status.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
+const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
 const BOOTSTRAP_WORKSPACE_DIRECTORY = ".bootstrap-workspace";
+const WEB_MAX_PROVIDER_AUTH_ITEMS = 250;
+const WEB_MAX_PROVIDER_AUTH_SCANNED = 1_024;
+const WEB_MAX_PROVIDER_ID_LENGTH = 160;
+const WEB_MAX_PROVIDER_NAME_LENGTH = 160;
+const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
+  "stored",
+  "runtime",
+  "environment",
+  "fallback",
+  "models_json_key",
+  "models_json_command",
+]);
 
 type PromptTrace = {
   commandId: string;
@@ -43,10 +65,35 @@ type PromptTrace = {
   startedAt: number;
   started: boolean;
   queued: boolean;
+  userMessageObserved: boolean;
+  epoch?: number;
+  outcome?: "completed" | "cancelled" | "failed" | "uncertain";
+};
+
+type TurnSettlement = WebActiveTurn & {
+  outcome: "completed" | "cancelled" | "failed" | "uncertain";
 };
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+function safeProviderId(value: string) {
+  return value.length > 0 &&
+    value.length <= WEB_MAX_PROVIDER_ID_LENGTH &&
+    !/[\u0000-\u001f\u007f]/u.test(value)
+    ? value
+    : undefined;
+}
+
+function boundedProviderName(value: string) {
+  const sanitized = value.replace(/[\u0000-\u001f\u007f]/gu, " ");
+  return sanitized.length <= WEB_MAX_PROVIDER_NAME_LENGTH
+    ? { value: sanitized, truncated: false }
+    : {
+        value: `${sanitized.slice(0, WEB_MAX_PROVIDER_NAME_LENGTH - 1)}…`,
+        truncated: true,
+      };
 }
 
 async function canonicalDirectory(path: string) {
@@ -77,6 +124,14 @@ export class PiWebRuntime implements WebRuntimeController {
   private promptAdmission: Promise<void> = Promise.resolve();
   private activePromptTrace?: PromptTrace;
   private readonly pendingPromptTraces: PromptTrace[] = [];
+  private nextTurnEpoch = 0;
+  private readonly terminalTurnKeys = new Set<string>();
+  private readonly turnSettlementWaiters = new Map<
+    string,
+    Set<(settlement: TurnSettlement) => void>
+  >();
+  /** Native aborts remain owned by Pi until its agent_settled event arrives. */
+  private readonly turnAbortOperations = new Map<string, Promise<unknown>>();
   private liveMessageKey?: string;
   private liveMessageSequence = 0;
   private readonly webSessionDirectory: string;
@@ -124,6 +179,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const webSessionDirectory = join(getAgentDir(), "web-sessions");
     const webHostLease = await acquireWebHostLease(webSessionDirectory);
     let runtime: PiWebRuntime | undefined;
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
     try {
       const created = await PiWebRuntime.createRuntime(
         canonicalCwd,
@@ -170,8 +226,128 @@ export class PiWebRuntime implements WebRuntimeController {
     return this.runtime.session.sessionManager;
   }
 
+  getProjectTrustStatus() {
+    if (!this.hasSelectedWorkspace) return projectWebTrustStatus({});
+    const workspace = this.cwd;
+    try {
+      const storedDecision = new ProjectTrustStore(getAgentDir()).get(workspace);
+      return projectWebTrustStatus({
+        workspace,
+        storedDecision,
+        projectResources: hasTrustRequiringProjectResources(workspace),
+        sessionTrusted:
+          this.runtime.session.settingsManager.isProjectTrusted(),
+      });
+    } catch {
+      return projectWebTrustStatus({ workspace });
+    }
+  }
+
   isIdle() {
     return !this.runtime.session.isStreaming;
+  }
+
+  getActiveTurn() {
+    return this.activeTurnFromTrace(this.activePromptTrace);
+  }
+
+  cancelTurn(options: WebTurnCancellationOptions) {
+    return this.serializeControllerMutation(() =>
+      this.cancelActiveTurn(options),
+    );
+  }
+
+  private async cancelActiveTurn(
+    options: WebTurnCancellationOptions,
+  ): Promise<WebTurnCancellationResult> {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    const activeSessionId = this.runtime.session.sessionManager.getSessionId();
+    if (options.sessionId !== activeSessionId) {
+      return { ...options, state: "stale-session" };
+    }
+    const key = this.turnKey(options);
+    if (this.terminalTurnKeys.has(key)) {
+      return { ...options, state: "already-settled" };
+    }
+    const activeTurn = this.getActiveTurn();
+    if (
+      !activeTurn ||
+      activeTurn.commandId !== options.commandId ||
+      activeTurn.epoch !== options.epoch
+    ) {
+      return { ...options, state: "stale-turn" };
+    }
+    if (this.turnAbortOperations.has(key)) {
+      return {
+        ...options,
+        state: "failed",
+        error: "Cancellation is already waiting for Pi to settle this turn",
+      };
+    }
+
+    let ownWaiter: ((settlement: TurnSettlement) => void) | undefined;
+    const settlement = new Promise<TurnSettlement>((resolveSettlement) => {
+      ownWaiter = resolveSettlement;
+      const waiters = this.turnSettlementWaiters.get(key) ?? new Set();
+      waiters.add(resolveSettlement);
+      this.turnSettlementWaiters.set(key, waiters);
+    });
+    let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+    try {
+      const abortOperation = this.runtime.session.abort();
+      this.turnAbortOperations.set(key, abortOperation);
+      void abortOperation.catch(() => {
+        if (this.turnAbortOperations.get(key) === abortOperation) {
+          this.turnAbortOperations.delete(key);
+        }
+      });
+      const abortFailure = new Promise<never>((_, reject) => {
+        void abortOperation.catch(reject);
+      });
+      const settlementTimeout = new Promise<never>((_, reject) => {
+        timeoutHandle = setTimeout(
+          () =>
+            reject(
+              new Error(
+                "Cancellation did not settle within the bounded wait window",
+              ),
+            ),
+          TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS,
+        );
+      });
+      const terminal = await Promise.race([
+        settlement,
+        abortFailure,
+        settlementTimeout,
+      ]);
+      return {
+        ...options,
+        state:
+          terminal.outcome === "cancelled"
+            ? "accepted"
+            : terminal.outcome === "completed"
+              ? "already-settled"
+              : "failed",
+        ...(terminal.outcome === "failed"
+          ? { error: "The active turn failed while cancellation was requested" }
+          : terminal.outcome === "uncertain"
+            ? {
+                error:
+                  "Pi settled without a terminal assistant outcome for this cancellation",
+              }
+            : {}),
+      };
+    } catch (error) {
+      return { ...options, state: "failed", error: errorText(error) };
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+      const waiters = this.turnSettlementWaiters.get(key);
+      if (waiters && ownWaiter) {
+        waiters.delete(ownWaiter);
+        if (waiters.size === 0) this.turnSettlementWaiters.delete(key);
+      }
+    }
   }
 
   listModels() {
@@ -192,6 +368,61 @@ export class PiWebRuntime implements WebRuntimeController {
       label: model.name || `${model.provider}/${model.id}`,
       current: current?.provider === model.provider && current.id === model.id,
     }));
+  }
+
+  listProviderAuth(): WebProviderAuthProjection {
+    const modelRuntime = this.runtime.services.modelRuntime;
+    const allProviders = modelRuntime.getProviders();
+    const providers = allProviders.slice(0, WEB_MAX_PROVIDER_AUTH_SCANNED);
+    const projection: WebProviderAuthProjection["providers"][number][] = [];
+    let omitted = Math.max(
+      0,
+      allProviders.length - WEB_MAX_PROVIDER_AUTH_SCANNED,
+    );
+    let namesTruncated = 0;
+    for (const provider of providers) {
+      if (projection.length >= WEB_MAX_PROVIDER_AUTH_ITEMS) {
+        omitted++;
+        continue;
+      }
+      try {
+        const id = safeProviderId(provider.id);
+        if (!id) {
+          omitted++;
+          continue;
+        }
+        const name = boundedProviderName(provider.name || id);
+        if (name.truncated) namesTruncated++;
+        const status = modelRuntime.getProviderAuthStatus(id);
+        const source =
+          status.source && WEB_PROVIDER_AUTH_SOURCES.has(status.source)
+            ? status.source
+            : undefined;
+        projection.push({
+          id,
+          name: name.value,
+          authMethods: [
+            ...(provider.auth.apiKey ? (["api_key"] as const) : []),
+            ...(provider.auth.oauth ? (["oauth"] as const) : []),
+          ],
+          configured: status.configured,
+          ...(source ? { source } : {}),
+          subscription: modelRuntime.isUsingSubscription(id),
+          nameTruncated: name.truncated,
+        });
+      } catch {
+        omitted++;
+      }
+    }
+    return {
+      providers: projection,
+      truncation: {
+        truncated: omitted > 0 || namesTruncated > 0,
+        providersOmitted: omitted,
+        namesTruncated,
+        maxProviders: WEB_MAX_PROVIDER_AUTH_ITEMS,
+      },
+    };
   }
 
   setModel(
@@ -265,6 +496,11 @@ export class PiWebRuntime implements WebRuntimeController {
     return () => this.listeners.delete(listener);
   }
 
+  getThinkingState() {
+    const session = this.runtime.session;
+    return { level: session.thinkingLevel, available: session.getAvailableThinkingLevels() };
+  }
+
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
@@ -287,23 +523,25 @@ export class PiWebRuntime implements WebRuntimeController {
       releaseAdmission = resolveAdmission;
     });
     const startedAt = performance.now();
-    const queued = session.isStreaming;
     const promptTrace: PromptTrace | undefined = options?.commandId
       ? {
           commandId: options.commandId,
           sessionId,
           startedAt,
           started: false,
-          queued,
+          queued: false,
+          userMessageObserved: false,
         }
       : undefined;
     this.retainRuntimeReference(agentRuntime);
-    let resolveRequest: () => void = () => undefined;
+    let resolveRequest: (receipt: WebPromptAdmissionReceipt) => void = () => undefined;
     let rejectRequest: (error: unknown) => void = () => undefined;
-    const requestAdmission = new Promise<void>((resolveRequestAdmission, reject) => {
-      resolveRequest = resolveRequestAdmission;
-      rejectRequest = reject;
-    });
+    const requestAdmission = new Promise<WebPromptAdmissionReceipt>(
+      (resolveRequestAdmission, reject) => {
+        resolveRequest = resolveRequestAdmission;
+        rejectRequest = reject;
+      },
+    );
     const operation = (async () => {
       let preflightObserved = false;
       let admitted = false;
@@ -331,14 +569,15 @@ export class PiWebRuntime implements WebRuntimeController {
             elapsedMs: elapsed(startedAt),
           });
         }
-        const pendingMessagesBefore = session.pendingMessageCount;
+        let followUpMessages = session.getFollowUpMessages().length;
         unsubscribePromptLifecycle = session.subscribe((event) => {
           if (event.type === "agent_start") agentLifecycleStarted = true;
-          if (
-            event.type === "queue_update" &&
-            event.steering.length + event.followUp.length > pendingMessagesBefore
-          ) {
-            queuedForAgent = true;
+          if (event.type === "queue_update") {
+            if (event.followUp.length > followUpMessages) {
+              queuedForAgent = true;
+              if (promptTrace) promptTrace.queued = true;
+            }
+            followUpMessages = event.followUp.length;
           }
         });
         await session.prompt(content, {
@@ -363,7 +602,9 @@ export class PiWebRuntime implements WebRuntimeController {
               );
             }
             if (accepted) {
-              resolveRequest();
+              resolveRequest({
+                pendingFollowUps: session.getFollowUpMessages().length,
+              });
             } else {
               rejectRequest(
                 new WebRuntimeRequestError(
@@ -432,6 +673,7 @@ export class PiWebRuntime implements WebRuntimeController {
           });
         }
         if (promptTrace) {
+          promptTrace.outcome = "failed";
           traceWeb("prompt_operation_failed", {
             commandId: promptTrace.commandId,
             sessionId,
@@ -451,7 +693,7 @@ export class PiWebRuntime implements WebRuntimeController {
       () => this.promptOperations.delete(operation),
       () => this.promptOperations.delete(operation),
     );
-    await requestAdmission;
+    return await requestAdmission;
   }
 
   newSession(workspacePath: string, options?: WebSessionCreationOptions) {
@@ -725,13 +967,17 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
+    if (event.type === "agent_start" && this.activePromptTrace) {
+      this.startPromptTrace(this.activePromptTrace);
+    }
     if (event.type === "message_start" && event.message.role === "user") {
       if (!this.activePromptTrace) {
         this.activePromptTrace = this.pendingPromptTraces.shift();
-      } else if (this.activePromptTrace.started && this.pendingPromptTraces.length > 0) {
-        this.activePromptTrace = this.pendingPromptTraces.shift();
       }
-      if (this.activePromptTrace) this.activePromptTrace.started = true;
+      if (this.activePromptTrace) {
+        this.startPromptTrace(this.activePromptTrace);
+        this.activePromptTrace.userMessageObserved = true;
+      }
     }
     const promptTrace = this.activePromptTrace;
     if (promptTrace) {
@@ -770,15 +1016,25 @@ export class PiWebRuntime implements WebRuntimeController {
     }
     switch (event.type) {
       case "agent_start":
+        this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
+          ...(this.getActiveTurn()
+            ? { activeTurn: this.getActiveTurn() }
+            : {}),
+        });
+        break;
       case "agent_settled":
-        this.emit(event.type);
-        if (
-          event.type === "agent_settled" &&
-          this.activePromptTrace?.started &&
-          this.pendingPromptTraces.length === 0
-        ) {
-          this.activePromptTrace = undefined;
+        // Pi emits this only after the whole agent run (including tool loops
+        // and admitted follow-ups) has reached a terminal state. A
+        // message_end is only one model response and must not settle a turn.
+        if (this.activePromptTrace?.started) {
+          this.settlePromptTrace(this.activePromptTrace);
         }
+        this.activePromptTrace = undefined;
+        this.pendingPromptTraces.length = 0;
+        this.emit(event.type, {
+          sessionId: session.sessionManager.getSessionId(),
+        });
         break;
       case "auto_retry_start":
         this.emit(event.type, {
@@ -796,6 +1052,30 @@ export class PiWebRuntime implements WebRuntimeController {
         break;
       case "message_update":
       case "message_end":
+        if (
+          event.type === "message_end" &&
+          event.message.role === "assistant" &&
+          this.activePromptTrace
+        ) {
+          // Preserve the terminal model result for classification, but defer
+          // publication until Pi confirms the entire run is settled.
+          const outcome =
+            event.message.stopReason === "aborted"
+              ? "cancelled"
+              : event.message.stopReason === "error"
+                ? "failed"
+                : event.message.stopReason === "stop" ||
+                    event.message.stopReason === "length"
+                  ? "completed"
+                  : undefined;
+          // A later queued continuation must not erase proof that the
+          // provider result targeted by Stop was aborted. The control remains
+          // owned until agent_settled; this outcome does not claim that every
+          // queued follow-up in the same Pi execution was cancelled.
+          if (outcome && this.activePromptTrace.outcome !== "cancelled") {
+            this.activePromptTrace.outcome = outcome;
+          }
+        }
         this.emit(event.type, {
           message: projectMessage(event.message),
           ...(this.liveMessageKey ? { messageKey: this.liveMessageKey } : {}),
@@ -819,10 +1099,56 @@ export class PiWebRuntime implements WebRuntimeController {
     for (const listener of this.listeners) listener({ type, detail });
   }
 
+  private activeTurnFromTrace(trace?: PromptTrace): WebActiveTurn | undefined {
+    if (!trace?.started || trace.epoch === undefined) return undefined;
+    return {
+      sessionId: trace.sessionId,
+      commandId: trace.commandId,
+      epoch: trace.epoch,
+    };
+  }
+
+  private startPromptTrace(trace: PromptTrace) {
+    if (trace.started) return;
+    trace.started = true;
+    trace.epoch = ++this.nextTurnEpoch;
+    const activeTurn = this.activeTurnFromTrace(trace);
+    if (activeTurn) this.emit("turn_started", { ...activeTurn });
+  }
+
+  private settlePromptTrace(trace: PromptTrace) {
+    const activeTurn = this.activeTurnFromTrace(trace);
+    if (!activeTurn) return;
+    const settlement: TurnSettlement = {
+      ...activeTurn,
+      outcome:
+        trace.outcome ?? "uncertain",
+    };
+    const key = this.turnKey(activeTurn);
+    if (this.terminalTurnKeys.has(key)) return;
+    this.terminalTurnKeys.add(key);
+    this.turnAbortOperations.delete(key);
+    while (this.terminalTurnKeys.size > 64) {
+      const oldest = this.terminalTurnKeys.values().next().value;
+      if (typeof oldest === "string") this.terminalTurnKeys.delete(oldest);
+    }
+    this.emit("turn_settled", { ...settlement });
+    for (const resolveSettlement of this.turnSettlementWaiters.get(key) ?? []) {
+      resolveSettlement(settlement);
+    }
+    this.turnSettlementWaiters.delete(key);
+  }
+
+  private turnKey(turn: WebActiveTurn) {
+    return `${turn.sessionId}\u0000${turn.commandId}\u0000${turn.epoch}`;
+  }
+
   private removePromptTrace(trace: PromptTrace) {
     const pendingIndex = this.pendingPromptTraces.indexOf(trace);
     if (pendingIndex !== -1) this.pendingPromptTraces.splice(pendingIndex, 1);
     if (this.activePromptTrace !== trace) return;
+    // A started trace can only be terminally projected by agent_settled.
+    if (trace.started) return;
     this.activePromptTrace = this.pendingPromptTraces.shift();
   }
 
@@ -987,5 +1313,6 @@ export class PiWebRuntime implements WebRuntimeController {
   private resetPromptTraces() {
     this.activePromptTrace = undefined;
     this.pendingPromptTraces.length = 0;
+    this.turnAbortOperations.clear();
   }
 }

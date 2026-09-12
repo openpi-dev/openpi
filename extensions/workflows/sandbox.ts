@@ -35,6 +35,7 @@ export interface SandboxAgentOptions {
   provider?: unknown;
   effort?: unknown;
   isolation?: unknown;
+  working_dir?: unknown;
   operator?: unknown;
   inputs?: unknown;
 }
@@ -110,6 +111,9 @@ function sanitizeAgentOptions(value: unknown): SandboxAgentOptions {
     ...(value.provider !== undefined ? { provider: value.provider } : {}),
     ...(value.effort !== undefined ? { effort: value.effort } : {}),
     ...(value.isolation !== undefined ? { isolation: value.isolation } : {}),
+    ...(value.working_dir !== undefined
+      ? { working_dir: value.working_dir }
+      : {}),
     ...(value.operator !== undefined ? { operator: value.operator } : {}),
     ...(value.inputs !== undefined ? { inputs: value.inputs } : {}),
   };

@@ -28,6 +28,10 @@ const manifest = JSON.parse(
     image?: string;
   };
 };
+const npmConfig = readFileSync(
+  new URL("../../../.npmrc", import.meta.url),
+  "utf8",
+);
 
 const HOST_PACKAGES = [
   "@earendil-works/pi-ai",
@@ -38,10 +42,21 @@ const HOST_PACKAGES = [
 
 test("Pi host packages stay peers while local checks keep development copies", () => {
   for (const packageName of HOST_PACKAGES) {
-    assert.equal(manifest.peerDependencies?.[packageName], "*");
+    assert.equal(
+      manifest.peerDependencies?.[packageName],
+      packageName === "typebox" ? "*" : ">=0.85.1",
+    );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
   }
+});
+
+test("Git source installs do not resolve host-provided peer dependencies", () => {
+  const directives = npmConfig
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  assert.deepEqual(directives, ["legacy-peer-deps=true"]);
 });
 
 test("the manifest enforces the documented Node floor", () => {
@@ -50,6 +65,10 @@ test("the manifest enforces the documented Node floor", () => {
 
 test("the standalone CLI ships its TypeScript module loader", () => {
   assert.equal(manifest.dependencies?.jiti, "2.7.0");
+});
+
+test("experimental Pi server stays outside OpenPI runtime dependencies", () => {
+  assert.equal(manifest.dependencies?.["@earendil-works/pi-server"], undefined);
 });
 
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {

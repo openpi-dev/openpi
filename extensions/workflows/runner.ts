@@ -16,14 +16,12 @@ import {
   type AgentSessionEventListener,
   createAgentSession,
   DefaultResourceLoader,
-  defineTool,
   type ExtensionAPI,
   type ExtensionContext,
   SessionManager,
   SettingsManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
-import { type TSchema, Type } from "typebox";
 import { AgentToolRenderLedger } from "../shared/agent-tool-renderer.ts";
 import {
   bindChildSessionExtensions,
@@ -34,10 +32,11 @@ import {
 import { createToolCallTimeoutGuard } from "../shared/tool-call-timeout.ts";
 import { type AgentUsage, emptyUsage, type TranscriptEntry } from "./model.ts";
 import {
-  buildWorkflowAgentPrompt,
+  childToolsWithStructuredOutput,
+  createStructuredOutputTool,
   STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION,
-  STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
-} from "./prompt.ts";
+} from "../shared/structured-output.ts";
+import { buildWorkflowAgentPrompt } from "./prompt.ts";
 import {
   AgentProgressProjection,
   type ProgressAssistantMessage,
@@ -51,7 +50,6 @@ import { truncateUtf8 } from "./serialization.ts";
 import { bindWorkflowToolRenderer } from "./tool-renderer.ts";
 
 const AGENT_OUTPUT_MAX_BYTES = 64 * 1024;
-export const MODEL_PROGRESS_TIMEOUT_MS = 45_000;
 
 export type WorkflowModel = NonNullable<ExtensionContext["model"]>;
 export type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
@@ -112,8 +110,6 @@ export interface RunAgentOptions {
   replayFilesystemBoundary?: ReplayFilesystemBoundaryOptions;
   /** Test-only override for the per-tool execution timeout. */
   toolCallTimeoutMs?: number;
-  /** Test-only override for the per-provider-turn model-progress timeout. */
-  modelProgressTimeoutMs?: number;
   /** Test-only override for the end-to-end abort/shutdown deadline. */
   shutdownTimeoutMs?: number;
   /** Test seam for lifecycle races; production always uses createAgentSession. */
@@ -142,9 +138,7 @@ export function workflowChildTools(
   tools: readonly string[] | undefined,
   structured: boolean,
 ) {
-  return tools
-    ? [...new Set([...tools, ...(structured ? ["structured_output"] : [])])]
-    : undefined;
+  return childToolsWithStructuredOutput(tools, structured);
 }
 
 interface WorkflowToolSession {
@@ -176,68 +170,6 @@ export function guardWorkflowChildTools(
   apply();
   return session.subscribe((event) => {
     if (event.type === "agent_start") apply();
-  });
-}
-
-function isJsonSchema(value: unknown): value is TSchema {
-  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
-  const seen = new WeakSet<object>();
-  let nodes = 0;
-  const validate = (current: unknown, depth: number): boolean => {
-    if (++nodes > 10_000 || depth > 24) return false;
-    if (
-      current === null ||
-      typeof current === "string" ||
-      typeof current === "boolean"
-    ) {
-      return true;
-    }
-    if (typeof current === "number") return Number.isFinite(current);
-    if (Array.isArray(current)) {
-      return current.every((item) => validate(item, depth + 1));
-    }
-    if (typeof current !== "object") return false;
-    if (seen.has(current)) return false;
-    seen.add(current);
-    return Object.keys(current).every((key) => {
-      if (key === "__proto__" || key === "constructor" || key === "prototype") {
-        return false;
-      }
-      return validate((current as Record<string, unknown>)[key], depth + 1);
-    });
-  };
-  return validate(value, 0);
-}
-
-/** Preserve the caller's full JSON Schema instead of lossy keyword conversion. */
-function jsonSchemaToTypebox(schema: unknown): TSchema {
-  if (!isJsonSchema(schema)) {
-    throw new Error("structured output schema must be a bounded JSON object");
-  }
-  return Type.Unsafe(schema);
-}
-
-/**
- * One-shot terminating tool injected when a schema is supplied: the subagent
- * calls it as its final action and we capture the validated object.
- */
-function makeStructuredOutputTool(
-  schema: unknown,
-  capture: (value: unknown) => void,
-): ToolDefinition {
-  return defineTool({
-    name: "structured_output",
-    label: "Structured Output",
-    description: STRUCTURED_OUTPUT_TOOL_DESCRIPTION,
-    parameters: jsonSchemaToTypebox(schema),
-    async execute(_toolCallId, params) {
-      capture(params);
-      return {
-        content: [{ type: "text", text: "Recorded structured result." }],
-        details: params,
-        terminate: true,
-      };
-    },
   });
 }
 
@@ -310,119 +242,6 @@ function errorText(error: unknown): string {
   );
 }
 
-function formatTimeout(timeoutMs: number) {
-  return timeoutMs % 1_000 === 0
-    ? `${timeoutMs / 1_000} seconds`
-    : `${timeoutMs} ms`;
-}
-
-export function resolveModelProgressTimeoutMs(
-  settingsManager: SettingsManager,
-  override?: number,
-) {
-  if (override !== undefined) return override;
-  const configured =
-    settingsManager.getProjectSettings().httpIdleTimeoutMs ??
-    settingsManager.getGlobalSettings().httpIdleTimeoutMs;
-  return typeof configured === "number" && Number.isFinite(configured)
-    ? Math.max(MODEL_PROGRESS_TIMEOUT_MS, Math.floor(configured))
-    : MODEL_PROGRESS_TIMEOUT_MS;
-}
-
-/** Abort any provider turn that stops producing model-visible progress. */
-export function createModelProgressWatchdog(
-  onTimeout: (error: Error) => Promise<unknown>,
-  options: { timeoutMs?: number; model?: string } = {},
-) {
-  const timeoutMs = options.timeoutMs ?? MODEL_PROGRESS_TIMEOUT_MS;
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  let activeTurn = false;
-  let closed = false;
-  let rejectTimeout!: (error: Error) => void;
-  const timeout = new Promise<never>((_resolve, reject) => {
-    rejectTimeout = reject;
-  });
-
-  const clear = () => {
-    if (timer) clearTimeout(timer);
-    timer = undefined;
-  };
-  const schedule = () => {
-    clear();
-    if (!activeTurn || closed) return;
-    // This timer owns the awaited watchdog outcome. Keep it referenced so a
-    // short-lived Node 22 process cannot exit with the promise still pending.
-    timer = setTimeout(() => {
-      timer = undefined;
-      activeTurn = false;
-      closed = true;
-      const model = options.model ? ` for ${options.model}` : "";
-      const error = new Error(
-        `Agent provider turn${model} produced no model-visible progress for ${formatTimeout(timeoutMs)}; the provider request may be stalled. Retry the workflow.`,
-      );
-      rejectTimeout(error);
-      try {
-        void onTimeout(error).catch(() => {});
-      } catch {
-        // The timeout result remains authoritative even if abort throws before
-        // returning its promise; bounded shutdown below gets another chance.
-      }
-    }, timeoutMs);
-  };
-  const armTurn = () => {
-    if (closed) return;
-    activeTurn = true;
-    schedule();
-  };
-  const markProgress = () => {
-    if (!activeTurn || closed) return;
-    schedule();
-  };
-  const completeTurn = () => {
-    activeTurn = false;
-    clear();
-  };
-  const cancel = () => {
-    closed = true;
-    activeTurn = false;
-    clear();
-  };
-
-  return {
-    armTurn,
-    markProgress,
-    completeTurn,
-    cancel,
-    async waitFor<T>(operation: Promise<T>) {
-      try {
-        return await Promise.race([operation, timeout]);
-      } finally {
-        cancel();
-      }
-    },
-  };
-}
-
-function isModelVisibleProgress(event: AgentSessionEvent) {
-  if (event.type !== "message_update" || event.message.role !== "assistant") {
-    return false;
-  }
-  // Raw transport heartbeats never become AgentSession events. Empty stream,
-  // text, and thinking starts likewise cannot keep a provider turn alive.
-  const update = event.assistantMessageEvent;
-  if (
-    update.type === "text_delta" ||
-    update.type === "thinking_delta" ||
-    update.type === "toolcall_delta"
-  ) {
-    return update.delta.length > 0;
-  }
-  if (update.type === "text_end" || update.type === "thinking_end") {
-    return update.content.length > 0;
-  }
-  return update.type === "toolcall_start" || update.type === "toolcall_end";
-}
-
 export async function runAgent(
   options: RunAgentOptions,
 ): Promise<AgentOutcome> {
@@ -432,8 +251,6 @@ export async function runAgent(
   let session: AgentSession | undefined;
   let unsubscribeToolGuards: (() => void) | undefined;
   let aborted = false;
-  let terminalCause: "abort" | "model-progress-timeout" | undefined;
-  let modelProgressTimeoutMessage: string | undefined;
   let abortOperation: Promise<unknown> | undefined;
   let rejectForAbort: ((error: Error) => void) | undefined;
   let rejectForProjectionFailure: ((error: Error) => void) | undefined;
@@ -454,7 +271,6 @@ export async function runAgent(
   const onAbort = () => {
     if (aborted) return;
     aborted = true;
-    terminalCause ??= "abort";
     if (session) {
       try {
         abortOperation ??= session.abort();
@@ -475,7 +291,7 @@ export async function runAgent(
     customTools =
       options.schema !== undefined
         ? [
-            makeStructuredOutputTool(options.schema, (value) => {
+            createStructuredOutputTool(options.schema, (value) => {
               if (!settled) structured = value;
             }),
           ]
@@ -659,10 +475,6 @@ export async function runAgent(
     });
   };
 
-  let armModelProgress = () => {};
-  let markModelProgress = () => {};
-  let completeModelTurn = () => {};
-  let cancelModelProgressWatchdog = () => {};
   let compactionReconcileQueued = false;
   const queueCompactionReconcile = () => {
     if (compactionReconcileQueued) return;
@@ -690,7 +502,6 @@ export async function runAgent(
   };
   const unsubscribe = childSession.subscribe((event) => {
     if (settled) return;
-    if (event.type === "turn_start") armModelProgress();
     if (event.type === "tool_execution_start") {
       toolRenderer.start(
         event.toolCallId,
@@ -712,10 +523,6 @@ export async function runAgent(
         event.result,
         event.isError,
       );
-    }
-    if (isModelVisibleProgress(event)) markModelProgress();
-    if (event.type === "message_end" && event.message.role === "assistant") {
-      completeModelTurn();
     }
     if (event.type === "message_end") {
       assistantSettlement = observeAssistantSettlement(
@@ -751,32 +558,10 @@ export async function runAgent(
     captureToolRenderData(childSession.messages);
     snapshotProjection();
     if (!aborted) {
-      const watchdog = createModelProgressWatchdog(
-        (error) => {
-          terminalCause ??= "model-progress-timeout";
-          if (terminalCause === "model-progress-timeout") {
-            modelProgressTimeoutMessage ??= error.message;
-          }
-          abortOperation ??= childSession.abort();
-          void abortOperation.catch(() => {});
-          return abortOperation;
-        },
-        {
-          timeoutMs: resolveModelProgressTimeoutMs(
-            options.settingsManager,
-            options.modelProgressTimeoutMs,
-          ),
-          model: modelId,
-        },
-      );
-      armModelProgress = watchdog.armTurn;
-      markModelProgress = watchdog.markProgress;
-      completeModelTurn = watchdog.completeTurn;
-      cancelModelProgressWatchdog = watchdog.cancel;
+      // Pi owns transport liveness and retries. Quiet model output is not
+      // evidence of a stalled request (thinking and retry backoff can be silent).
       await Promise.race([
-        watchdog.waitFor(
-          childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
-        ),
+        childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
         abortRace,
         projectionFailureRace,
       ]);
@@ -784,7 +569,6 @@ export async function runAgent(
   } catch (error) {
     promptErrorMessage ??= errorText(error);
   } finally {
-    cancelModelProgressWatchdog();
     options.signal?.removeEventListener("abort", onAbort);
     settled = true;
     unsubscribe();
@@ -823,11 +607,7 @@ export async function runAgent(
       ? `Cleanup failed: ${cleanupErrors.join("; ")}`
       : undefined;
 
-  if (
-    terminalCause === "abort" ||
-    (terminalCause === undefined &&
-      assistantSettlement?.stopReason === "aborted")
-  ) {
+  if (aborted || assistantSettlement?.stopReason === "aborted") {
     return {
       ok: false,
       output,
@@ -844,9 +624,7 @@ export async function runAgent(
   }
 
   const failureMessage =
-    (terminalCause === "model-progress-timeout"
-      ? modelProgressTimeoutMessage
-      : agentFailureMessage(assistantSettlement, promptErrorMessage)) ??
+    agentFailureMessage(assistantSettlement, promptErrorMessage) ??
     cleanupError;
   if (failureMessage !== undefined) {
     return {

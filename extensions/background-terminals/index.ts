@@ -32,7 +32,9 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
+  projectBackgroundTerminalDetail,
   projectBackgroundTerminalCapability,
   registerWebCapability,
 } from "../shared/web-observer-registry.ts";
@@ -105,7 +107,12 @@ export default function (pi: ExtensionAPI) {
   let ui: ExtensionUIContext | undefined;
   let unsubStatus: (() => void) | undefined;
   let startReservations = 0;
-  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>();
+  const resultDelivery = createDeferredResultDelivery<TerminalSnapshot>({
+    owner: () =>
+      sessionContext
+        ? completionOwnerFor(sessionContext.sessionManager)
+        : undefined,
+  });
   const hideLifecycleTools = () =>
     patchOwnedTools(pi, "background", {
       disable: OPENPI_TOOL_SURFACE.background.deferred,
@@ -133,6 +140,12 @@ export default function (pi: ExtensionAPI) {
                 kind: "background-terminals",
                 snapshot: () =>
                   projectBackgroundTerminalCapability(manager.view.list()),
+                detail: (id) => {
+                  const terminal = manager.view.get(id);
+                  return terminal
+                    ? projectBackgroundTerminalDetail(terminal)
+                    : undefined;
+                },
                 subscribe: (listener) => manager.view.subscribe(listener),
               })
             : undefined;
@@ -245,6 +258,7 @@ export default function (pi: ExtensionAPI) {
   const flushResults = (wake: boolean) => {
     const snaps = resultDelivery.drain(MAX_RUNNING);
     if (!deliverResults(snaps, wake)) resultDelivery.restore(snaps);
+    else resultDelivery.acknowledge(snaps);
   };
 
   const idleResultBatcher = createIdleResultBatcher({

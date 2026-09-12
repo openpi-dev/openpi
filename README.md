@@ -1,26 +1,17 @@
 <p align="center">
-  <img src="assets/openpi-launch-card-v1.webp" alt="OpenPI — Pi at the core, power on demand. Small Harness. Clean Context. Deep Extensions." width="100%" />
+  <img src="assets/openpi-product-hero-v2.webp" alt="OpenPI — Build. Delegate. Keep moving. 终端与本地 Web、独立子代理、后台任务的概念插画。" width="100%" />
 </p>
 
 <p align="center">
-  把后台 Terminal、Pi-native Subagent、可恢复 Workflow 与持续任务装进同一套 <a href="https://pi.dev">Pi</a> 工作台。<br />
-  普通回合零常驻 OpenPI 模型工具；明确需要时，才展开对应能力。
-</p>
-
-<p align="center">
-  <strong>Small Harness.</strong> 不替换 Pi 的 Agent loop，普通回合不常驻 OpenPI 模型工具。<br />
-  <strong>Clean Context.</strong> 能力按需加载，Subagent 使用独立 Context，不把所有工作塞进主会话。<br />
-  <strong>Deep Extensions.</strong> 后台执行、Subagent、Workflow 与持续任务在 Pi 原生生命周期内统一运行和观察。
-</p>
-
-<p align="center">
-  <strong>不是把一组插件摆在一起，而是让它们共享同一套配置、权限、状态与清理边界。</strong>
+  <strong>专注手上的问题，让独立任务并行，让长期进程后台运行。</strong><br />
+  OpenPI 为 <a href="https://pi.dev">Pi</a> 增加终端与本地 Web 工作台、独立上下文的子代理、Workflow 和后台任务管理。<br />
+  沿用你的模型、工具与 Skills；普通编码保持轻量，需要时再展开高级能力。
 </p>
 
 <p align="center">
   <a href="https://www.npmjs.com/package/@tt-a1i/openpi"><img alt="npm version" src="https://img.shields.io/npm/v/@tt-a1i/openpi?style=flat-square&color=cb3837"></a>
   <a href="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml"><img alt="CI status" src="https://github.com/openpi-dev/openpi/actions/workflows/ci.yml/badge.svg"></a>
-  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.84.1+" src="https://img.shields.io/badge/Pi-0.84.1%2B-2f81f7?style=flat-square"></a>
+  <a href="https://github.com/earendil-works/pi-mono"><img alt="Pi 0.85.1+" src="https://img.shields.io/badge/Pi-0.85.1%2B-2f81f7?style=flat-square"></a>
   <img alt="Node.js 22.19+" src="https://img.shields.io/badge/Node.js-22.19%2B-3fb950?style=flat-square&logo=nodedotjs&logoColor=white">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-3fb950?style=flat-square"></a>
 </p>
@@ -32,9 +23,10 @@ pi install npm:@tt-a1i/openpi
 <p align="center">
   <a href="https://openpi-dev.github.io/openpi/"><strong>项目网站</strong></a> ·
   <a href="#30-秒开始"><strong>立即开始</strong></a> ·
-  <a href="#默认轻按需强">为什么默认更轻</a> ·
+  <a href="#从这些场景开始">使用场景</a> ·
+  <a href="#独立-web-工作台">Web 工作台</a> ·
   <a href="#运行模型">看看它怎么工作</a> ·
-  <a href="https://github.com/openpi-dev/openpi/issues/22">查看 Benchmark</a>
+  <a href="https://github.com/openpi-dev/openpi/issues/455">参与体验改进</a>
 </p>
 
 <p align="center">
@@ -43,24 +35,30 @@ pi install npm:@tt-a1i/openpi
 
 ---
 
-## 默认轻，按需强
+## 从这些场景开始
 
-**OpenPI 最强的地方，不是工具多，而是复杂度只在值得的时候出现。**
+| 你正在做什么 | OpenPI 怎么帮忙 | 从哪里查看 |
+| --- | --- | --- |
+| 在多个项目之间切换，想看清对话和工具执行 | 本地 Web 按工作区管理会话，检查已保存的 Prompt、工具参数与结果 | `/web` → 会话与轨迹视图 |
+| 改一个功能，需要同时理解代码和检查测试 | 将独立问题交给不同子代理，各自使用独立 Context，主 Agent 汇总发现 | `/subagents` |
+| Dev server、构建或长测试还在运行 | 后台终端保留进程状态和日志，你可以继续讨论下一步 | `/ps` |
+| 一批任务有依赖，需要分阶段收集结果 | Workflow 组织并行与顺序执行，保留结构化结果和可检查的运行记录 | `/workflows` |
 
-普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；只保留独立的工作区删除保护。
+例如，你可以直接说：
 
-任务一旦需要长期进程、并行调研、隔离实现、多阶段协作或跨回合推进，高级能力仍然完整存在。用户直接提出需求，OpenPI 就在当轮加载对应能力；没用到的能力不会常驻模型工具面。
+```text
+用子代理分别检查登录流程和相关测试，各自给出问题与证据，最后汇总。
+```
 
-> **轻路径不缴复杂度税，重任务不缺工程能力。** 这不是一套替代 Pi 的 Agent Runtime，而是一组遵守 Pi 生命周期、Session、Provider、模型与 Trust 边界的 Pi-native 深扩展。
+```text
+在后台启动开发服务器，我继续修改页面；需要时让我查看日志并停止它。
+```
 
-| 使用场景                     | 模型看到什么                                      | OpenPI 的行为                                     |
-| ---------------------------- | ------------------------------------------------- | ------------------------------------------------- |
-| 普通编码任务                 | Pi 原生 `read` / `bash` / `edit` / `write`        | 默认不常驻任何 OpenPI 模型工具                    |
-| 用户明确要求委派或高级能力   | 仅与意图匹配的能力组                              | 在当轮开始前直接加载，不要求用户记住工具名        |
-| 用户主动开启 `adaptive`      | 一个小型 `openpi_load_tools` 网关                 | 主模型判断确有收益时，可自主加载一个能力组        |
-| 后台任务或子 Agent 已经运行  | 对应的状态、等待、继续与停止工具                  | 管理面随真实资源出现，资源结束后按生命周期收敛    |
+```text
+用 Workflow 分批审查这些模块，先并行收集问题，再汇总需要优先处理的项。
+```
 
-这套设计保住了两件通常很难同时拥有的东西：Pi 的清爽基本面，以及完整工程工作台的能力上限。
+模型负责判断怎么分工；OpenPI 提供执行、状态、结果和停止入口。独立任务才值得并行，具体收益取决于任务、模型和配置。
 
 ---
 
@@ -77,7 +75,14 @@ pi install npm:@tt-a1i/openpi
 结果回来后汇总风险，主会话不要原地等待。
 ```
 
-OpenPI 会把长期进程放到后台，把独立任务交给隔离 Context 的 Pi Subagent，把多阶段依赖组织成 Workflow。状态会持续显示；完整运行可从 `/ps`、`/subagents` 和 `/workflows` 检查或终止。
+这条请求会启用后台终端与子代理能力。通过 `/ps` 查看进程和日志，通过 `/subagents` 查看子任务和结果；需要多阶段编排时再明确使用 Workflow。
+
+更喜欢浏览器？在 Pi 中输入 `/web`，打开终端显示的本机地址，选择模型和工作区后开始对话。Web 使用独立会话，不会接管终端里正在进行的对话。入口与独立 CLI 用法见 [Web 工作台](#独立-web-工作台)。
+
+> 本 README 描述当前 `main`。npm 发布版本可能尚未包含最近的 Web 改进；体验最新源码前，请按[开发运行时说明](#开发运行时区分-npm-与当前源码)确认安装来源。
+
+<details>
+<summary>能力如何按需开启，以及原生 Skill 的使用方式</summary>
 
 > [!TIP]
 > Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。英文 `subagent` 与 `workflow` 是保留授权词，单独输入也会加载对应能力。
@@ -90,12 +95,35 @@ Skill 使用 Pi 原生机制：模型根据名称、描述和路径按需用 `re
 
 Skill 正文通过原生用户消息或工具结果进入正常 Session 历史，压缩也交给 Pi。OpenPI 不另存正文快照，不叠加隐藏正文，也不在压缩后自动补回。压缩后不保证全文仍在模型上下文中；需要时可重新读取或显式调用。普通 `read` 的输出限制和模型总上下文限制仍然适用。设计边界见 [Decision 0002](docs/decisions/0002-native-skill-lifecycle.md)。
 
+</details>
+
 > [!IMPORTANT]
 > 默认安装是安静的：不改主题、不绑定 Provider 或模型、不开启下一步预测，也不执行 post-edit 命令。Capability discovery 默认 `explicit`；只有用户通过 `/openpi-setup` 选择 `adaptive` 后，模型才会常驻看到一个小型发现网关并可自主加载额外能力。
 
 ```text
 /openpi-setup
 ```
+
+---
+
+## 默认轻，按需强
+
+**普通编码沿用 Pi，高级能力按需加入。**
+
+普通编码任务继续走 Pi 原生路径：`read`、`bash`、`edit`、`write`，完整历史、Session compaction、工具输出边界、显式 Bash timeout 与 Provider loop。OpenPI 不额外投影历史，不改写测试超时，也不向模型塞恢复提示；只保留独立的工作区删除保护。
+
+任务一旦需要长期进程、并行调研、隔离实现、多阶段协作或跨回合推进，高级能力仍然完整存在。用户直接提出需求，OpenPI 就在当轮加载对应能力；没用到的能力不会常驻模型工具面。
+
+OpenPI 在 Pi 的生命周期、Session、Provider、模型与 Trust 边界内扩展能力。
+
+| 使用场景                     | 模型看到什么                                      | OpenPI 的行为                                     |
+| ---------------------------- | ------------------------------------------------- | ------------------------------------------------- |
+| 普通编码任务                 | Pi 原生 `read` / `bash` / `edit` / `write`        | 默认不常驻任何 OpenPI 模型工具                    |
+| 用户明确要求委派或高级能力   | 仅与意图匹配的能力组                              | 在当轮开始前直接加载，不要求用户记住工具名        |
+| 用户主动开启 `adaptive`      | 一个小型 `openpi_load_tools` 网关                 | 主模型判断确有收益时，可自主加载一个能力组        |
+| 后台任务或子 Agent 已经运行  | 对应的状态、等待、继续与停止工具                  | 管理面随真实资源出现，资源结束后按生命周期收敛    |
+
+没有运行高级任务时，不需要为它们保留常驻工具面。
 
 ---
 
@@ -123,13 +151,15 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 工作面       | 已包含的能力                                                                                              |
 | ------------ | --------------------------------------------------------------------------------------------------------- |
 | 执行         | Background Terminal、Pi-native Subagent、Dynamic Workflow、隔离 Worktree                                  |
-| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Acceptance Ledger、Safe Replay、派生 Graph |
+| 编排         | `pipeline` / `parallel`、结构化输出、Result Handoff、Operator、Safe Replay、派生 Graph |
 | 连续性       | Tasks、Goal、Plan Mode、Context Pivot、Session Browser、Session-scoped Cron                               |
 | 自定义 Agent | `explorer` / `implementer` / `reviewer` / `advisor`，支持全局与项目角色文件、独立模型与 effort            |
+| 本地 Web     | 工作区与会话管理、模型预选、运行诊断、工具证据与持久化轨迹检查；与终端 Session 独立 |
 | 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
+| 模型授权     | `/login google-antigravity`；实验性的 `/login cursor`（支持 Pi 工具，不执行 Cursor 原生工具）                   |
 
 OpenPI 采用 [MIT License](LICENSE)；第三方来源与保留声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
 
@@ -195,23 +225,23 @@ subagent_spawn({
 每个 Subagent 都是新的进程内 Pi SDK Session：
 
 - 默认继承父会话的 Provider 与模型；用户可明确指定 Thinking Level，否则模型根据角色建议、任务难度与目标模型实际支持的档位选择；
-- 继承普通 child-safe 工具、Skills、项目说明与 Trust 决策；
+- 继承父会话当前启用且允许委派的工具、Skills 和项目说明；目标目录的项目扩展按其自身 Trust 决策加载；
 - 最多 4 个模型发起的 Subagent 并发运行，结束后自动回传；
 - 可 `check`、`wait`、`cancel`，也可用 `subagent_send` 继续同一子会话；
 - 输入框下方显示实时摘要，空输入时按 `↓` 聚焦，`Enter` 或 `→` 打开管理界面。
 
-内置角色由 Harness 强制工具边界，不靠 Prompt 自律：
+内置角色提供任务分工建议，普通模式下继承父会话当前启用且允许委派的工具，包括 Bash 和已启用的联网工具。角色名称本身不是只读权限边界；Plan Mode 与自定义角色的显式工具限制仍由 Harness 执行。
 
-| `agent_type`  | 适合             | 相对 effort 建议    | 强制能力                      |
-| ------------- | ---------------- | ------------------- | ----------------------------- |
-| `explorer`    | 代码追踪与探索   | 中等，难题可提高    | 只读发现工具                  |
-| `implementer` | 聚焦实现         | 中高，按范围与风险调整 | read / bash / edit / write 等 |
-| `reviewer`    | 正确性与回归审查 | 较高                | 只读发现工具                  |
-| `advisor`     | 深度技术建议     | 较高                | 只读发现工具                  |
+| `agent_type`  | 适合             | 相对 effort 建议 |
+| ------------- | ---------------- | ---------------- |
+| `explorer`    | 代码追踪与探索   | 中等，难题可提高 |
+| `implementer` | 聚焦实现         | 中高，按范围与风险调整 |
+| `reviewer`    | 正确性与回归审查 | 较高 |
+| `advisor`     | 深度技术建议     | 较高 |
 
 上述只是模型的相对选择提示，不会为内置角色写死具体档位。用户明确指定的 `reasoning_effort` 始终优先；否则模型结合任务难度，从目标模型实际支持的档位中选择。
 
-角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 覆盖。模型优先级是：显式调用 > Agent Type 文件 > `/openpi-setup` 角色模型 > 父模型继承。更高优先级定义损坏时会阻断 fallback，而不是悄悄退回更宽松的能力。
+角色可由全局 `~/.pi/agent/agents/*.md` 或受信任项目 `.pi/agents/*.md` 覆盖。模型优先级是：显式调用 > Agent Type 文件 > `/openpi-setup` 角色模型 > 父模型继承。更高优先级定义损坏时会阻断 fallback，而不是悄悄退回更宽松的能力。自定义角色省略 `tools` 时继承当前父工具；显式列表只能收窄，未在父会话启用的工具不会由委派自动激活。已有角色文件不会被升级覆盖；旧版 `explorer.md` 的只读列表仍然有效。工具可用性不等于文件系统沙箱；普通模式可使用绝对路径访问其他目录，目标仓库的执行 cwd 应通过 `working_dir` 指定。
 
 <details>
 <summary><strong>并行写文件时如何隔离 Worktree？</strong></summary>
@@ -270,11 +300,11 @@ return agent("Synthesize the verified findings", {
 | `phase()`    | 标记当前阶段                                                               |
 | `log()`      | 向实时界面与最终报告追加一行进度                                           |
 | `usage()`    | 读取累计 Token、缓存、成本及本轮并发/调用余量；Token 是 lower bound，不是预算器 |
-| `agent()`    | 启动 Pi Agent；支持 role、schema、acceptance、inputs、operator 与 worktree |
+| `agent()`    | 启动 Pi Agent；支持 role、schema、inputs、operator 与 worktree |
 | `pipeline()` | 每个 item 完成上阶段后立即进入下一阶段；多阶段 fan-out 的默认选择          |
 | `parallel()` | 并发 barrier；只在下一阶段确实需要全部结果时使用                           |
 
-Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。每个 Child Provider turn 必须在 45 秒内产生模型可见的 thinking、text、tool call 或完成事件，并在持续输出时按进展续期；空 stream start 与 transport heartbeat 不算进展。用户显式配置了更宽的 Pi `httpIdleTimeoutMs` 时沿用该上限。超时会 abort 当前 Child、保留已有 Transcript/usage/evidence，并让 sibling 与后续阶段继续结算。
+Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64 和 1024。前台运行可实时查看，后台运行完成后自动回传；`/workflows` 展示阶段、Agent、Transcript、Graph、用量与产物。普通子代理和 Workflow 都使用 Pi 原生传输超时与重试，不再用额外的 45 秒无可见输出计时器打断思考、排队或重试。显式取消和 Session 清理仍有界，原生 Provider 错误保留在 Child outcome 中。并发上限不代表账号的服务端速率额度；429 仍按 Pi 原生重试策略处理。
 
 ---
 
@@ -283,6 +313,8 @@ Workflow 默认并发 8 个 Agent，单次最多 128 次调用；可配置到 64
 OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程退出 0”当成业务成功。
 
 ### Result Handoff 与派生 Graph
+
+`agent(prompt, { working_dir: "/path/to/repository" })` 显式选择子代理工作目录；相对路径以父会话 cwd 解析，并在模型调用前验证。目标目录影响 Git、资源加载、Trust、Worktree 和 Replay 身份；只在 Prompt 中写路径不会切换 cwd。普通继承工具的内置角色不使用只读 Replay；明确配置只读工具的自定义角色仍保留原有 Replay 仓库边界。
 
 成功调用返回同一 Run 内有效的 opaque `ref`。后续调用通过 `inputs: [previous.ref]` 显式接收上游结论；每个结论最多 16 KiB，合计最多 48 KiB，并标记为不可信数据。Artifacts 从这些引用派生只读 Graph，用来观察 lineage，不参与调度。
 
@@ -308,9 +340,11 @@ OpenPI 把一次调用拆成可以审计的生命周期，而不是把“进程�
 
 `operator: "name"` 在同一 Run 内复用一个内存 Child Session，并把同名 activation 串行化。首个 activation 固定 model、role/tool surface、effort、structured mode 与 cwd。Operator 不与 per-call Worktree 或 Replay 混用，也不承诺跨重启持久记忆。
 
-### Explicit Acceptance
+### Deprecated Acceptance compatibility
 
-可选 `acceptance: { criteria: [...] }` 要求同一个 Agent 返回 evidence ledger。支持 1–32 条验收条件；`description` 为人类可读说明（1–500 字符），可选的 `requiredEvidence` 为字符串数组（至多 16 个标签，每项至多 120 字符），子 Agent 必须在 `acceptance.criteria[].evidence` 中返回完全匹配的标签：
+`acceptance` 自 OpenPI 0.5 起弃用，并计划在 1.0 删除。兼容期仍读取旧 DSL、journal 与 artifact，但 ledger 只是执行任务的同一个模型所写的 `model-self-attestation`，不是 runtime-observed evidence，也不再决定 `agent().ok`；`ok` 只表示 child execution 与结果制品是否成功。
+
+新 Workflow 应使用普通 `schema` 返回判断材料，由父模型结合退出码、测试结果、文件指纹和 tool receipts 等真实运行时事实综合判断。旧的可选 `acceptance: { criteria: [...] }` 仍可要求同一个 Agent 返回 ledger：
 
 ```js
 acceptance: {
@@ -324,7 +358,7 @@ acceptance: {
 }
 ```
 
-条件缺失、格式错误或被拒绝时，调用返回 `ok: false`，但原始输出与 ledger 仍保留。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
+条件缺失、格式错误或被拒绝时，原始输出与 ledger 仍保留并明确标注 authority/deprecation；它们不会把成功执行改成失败，也不会把失败执行改成成功。OpenPI 不会暗中再启动 reviewer、Shell 或额外 Judge 模型。
 
 未设置 `requiredEvidence` 的 criterion 是对 `description` 的自我声明，不是有证据约束的验收门禁；需要 evidence-backed gate 时，必须声明所需证据标签。
 
@@ -408,12 +442,14 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup workflow 同时跑 16 个 agent，总调用最多 256
+/openpi-setup Web 主题跟随系统
+/openpi-setup Web 使用深色主题
 /openpi-setup Footer 两行：cwd flex model / context cost flex git
 /openpi-setup Bash 展开，Write/Edit 保持紧凑
 /openpi-setup 编辑后自动跑 npm run format
@@ -434,18 +470,18 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |
+| Web 主题                    | `system`；可选 `light` / `dark`                 |
 | 大型 Header                  | 关闭                                           |
 | Dashboard Footer             | 开启；单行 `plain`                           |
 | Subagent / Bash / Write/Edit | `compact` / `compact` / `compact`             |
 | Post-edit 命令               | 关闭；单条命令最多 500 字符                    |
 | 内置角色模型                 | 全部继承父模型                                 |
-| 主题                         | 保留用户现有选择                               |
 
 </details>
 
 ### 安装要求与来源
 
-- Pi `0.84.1` 或更新版本；
+- Pi `0.85.1` 或更新版本；
 - Node.js `22.19.0` 或更新版本；
 - npm 安装：`pi install npm:@tt-a1i/openpi`；
 - GitHub 安装：`pi install git:github.com/openpi-dev/openpi`。
@@ -529,7 +565,7 @@ Web runtime 不嵌入交互式终端 Session。它由独立进程创建自己的
 
 同一 Pi agent 目录一次只允许一个 Web Host 持有该 Session/元数据目录。第二个 `openpi web` 会明确拒绝启动；正常关停会先排空共享目录变更再释放租约，进程崩溃后仅在确认原 owner 的 PID 与进程启动身份不再匹配时恢复。一个 Host 可在侧栏管理多个工作区，因此不需要为每个仓库启动一个进程。
 
-Host 仅监听 loopback。启动链接中的高熵 token 属于本次 Web Host 进程，浏览器会从 URL fragment 取出后保存到当前标签页的 `sessionStorage`，并立即清除地址栏 fragment；关闭 Host 后该 token 失效。这不是远程身份或长期登录机制。
+Host 仅监听 loopback。本机任意浏览器直接输入终端显示的 `http://127.0.0.1:端口` 即可使用，无需配对或复制 token。正式页面在本地导航时自动取得当前 Host 的高熵凭据，API 仍校验 Bearer token；跨站、其他本地端口和嵌入页面不能取得入口凭据。凭据只属于本次进程，不是远程身份或长期登录机制；Host 重启后刷新页面即可取得新凭据。旧的 fragment 登录链接仍兼容，读取后清除地址栏 fragment。Vite 开发页面保持开发启动器提供的 fragment 入口。
 
 发布包提供 `openpi` 可执行文件。需要同时使用终端扩展和 Web 时，安装同一版本的 Pi package 与 CLI：
 
@@ -543,6 +579,8 @@ openpi web /path/to/repo      # 指定初始工作区
 两处应保持同一 OpenPI 版本。Pi 的 managed package 与全局 CLI 即使位于不同物理路径，同一 Web 进程内也通过带版本的共享 registry 按 Pi `SessionManager` 身份连接 capability 投影；它不保存第二份状态，也不兼容任意混装版本。
 
 已经在 Pi 中安装 OpenPI 时，也可以直接执行 `/web`。它通过 Pi 官方的交互式终端 seam 暂停当前 TUI，运行当前 package 内完全相同的 `openpi web` 子进程，并在 `Ctrl+C` 停止 Web 后恢复原来的终端 Session。运行期间终端只归 Web 子进程使用；父 Pi 不读取按键，也不会把当前 Session id、消息、上下文或工作目录传给浏览器。Web 会恢复它自己的已有 Session 和工作区；没有可用项时，由用户在浏览器中添加或选择，不会把启动 `/web` 时的终端目录自动注册为 Web 工作区。选择前的内部引导态不暴露 Session、不绑定 extension 生命周期，也不接受 Prompt 或模型变更。选择工作区后发送第一条消息会先创建真实 Web Session，再向它投递。
+
+Web 可以在选择工作区之前预选可用模型。选择仅保留在当前页面，创建会话后确认模型生效再发送第一条消息；模型不可用时会提示并阻止发送，不会自动换成默认模型。打开已有会话时使用该会话的模型。
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 
@@ -560,8 +598,26 @@ Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和
 | `/sessions`                | 搜索、预览与切换 Session                       |
 | `/plan [目标]`             | 只读调研；Plan Ready 后显式选择实施方式        |
 | `/cron ...`                | 为当前 Session 安排一次或周期性 Prompt         |
+| `/usage [选项]`            | 查看订阅额度快照（Cursor / Codex / Antigravity） |
 | `/lg` / `/pr`              | 浏览 Diff（`/lg` 仅 TUI）/ 显式刷新当前分支 PR |
 | `/copy-all`                | 复制当前分支可见对话                           |
+
+<details>
+<summary><strong>查看服务额度：/usage</strong></summary>
+
+`/usage` 手动查询 Cursor、OpenAI Codex 和 Google Antigravity 的订阅额度快照，显示已用/剩余比例、已知金额、重置时间和采样年龄。它与 Session 的 token/cost 统计不同，也不是完整的账户账单或任务预算保证；服务未返回的额度会明确标为未知。
+
+- `--refresh` / `-f`：跳过当前身份的 60 秒内存缓存，重新查询。
+- `--redact` / `-r`：遮蔽报告中的账号邮箱用户名或标识，便于分享；邮箱域名仍保留。
+- `--json` / `-j`：展示同一快照的 JSON 数组；没有可查询账号时为 `[]`。
+
+TUI 查询中按 Esc/Ctrl+C 取消等待；结果使用可滚动浮层，方向键或 Page Up/Down 滚动，Enter/Esc 关闭；RPC/Web 通过 Pi 的通知通道交付，真正无 UI 的调用输出扩展日志（Pi print 模式会将其转到 stderr）。`--json` 改变报告格式，不绕过宿主的输出协议。
+
+查询复用 Pi 当前运行时的鉴权和 OAuth 刷新，不直接读取 `auth.json`。正常刷新可能由 Pi 更新登录凭据；usage 不保存额度历史、不后台轮询、不切换账号或模型、不消耗充值/重置额度，也不注册模型工具。缓存按扩展实例及已解析身份隔离；失败、不完整和空快照不缓存。每个查询最多等待 15 秒，单个 HTTP 尝试最多 4 秒；Antigravity 对瞬时故障回退端点。Pi 当前鉴权接口没有取消参数，停止等待不会中断 Pi 已经启动的凭据刷新。
+
+适配器使用服务自身的额度接口，服务可能调整响应结构。Codex 展示主池及附加池的窗口；Cursor 展示计划比例和已知的按量使用金额；Antigravity 保留模型组、窗口和没有比例分母的剩余值。不支持的计费字段不会被推算成余额。
+
+</details>
 
 <details>
 <summary><strong>模型工具速查</strong></summary>
@@ -606,6 +662,8 @@ Capability discovery 默认是 `explicit`：普通父 Session 不常驻任何 Op
 
 `subagent_spawn` 立即返回，结束后自动回传并重新唤醒主 Agent。交互会话没有其他工作时，主 Agent 应结束当前轮、让用户继续交互；“下一步依赖结果”本身不是阻塞理由。只有用户明确要求当前回复等完，或非交互自动化必须在同一次调用中返回完整结果时，才应调用 `subagent_wait`。
 
+需要机器可验证的 review findings、research evidence 或 test matrix 时，可为 `subagent_spawn` 提供可选 `output_schema`。该次 Direct Subagent 只会额外获得 terminating `structured_output`，未提交匹配结果会明确失败；验证后的 JSON 会有界回传并写入私有 content-addressed artifact。省略 schema 的普通文本路径不会加载该 child tool 或 structured instruction。
+
 </details>
 
 <details>
@@ -646,6 +704,7 @@ Plan Mode 不猜“任意 Shell 是否只读”，只放行由已知安全零件
 
 ```text
 extensions/
+├── ai-providers/          # Antigravity 与实验性 Cursor OAuth 模型 Provider
 ├── setup/                 # /openpi-setup 与受限配置工具
 ├── capabilities/          # 最小能力发现入口与 Session 工具面加载
 ├── background-terminals/  # 长进程、日志、/ps
@@ -661,6 +720,7 @@ extensions/
 ├── sessions/              # Session 搜索与切换
 ├── suggestions/           # Ephemeral next-action suggestion
 ├── ui-customization/      # Header、Footer、Terminal title
+├── usage/                 # /usage 订阅配额与剩余额度查询
 └── shared/                # Child policy、配置、Worktree、终端清洗
 
 bin/openpi.js              # 独立 Web CLI 入口
@@ -687,10 +747,6 @@ npm 仍用于发布包的 `pack` / clean-install 验证，因为用户通过 npm
 
 ---
 
-## 来源、许可与致谢
+## 许可与致谢
 
-本项目最初基于 [davis7dotsh/my-pi-setup](https://github.com/davis7dotsh/my-pi-setup) 演进，现作为独立发行版维护。感谢原作者提供起点。
-
-`extensions/sessions/` 改编自 [jayshah5696/pi-agent-extensions](https://github.com/jayshah5696/pi-agent-extensions)。独立可选的顶层 Session 通信 package 见 [pi-intercom](https://github.com/nicobailon/pi-intercom)。完整第三方说明见 [`THIRD_PARTY_NOTICES.md`](THIRD_PARTY_NOTICES.md)。
-
-本项目以 MIT 许可证发布（见 [`LICENSE`](LICENSE)）；`THIRD_PARTY_NOTICES.md` 记录第三方来源与各自许可。
+[MIT License](LICENSE) · [第三方来源与致谢](THIRD_PARTY_NOTICES.md) · [所有贡献者](https://github.com/openpi-dev/openpi/graphs/contributors)

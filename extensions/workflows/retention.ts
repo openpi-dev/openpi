@@ -237,6 +237,12 @@ function makeProjection(
       ? {
           delivery: {
             id: details.delivery.id,
+            ...(details.delivery.ownerSessionId
+              ? { ownerSessionId: details.delivery.ownerSessionId }
+              : {}),
+            ...(details.delivery.ownerEpoch !== undefined
+              ? { ownerEpoch: details.delivery.ownerEpoch }
+              : {}),
             state: details.delivery.state,
             attempts: details.delivery.attempts,
             updatedAt: details.delivery.updatedAt,
