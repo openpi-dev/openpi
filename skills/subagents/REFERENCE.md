@@ -152,9 +152,15 @@ So `tools: [read, grep, find, ls]` yields a child that genuinely has no
 `write`, `edit`, or `bash` tool to call — not one that has been asked not to.
 Parent-only names are removed before the generated roster and spawn result are
 shown, so a type that lists `subagent_spawn` never advertises it as usable.
-A Workflow child with a schema, or a Direct Subagent spawned with
-`output_schema`, additionally receives only its terminating `structured_output`
-tool; this does not restore any denied repository tool.
+
+When a long manager-bounded final is durably written, result details may carry
+an owner-bound resource reference beside the existing Pi-readable path. The
+reference names the `manager-bounded-final` coverage and Session-cache lifetime;
+it neither proves uncaptured backend bytes nor grants a child extra read access.
+A structured Workflow child additionally receives only its terminating
+`structured_output` tool. A Workflow child with a schema, or a Direct Subagent
+spawned with `output_schema`, additionally receives only its terminating
+`structured_output` tool; this does not restore any denied repository tool.
 
 While `/plan` is armed, `isolation: "worktree"` is rejected before Git is
 changed. A selected type whose declared tools plan mode would narrow (such as

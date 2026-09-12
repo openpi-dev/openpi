@@ -1,10 +1,15 @@
 import assert from "node:assert/strict";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import backgroundTerminals from "../../../extensions/background-terminals/index.ts";
+import backgroundTerminals, {
+  terminalResourceRefs,
+} from "../../../extensions/background-terminals/index.ts";
 
 type CapturedTool = {
   name: string;
@@ -16,6 +21,42 @@ type CapturedTool = {
     ctx: ExtensionContext,
   ) => Promise<unknown>;
 };
+
+test("a settled full-log spill publishes a session-temporary owner ref", () => {
+  const directory = mkdtempSync(path.join(tmpdir(), "openpi-terminal-ref-"));
+  const spillPath = path.join(directory, "stdout.log");
+  writeFileSync(spillPath, "complete stream");
+  try {
+    const resources = terminalResourceRefs({
+      id: "bt-1",
+      command: "printf test",
+      title: "test",
+      cwd: directory,
+      status: "done",
+      createdAt: 1,
+      settledAt: 2,
+      exitCode: 0,
+      stdout: {
+        text: "complete stream",
+        modelSafeText: "complete stream",
+        totalBytes: 15,
+        truncatedBytes: 0,
+        spillPath,
+      },
+      stderr: {
+        text: "",
+        modelSafeText: "",
+        totalBytes: 0,
+        truncatedBytes: 0,
+      },
+    });
+    assert.equal(resources.length, 1);
+    assert.equal(resources[0]?.owner.kind, "background");
+    assert.equal(resources[0]?.lifetime, "session-temporary");
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
 
 test("session start keeps only the background entry tool active", () => {
   let active = ["read", "third_party_tool"];

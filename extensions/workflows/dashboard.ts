@@ -67,6 +67,7 @@ import {
   type WorkflowLogEntry,
   workflowGraphRecords,
 } from "./model.ts";
+import { isOpenPiResourceRef } from "../shared/resource-reference.ts";
 import { writeFileAtomic } from "./serialization.ts";
 import { WorkflowTranscriptAdapter } from "./transcript.ts";
 
@@ -542,6 +543,9 @@ export function normalizePersistedWorkflowDetails(
       typeof record.transcriptArtifact === "string"
         ? record.transcriptArtifact
         : undefined,
+    resourceRefs: Array.isArray(record.resourceRefs)
+      ? record.resourceRefs.filter(isOpenPiResourceRef).slice(0, 256)
+      : undefined,
     resumedFrom:
       typeof record.resumedFrom === "string" ? record.resumedFrom : undefined,
     resumeNote:

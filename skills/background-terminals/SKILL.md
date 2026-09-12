@@ -28,3 +28,8 @@ After starting, continue useful work instead of polling. The terminal sends one 
 - Tell the user they can open `/ps` to inspect live output and kill terminals interactively.
 
 Prefer meaningful titles and avoid starting duplicate servers or watchers. Full output is captured to spill files; tool and completion output shows a concise tail. Terminals are session-scoped and are stopped during shutdown or reload.
+
+Settled spill metadata may include owner-bound resource references for stdout
+and stderr. They are complete only relative to the captured process stream and
+remain session-temporary; cleanup, pruning, or shutdown can make them stale.
+Possession of a reference does not bypass Pi's normal read/trust boundary.
