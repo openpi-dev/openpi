@@ -1,5 +1,5 @@
 import { Menu, PanelLeftOpen, X } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
@@ -17,6 +17,22 @@ export function App() {
   const state = useStore(webStore);
   const { t } = useTranslation();
   const { actions } = state;
+  const sidebarTrigger = useRef<HTMLButtonElement>(null);
+  const [narrow, setNarrow] = useState(
+    () => window.matchMedia?.("(max-width: 760px)").matches ?? false,
+  );
+  const mobileSidebarOpen = narrow && state.mobileSidebarOpen;
+  useEffect(() => {
+    const media = window.matchMedia?.("(max-width: 760px)");
+    if (!media) return;
+    const update = () => {
+      setNarrow(media.matches);
+      if (!media.matches) actions.closeMobileSidebar();
+    };
+    update();
+    media.addEventListener("change", update);
+    return () => media.removeEventListener("change", update);
+  }, [actions]);
   const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
   const currentModel = state.snapshot?.models.find((model) => model.current);
@@ -81,7 +97,8 @@ export function App() {
         collapsed={state.collapsed}
         query={state.query}
         searchOpen={state.searchOpen}
-        mobileOpen={state.mobileSidebarOpen}
+        mobileOpen={mobileSidebarOpen}
+        returnFocusRef={sidebarTrigger}
         actions={actions}
       />
       {state.sidebarCollapsed && (
@@ -96,13 +113,17 @@ export function App() {
         </button>
       )}
       <main
+        inert={mobileSidebarOpen}
         className={`conversation-shell ${selected ? "has-view" : ""} ${landing && (state.workspaceDraft || view === "chat") ? "landing" : ""}`}
       >
         <h1 className="sr-only">OpenPI</h1>
         <header className="mobile-header">
           <button
+            ref={sidebarTrigger}
             type="button"
             aria-label={t("openSidebar")}
+            aria-controls="session-sidebar"
+            aria-expanded={mobileSidebarOpen}
             onClick={() => actions.toggleSidebar(true)}
           >
             <Menu />
@@ -208,6 +229,8 @@ export function App() {
       <button
         className="sidebar-scrim"
         type="button"
+        tabIndex={-1}
+        aria-hidden="true"
         aria-label={t("close")}
         onClick={actions.closeMobileSidebar}
       />
