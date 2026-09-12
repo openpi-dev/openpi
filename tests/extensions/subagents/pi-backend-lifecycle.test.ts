@@ -349,11 +349,11 @@ test("a direct structured subagent fails when it never submits", async () => {
 });
 
 test("by-the-way spawns use in-memory sessions without persisting to disk", async () => {
-  let createdSessionManager: any;
+  let persisted: boolean | undefined;
   const fixtures = harnessFactory();
   const backend = makePiBackend({
     sessionFactory: async (options) => {
-      if (options) createdSessionManager = options.sessionManager;
+      persisted = options?.sessionManager?.isPersisted();
       return fixtures.factory(options);
     },
     shutdownTimeoutMs: 50,
@@ -371,8 +371,7 @@ test("by-the-way spawns use in-memory sessions without persisting to disk", asyn
     },
   );
 
-  assert.ok(createdSessionManager);
-  assert.equal(createdSessionManager.isPersisted(), false);
+  assert.equal(persisted, false);
 });
 
 test("prompt rejection wins over an earlier agent_settled event", async () => {

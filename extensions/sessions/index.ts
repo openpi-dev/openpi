@@ -62,13 +62,8 @@ const isPrintable = (data: string): boolean => {
   return code >= 32 && code !== 127;
 };
 
-const isVisibleSession = (session: SessionInfoLike): boolean =>
-  !session.name?.startsWith("btw:") && !session.name?.startsWith("by the way:");
-
 const sortSessions = (sessions: SessionInfoLike[]): SessionInfoLike[] =>
-  [...sessions]
-    .filter(isVisibleSession)
-    .sort((a, b) => b.modified.getTime() - a.modified.getTime());
+  [...sessions].sort((a, b) => b.modified.getTime() - a.modified.getTime());
 
 const formatPlainLine = (session: SessionInfoLike): string => {
   const label = buildSessionLabel(session);

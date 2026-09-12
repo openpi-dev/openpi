@@ -687,10 +687,8 @@ export default function (
   };
 
   const deliverBtwResult = (snap: SubagentSnapshot) => {
-    const isAborted =
-      snap.errorText?.toLowerCase().includes("abort") ||
-      snap.errorText?.toLowerCase().includes("cancel");
-    const output = truncatedOutput(snap)?.trim();
+    const isAborted = snap.outcome === "interrupted";
+    const output = (snap.structuredResult?.json ?? snap.finalText)?.trim();
     if (snap.status === "error" && (!output || isAborted)) {
       if (!isAborted) {
         ui?.notify(`by the way “${snap.title}” failed`, "error");
