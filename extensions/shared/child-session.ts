@@ -550,17 +550,103 @@ export function effectiveChildToolAllowlist(tools?: readonly string[]) {
   );
 }
 
+export type ChildToolDescriptor = {
+  name: string;
+  sourceInfo?: {
+    path?: string;
+    source?: string;
+    baseDir?: string;
+    scope?: string;
+    origin?: string;
+  };
+};
+
+export interface ChildToolInheritanceOptions {
+  availableTools?: readonly ChildToolDescriptor[];
+  cwd?: string;
+  agentDir?: string;
+}
+
+function isChildToolDescriptorList(
+  options: unknown,
+): options is readonly ChildToolDescriptor[] {
+  return Array.isArray(options);
+}
+
+/**
+ * Checks whether a tool originates from a package that is blocked from child sessions.
+ * Currently, pi-intercom packages are blocked (via blockedPackageSources) to avoid
+ * process.env session cross-wiring in concurrent child sessions (#128).
+ */
+export function isBlockedChildTool(
+  tool: ChildToolDescriptor,
+  options: { cwd?: string; agentDir?: string } = {},
+) {
+  if (!tool.sourceInfo) return false;
+  const { source, baseDir, path: toolFilePath } = tool.sourceInfo;
+  if (
+    source === "builtin" ||
+    source === "sdk" ||
+    (toolFilePath && toolFilePath.startsWith("<"))
+  ) {
+    return false;
+  }
+  const isPiIntercomPackage = createPiIntercomPackageMatcher({
+    cwd: options.cwd ?? process.cwd(),
+    agentDir: options.agentDir ?? getAgentDir(),
+  });
+  const candidatePath = baseDir ?? toolFilePath;
+  try {
+    return isPiIntercomPackage(source ?? "", candidatePath);
+  } catch {
+    if (
+      source &&
+      (source === "npm:pi-intercom" || source.includes("pi-intercom"))
+    ) {
+      return true;
+    }
+    if (candidatePath && candidatePath.includes("pi-intercom")) {
+      return true;
+    }
+    return false;
+  }
+}
+
 /** Project the parent's active surface into a child; a role can only narrow it.
  * Active tools are a visibility choice, not a filesystem/network sandbox.
  * Inactive tools are not implicitly activated by delegation.
+ * Tools registered by packages that are blocked from child sessions (e.g. pi-intercom)
+ * are dynamically dropped during inheritance when availableTools metadata is provided.
  */
 export function inheritedChildToolAllowlist(
   parentTools: readonly string[],
   roleTools?: readonly string[],
+  options?: ChildToolInheritanceOptions | readonly ChildToolDescriptor[],
 ) {
   const allowed = roleTools === undefined ? undefined : new Set(roleTools);
+  const optionsObj: ChildToolInheritanceOptions = isChildToolDescriptorList(
+    options,
+  )
+    ? { availableTools: options }
+    : (options ?? {});
+
+  const blockedTools = new Set<string>();
+  if (optionsObj.availableTools) {
+    for (const tool of optionsObj.availableTools) {
+      if (
+        isBlockedChildTool(tool, {
+          cwd: optionsObj.cwd,
+          agentDir: optionsObj.agentDir,
+        })
+      ) {
+        blockedTools.add(tool.name);
+      }
+    }
+  }
+
   return effectiveChildToolAllowlist([...new Set(parentTools)])!.filter(
-    (name) => allowed === undefined || allowed.has(name),
+    (name) =>
+      !blockedTools.has(name) && (allowed === undefined || allowed.has(name)),
   );
 }
 

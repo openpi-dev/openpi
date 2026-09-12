@@ -940,6 +940,10 @@ export default function (
       const childTools = inheritedChildToolAllowlist(
         pi.getActiveTools(),
         requestedChildTools,
+        {
+          availableTools: pi.getAllTools?.(),
+          cwd: ctx.cwd,
+        },
       );
       // Read at spawn time so `/openpi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model
