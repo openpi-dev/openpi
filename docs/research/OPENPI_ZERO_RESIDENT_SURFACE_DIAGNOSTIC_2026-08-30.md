@@ -4,7 +4,7 @@
 >
 > 创建日期：2026-08-30
 >
-> 最后核验：2026-08-30
+> 最后核验：2026-09-12（来源转述与分类；未复跑模型实验）
 >
 > 关联 Issue：[#20](https://github.com/openpi-dev/openpi/issues/20)、[#19](https://github.com/openpi-dev/openpi/issues/19)
 
@@ -36,7 +36,9 @@ OpenPI 从多个常驻入口收敛到普通 turn 零常驻 OpenPI 工具，消�
 - 结果投影、重试和 artifact 保留必须与模型上下文、用户 UI 分离。
 - 在新的配对证据达到预注册门槛前，不因单次诊断扩大默认 prompt 或工具面。
 
-## 后续实验门槛
+## 后续实验门槛（本记录的新建议）
+
+以下 profile/OMP 对照是未来实验建议，不是来源三臂实验的实际安排或结果。
 
 先完成干净 workspace、网络和 verifier 隔离，再使用 AB/BA 顺序反转与多次重复比较 Bare Pi、OpenPI Explicit、指定 capability profile 和固定版本 OMP。至少同时报告质量、首请求静态税、总 usage、轨迹长度、机制采用率和失败分类。
 
@@ -48,3 +50,7 @@ OpenPI 从多个常驻入口收敛到普通 turn 零常驻 OpenPI 工具，消�
 - [Issue #19](https://github.com/openpi-dev/openpi/issues/19)：从 compact entry 到 capability gateway 的设计分析。
 - [Issue #45](https://github.com/openpi-dev/openpi/issues/45)：模型能力 × Harness 强度配对研究协议。
 - [OpenPI documentation contract](../README.md)：研究记录状态与证据边界。
+
+## 本次核验边界
+
+本次修订对应 [PR #307](https://github.com/openpi-dev/openpi/pull/307)；产品实现核对以 OpenPI `77d444f51b0b81589f407b6b413578cb06e083ad` 为界。历史观察来自正文列出的 Issue，validated 仅指来源转述与范围核验，不代表重算原始 trace 或验证新的实验结论。

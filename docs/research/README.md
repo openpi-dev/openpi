@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md`](OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #307](https://github.com/openpi-dev/openpi/pull/307)).
+
 - [`CACHE_USAGE_CONTRACT_2026-09-11.md`](CACHE_USAGE_CONTRACT_2026-09-11.md) — source-scoped Pi usage field matrix and synthetic cache-diagnostic replay boundaries; real comparative Session evidence remains open ([#156](https://github.com/openpi-dev/openpi/issues/156)).
 
 - [`CURSOR_NATIVE_RECOVERY_2026-09-08.md`](CURSOR_NATIVE_RECOVERY_2026-09-08.md) — bounded in-band native execution rejection, Pi-owned tools, cancellation identity, and actual child acceptance ([#234](https://github.com/openpi-dev/openpi/issues/234)).
@@ -32,6 +34,5 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 
 - [`CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md) — official-source research on dynamic fan-out and bounded execution.
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
-- [`OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md`](OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md) — Issue #19/#20 的零常驻工具面与三臂诊断复盘。
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
