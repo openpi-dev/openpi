@@ -1,7 +1,19 @@
 import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
-import type { WebModelSummary, WebSnapshot } from "../../../protocol/types.ts";
+import {
+  ARTIFACT_MAX_BYTES,
+  type ArtifactMetadata,
+  type ArtifactPreview,
+} from "../../../protocol/artifacts.ts";
+import {
+  WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebModelSearchResult,
+  type WebModelSummary,
+  type WebSnapshot,
+  type WebThinkingState,
+  type WebCommandDiscoveryResult,
+} from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -117,6 +129,90 @@ export class WebClient {
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
   }
 
+  resolveArtifact(
+    sessionId: string,
+    reference: string,
+    parent?: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ handle: string }>("/api/artifacts/resolve", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        reference,
+        parent,
+        access: "read-file",
+      }),
+      signal,
+    });
+  }
+
+  artifactMetadata(sessionId: string, handle: string, signal?: AbortSignal) {
+    return this.request<{ identity: string }>(
+      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle, metadata: "1" })}`,
+      { signal },
+    );
+  }
+
+  artifactPreview(sessionId: string, handle: string, signal?: AbortSignal) {
+    return this.request<ArtifactPreview>(
+      `/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,
+      { signal },
+    );
+  }
+
+  releaseArtifact(sessionId: string, handle: string) {
+    return this.request(
+      "/api/artifacts/content?" + new URLSearchParams({ sessionId, handle }),
+      { method: "DELETE" },
+    );
+  }
+
+  async downloadArtifact(artifact: ArtifactMetadata, signal: AbortSignal) {
+    const controller = new AbortController();
+    const abort = () => controller.abort();
+    signal.addEventListener("abort", abort, { once: true });
+    if (signal.aborted) abort();
+    const timer = window.setTimeout(abort, 15_000);
+    try {
+      const response = await fetch(
+        `/api/artifacts/content?${new URLSearchParams({ sessionId: artifact.sessionId, handle: artifact.handle, revision: artifact.revision, download: "1" })}`,
+        { headers: this.headers(), signal: controller.signal },
+      );
+      if (!response.ok) {
+        const body = (await response.json()) as {
+          error?: string;
+          code?: string;
+        };
+        throw new WebApiError(
+          body.error || "Download failed",
+          response.status,
+          body.code,
+        );
+      }
+      const reader = response.body?.getReader();
+      if (!reader) throw new Error("Download body unavailable");
+      const chunks: Uint8Array<ArrayBuffer>[] = [];
+      let total = 0;
+      try {
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          total += value.byteLength;
+          if (total > ARTIFACT_MAX_BYTES)
+            throw new Error("Download exceeds the 20 MiB limit");
+          chunks.push(new Uint8Array(value));
+        }
+      } finally {
+        await reader.cancel();
+      }
+      return new Blob(chunks, { type: "application/octet-stream" });
+    } finally {
+      window.clearTimeout(timer);
+      signal.removeEventListener("abort", abort);
+    }
+  }
+
   chooseWorkspace() {
     return this.request<WorkspaceSelectionResult>("/api/workspaces/select", {
       method: "POST",
@@ -173,11 +269,20 @@ export class WebClient {
   }
 
   thinking(sessionId: string, signal: AbortSignal) {
-    return this.request<{
-      sessionId: string;
-      level: string;
-      available: readonly string[];
-    }>(`/api/thinking?sessionId=${encodeURIComponent(sessionId)}`, { signal });
+    return this.request<WebThinkingState & { sessionId: string }>(
+      `/api/thinking?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  setThinkingLevel(sessionId: string, level: string) {
+    return this.request<WebThinkingState & { sessionId: string }>(
+      "/api/thinking",
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionId, level }),
+      },
+    );
   }
 
   trust(sessionId: string, signal: AbortSignal) {
@@ -190,6 +295,13 @@ export class WebClient {
   providerAuth(sessionId: string, signal: AbortSignal) {
     return this.request<WebProviderAuthProjection>(
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  commands(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebCommandDiscoveryResult>(
+      `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }
@@ -208,6 +320,17 @@ export class WebClient {
     return this.request<WebModelSummary>("/api/model", {
       method: "POST",
       body: JSON.stringify({ provider, modelId, sessionId }),
+    });
+  }
+
+  searchModels(query: string, sessionId?: string, signal?: AbortSignal) {
+    const params = new URLSearchParams({
+      query,
+      limit: String(WEB_MAX_MODEL_SEARCH_RESULTS),
+    });
+    if (sessionId) params.set("sessionId", sessionId);
+    return this.request<WebModelSearchResult>(`/api/models?${params}`, {
+      signal,
     });
   }
 

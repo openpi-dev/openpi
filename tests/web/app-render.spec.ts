@@ -20,9 +20,13 @@ import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
@@ -290,8 +294,9 @@ describe("OpenPI React transcript", () => {
       }),
     );
 
-    expect(container.querySelectorAll(".tool-group")).toHaveLength(2);
-    expect(screen.getAllByText(/4 (steps|个步骤)/u)).toHaveLength(2);
+    expect(container.querySelectorAll(".tool-group")).toHaveLength(1);
+    expect(screen.getAllByText(/4 (steps|个步骤)/u)).toHaveLength(1);
+    expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );
@@ -388,6 +393,7 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: 2,
+      thinkingPendingLevel: null,
       actions: { ...store.getState().actions, cancelActiveTurn: cancel },
     }),
   );
@@ -411,6 +417,7 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
         turnCancellationPending: true,
         turnTerminalStatus: null,
         pendingFollowUpsReceipt: 2,
+        thinkingPendingLevel: null,
         actions: store.getState().actions,
       }),
     ),
@@ -523,6 +530,7 @@ it("does not attribute current runtime activity to a historical session", () => 
     turnCancellationPending: false,
     turnTerminalStatus: null,
     pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
     actions: store.getState().actions,
   };
   const { rerender } = renderWithI18n(createElement(Composer, props));
@@ -713,6 +721,7 @@ it("shows complete model identities before workspace selection", () => {
     turnCancellationPending: false,
     turnTerminalStatus: null,
     pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
     actions: store.getState().actions,
     draftModel: snapshot.models[1],
   };
@@ -723,12 +732,12 @@ it("shows complete model identities before workspace selection", () => {
   expect(modelButton.disabled).toBe(false);
   fireEvent.click(modelButton);
   expect(
-    screen.getByRole("menuitem", {
+    screen.getByRole("option", {
       name: "Shared model (provider-alpha/a)",
     }),
   ).toBeTruthy();
   expect(
-    screen.getByRole("menuitem", {
+    screen.getByRole("option", {
       name: "Shared model (provider-beta/b)",
     }),
   ).toBeTruthy();
@@ -773,6 +782,7 @@ it("does not repeat a provider identity used as the fallback model label", () =>
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
       actions: store.getState().actions,
     }),
   );
@@ -783,6 +793,533 @@ it("does not repeat a provider identity used as the fallback model label", () =>
   expect(
     screen.queryByText("provider-alpha/model-a (provider-alpha/model-a)"),
   ).toBeNull();
+});
+
+class ThinkingClient extends WebClient {
+  thinkings: Array<{ sessionId: string; level: string }> = [];
+
+  override setThinkingLevel(sessionId: string, level: string) {
+    this.thinkings.push({ sessionId, level });
+    return Promise.resolve({
+      sessionId,
+      level,
+      available: ["off", "minimal", "low", "medium", "high"],
+      supported: true,
+      revision: 2,
+    });
+  }
+
+  override snapshot() {
+    return Promise.resolve(activeSnapshot());
+  }
+}
+
+function idleThinkingSnapshot(
+  overrides: Partial<WebSnapshot> = {},
+): WebSnapshot {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.thinking = {
+    level: "medium",
+    available: ["off", "minimal", "low", "medium", "high"],
+    supported: true,
+    revision: 1,
+  };
+  return { ...snapshot, ...overrides };
+}
+
+function thinkingProps(
+  snapshot: WebSnapshot,
+  actions = createWebStore().getState().actions,
+) {
+  return {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null as string | null,
+    actions,
+  };
+}
+
+function thinkingPickerName(level: string) {
+  return `${i18n.t("thinkingLevel")}: ${level}`;
+}
+
+describe("thinking level picker", () => {
+  it("renders nothing when the snapshot has no thinking projection", () => {
+    const snapshot = idleThinkingSnapshot();
+    delete snapshot.thinking;
+    const { container } = renderWithI18n(
+      createElement(Composer, thinkingProps(snapshot)),
+    );
+    expect(container.querySelector(".thinking-picker")).toBeNull();
+  });
+
+  it("keeps a disabled placeholder with a reason when thinking is unsupported", () => {
+    const snapshot = idleThinkingSnapshot();
+    snapshot.thinking = {
+      level: "off",
+      available: [],
+      supported: false,
+      revision: 1,
+    };
+    const { container } = renderWithI18n(
+      createElement(Composer, thinkingProps(snapshot)),
+    );
+    const picker = screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("thinkingUnsupported"),
+    });
+    expect(picker.disabled).toBe(true);
+    expect(
+      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+    ).toBe(i18n.t("thinkingUnsupportedHint"));
+  });
+
+  it("disables the picker for a workspace draft", () => {
+    const props = thinkingProps(idleThinkingSnapshot());
+    const { container } = renderWithI18n(
+      createElement(Composer, { ...props, workspaceDraft: true }),
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: thinkingPickerName("medium"),
+      }).disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+    ).toBe(i18n.t("thinkingDraftHint"));
+  });
+
+  it("disables the picker for a non-current session", () => {
+    const props = thinkingProps(
+      idleThinkingSnapshot({ currentSessionId: "another-session" }),
+    );
+    const { container } = renderWithI18n(createElement(Composer, props));
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: thinkingPickerName("medium"),
+      }).disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+    ).toBe(i18n.t("thinkingInactiveHint"));
+  });
+
+  it("disables the picker while a turn is running", () => {
+    const snapshot = idleThinkingSnapshot();
+    snapshot.runtime.status = "running";
+    const { container } = renderWithI18n(
+      createElement(Composer, thinkingProps(snapshot)),
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: thinkingPickerName("medium"),
+      }).disabled,
+    ).toBe(true);
+    expect(
+      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
+    ).toBe(i18n.t("thinkingLockedRunning"));
+  });
+
+  it("opens the active picker under a section titled by the thinking level", () => {
+    renderWithI18n(
+      createElement(Composer, thinkingProps(idleThinkingSnapshot())),
+    );
+    const picker = screen.getByRole<HTMLButtonElement>("button", {
+      name: thinkingPickerName("medium"),
+    });
+    expect(picker.disabled).toBe(false);
+    expect(picker.getAttribute("aria-label")).toBe(
+      thinkingPickerName("medium"),
+    );
+    fireEvent.click(picker);
+    expect(
+      screen.getByRole("group", { name: i18n.t("thinkingLevel") }),
+    ).toBeTruthy();
+    expect(screen.getByText(i18n.t("thinkingLevel"))).toBeTruthy();
+    for (const level of ["off", "minimal", "low", "medium", "high"])
+      expect(screen.getByRole("menuitem", { name: level })).toBeTruthy();
+  });
+
+  it("sends nothing for the confirmed level and one request for another", async () => {
+    vi.useFakeTimers();
+    const snapshot = idleThinkingSnapshot();
+    const client = new ThinkingClient();
+    const store = createWebStore(client);
+    store.setState({ snapshot });
+    const selectThinking = vi.spyOn(store.getState().actions, "selectThinking");
+    try {
+      renderWithI18n(
+        createElement(
+          Composer,
+          thinkingProps(snapshot, store.getState().actions),
+        ),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: thinkingPickerName("medium") }),
+      );
+      fireEvent.click(screen.getByRole("menuitem", { name: "medium" }));
+      expect(client.thinkings).toEqual([]);
+      expect(selectThinking).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        screen.getByRole("button", { name: thinkingPickerName("medium") }),
+      );
+      await act(async () => {
+        fireEvent.click(screen.getByRole("menuitem", { name: "high" }));
+      });
+      expect(selectThinking).toHaveBeenLastCalledWith("high");
+      expect(client.thinkings).toEqual([
+        { sessionId: "session", level: "high" },
+      ]);
+    } finally {
+      store.getState().actions.stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps a pending picker interactive while the send button is disabled", () => {
+    const snapshot = idleThinkingSnapshot();
+    const props = thinkingProps(snapshot);
+    const view = renderWithI18n(
+      createElement(Composer, { ...props, thinkingPendingLevel: "high" }),
+    );
+    const picker = screen.getByRole<HTMLButtonElement>("button", {
+      name: thinkingPickerName("high"),
+    });
+    expect(picker.disabled).toBe(false);
+    expect(
+      view.container
+        .querySelector(".thinking-picker-wrap")
+        ?.getAttribute("data-pending"),
+    ).toBe("true");
+    fireEvent.change(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      }),
+      { target: { value: "hello" } },
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("send"),
+      }).disabled,
+    ).toBe(true);
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, { ...props, thinkingPendingLevel: null }),
+      ),
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", {
+        name: i18n.t("send"),
+      }).disabled,
+    ).toBe(false);
+  });
+
+  it("keeps the stop button enabled while thinking is pending", () => {
+    const snapshot = idleThinkingSnapshot();
+    snapshot.runtime.status = "running";
+    renderWithI18n(
+      createElement(Composer, {
+        ...thinkingProps(snapshot),
+        liveRunning: true,
+        activeTurn: { sessionId: "session", commandId: "turn", epoch: 1 },
+        thinkingPendingLevel: "high",
+      }),
+    );
+    const stop = screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("stopTurn"),
+    });
+    expect(stop.disabled).toBe(false);
+    expect(screen.getByText(i18n.t("thinkingPendingHint"))).toBeTruthy();
+  });
+
+  it("warns when the confirmed level is not offered by the current model", () => {
+    const snapshot = idleThinkingSnapshot();
+    snapshot.thinking = {
+      level: "ultra",
+      available: ["off", "low"],
+      supported: true,
+      revision: 1,
+    };
+    const { container } = renderWithI18n(
+      createElement(Composer, thinkingProps(snapshot)),
+    );
+    expect(
+      container
+        .querySelector(".thinking-picker-wrap")
+        ?.getAttribute("data-warning"),
+    ).toBe("true");
+    fireEvent.click(
+      screen.getByRole("button", { name: thinkingPickerName("ultra") }),
+    );
+    expect(screen.getByText(i18n.t("thinkingLevelMismatch"))).toBeTruthy();
+  });
+});
+
+it("debounces bounded model search when the snapshot omitted models", async () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 2,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const searchModels = vi.fn(async (_query: string) => {});
+  const selectModel = vi.fn(async (_value: string) => {});
+  const actions = {
+    ...baseStore.getState().actions,
+    searchModels,
+    selectModel,
+  };
+  const initialSearch = baseStore.getState().modelSearch;
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions,
+    modelSearch: initialSearch,
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  expect(
+    screen.getByText(
+      "Showing 1 models. 2 more are available; search to find them.",
+    ),
+  ).toBeTruthy();
+  const searchInput = screen.getByPlaceholderText(
+    "Search provider, model name, or ID...",
+  );
+  fireEvent.change(searchInput, { target: { value: "h" } });
+  fireEvent.change(searchInput, { target: { value: "hidden" } });
+  expect(searchModels).not.toHaveBeenCalled();
+  await act(() => vi.advanceTimersByTimeAsync(249));
+  expect(searchModels).not.toHaveBeenCalled();
+  await act(() => vi.advanceTimersByTimeAsync(1));
+  expect(searchModels).toHaveBeenCalledOnce();
+  expect(searchModels).toHaveBeenCalledWith("hidden");
+
+  const refreshedSnapshot = {
+    ...snapshot,
+    generatedAt: "2026-09-03T00:00:01Z",
+  };
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: refreshedSnapshot,
+      }),
+    ),
+  );
+  await act(() => vi.advanceTimersByTimeAsync(250));
+  expect(searchModels).toHaveBeenCalledTimes(2);
+  expect(searchModels).toHaveBeenLastCalledWith("hidden");
+
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: refreshedSnapshot,
+        modelSearch: {
+          ...initialSearch,
+          query: "hidden",
+          status: "ready",
+          models: [
+            {
+              provider: "provider-hidden",
+              id: "hidden/model",
+              name: "Hidden model",
+              label: "Hidden model",
+              current: false,
+            },
+          ],
+          totalMatches: 1,
+        },
+      }),
+    ),
+  );
+  fireEvent.click(
+    screen.getByRole("option", {
+      name: "Hidden model (provider-hidden/hidden/model)",
+    }),
+  );
+  expect(selectModel).toHaveBeenCalledWith("provider-hidden/hidden/model");
+  vi.useRealTimers();
+});
+
+it("cancels a pending model search when the picker closes", async () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 1,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const searchModels = vi.fn(async (_query: string) => {});
+  const actions = {
+    ...baseStore.getState().actions,
+    searchModels,
+  };
+  renderWithI18n(
+    createElement(Composer, {
+      snapshot,
+      selectedWorkspace: "/tmp",
+      sessionSwitching: false,
+      promptAdmissionPending: false,
+      liveRunning: false,
+      landing: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
+      actions,
+      modelSearch: baseStore.getState().modelSearch,
+    }),
+  );
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  const searchInput = screen.getByPlaceholderText(
+    "Search provider, model name, or ID...",
+  );
+  fireEvent.change(searchInput, { target: { value: "hidden" } });
+  fireEvent.keyDown(searchInput, { key: "Escape" });
+  await act(() => vi.advanceTimersByTimeAsync(250));
+
+  expect(searchModels).not.toHaveBeenCalled();
+});
+
+it("shows empty and error feedback for bounded model search", () => {
+  vi.useFakeTimers();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.models = [
+    {
+      provider: "provider-visible",
+      id: "visible",
+      name: "Visible model",
+      label: "Visible model",
+      current: true,
+    },
+  ];
+  snapshot.truncation = {
+    ...truncation,
+    modelsOmitted: 1,
+    truncated: true,
+  };
+  const baseStore = createWebStore();
+  const initialSearch = baseStore.getState().modelSearch;
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: baseStore.getState().actions,
+    modelSearch: initialSearch,
+  };
+  const { rerender } = renderWithI18n(createElement(Composer, props));
+
+  fireEvent.click(
+    screen.getByRole("button", {
+      name: "Visible model (provider-visible/visible)",
+    }),
+  );
+  fireEvent.change(
+    screen.getByPlaceholderText("Search provider, model name, or ID..."),
+    { target: { value: "missing" } },
+  );
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        modelSearch: {
+          ...initialSearch,
+          query: "missing",
+          status: "ready",
+          totalMatches: 0,
+        },
+      }),
+    ),
+  );
+  expect(screen.getByText("No matching models")).toBeTruthy();
+
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        modelSearch: {
+          ...initialSearch,
+          query: "missing",
+          status: "error",
+          error: "Model lookup failed",
+        },
+      }),
+    ),
+  );
+  expect(screen.getByRole("alert").textContent).toBe("Model lookup failed");
 });
 
 it("renders explicit choices for an unknown prompt admission", () => {
@@ -808,6 +1345,7 @@ it("renders explicit choices for an unknown prompt admission", () => {
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
       actions: store.getState().actions,
     }),
   );
@@ -851,6 +1389,7 @@ it("requires another canonical check after admission verification fails", () => 
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
       actions: {
         ...store.getState().actions,
         checkPromptAdmissionRecovery: check,
@@ -896,6 +1435,7 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
       turnCancellationPending: false,
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
+      thinkingPendingLevel: null,
       actions: {
         ...store.getState().actions,
         acknowledgePromptAdmissionResolution: acknowledge,
@@ -951,6 +1491,7 @@ it("keeps an emptied recovery draft empty across verification and submission pha
     turnCancellationPending: false,
     turnTerminalStatus: null,
     pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
     actions: { ...store.getState().actions, sendPromptAsNew: sendAsNew },
   };
   const { rerender } = renderWithI18n(createElement(Composer, baseProps));
@@ -1031,6 +1572,7 @@ it("preserves an edited recovered draft when late evidence arrives", () => {
     turnCancellationPending: false,
     turnTerminalStatus: null,
     pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
     actions: {
       ...store.getState().actions,
       acknowledgePromptAdmissionResolution: acknowledge,

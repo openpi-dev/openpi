@@ -1,0 +1,265 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { ArtifactError, ArtifactReader } from "../../web/host/artifacts.ts";
+import { ARTIFACT_MAX_BYTES } from "../../web/protocol/artifacts.ts";
+
+function code(value: string) {
+  return (error: unknown) =>
+    error instanceof ArtifactError && error.code === value;
+}
+
+test("artifact reads bind Session, canonical file, content revision and explicit release", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifacts-"));
+  let sessionId = "session";
+  const reader = new ArtifactReader(() => ({ sessionId, cwd: root }));
+  try {
+    const path = join(root, "report space.md");
+    await writeFile(path, "# revision one");
+    const handle = await reader.resolveFile(sessionId, "./report%20space.md");
+    const first = await reader.read(handle, sessionId);
+    assert.equal(first.preview.text, "# revision one");
+    assert.equal(
+      (await reader.metadata(handle, sessionId)).identity,
+      first.preview.identity,
+    );
+    await assert.rejects(
+      reader.metadata(handle, "other"),
+      code("ARTIFACT_EXPIRED"),
+    );
+    // Windows temporary directories may use an 8.3 alias (e.g. RUNNER~1).
+    assert.equal(first.preview.artifact.path, await realpath(path));
+    assert.equal(
+      first.preview.artifact.revision,
+      createHash("sha256").update(first.bytes).digest("hex"),
+    );
+    await writeFile(path, "# revision two");
+    assert.notEqual(
+      (await reader.metadata(handle, sessionId)).identity,
+      first.preview.identity,
+    );
+    await assert.rejects(
+      reader.read(handle, sessionId, first.preview.artifact.revision),
+      code("ARTIFACT_CHANGED"),
+    );
+    const next = await reader.read(handle, sessionId);
+    assert.equal(next.preview.text, "# revision two");
+    assert.notEqual(
+      next.preview.artifact.revision,
+      first.preview.artifact.revision,
+    );
+    await assert.rejects(
+      reader.read(handle, "other"),
+      code("ARTIFACT_EXPIRED"),
+    );
+    reader.release(handle, sessionId);
+    await assert.rejects(
+      reader.read(handle, sessionId),
+      code("ARTIFACT_EXPIRED"),
+    );
+    const old = await reader.resolveFile(sessionId, path);
+    sessionId = "new";
+    await assert.rejects(reader.read(old, "session"), code("ARTIFACT_EXPIRED"));
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("absolute paths through the Session root alias remain scoped to its canonical workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifact-alias-"));
+  const workspace = join(root, "workspace");
+  const alias = join(root, "workspace-alias");
+  const outside = join(root, "outside");
+  await mkdir(workspace);
+  await mkdir(outside);
+  await writeFile(join(workspace, "report.md"), "report");
+  await writeFile(join(outside, "secret.md"), "private");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  await symlink(workspace, alias, linkType);
+  const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: alias }));
+  try {
+    for (const reference of [
+      join(alias, "report.md"),
+      join(workspace, "report.md"),
+      "./report.md",
+    ]) {
+      const handle = await reader.resolveFile("s", reference);
+      const result = await reader.read(handle, "s");
+      assert.equal(result.preview.text, "report");
+      assert.equal(
+        result.preview.artifact.path,
+        await realpath(join(workspace, "report.md")),
+      );
+      reader.release(handle, "s");
+    }
+    await symlink(outside, join(workspace, "escape"), linkType);
+    await assert.rejects(
+      reader.resolveFile("s", join(alias, "escape", "secret.md")),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.resolveFile("s", join(alias, "..", "outside", "secret.md")),
+      code("ARTIFACT_DENIED"),
+    );
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("ancestor aliases and selected root aliases compose without granting descendant or foreign links", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifact-composed-"));
+  const parent = join(root, "parent");
+  const parentAlias = join(root, "parent-alias");
+  const workspace = join(parent, "workspace");
+  const selectedAlias = join(parent, "selected-alias");
+  const outside = join(root, "outside");
+  const linkType = process.platform === "win32" ? "junction" : "dir";
+  try {
+    await mkdir(workspace, { recursive: true });
+    await mkdir(outside);
+    await writeFile(join(workspace, "report.md"), "report");
+    await writeFile(join(outside, "secret.md"), "private");
+    await symlink(parent, parentAlias, linkType);
+    await symlink(workspace, selectedAlias, linkType);
+    await symlink(workspace, join(root, "foreign-root-alias"), linkType);
+    await symlink(outside, join(workspace, "escape"), linkType);
+    await symlink(workspace, join(workspace, "loop"), linkType);
+    const canonicalFile = await realpath(join(workspace, "report.md"));
+    for (const cwd of [
+      workspace,
+      join(parentAlias, "workspace"),
+      selectedAlias,
+      join(parentAlias, "selected-alias"),
+    ]) {
+      const reader = new ArtifactReader(() => ({ sessionId: "s", cwd }));
+      try {
+        for (const reference of [
+          canonicalFile,
+          join(parentAlias, "workspace", "report.md"),
+          join(cwd, "report.md"),
+          "./report.md",
+        ]) {
+          const handle = await reader.resolveFile("s", reference);
+          const result = await reader.read(handle, "s");
+          assert.equal(result.preview.artifact.path, canonicalFile);
+          assert.equal(result.preview.text, "report");
+          reader.release(handle, "s");
+        }
+        for (const reference of [
+          join(cwd, "escape", "secret.md"),
+          join(cwd, "loop", "report.md"),
+          join(root, "foreign-root-alias", "report.md"),
+          join(outside, "missing.md"),
+        ]) {
+          await assert.rejects(
+            reader.resolveFile("s", reference),
+            code("ARTIFACT_DENIED"),
+          );
+        }
+        await assert.rejects(
+          reader.resolveFile("s", join(parentAlias, "workspace", "missing.md")),
+          code("ARTIFACT_MISSING"),
+        );
+      } finally {
+        reader.dispose();
+      }
+    }
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact paths reject traversal, encodings, junctions, directories and missing files", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifacts-boundary-"));
+  const workspace = join(root, "workspace");
+  const outside = join(root, "outside");
+  await mkdir(workspace);
+  await mkdir(outside);
+  await writeFile(join(outside, "secret.md"), "private");
+  const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: workspace }));
+  try {
+    for (const path of [
+      "../outside/secret.md",
+      "%2e%2e/outside/secret.md",
+      join(outside, "secret.md"),
+      "\\\\server\\share",
+      "report.md:stream",
+      "%00",
+      "%XX",
+    ])
+      await assert.rejects(
+        reader.resolveFile("s", path),
+        code("ARTIFACT_DENIED"),
+      );
+    await symlink(
+      outside,
+      join(workspace, "link"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    await assert.rejects(
+      reader.resolveFile("s", "link/secret.md"),
+      code("ARTIFACT_DENIED"),
+    );
+    await assert.rejects(
+      reader.resolveFile("s", "missing.md"),
+      code("ARTIFACT_MISSING"),
+    );
+    await mkdir(join(workspace, "directory"));
+    const directory = await reader.resolveFile("s", "directory");
+    await assert.rejects(
+      reader.read(directory, "s"),
+      code("ARTIFACT_UNSUPPORTED"),
+    );
+    await assert.rejects(
+      reader.resolveFile("other", "missing.md"),
+      code("ARTIFACT_DENIED"),
+    );
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("artifact previews bound content and resolve nested references without widening grants", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-artifacts-preview-"));
+  const reader = new ArtifactReader(() => ({ sessionId: "s", cwd: root }));
+  try {
+    await mkdir(join(root, "out"));
+    await writeFile(join(root, "out", "report.md"), "row\n".repeat(8_000));
+    await writeFile(join(root, "out", "image.pdf"), Buffer.from([0, 1, 2]));
+    const parent = await reader.resolveFile("s", "out/report.md");
+    const preview = await reader.read(parent, "s");
+    assert.equal(preview.preview.truncated, true);
+    assert.ok((preview.preview.text?.split("\n").length ?? 0) <= 5_000);
+    const child = await reader.resolveFile("s", "./image.pdf", parent);
+    assert.equal(
+      (await reader.read(child, "s")).preview.artifact.preview,
+      "unsupported",
+    );
+    await writeFile(
+      join(root, "huge.txt"),
+      Buffer.alloc(ARTIFACT_MAX_BYTES + 1),
+    );
+    const huge = await reader.resolveFile("s", "huge.txt");
+    await assert.rejects(reader.read(huge, "s"), code("ARTIFACT_TOO_LARGE"));
+    await rm(join(root, "out", "report.md"));
+    await assert.rejects(reader.read(parent, "s"), code("ARTIFACT_MISSING"));
+    reader.dispose();
+    await assert.rejects(reader.read(child, "s"), code("ARTIFACT_DENIED"));
+  } finally {
+    reader.dispose();
+    await rm(root, { recursive: true, force: true });
+  }
+});

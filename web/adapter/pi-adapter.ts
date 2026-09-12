@@ -1,10 +1,25 @@
-import { readFile, realpath, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash } from "node:crypto";
-import { basename, join, resolve } from "node:path";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
+import {
+  lstat,
+  open,
+  readFile,
+  opendir,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
+import {
+  getAgentDir,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
   boundedText,
+  boundThinkingProjection,
   jsonByteLength,
   projectEntries,
   projectEntry,
@@ -22,7 +37,20 @@ import {
   type WebSnapshotTruncation,
   type WebWorkspaceSummary,
 } from "../protocol/types.ts";
-import type { WebRuntimeController } from "../runtime/types.ts";
+import type {
+  WebRuntimeController,
+  WebThinkingProjection,
+} from "../runtime/types.ts";
+
+export class WebReadOnlySessionError extends Error {
+  readonly code = "SESSION_NOT_FOUND" as const;
+  readonly statusCode = 404 as const;
+
+  constructor(message: string) {
+    super(message);
+    this.name = "WebReadOnlySessionError";
+  }
+}
 
 type WorkspaceStateSnapshot = {
   importedWorkspaces: Set<string>;
@@ -31,6 +59,182 @@ type WorkspaceStateSnapshot = {
   ungroupedSessions: Set<string>;
   restoreInitialWorkspace: boolean;
 };
+
+const TERMINAL_DISCOVERY_MAX_BYTES = 256 * 1024;
+const TERMINAL_DISCOVERY_MAX_FILES = WEB_MAX_SESSIONS;
+
+type ReadOnlyTerminalSessionInfo = {
+  id: string;
+  path: string;
+  cwd: string;
+  name?: string;
+  modified: Date;
+  created: Date;
+  messageCount: number;
+  firstMessage: string;
+  metadataPartial: boolean;
+};
+
+function defaultTerminalSessionDirectory(cwd: string) {
+  const resolvedCwd = resolve(cwd);
+  const encoded = `--${resolvedCwd.replace(/^[/\\]/u, "").replace(/[/\\:]/gu, "-")}--`;
+  return join(getAgentDir(), "sessions", encoded);
+}
+
+function containedPath(parent: string, candidate: string) {
+  const child = relative(parent, candidate);
+  return (
+    child.length > 0 &&
+    child !== ".." &&
+    !child.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`) &&
+    !isAbsolute(child)
+  );
+}
+
+function terminalTextContent(message: Record<string, unknown>) {
+  const content = message.content;
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .filter(
+      (part): part is { type: "text"; text: string } =>
+        !!part &&
+        typeof part === "object" &&
+        (part as Record<string, unknown>).type === "text" &&
+        typeof (part as Record<string, unknown>).text === "string",
+    )
+    .map((part) => part.text)
+    .join(" ");
+}
+
+async function readTerminalSessionInfo(
+  filePath: string,
+  modified: Date,
+  signal?: AbortSignal,
+): Promise<ReadOnlyTerminalSessionInfo | undefined> {
+  signal?.throwIfAborted();
+  let fileStat;
+  try {
+    fileStat = await lstat(filePath);
+    if (!fileStat.isFile() || fileStat.isSymbolicLink()) return undefined;
+  } catch {
+    return undefined;
+  }
+
+  let handle;
+  try {
+    handle = await open(filePath, "r");
+  } catch {
+    return undefined;
+  }
+  try {
+    signal?.throwIfAborted();
+    const length = Math.min(fileStat.size, TERMINAL_DISCOVERY_MAX_BYTES);
+    const bytes = Buffer.allocUnsafe(length);
+    const { bytesRead } = await handle.read(bytes, 0, length, 0);
+    signal?.throwIfAborted();
+    const text = bytes.toString("utf8", 0, bytesRead);
+    const lines = text.split(/\r?\n/u);
+    if (bytesRead < fileStat.size) lines.pop();
+
+    let header: Record<string, unknown> | undefined;
+    let name: string | undefined;
+    let firstMessage = "";
+    let messageCount = 0;
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      let value: unknown;
+      try {
+        value = JSON.parse(line);
+      } catch {
+        continue;
+      }
+      if (!value || typeof value !== "object" || Array.isArray(value)) {
+        continue;
+      }
+      const entry = value as Record<string, unknown>;
+      if (!header) {
+        if (entry.type !== "session" || typeof entry.id !== "string") {
+          return undefined;
+        }
+        header = entry;
+        continue;
+      }
+      if (entry.type === "session_info") {
+        const entryName = entry.name;
+        name = typeof entryName === "string" ? entryName.trim() || undefined : name;
+        continue;
+      }
+      if (entry.type !== "message") continue;
+      messageCount++;
+      const message = entry.message;
+      if (
+        !firstMessage &&
+        message &&
+        typeof message === "object" &&
+        !Array.isArray(message) &&
+        (message as Record<string, unknown>).role === "user"
+      ) {
+        firstMessage = terminalTextContent(message as Record<string, unknown>);
+      }
+    }
+    if (!header || typeof header.cwd !== "string") return undefined;
+    const created =
+      typeof header.timestamp === "string" && !Number.isNaN(Date.parse(header.timestamp))
+        ? new Date(header.timestamp)
+        : modified;
+    return {
+      id: header.id as string,
+      path: filePath,
+      cwd: resolve(header.cwd),
+      ...(name ? { name } : {}),
+      modified,
+      created,
+      messageCount,
+      firstMessage: firstMessage || "(no messages)",
+      metadataPartial: bytesRead < fileStat.size,
+    };
+  } finally {
+    await handle.close();
+  }
+}
+
+async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) {
+  signal?.throwIfAborted();
+  const directory = defaultTerminalSessionDirectory(workspace);
+  const sessions: ReadOnlyTerminalSessionInfo[] = [];
+  let partial = false;
+  let scanned = 0;
+  try {
+    // Bound directory traversal and file work, not only the returned projection.
+    const entries = await opendir(directory);
+    for await (const entry of entries) {
+      signal?.throwIfAborted();
+      if (++scanned > TERMINAL_DISCOVERY_MAX_FILES) {
+        partial = true;
+        break;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const path = join(directory, entry.name);
+      try {
+        const fileStat = await stat(path);
+        const session = await readTerminalSessionInfo(path, fileStat.mtime, signal);
+        if (!session) { partial = true; continue; }
+        if (session.cwd !== workspace) continue;
+        partial ||= session.metadataPartial;
+        sessions.push(session);
+      } catch (error) {
+        signal?.throwIfAborted();
+        partial = true;
+      }
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") partial = true;
+  }
+  sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
+  return { sessions, partial };
+}
 
 export interface ArchivedSessionQuery {
   readonly cursor?: string;
@@ -270,6 +474,18 @@ export class PiWebAdapter {
       throw new Error("Workspace is not available");
     }
     return canonical;
+  }
+
+  private async requireSelectedWorkspace() {
+    await this.ensureWorkspaceStateLoaded();
+    const workspace = resolve(this.runtime.cwd);
+    if (
+      this.runtime.workspaceSelected !== true ||
+      this.hiddenWorkspaces.has(workspace)
+    ) {
+      throw new Error("Workspace is not available");
+    }
+    return workspace;
   }
 
   async requireSession(path: string) {
@@ -592,6 +808,108 @@ export class PiWebAdapter {
     return (await this.listSessionProjection(pinnedPath)).sessions;
   }
 
+  async listReadOnlyTerminalSessions(
+    options: { query?: string; cursor?: number; limit?: number; signal?: AbortSignal } = {},
+  ) {
+    options.signal?.throwIfAborted();
+    const workspace = await this.requireSelectedWorkspace();
+    const query = options.query?.trim().toLocaleLowerCase() ?? "";
+    const cursor = options.cursor ?? 0;
+    const limit = options.limit ?? 50;
+    const discovery = await listTerminalSessionInfo(workspace, options.signal);
+    const sessions = discovery.sessions
+      .filter((session) => {
+        if (!query) return true;
+        return [session.name, session.cwd, session.firstMessage].some((value) =>
+          value?.toLocaleLowerCase().includes(query),
+        );
+      });
+    options.signal?.throwIfAborted();
+    const page = sessions.slice(cursor, cursor + limit);
+    return {
+      sessions: page.map((session) => ({
+        id: session.id,
+        path: session.path,
+        cwd: resolve(session.cwd),
+        ...(session.name
+          ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+          : {}),
+        modified: session.modified.toISOString(),
+        created: session.created.toISOString(),
+        messageCount: session.messageCount,
+        metadataPartial: session.metadataPartial,
+        firstMessage: boundedText(
+          session.firstMessage,
+          WEB_MAX_SESSION_PREVIEW,
+        ),
+        source: "pi-default" as const,
+        origin: "terminal" as const,
+        readOnly: true as const,
+      })),
+      cursor,
+      nextCursor:
+        cursor + page.length < sessions.length
+          ? cursor + page.length
+          : undefined,
+      total: sessions.length,
+      partial: discovery.partial,
+    };
+  }
+
+  async getReadOnlyTerminalSession(path: string, options: { signal?: AbortSignal } = {}) {
+    options.signal?.throwIfAborted();
+    const workspace = await this.requireSelectedWorkspace();
+    const canonical = resolve(path);
+    const directory = defaultTerminalSessionDirectory(workspace);
+    let session: ReadOnlyTerminalSessionInfo | undefined;
+    if (containedPath(directory, canonical)) {
+      try {
+        session = await readTerminalSessionInfo(
+          canonical,
+          (await stat(canonical)).mtime,
+          options.signal,
+        );
+      } catch {
+        options.signal?.throwIfAborted();
+        session = undefined;
+      }
+    }
+    if (!session) {
+      throw new WebReadOnlySessionError("Terminal Session is not available");
+    }
+    if (session.cwd !== workspace) {
+      throw new WebReadOnlySessionError("Terminal Session is not available");
+    }
+    const preview = await loadSessionPreviewData(session.path, options);
+    options.signal?.throwIfAborted();
+    return {
+      id: session.id,
+      path: session.path,
+      cwd: resolve(session.cwd),
+      ...(session.name
+        ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+        : {}),
+      modified: session.modified.toISOString(),
+      created: session.created.toISOString(),
+      messageCount: session.messageCount,
+      metadataPartial: session.metadataPartial,
+      firstMessage: boundedText(
+        session.firstMessage,
+        WEB_MAX_SESSION_PREVIEW,
+      ),
+      source: "pi-default" as const,
+      origin: "terminal" as const,
+      readOnly: true as const,
+      preview: {
+        messages: preview.messages,
+        totalMessages: preview.totalMessages,
+        bytesRead: preview.bytesRead,
+        retainedBytes: preview.retainedBytes,
+        truncatedBytes: preview.truncatedBytes,
+      },
+    };
+  }
+
   async getSnapshot(selectedPath?: string) {
     await this.ensureWorkspaceStateLoaded();
     const sessionProjection = await this.listSessionProjection(selectedPath);
@@ -643,6 +961,7 @@ export class PiWebAdapter {
       name: boundedText(model.name, WEB_MAX_SESSION_PREVIEW),
       label: boundedText(model.label, WEB_MAX_SESSION_PREVIEW),
     }));
+    const thinking = this.safeThinking();
     const snapshot = {
       ...(this.runtime.workspaceSelected === true
         ? { currentSessionId: this.runtime.sessionManager.getSessionId() }
@@ -650,6 +969,7 @@ export class PiWebAdapter {
       workspaces,
       sessions,
       models,
+      ...(thinking ? { thinking } : {}),
       ...(selectedSession ? { selectedSession } : {}),
       runtime: {
         status: this.runtime.isIdle()
@@ -766,6 +1086,16 @@ export class PiWebAdapter {
     snapshot.truncation.truncated = true;
   }
 
+  private safeThinking(): WebThinkingProjection | undefined {
+    if (!this.runtime.getThinkingState) return undefined;
+    try {
+      return boundThinkingProjection(this.runtime.getThinkingState());
+    } catch {
+      // An optional diagnostic must never break /api/snapshot.
+      return undefined;
+    }
+  }
+
   private captureWorkspaceState(): WorkspaceStateSnapshot {
     return {
       importedWorkspaces: new Set(this.importedWorkspaces),
@@ -818,7 +1148,7 @@ export class PiWebAdapter {
       summary.id === this.runtime.sessionManager.getSessionId()
         ? this.runtime.sessionManager
         : SessionManager.open(path);
-    const projected = projectEntries(manager.getBranch());
+    const projected = projectEntries(manager.getBranch(), (path) => resolve(summary.cwd, path));
     return {
       id: summary.id,
       path: summary.path,

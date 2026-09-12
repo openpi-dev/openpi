@@ -1,5 +1,9 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { WebModelSummary } from "../protocol/types.ts";
+import type {
+  WebModelSearchResult,
+  WebCommandDiscoveryResult,
+  WebModelSummary,
+} from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 
 export type WebProviderAuthSource =
@@ -39,7 +43,8 @@ export type WebRuntimeRequestErrorCode =
   | "MODEL_NOT_AVAILABLE"
   | "SESSION_CONFLICT"
   | "PROMPT_REJECTED"
-  | "WORKSPACE_REQUIRED";
+  | "WORKSPACE_REQUIRED"
+  | "THINKING_LEVEL_NOT_AVAILABLE";
 
 export class WebRuntimeRequestError extends Error {
   readonly code: WebRuntimeRequestErrorCode;
@@ -90,6 +95,16 @@ export interface WebModelSelectionOptions {
   expectedSessionId?: string;
 }
 
+export interface WebThinkingSelectionOptions {
+  expectedSessionId?: string;
+}
+
+export interface WebThinkingProjection {
+  level: string;
+  available: readonly string[];
+  supported: boolean;
+}
+
 export interface WebSessionCreationOptions {
   commandId?: string;
 }
@@ -122,8 +137,14 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
+  searchModels(query: string, limit?: number): WebModelSearchResult;
+  listCommands?(): WebCommandDiscoveryResult;
   listProviderAuth?(): WebProviderAuthProjection;
-  getThinkingState?(): { level: string; available: readonly string[] };
+  getThinkingState?(): WebThinkingProjection;
+  setThinkingLevel?(
+    level: string,
+    options?: WebThinkingSelectionOptions,
+  ): Promise<WebThinkingProjection>;
   setModel(
     provider: string,
     modelId: string,
