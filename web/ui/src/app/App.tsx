@@ -11,6 +11,7 @@ import {
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import { WorkspaceChanges } from "../features/workspace/WorkspaceChanges.tsx";
 import { webStore } from "../store/web-store.ts";
 
 export function App() {
@@ -33,7 +34,7 @@ export function App() {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, [actions]);
-  const [view, setView] = useState<"chat" | "trajectory">("chat");
+  const [view, setView] = useState<"chat" | "trajectory" | "changes">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
@@ -151,6 +152,13 @@ export function App() {
             >
               {t("trajectory")}
             </button>
+            <button
+              type="button"
+              aria-pressed={view === "changes"}
+              onClick={() => setView("changes")}
+            >
+              {t("workspaceChanges")}
+            </button>
           </fieldset>
         )}
         {state.sessionSwitching ? (
@@ -165,6 +173,12 @@ export function App() {
             key={selected.path}
             snapshot={state.snapshot}
             running={state.liveRunning}
+          />
+        ) : view === "changes" && selected ? (
+          <WorkspaceChanges
+            key={selected.id}
+            sessionId={selected.id}
+            cwd={selected.cwd}
           />
         ) : landing ? (
           <section
