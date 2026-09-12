@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI headless Session shellPath inheritance
+related-issues: #419
+related-prs: #423
+supersedes: none
+---
+
 # Issue #419：headless Session 的 shellPath 继承复盘
 
 - 状态：在源码与回归测试边界验证
@@ -43,3 +53,19 @@ Headless Session 重新使用 Pi 的 shell 解析和生命周期。当前环境�
 因此没有宣称真实 Windows WSL stub 的手工验收；回归测试使用跨平台的“不存在
 shell 路径”证据验证覆盖边界。Windows 原生命令编码和 Git Bash 安装发现仍由
 Pi 0.85.1 负责。
+
+## Verified facts
+
+源码复核与回归测试确认了 headless Session 的 shellPath 保留边界。
+
+## Inferences
+
+该修复解释了复现的配置丢失，但不等同于 Windows 环境的手工验收。
+
+## Recommendations
+
+继续让 Pi 原生工具拥有 shell 生命周期，展示扩展只在 TUI 模式替换展示行为。
+
+## Unknowns
+
+真实 Windows WSL launcher、Git Bash 安装和用户配置组合仍未在本记录中验证。

@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Cursor context, transport, and transcript projections
+related-issues: #431
+related-prs: #432
+supersedes: none
+---
+
 # Cursor context and transport follow-up
 
 - Status: validated source investigation and deterministic reproductions; PR validation is recorded in the linked Issue
@@ -36,3 +46,19 @@ The separate [viewport PR #327](https://github.com/openpi-dev/openpi/pull/327), 
 ## Acceptance limits
 
 No paid provider calls were needed or made for these deterministic tests. Local SDK/transport tests establish the client behavior; upstream protocol evidence is separately attributed. Local `bun run check` passed. The default full test attempt was interrupted during host scheduling delay; the complete discovered suite then passed at Node file concurrency 2 (1455 passed, one platform skip; Vitest 30/30). Two independent reviews found no actionable defects. Remote CI receipts are recorded in the PR. This investigation is not a formal end-to-end performance Benchmark.
+
+## Verified facts
+
+The local protocol and transcript regressions described above are the verified source-boundary facts for this record.
+
+## Inferences
+
+Allocation and cache observations support the scoped repairs but do not establish provider-side latency or billing effects.
+
+## Recommendations
+
+Preserve the bounded transport and cache identity contracts when changing the Cursor adapter or transcript renderer.
+
+## Unknowns
+
+Live provider behavior, exact tokenization, and cold-start performance remain unmeasured here.

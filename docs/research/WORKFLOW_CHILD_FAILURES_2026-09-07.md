@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-07
+last-verified: 2026-09-07
+applies-to: OpenPI Workflow child lifecycle and capability inheritance
+related-issues: #424
+related-prs: #426
+supersedes: none
+---
+
 # Workflow child failures and capability inheritance
 
 - Status: validated for private run inspection and local regression reproduction; live provider acceptance tracked separately below
@@ -58,3 +68,19 @@ On 2026-09-07, an isolated Pi agent directory reported this repair worktree as i
 | Eight concurrent real Workflow `runAgent` sessions | 8/8 successful; each executed one read, completed two model turns, and returned the correct external-file nonce | 12.0 s total |
 
 These are bounded connectivity/lifecycle acceptance runs, not model-quality or throughput Benchmarks. The eight-child smoke invoked the production runner concurrently; selected-cwd DSL propagation is separately covered by execute-level tests. It does not prove long 44-PR audits fit provider rate limits, automatic choice of the right tool, every Cursor model, or the user's older custom role configuration. Cursor does not report complete usage, so zero provider counters are unknown accounting rather than a claim of free execution.
+
+## Verified facts
+
+The local lifecycle, capability, transport, and bounded smoke tests establish the recorded child behavior.
+
+## Inferences
+
+The repairs explain the reproduced startup, tool-boundary, and timeout mechanisms without proving provider-wide reliability.
+
+## Recommendations
+
+Keep Pi as the owner of provider, tool, cwd, trust, and cancellation lifecycle decisions for child sessions.
+
+## Unknowns
+
+Provider rate limits, all-model behavior, long audits, and legacy custom role configurations remain unknown.

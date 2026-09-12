@@ -1,3 +1,13 @@
+---
+status: validated
+created: 2026-09-08
+last-verified: 2026-09-08
+applies-to: OpenPI Cursor native request recovery
+related-issues: #234
+related-prs: none
+supersedes: none
+---
+
 # Cursor native request recovery
 
 - Status: validated at the boundaries below; exploratory acceptance, not a Benchmark.
@@ -40,3 +50,19 @@ Outbound protocol instrumentation counted the rejection; it did not infer recove
 ## Limits
 
 This is two exploratory runs on one model, not a reliability or performance measurement. It does not establish long-task, fan-out, or all-model acceptance. Proxy tunnel timeouts and remote connection aborts remain separate transport failures. The fix neither proves nor assumes intentional third-party blocking by Cursor. Repository validation and live isolated acceptance do not mean the change is merged, released, or installed in the user's regular runtime. Credentials and private Session transcripts are not part of the published evidence.
+
+## Verified facts
+
+The deterministic Cursor recovery tests and the two bounded exploratory runs establish the behavior and limits stated above.
+
+## Inferences
+
+The observed recovery path supports the scoped native-request boundary but does not generalize to all models or workloads.
+
+## Recommendations
+
+Keep native requests fail-closed and resume through Pi-advertised tools with explicit cancellation and rejection bounds.
+
+## Unknowns
+
+Third-party service reliability, long-task behavior, and all-model acceptance remain unknown.
