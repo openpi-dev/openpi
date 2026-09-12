@@ -21,6 +21,7 @@ import {
 import { fetchAntigravityModels } from "../../../extensions/ai-providers/antigravity/discovery.ts";
 import {
   convertMessages,
+  convertTools,
   isThinkingPart,
   mapStopReasonString,
   retainThoughtSignature,
@@ -439,6 +440,136 @@ test("sanitizeSchemaForCca preserves property names that match schema keywords",
       },
       required: ["pattern"],
     },
+  );
+});
+
+test("convertTools expands bounded local refs before CCA sanitization", () => {
+  const declarations = convertTools(
+    [
+      {
+        name: "structured_output",
+        description: "Return the result",
+        parameters: {
+          type: "object",
+          properties: { answer: { $ref: "#/$defs/Answer" } },
+          required: ["answer"],
+          $defs: {
+            Answer: {
+              type: "object",
+              properties: {
+                verdict: { type: "string", enum: ["pass", "fail"] },
+              },
+              required: ["verdict"],
+            },
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  assert.deepEqual(declarations?.[0]?.functionDeclarations[0]?.parameters, {
+    type: "object",
+    properties: {
+      answer: {
+        type: "object",
+        properties: { verdict: { type: "string", enum: ["pass", "fail"] } },
+        required: ["verdict"],
+      },
+    },
+    required: ["answer"],
+  });
+});
+
+test("convertTools counts each expanded ref subtree once", () => {
+  const fields = Object.fromEntries(
+    Array.from({ length: 60 }, (_, index) => [
+      `field${index}`,
+      { type: "string" },
+    ]),
+  );
+  const declarations = convertTools(
+    [
+      {
+        name: "structured_output",
+        description: "Return the result",
+        parameters: {
+          type: "object",
+          properties: {
+            first: { $ref: "#/$defs/Result" },
+            second: { $ref: "#/$defs/Result" },
+          },
+          $defs: {
+            Result: { type: "object", properties: fields },
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  const parameters = declarations?.[0]?.functionDeclarations[0]?.parameters as {
+    properties?: Record<string, { properties?: Record<string, unknown> }>;
+  };
+  assert.deepEqual(parameters.properties?.first, parameters.properties?.second);
+  assert.equal(
+    parameters.properties?.first?.properties?.field59 !== undefined,
+    true,
+  );
+});
+
+test("convertTools bounds the serialized expanded schema size", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "oversized",
+            description: "oversized",
+            parameters: {
+              type: "object",
+              properties: { value: { $ref: "#/$defs/Value" } },
+              $defs: {
+                Value: { type: "string", description: "x".repeat(256 * 1024) },
+              },
+            },
+          } as never,
+        ],
+        true,
+      ),
+    /expansion byte limit/,
+  );
+});
+
+test("convertTools rejects unsafe local refs before the request", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "bad",
+            description: "bad",
+            parameters: { $ref: "https://example.test/schema" },
+          } as never,
+        ],
+        true,
+      ),
+    /unsupported external \$ref/,
+  );
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "loop",
+            description: "loop",
+            parameters: {
+              $defs: { Node: { $ref: "#/$defs/Node" } },
+              $ref: "#/$defs/Node",
+            },
+          } as never,
+        ],
+        true,
+      ),
+    /recursive \$ref/,
   );
 });
 
