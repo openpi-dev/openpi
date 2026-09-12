@@ -28,25 +28,40 @@ function frontmatter(text) {
   const document = parseDocument(match[1], { uniqueKeys: true });
   if (document.errors.length) return null;
   const value = document.toJS({ maxAliasCount: 20 });
-  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? value
+    : null;
 }
 
-const decisions = markdownFiles(root).filter((file) =>
-  ![join(root, "README.md"), join(root, "TEMPLATE.md")].includes(file),
+const decisions = markdownFiles(root).filter(
+  (file) =>
+    ![join(root, "README.md"), join(root, "TEMPLATE.md")].includes(file),
 );
 const errors = [];
 
 for (const file of decisions) {
   let metadata;
-  try { metadata = frontmatter(readFileSync(file, "utf8")); } catch { metadata = null; }
+  try {
+    metadata = frontmatter(readFileSync(file, "utf8"));
+  } catch {
+    metadata = null;
+  }
   if (!metadata) {
     errors.push(`${relative(process.cwd(), file)}: missing YAML frontmatter`);
     continue;
   }
   for (const field of requiredDecisionFields) {
     const value = metadata[field];
-    const present = typeof value === "string" ? value.trim().length > 0 : Array.isArray(value) && value.length > 0 && value.every((item) => typeof item === "string" && item.trim().length > 0);
-    if (!present) errors.push(`${relative(process.cwd(), file)}: missing ${field}`);
+    const present =
+      typeof value === "string"
+        ? value.trim().length > 0
+        : Array.isArray(value) &&
+          value.length > 0 &&
+          value.every(
+            (item) => typeof item === "string" && item.trim().length > 0,
+          );
+    if (!present)
+      errors.push(`${relative(process.cwd(), file)}: missing ${field}`);
   }
 }
 
