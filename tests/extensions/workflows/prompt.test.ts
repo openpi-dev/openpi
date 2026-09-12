@@ -298,7 +298,7 @@ test("result message names where isolated work ended up", () => {
   assert.doesNotMatch(msg, /\[plain\].*worktree/);
 });
 
-test("result message surfaces explicit acceptance state", () => {
+test("result message labels deprecated acceptance as model self-attestation", () => {
   const msg = buildWorkflowResultMessage(
     details([
       agentRecord({
@@ -313,7 +313,7 @@ test("result message surfaces explicit acceptance state", () => {
     ]),
     "/tmp/wf_abc123",
   );
-  assert.match(msg, /acceptance rejected/);
+  assert.match(msg, /deprecated model self-attestation rejected/);
 });
 
 test("result message stays quiet when nothing was isolated", () => {
@@ -416,7 +416,7 @@ test("the resident workflow prompt stays compact while the Skill carries the ful
   assert.match(skill, /^---\r?\nname: workflows\r?\n/);
   assert.match(skill, /Use when .*multi-phase/i);
   assert.match(reference, /operator/);
-  assert.match(reference, /acceptance/);
+  assert.match(reference, /result refs/);
   assert.match(reference, /resume_from_run_id/);
   assert.match(reference, /same workflow run/i);
   assert.match(examples, /reliability-review/);

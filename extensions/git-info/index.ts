@@ -158,18 +158,24 @@ export default function gitInfo(pi: ExtensionAPI) {
   const refresh = (ctx: ExtensionContext, forcePullRequest = false) =>
     refreshCoordinator.run(refreshEffect(ctx, forcePullRequest, generation));
 
-  const refreshIfIdle = (ctx: ExtensionContext) =>
-    refreshCoordinator.runIfIdle(refreshEffect(ctx, false, generation));
+  const refreshIfIdle = (
+    ctx: ExtensionContext,
+    refreshGeneration = generation,
+  ) =>
+    refreshCoordinator.runIfIdle(refreshEffect(ctx, false, refreshGeneration));
 
   const reportBackgroundDefect = (defect: unknown) =>
     Effect.logError("git-info background task defect", defect);
 
-  const poll = () =>
+  const poll = (ctx: ExtensionContext, pollGeneration: number) =>
     Effect.suspend(() =>
-      currentContext ? refreshIfIdle(currentContext) : Effect.void,
+      pollGeneration === generation
+        ? refreshIfIdle(ctx, pollGeneration)
+        : Effect.fail("stale polling session"),
     ).pipe(
       Effect.catchDefect(reportBackgroundDefect),
       Effect.repeat(Schedule.fixed(POLL_INTERVAL_MS)),
+      Effect.catch(() => Effect.void),
       Effect.delay(POLL_INTERVAL_MS),
       Effect.asVoid,
     );
@@ -183,24 +189,29 @@ export default function gitInfo(pi: ExtensionAPI) {
     forkBackground(refreshIfIdle(ctx));
   };
 
+  const stopPolling = async (activeRuntime = runtime) => {
+    const previousPollingFiber = pollingFiber;
+    pollingFiber = undefined;
+    if (previousPollingFiber && activeRuntime) {
+      await activeRuntime.runPromise(Fiber.interrupt(previousPollingFiber));
+    }
+  };
+
   const stopRefreshListener = pi.events.on(REFRESH_CHANNEL, () => {
     if (currentContext) refreshInBackground(currentContext);
   });
 
   pi.on("session_start", async (_event, ctx) => {
-    generation += 1;
+    const sessionGeneration = ++generation;
     queriedPrBranch = null;
 
-    const previousPollingFiber = pollingFiber;
-    pollingFiber = undefined;
-    if (previousPollingFiber) {
-      await getRuntime().runPromise(Fiber.interrupt(previousPollingFiber));
-    }
+    await stopPolling();
+    if (sessionGeneration !== generation) return;
 
     // Do not block Pi startup on GitHub/network I/O. The initial refresh publishes
     // state when it completes; polling continues to keep it current afterwards.
     refreshInBackground(ctx);
-    pollingFiber = forkBackground(poll());
+    pollingFiber = forkBackground(poll(ctx, sessionGeneration));
   });
 
   pi.on("input", (_event, ctx) => {
@@ -216,8 +227,8 @@ export default function gitInfo(pi: ExtensionAPI) {
     stopRefreshListener();
     generation += 1;
     currentContext = undefined;
-    pollingFiber = undefined;
     const closing = runtime;
+    await stopPolling(closing);
     runtime = undefined;
     await closing?.dispose();
   });

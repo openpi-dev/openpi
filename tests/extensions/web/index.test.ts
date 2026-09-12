@@ -1,0 +1,389 @@
+import assert from "node:assert/strict";
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
+import test from "node:test";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+} from "@earendil-works/pi-coding-agent";
+import web, {
+  type WebCommandDependencies,
+  type WebProcess,
+} from "../../../extensions/web/index.ts";
+
+type CommandHandler = (
+  args: string,
+  ctx: ExtensionCommandContext,
+) => Promise<void>;
+type CustomFactory = (
+  tui: {
+    stop(): void;
+    start(): void;
+    requestRender(force?: boolean): void;
+  },
+  theme: unknown,
+  keybindings: unknown,
+  done: (value: unknown) => void,
+) => unknown;
+
+class FakeWebProcess extends EventEmitter implements WebProcess {
+  exitCode: number | null = null;
+  signalCode: NodeJS.Signals | null = null;
+  readonly kills: NodeJS.Signals[] = [];
+  readonly stderr = new PassThrough();
+
+  kill(signal: NodeJS.Signals = "SIGTERM") {
+    this.kills.push(signal);
+    return true;
+  }
+
+  close(code: number | null, signal: NodeJS.Signals | null = null) {
+    this.exitCode = code;
+    this.signalCode = signal;
+    this.emit("close", code, signal);
+  }
+
+  writeError(text: string) {
+    this.stderr.write(text);
+  }
+}
+
+function harness(
+  options: {
+    mode?: "tui" | "print";
+    idle?: boolean;
+    stopError?: Error;
+    piCodingAgentEntry?: string | null;
+  } = {},
+) {
+  const hooks = new Map<string, Array<(event: unknown) => unknown>>();
+  let command: CommandHandler | undefined;
+  let customCalls = 0;
+  let stopped = 0;
+  let started = 0;
+  let rendered = 0;
+  let spawnCalls = 0;
+  let resolveCalls = 0;
+  let activeSigint = 0;
+  let clearCalls = 0;
+  let forwardedStderr = "";
+  const notifications: Array<{ message: string; level?: string }> = [];
+  const children: FakeWebProcess[] = [];
+  const spawnEnvs: NodeJS.ProcessEnv[] = [];
+  const cwd = "/workspace/current";
+  const pi = {
+    registerCommand(name: string, definition: { handler: CommandHandler }) {
+      assert.equal(name, "web");
+      command = definition.handler;
+    },
+    on(event: string, handler: (event: unknown) => unknown) {
+      hooks.set(event, [...(hooks.get(event) ?? []), handler]);
+    },
+  } as unknown as ExtensionAPI;
+
+  const dependencies: WebCommandDependencies = {
+    entrypoint: "/package/bin/openpi.js",
+    spawn(commandName, args, spawnOptions) {
+      assert.equal(clearCalls, 1);
+      assert.match(forwardedStderr, /Starting OpenPI Web Workbench/u);
+      spawnCalls++;
+      spawnEnvs.push(spawnOptions.env);
+      assert.equal(commandName, process.execPath);
+      assert.deepEqual(args, [
+        "/package/bin/openpi.js",
+        "web",
+        "--no-workspace",
+      ]);
+      assert.equal(spawnOptions.cwd, "/package/bin");
+      assert.equal(spawnOptions.env.PWD, "/package/bin");
+      assert.equal(spawnOptions.env.OLDPWD, undefined);
+      assert.equal(spawnOptions.env.INIT_CWD, undefined);
+      assert.equal(spawnOptions.env.PI_SESSION_ID, undefined);
+      assert.equal(spawnOptions.env.PI_SESSION_FILE, undefined);
+      const childPath = Object.entries(spawnOptions.env).find(
+        ([name]) => name.toLowerCase() === "path",
+      )?.[1];
+      assert.equal(childPath, process.env.PATH);
+      assert.equal(
+        spawnOptions.env.OPENPI_PI_CODING_AGENT_ENTRY,
+        options.piCodingAgentEntry === null
+          ? undefined
+          : (options.piCodingAgentEntry ??
+              "/host/pi-coding-agent/dist/index.js"),
+      );
+      assert.equal(spawnOptions.shell, false);
+      assert.deepEqual(spawnOptions.stdio, ["inherit", "inherit", "pipe"]);
+      const child = new FakeWebProcess();
+      children.push(child);
+      return child;
+    },
+    writeStderr(chunk) {
+      forwardedStderr += String(chunk);
+    },
+    clearTerminal() {
+      clearCalls++;
+    },
+    holdParentSigint() {
+      activeSigint++;
+      return () => {
+        activeSigint--;
+      };
+    },
+    resolvePiCodingAgentEntry: () => {
+      resolveCalls++;
+      return options.piCodingAgentEntry === null
+        ? undefined
+        : (options.piCodingAgentEntry ?? "/host/pi-coding-agent/dist/index.js");
+    },
+    shutdownTimeoutMs: 20,
+  };
+
+  const ctx = {
+    cwd,
+    mode: options.mode ?? "tui",
+    isIdle: () => options.idle ?? true,
+    hasPendingMessages: () => false,
+    ui: {
+      notify(message: string, level?: string) {
+        notifications.push({ message, level });
+      },
+      custom(factory: CustomFactory) {
+        customCalls++;
+        return new Promise((resolve) => {
+          factory(
+            {
+              stop() {
+                if (options.stopError) throw options.stopError;
+                stopped++;
+              },
+              start() {
+                started++;
+              },
+              requestRender(force?: boolean) {
+                assert.equal(force, true);
+                rendered++;
+              },
+            },
+            {},
+            {},
+            resolve,
+          );
+        });
+      },
+    },
+  } as unknown as ExtensionCommandContext;
+
+  web(pi, dependencies);
+
+  const run = (args = "") => {
+    assert.ok(command);
+    return command(args, ctx);
+  };
+  const emit = async (event: string, payload: unknown = {}) => {
+    for (const handler of hooks.get(event) ?? []) await handler(payload);
+  };
+
+  return {
+    run,
+    emit,
+    children,
+    notifications,
+    spawnEnv: () => spawnEnvs.at(-1),
+    customCalls: () => customCalls,
+    stopped: () => stopped,
+    started: () => started,
+    rendered: () => rendered,
+    spawnCalls: () => spawnCalls,
+    resolveCalls: () => resolveCalls,
+    activeSigint: () => activeSigint,
+    clearCalls: () => clearCalls,
+    forwardedStderr: () => forwardedStderr,
+  };
+}
+
+test("/web hands the terminal to the exact packaged Web CLI and restores Pi", async () => {
+  const previousSessionId = process.env.PI_SESSION_ID;
+  const previousSessionFile = process.env.PI_SESSION_FILE;
+  process.env.PI_SESSION_ID = "terminal-session";
+  process.env.PI_SESSION_FILE = "/tmp/terminal-session.jsonl";
+  const h = harness();
+  try {
+    const running = h.run();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    assert.equal(h.spawnCalls(), 1);
+    assert.equal(h.resolveCalls(), 1);
+    assert.equal(h.stopped(), 1);
+    assert.equal(h.clearCalls(), 1);
+    assert.equal(h.activeSigint(), 1);
+    assert.equal(h.started(), 0);
+
+    h.children[0]!.close(0);
+    await running;
+
+    assert.equal(h.activeSigint(), 0);
+    assert.equal(h.started(), 1);
+    assert.equal(h.rendered(), 1);
+    assert.deepEqual(h.notifications.at(-1), {
+      message: "OpenPI Web Workbench stopped.",
+      level: "info",
+    });
+  } finally {
+    if (previousSessionId === undefined) delete process.env.PI_SESSION_ID;
+    else process.env.PI_SESSION_ID = previousSessionId;
+    if (previousSessionFile === undefined) delete process.env.PI_SESSION_FILE;
+    else process.env.PI_SESSION_FILE = previousSessionFile;
+  }
+});
+
+test("/web hands the host Pi entry to the child and fail-closes without one", async () => {
+  const previousEntry = process.env.OPENPI_PI_CODING_AGENT_ENTRY;
+  process.env.OPENPI_PI_CODING_AGENT_ENTRY = "/stale/not-a-pi-package.js";
+  const resolvedEntry =
+    "/pi/node_modules/@earendil-works/pi-coding-agent/dist/index.js";
+  try {
+    const resolved = harness({ piCodingAgentEntry: resolvedEntry });
+    const running = resolved.run();
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.equal(resolved.resolveCalls(), 1);
+    assert.equal(
+      resolved.spawnEnv()?.OPENPI_PI_CODING_AGENT_ENTRY,
+      resolvedEntry,
+    );
+    resolved.children[0]!.close(0);
+    await running;
+
+    const unresolved = harness({ piCodingAgentEntry: null });
+    await unresolved.run();
+    assert.equal(unresolved.spawnCalls(), 0);
+    assert.equal(unresolved.resolveCalls(), 1);
+    assert.match(
+      unresolved.notifications.at(-1)?.message ?? "",
+      /could not resolve @earendil-works\/pi-coding-agent/u,
+    );
+    assert.equal(unresolved.notifications.at(-1)?.level, "error");
+  } finally {
+    if (previousEntry === undefined)
+      delete process.env.OPENPI_PI_CODING_AGENT_ENTRY;
+    else process.env.OPENPI_PI_CODING_AGENT_ENTRY = previousEntry;
+  }
+});
+
+test("/web rejects unsupported modes, arguments, busy sessions, and duplicates", async () => {
+  const print = harness({ mode: "print" });
+  await print.run();
+  assert.equal(print.spawnCalls(), 0);
+  assert.match(print.notifications.at(-1)?.message ?? "", /interactive TUI/u);
+
+  const args = harness();
+  await args.run("/tmp/other");
+  assert.equal(args.spawnCalls(), 0);
+  assert.match(args.notifications.at(-1)?.message ?? "", /Usage: \/web/u);
+
+  const busy = harness({ idle: false });
+  await busy.run();
+  assert.equal(busy.spawnCalls(), 0);
+  assert.match(busy.notifications.at(-1)?.message ?? "", /idle/u);
+
+  const duplicate = harness();
+  const running = duplicate.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  await duplicate.run();
+  assert.equal(duplicate.spawnCalls(), 1);
+  assert.match(
+    duplicate.notifications.at(-1)?.message ?? "",
+    /already running/u,
+  );
+  duplicate.children[0]!.close(0);
+  await running;
+});
+
+test("/web restores the TUI and reports startup or process failures", async () => {
+  const h = harness();
+  const running = h.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  h.children[0]!.emit("error", new Error("spawn failed"));
+  await running;
+
+  assert.equal(h.activeSigint(), 0);
+  assert.equal(h.started(), 1);
+  assert.equal(h.rendered(), 1);
+  assert.match(h.notifications.at(-1)?.message ?? "", /spawn failed/u);
+
+  const nonzero = harness();
+  const failed = nonzero.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  nonzero.children[0]!.close(2);
+  await failed;
+  assert.match(nonzero.notifications.at(-1)?.message ?? "", /code 2/u);
+
+  const diagnosed = harness();
+  const diagnosedFailure = diagnosed.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  diagnosed.children[0]!.writeError(
+    `\u001b[31m${"x".repeat(9 * 1024)}\u001b[0m\n` +
+      "Failed to start OpenPI Web Workbench: Web Host runtime is already owned by live PID 52690\u202e\n",
+  );
+  diagnosed.children[0]!.close(1);
+  await diagnosedFailure;
+  const diagnosedMessage = diagnosed.notifications.at(-1)?.message ?? "";
+  assert.match(diagnosedMessage, /already owned by live PID 52690/u);
+  assert.doesNotMatch(diagnosedMessage, /\u001b|\u202e/u);
+  assert.ok(Buffer.byteLength(diagnosedMessage, "utf8") <= 8 * 1024);
+  assert.match(diagnosed.forwardedStderr(), /\u001b\[31m/u);
+
+  const signalled = harness();
+  const terminated = signalled.run();
+  await new Promise((resolve) => setImmediate(resolve));
+  signalled.children[0]!.close(null, "SIGKILL");
+  await terminated;
+  assert.deepEqual(signalled.notifications.at(-1), {
+    message: "OpenPI Web Workbench was terminated by SIGKILL.",
+    level: "error",
+  });
+
+  const stopFailure = harness({ stopError: new Error("terminal unavailable") });
+  await stopFailure.run();
+  assert.equal(stopFailure.activeSigint(), 0);
+  assert.equal(stopFailure.started(), 0);
+  assert.match(
+    stopFailure.notifications.at(-1)?.message ?? "",
+    /terminal unavailable/u,
+  );
+});
+
+test("session shutdown terminates the foreground Web process without repainting stale TUI", async () => {
+  const h = harness();
+  const running = h.run();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const shutdown = h.emit("session_shutdown", {
+    type: "session_shutdown",
+    reason: "quit",
+  });
+  assert.deepEqual(h.children[0]!.kills, ["SIGTERM"]);
+  h.children[0]!.close(0, "SIGTERM");
+  await Promise.all([running, shutdown]);
+
+  assert.equal(h.activeSigint(), 0);
+  assert.equal(h.started(), 0);
+  assert.equal(h.rendered(), 0);
+});
+
+test("session shutdown force-kills a Web child that misses its graceful deadline", async () => {
+  const h = harness();
+  const running = h.run();
+  await new Promise((resolve) => setImmediate(resolve));
+
+  const shutdown = h.emit("session_shutdown", {
+    type: "session_shutdown",
+    reason: "quit",
+  });
+  await new Promise((resolve) => setTimeout(resolve, 25));
+  assert.deepEqual(h.children[0]!.kills, ["SIGTERM", "SIGKILL"]);
+  h.children[0]!.close(null, "SIGKILL");
+  await Promise.all([running, shutdown]);
+
+  assert.equal(h.activeSigint(), 0);
+  assert.equal(h.started(), 0);
+});

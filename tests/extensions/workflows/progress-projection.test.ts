@@ -163,3 +163,49 @@ test("transcript byte limits preserve UTF-8 boundaries and explicit markers", ()
   );
   assert.match(bounded.at(-1)?.text ?? "", /retained 16 of 20 entries/);
 });
+
+test("byte pressure retains the initial task and newest failure evidence", () => {
+  const messages: AgentMessage[] = [
+    { role: "user", content: "initial task", timestamp: 0 },
+    ...Array.from({ length: 20 }, (_, index) => ({
+      role: "toolResult" as const,
+      toolName: "read",
+      toolCallId: `read-${index}`,
+      content: [{ type: "text" as const, text: "x".repeat(16 * 1024) }],
+      isError: false,
+      timestamp: index + 1,
+    })),
+    {
+      role: "toolResult",
+      toolName: "bash",
+      toolCallId: "latest-failure",
+      content: [{ type: "text", text: "LATEST_FAILURE: build failed" }],
+      isError: true,
+      timestamp: 99,
+    },
+  ];
+  const projection = new AgentProgressProjection(messages);
+  const transcript = projection.snapshot(
+    new Map([
+      ["latest-failure", { startedAt: 97, finishedAt: 99, durationMs: 2 }],
+    ]),
+  ).transcript;
+  assert.equal(transcript[0]?.text, "initial task");
+  const latest = transcript.at(-2);
+  assert.equal(latest?.text, "LATEST_FAILURE: build failed");
+  assert.equal(latest?.isError, true);
+  assert.equal(latest?.toolCallId, "latest-failure");
+  assert.equal(latest?.durationMs, 2);
+  assert.equal(
+    transcript.some((entry) => entry.toolCallId === "read-0"),
+    false,
+  );
+  const timestamps = transcript.flatMap((entry) =>
+    entry.timestamp === undefined ? [] : [entry.timestamp],
+  );
+  assert.deepEqual(
+    timestamps,
+    [...timestamps].sort((a, b) => a - b),
+  );
+  assert.match(transcript.at(-1)?.text ?? "", /transcript truncated/);
+});

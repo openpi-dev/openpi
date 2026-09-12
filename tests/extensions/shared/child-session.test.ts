@@ -13,12 +13,13 @@ import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import {
   createAgentSession,
   DefaultPackageManager,
   DefaultResourceLoader,
   defineTool,
+  type ExtensionContext,
   ProjectTrustStore,
   SessionManager,
   type SessionShutdownEvent,
@@ -34,6 +35,8 @@ import {
   createChildResources,
   type DisposableChildSession,
   effectiveChildToolAllowlist,
+  inheritedChildToolAllowlist,
+  resolveGitInfoPathOrThrow,
   resolveStandaloneChildProjectTrust,
   shutdownAndDisposeChildSession,
 } from "../../../extensions/shared/child-session.ts";
@@ -255,6 +258,60 @@ test("child resources remove only verified parent-only OpenPI extensions", async
       true,
       "ordinary third-party extensions must survive tool-name collisions",
     );
+  });
+});
+
+test("headless children preserve Pi shellPath through display extension startup", async () => {
+  await withTempDir(async (directory) => {
+    const cwd = path.join(directory, "project");
+    const agentDir = path.join(directory, "agent");
+    const repoRoot = fileURLToPath(new URL("../../..", import.meta.url));
+    const missingShell = path.join(directory, "missing-shell");
+    await mkdir(cwd, { recursive: true });
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ shellPath: missingShell, packages: [repoRoot] }),
+    );
+
+    const { loader, settingsManager } = await createChildResources({
+      cwd,
+      agentDir,
+      projectTrusted: true,
+    });
+    const { session } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+      ...childToolPolicy(["bash"]),
+    });
+
+    try {
+      await bindChildSessionExtensions(session, ["bash"]);
+      const bash = session.getToolDefinition("bash");
+      assert.ok(bash);
+      const context = {
+        cwd,
+        sessionManager: {
+          getSessionId: () => "shell-path",
+          getSessionFile: () => undefined,
+        },
+      } as unknown as ExtensionContext;
+      await assert.rejects(
+        bash.execute(
+          "shell-path",
+          { command: "printf should-not-run" },
+          undefined,
+          undefined,
+          context,
+        ),
+        /Custom shell path not found/,
+      );
+    } finally {
+      await shutdownAndDisposeChildSession(session);
+    }
   });
 });
 
@@ -1469,4 +1526,52 @@ test("every registered package tool is classified child-safe or excluded (fail-c
       `excluded tool "${name}" is no longer registered; remove it from CHILD_EXCLUDED_TOOL_NAMES`,
     );
   }
+});
+
+test("git-info exclusion: ENOENT degrades, other errors fail closed", async () => {
+  const enoent: NodeJS.ErrnoException = new Error("no such file");
+  enoent.code = "ENOENT";
+  // Absent (ENOENT) -> undefined, so nothing is excluded.
+  assert.equal(
+    resolveGitInfoPathOrThrow(() => {
+      throw enoent;
+    }),
+    undefined,
+  );
+  // Present -> the real path is returned for exclusion matching.
+  assert.equal(
+    resolveGitInfoPathOrThrow(() => "/repo/extensions/git-info/index.ts"),
+    "/repo/extensions/git-info/index.ts",
+  );
+  // Unverifiable (non-ENOENT) -> must throw, not silently degrade.
+  const eacces: NodeJS.ErrnoException = new Error("permission denied");
+  eacces.code = "EACCES";
+  assert.throws(
+    () =>
+      resolveGitInfoPathOrThrow(() => {
+        throw eacces;
+      }),
+    (error: unknown) => (error as NodeJS.ErrnoException).code === "EACCES",
+    "non-ENOENT realpath failures must fail closed",
+  );
+});
+
+test("child delegation inherits active tools and custom restrictions only narrow", () => {
+  const parent = ["read", "bash", "web_search", "workflow", "subagent_spawn"];
+  assert.deepEqual(inheritedChildToolAllowlist(parent), [
+    "read",
+    "bash",
+    "web_search",
+  ]);
+  assert.deepEqual(
+    inheritedChildToolAllowlist(parent, [
+      "read",
+      "rg",
+      "web_search",
+      "workflow",
+    ]),
+    ["read", "web_search"],
+  );
+  assert.deepEqual(inheritedChildToolAllowlist(parent, []), []);
+  assert.deepEqual(inheritedChildToolAllowlist([], ["bash"]), []);
 });

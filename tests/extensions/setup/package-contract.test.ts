@@ -13,6 +13,7 @@ const manifest = JSON.parse(
   private?: boolean;
   license?: string;
   keywords?: string[];
+  bin?: Record<string, string>;
   files?: string[];
   publishConfig?: { access?: string };
   packageManager?: string;
@@ -27,6 +28,10 @@ const manifest = JSON.parse(
     image?: string;
   };
 };
+const npmConfig = readFileSync(
+  new URL("../../../.npmrc", import.meta.url),
+  "utf8",
+);
 
 const HOST_PACKAGES = [
   "@earendil-works/pi-ai",
@@ -37,14 +42,33 @@ const HOST_PACKAGES = [
 
 test("Pi host packages stay peers while local checks keep development copies", () => {
   for (const packageName of HOST_PACKAGES) {
-    assert.equal(manifest.peerDependencies?.[packageName], "*");
+    assert.equal(
+      manifest.peerDependencies?.[packageName],
+      packageName === "typebox" ? "*" : ">=0.85.1",
+    );
     assert.ok(manifest.devDependencies?.[packageName]);
     assert.equal(manifest.dependencies?.[packageName], undefined);
   }
 });
 
+test("Git source installs do not resolve host-provided peer dependencies", () => {
+  const directives = npmConfig
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter((line) => line && !line.startsWith("#"));
+  assert.deepEqual(directives, ["legacy-peer-deps=true"]);
+});
+
 test("the manifest enforces the documented Node floor", () => {
   assert.equal(manifest.engines?.node, ">=22.19.0");
+});
+
+test("the standalone CLI ships its TypeScript module loader", () => {
+  assert.equal(manifest.dependencies?.jiti, "2.7.0");
+});
+
+test("experimental Pi server stays outside OpenPI runtime dependencies", () => {
+  assert.equal(manifest.dependencies?.["@earendil-works/pi-server"], undefined);
 });
 
 test("pi-intercom stays an explicit opt-in instead of a bundled dependency", () => {
@@ -59,6 +83,7 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
   assert.ok(manifest.keywords?.includes("pi-package"));
   assert.equal(manifest.publishConfig?.access, "public");
   assert.equal(manifest.packageManager, "bun@1.3.14");
+  assert.deepEqual(manifest.bin, { openpi: "./bin/openpi.js" });
   assert.equal(manifest.devDependencies?.["@biomejs/biome"], "2.5.8");
   assert.equal(manifest.devDependencies?.prettier, undefined);
   assert.equal(
@@ -84,6 +109,8 @@ test("the public OpenPI package has complete gallery and registry metadata", () 
     "https://raw.githubusercontent.com/openpi-dev/openpi/main/assets/openpi-package.png",
   );
   assert.deepEqual(manifest.files, [
+    "bin",
+    "web",
     "extensions",
     "!extensions/**/*.test.ts",
     "!extensions/**/*.spec.ts",

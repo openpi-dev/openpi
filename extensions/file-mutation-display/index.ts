@@ -27,15 +27,19 @@ function compact<TParams extends TSchema, TDetails, TState>(
 export default function fileMutationDisplay(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     const display = loadSetupConfig().ui;
-    if (ctx.mode === "tui") {
-      // Ctrl+O remains a temporary override. A new/reloaded session starts from
-      // the persisted defaults instead of inheriting an old expanded toggle.
-      ctx.ui.setToolsExpanded(
-        display.subagentResultDisplay === "full" &&
-          display.bashToolDisplay === "full" &&
-          display.fileMutationDisplay === "full",
-      );
-    }
+    // This extension changes only the interactive TUI projection. Headless
+    // sessions must keep Pi's native definitions, especially bash: replacing
+    // it here would drop the SettingsManager-provided shellPath and can make
+    // Windows resolve the WSL System32 stub instead of the configured shell.
+    if (ctx.mode !== "tui") return;
+
+    // Ctrl+O remains a temporary override. A new/reloaded session starts from
+    // the persisted defaults instead of inheriting an old expanded toggle.
+    ctx.ui.setToolsExpanded(
+      display.subagentResultDisplay === "full" &&
+        display.bashToolDisplay === "full" &&
+        display.fileMutationDisplay === "full",
+    );
 
     pi.registerTool(
       compact(

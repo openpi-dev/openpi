@@ -11,7 +11,7 @@
  * - fails the run when the prompt starts with "FAIL:", and refuses to spawn
  *   at all when it starts with "SPAWNFAIL:" (error-path testing);
  * - hangs the run after RunStarted without any assistant event when the
- * prompt starts with "HANG:" (first-response watchdog testing);
+ * prompt starts with "HANG:" (cancellation and stalled-provider testing);
  * - appends every event to a JSONL "session file" in tmpdir so the
  *   "full transcript in session file" pointers resolve.
  */
