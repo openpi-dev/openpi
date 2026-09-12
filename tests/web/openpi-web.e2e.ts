@@ -1,8 +1,9 @@
 import { AxeBuilder } from "@axe-core/playwright";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, type Page, test } from "@playwright/test";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
@@ -144,6 +145,203 @@ test.describe("touch viewport", () => {
     }));
     expect(width.scroll).toBe(width.client);
   });
+});
+
+for (const width of [320, 390]) {
+  test(`mobile sidebar contains keyboard focus at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({ width, height: 844 });
+    const requests = await openWorkbench(page);
+    const trigger = page.getByRole("button", { name: "打开侧边栏" });
+    const sidebar = page.locator(".session-sidebar");
+    await page.keyboard.press("Tab");
+    await expect(trigger).toBeFocused();
+    await expect(sidebar).not.toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(sidebar).toHaveAttribute("role", "dialog");
+    await expect(sidebar).toHaveAttribute("aria-modal", "true");
+    await expect(page.locator("main")).toHaveAttribute("inert", "");
+    const close = sidebar.getByRole("button", { name: "收起侧边栏" });
+    await expect(close).toBeFocused();
+    await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
+
+    const last = sidebar.getByRole("button", { name: "会话选项" }).last();
+    for (const source of ["brand", "search"] as const) {
+      for (const key of ["Tab", "Shift+Tab", "Escape"]) {
+        if (source === "brand") {
+          await sidebar.locator(".brand-lockup").click();
+          await expect(sidebar).toBeFocused();
+        } else {
+          const search = sidebar.getByRole("button", { name: "搜索会话" });
+          await search.click();
+          await sidebar.getByRole("button", { name: "关闭搜索" }).click();
+          await expect(search).toBeFocused();
+        }
+        await page.keyboard.press(key);
+        if (key === "Escape") {
+          await expect(sidebar).not.toBeVisible();
+          await expect(trigger).toBeFocused();
+          await trigger.click();
+        } else {
+          expect(
+            await sidebar.evaluate((element) =>
+              element.contains(document.activeElement),
+            ),
+          ).toBe(true);
+        }
+      }
+    }
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Shift+Tab");
+    await expect(last).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    await last.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "重命名会话" }),
+    ).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(close).toBeFocused();
+    for (let step = 0; step < 15; step++) {
+      await page.keyboard.press("Tab");
+      expect(
+        await sidebar.evaluate((element) =>
+          element.contains(document.activeElement),
+        ),
+      ).toBe(true);
+    }
+
+    const menu = sidebar.getByRole("button", { name: "Workspace options" });
+    await menu.focus();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "重命名工作区" }),
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(menu).toBeFocused();
+    await expect(sidebar).toBeVisible();
+    await page.keyboard.press("Enter");
+    await expect(
+      page.getByRole("menuitem", { name: "重命名工作区" }),
+    ).toBeFocused();
+    await page.keyboard.press("Enter");
+    const dialog = page.getByRole("dialog", { name: "重命名工作区" });
+    await expect(
+      dialog.getByRole("textbox", { name: "工作区名称" }),
+    ).toBeFocused();
+    const dialogBox = await dialog.boundingBox();
+    expect(dialogBox?.x).toBeGreaterThanOrEqual(0);
+    expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
+    await page.keyboard.press("Escape");
+    await expect(dialog).not.toBeVisible();
+    await expect(menu).toBeFocused();
+    await expect(sidebar).toBeVisible();
+    await expect(menu).toHaveCSS("outline-style", "solid");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`sidebar-keyboard-${width}.png`),
+      fullPage: true,
+    });
+    await page.emulateMedia({ colorScheme: "dark" });
+    await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+
+    await page.keyboard.press("Escape");
+    await expect(sidebar).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+    await expect(trigger).toHaveAttribute("aria-expanded", "false");
+    await expect(page.locator("main")).not.toHaveAttribute("inert", "");
+    await page.keyboard.press("Tab");
+    expect(
+      await sidebar.evaluate((element) =>
+        element.contains(document.activeElement),
+      ),
+    ).toBe(false);
+    expect(requests).toEqual([]);
+  });
+}
+
+test("mobile sidebar releases focus isolation when resized to desktop", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openWorkbench(page);
+  const trigger = page.getByRole("button", { name: "打开侧边栏" });
+  await trigger.click();
+  await page.setViewportSize({ width: 1280, height: 844 });
+  await expect(page.locator("main")).not.toHaveAttribute("inert", "");
+  await expect(page.locator(".session-sidebar")).not.toHaveAttribute(
+    "role",
+    "dialog",
+  );
+  await page.getByRole("textbox", { name: "描述任务" }).focus();
+  await expect(page.getByRole("textbox", { name: "描述任务" })).toBeFocused();
+  await page.getByRole("button", { name: "收起侧边栏" }).click();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator(".session-sidebar")).not.toBeVisible();
+  await trigger.click();
+  await page.getByRole("button", { name: "收起侧边栏" }).click();
+  await expect(trigger).toBeFocused();
+  await trigger.click();
+  await page.locator(".sidebar-scrim").click({ position: { x: 380, y: 400 } });
+  await expect(page.locator(".session-sidebar")).not.toBeVisible();
+  await expect(trigger).toBeFocused();
+});
+
+test("mobile sidebar recovers focus when archived and restored rows disappear", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openWorkbench(page);
+  const snapshot = await (
+    await page.request.get("/api/snapshot", {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+  ).json();
+  // Pi does not persist empty new Sessions; use a header-only fixture, not a model response.
+  const fixture = SessionManager.inMemory(snapshot.selectedSession.cwd);
+  const path = join(
+    dirname(snapshot.selectedSession.path),
+    `${fixture.getSessionId()}.jsonl`,
+  );
+  await writeFile(path, `${JSON.stringify(fixture.getHeader())}\n`, {
+    flag: "wx",
+  });
+  try {
+    await page.reload();
+    const trigger = page.getByRole("button", { name: "打开侧边栏" });
+    const sidebar = page.locator(".session-sidebar");
+    const close = sidebar.getByRole("button", { name: "收起侧边栏" });
+    await trigger.click();
+    for (const action of ["归档会话", "恢复会话"]) {
+      const rows = sidebar.locator(".session-row");
+      const count = await rows.count();
+      await rows
+        .filter({ hasNot: page.locator('[aria-current="page"]') })
+        .first()
+        .getByRole("button", { name: "会话选项" })
+        .focus();
+      await page.keyboard.press("Enter");
+      await page.getByRole("menuitem", { name: action }).click();
+      await expect(rows).toHaveCount(count - 1);
+      await expect(close).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expect(
+        sidebar.getByRole("button", { name: "新建会话", exact: true }),
+      ).toBeFocused();
+      await page.keyboard.press("Escape");
+      await expect(sidebar).not.toBeVisible();
+      await expect(trigger).toBeFocused();
+      await trigger.click();
+      await sidebar
+        .getByRole("button", { name: "已归档", exact: true })
+        .click();
+    }
+  } finally {
+    await rm(path, { force: true });
+  }
 });
 
 test.describe("reduced motion", () => {
