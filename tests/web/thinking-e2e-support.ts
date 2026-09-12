@@ -3,9 +3,7 @@ import type { Page, Route } from "@playwright/test";
 /**
  * Route-mocked backend fixture for the thinking-level picker.
  *
- * The Web E2E config starts one real Host with an empty temp agent dir, so the
- * snapshot has no active Session, no workspace, and no `thinking` projection.
- * These tests fetch that real snapshot and override it with a deterministic
+ * These tests fetch the real Host snapshot and override it with a deterministic
  * active reasoning Session, then intercept `/api/thinking` reads and writes.
  * Nothing here touches the real runtime; only the browser's view of it.
  */

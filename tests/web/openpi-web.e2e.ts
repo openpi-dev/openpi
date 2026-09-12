@@ -58,8 +58,6 @@ test("production workbench is local, keyboard-operable, and accessible", async (
 
   const thinkingPicker = page.locator(".thinking-picker");
   await expect(thinkingPicker).toBeVisible();
-  await expect(thinkingPicker).toBeDisabled();
-  await expect(thinkingPicker).toHaveAttribute("aria-label", "暂不支持思考");
   expect(
     await page.evaluate(() => {
       const model = document.querySelector(".model-picker");
@@ -1077,6 +1075,16 @@ test("workspace selection survives refresh and creates the exact native Session 
 });
 
 test.describe("thinking picker", () => {
+  test("disables thinking when the runtime reports it unsupported", async ({
+    page,
+  }) => {
+    await installThinkingFixture(page, { supported: false, available: [] });
+    await openWorkbench(page);
+    const thinkingPicker = page.locator(".thinking-picker");
+    await expect(thinkingPicker).toBeDisabled();
+    await expect(thinkingPicker).toHaveAttribute("aria-label", "暂不支持思考");
+  });
+
   test("opens with a section heading and marks the confirmed level", async ({
     page,
   }) => {
