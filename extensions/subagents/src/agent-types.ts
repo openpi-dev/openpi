@@ -125,8 +125,8 @@ export const BUILT_IN_AGENT_TYPES: readonly AgentType[] = [
     name: "explorer",
     planningCompatible: true,
     description:
-      "Read-only codebase exploration. Usually use moderate reasoning, increasing it for harder tasks.",
-    body: "Explore the codebase read-only. Trace the real flow, inspect related callers, and report concise evidence with file paths and line references.",
+      "Codebase exploration. Usually use moderate reasoning, increasing it for harder tasks.",
+    body: "Explore the codebase. Trace the real flow, inspect related callers, and report concise evidence with file paths and line references.",
     source: "built-in:explorer",
   },
   {
@@ -140,16 +140,16 @@ export const BUILT_IN_AGENT_TYPES: readonly AgentType[] = [
     name: "reviewer",
     planningCompatible: true,
     description:
-      "Read-only review for correctness, safety, and regressions. Usually use high reasoning, adjusted for task difficulty.",
-    body: "Review the requested code or change read-only. Identify concrete correctness, security, and regression risks with evidence; do not modify files.",
+      "Review for correctness, safety, and regressions. Usually use high reasoning, adjusted for task difficulty.",
+    body: "Review the requested code or change. Identify concrete correctness, security, and regression risks with evidence.",
     source: "built-in:reviewer",
   },
   {
     name: "advisor",
     planningCompatible: true,
     description:
-      "Deep read-only analysis and technical advice. Usually use high reasoning, adjusted for task difficulty.",
-    body: "Analyze the problem deeply without modifying files. Explain the relevant tradeoffs, risks, and recommended next step using repository evidence.",
+      "Deep technical analysis and advice. Usually use high reasoning, adjusted for task difficulty.",
+    body: "Analyze the problem deeply. Explain the relevant tradeoffs, risks, and recommended next step using repository evidence.",
     source: "built-in:advisor",
   },
 ];

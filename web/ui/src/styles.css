@@ -154,7 +154,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .session:hover { background: var(--sidebar-hover); color: var(--text); }
 .session.active { background: var(--sidebar-active); color: var(--text); }
 .session-title { @apply min-w-0 flex-1 overflow-hidden text-ellipsis whitespace-nowrap; font-size: 12.5px; }
-.session-time { flex: 0 0 auto; color: var(--subtle); font-size: 10.5px; }
+.session-time { flex: 0 0 auto; color: inherit; font-size: 10.5px; }
 .session-row > .astryx-menu-trigger { @apply absolute right-1 opacity-0; pointer-events: none; }
 .session-row:hover > .astryx-menu-trigger, .session-row:focus-within > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
 .session-row:hover .session-time, .session-row:focus-within .session-time { visibility: hidden; }
@@ -374,11 +374,11 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 
 @media (max-width: 760px) {
   .app-shell, .app-shell.sidebar-collapsed { grid-template-columns: 1fr; }
-  .session-sidebar { position: fixed; inset: 0 auto 0 0; width: min(86vw, 300px); transform: translateX(-100%); border-right: 1px solid var(--border); background: var(--sidebar); backdrop-filter: none; transition: transform 180ms ease; }
+  .session-sidebar { position: fixed; inset: 0 auto 0 0; width: min(86vw, 300px); visibility: hidden; transform: translateX(-100%); border-right: 1px solid var(--border); background: var(--sidebar); backdrop-filter: none; transition: transform 180ms ease; }
   .session-sidebar::before { display: none; }
-  .sidebar-open .session-sidebar { transform: translateX(0); }
+  .sidebar-open .session-sidebar { visibility: visible; transform: translateX(0); }
   .sidebar-collapsed .session-sidebar { align-items: stretch; padding: 8px 10px; }
-  .sidebar-collapsed .sidebar-brand, .sidebar-collapsed .workspace-heading, .sidebar-collapsed .workspace-tree { visibility: visible; }
+  .sidebar-collapsed .sidebar-brand, .sidebar-collapsed .workspace-heading, .sidebar-collapsed .workspace-tree { visibility: inherit; }
   .sidebar-collapsed .new-session-button { width: calc(100% - 4px); height: 38px; margin: 8px 2px 10px; border-color: var(--border-strong); background: var(--page); }
   .sidebar-collapsed .new-session-button span { display: initial; }
   .sidebar-expand { display: none; }
