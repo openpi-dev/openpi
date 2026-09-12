@@ -40,6 +40,11 @@ import {
   type WebHostLease,
 } from "./web-host-lease.ts";
 import {
+  commandsForServices,
+  createCommandDiscoveryBridge,
+  registerCommandDiscoveryBridge,
+} from "./command-discovery.ts";
+import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 
@@ -368,6 +373,12 @@ export class PiWebRuntime implements WebRuntimeController {
       label: model.name || `${model.provider}/${model.id}`,
       current: current?.provider === model.provider && current.id === model.id,
     }));
+  }
+
+  listCommands() {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    return commandsForServices(this.runtime.services);
   }
 
   listProviderAuth(): WebProviderAuthProjection {
@@ -867,12 +878,17 @@ export class PiWebRuntime implements WebRuntimeController {
         );
         ownsDispatcherLease = true;
       }
+      const commandDiscovery = createCommandDiscoveryBridge();
       const services = await createAgentSessionServices({
         cwd: options.cwd,
         agentDir: options.agentDir,
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
+        resourceLoaderOptions: {
+          extensionFactories: [commandDiscovery.extension],
+        },
       });
+      registerCommandDiscoveryBridge(services, commandDiscovery);
       const extensionErrors = services.resourceLoader
         .getExtensions()
         .errors.map(({ path, error }) => `Failed to load extension "${path}": ${error}`);

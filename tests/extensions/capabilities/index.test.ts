@@ -244,14 +244,14 @@ test("an explicit subagent request loads delegation directly", () => {
   assert.match(JSON.stringify(results), SUBAGENT_SKILL_PATH_PATTERN);
 });
 
-test("reserved capability words load their groups without action verbs", () => {
+test("capability names without request verbs leave their groups unloaded", () => {
   const h = harness();
   h.start();
 
   h.before("subagent, workflow");
 
-  assert.ok(h.active().includes("subagent_spawn"));
-  assert.ok(h.active().includes("workflow"));
+  assert.equal(h.active().includes("subagent_spawn"), false);
+  assert.equal(h.active().includes("workflow"), false);
 });
 
 test("common Chinese and multi-agent delegation requests are explicit intent", () => {
