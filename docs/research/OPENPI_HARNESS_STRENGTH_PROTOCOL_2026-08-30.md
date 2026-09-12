@@ -4,7 +4,7 @@
 >
 > 创建日期：2026-08-30
 >
-> 最后核验：2026-08-30
+> 最后核验：2026-09-12（来源转述与分类；未复跑模型实验）
 >
 > 关联 Issue：[#45](https://github.com/openpi-dev/openpi/issues/45)
 
@@ -43,16 +43,18 @@
 - 不同 provider 的 usage 字段不能直接视为同一账本；
 - 没有触发的机制不能用于解释该 cell 的结果。
 
-## 对照设计
+## 对照设计（本记录的新建议）
 
-至少冻结四个 arm：
+以下四臂设计是供后续讨论的建议，不是 Issue #45 已执行或已采纳的实验安排。
+
+建议冻结四个 arm：
 
 1. Bare Pi：Pi 原生最小编码面。
 2. OpenPI Explicit：普通 turn 保持 Pi-native，明确请求时才加载能力。
 3. OpenPI capability profile：只加载实验指定的一个能力组。
 4. OMP：固定版本的完整公开 harness。
 
-每个模型 × 任务 cell 使用 AB/BA 顺序反转；每个 arm 使用独立 workspace、HOME、TMP、Session 和 provider credential 投影。任务完成后才运行 hidden verifier，禁止模型读取 verifier 或其他 arm 的目录。
+对每个预注册的双臂比较使用 AB/BA 顺序反转；四臂整体采用预注册的平衡顺序，不能把 AB/BA 当作四臂完整排列；每个 arm 使用独立 workspace、HOME、TMP、Session 和 provider credential 投影。任务完成后才运行 hidden verifier，禁止模型读取 verifier 或其他 arm 的目录。
 
 模型至少覆盖一个较弱执行模型、一个中等模型和一个强 coding model。模型、provider、thinking/reasoning、timeout、最大请求数和权限配置必须在运行前冻结，不能看到结果后调整。
 
@@ -80,4 +82,8 @@
 
 ## 当前结论
 
-Issue #45 的现有材料支持建立上述配对协议，但不足以证明 Harness 强度与模型能力之间已经存在可迁移曲线。下一步必须先完成隔离有效、身份冻结、可审计 trace 的小规模重复；在此之前 OpenPI 默认 runtime 保持不变。
+Issue #45 的现有材料支持继续讨论配对协议，但不足以证明 Harness 强度与模型能力之间已经存在可迁移曲线。下一步必须先完成隔离有效、身份冻结、可审计 trace 的小规模重复；在此之前 OpenPI 默认 runtime 保持不变。
+
+## 本次核验边界
+
+本次修订对应 [PR #306](https://github.com/openpi-dev/openpi/pull/306)；产品实现核对以 OpenPI `77d444f51b0b81589f407b6b413578cb06e083ad` 为界。历史观察来自正文列出的 Issue，validated 仅指来源转述与范围核验，不代表重算原始 trace 或验证新的实验结论。

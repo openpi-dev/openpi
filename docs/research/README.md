@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md`](OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #306](https://github.com/openpi-dev/openpi/pull/306)).
+
 - [`CACHE_USAGE_CONTRACT_2026-09-11.md`](CACHE_USAGE_CONTRACT_2026-09-11.md) — source-scoped Pi usage field matrix and synthetic cache-diagnostic replay boundaries; real comparative Session evidence remains open ([#156](https://github.com/openpi-dev/openpi/issues/156)).
 
 - [`CURSOR_NATIVE_RECOVERY_2026-09-08.md`](CURSOR_NATIVE_RECOVERY_2026-09-08.md) — bounded in-band native execution rejection, Pi-owned tools, cancellation identity, and actual child acceptance ([#234](https://github.com/openpi-dev/openpi/issues/234)).
@@ -32,6 +34,5 @@ The following records predate [`Decision 0001`](../decisions/0001-documentation-
 
 - [`CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md) — official-source research on dynamic fan-out and bounded execution.
 - [`CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md`](CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md) — version-scoped Workflow contract interview and evidence boundary.
-- [`OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md`](OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md) — Issue #45 的模型能力 × Harness 强度配对研究协议；不包含新的 Benchmark 结果。
 
 When research changes a project constraint, preserve the adopted choice in a Decision. Amend or supersede a historical record rather than silently rewriting its original conclusion.
