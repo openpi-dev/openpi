@@ -37,7 +37,8 @@ test("English references without an imperative stay inert", () => {
     "git checkout -b subagent-matching",
     "Please review the subagent.ts implementation",
     "讨论 workflow 和 subagent 的区别",
-  ]) assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
+  ])
+    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
   assert.deepEqual(
     capabilitiesRequestedByPrompt("Use a subagent to review this change"),
     ["delegate"],
@@ -68,4 +69,22 @@ test("Chinese discussion of subagents does not authorize delegation", () => {
 test("gateway intent shares the same negation policy", () => {
   assert.equal(requestsCapabilityGateway("Show OpenPI capabilities."), true);
   assert.equal(requestsCapabilityGateway("Do not use OpenPI tools."), false);
+});
+
+test("declarative English usage is not a capability request", () => {
+  for (const prompt of [
+    "I use subagents in this repo",
+    "We run workflows every day",
+    "They use a workflow for releases",
+  ]) {
+    assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
+  }
+  assert.deepEqual(
+    capabilitiesRequestedByPrompt("Please use a subagent to inspect this"),
+    ["delegate"],
+  );
+  assert.deepEqual(
+    capabilitiesRequestedByPrompt("Could you run a workflow for this task"),
+    ["workflow"],
+  );
 });
