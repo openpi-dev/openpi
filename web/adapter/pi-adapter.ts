@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import {
   lstat,
   open,
@@ -22,6 +23,10 @@ import {
   projectEntries,
   projectEntry,
   WEB_MAX_MODELS,
+  WEB_MAX_ARCHIVED_SESSION_PAGE,
+  WEB_MAX_ARCHIVED_SESSION_CURSOR,
+  WEB_MAX_ARCHIVED_SESSION_QUERY,
+  WEB_MAX_ARCHIVED_SESSION_SCAN,
   WEB_MAX_SESSIONS,
   WEB_MAX_SESSION_PREVIEW,
   WEB_MAX_SNAPSHOT_BYTES,
@@ -224,6 +229,50 @@ async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) 
         !!session && session.cwd === workspace,
     )
     .sort((left, right) => right.modified.getTime() - left.modified.getTime());
+}
+
+export interface ArchivedSessionQuery {
+  readonly cursor?: string;
+  readonly limit?: number;
+  readonly query?: string;
+}
+
+interface ArchivedSessionCursor {
+  readonly version: 1;
+  readonly sessionPath: string;
+  readonly queryHash: string;
+}
+
+function encodeArchivedSessionCursor(cursor: ArchivedSessionCursor) {
+  return Buffer.from(JSON.stringify(cursor)).toString("base64url");
+}
+
+function archivedQueryHash(query: string) {
+  return createHash("sha256").update(query).digest("hex");
+}
+
+function decodeArchivedSessionCursor(value: string) {
+  try {
+    const bytes = Buffer.from(value, "base64url");
+    if (bytes.toString("base64url") !== value) return undefined;
+    const parsed: unknown = JSON.parse(bytes.toString("utf8"));
+    if (
+      !parsed ||
+      typeof parsed !== "object" ||
+      Array.isArray(parsed) ||
+      (parsed as { version?: unknown }).version !== 1 ||
+      typeof (parsed as { sessionPath?: unknown }).sessionPath !== "string" ||
+      (parsed as { sessionPath: string }).sessionPath.length === 0 ||
+      (parsed as { sessionPath: string }).sessionPath.length > 320 ||
+      typeof (parsed as { queryHash?: unknown }).queryHash !== "string" ||
+      !/^[0-9a-f]{64}$/u.test((parsed as { queryHash: string }).queryHash)
+    ) {
+      return undefined;
+    }
+    return parsed as ArchivedSessionCursor;
+  } catch {
+    return undefined;
+  }
 }
 
 export class PiWebAdapter {
@@ -493,6 +542,105 @@ export class PiWebAdapter {
       const session = await this.requireSession(path);
       draft.add(resolve(session.path));
     });
+  }
+
+  async listArchivedSessions(options: ArchivedSessionQuery = {}) {
+    await this.ensureWorkspaceStateLoaded();
+    await this.ensureArchivesLoaded();
+    const limit = options.limit ?? 25;
+    const query = options.query?.trim() ?? "";
+    if (
+      !Number.isSafeInteger(limit) ||
+      limit <= 0 ||
+      limit > WEB_MAX_ARCHIVED_SESSION_PAGE ||
+      query.length > WEB_MAX_ARCHIVED_SESSION_QUERY ||
+      /[\u0000-\u001f\u007f]/u.test(query) ||
+      (options.cursor !== undefined &&
+        (options.cursor.length === 0 ||
+          options.cursor.length > WEB_MAX_ARCHIVED_SESSION_CURSOR ||
+          /[\u0000-\u001f\u007f]/u.test(options.cursor)))
+    ) {
+      return { status: "invalid" as const };
+    }
+
+    const allSessions = await SessionManager.listAll(
+      this.runtime.sessionDirectory,
+    );
+    const scanned = allSessions.slice(0, WEB_MAX_ARCHIVED_SESSION_SCAN);
+    const normalizedQuery = query.normalize("NFKC").toLocaleLowerCase();
+    if (normalizedQuery.length > WEB_MAX_ARCHIVED_SESSION_QUERY) {
+      return { status: "invalid" as const };
+    }
+    const matches = scanned.filter((session) => {
+      if (!this.archivedSessions.has(resolve(session.path))) return false;
+      if (!normalizedQuery) return true;
+      const source = [
+        session.id,
+        session.name ?? "",
+        session.cwd,
+        session.firstMessage.slice(0, 2_000),
+      ]
+        .join("\n")
+        .normalize("NFKC")
+        .toLocaleLowerCase();
+      return source.includes(normalizedQuery);
+    });
+    let start = 0;
+    if (options.cursor !== undefined) {
+      const cursor = decodeArchivedSessionCursor(options.cursor);
+      if (!cursor) return { status: "invalid" as const };
+      if (cursor.queryHash !== archivedQueryHash(normalizedQuery)) {
+        return { status: "stale_cursor" as const };
+      }
+      const cursorIndex = matches.findIndex(
+        (session) => session.path === cursor.sessionPath,
+      );
+      if (cursorIndex < 0) return { status: "stale_cursor" as const };
+      start = cursorIndex + 1;
+    }
+    const selected = matches.slice(start, start + limit);
+    const sessions = selected.map((session) => ({
+      id: session.id,
+      path: session.path,
+      cwd: resolve(session.cwd),
+      ...(session.name
+        ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
+        : {}),
+      modified: session.modified.toISOString(),
+      created: session.created.toISOString(),
+      messageCount: session.messageCount,
+      firstMessage: boundedText(
+        session.firstMessage,
+        WEB_MAX_SESSION_PREVIEW,
+      ),
+      archived: true,
+      ...(this.ungroupedSessions.has(resolve(session.path))
+        ? { ungrouped: true }
+        : {}),
+    }));
+    const pageEnd = start + sessions.length;
+    const hasMoreMatches = pageEnd < matches.length;
+    const recordsUnscanned = Math.max(0, allSessions.length - scanned.length);
+    return {
+      status: "ok" as const,
+      sessions,
+      ...(hasMoreMatches && sessions.length > 0
+        ? {
+            nextCursor: encodeArchivedSessionCursor({
+              version: 1,
+              sessionPath: sessions.at(-1)!.path,
+              queryHash: archivedQueryHash(normalizedQuery),
+            }),
+          }
+        : {}),
+      truncation: {
+        truncated: hasMoreMatches || recordsUnscanned > 0,
+        matchesOmitted: Math.max(0, matches.length - pageEnd),
+        recordsUnscanned,
+        maxPageSize: WEB_MAX_ARCHIVED_SESSION_PAGE,
+        maxScanned: WEB_MAX_ARCHIVED_SESSION_SCAN,
+      },
+    };
   }
 
   async unarchiveSession(path: string) {
