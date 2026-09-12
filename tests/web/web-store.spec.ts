@@ -409,6 +409,29 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("preserves a business notice when the event stream reconnects", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    let connected: (() => void) | undefined;
+    const consumeEvents = vi.fn((options: EventStreamOptions) => {
+      connected = options.onConnected;
+      return new Promise<void>((resolve) => {
+        options.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        });
+      });
+    });
+    const store = createWebStore(client, { consumeEvents });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    await vi.waitFor(() => expect(connected).toBeDefined());
+    store.setState({ notice: "The created Session is no longer active." });
+    connected?.();
+    expect(store.getState().connection).toBe("connected");
+    expect(store.getState().notice).toContain("no longer active");
+    store.getState().actions.stop();
+  });
+
   it("projects prompt admission optimistically and settles on the receipt", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -1067,6 +1090,19 @@ describe("OpenPI Web store", () => {
     expect(store.getState().snapshot?.currentSessionId).toBe("session-b");
     expect(store.getState().notice).toContain("no longer active");
     expect(store.getState().workspaceDraft).toBe(true);
+    const previousCommandId = client.creations[0].commandId;
+    client.snapshots.push(
+      Promise.resolve(
+        activeSnapshot("session-a", `${workspaceA}/session.jsonl`, {
+          workspace: workspaceA,
+        }),
+      ),
+    );
+    expect(await store.getState().actions.sendPrompt("retry in A")).toBe(true);
+    expect(client.creations[1].commandId).not.toBe(previousCommandId);
+    expect(client.prompts).toEqual([
+      { sessionId: "session-a", content: "retry in A" },
+    ]);
   });
 
   it("binds a first prompt to a new Session before it has a persisted path", async () => {

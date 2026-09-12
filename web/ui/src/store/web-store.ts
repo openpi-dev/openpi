@@ -541,7 +541,7 @@ export function createWebStore(
             cursor: get().cursor ?? 0,
             onConnected: () => {
               reconnectDelay = 500;
-              set({ connection: "connected", notice: null });
+              set({ connection: "connected" });
             },
             onEvent: applyRuntimeEvent,
             onHeartbeat: () => scheduleSnapshotRefresh(0),
@@ -789,6 +789,7 @@ export function createWebStore(
               );
             }
             if (!targetMatchesSnapshot(target)) {
+              creationRetry = null;
               showError(
                 new Error(
                   "The created Session is no longer active in the selected workspace. Please try again.",
@@ -802,6 +803,7 @@ export function createWebStore(
               return;
             }
             if (get().workspaceDraft || !targetMatchesSnapshot(target)) {
+              creationRetry = null;
               showError(
                 new Error(
                   "The created Session is no longer active in the selected workspace. Please try again.",
