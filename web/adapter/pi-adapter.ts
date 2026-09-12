@@ -3,7 +3,7 @@ import {
   lstat,
   open,
   readFile,
-  readdir,
+  opendir,
   realpath,
   rename,
   rm,
@@ -68,6 +68,7 @@ type ReadOnlyTerminalSessionInfo = {
   created: Date;
   messageCount: number;
   firstMessage: string;
+  metadataPartial: boolean;
 };
 
 function defaultTerminalSessionDirectory(cwd: string) {
@@ -187,6 +188,7 @@ async function readTerminalSessionInfo(
       created,
       messageCount,
       firstMessage: firstMessage || "(no messages)",
+      metadataPartial: bytesRead < fileStat.size,
     };
   } finally {
     await handle.close();
@@ -196,39 +198,38 @@ async function readTerminalSessionInfo(
 async function listTerminalSessionInfo(workspace: string, signal?: AbortSignal) {
   signal?.throwIfAborted();
   const directory = defaultTerminalSessionDirectory(workspace);
-  let entries;
+  const sessions: ReadOnlyTerminalSessionInfo[] = [];
+  let partial = false;
+  let scanned = 0;
   try {
-    entries = await readdir(directory, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const candidates = await Promise.all(
-    entries
-      .filter((entry) => entry.isFile() && entry.name.endsWith(".jsonl"))
-      .map(async (entry) => {
+    // Bound directory traversal and file work, not only the returned projection.
+    const entries = await opendir(directory);
+    for await (const entry of entries) {
+      signal?.throwIfAborted();
+      if (++scanned > TERMINAL_DISCOVERY_MAX_FILES) {
+        partial = true;
+        break;
+      }
+      if (!entry.isFile() || !entry.name.endsWith(".jsonl")) continue;
+      const path = join(directory, entry.name);
+      try {
+        const fileStat = await stat(path);
+        const session = await readTerminalSessionInfo(path, fileStat.mtime, signal);
+        if (!session) { partial = true; continue; }
+        if (session.cwd !== workspace) continue;
+        partial ||= session.metadataPartial;
+        sessions.push(session);
+      } catch (error) {
         signal?.throwIfAborted();
-        const path = join(directory, entry.name);
-        try {
-          const fileStat = await stat(path);
-          return { path, modified: fileStat.mtime };
-        } catch {
-          return undefined;
-        }
-      }),
-  );
-  const infos = await Promise.all(
-    candidates
-      .filter((candidate): candidate is { path: string; modified: Date } => !!candidate)
-      .sort((left, right) => right.modified.getTime() - left.modified.getTime())
-      .slice(0, TERMINAL_DISCOVERY_MAX_FILES)
-      .map((candidate) => readTerminalSessionInfo(candidate.path, candidate.modified, signal)),
-  );
-  return infos
-    .filter(
-      (session): session is ReadOnlyTerminalSessionInfo =>
-        !!session && session.cwd === workspace,
-    )
-    .sort((left, right) => right.modified.getTime() - left.modified.getTime());
+        partial = true;
+      }
+    }
+  } catch (error) {
+    signal?.throwIfAborted();
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") partial = true;
+  }
+  sessions.sort((left, right) => right.modified.getTime() - left.modified.getTime());
+  return { sessions, partial };
 }
 
 export interface ArchivedSessionQuery {
@@ -811,7 +812,8 @@ export class PiWebAdapter {
     const query = options.query?.trim().toLocaleLowerCase() ?? "";
     const cursor = options.cursor ?? 0;
     const limit = options.limit ?? 50;
-    const sessions = (await listTerminalSessionInfo(workspace, options.signal))
+    const discovery = await listTerminalSessionInfo(workspace, options.signal);
+    const sessions = discovery.sessions
       .filter((session) => {
         if (!query) return true;
         return [session.name, session.cwd, session.firstMessage].some((value) =>
@@ -831,6 +833,7 @@ export class PiWebAdapter {
         modified: session.modified.toISOString(),
         created: session.created.toISOString(),
         messageCount: session.messageCount,
+        metadataPartial: session.metadataPartial,
         firstMessage: boundedText(
           session.firstMessage,
           WEB_MAX_SESSION_PREVIEW,
@@ -845,6 +848,7 @@ export class PiWebAdapter {
           ? cursor + page.length
           : undefined,
       total: sessions.length,
+      partial: discovery.partial,
     };
   }
 
@@ -884,6 +888,7 @@ export class PiWebAdapter {
       modified: session.modified.toISOString(),
       created: session.created.toISOString(),
       messageCount: session.messageCount,
+      metadataPartial: session.metadataPartial,
       firstMessage: boundedText(
         session.firstMessage,
         WEB_MAX_SESSION_PREVIEW,

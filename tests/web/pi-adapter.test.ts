@@ -208,6 +208,7 @@ test("discovers default Pi sessions as bounded read-only projections", async (t)
         modified: listed.sessions[0]?.modified,
         created: listed.sessions[0]?.created,
         messageCount: 2,
+        metadataPartial: false,
         firstMessage: "terminal history",
         source: "pi-default",
         origin: "terminal",
@@ -339,6 +340,40 @@ test("discovers default Pi sessions as bounded read-only projections", async (t)
     await assert.rejects(
       readFile(join(sessionDirectory, "archived-sessions.json")),
       { code: "ENOENT" },
+    );
+    terminal.appendMessage({
+      role: "user",
+      content: "x".repeat(300 * 1024),
+      timestamp: 8,
+    });
+    terminal.appendSessionInfo("late metadata name");
+    const partial = await adapter.listReadOnlyTerminalSessions();
+    assert.equal(partial.partial, true);
+    assert.equal(partial.sessions[0]?.metadataPartial, true);
+    assert.equal(
+      (await adapter.getReadOnlyTerminalSession(terminalPath)).metadataPartial,
+      true,
+    );
+    const unmatched = await adapter.listReadOnlyTerminalSessions({
+      query: "late metadata name",
+    });
+    assert.equal(unmatched.sessions.length, 0);
+    assert.equal(
+      unmatched.partial,
+      true,
+      "an absent match in a prefix is not a complete search",
+    );
+    const directory = terminalPath.slice(
+      0,
+      Math.max(terminalPath.lastIndexOf("/"), terminalPath.lastIndexOf("\\")),
+    );
+    for (let i = 0; i <= WEB_MAX_SESSIONS; i++)
+      await writeFile(join(directory, `unrelated-${i}.txt`), "");
+    const capped = await adapter.listReadOnlyTerminalSessions();
+    assert.equal(
+      capped.partial,
+      true,
+      "directory traversal stops at the discovery bound",
     );
   } finally {
     if (previousAgentDirectory === undefined) {
