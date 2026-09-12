@@ -3,11 +3,11 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
+import { Composer } from "../features/composer/Composer.tsx";
 import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { Composer } from "../features/composer/Composer.tsx";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
@@ -192,15 +192,20 @@ export function App() {
           workspaceDraft={state.workspaceDraft}
           draftModel={state.draftModel}
           modelSelectionPending={state.modelSelectionPending}
+          modelSearch={state.modelSearch}
+          thinkingPendingLevel={state.thinkingPendingLevel}
           onInspect={inspect}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
           pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
+          commandDiscovery={state.commandDiscovery}
           snapshot={state.snapshot}
           selectedWorkspace={state.selectedWorkspace}
           sessionSwitching={state.sessionSwitching}
           promptAdmissionPending={state.promptAdmissionPending}
+          promptAdmissionRecovery={state.promptAdmissionRecovery}
+          promptAdmissionResolution={state.promptAdmissionResolution}
           liveRunning={state.liveRunning}
           landing={landing}
           actions={actions}

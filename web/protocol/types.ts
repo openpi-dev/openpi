@@ -1,6 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
-import type { WebActiveTurn } from "../runtime/types.ts";
+import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
+import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
@@ -17,8 +18,17 @@ export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
 export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
 export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
 export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
+export const WEB_MAX_MODEL_SEARCH_RESULTS = 50;
+export const WEB_MAX_MODEL_SEARCH_BYTES = 64 * 1024;
+export const WEB_MAX_MODEL_QUERY = 200;
+export const WEB_MAX_COMMANDS = 250;
+export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
+export const WEB_MAX_COMMAND_NAME = 160;
+export const WEB_MAX_COMMAND_DESCRIPTION = 500;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
+export const WEB_MAX_THINKING_LEVEL = 500;
+export const WEB_MAX_THINKING_LEVELS = 16;
 
 export interface WebEvent {
   protocolVersion: typeof WEB_PROTOCOL_VERSION;
@@ -62,6 +72,39 @@ export interface WebModelSummary {
   current: boolean;
 }
 
+export interface WebModelSearchResult {
+  models: WebModelSummary[];
+  totalAvailable: number;
+  totalMatches: number;
+  truncation: {
+    truncated: boolean;
+    matchesOmitted: number;
+    maxResults: number;
+    maxBytes: number;
+    bytes: number;
+  };
+}
+
+export interface WebCommandSummary {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
+  availability: "available" | "unsupported";
+  argumentHint?: string;
+}
+
+export interface WebCommandDiscoveryResult {
+  commands: WebCommandSummary[];
+  totalAvailable: number;
+  truncation: {
+    truncated: boolean;
+    commandsOmitted: number;
+    maxCommands: number;
+    maxBytes: number;
+    bytes: number;
+  };
+}
+
 export interface WebProjectionTruncation {
   readonly truncated: boolean;
   readonly entriesOmitted: number;
@@ -87,6 +130,7 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  terminalReceipt?: ReturnType<typeof bashReceipt>;
   role?: string;
   toolName?: string;
   content: string;
@@ -102,7 +146,7 @@ export interface WebLiveMessage {
 export type WebMessagePart =
   | { type: "text"; text: string }
   | { type: "thinking"; text: string }
-  | { type: "toolCall"; id?: string; name: string; arguments: string };
+  | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
 export interface WebSnapshotTruncation {
   truncated: boolean;
@@ -111,6 +155,33 @@ export interface WebSnapshotTruncation {
   modelsOmitted: number;
   maxBytes: number;
   bytes: number;
+}
+
+export interface WebThinkingState {
+  readonly level: string;
+  readonly available: readonly string[];
+  /** false before a model is selected or for non-reasoning models. */
+  readonly supported: boolean;
+  /** Host-assigned monotonic value (SSE sequence); newer wins. */
+  readonly revision: number;
+}
+
+/**
+ * Bounds a runtime thinking projection at the wire boundary. Shared by the
+ * adapter snapshot and the host's GET/POST /api/thinking responses so an
+ * unbounded runtime projection can never reach the client. `revision` is
+ * host-assigned and deliberately excluded here.
+ */
+export function boundThinkingProjection(
+  projection: WebThinkingProjection,
+): Omit<WebThinkingState, "revision"> {
+  return {
+    level: projection.level.slice(0, WEB_MAX_THINKING_LEVEL),
+    available: projection.available
+      .slice(0, WEB_MAX_THINKING_LEVELS)
+      .map((level) => level.slice(0, WEB_MAX_THINKING_LEVEL)),
+    supported: projection.supported === true,
+  };
 }
 
 export interface WebSnapshot {
@@ -126,7 +197,10 @@ export interface WebSnapshot {
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
   models: WebModelSummary[];
+  /** Optional diagnostic; absent when the runtime cannot report it. */
+  thinking?: WebThinkingState;
   runtime: {
+    liveTools?: LiveToolEvidence[];
     status: "idle" | "running" | "unknown";
     activeTurn?: WebActiveTurn;
     capabilities: WebCapabilitySnapshot;
@@ -259,7 +333,7 @@ export function boundedDetails(value: unknown): unknown {
   return detailsProjection(value).value;
 }
 
-function projectContent(message: Record<string, unknown>) {
+function projectContent(message: Record<string, unknown>, resolvePath?: (path: string) => string | undefined) {
   const content = message.content;
   if (typeof content === "string") {
     const text = boundedTextProjection(content, WEB_MAX_TEXT);
@@ -341,11 +415,18 @@ function projectContent(message: Record<string, unknown>) {
         typeof typed.name === "string" ? typed.name : "tool",
         WEB_MAX_METADATA_TEXT,
       );
+      const evidenceArguments = isEvidenceTool(name.value) ? projectEvidenceArguments(typed.arguments) : undefined;
+      if (evidenceArguments && typeof evidenceArguments.path === "string" && !evidenceArguments.path.startsWith("~") && !evidenceArguments.path.startsWith("@")) {
+        const path = resolvePath?.(evidenceArguments.path);
+        if (path && path.length <= 4096) evidenceArguments.resolvedPath = path;
+      }
       projected = {
         type: "toolCall",
         ...(id ? { id: id.value } : {}),
         name: name.value,
         arguments: argumentsProjection.value,
+        ...(evidenceArguments ? { evidenceArguments } : {}),
+        ...((argumentsProjection.truncated || argumentsBudget.truncated || id?.truncated || name.truncated) ? { evidenceTruncated: true } : {}),
       };
       textTruncated ||=
         argumentsProjection.truncated ||
@@ -365,12 +446,12 @@ function projectContent(message: Record<string, unknown>) {
   };
 }
 
-export function projectMessage(message: unknown): WebLiveMessage {
+export function projectMessage(message: unknown, resolvePath?: (path: string) => string | undefined): WebLiveMessage {
   const value =
     message && typeof message === "object"
       ? (message as Record<string, unknown>)
       : {};
-  const content = projectContent(value);
+  const content = projectContent(value, resolvePath);
   const details = detailsProjection(value.details);
   const role =
     typeof value.role === "string"
@@ -400,6 +481,7 @@ export function projectMessage(message: unknown): WebLiveMessage {
     metadataTruncated;
   return {
     role: role?.value,
+    ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
@@ -425,7 +507,7 @@ export function projectMessage(message: unknown): WebLiveMessage {
   };
 }
 
-export function projectEntry(entry: SessionEntry) {
+export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
   if (entry.type !== "message") {
     return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
   }
@@ -433,7 +515,7 @@ export function projectEntry(entry: SessionEntry) {
     type: entry.type,
     id: entry.id,
     timestamp: entry.timestamp,
-    message: projectMessage(entry.message),
+    message: projectMessage(entry.message, resolvePath),
   };
 }
 
@@ -443,14 +525,14 @@ export function jsonByteLength(value: unknown) {
   return textEncoder.encode(JSON.stringify(value)).byteLength;
 }
 
-export function projectEntries(entries: readonly SessionEntry[]) {
+export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined) {
   const retained = entries.slice(-WEB_MAX_ENTRIES);
   const projected: ReturnType<typeof projectEntry>[] = [];
   let bytes = 2;
   let messagePartsOmitted = 0;
   let messagesTruncated = 0;
   for (let index = retained.length - 1; index >= 0; index--) {
-    const entry = projectEntry(retained[index]!);
+    const entry = projectEntry(retained[index]!, resolvePath);
     const entryBytes = jsonByteLength(entry) + (projected.length > 0 ? 1 : 0);
     if (bytes + entryBytes > WEB_MAX_SELECTED_TRANSCRIPT_BYTES) break;
     projected.unshift(entry);

@@ -17,7 +17,12 @@ export interface InspectionTarget {
 }
 
 interface InspectionData {
-  thinking?: { level: string; available: readonly string[] };
+  thinking?: {
+    level: string;
+    available: readonly string[];
+    supported?: boolean;
+    revision?: number;
+  };
   trust?: WebProjectTrustStatus;
   auth?: WebProviderAuthProjection;
   terminal?: WebBackgroundTerminalDetail;
@@ -201,7 +206,11 @@ export function InspectionPanel({
                       <dt>{t("selectedModel")}</dt>
                       <dd>{target.model || t("noModels")}</dd>
                       <dt>{t("thinkingLevel")}</dt>
-                      <dd>{data.thinking?.level ?? t("unknownState")}</dd>
+                      <dd>
+                        {data.thinking?.supported === false
+                          ? t("thinkingUnsupported")
+                          : (data.thinking?.level ?? t("unknownState"))}
+                      </dd>
                       {Boolean(data.thinking?.available.length) && (
                         <>
                           <dt>{t("availableThinking")}</dt>
@@ -209,6 +218,20 @@ export function InspectionPanel({
                         </>
                       )}
                     </dl>
+                    {data.thinking?.supported === false && (
+                      <p className="inspection-note">
+                        {t("thinkingUnsupportedHint")}
+                      </p>
+                    )}
+                    {data.thinking &&
+                      data.thinking.supported !== false &&
+                      !data.thinking.available.includes(
+                        data.thinking.level,
+                      ) && (
+                        <p className="inspection-warning" role="status">
+                          {t("thinkingLevelMismatch")}
+                        </p>
+                      )}
                   </section>
                   <section className="inspection-section">
                     <h3>{t("projectTrust")}</h3>
