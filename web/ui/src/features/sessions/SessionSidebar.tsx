@@ -13,7 +13,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { OpenPiLogo } from "../../components/OpenPiLogo.tsx";
@@ -28,6 +28,7 @@ interface SessionSidebarProps {
   query: string;
   searchOpen: boolean;
   mobileOpen: boolean;
+  returnFocusRef?: RefObject<HTMLButtonElement | null>;
   actions: WebStoreActions;
 }
 
@@ -68,7 +69,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [draft, setDraft] = useState("");
   const searchInput = useRef<HTMLInputElement>(null);
+  const searchButton = useRef<HTMLButtonElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
+  const sidebar = useRef<HTMLDivElement>(null);
+  const closeButton = useRef<HTMLButtonElement>(null);
   const snapshot = props.snapshot;
   const [archived, setArchived] = useState(false);
   const [archiveCollapsed, setArchiveCollapsed] = useState<Set<string>>(
@@ -91,8 +95,27 @@ export function SessionSidebar(props: SessionSidebarProps) {
   };
 
   useEffect(() => {
-    if (props.searchOpen) searchInput.current?.focus();
+    if (!props.searchOpen) return;
+    searchInput.current?.focus();
+    return () => searchButton.current?.focus();
   }, [props.searchOpen]);
+  useEffect(() => {
+    if (!props.mobileOpen) return;
+    closeButton.current?.focus();
+    return () => {
+      const trigger = props.returnFocusRef?.current;
+      if (trigger?.checkVisibility()) trigger.focus();
+    };
+  }, [props.mobileOpen, props.returnFocusRef]);
+  // A refreshed/filtered row can remove the focused control in any commit.
+  useEffect(() => {
+    if (
+      props.mobileOpen &&
+      document.activeElement === document.body &&
+      !document.querySelector("dialog:modal")
+    )
+      closeButton.current?.focus();
+  });
   useEffect(() => {
     if (!editTarget) return;
     editInput.current?.focus();
@@ -159,11 +182,56 @@ export function SessionSidebar(props: SessionSidebarProps) {
   };
 
   return (
-    <aside className="session-sidebar" aria-label="Session navigation">
+    // biome-ignore lint/a11y/noStaticElementInteractions: Only the modal dialog handles keys; the desktop complementary landmark does not.
+    // biome-ignore lint/a11y/useAriaPropsSupportedByRole: aria-modal is present only with the responsive dialog role, verified by browser accessibility tests.
+    <div
+      ref={sidebar}
+      id="session-sidebar"
+      className="session-sidebar"
+      role={props.mobileOpen ? "dialog" : "complementary"}
+      aria-modal={props.mobileOpen || undefined}
+      aria-label="Session navigation"
+      tabIndex={props.mobileOpen ? -1 : undefined}
+      onKeyDown={(event) => {
+        if (!props.mobileOpen || event.defaultPrevented) return;
+        // Native dialogs own focus; menus own dismissal but return Tab to the drawer.
+        if (
+          event.target instanceof Element &&
+          (event.target.closest("dialog") ||
+            (event.key !== "Tab" && event.target.closest('[role="menu"]')))
+        )
+          return;
+        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+          event.preventDefault();
+          props.actions.closeMobileSidebar();
+        }
+        if (event.key !== "Tab") return;
+        const controls = Array.from(
+          sidebar.current?.querySelectorAll<HTMLElement>(
+            "button, input, select, textarea, a[href], [tabindex]",
+          ) ?? [],
+        ).filter(
+          (element) =>
+            element.tabIndex >= 0 &&
+            !element.matches(":disabled") &&
+            element.checkVisibility({ visibilityProperty: true }),
+        );
+        const next = event.shiftKey ? controls.at(-1) : controls[0];
+        const boundary = event.shiftKey ? controls[0] : controls.at(-1);
+        if (
+          document.activeElement === sidebar.current ||
+          document.activeElement === boundary
+        ) {
+          event.preventDefault();
+          next?.focus();
+        }
+      }}
+    >
       <div className="sidebar-brand">
         <OpenPiLogo compact />
         <Tooltip content={t("collapseSidebar")} placement="end">
           <button
+            ref={closeButton}
             className="collapse-button"
             type="button"
             aria-label={t("collapseSidebar")}
@@ -216,6 +284,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         <div className="workspace-actions">
           <Tooltip content={t("searchConversations")}>
             <button
+              ref={searchButton}
               className="icon-button"
               type="button"
               aria-label={t("searchConversations")}
@@ -506,6 +575,6 @@ export function SessionSidebar(props: SessionSidebarProps) {
           </div>
         </div>
       </Dialog>
-    </aside>
+    </div>
   );
 }

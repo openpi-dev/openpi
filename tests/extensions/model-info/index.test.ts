@@ -436,3 +436,156 @@ for (const stopReason of ["error", "aborted"] as const) {
     assert.deepEqual(observation?.correlations, ["compaction"]);
   });
 }
+
+test("synthetic event replay consumes correlations once and keeps elapsed time causally unknown", async () => {
+  // Hand-authored events exercise OpenPI's extension seam. These are not a
+  // Session recording, a provider response fixture, or a TTL experiment.
+  const harness = new ModelInfoHarness([]);
+  await harness.selectModel({
+    provider: "anthropic",
+    id: "synthetic-model",
+    name: "Synthetic model",
+    contextWindow: 200_000,
+    reasoning: false,
+  });
+  await harness.emit("session_start");
+
+  const turns = [
+    { input: 100, cacheRead: 4_096, cacheWrite: 0 },
+    { input: 1_000, cacheRead: 0, cacheWrite: 3_000 },
+    { input: 4_100, cacheRead: 0, cacheWrite: 0 },
+    { input: 100, cacheRead: 8_192, cacheWrite: 0 },
+    { input: 100, cacheRead: 4_096, cacheWrite: 0 },
+    { input: 4_400, cacheRead: 0, cacheWrite: 0 },
+    { input: 4_500, cacheRead: 0, cacheWrite: 0 },
+  ];
+  for (const [turnIndex, counters] of turns.entries()) {
+    if (turnIndex === 1) {
+      await harness.emit("session_compact");
+      await harness.emit("session_compact");
+    }
+    if (turnIndex === 5) await harness.emit("session_tree");
+    await harness.emit("before_agent_start", {
+      systemPrompt: turnIndex < 4 ? "synthetic system" : "changed system",
+      systemPromptOptions: {
+        cwd: "/synthetic",
+        selectedTools: turnIndex < 4 ? ["read"] : ["read", "bash"],
+      },
+    });
+    await harness.emit("turn_end", {
+      turnIndex,
+      message: {
+        ...assistant(`synthetic-${turnIndex}`, null, usage(counters)).message,
+        api: "anthropic-messages",
+        provider: "anthropic",
+        model: "synthetic-model",
+        // A one-day timestamp gap is deliberately not evidence of expiry.
+        timestamp: turnIndex < 5 ? turnIndex * 1_000 : 86_400_000 + turnIndex,
+      },
+      toolResults: [],
+    });
+  }
+
+  assert.deepEqual(
+    harness.cacheObservations.map((observation) => ({
+      turnIndex: observation.turnIndex,
+      kind: observation.kind,
+      previousCacheRead: observation.previousCacheRead,
+      reprocessedTokens: observation.reprocessedTokens,
+      correlations: observation.correlations,
+    })),
+    [
+      {
+        turnIndex: 0,
+        kind: "first-turn",
+        previousCacheRead: null,
+        reprocessedTokens: null,
+        correlations: [],
+      },
+      {
+        turnIndex: 1,
+        kind: "miss-after-warm-prefix",
+        previousCacheRead: 4_096,
+        reprocessedTokens: 1_000,
+        correlations: ["compaction"],
+      },
+      {
+        turnIndex: 2,
+        kind: "cold",
+        previousCacheRead: 0,
+        reprocessedTokens: null,
+        correlations: [],
+      },
+      {
+        turnIndex: 3,
+        kind: "warm",
+        previousCacheRead: 0,
+        reprocessedTokens: null,
+        correlations: [],
+      },
+      {
+        turnIndex: 4,
+        kind: "partial-hit",
+        previousCacheRead: 8_192,
+        reprocessedTokens: null,
+        correlations: ["tool-surface-change", "system-prompt-change"],
+      },
+      {
+        turnIndex: 5,
+        kind: "miss-after-warm-prefix",
+        previousCacheRead: 4_096,
+        reprocessedTokens: 4_400,
+        correlations: ["branch-change"],
+      },
+      {
+        turnIndex: 6,
+        kind: "cold",
+        previousCacheRead: 0,
+        reprocessedTokens: null,
+        correlations: [],
+      },
+    ],
+  );
+  for (const observation of harness.cacheObservations) {
+    assert.equal(observation.evidence, "observation");
+    assert.equal(observation.verifiedCause, null);
+  }
+  assert.deepEqual(harness.cacheObservations[1]?.usage, {
+    input: 1_000,
+    cacheRead: 0,
+    cacheWrite: 3_000,
+    promptTokens: 4_000,
+  });
+});
+
+test("synthetic Session restart does not replay persisted usage into a live warm baseline", async () => {
+  const harness = new ModelInfoHarness([
+    assistant("persisted-warm", null, usage({ input: 100, cacheRead: 4_096 })),
+  ]);
+  const begin = () =>
+    harness.emit("before_agent_start", {
+      systemPrompt: "synthetic system",
+      systemPromptOptions: { cwd: "/synthetic", selectedTools: ["read"] },
+    });
+  await harness.emit("session_start");
+  await begin();
+  await harness.emit("turn_end", {
+    turnIndex: 0,
+    message: assistant("live-warm", null, usage({ cacheRead: 4_096 })).message,
+    toolResults: [],
+  });
+  await harness.emit("session_tree");
+  await harness.emit("session_start");
+  assert.equal(harness.state.cachePercent, (4_096 / 4_196) * 100);
+
+  await begin();
+  await harness.emit("turn_end", {
+    turnIndex: 0,
+    message: assistant("new-cold", null, usage({ input: 4_400 })).message,
+    toolResults: [],
+  });
+  const observation = harness.cacheObservations.at(-1);
+  assert.equal(observation?.kind, "first-turn");
+  assert.equal(observation?.previousCacheRead, null);
+  assert.deepEqual(observation?.correlations, []);
+});
