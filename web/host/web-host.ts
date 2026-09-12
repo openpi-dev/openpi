@@ -15,7 +15,10 @@ import {
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
-import { PiWebAdapter } from "../adapter/pi-adapter.ts";
+import {
+  PiWebAdapter,
+  WebReadOnlySessionError,
+} from "../adapter/pi-adapter.ts";
 import {
   jsonByteLength,
   WEB_MAX_ARCHIVED_SESSION_PAGE,
@@ -714,6 +717,39 @@ export class WebHost {
       });
     }
     if (url.pathname === "/events") return this.eventsStream(request, response);
+    if (url.pathname === "/api/commands") {
+      if (
+        diagnosticSession === null ||
+        diagnosticSession.length === 0 ||
+        diagnosticSession.length > 128 ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_COMMAND_DISCOVERY_REQUEST",
+          error: "the active Session id is required",
+        });
+      }
+      if (diagnosticSession !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Reopen command discovery.",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before discovering commands",
+        });
+      }
+      if (!this.runtime.listCommands) {
+        return this.json(response, 501, {
+          code: "COMMAND_DISCOVERY_UNAVAILABLE",
+          error: "Pi command discovery is unavailable",
+        });
+      }
+      return this.json(response, 200, this.runtime.listCommands());
+    }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
       return this.json(response, 200, {
@@ -723,6 +759,66 @@ export class WebHost {
           sessionsOmitted: projection.omitted,
         },
       });
+    }
+    if (url.pathname === "/api/terminal-sessions") {
+      const query = url.searchParams.get("query") ?? "";
+      if (query.length > 200) {
+        return this.json(response, 400, {
+          code: "QUERY_TOO_LONG",
+          error: "query must be at most 200 characters",
+        });
+      }
+      const cursor = this.parseCursor(url.searchParams.get("cursor"));
+      if (cursor.invalid) {
+        return this.json(response, 400, {
+          code: "INVALID_CURSOR",
+          error: "cursor must be a non-negative integer",
+        });
+      }
+      const rawLimit = url.searchParams.get("limit");
+      const limit = rawLimit === null ? 50 : Number(rawLimit);
+      if (!Number.isSafeInteger(limit) || limit < 1 || limit > 100) {
+        return this.json(response, 400, {
+          code: "INVALID_LIMIT",
+          error: "limit must be an integer from 1 to 100",
+        });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      const signal = AbortSignal.any([controller.signal, this.chooserAbort.signal]);
+      try {
+        const path = url.searchParams.get("path");
+        if (path) {
+          return this.json(
+            response,
+            200,
+            await this.adapter.getReadOnlyTerminalSession(path, { signal }),
+          );
+        }
+        return this.json(
+          response,
+          200,
+          await this.adapter.listReadOnlyTerminalSessions({
+            query,
+            cursor: cursor.value,
+            limit,
+            signal,
+          }),
+        );
+      } catch (error) {
+        if (error instanceof WebReadOnlySessionError) {
+          return this.json(response, error.statusCode, {
+            code: error.code,
+            error: error.message,
+          });
+        }
+        throw error;
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
     }
     if (url.pathname === "/api/sessions/archived") {
       const rawLimit = url.searchParams.get("limit");

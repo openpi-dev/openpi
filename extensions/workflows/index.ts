@@ -1647,6 +1647,10 @@ export default function workflows(
         const childTools = inheritedChildToolAllowlist(
           pi.getActiveTools(),
           agentType?.tools,
+          {
+            availableTools: pi.getAllTools(),
+            cwd: ctx.cwd,
+          },
         );
         if (
           opts.working_dir !== undefined &&

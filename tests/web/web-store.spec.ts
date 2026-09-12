@@ -2,6 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type {
+  WebCommandDiscoveryResult,
   WebEvent,
   WebModelSummary,
   WebSnapshot,
@@ -160,6 +161,8 @@ class FakeClient extends WebClient {
     id: "prompt-1",
     accepted: true,
   });
+  commandResults: Array<Promise<WebCommandDiscoveryResult>> = [];
+  commandRequests: Array<{ sessionId: string; signal?: AbortSignal }> = [];
   creations: Array<{ commandId: string; workspacePath: string }> = [];
   selections: string[] = [];
   modelSelections: Array<{
@@ -204,6 +207,34 @@ class FakeClient extends WebClient {
     this.prompts.push({ sessionId, content });
     return this.promptResult;
   }
+
+  override commands(sessionId: string, signal?: AbortSignal) {
+    this.commandRequests.push({ sessionId, signal });
+    const next = this.commandResults.shift();
+    if (!next) throw new Error("No fake command discovery queued");
+    return next;
+  }
+}
+
+function commandDiscovery(name = "review"): WebCommandDiscoveryResult {
+  return {
+    commands: [
+      {
+        name,
+        source: "prompt",
+        availability: "available",
+        argumentHint: "[arguments]",
+      },
+    ],
+    totalAvailable: 1,
+    truncation: {
+      truncated: false,
+      commandsOmitted: 0,
+      maxCommands: 250,
+      maxBytes: 64 * 1024,
+      bytes: 200,
+    },
+  };
 }
 
 function runtimeEvent(
@@ -251,6 +282,90 @@ afterEach(() => {
 });
 
 describe("OpenPI Web store", () => {
+  it("discovers commands once for the active Session and caches the result", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.commandResults.push(Promise.resolve(commandDiscovery()));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    await store.getState().actions.discoverCommands();
+    await store.getState().actions.discoverCommands();
+
+    expect(client.commandRequests).toHaveLength(1);
+    expect(client.commandRequests[0]?.sessionId).toBe("session-1");
+    expect(store.getState().commandDiscovery).toMatchObject({
+      sessionId: "session-1",
+      status: "ready",
+      commands: [{ name: "review" }],
+      commandsOmitted: 0,
+    });
+  });
+
+  it("retries command discovery after an error", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    client.commandResults.push(
+      Promise.reject(new Error("discovery failed")),
+      Promise.resolve(commandDiscovery("retry-success")),
+    );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    await store.getState().actions.discoverCommands();
+    expect(store.getState().commandDiscovery).toMatchObject({
+      status: "error",
+      error: "discovery failed",
+    });
+    await store.getState().actions.discoverCommands();
+    expect(store.getState().commandDiscovery).toMatchObject({
+      status: "ready",
+      commands: [{ name: "retry-success" }],
+    });
+    expect(client.commandRequests).toHaveLength(2);
+  });
+
+  it("cancels and ignores command discovery when the workspace changes", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const pending = deferred<WebCommandDiscoveryResult>();
+    client.commandResults.push(pending.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    const discovery = store.getState().actions.discoverCommands();
+    store.getState().actions.setWorkspace("/tmp/other");
+    expect(client.commandRequests[0]?.signal?.aborted).toBe(true);
+    pending.resolve(commandDiscovery("stale"));
+    await discovery;
+
+    expect(store.getState().commandDiscovery).toEqual({
+      sessionId: null,
+      status: "idle",
+      commands: [],
+      totalAvailable: 0,
+      commandsOmitted: 0,
+      error: null,
+    });
+  });
+
+  it("does not discover commands for a draft workspace", async () => {
+    const client = new FakeClient();
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: unboundSnapshot([
+        { path: "/tmp/draft", name: "Draft", current: false },
+      ]),
+      selectedWorkspace: "/tmp/draft",
+      workspaceDraft: true,
+    });
+
+    await store.getState().actions.discoverCommands();
+
+    expect(client.commandRequests).toHaveLength(0);
+    expect(store.getState().commandDiscovery.status).toBe("idle");
+  });
+
   it("prevents an older snapshot response from overwriting newer state", async () => {
     const client = new FakeClient();
     const older = deferred<WebSnapshot>();

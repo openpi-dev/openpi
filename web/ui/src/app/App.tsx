@@ -197,6 +197,7 @@ export function App() {
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
           pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
+          commandDiscovery={state.commandDiscovery}
           snapshot={state.snapshot}
           selectedWorkspace={state.selectedWorkspace}
           sessionSwitching={state.sessionSwitching}

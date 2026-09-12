@@ -99,6 +99,155 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   );
 });
 
+test("discovers and completes Pi commands without submitting unsupported commands", async ({
+  page,
+}) => {
+  let commandReads = 0;
+  const prompts: unknown[] = [];
+  await page.route("**/api/commands?**", async (route) => {
+    commandReads++;
+    expect(
+      new URL(route.request().url()).searchParams.get("sessionId"),
+    ).toBeTruthy();
+    await route.fulfill({
+      status: 200,
+      json: {
+        commands: [
+          {
+            name: "extension:setup",
+            description: "Configure the package",
+            source: "extension",
+            availability: "unsupported",
+          },
+          {
+            name: "review",
+            description: "Review the current change",
+            source: "prompt",
+            availability: "available",
+            argumentHint: "[arguments]",
+          },
+          {
+            name: "release",
+            description: "Prepare a release",
+            source: "skill",
+            availability: "available",
+            argumentHint: "[arguments]",
+          },
+          {
+            name: "analyze",
+            description: "Analyze the current change",
+            source: "prompt",
+            availability: "available",
+          },
+          {
+            name: "deploy",
+            description: "Prepare a deployment",
+            source: "skill",
+            availability: "available",
+          },
+          {
+            name: "inspect",
+            description: "Inspect the workspace",
+            source: "prompt",
+            availability: "available",
+          },
+          {
+            name: "optimize",
+            description: "Optimize the implementation",
+            source: "skill",
+            availability: "available",
+          },
+        ],
+        totalAvailable: 7,
+        truncation: {
+          truncated: false,
+          commandsOmitted: 0,
+          maxCommands: 250,
+          maxBytes: 65_536,
+          bytes: 512,
+        },
+      },
+    });
+  });
+  await page.route("**/api/prompt", async (route) => {
+    prompts.push(route.request().postDataJSON());
+    await route.fulfill({
+      status: 202,
+      json: { id: "unexpected-prompt", accepted: true },
+    });
+  });
+  await openWorkbench(page);
+
+  const input = page.getByRole("textbox", { name: "描述任务" });
+  await input.fill("/");
+  const listbox = page.getByRole("listbox", { name: "斜杠命令" });
+  await expect(listbox).toBeVisible();
+  await expect(page.locator(".conversation-shell")).toHaveClass(/\blanding\b/u);
+  await expect(listbox.getByRole("option")).toHaveText([
+    /\/review/u,
+    /\/release/u,
+    /\/analyze/u,
+    /\/deploy/u,
+    /\/inspect/u,
+    /\/optimize/u,
+    /\/extension:setup/u,
+  ]);
+  const menu = page.locator(".slash-command-menu");
+  const menuBox = await menu.boundingBox();
+  const composerBox = await page.locator(".composer").boundingBox();
+  expect(menuBox).not.toBeNull();
+  expect(composerBox).not.toBeNull();
+  expect(menuBox!.height).toBeLessThanOrEqual(225);
+  expect(menuBox!.y).toBeGreaterThanOrEqual(
+    composerBox!.y + composerBox!.height + 7,
+  );
+
+  for (let index = 0; index < 5; index++) await input.press("ArrowDown");
+  const selectedOption = listbox.getByRole("option", { selected: true });
+  await expect(selectedOption).toContainText("/optimize");
+  await expect
+    .poll(() => menu.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  const selectedBox = await selectedOption.boundingBox();
+  const scrolledMenuBox = await menu.boundingBox();
+  expect(selectedBox).not.toBeNull();
+  expect(scrolledMenuBox).not.toBeNull();
+  expect(selectedBox!.y).toBeGreaterThanOrEqual(scrolledMenuBox!.y);
+  expect(selectedBox!.y + selectedBox!.height).toBeLessThanOrEqual(
+    scrolledMenuBox!.y + scrolledMenuBox!.height,
+  );
+
+  await page.locator(".composer-dock").evaluate((element) => {
+    element.style.top = "calc(100% - 160px)";
+    window.dispatchEvent(new Event("resize"));
+  });
+  await expect(menu).toHaveAttribute("data-placement", "above");
+  const flippedMenuBox = await menu.boundingBox();
+  const shiftedComposerBox = await page.locator(".composer").boundingBox();
+  expect(flippedMenuBox).not.toBeNull();
+  expect(shiftedComposerBox).not.toBeNull();
+  expect(flippedMenuBox!.y + flippedMenuBox!.height).toBeLessThanOrEqual(
+    shiftedComposerBox!.y - 7,
+  );
+  const extension = page.getByRole("option", { name: /\/extension:setup/u });
+  await expect(extension).toBeDisabled();
+  await expect(extension).toContainText("当前 Web 不支持");
+
+  await input.fill("/rev");
+  await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
+  await input.press("Enter");
+  await expect(input).toHaveValue("/review ");
+  expect(prompts).toEqual([]);
+  expect(commandReads).toBe(1);
+
+  await input.fill("/");
+  await page.getByRole("option", { name: /\/release/u }).click();
+  await expect(input).toHaveValue("/release ");
+  expect(prompts).toEqual([]);
+  expect(commandReads).toBe(1);
+  await expect(page.locator("body")).not.toContainText("/private/project");
+});
+
 test.describe("touch viewport", () => {
   test.use({
     hasTouch: true,
