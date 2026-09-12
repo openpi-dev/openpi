@@ -37,12 +37,10 @@
  *   with a self-referential symlink — destroying the dependencies of the very
  *   repo the session was working in.
  *
- * - **Teardown never uses `--force`.** Git refuses to remove a worktree with
- *   modified or untracked files, and that refusal is exactly the policy we
- *   want: an isolated child that produced nothing is reclaimed automatically,
- *   and one that produced work keeps its directory and branch for the parent
- *   to inspect. Committed work is safe either way — the branch outlives the
- *   worktree — but uncommitted work would not be, so we let git veto.
+ * - **Teardown never uses `--force`.** Before asking Git to remove a checkout,
+ *   inspect ignored files and index flags too: Git's ordinary dirty check can
+ *   miss the only copy of local work. Unknown inspection results preserve the
+ *   checkout; committed work keeps its branch for the parent to inspect.
  */
 
 import { execFile } from "node:child_process";
@@ -110,6 +108,7 @@ function runGit(
       {
         cwd,
         encoding: "utf8",
+        maxBuffer: 1024 * 1024,
         timeout: Math.min(timeoutMs, WORKTREE_GIT_TIMEOUT_MS),
       },
       (error, stdout, stderr) => {
@@ -194,7 +193,10 @@ export async function createWorktree(options: {
   /** Link the repo's node_modules in, so the child can build and test. */
   linkNodeModules?: boolean;
 }): Promise<WorktreeResult> {
-  const gitDir = await resolveGitCommonDir(options.cwd);
+  const resolvedGitDir = await resolveGitCommonDir(options.cwd);
+  const gitDir = resolvedGitDir
+    ? path.resolve(options.cwd, resolvedGitDir)
+    : resolvedGitDir;
   if (!gitDir) {
     return { ok: false, reason: `not a git repository: ${options.cwd}` };
   }
@@ -312,8 +314,8 @@ export interface WorktreeCommitCount {
 /**
  * Reclaim a worktree, keeping anything the child actually produced.
  *
- * Deliberately no `--force`: git's own refusal on a dirty tree is the policy
- * we want. A child that changed nothing costs nothing to discard; a child with
+ * Deliberately no `--force`, plus explicit ignored-file and index inspection.
+ * A child that changed nothing costs nothing to discard; a child with
  * uncommitted work keeps its directory so the parent can look at it. The
  * branch is deleted only when it holds no commits, so a child that committed
  * always leaves something to merge, and a child that did nothing leaves no
@@ -380,7 +382,39 @@ export async function reclaimWorktree(
   const branch = headBranch || worktree.branch;
   const observed = { branch, headSha, detached };
 
+  // Status and even non-force removal trust flags that can hide local edits.
+  // Do not clear flags (including sparse-checkout flags) to guess at safety.
+  const index = await run(["-C", worktree.path, "ls-files", "-v", "-z"]);
+  if (index.code !== 0) {
+    return preserve(
+      `could not inspect worktree index: ${firstLine(index.stderr) || "git ls-files failed"}`,
+      observed,
+    );
+  }
+  if (index.stdout && !index.stdout.endsWith("\0")) {
+    return preserve("worktree index inventory is incomplete", observed);
+  }
+  for (const entry of index.stdout.split("\0").slice(0, -1)) {
+    if (!/^[HSMRCK?hsmrck] [\s\S]+$/.test(entry)) {
+      return preserve(
+        "worktree index inventory has an unknown format",
+        observed,
+      );
+    }
+    const flag = entry[0]!;
+    if (flag === "S" || flag === flag.toLowerCase()) {
+      return preserve(
+        "worktree index flags (assume-unchanged or skip-worktree) may hide local changes",
+        observed,
+      );
+    }
+    if (flag !== "H") {
+      return preserve("worktree index contains non-clean entries", observed);
+    }
+  }
+
   const status = await run([
+    "--no-optional-locks",
     "-C",
     worktree.path,
     "status",
