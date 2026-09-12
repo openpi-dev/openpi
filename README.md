@@ -155,7 +155,7 @@ OpenPI 把成熟 Coding Agent 的工作习惯做成 Pi-native 能力，但不复
 | 连续性       | Tasks、Goal、Plan Mode、Context Pivot、Session Browser、Session-scoped Cron                               |
 | 自定义 Agent | `explorer` / `implementer` / `reviewer` / `advisor`，支持全局与项目角色文件、独立模型与 effort            |
 | 本地 Web     | 工作区与会话管理、模型预选、运行诊断、工具证据与持久化轨迹检查；与终端 Session 独立 |
-| 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、Next-action Suggestion、Git / PR 信号                 |
+| 终端工作台   | 自定义 Footer 与任务栏、运行状态、紧凑 Tool Result、图片粘贴占位符、Next-action Suggestion、Git / PR 信号 |
 | 快捷工作流   | `/btw` 旁路提问（TUI）、`/lg` 浏览 Diff（TUI）、`/pr` 查 PR、`/copy-all`、`fd`、`rg`、只读 Git 工具       |
 | 人类决策     | `ask_user` 草稿与最终复核、parent-only `human_handoff`、Plan Ready 实施门禁                               |
 | 统一配置     | `/openpi-setup` 管理 OpenPI 自有模型、并发、Footer、输出密度与 Post-edit 偏好                             |
