@@ -150,3 +150,113 @@ test("reset removes the prior warm baseline and pending correlations", () => {
   assert.equal(observation.kind, "first-turn");
   assert.deepEqual(observation.correlations, []);
 });
+
+// Synthetic normalized Usage vectors, not captured provider responses.
+for (const [provider, semantics] of [
+  ["azure-openai-responses", "implicit-best-effort"],
+  ["google", "implicit-best-effort"],
+  ["google-antigravity", "implicit-best-effort"],
+  ["google-gemini-cli", "implicit-best-effort"],
+  ["openai", "implicit-best-effort"],
+  ["openai-codex", "implicit-best-effort"],
+  ["openai-responses", "implicit-best-effort"],
+  ["amazon-bedrock", "unknown"],
+  ["google-vertex", "unknown"],
+  ["openrouter", "unknown"],
+  ["custom-provider", "unknown"],
+] as const) {
+  test(`${provider} synthetic warm/cold replay never claims an explicit-prefix miss`, () => {
+    const tracker = createCacheDiagnosticsTracker();
+    const observations = [4_096, 0, 0, 4_096, 2_048, 0].map(
+      (cacheRead, turnIndex) =>
+        tracker.observe({
+          turnIndex,
+          identity: { ...identity, provider },
+          usage: usage({ input: 100, cacheRead, cacheWrite: 500 }),
+        }),
+    );
+
+    assert.deepEqual(
+      observations.map((observation) => observation.kind),
+      ["first-turn", "unknown", "cold", "warm", "partial-hit", "unknown"],
+    );
+    for (const observation of observations) {
+      assert.equal(observation.semantics, semantics);
+      assert.equal(observation.reprocessedTokens, null);
+      assert.equal(observation.verifiedCause, null);
+      assert.equal(observation.evidence, "observation");
+    }
+  });
+}
+
+test("the explicit-prefix warm threshold includes exactly 2048 reported read tokens", () => {
+  for (const [previousCacheRead, kind] of [
+    [2_047, "cold"],
+    [2_048, "miss-after-warm-prefix"],
+  ] as const) {
+    const tracker = createCacheDiagnosticsTracker();
+    tracker.observe({
+      turnIndex: 0,
+      identity,
+      usage: usage({ cacheRead: previousCacheRead }),
+    });
+    const observation = tracker.observe({
+      turnIndex: 1,
+      identity,
+      usage: usage({ input: 100, cacheWrite: 3_000 }),
+    });
+
+    assert.equal(observation.kind, kind);
+    assert.equal(observation.usage.promptTokens, 3_100);
+    assert.equal(observation.reprocessedTokens, kind === "cold" ? null : 100);
+  }
+});
+
+test("prompt accounting excludes output, reasoning, write subsets, totals and cost", () => {
+  const reported = usage({
+    input: 100,
+    cacheRead: 2_000,
+    cacheWrite: 500,
+    cacheWrite1h: 300,
+    output: 90,
+    reasoning: 40,
+    totalTokens: 2_690,
+    cost: { input: 1, output: 2, cacheRead: 3, cacheWrite: 4, total: 10 },
+  });
+  const before = structuredClone(reported);
+  const observation = createCacheDiagnosticsTracker().observe({
+    turnIndex: 0,
+    identity,
+    usage: reported,
+  });
+
+  assert.deepEqual(observation.usage, {
+    input: 100,
+    cacheRead: 2_000,
+    cacheWrite: 500,
+    promptTokens: 2_600,
+  });
+  assert.deepEqual(reported, before);
+});
+
+test("non-finite and negative prompt counters cannot establish a warm baseline", () => {
+  for (const invalid of [Number.NaN, Number.POSITIVE_INFINITY, -1]) {
+    const tracker = createCacheDiagnosticsTracker();
+    const first = tracker.observe({
+      turnIndex: 0,
+      identity,
+      usage: usage({ input: invalid, cacheRead: invalid, cacheWrite: invalid }),
+    });
+    assert.deepEqual(first.usage, {
+      input: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      promptTokens: 0,
+    });
+    assert.equal(
+      tracker.observe({ turnIndex: 1, identity, usage: usage({ input: 100 }) })
+        .kind,
+      "cold",
+    );
+  }
+});
