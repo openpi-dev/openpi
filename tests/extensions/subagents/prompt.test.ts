@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 /** Model-facing strings that carry a behavioral contract, not just wording. */
 
 import assert from "node:assert/strict";
@@ -128,7 +129,15 @@ test("investigator roles describe the same inherited capability that spawn repor
     assert.match(description, /\[inherited-tools\]/);
     assert.doesNotMatch(description, /read-only/i, name);
 
-    const inherited = inheritedChildToolAllowlist(parentTools, role.tools);
+    const inherited = inheritedChildToolAllowlist(parentTools, role.tools, {
+      cwd: process.cwd(),
+      availableTools: parentTools.map((name) => ({
+        name,
+        sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
+          source: "sdk",
+        }),
+      })),
+    });
     assert.deepEqual(inherited, expectedTools);
     assert.deepEqual(effectiveChildToolAllowlist(parentTools), expectedTools);
     const result = buildSubagentSpawnResult({
