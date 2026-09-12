@@ -9,11 +9,11 @@
 
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { Data, Effect } from "effect";
-import type { CapturedOutput } from "../../file-search/src/output.ts";
+import type { CapturedOutput } from "../../shared/search-output.ts";
 import {
   discardCapturedOutput,
   executeSearchProcess,
-} from "../../file-search/src/process.ts";
+} from "../../shared/search-process.ts";
 import { GIT_TIMEOUT_MS } from "./args.ts";
 
 export const GIT_CAPTURE_MAX_BYTES = 10 * 1024 * 1024;
