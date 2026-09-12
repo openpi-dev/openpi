@@ -749,32 +749,25 @@ test("referenced history still obeys the dashboard projection bound", () => {
 test("dashboard pinning retains only the exact canonical id across case collisions", () => {
   const runId = "wf_ABCD";
   const startedAt = Date.now() + 60_000;
-  writeRun(runId, startedAt);
-  writeRun("wf_abcd", startedAt);
-  try {
-    const projection = loadRunEntryProjection(
-      new Map(),
-      SESSION,
-      new Set(),
-      startedAt,
-      new Map(),
-      { initialRunId: runId, maxRuns: 0, maxBytes: 0 },
-    );
-    assert.deepEqual(
-      projection.entries.map((entry) => entry.runId),
-      [runId],
-    );
-    assert.equal(projection.omittedRuns, 1);
-  } finally {
-    rmSync(join(agentDir, "workflows", runId), {
-      recursive: true,
-      force: true,
-    });
-    rmSync(join(agentDir, "workflows", "wf_abcd"), {
-      recursive: true,
-      force: true,
-    });
-  }
+  // A retained projection can contain both identities on every platform;
+  // case-insensitive filesystems cannot store them as separate directories.
+  const retained = new Map([
+    [runId, retainedRun(runId, startedAt)],
+    ["wf_abcd", retainedRun("wf_abcd", startedAt)],
+  ]);
+  const projection = loadRunEntryProjection(
+    new Map(),
+    SESSION,
+    new Set(),
+    startedAt,
+    retained,
+    { initialRunId: runId, maxRuns: 0, maxBytes: 0 },
+  );
+  assert.deepEqual(
+    projection.entries.map((entry) => entry.runId),
+    [runId],
+  );
+  assert.equal(projection.omittedRuns, 1);
 });
 
 test("dashboard hydrates a persisted run only when its detail view opens", () => {
