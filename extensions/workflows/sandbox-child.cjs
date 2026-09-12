@@ -319,8 +319,9 @@ process.on("message", (message) => {
     }
     initialized = true;
     token = message.token;
+    const seq = typeof message.seq === "number" ? message.seq : undefined;
     if (typeof message.usageJson === "string") usageJson = message.usageJson;
-    run(message.source, message.argsJson, message.maxConcurrency);
+    run(message.source, message.argsJson, message.maxConcurrency, seq);
     return;
   }
   if (message.token !== token || message.kind !== "agentResult") return;
@@ -328,6 +329,7 @@ process.on("message", (message) => {
   const pending = pendingAgents.get(message.id);
   if (!pending) return;
   pendingAgents.delete(message.id);
+  const seq = typeof message.seq === "number" ? message.seq : undefined;
   if (typeof message.resultJson === "string")
     pending.resolve(message.resultJson);
   else
@@ -336,9 +338,14 @@ process.on("message", (message) => {
         typeof message.error === "string" ? message.error : "Agent IPC failed",
       ),
     );
+  if (seq !== undefined) {
+    setImmediate(() => {
+      send({ kind: "idle", seq });
+    });
+  }
 });
 
-function run(source, argsJson, maxConcurrency) {
+function run(source, argsJson, maxConcurrency, initSeq) {
   try {
     const sandbox = Object.create(null);
     sandbox.__argsJson = argsJson;
@@ -410,6 +417,11 @@ function run(source, argsJson, maxConcurrency) {
       context,
       { timeout: 1000 },
     );
+    if (initSeq !== undefined) {
+      setImmediate(() => {
+        send({ kind: "idle", seq: initSeq });
+      });
+    }
     Promise.resolve(context.__workflowPromise)
       .then((resultJson) => {
         if (typeof resultJson !== "string")

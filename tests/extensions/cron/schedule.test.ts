@@ -21,6 +21,19 @@ test("parses duration units and rejects nonsense", () => {
   assert.equal(parseDuration("* * * * *"), undefined);
 });
 
+test("rejects durations that overflow after unit conversion", () => {
+  const overflowingHours = `${"1"}${"0".repeat(305)}h`;
+
+  assert.equal(parseDuration(overflowingHours), undefined);
+  for (const schedule of ["in", "every"]) {
+    const parsed = parseCronCommand(
+      `${schedule} ${overflowingHours} never fire`,
+    );
+    assert.equal(parsed.action, "help");
+    assert.equal(parsed.intervalMs, undefined);
+  }
+});
+
 test("parses recurring, one-shot, and management commands", () => {
   const every = parseCronCommand("every 5m check the deploy");
   assert.equal(every.action, "add");

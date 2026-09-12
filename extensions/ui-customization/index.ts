@@ -21,8 +21,6 @@ import {
   REFRESH_CHANNEL,
   isGitInfoState,
   isModelInfoState,
-  type GitInfoState,
-  type ModelInfoState,
 } from "../shared/dashboard-state.ts";
 import { formatDirectory, renderFooter } from "./footer.ts";
 

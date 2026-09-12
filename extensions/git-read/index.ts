@@ -13,15 +13,13 @@
 
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { StringEnum } from "@earendil-works/pi-ai";
 import type {
   AgentToolResult,
   ExtensionAPI,
-  ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Text } from "@earendil-works/pi-tui";
 import { Cause, Effect, Exit } from "effect";
-import { type Static, Type } from "typebox";
+import { Type } from "typebox";
 import { formatCapturedOutput } from "../file-search/src/output.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 import {

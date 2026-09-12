@@ -301,13 +301,24 @@ test("unproven or non-standalone rm input fails closed", async () => {
 
 test("quoted or escaped literals remain directly verifiable", async () => {
   await withWorkspace(async (workspace) => {
-    for (const target of [
-      "keep*.txt",
-      "keep\\*.txt",
-      "keep.txt",
-      "scratch$1.txt",
-      "file name.txt",
-    ]) {
+    const cases =
+      process.platform === "win32"
+        ? [
+            ["rm 'keep[1].txt'", "keep[1].txt"],
+            ["rm scratch\\$1.txt", "scratch$1.txt"],
+            ["rm 'scratch$1.txt'", "scratch$1.txt"],
+            ['rm "file name.txt"', "file name.txt"],
+            ['rm "keep\\\n.txt"', "keep.txt"],
+          ]
+        : [
+            ["rm 'keep*.txt'", "keep*.txt"],
+            ["rm keep\\*.txt", "keep*.txt"],
+            ["rm 'scratch$1.txt'", "scratch$1.txt"],
+            ['rm "file name.txt"', "file name.txt"],
+            ['rm "keep\\*.txt"', "keep\\*.txt"],
+            ['rm "keep\\\n.txt"', "keep.txt"],
+          ];
+    for (const target of new Set(cases.map(([, target]) => target))) {
       await writeFile(path.join(workspace, target), "keep");
     }
     const confirmations: string[][] = [];
@@ -316,14 +327,7 @@ test("quoted or escaped literals remain directly verifiable", async () => {
       return false;
     });
 
-    for (const [index, command] of [
-      "rm 'keep*.txt'",
-      "rm keep\\*.txt",
-      "rm 'scratch$1.txt'",
-      'rm "file name.txt"',
-      'rm "keep\\*.txt"',
-      'rm "keep\\\n.txt"',
-    ].entries()) {
+    for (const [index, [command]] of cases.entries()) {
       assert.equal(
         (
           await guard.before({
@@ -336,14 +340,10 @@ test("quoted or escaped literals remain directly verifiable", async () => {
         command,
       );
     }
-    assert.deepEqual(confirmations, [
-      ["keep*.txt"],
-      ["keep*.txt"],
-      ["scratch$1.txt"],
-      ["file name.txt"],
-      ["keep\\*.txt"],
-      ["keep.txt"],
-    ]);
+    assert.deepEqual(
+      confirmations,
+      cases.map(([, target]) => [target]),
+    );
   });
 });
 
@@ -382,6 +382,46 @@ test("ordinary Bash and identifiers without an rm executable stay native", async
   });
 });
 
+test("an rm substring inside a longer path segment is not an rm reference", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => false);
+
+    for (const [index, command] of [
+      "curl -s https://api.github.com/repos/apache/storm/issues/1 | head -c 10",
+      "grep -rn cleanup /repos/eclipse/platform/foo.c | head -5",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `path-word-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "allow", command);
+    }
+  });
+});
+
+test("piped xargs input and absolute rm paths fail closed", async () => {
+  await withWorkspace(async (workspace) => {
+    const guard = guardFor(async () => true);
+
+    for (const [index, command] of [
+      "echo temp/ | xargs rm",
+      "/bin/rm -rf build",
+    ].entries()) {
+      const decision = await guard.before({
+        id: `destructive-${index}`,
+        command,
+        cwd: workspace,
+      });
+      assert.equal(decision.kind, "block", command);
+      if (decision.kind === "block") {
+        assert.deepEqual(decision.protectedPaths, [], command);
+        assert.match(decision.reason, /direct rm command/u);
+      }
+    }
+  });
+});
+
 test("literal word concatenation still identifies the direct rm executable", async () => {
   await withWorkspace(async (workspace) => {
     await writeFile(path.join(workspace, "keep.txt"), "keep");
@@ -413,7 +453,7 @@ test("direct rm targets must resolve from workspace-relative paths", async () =>
     });
 
     for (const [index, command] of [
-      `rm ${target}`,
+      "rm /outside/keep.txt",
       "rm ../keep.txt",
       "rm .",
       "rm ~/keep.txt",

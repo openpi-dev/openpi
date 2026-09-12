@@ -181,8 +181,6 @@ function compactAgent(
 
 function omissionMetadata(
   details: WorkflowDetails,
-  agents: readonly Record<string, unknown>[],
-  logs: readonly unknown[],
   agentLimit: number,
   logLimit: number,
 ): WorkflowMemoryProjection["omitted"] {
@@ -207,7 +205,6 @@ function makeProjection(
   logs: readonly unknown[],
   agentLimit: number,
   logLimit: number,
-  display: boolean,
 ) {
   const phases = details.phases.slice(0, MAX_PHASES).map((phase) => ({
     title: bounded(phase.title, MAX_LABEL_BYTES) ?? "phase",
@@ -215,7 +212,7 @@ function makeProjection(
       ? { detail: bounded(phase.detail, MAX_DESCRIPTION_BYTES) }
       : {}),
   }));
-  const omitted = omissionMetadata(details, agents, logs, agentLimit, logLimit);
+  const omitted = omissionMetadata(details, agentLimit, logLimit);
   const candidate: Record<string, unknown> = {
     runId: details.runId,
     ...(details.sessionId ? { sessionId: details.sessionId } : {}),
@@ -240,6 +237,12 @@ function makeProjection(
       ? {
           delivery: {
             id: details.delivery.id,
+            ...(details.delivery.ownerSessionId
+              ? { ownerSessionId: details.delivery.ownerSessionId }
+              : {}),
+            ...(details.delivery.ownerEpoch !== undefined
+              ? { ownerEpoch: details.delivery.ownerEpoch }
+              : {}),
             state: details.delivery.state,
             attempts: details.delivery.attempts,
             updatedAt: details.delivery.updatedAt,
@@ -368,7 +371,6 @@ export function projectWorkflowDetails(
       logs,
       agentLimit,
       logLimit,
-      display,
     );
     candidate = built.candidate;
     projection = built.metadata(0);
@@ -422,7 +424,6 @@ export function projectWorkflowDetails(
       [],
       0,
       0,
-      false,
     ).metadata(0);
     minimal.memoryProjection = minimalProjection;
     const minimalBytes = jsonBytes(minimal);

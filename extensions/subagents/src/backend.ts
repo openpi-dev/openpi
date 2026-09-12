@@ -19,6 +19,13 @@ import type {
   SubagentMeta,
 } from "./domain.ts";
 
+export interface SubagentCleanupReceipt {
+  /** True when the session/worktree state could not be proven quiescent. */
+  readonly uncertain: boolean;
+  /** Bounded operator-facing explanation of the cleanup result. */
+  readonly message: string;
+}
+
 /**
  * A live subagent session. The manager is the single consumer of `events`;
  * it folds them into the `SubagentSnapshot` everything else reads.
@@ -44,6 +51,8 @@ export interface SubagentSession {
   readonly interrupt: Effect.Effect<void>;
   /** Ephemeral Pi-native tool projection for the operator-facing child page. */
   readonly toolRenderer?: AgentToolRenderer;
+  /** Cleanup receipt populated when scope teardown cannot prove safety. */
+  readonly cleanupReceipt?: () => SubagentCleanupReceipt | undefined;
 }
 
 export interface SubagentBackend {

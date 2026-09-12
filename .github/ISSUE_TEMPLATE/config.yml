@@ -1,0 +1,5 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Web UI/UX 总任务与社区讨论 / Tracking and discussion
+    url: https://github.com/openpi-dev/openpi/issues/455
+    about: 浏览已有任务、补充轻量建议，或寻找可参与的改进。

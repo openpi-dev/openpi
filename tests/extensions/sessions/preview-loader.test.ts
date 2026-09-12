@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { appendFileSync, renameSync } from "node:fs";
+import { appendFileSync, renameSync, writeFileSync } from "node:fs";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -399,10 +399,10 @@ for (const version of [1, 3]) {
         : [header(3), message("m1", null, "user", "replaced")];
     const fixture = await writeSession(originalEntries);
     const replacementPath = join(fixture.directory, "replacement.jsonl");
-    await writeFile(
-      replacementPath,
-      `${replacementEntries.map((entry) => JSON.stringify(entry)).join("\n")}\n`,
-    );
+    const replacementContent = `${replacementEntries
+      .map((entry) => JSON.stringify(entry))
+      .join("\n")}\n`;
+    await writeFile(replacementPath, replacementContent);
     t.after(() => rm(fixture.directory, { recursive: true, force: true }));
 
     let replaced = false;
@@ -411,7 +411,13 @@ for (const version of [1, 3]) {
         onRead: () => {
           if (replaced) return;
           replaced = true;
-          renameSync(replacementPath, fixture.path);
+          if (process.platform === "win32") {
+            // Windows rejects rename-over-open. An in-place replacement still
+            // exercises the loader's changed-file rejection on that platform.
+            writeFileSync(fixture.path, `${replacementContent}\n`);
+          } else {
+            renameSync(replacementPath, fixture.path);
+          }
         },
       }),
       /changed while preview was loading/,

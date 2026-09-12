@@ -12,3 +12,9 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md`](OPENPI_WORKFLOW_V2_DESIGN_2026-08-23.md) — Pi-native Workflow interface and lifecycle redesign with implementation evidence
 - [`WORKFLOW_INVOCATION_GRAPH.md`](WORKFLOW_INVOCATION_GRAPH.md) — durable invocation facts, same-run handoff refs, reusable operators, and derived graph semantics
 - [`CHILD_TOOL_ACTIVITY.md`](CHILD_TOOL_ACTIVITY.md) — shared compact and Pi-native expanded evidence projection for Direct Subagent and Workflow child transcripts
+- [`OPENPI_WEB_ARCHITECTURE.md`](OPENPI_WEB_ARCHITECTURE.md) — draft architecture, protocol boundaries, delivery phases, and visual direction for the local Web workbench
+- [`OPENPI_WEB_REACT_MVP.md`](OPENPI_WEB_REACT_MVP.md) — draft local validation design for a behavior-compatible React, Astryx, and Tailwind browser migration
+- [`OPENPI_WEB_DEV_PORT_CONFLICTS.md`](OPENPI_WEB_DEV_PORT_CONFLICTS.md) — draft local design for development-port fallback, strict explicit ports, startup diagnostics, and TUI `/web` error projection
+- [`COMPLETION_INBOX.md`](COMPLETION_INBOX.md) — shared owner, epoch, consumption, retry, and receipt contract for background completions
+
+开发与热更新流程见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](../development/OPENPI_WEB_DEVELOPMENT.md)。
