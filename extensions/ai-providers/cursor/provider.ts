@@ -43,6 +43,7 @@ import {
   ExecClientStreamCloseSchema,
   ExecClientThrowSchema,
   GetBlobResultSchema,
+  InteractionResponseSchema,
   type InteractionUpdate,
   KvClientMessageSchema,
   type KvServerMessage,
@@ -70,6 +71,8 @@ import {
   SetBlobResultSchema,
   UserMessageActionSchema,
   UserMessageSchema,
+  WebFetchRequestRejectedSchema,
+  WebFetchRequestResponseSchema,
 } from "./proto.ts";
 import { create, encodeJsonValue, fromBinary, toBinary } from "./protobuf.ts";
 import { connectCursorHttp2 } from "./proxy.ts";
@@ -86,6 +89,7 @@ const MAX_CONNECT_FRAME_BYTES = 16 * 1024 * 1024;
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const PROXY_TUNNEL_TIMEOUT_MS = 30_000;
 const MAX_NATIVE_EXEC_REJECTIONS = 3;
+const MAX_WEB_FETCH_REJECTIONS = 3;
 
 export const CURSOR_CHAT_ONLY_SYSTEM_PROMPT =
   "This Cursor provider is running in chat-only mode. No filesystem, shell, code modification, MCP, web, or user-interaction tools are available. Never emit tool calls or interaction queries. Images attached to the user message are already available for direct analysis. If required information is unavailable, explain the limitation in text instead of attempting a tool.";
@@ -715,6 +719,7 @@ export function streamCursor(
     const pendingCalls = new Map<string, ToolCall>();
     let handingOffTools = false;
     let nativeExecRejections = 0;
+    let webFetchRejections = 0;
 
     const closeBlocks = () => {
       if (currentText) {
@@ -991,6 +996,45 @@ export function streamCursor(
           return;
         }
         if (message.message.case === "interactionQuery") {
+          const query = message.message.value;
+          if (query.query.case === "webFetchRequestQuery") {
+            // Deny hosted execution without aborting the Run. Pi still owns
+            // any subsequent tool call and its permissions, including fetches.
+            const reply = create(AgentClientMessageSchema, {
+              message: {
+                case: "interactionResponse",
+                value: create(InteractionResponseSchema, {
+                  id: query.id,
+                  result: {
+                    case: "webFetchRequestResponse",
+                    value: create(WebFetchRequestResponseSchema, {
+                      result: {
+                        case: "rejected",
+                        value: create(WebFetchRequestRejectedSchema, {
+                          reason: context.tools?.length
+                            ? "Cursor-hosted web fetching is unavailable. Use an advertised Pi tool if it supports the request; otherwise explain that you cannot fetch the page. Do not retry Cursor-hosted fetching."
+                            : "Web fetching is unavailable in this chat-only provider. Explain that you cannot fetch the page. Do not retry Cursor-hosted fetching.",
+                        }),
+                      },
+                    }),
+                  },
+                }),
+              },
+            });
+            const recover = ++webFetchRejections <= MAX_WEB_FETCH_REJECTIONS;
+            if (!recover) {
+              terminalError = new Error(
+                `Cursor WebFetch recovery limit (${MAX_WEB_FETCH_REJECTIONS}) exceeded; last query id ${query.id}`,
+              );
+            }
+            h2Request?.write(
+              frameConnectMessage(toBinary(AgentClientMessageSchema, reply)),
+              () => {
+                if (!recover) settle(terminalError);
+              },
+            );
+            return;
+          }
           throw new Error(
             `Cursor interaction query ${message.message.value.query.case ?? "unknown"} is unavailable ${context.tools?.length ? "outside Pi's interaction lifecycle" : "in chat-only mode"}`,
           );
