@@ -18,7 +18,11 @@ import {
   getAgentDir,
   type KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
-import { type TUI, truncateToWidth } from "@earendil-works/pi-tui";
+import {
+  type TUI,
+  type TuiMouseEvent,
+  truncateToWidth,
+} from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../shared/agent-session-page.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
@@ -768,6 +772,19 @@ type View = "list" | "detail" | "transcript";
 type DetailFocus = "phases" | "agents";
 
 export class WorkflowDashboard {
+  private _focused = false;
+  get focused() {
+    return this._focused;
+  }
+  set focused(value: boolean) {
+    this._focused = value;
+    if (this.transcriptPage) this.transcriptPage.focused = value;
+  }
+
+  handleMouse(event: TuiMouseEvent) {
+    return this.transcriptPage?.handleMouse(event);
+  }
+
   private view: View = "list";
   private entries: RunEntry[] = [];
   private historyLoaded = false;
@@ -872,6 +889,7 @@ export class WorkflowDashboard {
     this.disposed = true;
     if (this.timer) clearInterval(this.timer);
     this.timer = undefined;
+    this.transcriptPage?.dispose();
     this.transcriptPage = undefined;
   }
 
@@ -1177,6 +1195,7 @@ export class WorkflowDashboard {
           };
         },
         close: () => {
+          this.transcriptPage?.dispose();
           this.transcriptPage = undefined;
           this.view = "detail";
           this.detailFocus = "agents";
@@ -1186,6 +1205,7 @@ export class WorkflowDashboard {
       },
       { toolsExpanded: this.initialToolsExpanded },
     );
+    this.transcriptPage.focused = this.focused;
     this.tui.requestRender();
   }
 
