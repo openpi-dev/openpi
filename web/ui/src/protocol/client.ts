@@ -6,6 +6,8 @@ import {
   type WebModelSearchResult,
   type WebModelSummary,
   type WebSnapshot,
+  type WebThinkingState,
+  type WebCommandDiscoveryResult,
 } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
@@ -178,11 +180,20 @@ export class WebClient {
   }
 
   thinking(sessionId: string, signal: AbortSignal) {
-    return this.request<{
-      sessionId: string;
-      level: string;
-      available: readonly string[];
-    }>(`/api/thinking?sessionId=${encodeURIComponent(sessionId)}`, { signal });
+    return this.request<WebThinkingState & { sessionId: string }>(
+      `/api/thinking?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  setThinkingLevel(sessionId: string, level: string) {
+    return this.request<WebThinkingState & { sessionId: string }>(
+      "/api/thinking",
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionId, level }),
+      },
+    );
   }
 
   trust(sessionId: string, signal: AbortSignal) {
@@ -195,6 +206,13 @@ export class WebClient {
   providerAuth(sessionId: string, signal: AbortSignal) {
     return this.request<WebProviderAuthProjection>(
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  commands(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebCommandDiscoveryResult>(
+      `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

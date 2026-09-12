@@ -193,11 +193,13 @@ export function App() {
           draftModel={state.draftModel}
           modelSelectionPending={state.modelSelectionPending}
           modelSearch={state.modelSearch}
+          thinkingPendingLevel={state.thinkingPendingLevel}
           onInspect={inspect}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
           pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
+          commandDiscovery={state.commandDiscovery}
           snapshot={state.snapshot}
           selectedWorkspace={state.selectedWorkspace}
           sessionSwitching={state.sessionSwitching}
