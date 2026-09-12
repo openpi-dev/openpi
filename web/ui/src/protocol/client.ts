@@ -5,6 +5,7 @@ import type {
   WebModelSummary,
   WebSnapshot,
   WebThinkingState,
+  WebCommandDiscoveryResult,
 } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
@@ -203,6 +204,13 @@ export class WebClient {
   providerAuth(sessionId: string, signal: AbortSignal) {
     return this.request<WebProviderAuthProjection>(
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  commands(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebCommandDiscoveryResult>(
+      `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

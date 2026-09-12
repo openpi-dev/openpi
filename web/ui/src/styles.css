@@ -333,6 +333,25 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .composer.dormant:hover { border-color: oklch(66% .018 249); }
 .composer textarea { @apply w-full min-w-0 border-0 bg-transparent outline-0; min-height: 52px; max-height: 220px; flex: 0 0 auto; padding: 0 2px; resize: none; color: var(--text); font-size: 14px; line-height: 1.55; }
 .composer textarea::placeholder { color: var(--subtle); }
+.slash-command-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); left: 0; max-height: min(360px, 48vh); overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--page); box-shadow: 0 14px 34px oklch(26% .02 249 / 18%); }
+.landing .slash-command-menu { top: calc(100% + 8px); bottom: auto; max-height: min(224px, 32vh, var(--slash-command-available-height, 224px)); }
+.landing .slash-command-menu[data-placement="above"] { top: auto; bottom: calc(100% + 8px); }
+.slash-command-option { @apply flex w-full min-w-0 items-center gap-3 border-0 text-left; min-height: 56px; padding: 8px 11px; background: transparent; color: var(--text); }
+.slash-command-option + .slash-command-option { border-top: 1px solid var(--border); }
+.slash-command-option[aria-selected="true"] { background: var(--sidebar-active); }
+.slash-command-option:disabled { cursor: not-allowed; color: var(--subtle); }
+.slash-command-option:disabled[aria-selected="true"] { background: var(--sidebar-hover); }
+.slash-command-icon { @apply grid shrink-0 place-items-center; width: 28px; height: 28px; border-radius: 6px; background: var(--sidebar); color: var(--muted); }
+.slash-command-icon svg { width: 15px; height: 15px; }
+.slash-command-copy { @apply flex min-w-0 flex-1 flex-col; gap: 2px; color: var(--muted); font-size: 12px; line-height: 1.35; overflow-wrap: anywhere; }
+.slash-command-heading { @apply flex min-w-0 flex-wrap items-baseline gap-x-2; }
+.slash-command-heading strong { color: var(--text); font: 600 13px ui-monospace, SFMono-Regular, Menlo, monospace; }
+.slash-command-heading > span { color: var(--subtle); font-size: 11px; }
+.slash-command-option:disabled .slash-command-heading strong { color: var(--muted); }
+.slash-command-support { @apply shrink-0; max-width: 132px; color: var(--subtle); font-size: 11px; text-align: right; }
+.slash-command-state { display: flex; min-height: 58px; flex-direction: column; justify-content: center; gap: 3px; padding: 10px 13px; color: var(--muted); font-size: 12px; }
+.slash-command-state strong { color: var(--text); font-weight: 600; }
+.slash-command-bounded { padding: 7px 11px; border-top: 1px solid var(--border); color: var(--subtle); font-size: 11px; }
 .composer-toolbar { @apply mt-2 flex min-w-0 items-center justify-end gap-2; }
 .model-picker-wrap { position: relative; z-index: 11; min-width: 0; max-width: 48%; }
 .model-picker { min-width: 150px !important; max-width: 100% !important; min-height: 34px !important; height: auto !important; padding: 0 9px 0 10px !important; background: transparent !important; color: var(--muted) !important; box-shadow: none !important; }
@@ -400,6 +419,8 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .landing .composer-dock { top: calc(50% - 74px); padding: 0 12px; }
   .landing-welcome { transform: translateY(-96px); }
   .composer { min-height: 104px; }
+  .slash-command-option { align-items: flex-start; }
+  .slash-command-support { max-width: 96px; }
   .notice { bottom: 12px; width: calc(100% - 24px); }
 }
 
@@ -441,6 +462,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 :root[data-theme="dark"] :is(.markdown blockquote, .markdown code, .markdown pre, .markdown th, .tool-evidence, .tool-group, .activity-card, .activity-chip, .mobile-header > button) { background: var(--sidebar); color: var(--text); border-color: var(--border); }
 :root[data-theme="dark"] :is(.new-session-button:hover, .message-details summary:hover, .tool-group > summary:hover, .message-actions button:hover, .turn-tick:hover) { background: var(--sidebar-hover); border-color: var(--border); }
 :root[data-theme="dark"] :is(.turn-rail:hover, .turn-rail:focus-within) { background: var(--page); }
+:root[data-theme="dark"] .slash-command-icon { background: var(--sidebar-hover); }
 :root[data-theme="dark"] .model-picker:hover, :root[data-theme="dark"] .model-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
 :root[data-theme="dark"] .thinking-picker:hover, :root[data-theme="dark"] .thinking-picker[aria-expanded="true"] { background: var(--sidebar-hover) !important; }
 

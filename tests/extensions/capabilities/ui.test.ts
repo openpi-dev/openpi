@@ -104,9 +104,7 @@ test("shimmer phase changes only the keyword colors", () => {
 
 test("highlights capability names only when shared intent authorizes them", () => {
   const reserved = editor("subagent, workflow");
-  assert.deepEqual(reserved.highlighted.render(120), [
-    "<accent>subagent</accent>, <accent>workflow</accent>",
-  ]);
+  assert.deepEqual(reserved.highlighted.render(120), ["subagent, workflow"]);
 
   const explicit = editor("用 Subagent 检查，再用 Workflow 汇总");
   assert.deepEqual(explicit.highlighted.render(120), [
@@ -120,7 +118,7 @@ test("highlights capability names only when shared intent authorizes them", () =
 
   const named = editor("Subagent 和 Workflow 有什么区别？");
   assert.deepEqual(named.highlighted.render(120), [
-    "<accent>Subagent</accent> 和 <accent>Workflow</accent> 有什么区别？",
+    "Subagent 和 Workflow 有什么区别？",
   ]);
 
   const negated = editor("不要用 Subagent，也不要用 Workflow");

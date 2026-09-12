@@ -893,6 +893,163 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
+test("serves terminal Sessions through a read-only bounded endpoint", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-host-"));
+  const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+  process.env.PI_CODING_AGENT_DIR = join(root, "pi-agent");
+  const sessionManager = SessionManager.inMemory(root);
+  const terminal = SessionManager.create(root);
+  terminal.appendMessage({
+    role: "user",
+    content: "terminal endpoint",
+    timestamp: 1,
+  });
+  terminal.appendMessage({
+    role: "assistant",
+    content: [],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "stop",
+    timestamp: 1,
+  });
+  const runtime: WebRuntimeController = {
+    cwd: root,
+    workspaceSelected: true,
+    sessionDirectory: join(root, "web-sessions"),
+    sessionManager,
+    isIdle: () => true,
+    getActiveTurn: () => undefined,
+    cancelTurn: async (options) => ({ ...options, state: "stale-turn" }),
+    sendPrompt: async () => ({ pendingFollowUps: 0 }),
+    newSession: async () => ({ cancelled: false }),
+    switchSession: async () => ({ cancelled: false }),
+    listModels: () => [],
+    setModel: async () => {
+      throw new Error("not available");
+    },
+    subscribe: () => () => {},
+    dispose: async () => {},
+  };
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    const launched = new URL(host.url);
+    const token = new URLSearchParams(launched.hash.slice(1)).get("token");
+    assert.ok(token);
+    const headers = { Authorization: `Bearer ${token}` };
+    const listed = await fetch(
+      `${launched.origin}/api/terminal-sessions?limit=1`,
+      {
+        headers,
+      },
+    );
+    assert.equal(listed.status, 200);
+    const page = (await listed.json()) as {
+      sessions: Array<{
+        path: string;
+        source: string;
+        origin: string;
+        readOnly: boolean;
+      }>;
+      total: number;
+    };
+    assert.equal(page.total, 1);
+    assert.equal(page.sessions[0]?.path, terminal.getSessionFile());
+    assert.equal(page.sessions[0]?.source, "pi-default");
+    assert.equal(page.sessions[0]?.origin, "terminal");
+    assert.equal(page.sessions[0]?.readOnly, true);
+    assert.equal(JSON.stringify(page).includes("allMessagesText"), false);
+    assert.equal(
+      (
+        await fetch(
+          `${launched.origin}/api/terminal-sessions?query=${"x".repeat(201)}`,
+          { headers },
+        )
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?cursor=nope`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/terminal-sessions?limit=101`, {
+          headers,
+        })
+      ).status,
+      400,
+    );
+    const missing = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(join(root, "missing.jsonl"))}`,
+      { headers },
+    );
+    assert.equal(missing.status, 404);
+    assert.deepEqual(await missing.json(), {
+      code: "SESSION_NOT_FOUND",
+      error: "Terminal Session is not available",
+    });
+    const inspected = await fetch(
+      `${launched.origin}/api/terminal-sessions?path=${encodeURIComponent(terminal.getSessionFile()!)}`,
+      { headers },
+    );
+    assert.equal(inspected.status, 200);
+    const details = (await inspected.json()) as {
+      readOnly: boolean;
+      preview: { messages: unknown[]; retainedBytes: number };
+    };
+    assert.equal(details.readOnly, true);
+    assert.equal(details.preview.messages.length, 2);
+    assert.ok(details.preview.retainedBytes > 0);
+    assert.equal(JSON.stringify(details).includes("allMessagesText"), false);
+    for (const method of ["POST", "PATCH", "DELETE"]) {
+      const rejected = await fetch(`${launched.origin}/api/terminal-sessions`, {
+        method,
+        headers,
+      });
+      assert.equal(rejected.status, 405);
+    }
+    const capabilities = await fetch(`${launched.origin}/api/capabilities`, {
+      headers,
+    });
+    assert.equal(
+      (await capabilities.json()).sessionId,
+      sessionManager.getSessionId(),
+    );
+    const webSessions = await fetch(`${launched.origin}/api/sessions`, {
+      headers,
+    });
+    assert.ok(!JSON.stringify(await webSessions.json()).includes("pi-default"));
+  } finally {
+    await host.stop();
+    if (previousAgentDirectory === undefined) {
+      delete process.env.PI_CODING_AGENT_DIR;
+    } else {
+      process.env.PI_CODING_AGENT_DIR = previousAgentDirectory;
+    }
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-unbound-host-"));
   const bootstrap = join(root, ".bootstrap-workspace");
@@ -1520,6 +1677,108 @@ async function startTestHost(runtime: WebRuntimeController) {
   const headers = { Authorization: `Bearer ${token}` };
   return { host, launched, headers };
 }
+
+test("serves Session-bound command discovery with fail-closed request validation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-commands-"));
+  const runtime = testRuntime(cwd);
+  let workspaceSelected = true;
+  Object.defineProperty(runtime, "workspaceSelected", {
+    configurable: true,
+    get: () => workspaceSelected,
+  });
+  runtime.listCommands = () => ({
+    commands: [
+      {
+        name: "review",
+        description: "Review the current change",
+        source: "prompt",
+        availability: "available",
+        argumentHint: "[arguments]",
+      },
+    ],
+    totalAvailable: 1,
+    truncation: {
+      truncated: false,
+      commandsOmitted: 0,
+      maxCommands: 250,
+      maxBytes: 64 * 1024,
+      bytes: 256,
+    },
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const sessionId = runtime.sessionManager.getSessionId();
+  try {
+    assert.equal(
+      (await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`))
+        .status,
+      401,
+    );
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/commands?sessionId=${sessionId}`, {
+          method: "POST",
+          headers,
+        })
+      ).status,
+      405,
+    );
+    for (const suffix of [
+      "",
+      "?sessionId=",
+      `?sessionId=${sessionId}&extra=true`,
+      `?sessionId=${sessionId}&sessionId=${sessionId}`,
+    ]) {
+      const response = await fetch(`${launched.origin}/api/commands${suffix}`, {
+        headers,
+      });
+      assert.equal(response.status, 400);
+      assert.equal(
+        (await response.json()).code,
+        "INVALID_COMMAND_DISCOVERY_REQUEST",
+      );
+    }
+    const stale = await fetch(
+      `${launched.origin}/api/commands?sessionId=stale-session`,
+      { headers },
+    );
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, "SESSION_CHANGED");
+
+    workspaceSelected = false;
+    const noWorkspace = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(noWorkspace.status, 409);
+    assert.equal((await noWorkspace.json()).code, "WORKSPACE_REQUIRED");
+
+    workspaceSelected = true;
+    const listCommands = runtime.listCommands;
+    delete runtime.listCommands;
+    const unavailable = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(unavailable.status, 501);
+    assert.equal(
+      (await unavailable.json()).code,
+      "COMMAND_DISCOVERY_UNAVAILABLE",
+    );
+    runtime.listCommands = listCommands;
+
+    const response = await fetch(
+      `${launched.origin}/api/commands?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const body = await response.text();
+    assert.match(body, /"name":"review"/u);
+    assert.doesNotMatch(body, /sourceInfo|\/private\/|private-fixture/u);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 test("classifies invalid and oversized JSON bodies as client errors", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));

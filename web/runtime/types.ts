@@ -1,5 +1,8 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
-import type { WebModelSummary } from "../protocol/types.ts";
+import type {
+  WebCommandDiscoveryResult,
+  WebModelSummary,
+} from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 
 export type WebProviderAuthSource =
@@ -133,6 +136,7 @@ export interface WebRuntimeController {
   ): Promise<WebSessionCreationResult>;
   switchSession(sessionPath: string): Promise<{ cancelled: boolean }>;
   listModels(): WebModelSummary[];
+  listCommands?(): WebCommandDiscoveryResult;
   listProviderAuth?(): WebProviderAuthProjection;
   getThinkingState?(): WebThinkingProjection;
   setThinkingLevel?(

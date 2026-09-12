@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md`](CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #308](https://github.com/openpi-dev/openpi/pull/308)).
+
 - [`CACHE_USAGE_CONTRACT_2026-09-11.md`](CACHE_USAGE_CONTRACT_2026-09-11.md) — source-scoped Pi usage field matrix and synthetic cache-diagnostic replay boundaries; real comparative Session evidence remains open ([#156](https://github.com/openpi-dev/openpi/issues/156)).
 
 - [`CURSOR_NATIVE_RECOVERY_2026-09-08.md`](CURSOR_NATIVE_RECOVERY_2026-09-08.md) — bounded in-band native execution rejection, Pi-owned tools, cancellation identity, and actual child acceptance ([#234](https://github.com/openpi-dev/openpi/issues/234)).

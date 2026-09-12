@@ -17,6 +17,10 @@ export const WEB_MAX_ARCHIVED_SESSION_PAGE = 50;
 export const WEB_MAX_ARCHIVED_SESSION_QUERY = 160;
 export const WEB_MAX_ARCHIVED_SESSION_CURSOR = 512;
 export const WEB_MAX_ARCHIVED_SESSION_SCAN = 5_000;
+export const WEB_MAX_COMMANDS = 250;
+export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
+export const WEB_MAX_COMMAND_NAME = 160;
+export const WEB_MAX_COMMAND_DESCRIPTION = 500;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 export const WEB_MAX_THINKING_LEVEL = 500;
@@ -62,6 +66,26 @@ export interface WebModelSummary {
   name: string;
   label: string;
   current: boolean;
+}
+
+export interface WebCommandSummary {
+  name: string;
+  description?: string;
+  source: "extension" | "prompt" | "skill";
+  availability: "available" | "unsupported";
+  argumentHint?: string;
+}
+
+export interface WebCommandDiscoveryResult {
+  commands: WebCommandSummary[];
+  totalAvailable: number;
+  truncation: {
+    truncated: boolean;
+    commandsOmitted: number;
+    maxCommands: number;
+    maxBytes: number;
+    bytes: number;
+  };
 }
 
 export interface WebProjectionTruncation {
