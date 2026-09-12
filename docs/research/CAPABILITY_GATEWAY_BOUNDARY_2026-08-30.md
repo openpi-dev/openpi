@@ -4,7 +4,7 @@
 >
 > 创建日期：2026-08-30
 >
-> 最后核验：2026-08-30
+> 最后核验：2026-09-12（来源转述与分类；未复跑模型实验）
 >
 > 关联 Issue：[#19](https://github.com/openpi-dev/openpi/issues/19)
 
@@ -20,6 +20,8 @@ Issue #19 的核心问题是能力入口是否应常驻模型上下文。现有�
 - 已加载组在 Session 内单调保持，避免频繁增删 schema 导致 cache churn。
 - 第三方同名工具不能被 OpenPI 误隐藏；无法证明 source ownership 时必须保留并 fail open。
 - child Session 不得通过 gateway 改变父会话工具面，工具仍需通过 child-safe drift guard。
+
+Issue #19 记录早期常驻 gateway 提案；#20 记录后续零常驻诊断。下文 Explicit/Adaptive 是上述固定源码版本的产品边界，不能回写为早期提案已实现的事实。
 
 ## 设计选择
 
@@ -47,7 +49,7 @@ Issue #19 的核心问题是能力入口是否应常驻模型上下文。现有�
 - 不把 gateway 变成关键词路由器、固定数量 planner 或第二 authority plane。
 - 不因为一次小样本诊断改写默认产品行为。
 
-## 后续门槛
+## 后续门槛（本记录的建议，尚未执行）
 
 先在隔离有效的配对任务上比较 Bare Pi、OpenPI Explicit、OpenPI Adaptive 和按需加载组。只有在能力实际被采用且对预注册主要结果产生净收益时，才考虑新增 runtime seam；否则保持当前 Pi-native 最小面。
 
@@ -56,3 +58,9 @@ Issue #19 的核心问题是能力入口是否应常驻模型上下文。现有�
 - [Issue #19](https://github.com/openpi-dev/openpi/issues/19)：工具面复盘与 gateway 提案。
 - [Issue #20](https://github.com/openpi-dev/openpi/issues/20)：三臂诊断复盘。
 - [`docs/README.md`](../README.md)：研究记录状态与证据边界。
+
+## 本次核验边界
+
+本次修订对应 [PR #308](https://github.com/openpi-dev/openpi/pull/308)；产品实现核对以 OpenPI `77d444f51b0b81589f407b6b413578cb06e083ad` 为界。历史观察来自正文列出的 Issue，validated 仅指来源转述与范围核验，不代表重算原始 trace 或验证新的实验结论。
+
+诊断来源：[Issue #20](https://github.com/openpi-dev/openpi/issues/20)。
