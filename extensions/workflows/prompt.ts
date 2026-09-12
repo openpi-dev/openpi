@@ -56,7 +56,7 @@ export const WORKFLOW_TOOL_DESCRIPTION = [
   "Interactive sessions launch in the background by default and deliver completion later. Set wait: true only when this tool call must return the final result inline.",
   "Derive fan-out from independent verifiable work items and task difficulty. Concurrency is a runtime ceiling, not a target or the total-call limit; user cost, count, model, and effort constraints take precedence.",
   "For concurrent writers use isolation: 'worktree' and tell each agent to commit. Read-only work should normally stay in the shared checkout.",
-  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, acceptance, result refs, replay, background lifecycle, limits, and examples.",
+  "Read the workflows Skill before a nontrivial script; it covers the restricted sandbox, full DSL, result refs, replay, background lifecycle, limits, and examples.",
 ].join("\n");
 
 /** Adds workflow orchestration primitives and background execution to the model's tool prompt. */
@@ -74,14 +74,6 @@ export const WORKFLOW_PROMPT_GUIDELINES = [
 export function buildWorkflowAgentPrompt(prompt: string) {
   return prompt;
 }
-
-/** Instructs structured workflow children to terminate with exactly one structured_output call. */
-export const STRUCTURED_OUTPUT_SYSTEM_INSTRUCTION =
-  "When your task is complete, call the `structured_output` tool exactly once as your final action, with fields matching the required schema. Do not write any other text after it.";
-
-/** Describes the terminating structured_output tool and its final-action contract. */
-export const STRUCTURED_OUTPUT_TOOL_DESCRIPTION =
-  "Return your final result as structured data matching the required schema. Call this exactly once, as your last action; do not write any other text after it.";
 
 /** Builds the workflow completion report returned to the parent model. */
 export function buildWorkflowResultMessage(
@@ -157,7 +149,9 @@ export function buildWorkflowResultMessage(
               : "running";
       lines.push(
         `- [${agent.label}]${agent.phase ? ` (${agent.phase})` : ""} ${status}` +
-          (agent.acceptance ? ` · acceptance ${agent.acceptance.status}` : "") +
+          (agent.acceptance
+            ? ` · deprecated model self-attestation ${agent.acceptance.status}`
+            : "") +
           (agent.error ? ` — ${agent.error}` : ""),
       );
     }

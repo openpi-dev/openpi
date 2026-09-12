@@ -1,6 +1,7 @@
 {
   "compilerOptions": {
     "allowImportingTsExtensions": true,
+    "jsx": "react-jsx",
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "noEmit": true,
@@ -16,5 +17,10 @@
     "types": ["node"],
     "verbatimModuleSyntax": true
   },
-  "include": ["extensions/**/*.ts", "tests/**/*.ts", "benchmarks/**/*.ts"]
+  "include": [
+    "extensions/**/*.ts",
+    "tests/**/*.ts",
+    "benchmarks/**/*.ts",
+    "scripts/**/*.ts"
+  ]
 }

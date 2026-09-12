@@ -10,10 +10,8 @@
  * imperative TUI components (which render synchronously) can read snapshots
  * and issue fire-and-forget commands without touching the Effect runtime.
  *
- * Every run is guarded by a first-response watchdog: a provider that accepts
- * the request but never emits its first assistant event is settled as a
- * failure (releasing its concurrency slot) instead of hanging forever,
- * mirroring the workflow runner's watchdog.
+ * Pi owns provider transport timeouts and retries. This manager owns explicit
+ * cancellation, settlement, and bounded cleanup, not model-output deadlines.
  */
 
 import {
@@ -60,13 +58,6 @@ export const MAX_TRACKED = 64;
 const STOP_TIMEOUT_MS = 5_000;
 /** Session abort/shutdown (5s) plus bounded direct-worktree cleanup (4s). */
 const ENTRY_CLOSE_TIMEOUT_MS = 10_000;
-/**
- * First-response watchdog: a run whose provider accepts the request but
- * never emits an assistant event is settled as a failure so it cannot
- * occupy a concurrency slot forever. Matches the workflow runner's
- * MODEL_PROGRESS_TIMEOUT_MS (extensions/workflows/runner.ts).
- */
-export const FIRST_RESPONSE_TIMEOUT_MS = 45_000;
 const ERROR_TEXT_MAX_LENGTH = 4_096;
 const TRANSCRIPT_TEXT_MAX_LENGTH = 64 * 1_024;
 const LIVE_ASSISTANT_MAX_LENGTH = 128 * 1_024;
@@ -75,10 +66,6 @@ const MAX_TRANSCRIPT_ITEMS = 512;
 
 function bounded(text: string) {
   return text.slice(0, ERROR_TEXT_MAX_LENGTH);
-}
-
-function formatWatchdogTimeout(ms: number) {
-  return ms % 1_000 === 0 ? `${ms / 1_000} seconds` : `${ms} ms`;
 }
 
 function boundedTranscriptText(text: string) {
@@ -123,6 +110,7 @@ interface MutableSnapshot {
   liveTools: LiveToolState[];
   queued: SubagentSnapshot["queued"];
   finalText: string;
+  structuredResult?: SubagentSnapshot["structuredResult"];
   turns: number;
 }
 
@@ -132,8 +120,6 @@ interface Entry {
   scope: Scope.Closeable;
   pump?: Fiber.Fiber<void>;
   liveToolMap: Map<string, LiveToolState>;
-  /** First-response watchdog timer for the active (or just-armed) run. */
-  watchdogTimer?: ReturnType<typeof setTimeout>;
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
    * so concurrent restarts cannot race past the cap. */
   restarting?: boolean;
@@ -213,8 +199,6 @@ export class SubagentManager extends Context.Service<
 
 const makeManager = (config: SubagentManagerConfig = {}) =>
   Effect.gen(function* () {
-    const firstResponseTimeoutMs =
-      config.firstResponseTimeoutMs ?? FIRST_RESPONSE_TIMEOUT_MS;
     const registry = yield* BackendRegistry;
     // Detached forker for sync contexts (read-model commands, pruning) that
     // preserves the manager's services instead of using the global runtime.
@@ -309,7 +293,20 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     };
 
     const closeEntryScope = (entry: Entry) =>
-      Scope.close(entry.scope, Exit.void).pipe(Effect.ignore);
+      Scope.close(entry.scope, Exit.void).pipe(
+        Effect.tap(() =>
+          Effect.sync(() => {
+            const receipt = entry.session.cleanupReceipt?.();
+            if (!receipt?.uncertain) return;
+            const current = entry.snapshot.errorText;
+            entry.snapshot.errorText = current
+              ? `${current}; ${receipt.message}`
+              : receipt.message;
+            notify(entry.snapshot.id);
+          }),
+        ),
+        Effect.ignore,
+      );
 
     const pruneSettled = () => {
       if (entries.size <= MAX_TRACKED) return;
@@ -330,7 +327,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     };
 
     const settle = (entry: Entry, outcome: RunOutcome) => {
-      clearWatchdog(entry);
       const s = entry.snapshot;
       const wasRestarting = entry.restarting === true;
       entry.restarting = false;
@@ -350,6 +346,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = "completed";
           s.errorText = undefined;
           s.finalText = outcome.finalText.slice(0, FINAL_TEXT_MAX_LENGTH);
+          s.structuredResult = outcome.structuredResult;
           break;
         case "Failed":
           s.status = "error";
@@ -360,6 +357,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             0,
             FINAL_TEXT_MAX_LENGTH,
           );
+          s.structuredResult = undefined;
           break;
         case "Interrupted":
           s.status = "error";
@@ -369,6 +367,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             0,
             FINAL_TEXT_MAX_LENGTH,
           );
+          s.structuredResult = undefined;
           break;
       }
       s.liveAssistant = undefined;
@@ -386,44 +385,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       pruneSettled();
     };
 
-    /** Stop the first-response watchdog (first response arrived / run settled). */
-    const clearWatchdog = (entry: Entry) => {
-      if (entry.watchdogTimer !== undefined) {
-        clearTimeout(entry.watchdogTimer);
-        entry.watchdogTimer = undefined;
-      }
-    };
-
-    /** Settle a run whose provider never emitted a first assistant response. */
-    const watchdogExpired = (entry: Entry) => {
-      entry.watchdogTimer = undefined;
-      if (!isBusy(entry)) return;
-      const model = entry.snapshot.meta.modelLabel;
-      settle(entry, {
-        _tag: "Failed",
-        errorText: `Agent received no assistant response event${model ? ` for ${model}` : ""} within ${formatWatchdogTimeout(firstResponseTimeoutMs)}; the provider request may be stalled. Retry the subagent.`,
-      });
-      // The stalled session cannot be trusted to abort cooperatively; dispose
-      // it like the abort-deadline path so it cannot revive into a zombie run.
-      const fiber = runDetached(
-        closeEntryScope(entry).pipe(
-          Effect.timeout(ENTRY_CLOSE_TIMEOUT_MS),
-          Effect.ignore,
-        ),
-      );
-      cleanups.add(fiber);
-      fiber.addObserver(() => cleanups.delete(fiber));
-    };
-
-    /** Arm the first-response watchdog for the entry's current run. */
-    const armWatchdog = (entry: Entry) => {
-      clearWatchdog(entry);
-      entry.watchdogTimer = setTimeout(
-        () => watchdogExpired(entry),
-        firstResponseTimeoutMs,
-      );
-    };
-
     const foldEvent = (entry: Entry, event: SubagentEvent) => {
       const s = entry.snapshot;
       switch (event._tag) {
@@ -433,7 +394,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           s.outcome = undefined;
           s.settledAt = undefined;
           s.errorText = undefined;
-          armWatchdog(entry);
+          s.structuredResult = undefined;
           break;
         case "RunSettled":
           settle(entry, event.outcome);
@@ -445,7 +406,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           });
           break;
         case "AssistantDelta": {
-          clearWatchdog(entry);
           const live = s.liveAssistant ?? { text: "", thinking: "" };
           s.liveAssistant =
             event.kind === "text"
@@ -464,7 +424,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           break;
         }
         case "AssistantMessage":
-          clearWatchdog(entry);
           appendTranscript(s, {
             kind: "assistant",
             parts: event.parts.map((part) =>
@@ -610,9 +569,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             liveToolMap: new Map(),
           };
           entries.set(id, entry);
-          // The run is live from the caller's perspective before RunStarted
-          // reaches the pump; guard that window too.
-          armWatchdog(entry);
 
           // Pump: fold the event stream into the snapshot. Tied to the entry
           // scope, so closing the scope stops it. If the stream ends while the
@@ -763,10 +719,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // both pass the check in that window. Cleared by RunStarted/settle,
           // or here when the backend rejects the send.
           entry.restarting = true;
-          // A backend that accepts the send but never starts the run would
-          // hold the slot forever; guard the restart window the same way the
-          // spawn path guards its pre-RunStarted window.
-          armWatchdog(entry);
           return entry.session.send(text).pipe(
             Effect.onError(() =>
               Effect.sync(() => {
@@ -782,7 +734,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const disposeAll = Effect.gen(function* () {
       disposed = true;
       const all = [...entries.values()];
-      for (const entry of all) clearWatchdog(entry);
       entries.clear();
       yield* Effect.forEach(
         all,
@@ -860,8 +811,6 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
   });
 
 export interface SubagentManagerConfig {
-  /** Test-only override for the first-response watchdog timeout. */
-  firstResponseTimeoutMs?: number;
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;

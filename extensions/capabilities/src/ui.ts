@@ -15,6 +15,21 @@ interface CapabilityKeywordColorOptions {
   readonly light: boolean;
 }
 
+type Rgb = readonly [number, number, number];
+
+const DARK_SHIMMER_PALETTE: readonly Rgb[] = [
+  [210, 168, 255],
+  [239, 220, 255],
+  [178, 125, 244],
+  [210, 168, 255],
+];
+const LIGHT_SHIMMER_PALETTE: readonly Rgb[] = [
+  [130, 80, 223],
+  [92, 42, 174],
+  [161, 111, 239],
+  [130, 80, 223],
+];
+
 export function isLightNamedTheme(name: string | undefined) {
   return name !== undefined && /(?:^|[-_])light(?:$|[-_])/iu.test(name);
 }
@@ -26,6 +41,7 @@ export function isLightNamedTheme(name: string | undefined) {
 export function colorCapabilityKeyword(
   text: string,
   options: CapabilityKeywordColorOptions,
+  phase?: number,
 ) {
   const start = options.light
     ? options.colorMode === "truecolor"
@@ -34,7 +50,34 @@ export function colorCapabilityKeyword(
     : options.colorMode === "truecolor"
       ? "\u001b[38;2;210;168;255m"
       : "\u001b[38;5;183m";
-  return `${start}${text}${FOREGROUND_RESET}`;
+  if (phase === undefined || options.colorMode !== "truecolor") {
+    return `${start}${text}${FOREGROUND_RESET}`;
+  }
+
+  const palette = options.light ? LIGHT_SHIMMER_PALETTE : DARK_SHIMMER_PALETTE;
+  const chars = [...text];
+  const span = Math.max(chars.length - 1, 1);
+  const normalized = ((phase % 1) + 1) % 1;
+  const sample = (position: number) => {
+    const scaled = ((((position + normalized) % 1) + 1) % 1) * palette.length;
+    const index = Math.floor(scaled);
+    const amount = scaled - index;
+    const from = palette[index]!;
+    const to = palette[(index + 1) % palette.length]!;
+    return [
+      Math.round(from[0] + (to[0] - from[0]) * amount),
+      Math.round(from[1] + (to[1] - from[1]) * amount),
+      Math.round(from[2] + (to[2] - from[2]) * amount),
+    ];
+  };
+  return (
+    chars
+      .map((character, index) => {
+        const [red, green, blue] = sample(index / span);
+        return `\u001b[38;2;${red};${green};${blue}m${character}`;
+      })
+      .join("") + FOREGROUND_RESET
+  );
 }
 
 export function highlightCapabilityNames(
@@ -59,11 +102,13 @@ export function highlightCapabilityNames(
  */
 export class CapabilityIntentHighlightEditor extends BelowEditorNavigationEditor {
   private readonly highlight: (text: string) => string;
+  private readonly onShimmerActive?: (active: boolean) => void;
 
   constructor(
     base: EditorComponent,
     keybindings: KeybindingsManager,
     highlight: (text: string) => string,
+    onShimmerActive?: (active: boolean) => void,
   ) {
     super(
       base,
@@ -74,14 +119,15 @@ export class CapabilityIntentHighlightEditor extends BelowEditorNavigationEditor
       () => undefined,
     );
     this.highlight = highlight;
+    this.onShimmerActive = onShimmerActive;
   }
 
   override render(width: number) {
     const capabilities = capabilitiesRequestedByPrompt(this.getText());
-    if (
-      !capabilities.includes("delegate") &&
-      !capabilities.includes("workflow")
-    ) {
+    const active =
+      capabilities.includes("delegate") || capabilities.includes("workflow");
+    this.onShimmerActive?.(active);
+    if (!active) {
       return super.render(width);
     }
     return super

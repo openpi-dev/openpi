@@ -2,7 +2,12 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import type { KeybindingsManager } from "@earendil-works/pi-coding-agent";
 import type { EditorComponent } from "@earendil-works/pi-tui";
-import { CURSOR_MARKER, visibleWidth } from "@earendil-works/pi-tui";
+import {
+  CURSOR_MARKER,
+  stripTerminalSequences,
+  truncateToWidth,
+  visibleWidth,
+} from "@earendil-works/pi-tui";
 import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
@@ -86,10 +91,99 @@ test("latest-wins state rejects stale or non-empty-editor offers", () => {
   assert.equal(state.isActive(), false);
 });
 
+function editorRow(width: number) {
+  return `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(width - 1)}`;
+}
+
+function reservedPreeditCells(row: string) {
+  const markerIndex = row.indexOf(CURSOR_MARKER);
+  assert.ok(markerIndex >= 0);
+  return visibleWidth(row.slice(markerIndex + CURSOR_MARKER.length));
+}
+
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
+
+/**
+ * Same contract as Pi TUI `TuiBase.extractCursorPosition`: find CURSOR_MARKER
+ * in the visible viewport, take visibleWidth(before) as the hardware-cursor
+ * column, then strip the APC marker before the terminal paints.
+ */
+function extractHardwareCursor(lines: readonly string[], height: number) {
+  const viewportTop = Math.max(0, lines.length - height);
+  const next = [...lines];
+  for (let row = next.length - 1; row >= viewportTop; row--) {
+    const line = next[row]!;
+    const markerIndex = line.indexOf(CURSOR_MARKER);
+    if (markerIndex === -1) continue;
+    const col = visibleWidth(line.slice(0, markerIndex));
+    next[row] =
+      line.slice(0, markerIndex) +
+      line.slice(markerIndex + CURSOR_MARKER.length);
+    return { lines: next, row, col };
+  }
+  return undefined;
+}
+
+function paintVisibleCells(line: string, width: number) {
+  const cells = Array.from({ length: width }, () => " ");
+  let col = 0;
+  for (const { segment } of graphemes.segment(stripTerminalSequences(line))) {
+    const w = visibleWidth(segment);
+    if (w <= 0) continue;
+    if (col >= width) break;
+    if (col + w > width) {
+      // Wide glyphs that do not fit the last columns shift left, covering the
+      // preceding cell. That is how a 1-cell pad loses the ghost's last char.
+      col = Math.max(0, width - w);
+    }
+    cells[col] = segment;
+    for (let i = 1; i < w && col + i < width; i++) cells[col + i] = "";
+    col += w;
+  }
+  return cells;
+}
+
+/**
+ * Terminal compositor: park the hardware cursor where Pi TUI would, then paint
+ * IME preedit from that cell. CJK graphemes occupy two cells; a glyph that
+ * cannot fit at the row end clamps left and overwrites earlier cells.
+ */
+function composeImePreedit(
+  lines: readonly string[],
+  width: number,
+  preedit: string,
+) {
+  const cursor = extractHardwareCursor(lines, lines.length);
+  assert.ok(cursor);
+  const row = paintVisibleCells(cursor.lines[cursor.row]!, width);
+  const ghostBefore = row.slice(0, cursor.col).map((cell) => cell);
+  let col = cursor.col;
+  let overwrittenGhostCells = 0;
+  for (const { segment } of graphemes.segment(preedit)) {
+    const w = visibleWidth(segment);
+    if (w <= 0) continue;
+    if (col + w > width) col = Math.max(0, width - w);
+    for (let i = 0; i < w && col + i < width; i++) {
+      if (col + i < cursor.col && ghostBefore[col + i] !== " ") {
+        overwrittenGhostCells += 1;
+      }
+    }
+    row[col] = segment;
+    for (let i = 1; i < w && col + i < width; i++) row[col + i] = "";
+    col += w;
+  }
+  return {
+    hardwareCol: cursor.col,
+    ghost: ghostBefore.join(""),
+    overwrittenGhostCells,
+    cells: row,
+  };
+}
+
 test("renders the ghost on the first row with reserved IME preedit cells", () => {
   const width = 40;
   const lines = renderGhostSuggestion(
-    ["top", `${CURSOR_MARKER}${FAKE_CURSOR}${" ".repeat(width - 1)}`, "bottom"],
+    ["top", editorRow(width), "bottom"],
     width,
     "run the full test suite",
     (text) => `\u001b[2m${text}\u001b[22m`,
@@ -107,10 +201,100 @@ test("renders the ghost on the first row with reserved IME preedit cells", () =>
   // IME preedit can draw without overwriting the suggestion.
   const markerIndex = lines[1]!.indexOf(CURSOR_MARKER);
   assert.ok(markerIndex > lines[1]!.indexOf("run the full test suite"));
-  assert.equal(
-    visibleWidth(lines[1]!.slice(markerIndex + CURSOR_MARKER.length)),
-    12,
+  assert.equal(reservedPreeditCells(lines[1]!), 12);
+  assert.equal(visibleWidth(lines[1]!), width);
+});
+
+test("IME preedit reservation scales with terminal width up to 32 cells", () => {
+  const cases = [
+    { width: 40, preedit: 12 },
+    { width: 80, preedit: 24 },
+    { width: 120, preedit: 32 },
+    { width: 200, preedit: 32 },
+  ];
+  for (const { width, preedit } of cases) {
+    const lines = renderGhostSuggestion(
+      ["top", editorRow(width), "bottom"],
+      width,
+      "run the full test suite",
+      (text) => text,
+    );
+    assert.equal(reservedPreeditCells(lines[1]!), preedit, `width ${width}`);
+    assert.equal(visibleWidth(lines[1]!), width);
+  }
+});
+
+test("Pi TUI parks the hardware cursor at the start of the reserved IME band", () => {
+  const width = 40;
+  const lines = renderGhostSuggestion(
+    ["top", editorRow(width), "bottom"],
+    width,
+    "run tests",
+    (text) => text,
   );
+  const cursor = extractHardwareCursor(lines, lines.length);
+  assert.ok(cursor);
+  assert.equal(cursor.row, 1);
+  assert.equal(cursor.col, width - 12);
+  assert.equal(cursor.lines[1]!.includes(CURSOR_MARKER), false);
+});
+
+test("a long CJK IME preedit stays inside the reserved band", () => {
+  const width = 80;
+  const lines = renderGhostSuggestion(
+    ["top", editorRow(width), "bottom"],
+    width,
+    "run the full test suite",
+    (text) => text,
+  );
+  // 12 CJK syllables → 24 cells, matching width 80's 30% reservation.
+  const composed = composeImePreedit(lines, width, "にほんごにほんごにほんご");
+  assert.equal(composed.hardwareCol, width - 24);
+  assert.equal(composed.overwrittenGhostCells, 0);
+  assert.match(composed.ghost, /run the full test suite/);
+  assert.equal(composed.ghost.includes("にほん"), false);
+});
+
+test("a 1-cell hardware pad lets a wide CJK preedit cover the ghost", () => {
+  const width = 40;
+  const ghost = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ";
+  const conservative = renderGhostSuggestion(
+    ["top", editorRow(width), "bottom"],
+    width,
+    ghost,
+    (text) => text,
+  );
+  // Rejected 1-cell layout: fill the row except one hardware-cursor cell.
+  const oneCellGhost = truncateToWidth(ghost, width - 2, "…");
+  const oneCellPad = `${FAKE_CURSOR}${oneCellGhost}${CURSOR_MARKER} `;
+  assert.equal(visibleWidth(oneCellPad), width);
+
+  const preedit = "漢字"; // 4 cells; a 1-cell pad must clamp left.
+  const safe = composeImePreedit(conservative, width, preedit);
+  const unsafe = composeImePreedit(
+    [conservative[0]!, oneCellPad, conservative[2]!],
+    width,
+    preedit,
+  );
+  assert.equal(safe.overwrittenGhostCells, 0);
+  assert.ok(unsafe.overwrittenGhostCells > 0);
+  assert.ok(unsafe.ghost.includes("…"));
+});
+
+test("a truncated ghost still leaves the conservative IME preedit band", () => {
+  const width = 40;
+  const lines = renderGhostSuggestion(
+    ["top", editorRow(width), "bottom"],
+    width,
+    "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    (text) => text,
+  );
+
+  const markerIndex = lines[1]!.indexOf(CURSOR_MARKER);
+  const beforeMarker = lines[1]!.slice(0, markerIndex);
+  assert.ok(beforeMarker.includes("…"));
+  assert.equal(visibleWidth(beforeMarker), width - 12);
+  assert.equal(reservedPreeditCells(lines[1]!), 12);
   assert.equal(visibleWidth(lines[1]!), width);
 });
 
@@ -153,6 +337,16 @@ test("an editor too narrow to reserve an IME cell does not steal Right", () => {
   assert.equal(base.getText(), "");
   assert.deepEqual(base.inputs, ["\u001b[C"]);
   assert.equal(state.peek(), undefined);
+});
+
+test("suppresses ghost when the minimum IME band cannot fit", () => {
+  const base = new FakeEditor();
+  const { state, editor } = suggestionEditor({ base });
+  state.offer(state.begin(), "run tests", true);
+
+  assert.equal(editor.render(20)[1], `${FAKE_CURSOR}${" ".repeat(19)}`);
+  assert.notEqual(editor.render(21)[1], base.render(21)[1]);
+  assert.match(editor.render(21)[1]!, /run tes/);
 });
 
 test("supports a custom editor cursor with a selective reverse reset", () => {

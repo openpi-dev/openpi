@@ -53,8 +53,13 @@ import {
   formatActivityStatus,
 } from "../shared/activity-status.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
-import { waitBounded } from "../shared/child-session.ts";
+import {
+  inheritedChildToolAllowlist,
+  resolveStandaloneChildProjectTrust,
+  waitBounded,
+} from "../shared/child-session.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
+import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -65,6 +70,12 @@ import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
+import {
+  notifyWebCapabilities,
+  projectWorkflowCapability,
+  registerWebCapability,
+  type WebCapabilityScope,
+} from "../shared/web-observer-registry.ts";
 import {
   createWorktree,
   reclaimWorktree,
@@ -120,8 +131,8 @@ import {
 } from "./invocation-ledger.ts";
 import {
   agentCallKey,
+  createJournalAccumulator,
   createReplayCache,
-  type JournalEntry,
   type ReplayCache,
 } from "./journal.ts";
 import {
@@ -138,7 +149,6 @@ import {
   countStates,
   createUsageReader,
   emptyUsage,
-  evictOldestSettledRuns,
   formatElapsed,
   formatUsage,
   isWorkflowRunId,
@@ -158,16 +168,15 @@ import {
 import {
   WorkflowNavigationEditor,
   type WorkflowStripEntry,
-  workflowStripEntryKey,
   WorkflowStripState,
   WorkflowStripWidget,
+  workflowStripEntryKey,
 } from "./navigation.ts";
 import {
   normalizeWorkflowOperatorKey,
   WorkflowOperatorRegistry,
 } from "./operator.ts";
 import {
-  buildBackgroundWorkflowFollowUp,
   buildBackgroundWorkflowLaunchResult,
   buildProjectedWorkflowCompletionBatches,
   buildProjectedWorkflowResultMessage,
@@ -194,17 +203,17 @@ import {
   type WorkflowCompletionEnvelope,
 } from "./result-delivery.ts";
 import {
+  createWorkflowSettledRunRetention,
+  projectWorkflowDetails,
+  type WorkflowSettledRunRetentionOptions,
+} from "./retention.ts";
+import {
   createWorkflowResources,
   runAgent,
   type ThinkingLevel,
   type WorkflowAgentSessionFactory,
   type WorkflowModel,
 } from "./runner.ts";
-import {
-  createWorkflowSettledRunRetention,
-  projectWorkflowDetails,
-  type WorkflowSettledRunRetentionOptions,
-} from "./retention.ts";
 import { runWorkflowSandbox } from "./sandbox.ts";
 import { writeFileAtomic } from "./serialization.ts";
 import {
@@ -533,10 +542,13 @@ interface ScriptAgentResult {
   /** Opaque same-run handle for bounded downstream handoff. */
   ref?: string;
   acceptance?: AgentRecord["acceptance"];
+  /** Present only for the deprecated model self-attestation compatibility path. */
+  acceptanceWarning?: string;
   error?: string;
 }
 
 interface AgentCallOptions {
+  working_dir?: unknown;
   agent_type?: unknown;
   label?: unknown;
   phase?: unknown;
@@ -805,6 +817,8 @@ export default function workflows(
 ) {
   /** Live background runs, for /workflows and shutdown cleanup. */
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
+  let unregisterWebCapability: (() => void) | undefined;
+  let webCapabilityScope: WebCapabilityScope | undefined;
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
@@ -851,6 +865,8 @@ export default function workflows(
   };
   const resultDelivery = createWorkflowResultDelivery({
     isIdle: () => lastContext?.isIdle() ?? false,
+    owner: () =>
+      lastContext ? completionOwnerFor(lastContext.sessionManager) : undefined,
     persist: (details) => {
       if (!details.delivery)
         throw new Error("Workflow delivery identity is missing");
@@ -966,6 +982,7 @@ export default function workflows(
   };
 
   const updateIndicator = () => {
+    if (webCapabilityScope) notifyWebCapabilities(webCapabilityScope);
     const ctx = lastContext;
     if (!ctx) return;
     try {
@@ -1054,6 +1071,20 @@ export default function workflows(
   };
 
   pi.on("session_start", (_event, ctx) => {
+    unregisterWebCapability?.();
+    const scope = ctx.sessionManager;
+    webCapabilityScope = scope;
+    unregisterWebCapability = registerWebCapability(scope, {
+      kind: "workflows",
+      snapshot: () =>
+        projectWorkflowCapability([
+          ...activeDetails().values(),
+          ...settledRuns
+            .entriesArray()
+            .filter(([runId]) => !activeRuns.has(runId))
+            .map(([, details]) => details),
+        ]),
+    });
     registerStableToolFamily();
     if (ctx.hasUI) lastContext = ctx;
     agentTypes = loadAgentTypes({
@@ -1122,6 +1153,9 @@ export default function workflows(
       // UI may already be disposed.
     }
     statusWriter.reset();
+    unregisterWebCapability?.();
+    unregisterWebCapability = undefined;
+    webCapabilityScope = undefined;
     lastContext = undefined;
     widgetVisible = false;
     widgetEntryKey = undefined;
@@ -1252,6 +1286,8 @@ export default function workflows(
         agents: [],
         delivery: {
           id: `workflow:${runId}:terminal`,
+          ownerSessionId: completionOwnerFor(ctx.sessionManager).sessionId,
+          ownerEpoch: completionOwnerFor(ctx.sessionManager).epoch,
           state: launchMode === "inline" ? "held-for-inline" : "none",
           attempts: 0,
           updatedAt: now,
@@ -1261,7 +1297,7 @@ export default function workflows(
       // Resume: replay cached results for calls whose content is unchanged.
       // A missing or unreadable source degrades to a normal full run — resume
       // is an optimization and must not become a new way to fail.
-      const journalEntries: JournalEntry[] = [];
+      const journal = createJournalAccumulator();
       let replay: ReplayCache | undefined;
       if (params.resume_from_run_id) {
         const source = resolveRunDir(params.resume_from_run_id);
@@ -1281,7 +1317,7 @@ export default function workflows(
         writeRunFile(runDir, "args.json", params.args);
       persistWorkflowJson(runDir, details);
       const persistence = createWorkflowPersistence(runDir, details, {
-        journal: () => journalEntries,
+        journal: () => journal,
         ...(workflowLifecycleTestHooks?.persistWorkflow
           ? { persist: workflowLifecycleTestHooks.persistWorkflow }
           : {}),
@@ -1308,11 +1344,12 @@ export default function workflows(
         structured: boolean,
         cwd: string,
         agentTypePrompt?: string,
+        childProjectTrusted = projectTrusted,
       ) =>
         createWorkflowResources(
           cwd,
           structured ? "structured" : "plain",
-          projectTrusted,
+          childProjectTrusted,
           agentTypePrompt,
         );
 
@@ -1607,6 +1644,36 @@ export default function workflows(
           );
         }
 
+        const childTools = inheritedChildToolAllowlist(
+          pi.getActiveTools(),
+          agentType?.tools,
+        );
+        if (
+          opts.working_dir !== undefined &&
+          (typeof opts.working_dir !== "string" || !opts.working_dir.trim())
+        ) {
+          return fail(
+            `agent "${label}": working_dir must be a non-empty string`,
+          );
+        }
+        const requestedCwd = path.resolve(
+          ctx.cwd,
+          typeof opts.working_dir === "string" ? opts.working_dir : ".",
+        );
+        try {
+          if (!fs.statSync(requestedCwd).isDirectory())
+            throw new Error("not a directory");
+        } catch {
+          return fail(
+            `agent "${label}": working_dir is not a directory: ${requestedCwd}`,
+          );
+        }
+        const childProjectTrusted = resolveStandaloneChildProjectTrust({
+          parentCwd: ctx.cwd,
+          childCwd: requestedCwd,
+          parentTrusted: projectTrusted,
+        });
+
         const explicitModel =
           typeof opts.model === "string" && opts.model.trim()
             ? opts.model.trim()
@@ -1677,11 +1744,14 @@ export default function workflows(
         const operatorFingerprint = operatorKey
           ? agentCallKey("workflow-operator", {
               execution: {
+                cwd: requestedCwd,
+                projectTrusted: childProjectTrusted,
+                tools: childTools,
                 agentType: agentType
                   ? {
                       name: agentType.name,
                       body: agentType.body,
-                      tools: agentType.tools,
+                      tools: childTools,
                     }
                   : undefined,
                 model: model ? `${model.provider}/${model.id}` : undefined,
@@ -1701,7 +1771,7 @@ export default function workflows(
         const replaySafe =
           operatorKey === undefined &&
           isReplaySafeAgentCall({
-            tools: agentType?.tools,
+            tools: agentType?.tools === undefined ? undefined : childTools,
             isolation: opts.isolation,
           });
         const replayLease = beginProcessReplayWorkspaceLease(replaySafe);
@@ -1713,13 +1783,14 @@ export default function workflows(
           try {
             replayResources = await getResources(
               effectiveSchema !== undefined,
-              ctx.cwd,
+              requestedCwd,
               agentType?.body,
+              childProjectTrusted,
             );
             replayIdentity = createReplayIdentity(
-              ctx.cwd,
+              requestedCwd,
               replayResources.loader,
-              projectTrusted,
+              childProjectTrusted,
             );
           } catch {
             // Fingerprinting is an optimization boundary. If resources cannot
@@ -1737,7 +1808,7 @@ export default function workflows(
                 ? {
                     name: agentType.name,
                     body: agentType.body,
-                    tools: agentType.tools,
+                    tools: childTools,
                   }
                 : undefined,
               model: model ? `${model.provider}/${model.id}` : undefined,
@@ -1846,7 +1917,7 @@ export default function workflows(
           emit();
           // Re-journal so a chain of resumes keeps working: run C resuming from
           // B still finds what B replayed from A.
-          journalEntries.push(cached);
+          journal.append(cached);
           replayLease.end();
           return {
             ok: true,
@@ -1856,6 +1927,9 @@ export default function workflows(
               : {}),
             ...(ref ? { ref } : {}),
             ...(record.acceptance ? { acceptance: record.acceptance } : {}),
+            ...(judged.acceptanceWarning
+              ? { acceptanceWarning: judged.acceptanceWarning }
+              : {}),
           };
         }
 
@@ -1891,7 +1965,7 @@ export default function workflows(
                 );
               }
               const created = await createWorktree({
-                cwd: ctx.cwd,
+                cwd: requestedCwd,
                 label,
                 id: `${details.runId}-${record.index}`,
               });
@@ -1903,18 +1977,19 @@ export default function workflows(
               worktree = created.worktree;
               if (!runSettled) record.worktreeBranch = worktree.branch;
             }
-            if (runSignal.aborted || runSettled) {
-              throw runSignal.reason instanceof Error
-                ? runSignal.reason
-                : new Error("Workflow was aborted");
-            }
-            const agentCwd = worktree?.path ?? ctx.cwd;
+            const agentCwd = worktree?.path ?? requestedCwd;
 
             // Inside the try, not before it: building resources can throw
             // (bad settings, an unreadable skills dir), and a throw out here
             // would skip the finally and leak the worktree permanently —
             // nothing sweeps `.git/pi-worktrees/` afterwards.
             try {
+              if (runSignal.aborted || runSettled) {
+                throw runSignal.reason instanceof Error
+                  ? runSignal.reason
+                  : new Error("Workflow was aborted");
+              }
+
               let rejectResourceLoad: (() => void) | undefined;
               const resourceAbort = new Promise<never>((_resolve, reject) => {
                 rejectResourceLoad = () =>
@@ -1934,6 +2009,7 @@ export default function workflows(
                     effectiveSchema !== undefined,
                     agentCwd,
                     agentType?.body,
+                    childProjectTrusted,
                   ),
                 resourceAbort,
               ]).finally(() => {
@@ -1958,7 +2034,7 @@ export default function workflows(
                   settingsManager: resources.settingsManager,
                   ...(sessionManager ? { sessionManager } : {}),
                   modelRegistry: ctx.modelRegistry,
-                  ...(agentType?.tools ? { tools: agentType.tools } : {}),
+                  tools: childTools,
                   ...(testAgentSessionFactory
                     ? { sessionFactory: testAgentSessionFactory }
                     : {}),
@@ -2074,9 +2150,9 @@ export default function workflows(
               // unfingerprintable calls always run for real.
               const completedIdentity = callKey
                 ? createReplayIdentity(
-                    ctx.cwd,
+                    requestedCwd,
                     resources.loader,
-                    projectTrusted,
+                    childProjectTrusted,
                   )
                 : undefined;
               const completedKey = completedIdentity
@@ -2090,7 +2166,7 @@ export default function workflows(
                 !replayBoundaryViolated &&
                 replayLease.canJournal()
               ) {
-                journalEntries.push({
+                journal.append({
                   key: completedKey,
                   output: outcome.output,
                   ...(outcome.structured !== undefined
@@ -2107,6 +2183,9 @@ export default function workflows(
                   : {}),
                 ...(ref ? { ref } : {}),
                 ...(acceptance ? { acceptance } : {}),
+                ...(judged.acceptanceWarning
+                  ? { acceptanceWarning: judged.acceptanceWarning }
+                  : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
               };
             } finally {
@@ -2120,7 +2199,7 @@ export default function workflows(
                   runId: details.runId,
                   agentIndex: record.index,
                   agentLabel: record.label,
-                  repoCwd: ctx.cwd,
+                  repoCwd: requestedCwd,
                   worktree,
                 });
                 let cleanup: WorktreeCleanup;
@@ -2137,7 +2216,7 @@ export default function workflows(
                   const reclaimer =
                     workflowLifecycleTestHooks?.reclaimWorktree ??
                     reclaimWorktree;
-                  cleanup = await reclaimer(ctx.cwd, worktree).catch(
+                  cleanup = await reclaimer(requestedCwd, worktree).catch(
                     (error): WorktreeCleanup => ({
                       removed: false,
                       branchDeleted: false,
