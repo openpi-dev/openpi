@@ -1514,6 +1514,86 @@ test("message_end and queued prompts do not settle a running turn", () => {
   );
 });
 
+test("projects provider failure details through the live message and retry lifecycle", () => {
+  const session = { sessionManager: { getSessionId: () => "session" } };
+  const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
+  harness.runtime = { session };
+  harness.pendingPromptTraces = [];
+  harness.liveMessageSequence = 0;
+  harness.listeners = new Set();
+  harness.nextTurnEpoch = 0;
+  harness.terminalTurnKeys = new Set();
+  harness.turnSettlementWaiters = new Map();
+  harness.turnAbortOperations = new Map();
+  const events: WebRuntimeEvent[] = [];
+  harness.listeners.add((event) => events.push(event));
+  harness.activePromptTrace = {
+    commandId: "provider-error",
+    sessionId: "session",
+    startedAt: 1,
+    started: false,
+    queued: false,
+  };
+
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(this: RuntimeHarness, session: object, event: object): void;
+    }
+  ).projectEvent;
+
+  projectEvent.call(harness, session, { type: "agent_start" });
+  projectEvent.call(harness, session, {
+    type: "message_start",
+    message: { role: "user", content: [{ type: "text", text: "run" }] },
+  });
+  projectEvent.call(harness, session, {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "partial output" }],
+      stopReason: "error",
+      errorMessage: "Synthetic provider failure",
+    },
+  });
+  projectEvent.call(harness, session, {
+    type: "auto_retry_start",
+    attempt: 1,
+    maxAttempts: 2,
+    delayMs: 10,
+    errorMessage: "Retrying provider request",
+  });
+  projectEvent.call(harness, session, {
+    type: "auto_retry_end",
+    attempt: 2,
+    success: false,
+    finalError: "Synthetic provider failure",
+  });
+  projectEvent.call(harness, session, { type: "agent_settled" });
+
+  const message = events.find((event) => event.type === "message_end")?.detail
+    ?.message as Record<string, unknown> | undefined;
+  assert.equal(message?.content, "partial output");
+  assert.equal(message?.stopReason, "error");
+  assert.equal(message?.errorMessage, "Synthetic provider failure");
+  assert.deepEqual(
+    events.find((event) => event.type === "auto_retry_end")?.detail,
+    {
+      attempt: 2,
+      success: false,
+      finalError: "Synthetic provider failure",
+    },
+  );
+  assert.deepEqual(
+    events.find((event) => event.type === "turn_settled")?.detail,
+    {
+      sessionId: "session",
+      commandId: "provider-error",
+      epoch: 1,
+      outcome: "failed",
+    },
+  );
+});
+
 test("toolUse message_end without a terminal result settles as uncertain", () => {
   const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;

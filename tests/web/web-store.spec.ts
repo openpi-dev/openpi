@@ -1859,6 +1859,64 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("keeps provider failure details and clears retry state at final settlement", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const turn = { sessionId: "session-1", commandId: "turn", epoch: 1 };
+    stream.emit(runtimeEvent(5, "turn_started", turn));
+    stream.emit(
+      runtimeEvent(6, "message_end", {
+        message: {
+          role: "assistant",
+          content: "partial output",
+          stopReason: "error",
+          errorMessage: "Synthetic provider failure",
+        },
+        messageKey: "assistant-error",
+      }),
+    );
+    stream.emit(
+      runtimeEvent(7, "auto_retry_start", {
+        attempt: 1,
+        maxAttempts: 2,
+        delayMs: 10,
+      }),
+    );
+    expect(store.getState().liveRetry).toEqual({ attempt: 1, maxAttempts: 2 });
+    stream.emit(
+      runtimeEvent(8, "auto_retry_end", {
+        attempt: 2,
+        success: false,
+        finalError: "Synthetic provider failure",
+      }),
+    );
+    expect(store.getState().liveRetry).toBeNull();
+    stream.emit(
+      runtimeEvent(9, "turn_settled", { ...turn, outcome: "failed" }),
+    );
+
+    expect(store.getState().turnTerminalStatus).toBe("failed");
+    expect(store.getState().liveRunning).toBe(false);
+    expect(store.getState().liveMessages).toEqual([
+      {
+        key: "assistant-error",
+        message: {
+          role: "assistant",
+          content: "partial output",
+          stopReason: "error",
+          errorMessage: "Synthetic provider failure",
+        },
+      },
+    ]);
+    store.getState().actions.stop();
+  });
+
   it("starts a new admission identity only after a definite rejection", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));

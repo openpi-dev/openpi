@@ -387,17 +387,21 @@ export function Composer(props: ComposerProps) {
           ? t("stoppingTurn")
           : props.turnTerminalStatus === "cancelled"
             ? t("stoppedTurn")
-            : props.pendingFollowUpsReceipt !== null
-              ? props.pendingFollowUpsReceipt > 0
-                ? t("pendingFollowUpsHint", {
-                    count: props.pendingFollowUpsReceipt,
-                  })
-                : t("acceptedHint")
-              : canCompose
-                ? running
-                  ? t("queuedHint")
-                  : t("enterHint")
-                : t("activeOnlyHint");
+            : props.turnTerminalStatus === "failed"
+              ? t("failedTurn")
+              : props.turnTerminalStatus === "uncertain"
+                ? t("uncertainTurn")
+                : props.pendingFollowUpsReceipt !== null
+                  ? props.pendingFollowUpsReceipt > 0
+                    ? t("pendingFollowUpsHint", {
+                        count: props.pendingFollowUpsReceipt,
+                      })
+                    : t("acceptedHint")
+                  : canCompose
+                    ? running
+                      ? t("queuedHint")
+                      : t("enterHint")
+                    : t("activeOnlyHint");
 
   return (
     <div className="composer-dock">

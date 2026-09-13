@@ -32,9 +32,7 @@ import {
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import {
-  projectMessage,
-} from "../protocol/types.ts";
+import { boundedDiagnostic, projectMessage } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
   applyHttpProxySettings,
@@ -1211,6 +1209,16 @@ export class PiWebRuntime implements WebRuntimeController {
           attempt: event.attempt,
           maxAttempts: event.maxAttempts,
           delayMs: event.delayMs,
+          errorMessage: boundedDiagnostic(event.errorMessage),
+        });
+        break;
+      case "auto_retry_end":
+        this.emit(event.type, {
+          attempt: event.attempt,
+          success: event.success,
+          ...(event.finalError !== undefined
+            ? { finalError: boundedDiagnostic(event.finalError) }
+            : {}),
         });
         break;
       case "message_start":

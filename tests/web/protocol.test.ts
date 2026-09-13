@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   projectEntries,
   projectMessage,
+  WEB_MAX_TEXT,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
@@ -17,6 +18,38 @@ test("message projection does not create phantom text for detail-only messages",
   });
   assert.equal(projected.content, "");
   assert.equal(projected.parts?.length, 2);
+});
+
+test("message projection preserves bounded assistant failure diagnostics", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "partial output" }],
+    stopReason: "error",
+    errorMessage: "Synthetic provider quota failure",
+  });
+
+  assert.equal(projected.content, "partial output");
+  assert.deepEqual(projected.parts, [{ type: "text", text: "partial output" }]);
+  assert.equal(projected.stopReason, "error");
+  assert.equal(projected.errorMessage, "Synthetic provider quota failure");
+});
+
+test("message projection bounds and sanitizes provider failure diagnostics", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    content: [],
+    stopReason: "error",
+    errorMessage: `provider\u001b[31m failure\u0000 ${"x".repeat(WEB_MAX_TEXT)}`,
+  });
+
+  assert.equal(projected.errorMessage?.includes("\u001b"), false);
+  assert.equal(projected.errorMessage?.includes("\u0000"), false);
+  assert.equal(projected.truncation?.truncated, true);
+  assert.equal(projected.truncation?.text, true);
+  assert.ok(
+    (projected.errorMessage?.length ?? 0) <=
+      WEB_MAX_TEXT + "\n[truncated]".length,
+  );
 });
 
 test("message projection keeps text parts separated without phantom blank lines", () => {

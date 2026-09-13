@@ -990,6 +990,56 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
   }
 });
 
+test("persists bounded provider error diagnostics in the Web snapshot", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-provider-error-"));
+  const runtime = testRuntime(cwd);
+  runtime.sessionManager.appendMessage({
+    role: "assistant",
+    content: [{ type: "text", text: "partial output" }],
+    api: "openai-responses",
+    provider: "fixture",
+    model: "fixture",
+    usage: {
+      input: 0,
+      output: 0,
+      cacheRead: 0,
+      cacheWrite: 0,
+      totalTokens: 0,
+      cost: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        total: 0,
+      },
+    },
+    stopReason: "error",
+    errorMessage: "Synthetic provider failure",
+    timestamp: 1,
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const response = await fetch(`${launched.origin}/api/snapshot`, {
+      headers,
+    });
+    assert.equal(response.status, 200);
+    const snapshot = (await response.json()) as {
+      selectedSession?: {
+        entries: Array<{ message?: Record<string, unknown> }>;
+      };
+    };
+    const message = snapshot.selectedSession?.entries.find(
+      (entry) => entry.message?.role === "assistant",
+    )?.message;
+    assert.equal(message?.content, "partial output");
+    assert.equal(message?.stopReason, "error");
+    assert.equal(message?.errorMessage, "Synthetic provider failure");
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("serves terminal Sessions through a read-only bounded endpoint", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-host-"));
   const previousAgentDirectory = process.env.PI_CODING_AGENT_DIR;

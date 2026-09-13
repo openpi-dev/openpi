@@ -129,6 +129,24 @@ function StatusMark({ status }: { status: Status }) {
   return null;
 }
 
+function assistantOutcome(message: WebLiveMessage, t: (key: string) => string) {
+  if (message.stopReason === "error") {
+    return {
+      className: "error",
+      label: t("assistantFailed"),
+      reason: message.errorMessage,
+    };
+  }
+  if (message.stopReason === "aborted") {
+    return {
+      className: "cancelled",
+      label: t("assistantStopped"),
+      reason: message.errorMessage,
+    };
+  }
+  return undefined;
+}
+
 function iconForTool(name: string) {
   const lowered = name.toLowerCase();
   if (lowered === "bash") return <Terminal />;
@@ -530,10 +548,15 @@ function buildEntries(
       ? [{ key: entry.id, timestamp: entry.timestamp, message: entry.message }]
       : [],
   );
+  const messageSignature = (message: WebLiveMessage) =>
+    JSON.stringify([
+      message.role || "",
+      message.content,
+      message.stopReason || "",
+      message.errorMessage || "",
+    ]);
   const signatures = new Set(
-    entries.map(
-      (entry) => `${entry.message.role || ""}:${entry.message.content}`,
-    ),
+    entries.map((entry) => messageSignature(entry.message)),
   );
   const persistedToolIds = new Set(
     entries.flatMap((entry) =>
@@ -546,7 +569,7 @@ function buildEntries(
     if (
       live.message.role === "toolResult" && live.message.toolCallId
         ? persistedToolIds.has(live.message.toolCallId)
-        : signatures.has(`${live.message.role || ""}:${live.message.content}`)
+        : signatures.has(messageSignature(live.message))
     )
       continue;
     entries.push({
@@ -782,6 +805,25 @@ export function Transcript(props: TranscriptProps) {
                     onResend={props.onResend}
                   />
                 )}
+              </article>
+            ),
+          });
+        const outcome = assistantOutcome(message, t);
+        if (outcome)
+          detailRows.push({
+            key: `${entry.key}-outcome`,
+            error: outcome.className === "error",
+            content: (
+              <article className="message-row assistant detail-only">
+                <div className="message-content">
+                  <div className={`assistant-outcome ${outcome.className}`}>
+                    {outcome.className === "error" && (
+                      <StatusMark status="error" />
+                    )}
+                    <strong>{outcome.label}</strong>
+                    {outcome.reason && <span>{outcome.reason}</span>}
+                  </div>
+                </div>
               </article>
             ),
           });

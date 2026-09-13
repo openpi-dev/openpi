@@ -137,6 +137,8 @@ export interface WebLiveMessage {
   parts?: WebMessagePart[];
   toolCallId?: string;
   isError?: boolean;
+  stopReason?: string;
+  errorMessage?: string;
   customType?: string;
   display?: boolean;
   details?: unknown;
@@ -220,6 +222,18 @@ function boundedTextProjection(value: string, maxLength: number): BoundedText {
         truncated: true,
       }
     : { value, truncated: false };
+}
+
+function boundedDiagnosticProjection(value: string): BoundedText {
+  const bounded = boundedTextProjection(value, WEB_MAX_TEXT);
+  const sanitized = bounded.value
+    .replace(/\r\n?/gu, "\n")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F\u001B]/gu, " ");
+  return { value: sanitized, truncated: bounded.truncated };
+}
+
+export function boundedDiagnostic(value: string): string {
+  return boundedDiagnosticProjection(value).value;
 }
 
 export function boundedText(value: string, maxLength = WEB_MAX_TEXT): string {
@@ -469,16 +483,26 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     typeof value.customType === "string"
       ? boundedTextProjection(value.customType, WEB_MAX_METADATA_TEXT)
       : undefined;
+  const stopReason =
+    typeof value.stopReason === "string"
+      ? boundedTextProjection(value.stopReason, WEB_MAX_METADATA_TEXT)
+      : undefined;
+  const errorMessage =
+    typeof value.errorMessage === "string"
+      ? boundedDiagnosticProjection(value.errorMessage)
+      : undefined;
   const metadataTruncated =
     role?.truncated === true ||
     toolName?.truncated === true ||
     toolCallId?.truncated === true ||
-    customType?.truncated === true;
+    customType?.truncated === true ||
+    stopReason?.truncated === true;
   const truncated =
     content.textTruncated ||
     content.partsOmitted > 0 ||
     details.truncated ||
-    metadataTruncated;
+    metadataTruncated ||
+    errorMessage?.truncated === true;
   return {
     role: role?.value,
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
@@ -487,6 +511,8 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
+    ...(stopReason ? { stopReason: stopReason.value } : {}),
+    ...(errorMessage ? { errorMessage: errorMessage.value } : {}),
     ...(customType ? { customType: customType.value } : {}),
     ...(typeof value.display === "boolean" ? { display: value.display } : {}),
     ...(details.value !== undefined ? { details: details.value } : {}),
@@ -494,7 +520,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       ? {
           truncation: {
             truncated: true as const,
-            ...(content.textTruncated || metadataTruncated
+            ...(content.textTruncated || metadataTruncated || errorMessage?.truncated
               ? { text: true as const }
               : {}),
             ...(content.partsOmitted > 0

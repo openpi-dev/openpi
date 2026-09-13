@@ -808,6 +808,9 @@ export function createWebStore(
           },
         });
       }
+      if (event.type === "auto_retry_end") {
+        set({ liveRetry: null });
+      }
       if (event.type === "thinking_level_changed") {
         const thinking = get().snapshot?.thinking;
         if (thinking && typeof detail.level === "string") {

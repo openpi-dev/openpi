@@ -377,6 +377,47 @@ it("follows same-key streamed growth, preserves reading position, and honors exp
   expect(scroll).toHaveBeenCalledOnce();
 });
 
+it("renders persisted provider failures with partial output and a bounded cause", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      type: "message",
+      id: "user",
+      timestamp: "2026-09-13T00:00:00Z",
+      message: { role: "user", content: "run" },
+    },
+    {
+      type: "message",
+      id: "assistant-error",
+      timestamp: "2026-09-13T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "partial output",
+        parts: [{ type: "text", text: "partial output" }],
+        stopReason: "error",
+        errorMessage: "Synthetic provider failure",
+      },
+    },
+  ];
+  renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+
+  expect(screen.getByText("partial output")).toBeTruthy();
+  expect(screen.getByText(i18n.t("assistantFailed"))).toBeTruthy();
+  expect(screen.getByText("Synthetic provider failure")).toBeTruthy();
+});
+
 it("shows cancellation and queued follow-up receipts on the active session", () => {
   const snapshot = activeSnapshot();
   const store = createWebStore();
@@ -426,6 +467,29 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
     screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("stopTurn") })
       .disabled,
   ).toBe(true);
+});
+
+it("keeps failed and uncertain turn outcomes distinct in the composer hint", () => {
+  const snapshot = activeSnapshot();
+  const base = thinkingProps(snapshot);
+  const { rerender } = renderWithI18n(
+    createElement(Composer, {
+      ...base,
+      turnTerminalStatus: "failed",
+    }),
+  );
+  expect(screen.getByText(i18n.t("failedTurn"))).toBeTruthy();
+  rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...base,
+        turnTerminalStatus: "uncertain",
+      }),
+    ),
+  );
+  expect(screen.getByText(i18n.t("uncertainTurn"))).toBeTruthy();
 });
 
 it("keeps background terminal activity and omission receipts visible", () => {

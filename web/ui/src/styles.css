@@ -231,6 +231,10 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-row.assistant .message-content { width: 100%; max-width: none; }
 .message-body { color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-row.user .message-body { padding: 9px 15px; border-radius: 18px; background: var(--sidebar-active); box-shadow: inset 0 0 0 1px oklch(72% .06 85 / 20%); }
+.assistant-outcome { @apply flex items-start gap-2; margin-top: 4px; color: var(--muted); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.assistant-outcome.error { color: var(--error); }
+.assistant-outcome.cancelled { color: var(--muted); }
+.assistant-outcome strong { font-weight: 600; }
 .markdown { color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }
