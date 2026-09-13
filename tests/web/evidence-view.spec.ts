@@ -86,6 +86,58 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   ).toHaveLength(4);
 });
 
+it("keeps image metadata visible in specialized read evidence", () => {
+  render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "read",
+        arguments: JSON.stringify({ path: "image.png" }),
+      },
+      result: {
+        content: "",
+        isError: false,
+        images: [{ mimeType: "image/png", bytes: 1 }],
+        imageCount: 1,
+      },
+    }),
+  );
+
+  expect(
+    screen.getByText("1 image included; preview unavailable in Web.", {
+      exact: true,
+    }),
+  ).toBeTruthy();
+  expect(screen.getByText(/image\/png/u)).toBeTruthy();
+});
+
+it("keeps text output alongside image metadata in specialized read evidence", () => {
+  render(
+    createElement(ToolEvidence, {
+      call: {
+        type: "toolCall",
+        name: "read",
+        arguments: JSON.stringify({ path: "image.png" }),
+      },
+      result: {
+        content: "caption",
+        isError: false,
+        images: [{ mimeType: "image/png", bytes: 1 }],
+        imageCount: 1,
+      },
+    }),
+  );
+
+  expect(
+    screen.getByRole("figure", { name: "File content" }).textContent,
+  ).toContain("caption");
+  expect(
+    screen.getByText("1 image included; preview unavailable in Web.", {
+      exact: true,
+    }),
+  ).toBeTruthy();
+});
+
 it("opens local links using authenticated API and stops preview reads on close", async () => {
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")

@@ -130,6 +130,161 @@ describe("OpenPI React transcript", () => {
     expect(container.querySelector("br")).toBeTruthy();
   });
 
+  it("shows unavailable image evidence instead of calling an image-only result empty", () => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        type: "message",
+        id: "image-result",
+        timestamp: "2026-09-01T10:00:00Z",
+        message: {
+          role: "toolResult",
+          toolName: "future_tool",
+          toolCallId: "image-call",
+          content: "",
+          isError: false,
+          images: [{ mimeType: "image/png", bytes: 1 }],
+          imageCount: 1,
+        },
+      },
+    ];
+
+    const { container } = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+
+    expect(screen.queryByText(i18n.t("noOutput"))).toBeNull();
+    expect(screen.getByText(i18n.t("toolImageUnavailable"))).toBeTruthy();
+    expect(screen.getByText(/image\/png/u)).toBeTruthy();
+    expect(container.querySelector("[aria-label=completed]")).toBeTruthy();
+  });
+
+  it("labels clipped image content without claiming unseen image counts", () => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        type: "message",
+        id: "clipped-result",
+        timestamp: "2026-09-01T10:00:00Z",
+        message: {
+          role: "toolResult",
+          toolName: "future_tool",
+          toolCallId: "clipped-call",
+          content: "",
+          isError: false,
+          truncation: { truncated: true, partsOmitted: 1 },
+        },
+      },
+    ];
+
+    const { container } = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+
+    expect(screen.queryByText(i18n.t("noOutput"))).toBeNull();
+    expect(
+      screen.getByText(i18n.t("toolContentPartsOmitted", { count: 1 })),
+    ).toBeTruthy();
+    expect(container.querySelector("[aria-label=completed]")).toBeTruthy();
+  });
+
+  it("keeps image evidence in an unpaired activity result", () => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        type: "message",
+        id: "activity-image-result",
+        timestamp: "2026-09-01T10:00:00Z",
+        message: {
+          role: "toolResult",
+          toolName: "workflow_run",
+          content: "",
+          isError: false,
+          images: [{ mimeType: "image/png", bytes: 1 }],
+          imageCount: 1,
+        },
+      },
+    ];
+
+    renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+
+    expect(screen.getByText(i18n.t("toolImageUnavailable"))).toBeTruthy();
+    expect(screen.queryByText(i18n.t("noOutput"))).toBeNull();
+  });
+
+  it("keeps image evidence when the tool result is an error", () => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        type: "message",
+        id: "failed-image-result",
+        timestamp: "2026-09-01T10:00:00Z",
+        message: {
+          role: "toolResult",
+          toolName: "future_tool",
+          content: "",
+          isError: true,
+          images: [{ mimeType: "image/png", bytes: 1 }],
+          imageCount: 1,
+        },
+      },
+    ];
+
+    const { container } = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+      }),
+    );
+
+    expect(screen.getByText(i18n.t("toolImageUnavailable"))).toBeTruthy();
+    expect(screen.queryByText(i18n.t("noOutput"))).toBeNull();
+    expect(container.querySelector("[aria-label=failed]")).toBeTruthy();
+  });
+
   it("matches Session searches after preserving a trailing input space", () => {
     const store = createWebStore();
     store.getState().actions.setQuery("foo ");

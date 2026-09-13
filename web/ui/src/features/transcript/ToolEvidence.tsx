@@ -7,6 +7,7 @@ import {
   projectToolEvidence,
   type EvidenceState,
 } from "../../../../protocol/evidence.ts";
+import { ImageEvidence } from "./ImageEvidence.tsx";
 
 function EvidenceBlock({
   children,
@@ -80,6 +81,12 @@ export function ToolEvidence({
             below may also be truncated.
           </p>
         )}
+        <ImageEvidence
+          images={view.images}
+          imageCount={view.imageCount}
+          partsOmitted={view.partsOmitted}
+          unsupportedContentBlocks={view.unsupportedContentBlocks}
+        />
         {view.change && (
           <p>
             {view.change === "created"
@@ -148,9 +155,15 @@ export function ToolEvidence({
               </span>
             ))}
           </EvidenceBlock>
-        ) : (
+        ) : view.output ? (
           <EvidenceBlock className="evidence-log" aria-label="Tool output">
-            {view.output || "No output received"}
+            {view.output}
+          </EvidenceBlock>
+        ) : view.imageCount > 0 ||
+          view.partsOmitted > 0 ||
+          view.unsupportedContentBlocks > 0 ? null : (
+          <EvidenceBlock className="evidence-log" aria-label="Tool output">
+            No output received
           </EvidenceBlock>
         )}
         {view.kind === "file" && view.truncated && (

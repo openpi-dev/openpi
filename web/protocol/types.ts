@@ -11,6 +11,7 @@ export const WEB_MAX_SESSION_PREVIEW = 500;
 const WEB_MAX_METADATA_TEXT = 500;
 export const WEB_MAX_ENTRIES = 250;
 export const WEB_MAX_MESSAGE_PARTS = 64;
+export const WEB_MAX_IMAGE_METADATA = 16;
 export const WEB_MAX_SESSIONS = 500;
 export const WEB_MAX_WORKSPACES = 250;
 export const WEB_MAX_MODELS = 250;
@@ -126,7 +127,14 @@ export interface WebMessageTruncation {
   readonly truncated: true;
   readonly text?: true;
   readonly partsOmitted?: number;
+  readonly imagesOmitted?: number;
+  readonly unsupportedContentBlocks?: number;
   readonly details?: true;
+}
+
+export interface WebImageMetadata {
+  readonly mimeType?: string;
+  readonly bytes?: number;
 }
 
 export interface WebLiveMessage {
@@ -135,6 +143,9 @@ export interface WebLiveMessage {
   toolName?: string;
   content: string;
   parts?: WebMessagePart[];
+  images?: WebImageMetadata[];
+  imageCount?: number;
+  unsupportedContentBlocks?: number;
   toolCallId?: string;
   isError?: boolean;
   customType?: string;
@@ -340,6 +351,10 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     return {
       content: text.value,
       parts: [] as WebMessagePart[],
+      images: [] as WebImageMetadata[],
+      imageCount: 0,
+      imagesOmitted: 0,
+      unsupportedContentBlocks: 0,
       partsOmitted: 0,
       textTruncated: text.truncated,
     };
@@ -358,18 +373,28 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     return {
       content: text.value,
       parts: [] as WebMessagePart[],
+      images: [] as WebImageMetadata[],
+      imageCount: 0,
+      imagesOmitted: 0,
+      unsupportedContentBlocks: 0,
       partsOmitted: 0,
       textTruncated: text.truncated,
     };
   }
 
   const parts: WebMessagePart[] = [];
+  const images: WebImageMetadata[] = [];
+  let imageCount = 0;
+  let unsupportedContentBlocks = 0;
   let visibleText = "";
   let textTruncated = false;
   const retainedParts = Math.min(content.length, WEB_MAX_MESSAGE_PARTS);
   for (let index = 0; index < retainedParts; index++) {
     const part = content[index];
-    if (typeof part !== "object" || part === null) continue;
+    if (typeof part !== "object" || part === null) {
+      unsupportedContentBlocks++;
+      continue;
+    }
     const typed = part as Record<string, unknown>;
     let projected: WebMessagePart | undefined;
     if (typed.type === "text" && typeof typed.text === "string") {
@@ -433,6 +458,31 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
         argumentsBudget.truncated ||
         id?.truncated === true ||
         name.truncated;
+    } else if (typed.type === "image") {
+      imageCount++;
+      if (images.length < WEB_MAX_IMAGE_METADATA) {
+        const mimeType =
+          typeof typed.mimeType === "string"
+            ? boundedTextProjection(typed.mimeType, WEB_MAX_METADATA_TEXT)
+            : undefined;
+        // Pi's ImageContent data is base64. Only inspect its length and final
+        // padding characters; never scan or retain the potentially large body.
+        const data = typeof typed.data === "string" ? typed.data : "";
+        const padding = data.endsWith("==") ? 2 : data.endsWith("=") ? 1 : 0;
+        const bytes =
+          data.length > 0 &&
+          data.length % 4 === 0 &&
+          Number.isSafeInteger((data.length * 3) / 4 - padding)
+            ? (data.length * 3) / 4 - padding
+            : undefined;
+        images.push({
+          ...(mimeType?.value ? { mimeType: mimeType.value } : {}),
+          ...(bytes !== undefined ? { bytes } : {}),
+        });
+        textTruncated ||= mimeType?.truncated === true;
+      }
+    } else {
+      unsupportedContentBlocks++;
     }
     if (!projected) continue;
     parts.push(projected);
@@ -441,6 +491,10 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
   return {
     content: contentText.value,
     parts,
+    images,
+    imageCount,
+    imagesOmitted: Math.max(0, imageCount - images.length),
+    unsupportedContentBlocks,
     partsOmitted: Math.max(0, content.length - retainedParts),
     textTruncated: textTruncated || contentText.truncated,
   };
@@ -477,6 +531,8 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   const truncated =
     content.textTruncated ||
     content.partsOmitted > 0 ||
+    content.imagesOmitted > 0 ||
+    content.unsupportedContentBlocks > 0 ||
     details.truncated ||
     metadataTruncated;
   return {
@@ -485,6 +541,11 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
+    ...(content.imageCount > 0 ? { imageCount: content.imageCount } : {}),
+    ...(content.images.length > 0 ? { images: content.images } : {}),
+    ...(content.unsupportedContentBlocks > 0
+      ? { unsupportedContentBlocks: content.unsupportedContentBlocks }
+      : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
     ...(customType ? { customType: customType.value } : {}),
@@ -499,6 +560,12 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
               : {}),
             ...(content.partsOmitted > 0
               ? { partsOmitted: content.partsOmitted }
+              : {}),
+            ...(content.imagesOmitted > 0
+              ? { imagesOmitted: content.imagesOmitted }
+              : {}),
+            ...(content.unsupportedContentBlocks > 0
+              ? { unsupportedContentBlocks: content.unsupportedContentBlocks }
               : {}),
             ...(details.truncated ? { details: true as const } : {}),
           },

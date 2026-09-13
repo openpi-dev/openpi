@@ -25,6 +25,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type {
+  WebImageMetadata,
   WebLiveMessage,
   WebMessagePart,
   WebSnapshot,
@@ -41,6 +42,7 @@ import type { LiveEntry } from "../../store/web-store.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
 import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
+import { ImageEvidence } from "./ImageEvidence.tsx";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -165,6 +167,10 @@ function EvidenceDetails({
   status,
   summary,
   thinking = false,
+  images,
+  imageCount,
+  partsOmitted,
+  unsupportedContentBlocks,
 }: {
   body: string;
   icon: ReactNode;
@@ -172,6 +178,10 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   thinking?: boolean;
+  images?: readonly WebImageMetadata[];
+  imageCount?: number;
+  partsOmitted?: number;
+  unsupportedContentBlocks?: number;
 }) {
   return (
     <details
@@ -188,6 +198,12 @@ function EvidenceDetails({
         </span>
         <StatusMark status={status} />
       </summary>
+      <ImageEvidence
+        images={images}
+        imageCount={imageCount}
+        partsOmitted={partsOmitted}
+        unsupportedContentBlocks={unsupportedContentBlocks}
+      />
       <pre className="details-body tool-evidence">
         {evidenceText(body).text}
       </pre>
@@ -201,12 +217,20 @@ function ActivityCard({
   meta,
   status,
   title,
+  images,
+  imageCount,
+  partsOmitted,
+  unsupportedContentBlocks,
 }: {
   body: string;
   family: "subagent" | "workflow";
   meta?: string;
   status: Status;
   title: string;
+  images?: readonly WebImageMetadata[];
+  imageCount?: number;
+  partsOmitted?: number;
+  unsupportedContentBlocks?: number;
 }) {
   return (
     <details className={`message-details activity-card ${family}`}>
@@ -222,6 +246,12 @@ function ActivityCard({
         <span className="details-mark" aria-hidden="true" />
       </summary>
       <pre className="details-body tool-evidence">{body}</pre>
+      <ImageEvidence
+        images={images}
+        imageCount={imageCount}
+        partsOmitted={partsOmitted}
+        unsupportedContentBlocks={unsupportedContentBlocks}
+      />
     </details>
   );
 }
@@ -234,6 +264,12 @@ function familyCard(
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
   const status = resultStatus(result);
+  const imageProps = {
+    images: result?.images,
+    imageCount: result?.imageCount,
+    partsOmitted: result?.truncation?.partsOmitted,
+    unsupportedContentBlocks: result?.unsupportedContentBlocks,
+  };
   if (name === "subagent_spawn") {
     const meta = [args.agent_type, args.model, args.working_dir]
       .filter(Boolean)
@@ -245,6 +281,7 @@ function familyCard(
         meta={meta || String(details.cwd || "")}
         body={result?.content || String(args.prompt || part.arguments)}
         status={status}
+        {...imageProps}
       />
     );
   }
@@ -257,6 +294,7 @@ function familyCard(
         meta={String(args.id || "")}
         body={result?.content || part.arguments}
         status={status}
+        {...imageProps}
       />
     );
   }
@@ -285,6 +323,7 @@ function familyCard(
         meta={meta}
         body={result?.content || script}
         status={status}
+        {...imageProps}
       />
     );
   }
@@ -296,6 +335,7 @@ function familyCard(
         meta={String(args.runId || "")}
         body={result?.content || part.arguments}
         status={status}
+        {...imageProps}
       />
     );
   }
@@ -475,6 +515,10 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
         meta={[details.outcome, details.elapsed].filter(Boolean).join(" · ")}
         body={message.content}
         status={canonicalStatus(details.status)}
+        images={message.images}
+        imageCount={message.imageCount}
+        partsOmitted={message.truncation?.partsOmitted}
+        unsupportedContentBlocks={message.unsupportedContentBlocks}
       />
     );
   }
@@ -510,6 +554,10 @@ function CustomResult({ message }: { message: WebLiveMessage }) {
         }
         body={body}
         status={status}
+        images={message.images}
+        imageCount={message.imageCount}
+        partsOmitted={message.truncation?.partsOmitted}
+        unsupportedContentBlocks={message.unsupportedContentBlocks}
       />
     );
   }
@@ -766,6 +814,26 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
+        if (
+          (message.imageCount ?? message.images?.length ?? 0) > 0 ||
+          (message.unsupportedContentBlocks ?? 0) > 0
+        ) {
+          detailRows.push({
+            key: `${entry.key}-image-evidence`,
+            content: (
+              <article className="message-row assistant detail-only">
+                <div className="message-content">
+                  <ImageEvidence
+                    images={message.images}
+                    imageCount={message.imageCount}
+                    partsOmitted={message.truncation?.partsOmitted}
+                    unsupportedContentBlocks={message.unsupportedContentBlocks}
+                  />
+                </div>
+              </article>
+            ),
+          });
+        }
         if (message.content.trim())
           detailRows.push({
             key: `${entry.key}-answer`,
@@ -798,6 +866,11 @@ export function Transcript(props: TranscriptProps) {
             : null;
         const status = resultStatus(message);
         const toolName = message.toolName || "tool";
+        const imageCount = message.imageCount ?? message.images?.length ?? 0;
+        const hasUnavailableContent =
+          imageCount > 0 ||
+          (message.unsupportedContentBlocks ?? 0) > 0 ||
+          (message.truncation?.partsOmitted ?? 0) > 0;
         const icon =
           family === "subagent" ? (
             <Bot key={`${entry.key}-icon`} />
@@ -813,8 +886,12 @@ export function Transcript(props: TranscriptProps) {
             title={`${toolName.replaceAll("_", " ")} · ${compactSummary(message.content)}`}
             body={message.content}
             status={status}
+            images={message.images}
+            imageCount={message.imageCount}
+            partsOmitted={message.truncation?.partsOmitted}
+            unsupportedContentBlocks={message.unsupportedContentBlocks}
           />
-        ) : isEmptyToolOutput(message.content) ? (
+        ) : isEmptyToolOutput(message.content) && !hasUnavailableContent ? (
           <div className="tool-line-empty" key={`${entry.key}-empty`}>
             <span className="tool-icon">{icon}</span>
             <span className="tool-name">{toolName}</span>
@@ -829,6 +906,10 @@ export function Transcript(props: TranscriptProps) {
             name={toolName}
             summary={compactSummary(message.content)}
             status={status}
+            images={message.images}
+            imageCount={message.imageCount}
+            partsOmitted={message.truncation?.partsOmitted}
+            unsupportedContentBlocks={message.unsupportedContentBlocks}
           />
         );
         return [

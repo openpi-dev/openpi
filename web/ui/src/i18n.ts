@@ -159,6 +159,16 @@ const resources = {
       noMatchingModels: "No matching models",
       modelSearchFailed: "Could not search models. Try again.",
       modelSearchTruncated: "{{omitted}} matching models are not shown.",
+      toolImageUnavailable: "1 image included; preview unavailable in Web.",
+      toolImagesUnavailable:
+        "{{count}} images included; previews unavailable in Web.",
+      toolImageUnknownType: "image (type unavailable)",
+      toolImagesMetadataOmitted:
+        "{{count}} image metadata item(s) are not shown.",
+      toolUnsupportedContentBlocks:
+        "{{count}} unsupported content block(s) are not shown.",
+      toolContentPartsOmitted:
+        "{{count}} additional content block(s) are not shown.",
       modelPreparing: "Preparing task...",
       modelRetrying: "Retrying model request...",
       modelRunning: "Working...",
@@ -362,6 +372,13 @@ const resources = {
       noMatchingModels: "没有匹配的模型",
       modelSearchFailed: "模型搜索失败，请重试。",
       modelSearchTruncated: "还有 {{omitted}} 个匹配模型未显示。",
+      toolImageUnavailable: "结果包含 1 张图片，Web 暂不提供图片预览。",
+      toolImagesUnavailable:
+        "结果包含 {{count}} 张图片，Web 暂不提供图片预览。",
+      toolImageUnknownType: "图片（类型不可用）",
+      toolImagesMetadataOmitted: "还有 {{count}} 项图片元数据未显示。",
+      toolUnsupportedContentBlocks: "还有 {{count}} 个不支持的内容块未显示。",
+      toolContentPartsOmitted: "还有 {{count}} 个内容块未显示。",
       modelPreparing: "正在准备任务...",
       modelRetrying: "模型请求重试中...",
       modelRunning: "正在运行...",

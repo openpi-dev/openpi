@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   projectEntries,
   projectMessage,
+  WEB_MAX_IMAGE_METADATA,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
@@ -57,6 +58,65 @@ test("message projection keeps tool result correlation and details", () => {
   assert.deepEqual(projected.details, {
     results: [{ id: "sa-1", status: "done" }],
   });
+});
+
+test("message projection retains bounded image metadata and unsupported block counts", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    toolName: "read",
+    toolCallId: "read-image",
+    content: [
+      { type: "text", text: "caption" },
+      { type: "image", data: "AA==", mimeType: "image/png" },
+      { type: "image", data: "AQID", mimeType: "image/jpeg" },
+      { type: "future", secret: "must not cross the wire" },
+    ],
+    isError: false,
+  });
+
+  assert.equal(projected.content, "caption");
+  assert.deepEqual(projected.images, [
+    { mimeType: "image/png", bytes: 1 },
+    { mimeType: "image/jpeg", bytes: 3 },
+  ]);
+  assert.equal(projected.imageCount, 2);
+  assert.equal(projected.unsupportedContentBlocks, 1);
+  assert.equal(JSON.stringify(projected).includes("AQID"), false);
+  assert.equal(JSON.stringify(projected).includes("must not cross"), false);
+});
+
+test("message projection caps image metadata and keeps image bytes out of the wire", () => {
+  const projected = projectMessage({
+    role: "toolResult",
+    content: Array.from({ length: WEB_MAX_IMAGE_METADATA + 4 }, () => ({
+      type: "image",
+      data: "AA==",
+      mimeType: "image/png",
+    })),
+  });
+
+  assert.equal(projected.imageCount, WEB_MAX_IMAGE_METADATA + 4);
+  assert.equal(projected.images?.length, WEB_MAX_IMAGE_METADATA);
+  assert.equal(projected.truncation?.imagesOmitted, 4);
+  assert.equal(JSON.stringify(projected).includes('"data"'), false);
+});
+
+test("message projection does not inspect an image hidden beyond the part budget", () => {
+  const content: Array<Record<string, unknown>> = Array.from(
+    { length: WEB_MAX_MESSAGE_PARTS + 1 },
+    () => ({ type: "text", text: "safe" }),
+  );
+  content[WEB_MAX_MESSAGE_PARTS] = {
+    type: "image",
+    data: "AA==",
+    mimeType: "image/png",
+  };
+
+  const projected = projectMessage({ role: "toolResult", content });
+
+  assert.equal(projected.imageCount, undefined);
+  assert.equal(projected.images, undefined);
+  assert.equal(projected.truncation?.partsOmitted, 1);
 });
 
 test("message projection drops oversized details", () => {

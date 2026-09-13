@@ -145,6 +145,10 @@ export function projectToolEvidence(call: Extract<WebMessagePart, { type: "toolC
   const offset = typeof args.offset === "number" && Number.isSafeInteger(args.offset) && args.offset > 0 ? args.offset : 1;
   return {
     kind, state, processState: terminal?.state ?? (call.name === "bash" && result?.isError === false ? "returned" : call.name === "bash" && liveState === "running" ? "running" : "unknown"), output: readFooter ? output.text.slice(0, readFooter.index) : output.text, truncated: truncated || diff?.truncated === true,
+    images: result?.images,
+    imageCount: result?.imageCount ?? result?.images?.length ?? 0,
+    unsupportedContentBlocks: result?.unsupportedContentBlocks ?? 0,
+    partsOmitted: result?.truncation?.partsOmitted ?? 0,
     readRecovery: readFooter?.[1],
     numberLines: call.name === "read" && result?.isError === false && evidenceRecord(details.truncation).firstLineExceedsLimit !== true && Boolean(output.text),
     path: typeof args.path === "string" ? evidenceText(args.path).text : undefined,

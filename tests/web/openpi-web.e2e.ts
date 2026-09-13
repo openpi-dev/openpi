@@ -123,6 +123,92 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   );
 });
 
+test("keeps an image-only tool result visible across snapshot reload", async ({
+  page,
+}, testInfo) => {
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.currentSessionId = "image-result-session";
+    snapshot.selectedSession = {
+      id: "image-result-session",
+      path: "/image-result/session.jsonl",
+      cwd: "/image-result",
+      entries: [
+        {
+          id: "image-assistant",
+          type: "message",
+          timestamp: "2026-09-13T00:00:00Z",
+          message: {
+            role: "assistant",
+            content: "",
+            parts: [
+              {
+                type: "toolCall",
+                id: "image-call",
+                name: "read",
+                arguments: JSON.stringify({ path: "image.png" }),
+              },
+            ],
+          },
+        },
+        {
+          id: "image-tool-result",
+          type: "message",
+          timestamp: "2026-09-13T00:00:01Z",
+          message: {
+            role: "toolResult",
+            toolName: "read",
+            toolCallId: "image-call",
+            content: "",
+            isError: false,
+            images: [{ mimeType: "image/png", bytes: 1 }],
+            imageCount: 1,
+          },
+        },
+      ],
+      bytes: 300,
+      truncation: {
+        truncated: false,
+        maxBytes: 2_097_152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      status: 200,
+      contentType: "text/event-stream",
+      body: ": image fixture idle\n\n",
+    }),
+  );
+
+  const openResultEvidence = async () => {
+    await expect(page.locator(".tool-evidence-card")).toHaveCount(1);
+    await page.locator(".tool-evidence-card > summary").click();
+    await expect(
+      page.getByText("结果包含 1 张图片，Web 暂不提供图片预览。", {
+        exact: true,
+      }),
+    ).toBeVisible();
+    await expect(page.getByText("无输出", { exact: true })).toHaveCount(0);
+  };
+
+  await openWorkbench(page);
+  await openResultEvidence();
+  await page.screenshot({
+    path: testInfo.outputPath("image-only-result.png"),
+    fullPage: true,
+  });
+  await page.reload();
+  await openWorkbench(page);
+  await openResultEvidence();
+});
+
 test("discovers and completes Pi commands without submitting unsupported commands", async ({
   page,
 }) => {

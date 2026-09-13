@@ -181,11 +181,21 @@ test("tool updates replace snapshots, final results resist replay, caches are bo
     result: { content: "ab" },
   });
   assert.equal(tools[0]?.result?.content, "ab");
-  tools = reduceLiveTools(tools, "tool_execution_end", {
-    toolCallId: "call",
-    result: { content: "final", isError: false },
+  const imageResult = projectMessage({
+    role: "toolResult",
+    content: [{ type: "image", data: "AA==", mimeType: "image/png" }],
     isError: false,
   });
+  tools = reduceLiveTools(tools, "tool_execution_end", {
+    toolCallId: "call",
+    result: imageResult,
+    isError: false,
+  });
+  assert.equal(tools[0]?.result?.content, "");
+  assert.equal(tools[0]?.result?.imageCount, 1);
+  assert.deepEqual(tools[0]?.result?.images, [
+    { mimeType: "image/png", bytes: 1 },
+  ]);
   const replayed = reduceLiveTools(tools, "tool_execution_update", {
     call: bash,
     toolCallId: "call",
