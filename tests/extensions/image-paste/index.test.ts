@@ -535,3 +535,47 @@ test("history recall restores compact placeholders and expands again", () => {
   assert.equal(editor.getText(), "[Image #1] do you see it?");
   assert.equal(editor.getExpandedText(), `${path} do you see it?`);
 });
+
+test("repeated identical paths survive the dequeue round trip", () => {
+  // The same image pasted twice: each occurrence needs its own placeholder
+  // identity so expandWith's single-occurrence guard expands every one.
+  const path = temporaryImage("png", "dup");
+  const { editor } = harness();
+
+  editor.setText(`${path} and ${path}`);
+
+  assert.equal(editor.getText(), "[Image #1] and [Image #2]");
+  assert.equal(editor.getExpandedText(), `${path} and ${path}`);
+});
+
+test("repeated identical paths survive history recall", () => {
+  const path = temporaryImage("png", "dup-recall");
+  const { base, editor } = harness();
+
+  base.text = `${path} ${path} see both?`;
+  base.onChange?.(base.text);
+
+  assert.equal(editor.getText(), "[Image #1] [Image #2] see both?");
+  assert.equal(editor.getExpandedText(), `${path} ${path} see both?`);
+});
+
+test("transcript collapses Windows paths with spaces in the username", () => {
+  const uuid = randomUUID();
+  const path = `C:\\Users\\Yuka Chen\\AppData\\Local\\Temp\\pi-clipboard-${uuid}.png`;
+
+  assert.equal(collapseClipboardPaths(`look ${path}`), "look [Image #1]");
+});
+
+test("adoption handles Windows paths with spaces in the username", () => {
+  const uuid = randomUUID();
+  const winPath = join(tmpdir(), `pi-clipboard-${uuid}.png`);
+  writeFileSync(winPath, "spacey");
+  created.push(winPath);
+
+  const { editor } = harness();
+
+  editor.setText(`${winPath} here`);
+
+  assert.equal(editor.getText(), "[Image #1] here");
+  assert.equal(editor.getExpandedText(), `${winPath} here`);
+});

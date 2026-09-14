@@ -30,7 +30,7 @@ const PI_CLIPBOARD_IMAGE =
  * it, which is exactly the boundary between two pasted images.
  */
 const CLIPBOARD_PATH_IN_TEXT =
-  /(?:[A-Za-z]:[\\/]|[\\/])(?:[^\s\\/:"'<>|]+[\\/])*?pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:gif|jpe?g|png|webp)/gi;
+  /(?:[A-Za-z]:[\\/]|[\\/])(?:[^\\/:"'<>|]+?[\\/])*?pi-clipboard-[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.(?:gif|jpe?g|png|webp)/gi;
 const IMAGE_EXTENSIONS = new Set([".gif", ".jpg", ".jpeg", ".png", ".webp"]);
 const LEFT_INPUT = "\u001b[D";
 const RIGHT_INPUT = "\u001b[C";
@@ -70,9 +70,12 @@ function isTemporaryDirectory(directory: string) {
  * collapses after the OS has reclaimed the file.
  */
 function isPiClipboardPath(path: string) {
-  if (!IMAGE_EXTENSIONS.has(extname(path).toLowerCase())) return false;
-  if (!isTemporaryDirectory(dirname(path))) return false;
-  return PI_CLIPBOARD_IMAGE.test(basename(path));
+  // Normalize backslashes so dirname/basename/extname work on POSIX hosts
+  // when the path was recorded on Windows (transcript portability).
+  const normalized = path.replaceAll("\\", "/");
+  if (!IMAGE_EXTENSIONS.has(extname(normalized).toLowerCase())) return false;
+  if (!isTemporaryDirectory(dirname(normalized))) return false;
+  return PI_CLIPBOARD_IMAGE.test(basename(normalized));
 }
 
 function isPiClipboardImage(path: string) {
@@ -255,21 +258,34 @@ export class ImageAttachmentStore {
    * tokens would no longer expand on the next submit.
    */
   adoptExpandedText(text: string) {
-    const paths = [...text.matchAll(CLIPBOARD_PATH_IN_TEXT)]
-      .map((match) => match[0])
-      .filter((path) => isPiClipboardPath(path));
-    if (paths.length === 0) return undefined;
+    const matches = [...text.matchAll(CLIPBOARD_PATH_IN_TEXT)].filter((match) =>
+      isPiClipboardPath(match[0]),
+    );
+    if (matches.length === 0) return undefined;
 
     this.clearDraft();
-    let collapsed = text;
-    for (const path of paths) {
-      if ([...this.draft.values()].some((entry) => entry.path === path)) {
-        continue;
-      }
+    // Build replacements in reverse document order so earlier indices stay
+    // valid while we splice. Each occurrence — even of the same path — gets
+    // its own placeholder identity so that expandWith's single-occurrence
+    // guard expands every one of them on submission.
+    const replacements: { start: number; end: number; placeholder: string }[] =
+      [];
+    for (const match of matches) {
+      const path = match[0];
       const id = this.nextAttachmentId++;
       const placeholder = `[Image #${id}]`;
       this.draft.set(id, { id, placeholder, path } satisfies Attachment);
-      collapsed = collapsed.replaceAll(path, placeholder);
+      replacements.push({
+        start: match.index,
+        end: match.index + path.length,
+        placeholder,
+      });
+    }
+    replacements.sort((a, b) => b.start - a.start);
+    let collapsed = text;
+    for (const { start, end, placeholder } of replacements) {
+      collapsed =
+        collapsed.slice(0, start) + placeholder + collapsed.slice(end);
     }
     return collapsed;
   }
