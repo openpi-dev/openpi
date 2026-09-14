@@ -249,6 +249,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
       <button
         className="new-session-button"
         type="button"
+        aria-label={t("newSession")}
+        title={t("newSession")}
         onClick={() =>
           props.selectedWorkspace
             ? void props.actions.createSession(props.selectedWorkspace)

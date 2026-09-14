@@ -109,7 +109,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 }
 .collapse-button { width: 30px; height: 30px; }
 .collapse-button svg, .icon-button svg { width: 18px; height: 18px; }
-.collapse-button:hover, .icon-button:hover, .workspace-action:hover { background: var(--sidebar-hover); color: var(--text); }
+.collapse-button:hover, .icon-button:hover, .workspace-action:hover, .sidebar-expand:hover { background: var(--sidebar-hover); color: var(--text); }
 .new-session-button {
   @apply flex shrink-0 items-center justify-center gap-2;
   width: calc(100% - 4px);
@@ -158,15 +158,22 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .session-row > .astryx-menu-trigger { @apply absolute right-1 opacity-0; pointer-events: none; }
 .session-row:hover > .astryx-menu-trigger, .session-row:focus-within > .astryx-menu-trigger { opacity: 1; pointer-events: auto; }
 .session-row:hover .session-time, .session-row:focus-within .session-time { visibility: hidden; }
-.empty { min-height: 32px; padding: 7px 10px 7px 29px; color: var(--subtle); font-size: 12px; }
+.empty { min-height: 32px; padding: 7px 10px 7px 29px; color: var(--muted); font-size: 12px; }
 .sidebar-expand { @apply fixed left-2 top-2 z-30; width: 40px; height: 40px; }
 .sidebar-expand svg { width: 19px; height: 19px; }
-.sidebar-collapsed .session-sidebar { align-items: center; padding: 8px; }
-.sidebar-collapsed .sidebar-brand { width: 40px; justify-content: center; padding: 0; }
-.sidebar-collapsed .sidebar-brand, .sidebar-collapsed .workspace-heading, .sidebar-collapsed .workspace-tree { visibility: hidden; }
-.sidebar-collapsed .new-session-button { width: 36px; height: 36px; margin: 54px 0 12px; padding: 0; border-color: transparent; background: transparent; }
-.sidebar-collapsed .new-session-button span { display: none; }
-.sidebar-collapsed .new-session-button:hover { background: var(--sidebar-hover); }
+/* Desktop collapse is an icon rail; narrow screens keep the full drawer. */
+@media (width > 760px) {
+  .sidebar-collapsed .session-sidebar { align-items: center; padding: 8px; }
+  .sidebar-collapsed .sidebar-brand,
+  .sidebar-collapsed .workspace-heading,
+  .sidebar-collapsed .workspace-tree,
+  .sidebar-collapsed .session-view-switch,
+  .sidebar-collapsed .sidebar-scope-note { display: none; }
+  /* Reserve the fixed expand button's 40px height and an 8px gap. */
+  .sidebar-collapsed .new-session-button { width: 40px; height: 40px; margin: 48px 0 0; padding: 0; border-color: transparent; border-radius: 6px; background: transparent; }
+  .sidebar-collapsed .new-session-button span { display: none; }
+  .sidebar-collapsed .new-session-button:hover { background: var(--sidebar-hover); }
+}
 
 .conversation-shell { @apply relative grid min-h-0 min-w-0; container-name: conversation-shell; container-type: inline-size; grid-template-rows: minmax(0, 1fr) auto; }
 .conversation-shell:not(.landing) {
@@ -341,7 +348,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .composer.dormant { border-style: dashed; box-shadow: none; cursor: pointer; }
 .composer.dormant:hover { border-color: oklch(66% .018 249); }
 .composer textarea { @apply w-full min-w-0 border-0 bg-transparent outline-0; min-height: 52px; max-height: 220px; flex: 0 0 auto; padding: 0 2px; resize: none; color: var(--text); font-size: 14px; line-height: 1.55; }
-.composer textarea::placeholder { color: var(--subtle); }
+.composer textarea::placeholder { color: var(--muted); }
 .slash-command-menu { position: absolute; z-index: 30; right: 0; bottom: calc(100% + 8px); left: 0; max-height: min(360px, 48vh); overflow-y: auto; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--page); box-shadow: 0 14px 34px oklch(26% .02 249 / 18%); }
 .landing .slash-command-menu { top: calc(100% + 8px); bottom: auto; max-height: min(224px, 32vh, var(--slash-command-available-height, 224px)); }
 .landing .slash-command-menu[data-placement="above"] { top: auto; bottom: calc(100% + 8px); }
@@ -425,10 +432,6 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   .session-sidebar { position: fixed; inset: 0 auto 0 0; width: min(86vw, 300px); visibility: hidden; transform: translateX(-100%); border-right: 1px solid var(--border); background: var(--sidebar); backdrop-filter: none; transition: transform 180ms ease; }
   .session-sidebar::before { display: none; }
   .sidebar-open .session-sidebar { visibility: visible; transform: translateX(0); }
-  .sidebar-collapsed .session-sidebar { align-items: stretch; padding: 8px 10px; }
-  .sidebar-collapsed .sidebar-brand, .sidebar-collapsed .workspace-heading, .sidebar-collapsed .workspace-tree { visibility: inherit; }
-  .sidebar-collapsed .new-session-button { width: calc(100% - 4px); height: 38px; margin: 8px 2px 10px; border-color: var(--border-strong); background: var(--page); }
-  .sidebar-collapsed .new-session-button span { display: initial; }
   .sidebar-expand { display: none; }
   .sidebar-scrim { @apply fixed inset-0 z-10 border-0; background: oklch(20% .02 249 / 28%); }
   .sidebar-open .sidebar-scrim { display: block; }
@@ -572,7 +575,7 @@ button.activity-chip:hover { filter: brightness(1.15); }
 
 /* Keep navigation and evidence independently reachable while browsing long ledgers. */
 .conversation-shell.has-view:not(.landing) { grid-template-rows:auto minmax(0,1fr) auto; }
-.conversation-shell.has-view:not(.landing) > .conversation-view-switch { position:relative; top:auto; left:auto; }
+.conversation-shell.has-view:not(.landing) > .conversation-view-switch { position:relative; top:auto; left:auto; justify-self:start; }
 .trajectory { padding-top:22px; overflow:hidden; }
 .trajectory-heading { flex-shrink:0; }
 .trajectory-body { flex:1; min-height:0; align-items:stretch; overflow:hidden; }

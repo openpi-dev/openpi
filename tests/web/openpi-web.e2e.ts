@@ -123,6 +123,96 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   );
 });
 
+for (const theme of ["light", "dark"]) {
+  test(`compact navigation preserves controls and drawer layout in ${theme} theme`, async ({
+    page,
+  }, testInfo) => {
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.preferences = { ...snapshot.preferences, theme };
+      await route.fulfill({ json: snapshot });
+    });
+    await openWorkbench(page);
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const sidebar = page.locator(".session-sidebar");
+    const current = sidebar.getByRole("button", { name: "当前", exact: true });
+    const archived = sidebar.getByRole("button", {
+      name: "已归档",
+      exact: true,
+    });
+    const create = sidebar.getByRole("button", {
+      name: "新建会话",
+      exact: true,
+    });
+    await archived.click();
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+    const expand = page.getByRole("button", { name: "展开侧边栏" });
+    await expect(expand).toBeVisible();
+    await expect(create).toBeVisible();
+    await expect(create).toHaveAttribute("title", "新建会话");
+    await expect(current).toBeHidden();
+    await expect(archived).toBeHidden();
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeHidden();
+    await expect(sidebar.locator(".workspace-tree")).toBeHidden();
+    await expect(sidebar).toHaveCSS("width", "56px");
+    const createBox = await create.boundingBox();
+    const expandBox = await expand.boundingBox();
+    if (!createBox || !expandBox) throw new Error("rail actions are missing");
+    expect(createBox.width).toBe(40);
+    expect(createBox.height).toBe(40);
+    expect(createBox.y - expandBox.y - expandBox.height).toBe(8);
+    expect(Math.abs(createBox.x - expandBox.x)).toBeLessThanOrEqual(1);
+    await create.focus();
+    await expect(create).toBeFocused();
+    const accessibility = await new AxeBuilder({ page }).analyze();
+    expect(accessibility.violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`rail-${theme}.png`),
+      animations: "disabled",
+    });
+
+    await expand.click();
+    await expect(archived).toHaveAttribute("aria-pressed", "true");
+    await expect(sidebar.locator(".sidebar-scope-note").first()).toBeVisible();
+    await current.click();
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+    await expect(sidebar.locator(".session-view-switch")).toBeHidden();
+
+    // Carry the desktop collapsed state across the responsive boundary.
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.getByRole("button", { name: "打开侧边栏" }).click();
+    await expect(current).toBeVisible();
+    await expect(sidebar.locator(".sidebar-brand")).toBeVisible();
+    await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
+    const brand = await sidebar.locator(".brand-lockup").boundingBox();
+    const drawer = await sidebar.boundingBox();
+    if (!brand || !drawer) throw new Error("drawer brand is missing");
+    expect(brand.x).toBeGreaterThanOrEqual(drawer.x);
+    expect(brand.x + brand.width).toBeLessThanOrEqual(drawer.x + drawer.width);
+    await page.screenshot({ path: testInfo.outputPath(`drawer-${theme}.png`) });
+    await sidebar.getByRole("button", { name: "收起侧边栏" }).click();
+
+    await page.setViewportSize({ width: 1280, height: 800 });
+    await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
+    const switcher = page.locator(".conversation-view-switch");
+    const switchBox = await switcher.boundingBox();
+    const buttons = await switcher.locator("button").all();
+    const buttonBoxes = await Promise.all(
+      buttons.map((button) => button.boundingBox()),
+    );
+    const contentWidth = buttonBoxes.reduce(
+      (sum, box) => sum + (box?.width ?? 0),
+      0,
+    );
+    expect(switchBox?.width).toBeLessThanOrEqual(contentWidth + 16);
+    await page.screenshot({
+      path: testInfo.outputPath(`navigation-${theme}.png`),
+    });
+  });
+}
+
 test("discovers and completes Pi commands without submitting unsupported commands", async ({
   page,
 }) => {
