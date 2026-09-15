@@ -44,7 +44,7 @@ const commands: WebCommandSummary[] = [
 function snapshot(): WebSnapshot {
   return {
     protocolVersion: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     generatedAt: "2026-09-09T00:00:00Z",
     cursor: 1,
     currentSessionId: "session-1",

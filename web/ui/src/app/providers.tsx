@@ -3,13 +3,17 @@ import { neutralTheme } from "@astryxdesign/theme-neutral/built";
 import { type PropsWithChildren, useEffect, useState } from "react";
 import { I18nextProvider } from "react-i18next";
 import { useStore } from "zustand";
-import { i18n } from "../i18n.ts";
+import { applyWebLanguage, i18n } from "../i18n.ts";
 import { webStore } from "../store/web-store.ts";
 
 export function Providers({ children }: PropsWithChildren) {
   const preference =
     useStore(webStore, (state) => state.snapshot?.preferences?.theme) ??
     "system";
+  const languagePreference = useStore(
+    webStore,
+    (state) => state.snapshot?.preferences?.language,
+  );
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
@@ -28,6 +32,9 @@ export function Providers({ children }: PropsWithChildren) {
   useEffect(() => {
     document.documentElement.dataset.theme = mode;
   }, [mode]);
+  useEffect(() => {
+    applyWebLanguage(languagePreference);
+  }, [languagePreference]);
   return (
     <I18nextProvider i18n={i18n}>
       <Theme theme={neutralTheme} mode={mode}>

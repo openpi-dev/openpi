@@ -11,7 +11,7 @@ function snapshot(count: number): WebSnapshot {
     protocolVersion: 1,
     generatedAt: "now",
     cursor: 0,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     workspaces: [],
     sessions: [],
     models: [],

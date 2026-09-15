@@ -37,6 +37,8 @@ import {
   REASONING_LEVELS,
   SETUP_CONFIG_CHANGED_CHANNEL,
   WEB_THEMES,
+  WEB_LANGUAGES,
+  type WebLanguage,
   type FooterLayoutItem,
   type CapabilityDiscoveryMode,
   type FooterPreset,
@@ -109,7 +111,7 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme/language/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
@@ -132,7 +134,7 @@ export function buildInteractiveSetupPrompt(options: {
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
-    "- UI: the Web theme is system (default), light, or dark and is projected from this canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web theme changes apply on its next canonical snapshot.",
+    "- UI: the Web theme is system (default), light, or dark and the Web language is system (default), en, or zh; both are projected from this canonical configuration without browser-local overrides. The large header costs vertical space; the custom footer is a declarative dashboard. Presets: powerline (one-line ANSI256 blocks), powerline-mono (one-line high-contrast gray powerline), and compact (one-line plain text); the default is plain with model/context on the left and git/pr/cwd on the right. Style can also be set independently: plain, powerline, powerline-mono. Custom lines are a 2D layout of cwd/model/thinking/context/cache/cost/throughput/git/pr plus at most one flex per line for left/right alignment. Footer metrics use Codicon outline glyphs for model, context, and directory; a Nerd Font renders them as designed while the text stays readable without it. Changes apply immediately in the active TUI session; Web theme and language changes apply on its next canonical snapshot.",
     "- Operational activity for Subagents, Workflows, and background terminals is core status and always remains visible whenever the custom footer is enabled.",
     "- Post-edit command: one optional shell command (maximum 500 characters) run in the background after a turn with successful Write/Edit operations (e.g. `npm run format`). Off by default, interactive TUI sessions only, failures surface as a notification. This is a single command, not an event-hook system.",
     "- Result detail display: Subagent results, Bash operations, and Write/Edit operations can each default to full or compact; all three default to compact. Compact Subagent results show only bounded status rows and keep raw child reports behind app.tools.expand; compact Bash and Write/Edit operations use one-line semantic activity summaries. Read, grep, find, and ls use the same compact activity-row projection. Ctrl+O restores Pi's native full arguments, output, errors, diffs, and timing. Recommend compact for users who scan activity first and inspect evidence on demand.",
@@ -142,6 +144,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
+    '- "use Chinese in OpenPI Web" → ui_web_language=zh',
     '- "switch footer to powerline" → ui_footer_preset=powerline',
     '- "use mono powerline" → ui_footer_preset=powerline-mono',
     '- "compact footer" → ui_footer_preset=compact',
@@ -365,6 +368,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
             "Canonical OpenPI Web theme: system follows the browser/OS color scheme, light and dark force that appearance. Stored in package setup rather than browser storage. Omit to preserve the current value.",
         }),
       ),
+      ui_web_language: Type.Optional(
+        StringEnum(WEB_LANGUAGES, {
+          description:
+            "Canonical OpenPI Web language: system follows the browser language, en and zh force that UI language. Stored in package setup rather than browser storage. Omit to preserve the current value.",
+        }),
+      ),
       ui_custom_footer: Type.Optional(
         Type.Boolean({
           description:
@@ -515,6 +524,9 @@ export default function openPiSetup(pi: ExtensionAPI) {
             webTheme:
               (params.ui_web_theme as WebTheme | undefined) ??
               current.ui.webTheme,
+            webLanguage:
+              (params.ui_web_language as WebLanguage | undefined) ??
+              current.ui.webLanguage,
             showHeader: params.ui_show_header ?? current.ui.showHeader,
             customFooter: params.ui_custom_footer ?? current.ui.customFooter,
             ...footer,

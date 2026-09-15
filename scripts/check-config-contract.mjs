@@ -52,6 +52,13 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["Web theme"],
   },
   {
+    path: "ui.webLanguage",
+    writerTokens: ["params.ui_web_language"],
+    statusTokens: ["config.ui.webLanguage"],
+    readmeTerms: ["Web 语言"],
+    setupTerms: ["Web language"],
+  },
+  {
     path: "ui.showHeader",
     writerTokens: ["params.ui_show_header"],
     statusTokens: ["config.ui.showHeader"],

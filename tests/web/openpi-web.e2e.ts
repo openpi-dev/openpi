@@ -646,7 +646,7 @@ test("restores a running turn and canonical dark theme without losing cancellati
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
-    snapshot.preferences = { theme: "dark" };
+    snapshot.preferences = { theme: "dark", language: "system" };
     snapshot.currentSessionId = turn.sessionId;
     snapshot.selectedSession = {
       id: turn.sessionId,

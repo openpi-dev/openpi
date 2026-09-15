@@ -227,6 +227,7 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("suggestion_model" in parameters.properties, true);
   assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal("ui_web_theme" in parameters.properties, true);
+  assert.equal("ui_web_language" in parameters.properties, true);
   const postEdit = parameters.properties.post_edit_command as {
     description?: string;
   };
@@ -259,6 +260,9 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
 
   await apply({ ui_web_theme: "dark" });
   assert.equal(loadSetupConfig().ui.webTheme, "dark");
+
+  await apply({ ui_web_language: "zh" });
+  assert.equal(loadSetupConfig().ui.webLanguage, "zh");
 
   await apply({ post_edit_command: "  npm run format  " });
   assert.equal(loadSetupConfig().postEdit.command, "npm run format");
@@ -690,7 +694,7 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
-  assert.match(message, /Web theme is system \(default\), light, or dark/);
+  assert.match(message, /Web language is system \(default\), en, or zh/);
   assert.match(message, /ui_web_theme=dark/);
   assert.match(message, /powerline.*powerline-mono.*compact/);
   assert.match(message, /Nerd Font/);
@@ -760,7 +764,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme\/language\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

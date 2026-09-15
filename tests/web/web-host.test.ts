@@ -412,7 +412,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const snapshot = (await response.json()) as {
       protocolVersion: number;
       cursor: number;
-      preferences: { theme: string };
+      preferences: { theme: string; language: string };
       currentSessionId: string;
       workspaces: Array<{ path: string }>;
       sessions: Array<{ cwd: string; ungrouped?: boolean }>;
@@ -421,6 +421,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     };
     assert.equal(snapshot.protocolVersion, 1);
     assert.equal(snapshot.preferences.theme, "system");
+    assert.equal(snapshot.preferences.language, "system");
     assert.ok(snapshot.cursor >= 1);
     assert.equal(snapshot.currentSessionId, sessionManager.getSessionId());
     assert.ok(Array.isArray(snapshot.models));

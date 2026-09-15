@@ -44,7 +44,7 @@ const transcriptTruncation = {
 function snapshot(name = "Current"): WebSnapshot {
   return {
     protocolVersion: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     generatedAt: "2026-09-03T00:00:00Z",
     cursor: 4,
     currentSessionId: "session-1",

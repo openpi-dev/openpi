@@ -135,7 +135,7 @@ describe("OpenPI React transcript", () => {
     store.getState().actions.setQuery("foo ");
     const snapshot: WebSnapshot = {
       protocolVersion: 1,
-      preferences: { theme: "system" },
+      preferences: { theme: "system", language: "system" },
       generatedAt: "2026-09-01T10:00:00Z",
       cursor: 1,
       workspaces: [{ path: "/tmp/ws", name: "ws", current: true }],
@@ -247,7 +247,7 @@ describe("OpenPI React transcript", () => {
     ];
     const snapshot: WebSnapshot = {
       protocolVersion: 1,
-      preferences: { theme: "system" },
+      preferences: { theme: "system", language: "system" },
       generatedAt: "2026-09-01T10:00:03Z",
       cursor: 1,
       currentSessionId: "session-1",
@@ -310,7 +310,7 @@ describe("OpenPI React transcript", () => {
 function activeSnapshot(): WebSnapshot {
   return {
     protocolVersion: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     generatedAt: "2026-09-01T10:00:00Z",
     cursor: 1,
     currentSessionId: "session",
@@ -468,7 +468,7 @@ it("resolves canonical system theme changes and explicit overrides", () => {
   expect(document.documentElement.dataset.theme).toBe("dark");
   act(() =>
     webStore.setState({
-      snapshot: { ...snapshot, preferences: { theme: "light" } },
+      snapshot: { ...snapshot, preferences: { theme: "light", language: "system" } },
     }),
   );
   expect(document.documentElement.dataset.theme).toBe("light");
@@ -622,7 +622,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
     .mockResolvedValue(false);
   const snapshot: WebSnapshot = {
     protocolVersion: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     generatedAt: "2026-09-01T10:00:00Z",
     cursor: 1,
     workspaces: [],

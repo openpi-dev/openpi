@@ -33,7 +33,7 @@ it("parses changed text without reparsing mounted history during streaming or sn
     protocolVersion: 1,
     generatedAt: "2026-09-07T00:00:00Z",
     cursor: 1,
-    preferences: { theme: "system" },
+    preferences: { theme: "system", language: "system" },
     currentSessionId: "current",
     workspaces: [],
     sessions: [],

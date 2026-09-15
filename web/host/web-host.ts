@@ -1104,7 +1104,10 @@ export class WebHost {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
         cursor,
-        preferences: { theme: loadSetupConfig().ui.webTheme },
+        preferences: {
+          theme: loadSetupConfig().ui.webTheme,
+          language: loadSetupConfig().ui.webLanguage,
+        },
         ...projection,
         runtime: { ...projection.runtime, liveTools: this.liveTools },
         thinking: projection.thinking

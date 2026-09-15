@@ -414,9 +414,30 @@ const resources = {
   },
 } as const;
 
-const language = navigator.language?.toLowerCase().startsWith("zh")
-  ? "zh"
-  : "en";
+export function browserLanguage() {
+  return navigator.language?.toLowerCase().startsWith("zh") ? "zh" : "en";
+}
+
+export function resolveWebLanguage(
+  preference: "system" | "en" | "zh" | undefined,
+) {
+  return preference === "en" || preference === "zh"
+    ? preference
+    : browserLanguage();
+}
+
+export function applyWebLanguage(
+  preference: "system" | "en" | "zh" | undefined,
+) {
+  const language = resolveWebLanguage(preference);
+  if (i18n.language !== language) {
+    void i18n.changeLanguage(language);
+  }
+  document.documentElement.lang = language === "zh" ? "zh-CN" : "en";
+  return language;
+}
+
+const language = browserLanguage();
 
 void i18n.use(initReactI18next).init({
   fallbackLng: "en",

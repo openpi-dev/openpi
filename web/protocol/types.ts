@@ -190,6 +190,7 @@ export interface WebSnapshot {
   cursor: number;
   preferences: {
     theme: "system" | "light" | "dark";
+    language: "system" | "en" | "zh";
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
