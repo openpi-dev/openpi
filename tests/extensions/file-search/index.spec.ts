@@ -30,8 +30,8 @@ import {
   COMPLETE_OUTPUT_MAX_BYTES,
   formatCapturedOutput,
   formatOutput,
-} from "../../../extensions/file-search/src/output.ts";
-import { executeSearchProcess } from "../../../extensions/file-search/src/process.ts";
+} from "../../../extensions/shared/search-output.ts";
+import { executeSearchProcess } from "../../../extensions/shared/search-process.ts";
 import {
   expandedPreview,
   installNotifications,

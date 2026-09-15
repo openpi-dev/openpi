@@ -1,5 +1,5 @@
 /**
- * Shared output shaping for the fd and rg tools: standard pi truncation
+ * Shared output shaping for bounded search and git-read tools: standard pi truncation
  * (2000 lines / 50KB) with complete output persisted to a temp file up to the
  * documented 10 MiB capture limit.
  */
