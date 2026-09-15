@@ -14,6 +14,31 @@ pi install git:github.com/openpi-dev/openpi
 
 Pi installs the package dependencies automatically. Restart Pi or run `/reload` after installation.
 
+### Windows terminal compatibility
+
+On Windows, OpenPI detects the stale autocomplete-row redraw problem in Pi's
+`regular` (main-screen) renderer. When neither global nor project settings
+explicitly sets `terminal.clearOnShrink`, it enables Pi's supported
+`clear-on-shrink` behavior for the current renderer only. This prevents old
+slash-command autocomplete rows from making commands look duplicated without
+changing a global or project preference.
+
+An explicit `terminal.clearOnShrink` value is always preserved, including
+`false`. OpenPI also leaves the selected `tuiMode` unchanged; use Pi's native
+`/settings`, `settings.json`, or the `--tui-mode` flag when you want to choose
+that mode explicitly.
+
+For example, Pi's alternate-screen renderer remains available from `/settings`
+or `settings.json`:
+
+```json
+{
+  "tuiMode": "fullscreen"
+}
+```
+
+The compatibility behavior is tracked in [openpi#407](https://github.com/openpi-dev/openpi/issues/407).
+
 ## fd, rg, and read-only git tools
 
 The `file-search` extension registers `fd` and `rg` as model tools, and `git-read` registers `git_show`, `git_diff`, and `git_log` (read-only git inspection). They stay outside an ordinary parent turn until the user explicitly asks to use `fd`/`rg`/git history, or structured file search, or the model loads the `search` group through `openpi_load_tools`. Entering or restoring Plan Mode is a runtime-safety exception: it loads `search` for that Session so diff investigation can use the structured Git boundary. The gateway is shown after an explicit OpenPI-capability request, or remains visible when the user opts into adaptive discovery; children receive these tools only when active in the parent and permitted by their role allowlist. No setup is normally needed: at startup `fd`/`rg` silently use a system-installed binary (`fd`/`fdfind` and `rg`) when available, or an existing binary in the agent's private managed bin directory (`~/.pi/agent/bin`). Only when neither exists does it download an official release binary (macOS/Linux, arm64/x64, over HTTPS) into that directory — a persistent cache that survives package updates — and show a one-time notification. If your platform is unsupported, install `fd` and `rg` with your package manager and restart Pi. The git tools require a system `git`.
