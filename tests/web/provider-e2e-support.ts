@@ -1,6 +1,7 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { createServer, type IncomingMessage, type Server } from "node:http";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 /**
  * Shared identity for the hermetic provider round-trip end-to-end test.
@@ -17,6 +18,10 @@ export const PROVIDER_ID = "fake-provider";
 export const MODEL_ID = "fake-reasoner";
 export const MODEL_NAME = "Fake Reasoner";
 export const PROVIDER_BASE_URL = `http://127.0.0.1:${PROVIDER_PORT}/v1`;
+export const OPENPI_SOURCE = resolve(
+  dirname(fileURLToPath(import.meta.url)),
+  "../..",
+);
 
 export type RecordedProviderRequest = {
   method: string;
@@ -61,7 +66,11 @@ export function seedAgentDirectory(agentDirectory: string) {
   // reach the provider, rather than a no-op against the initial clamped level.
   writeFileSync(
     join(agentDirectory, "settings.json"),
-    `${JSON.stringify({ defaultThinkingLevel: "off" }, null, 2)}\n`,
+    `${JSON.stringify(
+      { defaultThinkingLevel: "off", packages: [OPENPI_SOURCE] },
+      null,
+      2,
+    )}\n`,
   );
 }
 
