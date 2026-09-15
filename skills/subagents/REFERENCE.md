@@ -50,15 +50,15 @@ file with the same name.
 
 | Role          | Tools                                                               | Relative effort guidance | Purpose                                                |
 | ------------- | ------------------------------------------------------------------- | ------------------------ | ------------------------------------------------------ |
-| `explorer`    | Active parent child-eligible tools                 | Moderate                 | Read-only codebase tracing; increase for harder tasks. |
+| `explorer`    | Active parent child-eligible tools                 | Moderate                 | Codebase tracing; increase for harder tasks.           |
 | `implementer` | Active parent child-eligible tools | Medium-high              | Focused implementation; adjust for scope and risk.     |
-| `reviewer`    | Active parent child-eligible tools                 | High                     | Read-only correctness, safety, and regression review.  |
-| `advisor`     | Active parent child-eligible tools                 | High                     | Deep read-only analysis and technical advice.          |
+| `reviewer`    | Active parent child-eligible tools                 | High                     | Correctness, safety, and regression review.            |
+| `advisor`     | Active parent child-eligible tools                 | High                     | Deep technical analysis and advice.                    |
 
 These are relative selection hints, not fixed Pi thinking levels. Built-ins set
 no model or reasoning-effort default. An explicit user requirement takes
 priority; otherwise the parent model chooses from levels supported by the
-resolved child model according to the role and task difficulty. Custom role allowlists intersect with active parent tools, Plan Mode, and the child denylist. Built-in read-only task guidance is a role instruction, not a filesystem sandbox. Existing custom role files are never widened automatically.
+resolved child model according to the role and task difficulty. Custom role allowlists intersect with active parent tools, Plan Mode, and the child denylist. Built-in role names guide task selection; explicit tool lists and Plan Mode create the applicable child-tool boundary. Existing custom role files are never widened automatically.
 
 ## Discovery
 

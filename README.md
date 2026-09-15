@@ -598,8 +598,26 @@ Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和
 | `/sessions`                | 搜索、预览与切换 Session                       |
 | `/plan [目标]`             | 只读调研；Plan Ready 后显式选择实施方式        |
 | `/cron ...`                | 为当前 Session 安排一次或周期性 Prompt         |
+| `/usage [选项]`            | 查看订阅额度快照（Cursor / Codex / Antigravity） |
 | `/lg` / `/pr`              | 浏览 Diff（`/lg` 仅 TUI）/ 显式刷新当前分支 PR |
 | `/copy-all`                | 复制当前分支可见对话                           |
+
+<details>
+<summary><strong>查看服务额度：/usage</strong></summary>
+
+`/usage` 手动查询 Cursor、OpenAI Codex 和 Google Antigravity 的订阅额度快照，显示已用/剩余比例、已知金额、重置时间和采样年龄。它与 Session 的 token/cost 统计不同，也不是完整的账户账单或任务预算保证；服务未返回的额度会明确标为未知。
+
+- `--refresh` / `-f`：跳过当前身份的 60 秒内存缓存，重新查询。
+- `--redact` / `-r`：遮蔽报告中的账号邮箱用户名或标识，便于分享；邮箱域名仍保留。
+- `--json` / `-j`：展示同一快照的 JSON 数组；没有可查询账号时为 `[]`。
+
+TUI 查询中按 Esc/Ctrl+C 取消等待；结果使用可滚动浮层，方向键或 Page Up/Down 滚动，Enter/Esc 关闭；RPC/Web 通过 Pi 的通知通道交付，真正无 UI 的调用输出扩展日志（Pi print 模式会将其转到 stderr）。`--json` 改变报告格式，不绕过宿主的输出协议。
+
+查询复用 Pi 当前运行时的鉴权和 OAuth 刷新，不直接读取 `auth.json`。正常刷新可能由 Pi 更新登录凭据；usage 不保存额度历史、不后台轮询、不切换账号或模型、不消耗充值/重置额度，也不注册模型工具。缓存按扩展实例及已解析身份隔离；失败、不完整和空快照不缓存。每个查询最多等待 15 秒，单个 HTTP 尝试最多 4 秒；Antigravity 对瞬时故障回退端点。Pi 当前鉴权接口没有取消参数，停止等待不会中断 Pi 已经启动的凭据刷新。
+
+适配器使用服务自身的额度接口，服务可能调整响应结构。Codex 展示主池及附加池的窗口；Cursor 展示计划比例和已知的按量使用金额；Antigravity 保留模型组、窗口和没有比例分母的剩余值。不支持的计费字段不会被推算成余额。
+
+</details>
 
 <details>
 <summary><strong>模型工具速查</strong></summary>
@@ -702,6 +720,7 @@ extensions/
 ├── sessions/              # Session 搜索与切换
 ├── suggestions/           # Ephemeral next-action suggestion
 ├── ui-customization/      # Header、Footer、Terminal title
+├── usage/                 # /usage 订阅配额与剩余额度查询
 └── shared/                # Child policy、配置、Worktree、终端清洗
 
 bin/openpi.js              # 独立 Web CLI 入口

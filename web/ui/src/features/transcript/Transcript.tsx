@@ -38,6 +38,9 @@ import {
   turnTitle,
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
+import { ToolEvidence } from "./ToolEvidence.tsx";
+import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
+import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -185,7 +188,9 @@ function EvidenceDetails({
         </span>
         <StatusMark status={status} />
       </summary>
-      <pre className="details-body tool-evidence">{body}</pre>
+      <pre className="details-body tool-evidence">
+        {evidenceText(body).text}
+      </pre>
     </details>
   );
 }
@@ -312,11 +317,13 @@ function ThinkingEvidence({
   start,
   duration,
   active,
+  level,
 }: {
   body: string;
   start?: number;
   duration?: number;
   active: boolean;
+  level?: string;
 }) {
   const { t } = useTranslation();
   const elapsed = useElapsed(start, active);
@@ -325,7 +332,13 @@ function ThinkingEvidence({
     <EvidenceDetails
       body={body}
       icon={<Lightbulb />}
-      name={active ? t("thinkingActive") : t("thinkingDone")}
+      name={
+        active
+          ? level
+            ? t("thinkingActiveLevel", { level })
+            : t("thinkingActive")
+          : t("thinkingDone")
+      }
       status={active ? "running" : "done"}
       summary={settled ? `· ${settled}` : undefined}
       thinking
@@ -522,8 +535,19 @@ function buildEntries(
       (entry) => `${entry.message.role || ""}:${entry.message.content}`,
     ),
   );
+  const persistedToolIds = new Set(
+    entries.flatMap((entry) =>
+      entry.message.role === "toolResult" && entry.message.toolCallId
+        ? [entry.message.toolCallId]
+        : [],
+    ),
+  );
   for (const live of liveMessages) {
-    if (signatures.has(`${live.message.role || ""}:${live.message.content}`))
+    if (
+      live.message.role === "toolResult" && live.message.toolCallId
+        ? persistedToolIds.has(live.message.toolCallId)
+        : signatures.has(`${live.message.role || ""}:${live.message.content}`)
+    )
       continue;
     entries.push({
       key: live.key,
@@ -594,10 +618,14 @@ export function Transcript(props: TranscriptProps) {
   const { rows, turns } = useMemo(() => {
     const results = new Map<string, WebLiveMessage>();
     const familyIds = new Set<string>();
+    const specializedIds = new Set<string>();
+    const liveTools = props.snapshot.runtime.liveTools ?? [];
     entries.forEach(({ message }) => {
       if (message.role === "toolResult" && message.toolCallId)
         results.set(message.toolCallId, message);
       message.parts?.forEach((part) => {
+        if (part.type === "toolCall" && part.id && isEvidenceTool(part.name))
+          specializedIds.add(part.id);
         if (
           part.type === "toolCall" &&
           part.id &&
@@ -680,6 +708,9 @@ export function Transcript(props: TranscriptProps) {
                     <ThinkingEvidence
                       body={part.text}
                       active={isLive}
+                      level={
+                        isLive ? props.snapshot.thinking?.level : undefined
+                      }
                       start={props.thinkingStarts[entry.key]}
                       duration={props.thinkingDurations[entry.key]}
                     />
@@ -689,13 +720,27 @@ export function Transcript(props: TranscriptProps) {
             });
           }
           if (part.type === "toolCall") {
-            const result = part.id ? results.get(part.id) : undefined;
-            const card = familyCard(part, result);
+            const live = part.id
+              ? liveTools.find((item) => item.call.id === part.id)
+              : undefined;
+            const persistedResult = part.id ? results.get(part.id) : undefined;
+            const result = persistedResult ?? live?.result;
+            const card = isEvidenceTool(part.name) ? (
+              <ToolEvidence
+                key={`${entry.key}-${part.id || partIndex}-evidence`}
+                call={part}
+                result={result}
+                liveState={persistedResult ? undefined : live?.state}
+                cwd={selected?.cwd}
+              />
+            ) : (
+              familyCard(part, result)
+            );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
-              groupable: !card,
+              groupable: !card || isEvidenceTool(part.name),
               error: Boolean(result?.isError),
               icon: toolIcon,
               content: (
@@ -743,6 +788,8 @@ export function Transcript(props: TranscriptProps) {
         return detailRows;
       }
       if (message.role === "toolResult") {
+        if (message.toolCallId && specializedIds.has(message.toolCallId))
+          return [];
         if (message.toolCallId && familyIds.has(message.toolCallId)) return [];
         const family = message.toolName?.startsWith("subagent")
           ? "subagent"
@@ -806,8 +853,11 @@ export function Transcript(props: TranscriptProps) {
     entries,
     props.liveRunning,
     props.onResend,
+    props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.thinkingStarts,
+    props.snapshot.runtime.liveTools,
+    selected?.cwd,
     t,
   ]);
 
@@ -840,7 +890,7 @@ export function Transcript(props: TranscriptProps) {
       : t("modelRunning");
 
   return (
-    <>
+    <ArtifactProvider sessionId={selected?.id}>
       <div
         ref={viewport}
         className="conversation"
@@ -885,6 +935,6 @@ export function Transcript(props: TranscriptProps) {
           ))}
         </nav>
       )}
-    </>
+    </ArtifactProvider>
   );
 }

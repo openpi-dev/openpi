@@ -63,3 +63,26 @@ test("paused viewport clamps safely across shrink and resize without resuming", 
   assert.equal(viewport.scrollTop, 0);
   assert.equal(viewport.followingEnd, false);
 });
+
+test("a viewport reports hidden rows above, including while following", () => {
+  const viewport = new TranscriptViewport();
+
+  // Following the end still hides the beginning of a long transcript.
+  viewport.reconcile(20, 5);
+  assert.equal(viewport.linesAbove(20, 5), 15);
+  assert.equal(viewport.linesBelow(20, 5), 0);
+
+  viewport.scrollToTop(20, 5);
+  assert.equal(viewport.linesAbove(20, 5), 0);
+  assert.equal(viewport.linesBelow(20, 5), 15);
+
+  viewport.scrollBy(4, 20, 5);
+  assert.equal(viewport.linesAbove(20, 5), 4);
+  assert.equal(viewport.linesBelow(20, 5), 11);
+
+  // A transcript that fits has nothing hidden in either direction.
+  const fits = new TranscriptViewport();
+  fits.reconcile(3, 10);
+  assert.equal(fits.linesAbove(3, 10), 0);
+  assert.equal(fits.linesBelow(3, 10), 0);
+});

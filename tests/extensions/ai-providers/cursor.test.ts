@@ -19,6 +19,7 @@ import type {
 } from "@earendil-works/pi-ai/compat";
 import {
   AgentSession,
+  createReadTool,
   type ExtensionContext,
   VERSION as PI_VERSION,
 } from "@earendil-works/pi-coding-agent";
@@ -41,6 +42,7 @@ import {
   CursorToolCallSchema,
   ExecServerMessageSchema,
   GetUsableModelsResponseSchema,
+  InteractionResponseSchema,
   InteractionQueryPayloadSchema,
   InteractionQuerySchema,
   InteractionUpdateSchema,
@@ -54,6 +56,8 @@ import {
   ThinkingDetailsSchema,
   TokenDeltaUpdateSchema,
   TurnEndedUpdateSchema,
+  WebFetchRequestRejectedSchema,
+  WebFetchRequestResponseSchema,
 } from "../../../extensions/ai-providers/cursor/proto.ts";
 import {
   create,
@@ -1030,8 +1034,21 @@ test("Cursor request_context succeeds with global rules and empty tools; other e
 });
 
 test("Cursor tool interaction and interactionQuery fail explicitly without a Pi toolCall", async () => {
-  const cases: Array<"tool" | "query"> = ["tool", "query"];
-  for (const kind of cases) {
+  const cases: Array<{
+    kind: "tool" | "query";
+    queryCase?: "askQuestionInteractionQuery";
+    tools?: Context["tools"];
+  }> = [
+    { kind: "tool" },
+    { kind: "query", queryCase: "askQuestionInteractionQuery" },
+    {
+      kind: "query",
+      queryCase: "askQuestionInteractionQuery",
+      tools: [LOOKUP],
+    },
+    { kind: "query", tools: [LOOKUP] },
+  ];
+  for (const { kind, queryCase, tools } of cases) {
     const server = await startServer((stream) => {
       stream.respond({
         ":status": 200,
@@ -1062,10 +1079,12 @@ test("Cursor tool interaction and interactionQuery fail explicitly without a Pi 
                   case: "interactionQuery",
                   value: create(InteractionQuerySchema, {
                     id: 1,
-                    query: {
-                      case: "askQuestionInteractionQuery",
-                      value: create(InteractionQueryPayloadSchema, {}),
-                    },
+                    query: queryCase
+                      ? {
+                          case: queryCase,
+                          value: create(InteractionQueryPayloadSchema, {}),
+                        }
+                      : { case: undefined },
                   }),
                 },
               });
@@ -1074,13 +1093,23 @@ test("Cursor tool interaction and interactionQuery fail explicitly without a Pi 
     });
     servers.push(server);
     const events = await collectEvents(
-      streamCursor(localModel(server.baseUrl), CONTEXT, { apiKey: "token" }),
+      streamCursor(
+        localModel(server.baseUrl),
+        tools ? { ...CONTEXT, tools } : CONTEXT,
+        { apiKey: "token" },
+      ),
     );
     const error = events.find((event) => event.type === "error");
     assert.ok(error?.type === "error");
     assert.match(
       error.error.errorMessage ?? "",
-      /unavailable in chat-only mode/,
+      tools && kind === "query"
+        ? /outside Pi's interaction lifecycle/
+        : /unavailable in chat-only mode/,
+    );
+    assert.equal(
+      events.some((event) => event.type === "done"),
+      false,
     );
     assert.equal(
       events.some((event) => event.type.startsWith("toolcall")),
@@ -1740,6 +1769,282 @@ function completedText(text: string) {
     ),
   ]);
 }
+
+function webFetchQuery(id = 17) {
+  return frameServerMessage(
+    create(AgentServerMessageSchema, {
+      message: {
+        case: "interactionQuery",
+        value: create(InteractionQuerySchema, {
+          id,
+          query: {
+            case: "webFetchRequestQuery",
+            value: create(InteractionQueryPayloadSchema, {}),
+          },
+        }),
+      },
+    }),
+  );
+}
+
+test("Cursor WebFetch rejection keeps the in-band wire field numbers", () => {
+  const wire = Uint8Array.from([
+    0x32, 0x09, 0x08, 0x07, 0x4a, 0x05, 0x12, 0x03, 0x0a, 0x01, 0x78,
+  ]);
+  const message = create(AgentClientMessageSchema, {
+    message: {
+      case: "interactionResponse",
+      value: create(InteractionResponseSchema, {
+        id: 7,
+        result: {
+          case: "webFetchRequestResponse",
+          value: create(WebFetchRequestResponseSchema, {
+            result: {
+              case: "rejected",
+              value: create(WebFetchRequestRejectedSchema, { reason: "x" }),
+            },
+          }),
+        },
+      }),
+    },
+  });
+  assert.deepEqual([...toBinary(AgentClientMessageSchema, message)], [...wire]);
+
+  const decoded = fromBinary(AgentClientMessageSchema, wire);
+  assert.ok(decoded.message.case === "interactionResponse");
+  assert.equal(decoded.message.value.id, 7);
+  assert.equal(decoded.message.value.result.case, "webFetchRequestResponse");
+  const result = decoded.message.value.result.value.result;
+  assert.equal(result.case, "rejected");
+  assert.equal(result.value.reason, "x");
+});
+
+test("Cursor rejects WebFetch in band and continues to text with or without Pi tools", {
+  timeout: 3000,
+}, async () => {
+  const cases: Array<{
+    tools?: Context["tools"];
+    reason: RegExp;
+    text: string;
+  }> = [
+    {
+      reason: /unavailable in this chat-only provider/,
+      text: "WebFetch rejected without tools.",
+    },
+    {
+      tools: [LOOKUP],
+      reason: /Use an advertised Pi tool/,
+      text: "WebFetch rejected with tools.",
+    },
+  ];
+
+  for (const { tools, reason, text } of cases) {
+    let requests = 0;
+    const replies: AgentClientMessage["message"][] = [];
+    const server = await startServer((peer) => {
+      peer.respond({ ":status": 200 });
+      receiveClient(peer, (message) => {
+        if (message.case === "runRequest") {
+          assert.equal(++requests, 1);
+          peer.write(webFetchQuery());
+          return;
+        }
+        if (message.case !== "interactionResponse") return;
+        replies.push(message);
+        peer.end(completedText(text));
+      });
+    });
+    servers.push(server);
+
+    const events = await collectEvents(
+      streamCursor(
+        localModel(server.baseUrl),
+        tools ? { ...CONTEXT, tools } : CONTEXT,
+        { apiKey: "token" },
+      ),
+    );
+
+    assert.equal(requests, 1);
+    assert.equal(replies.length, 1);
+    const reply = replies[0]!;
+    assert.ok(reply.case === "interactionResponse");
+    assert.equal(reply.value.id, 17);
+    assert.equal(reply.value.result.case, "webFetchRequestResponse");
+    const response = reply.value.result.value;
+    assert.equal(response.result.case, "rejected");
+    assert.match(response.result.value.reason, reason);
+
+    const terminal = events.at(-1);
+    assert.ok(terminal?.type === "done");
+    assert.deepEqual(terminal.message.content, [{ type: "text", text }]);
+    assert.equal(
+      events.some((event) => event.type.startsWith("toolcall")),
+      false,
+    );
+  }
+});
+
+test("Cursor WebFetch rejection can recover through the real Pi read tool", {
+  timeout: 3000,
+}, async () => {
+  const directory = await mkdtemp(join(tmpdir(), "cursor-webfetch-read-"));
+  tempDirectories.push(directory);
+  const filePath = join(directory, "fixture.txt");
+  await writeFile(filePath, "Pi read fixture\n");
+
+  let requests = 0;
+  let webFetchResponses = 0;
+  let replay = "";
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest") {
+        requests++;
+        if (requests === 1) {
+          peer.write(webFetchQuery(23));
+        } else {
+          assert.equal(requests, 2);
+          assert.equal(message.value.action?.action.case, "resumeAction");
+          peer.end(completedText("Pi read result received."));
+        }
+        return;
+      }
+      if (message.case === "interactionResponse") {
+        webFetchResponses++;
+        assert.equal(message.value.id, 23);
+        assert.equal(message.value.result.case, "webFetchRequestResponse");
+        const response = message.value.result.value;
+        assert.equal(response.result.case, "rejected");
+        assert.match(response.result.value.reason, /Use an advertised Pi tool/);
+        peer.write(
+          mcpExec({
+            name: "read",
+            toolName: "read",
+            toolCallId: "read-1",
+            args: { path: encodeJsonValue(filePath) },
+          }),
+        );
+        return;
+      }
+    });
+  });
+  servers.push(server);
+
+  const lifecycle: string[] = [];
+  const agent = new Agent({
+    initialState: {
+      model: localModel(server.baseUrl),
+      systemPrompt: "Use read once after hosted fetching is rejected.",
+      tools: [createReadTool(directory)],
+    },
+    getApiKey: () => "token",
+    streamFn: async (model, context, options) => {
+      if (context.messages.at(-1)?.role === "toolResult") {
+        const built = await buildCursorRequest(model, context, options);
+        replay = built.conversationState.rootPromptMessagesJson
+          .map((id) =>
+            Buffer.from(
+              built.blobStore.get(Buffer.from(id).toString("hex"))!,
+            ).toString(),
+          )
+          .join("\n");
+      }
+      return streamCursor(model, context, options);
+    },
+  });
+  agent.subscribe((event) => {
+    lifecycle.push(event.type);
+  });
+  await agent.prompt("Read the fixture file.");
+
+  assert.equal(requests, 2);
+  assert.equal(webFetchResponses, 1);
+  assert.equal(
+    lifecycle.filter((type) => type === "tool_execution_start").length,
+    1,
+  );
+  assert.equal(
+    lifecycle.filter((type) => type === "tool_execution_end").length,
+    1,
+  );
+  const toolResult = agent.state.messages.find(
+    (message) =>
+      message.role === "toolResult" && message.toolCallId === "read-1",
+  );
+  assert.ok(toolResult?.role === "toolResult");
+  assert.deepEqual(toolResult.content, [
+    { type: "text", text: "Pi read fixture\n" },
+  ]);
+  assert.match(replay, /Pi read fixture/);
+  const last = agent.state.messages.at(-1);
+  assert.ok(last?.role === "assistant");
+  assert.deepEqual(last.content, [
+    { type: "text", text: "Pi read result received." },
+  ]);
+});
+
+test("Cursor sends the fourth WebFetch rejection before its bounded error", {
+  timeout: 3000,
+}, async () => {
+  const replies: AgentClientMessage["message"][] = [];
+  const fourthReplyReceived = Promise.withResolvers<void>();
+  const server = await startServer((peer) => {
+    peer.respond({ ":status": 200 });
+    receiveClient(peer, (message) => {
+      if (message.case === "runRequest") {
+        peer.write(
+          Buffer.concat([
+            ...[1, 2, 3, 4].map((id) => webFetchQuery(id)),
+            mcpExec(),
+            completedText("Must not finish after the limit."),
+          ]),
+        );
+        return;
+      }
+      if (message.case !== "interactionResponse") return;
+      replies.push(message);
+      if (replies.length === 4) fourthReplyReceived.resolve();
+    });
+  });
+  servers.push(server);
+
+  const events = await collectEvents(
+    streamCursor(
+      localModel(server.baseUrl),
+      { ...CONTEXT, tools: [LOOKUP] },
+      { apiKey: "token" },
+    ),
+  );
+  await fourthReplyReceived.promise;
+
+  assert.deepEqual(
+    replies.map((reply) => {
+      assert.ok(reply.case === "interactionResponse");
+      const response = reply.value.result;
+      assert.equal(response.case, "webFetchRequestResponse");
+      const rejected = response.value.result;
+      assert.equal(rejected.case, "rejected");
+      assert.match(rejected.value.reason, /Use an advertised Pi tool/);
+      return reply.value.id;
+    }),
+    [1, 2, 3, 4],
+  );
+  const terminal = events.at(-1);
+  assert.ok(terminal?.type === "error");
+  assert.equal(terminal.reason, "error");
+  assert.match(
+    terminal.error.errorMessage ?? "",
+    /Cursor WebFetch recovery limit \(3\) exceeded/,
+  );
+  assert.equal(
+    events.some((event) => event.type === "done"),
+    false,
+  );
+  assert.equal(
+    events.some((event) => event.type.startsWith("toolcall")),
+    false,
+  );
+});
 
 test("Cursor rejects native execution in band and recovers through a real Pi tool roundtrip", {
   timeout: 3000,
