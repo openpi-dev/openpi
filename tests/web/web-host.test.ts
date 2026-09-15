@@ -2078,6 +2078,60 @@ test("quiet SSE clients receive heartbeats without advancing the event cursor", 
   }
 });
 
+test("session search rejects empty queries and searches canonical metadata", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-search-host-"));
+  try {
+    const runtime = testRuntime(cwd);
+    const created = SessionManager.create(cwd, cwd);
+    created.appendMessage({
+      role: "user",
+      content: "canonical-search-hit",
+      timestamp: 1,
+    });
+    created.appendMessage({
+      role: "assistant",
+      content: [],
+      api: "openai-responses",
+      provider: "fixture",
+      model: "fixture",
+      usage: {
+        input: 0,
+        output: 0,
+        cacheRead: 0,
+        cacheWrite: 0,
+        totalTokens: 0,
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+      },
+      stopReason: "stop",
+      timestamp: 1,
+    });
+    const { host, launched, headers } = await startTestHost(runtime);
+    try {
+      const empty = await fetch(`${launched.origin}/api/sessions/search?q=`, {
+        headers,
+      });
+      assert.equal(empty.status, 400);
+      const found = await fetch(
+        `${launched.origin}/api/sessions/search?q=canonical-search-hit`,
+        { headers },
+      );
+      assert.equal(found.status, 200);
+      const body = (await found.json()) as {
+        sessions: Array<{ firstMessage: string }>;
+      };
+      assert.equal(body.sessions.length, 1);
+      assert.match(
+        body.sessions[0]?.firstMessage ?? "",
+        /canonical-search-hit/,
+      );
+    } finally {
+      await host.stop();
+    }
+  } finally {
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("adapter initialization fails before the Host starts listening", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-startup-failure-"));
   const runtime = testRuntime(cwd);
