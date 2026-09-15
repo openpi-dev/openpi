@@ -154,6 +154,70 @@ test("snapshot pins current and selected sessions while bounding the projection"
   }
 });
 
+test("session metadata search finds matches outside the UI projection cap", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-search-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.inMemory(root);
+    let latePath: string | undefined;
+    for (let index = 0; index <= WEB_MAX_SESSIONS; index++) {
+      const manager = SessionManager.create(root, sessionDirectory);
+      persistSession(
+        manager,
+        index === 0
+          ? "needle-late-unique common-token"
+          : `common-token session-${index}`,
+        index + 1,
+      );
+      if (index === 0) latePath = manager.getSessionFile();
+    }
+    assert.ok(latePath);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+    const projection = await adapter.listSessionProjection();
+    assert.equal(projection.sessions.length, WEB_MAX_SESSIONS);
+    assert.equal(
+      projection.sessions.some((session) => session.path === latePath),
+      false,
+    );
+    const result = await adapter.searchSessions({
+      query: "needle-late-unique",
+    });
+    assert.equal(result.status, "ok");
+    if (result.status !== "ok") return;
+    assert.equal(result.sessions.length, 1);
+    assert.equal(result.sessions[0]?.path, latePath);
+    assert.equal(result.truncation.truncated, false);
+    assert.deepEqual(await adapter.searchSessions({ query: "   " }), {
+      status: "invalid",
+    });
+    const paged = await adapter.searchSessions({
+      query: "common-token",
+      offset: WEB_MAX_SESSIONS,
+      limit: 10,
+    });
+    assert.equal(paged.status, "ok");
+    if (paged.status !== "ok") return;
+    assert.equal(paged.sessions.length, 1);
+    assert.equal("nextOffset" in paged, false);
+    const firstPage = await adapter.searchSessions({
+      query: "common-token",
+      offset: 0,
+      limit: 100,
+    });
+    assert.equal(firstPage.status, "ok");
+    if (firstPage.status !== "ok") return;
+    assert.equal(firstPage.nextOffset, 100);
+    assert.deepEqual(
+      await adapter.searchSessions({ query: "common-token", offset: -1 }),
+      { status: "invalid" },
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("discovers default Pi sessions as bounded read-only projections", async (t) => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-terminal-history-"));
   const sessionDirectory = join(root, "web-sessions");
