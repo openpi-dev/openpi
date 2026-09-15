@@ -1,28 +1,13 @@
 export interface WorkflowLaunchPolicyInput {
   wait?: boolean;
-  background?: boolean;
 }
 
-/**
- * Resolve the caller's launch preference to one positive runtime mode.
- * `background` remains only as the published inverse compatibility alias.
- */
+/** Resolve the caller's launch preference to one positive runtime mode. */
 export function resolveWorkflowLaunchMode(
   input: WorkflowLaunchPolicyInput,
   canDeliverLater: boolean,
 ) {
-  if (
-    input.wait !== undefined &&
-    input.background !== undefined &&
-    input.wait === input.background
-  ) {
-    throw new Error(
-      "wait and background conflict: background is the deprecated inverse of wait; remove background and provide only wait",
-    );
-  }
-  const wait =
-    input.wait ??
-    (input.background !== undefined ? !input.background : !canDeliverLater);
+  const wait = input.wait ?? !canDeliverLater;
   if (!wait && !canDeliverLater) {
     throw new Error(
       "This host cannot deliver a workflow result later; use wait: true",
