@@ -13,6 +13,7 @@ import {
   type WebSnapshot,
   type WebThinkingState,
   type WebCommandDiscoveryResult,
+  type WebWorkspaceChanges,
 } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
@@ -134,6 +135,13 @@ export class WebClient {
   snapshot(path?: string | null) {
     const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
+  }
+
+  workspaceChanges(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebWorkspaceChanges>(
+      `/api/workspace-changes?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
   }
 
   resolveArtifact(
