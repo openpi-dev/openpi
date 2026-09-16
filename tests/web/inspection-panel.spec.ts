@@ -180,3 +180,49 @@ it("rejects another Session's same-id terminal and renders output as plain text"
     screen.getByText("15 bytes omitted from this output view."),
   ).toBeTruthy();
 });
+
+function thinkingFetcher(thinking: unknown) {
+  return vi.fn(async (url: string) => {
+    if (url.startsWith("/api/thinking")) return reply(thinking);
+    if (url.startsWith("/api/trust"))
+      return reply({
+        workspace: "/ws",
+        state: "trusted",
+        refreshRequired: false,
+      });
+    return reply({ providers: [], truncation: { truncated: false } });
+  });
+}
+
+it("reports an unsupported thinking projection without a mismatch warning", async () => {
+  vi.stubGlobal(
+    "fetch",
+    thinkingFetcher({
+      sessionId: "session-a",
+      level: "off",
+      available: [],
+      supported: false,
+    }),
+  );
+  show();
+  expect(await screen.findByText(i18n.t("thinkingUnsupported"))).toBeTruthy();
+  expect(screen.getByText(i18n.t("thinkingUnsupportedHint"))).toBeTruthy();
+  expect(screen.queryByText(i18n.t("thinkingLevelMismatch"))).toBeNull();
+});
+
+it("warns with role status when the confirmed level is not available", async () => {
+  vi.stubGlobal(
+    "fetch",
+    thinkingFetcher({
+      sessionId: "session-a",
+      level: "ultra",
+      available: ["off", "low"],
+      supported: true,
+    }),
+  );
+  show();
+  expect(await screen.findByText("ultra")).toBeTruthy();
+  expect(screen.getByText("off · low")).toBeTruthy();
+  const warning = screen.getByText(i18n.t("thinkingLevelMismatch"));
+  expect(warning.getAttribute("role")).toBe("status");
+});

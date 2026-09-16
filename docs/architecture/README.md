@@ -5,3 +5,5 @@ Architecture records describe OpenPI ownership boundaries, lifecycle seams, and 
 Keep unresolved alternatives and implementation proposals in [`../design/`](../design/). Promote a constraint through an accepted [`Decision`](../decisions/) before treating it as architecture policy.
 
 Each new or materially revised architecture record should identify its evidence status, source revision, affected Pi primitive, current invariants, related Issues and Decisions, and any record it supersedes.
+
+- [`WEB_MODEL_DISCOVERY.md`](WEB_MODEL_DISCOVERY.md) - bounded Web model snapshots and full-catalog discovery through Pi's model runtime

@@ -432,6 +432,7 @@ await updateSetupConfig((current) => {
 });
 
 test("a reused PID does not impersonate the dead lock owner", async () => {
+  removeLockArtifacts();
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
   const owner = {
     version: 1,

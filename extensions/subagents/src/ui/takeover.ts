@@ -11,7 +11,12 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import type {
+  Component,
+  Focusable,
+  TUI,
+  TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import { AgentSessionPage } from "../../../shared/agent-session-page.ts";
 import { hintLine, panelFrame } from "../../../shared/screen-chrome.ts";
@@ -476,6 +481,7 @@ export class TakeoverView implements Component, Focusable {
     if (this.closed) return false;
     this.closed = true;
     this.unsubscribe();
+    this.page.dispose();
     if (this.ticker) clearInterval(this.ticker);
     if (this.renderTimer) clearTimeout(this.renderTimer);
     this.renderTimer = undefined;
@@ -492,6 +498,10 @@ export class TakeoverView implements Component, Focusable {
 
   handleInput(data: string): void {
     this.page.handleInput(data);
+  }
+
+  handleMouse(event: TuiMouseEvent) {
+    return this.page.handleMouse(event);
   }
 
   render(width: number): string[] {

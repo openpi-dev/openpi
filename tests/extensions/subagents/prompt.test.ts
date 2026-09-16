@@ -1,3 +1,4 @@
+import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 /** Model-facing strings that carry a behavioral contract, not just wording. */
 
 import assert from "node:assert/strict";
@@ -19,8 +20,13 @@ import {
 import {
   AGENT_TYPE_LIMITS,
   BUILT_IN_AGENT_TYPES,
+  READ_ONLY_AGENT_TOOLS,
   type AgentType,
 } from "../../../extensions/subagents/src/agent-types.ts";
+import {
+  effectiveChildToolAllowlist,
+  inheritedChildToolAllowlist,
+} from "../../../extensions/shared/child-session.ts";
 
 function spawnSurfaceBytes(agentTypes: readonly AgentType[]) {
   const surface = createSubagentSpawnToolSurface(agentTypes);
@@ -103,6 +109,59 @@ test("reasoning guidance prioritizes the user and task difficulty without fixing
     SUBAGENT_SPAWN_PARAMETER_DESCRIPTIONS.reasoningEffort,
     /supported by the resolved child model/i,
   );
+});
+
+test("investigator roles describe the same inherited capability that spawn reports", () => {
+  const parentTools = ["read", "bash", "edit", "write", "rg", "subagent_spawn"];
+  const expectedTools = ["read", "bash", "edit", "write", "rg"];
+
+  for (const name of ["explorer", "reviewer", "advisor"]) {
+    const role = BUILT_IN_AGENT_TYPES.find(
+      (candidate) => candidate.name === name,
+    );
+    assert.ok(role);
+    assert.equal(role.tools, undefined);
+    assert.doesNotMatch(role.body ?? "", /read-only|do not modify/i, name);
+
+    // Inspect each public roster entry independently: a later role's label
+    // must not satisfy this role's assertion.
+    const description = buildAgentTypeParameterDescription([role]);
+    assert.match(description, /\[inherited-tools\]/);
+    assert.doesNotMatch(description, /read-only/i, name);
+
+    const inherited = inheritedChildToolAllowlist(parentTools, role.tools, {
+      cwd: process.cwd(),
+      availableTools: parentTools.map((name) => ({
+        name,
+        sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, {
+          source: "sdk",
+        }),
+      })),
+    });
+    assert.deepEqual(inherited, expectedTools);
+    assert.deepEqual(effectiveChildToolAllowlist(parentTools), expectedTools);
+    const result = buildSubagentSpawnResult({
+      id: "sa-1",
+      title: name,
+      harness: "pi",
+      modelLabel: "fixture",
+      cwd: "/repo",
+      agentTypeName: name,
+      tools: inherited,
+    });
+    assert.match(result, /It can only use: read, bash, edit, write, rg\./);
+    assert.doesNotMatch(result, /subagent_spawn/);
+  }
+
+  const restricted = buildAgentTypeParameterDescription([
+    {
+      name: "bounded-investigator",
+      description: "Investigation with a declared read-only boundary.",
+      tools: READ_ONLY_AGENT_TOOLS,
+      source: "test",
+    },
+  ]);
+  assert.match(restricted, /bounded-investigator[^\n]*\[read-only\]/);
 });
 
 test("an explicit user-selected reasoning level remains available", () => {

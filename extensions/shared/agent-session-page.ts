@@ -2,7 +2,12 @@ import type {
   KeybindingsManager,
   Theme,
 } from "@earendil-works/pi-coding-agent";
-import type { Component, Focusable, TUI } from "@earendil-works/pi-tui";
+import type {
+  Component,
+  Focusable,
+  TUI,
+  TuiMouseEvent,
+} from "@earendil-works/pi-tui";
 import {
   Key,
   matchesKey,
@@ -82,6 +87,14 @@ export class AgentSessionPage implements Component, Focusable {
   private rowCount = 0;
   private viewportSize = 1;
   private toolsExpanded: boolean;
+  /**
+   * Whether the opening anchor has been decided. A page opens on a transcript
+   * that already exists, so the first render is the only moment that can tell
+   * "output produced before I looked" from "output arriving while I watch".
+   */
+  private anchored = false;
+  private mouseReporting = false;
+  private disposed = false;
 
   private _focused = false;
   get focused() {
@@ -89,6 +102,16 @@ export class AgentSessionPage implements Component, Focusable {
   }
   set focused(value: boolean) {
     this._focused = value;
+    // In regular mode the terminal otherwise scrolls its own history, exposing
+    // the parent above a partially visible child page. Fullscreen Pi already
+    // owns mouse reporting and dispatches normalized events to handleMouse.
+    const capture = value && !this.disposed && this.tui.mode === "regular";
+    if (capture !== this.mouseReporting) {
+      this.mouseReporting = capture;
+      this.tui.terminal.write(
+        capture ? "\x1b[?1000h\x1b[?1006h" : "\x1b[?1000l\x1b[?1006l",
+      );
+    }
   }
 
   constructor(
@@ -106,6 +129,14 @@ export class AgentSessionPage implements Component, Focusable {
   }
 
   handleInput(data: string) {
+    const mouse = /^\x1b\[<(\d+);\d+;\d+([Mm])$/.exec(data);
+    if (mouse) {
+      const button = Number(mouse[1]);
+      if (mouse[2] === "M" && (button & 64) !== 0 && (button & 3) < 2) {
+        this.scroll((button & 1) === 0 ? -SCROLL_STEP : SCROLL_STEP);
+      }
+      return;
+    }
     const state = this.source.getState();
     if (this.keybindings.matches(data, "app.tools.expand")) {
       this.toolsExpanded = !this.toolsExpanded;
@@ -184,6 +215,22 @@ export class AgentSessionPage implements Component, Focusable {
     }
   }
 
+  private scroll(delta: number) {
+    this.viewport.scrollBy(delta, this.rowCount, this.viewportSize);
+    this.tui.requestRender();
+  }
+
+  handleMouse(event: TuiMouseEvent) {
+    if (event.type !== "wheel") return;
+    this.scroll(event.wheelDelta ?? 0);
+    return { handled: true };
+  }
+
+  dispose() {
+    this.disposed = true;
+    this.focused = false;
+  }
+
   private rule(width: number, left = "", right = "") {
     const available = Math.max(1, width);
     const leftWidth = visibleWidth(left);
@@ -246,6 +293,17 @@ export class AgentSessionPage implements Component, Focusable {
     });
     this.rowCount = transcript.length;
     this.viewportSize = transcriptCapacity;
+    // A child page opens on work that already happened. Following the end would
+    // start a long answer partway through, hiding its beginning, so the first
+    // render anchors at the start of anything that already overflows. A page
+    // that opens on a short or empty transcript keeps following, so streaming
+    // output still scrolls into view as it arrives.
+    if (!this.anchored) {
+      this.anchored = true;
+      if (transcript.length > transcriptCapacity) {
+        this.viewport.scrollToTop(transcript.length, transcriptCapacity);
+      }
+    }
     this.viewport.reconcile(transcript.length, transcriptCapacity);
 
     const lines = [
@@ -279,16 +337,27 @@ export class AgentSessionPage implements Component, Focusable {
     while (body.length < bodyHeight) body.push("");
     lines.push(...body.slice(0, bodyHeight));
 
+    const linesAbove = this.viewport.linesAbove(
+      transcript.length,
+      transcriptCapacity,
+    );
+    const linesBelow = this.viewport.linesBelow(
+      transcript.length,
+      transcriptCapacity,
+    );
+    // Both directions are reported so hidden output is discoverable whether
+    // the reader is at the opening, following new output, or paused between.
+    const overflowNote = [
+      linesAbove > 0 ? `↑ ${linesAbove}` : "",
+      linesBelow > 0 ? `↓ ${linesBelow}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ");
     lines.push(
       this.rule(
         width,
         this.theme.fg("borderAccent", "─"),
-        this.viewport.followingEnd
-          ? ""
-          : this.theme.fg(
-              "dim",
-              `↓ ${this.viewport.linesBelow(transcript.length, transcriptCapacity)}`,
-            ),
+        overflowNote ? this.theme.fg("dim", overflowNote) : "",
       ),
     );
     const keys = (binding: Parameters<KeybindingsManager["getKeys"]>[0]) =>

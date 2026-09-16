@@ -438,7 +438,15 @@ export function projectWorkflowDetails(
 }
 
 export function measureWorkflowDetailsBytes(details: WorkflowDetails) {
-  return jsonBytes(details);
+  try {
+    const serialized = JSON.stringify(details);
+    if (serialized === undefined) {
+      throw new Error("Workflow projection is not serializable");
+    }
+    return Buffer.byteLength(serialized, "utf8");
+  } catch {
+    return jsonBytes(details);
+  }
 }
 
 interface RetainedEntry {

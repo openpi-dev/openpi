@@ -27,6 +27,14 @@ import type {
   ExtensionContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import {
+  createAgentSession,
+  createSyntheticSourceInfo,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
 import { SPINNER_INTERVAL_MS } from "../../../extensions/shared/spinner.ts";
 import { reclaimWorktree } from "../../../extensions/shared/worktree.ts";
 import { persistWorkflowJson } from "../../../extensions/workflows/artifacts.ts";
@@ -119,6 +127,11 @@ const pi = {
   },
   getThinkingLevel: () => "off",
   getActiveTools: () => [...activeTools],
+  getAllTools: () =>
+    activeTools.map((name) => ({
+      name,
+      sourceInfo: createSyntheticSourceInfo(`<sdk:${name}>`, { source: "sdk" }),
+    })),
   setActiveTools(names: string[]) {
     activeTools = [...names];
   },
@@ -1873,3 +1886,91 @@ for (const dirty of [false, true])
       __setWorkflowTestLifecycleHooks(undefined);
     }
   });
+
+test("Workflow agent inherits real parent package provenance and excludes intercom", async () => {
+  const packageDir = join(agentDir, "local-intercom-fixture");
+  mkdirSync(packageDir, { recursive: true });
+  writeFileSync(
+    join(packageDir, "package.json"),
+    JSON.stringify({
+      name: "pi-intercom",
+      version: "0.0.0",
+      pi: { extensions: ["./index.ts"] },
+    }),
+  );
+  writeFileSync(
+    join(packageDir, "index.ts"),
+    `export default function (pi) {
+    pi.registerTool({ name: "intercom", label: "fixture", description: "fixture",
+      parameters: { type: "object", properties: {} },
+      async execute() { return { content: [{ type: "text", text: "ok" }] }; }
+    });
+  }`,
+  );
+  const settingsPath = join(agentDir, "settings.json");
+  const previousSettings = existsSync(settingsPath)
+    ? readFileSync(settingsPath)
+    : undefined;
+  const previousTools = [...activeTools];
+  const previousGetAllTools = pi.getAllTools;
+  let parent: AgentSession | undefined;
+  let prompts = 0;
+  try {
+    writeFileSync(settingsPath, JSON.stringify({ packages: [packageDir] }));
+    const settingsManager = SettingsManager.create(repoDir, agentDir);
+    const loader = new DefaultResourceLoader({
+      cwd: repoDir,
+      agentDir,
+      settingsManager,
+    });
+    await loader.reload();
+    ({ session: parent } = await createAgentSession({
+      cwd: repoDir,
+      agentDir,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(repoDir),
+    }));
+    await parent.bindExtensions({ mode: "print" });
+    parent.setActiveToolsByName(["read", "intercom"]);
+    const parentSession = parent;
+    activeTools = parentSession.getActiveToolNames();
+    pi.getAllTools = () => parentSession.getAllTools();
+    __setWorkflowTestAgentSessionFactory(async (options) => {
+      assert.deepEqual(options?.tools, ["read"]);
+      assert.equal(
+        options?.resourceLoader
+          ?.getExtensions()
+          .extensions.some((extension) => extension.tools.has("intercom")),
+        false,
+      );
+      return {
+        session: fakeAgentSession(
+          "intercom boundary verified",
+          undefined,
+          () => prompts++,
+        ),
+      };
+    });
+    const result = (await workflow.execute(
+      "intercom-inherit",
+      {
+        script: 'return await agent("inspect", { agent_type: "explorer" });',
+        wait: true,
+      },
+      undefined,
+      undefined,
+      ctx,
+    )) as { content: Array<{ text: string }> };
+    assert.match(result.content[0]!.text, /intercom boundary verified/);
+    assert.equal(prompts, 1);
+    assert.deepEqual(parentSession.getActiveToolNames(), ["read", "intercom"]);
+  } finally {
+    __setWorkflowTestAgentSessionFactory(undefined);
+    pi.getAllTools = previousGetAllTools;
+    activeTools = previousTools;
+    if (parent) await shutdownAndDisposeChildSession(parent);
+    if (previousSettings) writeFileSync(settingsPath, previousSettings);
+    else rmSync(settingsPath, { force: true });
+  }
+});

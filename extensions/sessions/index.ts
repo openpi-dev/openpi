@@ -47,9 +47,9 @@ import {
   type PreviewBlock,
   type PreviewMessageLike,
   parseLimit,
-  selectSessionStatsWindow,
   type SessionInfoLike,
   type SessionPreview,
+  selectSessionStatsWindow,
 } from "./sessions.js";
 
 const DEFAULT_VISIBLE = 12;
