@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
+import fs, {
+  mkdir,
+  mkdtemp,
+  realpath,
+  rm,
+  symlink,
+  writeFile,
+} from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -292,6 +300,7 @@ test("fails soft for malformed, unavailable, archived, and unauthorized sessions
   const archived = join(root, "archived.jsonl");
   const symlinkPath = join(root, "linked.jsonl");
   try {
+    await mkdir(workspace);
     await writeFile(
       malformed,
       `{not-json}\n${line(header("malformed", workspace))}${line(
@@ -372,6 +381,83 @@ test("rejects transcript provenance when the Session header identity differs", a
     assert.deepEqual(result.partialReasons, ["malformed-session"]);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("rejects a matching Session id with an unauthorized header workspace", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-transcript-workspace-"));
+  const outside = await mkdtemp(join(tmpdir(), "openpi-outside-workspace-"));
+  const path = join(root, "session.jsonl");
+  try {
+    for (const cwd of [outside, undefined, "relative-workspace"]) {
+      await writeFile(
+        path,
+        `${line({ ...header("same-id", root), cwd })}${line(message("u", null, "user", "needle private", 1))}`,
+      );
+      const result = await searchWebTranscripts({
+        query: "needle",
+        sessions: [session("same-id", path, root)],
+        allowedSessionRoots: [root],
+        allowedWorkspaces: [root],
+      });
+      assert.deepEqual(result.matches, []);
+      assert.ok(result.partialReasons.includes("malformed-session"));
+    }
+    const alias = join(root, "alias");
+    await symlink(root, alias);
+    await writeFile(
+      path,
+      `${line(header("same-id", alias))}${line(message("u", null, "user", "needle", 1))}`,
+    );
+    const result = await searchWebTranscripts({
+      query: "needle",
+      sessions: [session("same-id", path, root)],
+      allowedSessionRoots: [root],
+      allowedWorkspaces: [alias],
+    });
+    assert.equal(result.matches.length, 1);
+    assert.equal(result.matches[0]?.workspace, await realpath(root));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("rejects a symlink substituted between authorization and opening", async (t) => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-transcript-race-"));
+  const outside = await mkdtemp(join(tmpdir(), "openpi-transcript-private-"));
+  const path = join(root, "session.jsonl");
+  const secret = join(outside, "private.jsonl");
+  try {
+    const body = `${line(header("same-id", root))}${line(message("u", null, "user", "needle", 1))}`;
+    await writeFile(path, body);
+    await writeFile(secret, body);
+    const canonicalPath = await realpath(path);
+    const originalStat = fs.stat;
+    let swapped = false;
+    t.mock.method(fs, "stat", async (...args: Parameters<typeof fs.stat>) => {
+      if (!swapped && args[0] === canonicalPath) {
+        swapped = true;
+        await rm(path);
+        await symlink(secret, path);
+      }
+      return originalStat(...args);
+    });
+    syncBuiltinESMExports();
+    const result = await searchWebTranscripts({
+      query: "needle",
+      sessions: [session("same-id", path, root)],
+      allowedSessionRoots: [root],
+      allowedWorkspaces: [root],
+    });
+    assert.equal(swapped, true);
+    assert.deepEqual(result.matches, []);
+    assert.ok(result.partialReasons.includes("changed-session"));
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await rm(root, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
   }
 });
 

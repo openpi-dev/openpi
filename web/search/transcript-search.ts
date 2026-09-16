@@ -364,6 +364,7 @@ async function scanSessionFile(
   session: WebTranscriptSearchSession,
   canonicalPath: string,
   authorizedIdentity: Stats,
+  authorizedWorkspace: string,
   tokens: string[],
   byteBudget: number,
   limits: WebTranscriptSearchLimits,
@@ -394,7 +395,7 @@ async function scanSessionFile(
     let headerSeen = false;
     let invalidHeader = false;
 
-    const processLine = (bytes: Buffer, lineOffset: number) => {
+    const processLine = async (bytes: Buffer, lineOffset: number) => {
       if (bytes.at(-1) === 0x0d) bytes = bytes.subarray(0, -1);
       if (bytes.length === 0) return;
       if (bytes.length > limits.maxLineBytes) {
@@ -415,7 +416,11 @@ async function scanSessionFile(
       const entry = value as Record<string, unknown>;
       if (!headerSeen) {
         headerSeen = true;
-        if (entry.type !== "session" || entry.id !== session.id) {
+        let headerWorkspace: string | undefined;
+        if (typeof entry.cwd === "string" && isAbsolute(entry.cwd)) {
+          headerWorkspace = await realpath(entry.cwd).catch(() => undefined);
+        }
+        if (entry.type !== "session" || entry.id !== session.id || headerWorkspace !== authorizedWorkspace) {
           malformedLines++;
           invalidHeader = true;
         }
@@ -443,7 +448,7 @@ async function scanSessionFile(
             {
               sessionId: session.id,
               sessionPath: canonicalPath,
-              workspace: resolve(session.cwd),
+              workspace: authorizedWorkspace,
               sessionSource: session.source,
               messageId: entry.id,
               ...(turnId ? { turnId } : {}),
@@ -477,7 +482,7 @@ async function scanSessionFile(
         if (combined[index] !== 0x0a) continue;
         if (expired()) return { status: "time", bytes: bytesConsumed };
         if (!discardingLine) {
-          processLine(combined.subarray(lineStart, index), pendingOffset + lineStart);
+          await processLine(combined.subarray(lineStart, index), pendingOffset + lineStart);
         }
         discardingLine = false;
         lineStart = index + 1;
@@ -493,7 +498,7 @@ async function scanSessionFile(
       position += bytesRead;
     }
     if (!discardingLine && readLimit === before.size) {
-      processLine(pending, pendingOffset);
+      await processLine(pending, pendingOffset);
     }
     if (!headerSeen) malformedLines++;
     let afterPath;
@@ -545,7 +550,7 @@ export async function searchWebTranscripts(
   const sessionRoots = await Promise.all(
     requestedSessionRoots.map((root) => realpath(root)),
   );
-  const workspaces = new Set(options.allowedWorkspaces.map((path) => resolve(path)));
+  const workspaces = new Set(await Promise.all(options.allowedWorkspaces.map((path) => realpath(path))));
   if (options.sessions.length > limits.maxFiles) reasons.add("file-limit");
   const sessions = options.sessions
     .slice(0, limits.maxFiles)
@@ -565,7 +570,8 @@ export async function searchWebTranscripts(
       reasons.add("time-limit");
       break;
     }
-    if (!workspaces.has(resolve(session.cwd))) {
+    const authorizedWorkspace = isAbsolute(session.cwd) ? await realpath(session.cwd).catch(() => undefined) : undefined;
+    if (!authorizedWorkspace || !workspaces.has(authorizedWorkspace)) {
       skippedFiles++;
       reasons.add("unauthorized-session");
       continue;
@@ -605,6 +611,7 @@ export async function searchWebTranscripts(
       session,
       canonicalPath,
       info,
+      authorizedWorkspace,
       tokens,
       remainingBytes,
       limits,
