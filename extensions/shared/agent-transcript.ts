@@ -399,13 +399,21 @@ function findResult(
 ) {
   const indices = pairing.resultsById.get(toolId);
   if (!indices) return undefined;
-  // Ascending by construction, so the first entry past the call is the match.
-  for (const index of indices) {
-    if (index <= callIndex) continue;
-    const candidate = transcript[index];
-    return candidate?.kind === "toolResult" ? candidate : undefined;
+  // Ascending by construction, so binary search the first entry past the call.
+  // Reused ids can have many results; bound each lookup to O(log results).
+  // Distinct ids (including parallel calls) already have constant-size indices,
+  // so this does not claim a speedup for that common case.
+  let low = 0;
+  let high = indices.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    if (indices[middle]! <= callIndex) low = middle + 1;
+    else high = middle;
   }
-  return undefined;
+  const index = indices[low];
+  if (index === undefined) return undefined;
+  const candidate = transcript[index];
+  return candidate?.kind === "toolResult" ? candidate : undefined;
 }
 
 /**

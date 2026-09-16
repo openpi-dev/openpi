@@ -17,6 +17,7 @@ import type {
   ExtensionContext,
   AgentSession,
 } from "@earendil-works/pi-coding-agent";
+import { createSyntheticSourceInfo } from "@earendil-works/pi-coding-agent";
 import subagents from "../../../extensions/subagents/index.ts";
 import { SpawnError } from "../../../extensions/subagents/src/domain.ts";
 import { makePiBackend } from "../../../extensions/subagents/src/backends/pi.ts";
@@ -114,6 +115,14 @@ for (const interrupted of [true, false]) {
       registerMessageRenderer() {},
       registerEntryRenderer() {},
       getActiveTools: () => ["read"],
+      getAllTools: () => [
+        {
+          name: "read",
+          sourceInfo: createSyntheticSourceInfo("<builtin:read>", {
+            source: "builtin",
+          }),
+        },
+      ],
       setActiveTools() {},
       getThinkingLevel: () => "off",
     } as unknown as ExtensionAPI;

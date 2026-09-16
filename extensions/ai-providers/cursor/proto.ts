@@ -17,6 +17,7 @@ export interface AgentClientMessage extends ProtoMessage {
     | { case: "execClientMessage"; value: ExecClientMessage }
     | { case: "execClientControlMessage"; value: ExecClientControlMessage }
     | { case: "kvClientMessage"; value: KvClientMessage }
+    | { case: "interactionResponse"; value: InteractionResponse }
     | { case: "clientHeartbeat"; value: ClientHeartbeat };
 }
 
@@ -49,6 +50,12 @@ export const AgentClientMessageSchema: MessageCodec<AgentClientMessage> =
           name: "kvClientMessage",
           kind: "message",
           T: () => KvClientMessageSchema,
+        },
+        {
+          no: 6,
+          name: "interactionResponse",
+          kind: "message",
+          T: () => InteractionResponseSchema,
         },
         {
           no: 7,
@@ -903,10 +910,66 @@ export const AgentServerMessageSchema: MessageCodec<AgentServerMessage> =
   ]);
 
 /**
- * Queries require an interactive client answer. This provider has no UI or
- * tool execution channel, so it recognizes the envelope and fails the turn
- * explicitly instead of silently dropping a server request.
+ * Queries require a client answer. Only WebFetch rejection is supported;
+ * other queries still fail explicitly rather than silently hanging the Run.
+ * Response fields come from oh-my-pi@856d9375,
+ * packages/ai/src/providers/cursor/proto/agent.proto (MIT).
  */
+export interface WebFetchRequestRejected extends ProtoMessage {
+  reason: string;
+}
+
+export const WebFetchRequestRejectedSchema: MessageCodec<WebFetchRequestRejected> =
+  pb<WebFetchRequestRejected>("agent.v1.WebFetchRequestResponse_Rejected", [
+    { no: 1, name: "reason", kind: "string" },
+  ]);
+
+export interface WebFetchRequestResponse extends ProtoMessage {
+  result:
+    | { case: undefined; value?: undefined }
+    | { case: "rejected"; value: WebFetchRequestRejected };
+}
+
+export const WebFetchRequestResponseSchema: MessageCodec<WebFetchRequestResponse> =
+  pb<WebFetchRequestResponse>("agent.v1.WebFetchRequestResponse", [
+    {
+      kind: "oneof",
+      name: "result",
+      variants: [
+        {
+          no: 2,
+          name: "rejected",
+          kind: "message",
+          T: () => WebFetchRequestRejectedSchema,
+        },
+      ],
+    },
+  ]);
+
+export interface InteractionResponse extends ProtoMessage {
+  id: number;
+  result:
+    | { case: undefined; value?: undefined }
+    | { case: "webFetchRequestResponse"; value: WebFetchRequestResponse };
+}
+
+export const InteractionResponseSchema: MessageCodec<InteractionResponse> =
+  pb<InteractionResponse>("agent.v1.InteractionResponse", [
+    { no: 1, name: "id", kind: "uint32" },
+    {
+      kind: "oneof",
+      name: "result",
+      variants: [
+        {
+          no: 9,
+          name: "webFetchRequestResponse",
+          kind: "message",
+          T: () => WebFetchRequestResponseSchema,
+        },
+      ],
+    },
+  ]);
+
 export interface InteractionQuery extends ProtoMessage {
   id: number;
   query:

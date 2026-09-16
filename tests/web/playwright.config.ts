@@ -19,7 +19,10 @@ process.env.OPENPI_WEB_E2E_TOKEN = token;
 
 export default defineConfig({
   testDir: repositoryRoot,
-  testMatch: "tests/web/openpi-web.e2e.ts",
+  testMatch: [
+    "tests/web/openpi-web.e2e.ts",
+    "tests/web/artifact-evidence.e2e.ts",
+  ],
   outputDir: outputDirectory,
   fullyParallel: false,
   workers: 1,

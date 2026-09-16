@@ -101,9 +101,11 @@ export function parseCronCommand(raw: string): ParsedCronCommand {
   };
 }
 
-/** Jobs whose next run is at or before `now`. */
+/** Oldest due jobs first, so bounded batches cannot starve pending jobs. */
 export function dueJobs(jobs: readonly CronJob[], now: number) {
-  return jobs.filter((job) => job.nextRunAt <= now);
+  return jobs
+    .filter((job) => job.nextRunAt <= now)
+    .sort((a, b) => a.nextRunAt - b.nextRunAt);
 }
 
 /** Advance only jobs whose prompt was successfully queued for delivery. */

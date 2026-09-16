@@ -43,4 +43,12 @@ export class TranscriptViewport {
   linesBelow(rowCount: number, viewportSize: number) {
     return maxScrollTop(rowCount, viewportSize) - this.scrollTop;
   }
+
+  /**
+   * Rows scrolled off the top. Following the end still hides everything above
+   * the viewport, so a reader needs this to know unseen output exists.
+   */
+  linesAbove(rowCount: number, viewportSize: number) {
+    return Math.min(this.scrollTop, maxScrollTop(rowCount, viewportSize));
+  }
 }

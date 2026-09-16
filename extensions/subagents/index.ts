@@ -60,8 +60,8 @@ import {
   inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
-import { formatContextUtilization } from "../shared/context-utilization.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
+import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
   registerEditorLayer,
   removeEditorLayer,
@@ -145,8 +145,8 @@ import { createSubagentResultDelivery } from "./src/result-delivery.ts";
 import {
   createSubagentRuntime,
   runTool,
-  SubagentToolInterruptedError,
   type SubagentRuntime,
+  SubagentToolInterruptedError,
 } from "./src/runtime.ts";
 import { openSubagentPicker, openSubagentTakeover } from "./src/ui/takeover.ts";
 import {
@@ -687,6 +687,15 @@ export default function (
   };
 
   const deliverBtwResult = (snap: SubagentSnapshot) => {
+    const isAborted = snap.outcome === "interrupted";
+    const output = (snap.structuredResult?.json ?? snap.finalText)?.trim();
+    if (snap.status === "error" && (!output || isAborted)) {
+      if (!isAborted) {
+        ui?.notify(`by the way “${snap.title}” failed`, "error");
+      }
+      return;
+    }
+
     // appendEntry is a synchronous SessionManager operation and emits an
     // entry_appended event, so it is safe while the parent is streaming and
     // never enters the model's context or follow-up queue.
@@ -940,6 +949,10 @@ export default function (
       const childTools = inheritedChildToolAllowlist(
         pi.getActiveTools(),
         requestedChildTools,
+        {
+          availableTools: pi.getAllTools(),
+          cwd: ctx.cwd,
+        },
       );
       // Read at spawn time so `/openpi-setup` changes affect the next child
       // without reloading this extension. Undefined preserves parent-model

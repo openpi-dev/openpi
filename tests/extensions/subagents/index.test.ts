@@ -18,6 +18,18 @@ import subagents, {
 } from "../../../extensions/subagents/index.ts";
 import { projectResult } from "../../../extensions/subagents/src/result-artifact.ts";
 
+import {
+  type AgentSession,
+  createAgentSession,
+  DefaultResourceLoader,
+  SessionManager,
+  SettingsManager,
+} from "@earendil-works/pi-coding-agent";
+import { shutdownAndDisposeChildSession } from "../../../extensions/shared/child-session.ts";
+import { makePiBackend } from "../../../extensions/subagents/src/backends/pi.ts";
+import { __setSubagentTestBackends } from "../../../extensions/subagents/src/runtime.ts";
+import { createPiAgentSessionHarness } from "../../support/pi-agent-session-harness.ts";
+
 initTheme("dark", false);
 
 const emptySessionManager = { getBranch: () => [] };
@@ -1008,5 +1020,148 @@ test("session_start re-registers agent types for its cwd and live trust decision
         ),
       /agent type "inherited-tools" would be narrowed to capabilities that contradict its unchanged prompt/,
     );
+  });
+});
+
+test("ordinary and typed Direct spawns inherit real single-file package provenance", async () => {
+  await withTempDir(async (cwd) => {
+    const agentDir = process.env.PI_CODING_AGENT_DIR!;
+    const packageDir = path.join(agentDir, "local-package-checkout");
+    const source = path.join(packageDir, "extensions", "intercom.ts");
+    await mkdir(path.dirname(source), { recursive: true });
+    await writeFile(
+      path.join(packageDir, "package.json"),
+      JSON.stringify({ name: "pi-intercom", version: "0.0.0" }),
+    );
+    await writeFile(
+      source,
+      `export default function (pi) {
+      pi.registerTool({ name: "intercom", label: "fixture", description: "fixture",
+        parameters: { type: "object", properties: {} },
+        async execute() { return { content: [{ type: "text", text: "ok" }] }; }
+      });
+    }`,
+    );
+    await writeFile(
+      path.join(agentDir, "settings.json"),
+      JSON.stringify({ packages: [source] }),
+    );
+    const settingsManager = SettingsManager.create(cwd, agentDir);
+    const loader = new DefaultResourceLoader({
+      cwd,
+      agentDir,
+      settingsManager,
+    });
+    await loader.reload();
+    const { session: parent } = await createAgentSession({
+      cwd,
+      agentDir,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(cwd),
+    });
+    const model = {
+      provider: "fixture",
+      id: "model",
+      name: "fixture",
+      api: "openai-completions",
+      baseUrl: "http://127.0.0.1:1",
+      reasoning: false,
+      input: ["text"],
+      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+      contextWindow: 8192,
+      maxTokens: 100,
+    } as NonNullable<AgentSession["model"]>;
+    let prompts = 0;
+    __setSubagentTestBackends([
+      makePiBackend({
+        sessionFactory: async (options) => {
+          assert.deepEqual(options?.tools, ["read"]);
+          assert.equal(
+            options?.resourceLoader
+              ?.getExtensions()
+              .extensions.some((extension) => extension.tools.has("intercom")),
+            false,
+          );
+          const harness = createPiAgentSessionHarness({
+            model,
+            activeTools: ["read"],
+            prompt: async (_text, child) => {
+              prompts++;
+              child.emitAssistant("intercom boundary verified");
+            },
+          });
+          return { session: harness.session };
+        },
+      }),
+    ]);
+    const tools = new Map<
+      string,
+      { execute: (...args: unknown[]) => Promise<unknown> }
+    >();
+    const hooks = new Map<string, (...args: unknown[]) => unknown>();
+    const pi = {
+      events: { on() {}, emit() {} },
+      on(name: string, handler: (...args: unknown[]) => unknown) {
+        hooks.set(name, handler);
+      },
+      registerTool(tool: {
+        name: string;
+        execute: (...args: unknown[]) => Promise<unknown>;
+      }) {
+        tools.set(tool.name, tool);
+      },
+      registerCommand() {},
+      registerMessageRenderer() {},
+      registerEntryRenderer() {},
+      appendEntry() {},
+      sendMessage() {},
+      setActiveTools() {},
+      getActiveTools: () => parent.getActiveToolNames(),
+      getAllTools: () => parent.getAllTools(),
+      getThinkingLevel: () => "off",
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      cwd,
+      hasUI: false,
+      isProjectTrusted: () => false,
+      model,
+      getContextUsage: () => undefined,
+      modelRegistry: { find: () => model, getAll: () => [model] },
+    } as unknown as ExtensionContext;
+    try {
+      await parent.bindExtensions({ mode: "print" });
+      parent.setActiveToolsByName(["read", "intercom"]);
+      subagents(pi);
+      for (const agent_type of [undefined, "advisor"]) {
+        const spawned = (await tools.get("subagent_spawn")!.execute(
+          "spawn",
+          {
+            prompt: "inspect",
+            name: agent_type ?? "ordinary",
+            ...(agent_type ? { agent_type } : {}),
+          },
+          undefined,
+          undefined,
+          ctx,
+        )) as { details: { id: string } };
+        const waited = await tools
+          .get("subagent_wait")!
+          .execute(
+            "wait",
+            { ids: [spawned.details.id] },
+            undefined,
+            undefined,
+            ctx,
+          );
+        assert.match(JSON.stringify(waited), /intercom boundary verified/);
+        assert.deepEqual(parent.getActiveToolNames(), ["read", "intercom"]);
+      }
+      assert.equal(prompts, 2);
+    } finally {
+      await hooks.get("session_shutdown")?.({}, ctx);
+      __setSubagentTestBackends(undefined);
+      await shutdownAndDisposeChildSession(parent);
+    }
   });
 });
