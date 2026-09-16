@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
   lstat,
   mkdir,
   mkdtemp,
@@ -8,7 +8,9 @@ import {
   rm,
   symlink,
   utimes,
+  writeFile,
 } from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -98,6 +100,99 @@ test("stages with server-owned paths and consumes once for the exact binding", a
       status: "settled",
       outcome: "consumed",
     });
+  } finally {
+    await value.cleanup();
+  }
+});
+
+test("rejects same-length changed bytes and substitution at open", async (t) => {
+  for (const race of [false, true]) {
+    const value = await fixture();
+    try {
+      const batch = await value.store.stage(binding, [
+        { name: "safe", mime: "text/plain", bytes: Buffer.from("safe") },
+      ]);
+      const directory = (await readdir(value.parent)).find(
+        (name) => !name.endsWith(".owner"),
+      )!;
+      const batchPath = join(value.parent, directory, batch.id);
+      const payload = join(batchPath, (await readdir(batchPath))[0]!);
+      if (race) {
+        const originalOpen = fs.open;
+        t.mock.method(
+          fs,
+          "open",
+          async (...args: Parameters<typeof fs.open>) => {
+            await writeFile(payload, "evil");
+            return originalOpen(...args);
+          },
+        );
+        syncBuiltinESMExports();
+      } else await writeFile(payload, "evil");
+      assert.equal(
+        (await value.store.consume(batch.id, binding)).status,
+        "failed",
+      );
+    } finally {
+      t.mock.restoreAll();
+      syncBuiltinESMExports();
+      await value.cleanup();
+    }
+  }
+});
+
+test("discard remains retryable after cleanup failure", async (t) => {
+  const value = await fixture();
+  try {
+    const batch = await value.store.stage(binding, [
+      { name: "safe", mime: "text/plain", bytes: Buffer.from("safe") },
+    ]);
+    const directory = (await readdir(value.parent)).find(
+      (name) => !name.endsWith(".owner"),
+    )!;
+    const batchPath = join(value.parent, directory, batch.id);
+    const originalRm = fs.rm;
+    let fail = true;
+    t.mock.method(fs, "rm", async (...args: Parameters<typeof fs.rm>) => {
+      if (fail) {
+        fail = false;
+        throw new Error("injected cleanup failure");
+      }
+      return originalRm(...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(
+      value.store.discard(batch.id, binding),
+      /cleanup failure/,
+    );
+    assert.ok((await lstat(batchPath)).isDirectory());
+    assert.deepEqual(await value.store.discard(batch.id, binding), {
+      status: "discarded",
+    });
+    await assert.rejects(lstat(batchPath), { code: "ENOENT" });
+    assert.deepEqual(await value.store.discard(batch.id, binding), {
+      status: "settled",
+      outcome: "discarded",
+    });
+  } finally {
+    t.mock.restoreAll();
+    syncBuiltinESMExports();
+    await value.cleanup();
+  }
+});
+
+test("workspace aliases share canonical attachment ownership", async () => {
+  const value = await fixture();
+  try {
+    const alias = join(value.parent, "workspace-alias");
+    await symlink(binding.workspace, alias);
+    const batch = await value.store.stage({ ...binding, workspace: alias }, [
+      { name: "safe", mime: "text/plain", bytes: Buffer.from("safe") },
+    ]);
+    assert.equal(
+      (await value.store.consume(batch.id, binding)).status,
+      "consumed",
+    );
   } finally {
     await value.cleanup();
   }

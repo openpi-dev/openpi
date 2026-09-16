@@ -1,4 +1,5 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { constants } from "node:fs";
 import {
   chmod,
   lstat,
@@ -95,6 +96,7 @@ interface StoredAttachment {
   readonly name: string;
   readonly mime: string;
   readonly size: number;
+  readonly digest: string;
 }
 
 interface StagingRecord {
@@ -159,6 +161,11 @@ function validateBinding(binding: WebAttachmentBinding) {
       "attachment binding must identify an absolute workspace and bounded Session and command ids",
     );
   }
+}
+
+async function canonicalBinding(binding: WebAttachmentBinding) {
+  validateBinding(binding);
+  return { ...binding, workspace: await realpath(binding.workspace) };
 }
 
 function sameBinding(
@@ -265,7 +272,7 @@ export class WebAttachmentStagingStore {
     }
     return this.exclusive(async () => {
       this.assertOpen();
-      validateBinding(binding);
+      binding = await canonicalBinding(binding);
       const activeBatchCount = [...this.records.values()].filter(
         (record) => record.status === "staged",
       ).length;
@@ -290,9 +297,11 @@ export class WebAttachmentStagingStore {
       try {
         for (const [index, payload] of payloads.entries()) {
           const path = join(directory, `${index}-${randomUUID()}.payload`);
+          const bytes = Buffer.from(payload.bytes);
+          const digest = createHash("sha256").update(bytes).digest("hex");
           const handle = await open(path, "wx", 0o600);
           try {
-            await handle.writeFile(payload.bytes);
+            await handle.writeFile(bytes);
           } finally {
             await handle.close();
           }
@@ -300,7 +309,8 @@ export class WebAttachmentStagingStore {
             path,
             name: payload.name,
             mime: payload.mime,
-            size: payload.bytes.byteLength,
+            size: bytes.byteLength,
+            digest,
           });
         }
       } catch (error) {
@@ -324,7 +334,7 @@ export class WebAttachmentStagingStore {
   consume(id: string, binding: WebAttachmentBinding) {
     return this.exclusive(async (): Promise<WebAttachmentConsumeReceipt> => {
       this.assertOpen();
-      validateBinding(binding);
+      binding = await canonicalBinding(binding);
       const record = this.records.get(id);
       if (!record) return { status: "missing" };
       if (!sameBinding(record.binding, binding)) return { status: "stale" };
@@ -350,9 +360,26 @@ export class WebAttachmentStagingStore {
           ) {
             throw new Error("invalid staged attachment");
           }
-          const bytes = await readFile(canonicalPath);
-          if (bytes.byteLength !== attachment.size) {
-            throw new Error("staged attachment changed while reading");
+          const handle = await open(canonicalPath, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+          let bytes: Buffer;
+          try {
+            const opened = await handle.stat();
+            if (!opened.isFile() || opened.dev !== fileStat.dev || opened.ino !== fileStat.ino || opened.size !== attachment.size) {
+              throw new Error("staged attachment replaced before reading");
+            }
+            bytes = Buffer.alloc(attachment.size);
+            let offset = 0;
+            while (offset < bytes.length) {
+              const { bytesRead } = await handle.read(bytes, offset, bytes.length - offset, offset);
+              if (bytesRead === 0) throw new Error("staged attachment truncated");
+              offset += bytesRead;
+            }
+            const after = await handle.stat();
+            if (after.size !== attachment.size || createHash("sha256").update(bytes).digest("hex") !== attachment.digest) {
+              throw new Error("staged attachment changed while reading");
+            }
+          } finally {
+            await handle.close();
           }
           attachments.push({
             name: attachment.name,
@@ -382,14 +409,14 @@ export class WebAttachmentStagingStore {
   discard(id: string, binding: WebAttachmentBinding) {
     return this.exclusive(async (): Promise<WebAttachmentDiscardReceipt> => {
       this.assertOpen();
-      validateBinding(binding);
+      binding = await canonicalBinding(binding);
       const record = this.records.get(id);
       if (!record) return { status: "missing" };
       if (!sameBinding(record.binding, binding)) return { status: "stale" };
       if (record.status !== "staged") return settledReceipt(record);
+      await this.cleanupRecord(record);
       record.status = "discarded";
       record.settledAt = Date.now();
-      await this.cleanupRecord(record);
       this.trimSettledReceipts();
       return { status: "discarded" };
     });
