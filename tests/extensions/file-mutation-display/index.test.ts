@@ -18,12 +18,14 @@ import {
   SessionManager,
   SettingsManager,
   ToolExecutionComponent,
+  type ExtensionAPI,
   type ExtensionContext,
   type Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { TUI } from "@earendil-works/pi-tui";
 import fileMutationDisplay from "../../../extensions/file-mutation-display/index.ts";
 import { withActivityRenderer } from "../../../extensions/file-mutation-display/render.ts";
+import { WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL } from "../../../extensions/shared/tool-confirmation.ts";
 
 initTheme("dark", false);
 
@@ -32,6 +34,7 @@ async function withSession(
     session: Awaited<ReturnType<typeof createAgentSession>>["session"],
     cwd: string,
   ) => Promise<void>,
+  extraFactories: Array<(pi: ExtensionAPI) => void> = [],
 ) {
   const cwd = await mkdtemp(path.join(tmpdir(), "pi-file-mutation-display-"));
   const agentDir = path.join(cwd, "agent");
@@ -43,7 +46,7 @@ async function withSession(
     cwd,
     agentDir,
     settingsManager,
-    extensionFactories: [fileMutationDisplay],
+    extensionFactories: [fileMutationDisplay, ...extraFactories],
   });
   await loader.reload();
   const { session } = await createAgentSession({
@@ -221,4 +224,63 @@ test("real ToolExecutionComponent toggles between one activity row and native ev
 
   component.setExpanded(false);
   assert.equal(nonEmpty().length, 1);
+});
+
+test("cleanup confirmation event refreshes only its session's Bash row", async () => {
+  let emitConfirmation: (event: unknown) => void = () => {
+    assert.fail("event probe not registered");
+  };
+  await withSession(
+    async (session, cwd) => {
+      const definition = session.getToolDefinition("bash");
+      assert.ok(definition);
+      let renders = 0;
+      const ui = {
+        requestRender() {
+          renders += 1;
+        },
+      } as unknown as TUI;
+      const component = new ToolExecutionComponent(
+        "bash",
+        "guarded-bash",
+        { command: "rm keep.txt" },
+        { showImages: false },
+        definition,
+        ui,
+        cwd,
+      );
+      component.markExecutionStarted();
+      component.setArgsComplete();
+      const row = () =>
+        component.render(80).map(stripVTControlCharacters).join("\n");
+      assert.match(row(), /Running\s+rm keep\.txt/);
+
+      const event = { toolCallId: "guarded-bash", waiting: true };
+      emitConfirmation({ ...event, sessionId: "another-session" });
+      assert.match(row(), /Running\s+rm keep\.txt/);
+      const beforeWaiting = renders;
+      emitConfirmation({ ...event, sessionId: session.sessionId });
+      assert.ok(renders > beforeWaiting);
+      assert.match(row(), /Awaiting approval rm keep\.txt/);
+      assert.doesNotMatch(row(), /Running|\d+s/);
+
+      emitConfirmation({
+        ...event,
+        sessionId: session.sessionId,
+        waiting: false,
+      });
+      assert.match(row(), /Running\s+rm keep\.txt/);
+      component.updateResult({
+        content: [{ type: "text", text: "deleted" }],
+        isError: false,
+      });
+      assert.match(row(), /Ran\s+rm keep\.txt/);
+    },
+    [
+      (pi) => {
+        emitConfirmation = (event) =>
+          pi.events.emit(WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL, event);
+      },
+    ],
+  );
 });

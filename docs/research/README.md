@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`ISSUE_544_CLEANUP_CONFIRMATION_UI_2026-09-17.md`](ISSUE_544_CLEANUP_CONFIRMATION_UI_2026-09-17.md) — Pi tool-start timing versus cleanup confirmation and the bounded TUI status repair ([#544](https://github.com/openpi-dev/openpi/issues/544)).
+
 - [`OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md`](OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #306](https://github.com/openpi-dev/openpi/pull/306)).
 - [`OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md`](OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #307](https://github.com/openpi-dev/openpi/pull/307)).
 - [`CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md`](CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #308](https://github.com/openpi-dev/openpi/pull/308)).
