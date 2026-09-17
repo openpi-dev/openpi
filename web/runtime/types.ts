@@ -107,6 +107,7 @@ export interface WebRuntimeController {
   readonly sessionDirectory: string;
   readonly sessionManager: SessionManager;
   isSessionOwned(sessionId: string, sessionPath?: string): boolean;
+  runControllerMutation?<T>(operation: () => Promise<T>): Promise<T>;
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;

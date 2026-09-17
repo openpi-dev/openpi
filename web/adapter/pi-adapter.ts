@@ -303,6 +303,10 @@ export class PiWebAdapter {
   }
 
   async deleteSession(path: string) {
+    const mutate =
+      this.runtime.runControllerMutation?.bind(this.runtime) ??
+      (async <T>(operation: () => Promise<T>) => operation());
+    return mutate(async () => {
     await this.ensureWorkspaceStateLoaded();
     await this.ensureArchivesLoaded();
     const session = await this.requireSession(path);
@@ -331,6 +335,7 @@ export class PiWebAdapter {
       draft.ungroupedSessions.delete(canonical);
     });
     return canonical;
+    });
   }
 
   async removeWorkspace(path: string) {

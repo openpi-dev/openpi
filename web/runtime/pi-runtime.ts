@@ -702,6 +702,10 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
+  runControllerMutation<T>(operation: () => Promise<T>) {
+    return this.serializeControllerMutation(operation);
+  }
+
   isSessionOwned(sessionId: string, sessionPath?: string) {
     const runtimes = new Set([
       this.runtime,
