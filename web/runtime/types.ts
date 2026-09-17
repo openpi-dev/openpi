@@ -5,6 +5,7 @@ import type {
   WebModelSummary,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
+import type { WebCleanupConfirmationRequest, WebConfirmationReceipt } from "./confirmation.ts";
 
 export type WebProviderAuthSource =
   | "stored"
@@ -65,6 +66,7 @@ export class WebRuntimeRequestError extends Error {
 export interface WebPromptOptions {
   commandId?: string;
   expectedSessionId?: string;
+  confirmationControllerAvailable?: boolean;
 }
 
 export interface WebPromptAdmissionReceipt {
@@ -126,6 +128,11 @@ export interface WebRuntimeController {
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;
+  getPendingConfirmations?(): readonly WebCleanupConfirmationRequest[];
+  answerConfirmation?(
+    target: WebActiveTurn & { workspace: string; requestId: string },
+    approved: boolean,
+  ): WebConfirmationReceipt;
   sendPrompt(
     content: string,
     options?: WebPromptOptions,

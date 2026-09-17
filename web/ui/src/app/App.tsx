@@ -1,4 +1,5 @@
 import { Menu, PanelLeftOpen, X } from "lucide-react";
+import { Dialog } from "@astryxdesign/core/Dialog";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
@@ -12,6 +13,8 @@ import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
 import { webStore } from "../store/web-store.ts";
+import { WebClient } from "../protocol/client.ts";
+import type { WebCleanupConfirmationRequest } from "../../../runtime/confirmation.ts";
 
 export function App() {
   const state = useStore(webStore);
@@ -35,6 +38,79 @@ export function App() {
   }, [actions]);
   const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
+  const [confirmation, setConfirmation] =
+    useState<WebCleanupConfirmationRequest | null>(null);
+  const [answering, setAnswering] = useState(false);
+  const [confirmationNotice, setConfirmationNotice] = useState<string | null>(
+    null,
+  );
+  const [confirmationClient] = useState(() => new WebClient());
+  const activeTurn = state.activeTurn;
+  const confirmationWorkspace = state.snapshot?.selectedSession?.cwd;
+  // A payload-free confirmation event refreshes the snapshot before this private read.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: the snapshot revision intentionally triggers the authenticated read.
+  useEffect(() => {
+    if (
+      !activeTurn ||
+      state.connection !== "connected" ||
+      state.sessionSwitching
+    ) {
+      setConfirmation(null);
+      return;
+    }
+    let cancelled = false;
+    void confirmationClient
+      .pendingConfirmations()
+      .then(({ pending }) => {
+        if (cancelled) return;
+        setConfirmation(
+          pending.find(
+            (item) =>
+              item.sessionId === activeTurn.sessionId &&
+              item.commandId === activeTurn.commandId &&
+              item.epoch === activeTurn.epoch &&
+              item.workspace === confirmationWorkspace &&
+              item.expiresAt > Date.now(),
+          ) ?? null,
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setConfirmation(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    confirmationClient,
+    activeTurn?.sessionId,
+    activeTurn?.commandId,
+    activeTurn?.epoch,
+    confirmationWorkspace,
+    state.snapshot?.cursor,
+    state.connection,
+    state.sessionSwitching,
+  ]);
+
+  const answerConfirmation = async (approved: boolean) => {
+    if (!confirmation || answering) return;
+    setAnswering(true);
+    try {
+      const receipt = await confirmationClient.answerConfirmation(
+        confirmation,
+        approved,
+      );
+      setConfirmationNotice(
+        receipt.state === "approved"
+          ? t("confirmationApproved")
+          : t("confirmationDenied"),
+      );
+    } catch {
+      setConfirmationNotice(t("confirmationStale"));
+    } finally {
+      setConfirmation(null);
+      setAnswering(false);
+    }
+  };
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
   const inspect = (terminalId?: string) => {
@@ -230,6 +306,54 @@ export function App() {
           target={inspection}
           onClose={() => setInspection(null)}
         />
+      )}
+      <Dialog
+        isOpen={Boolean(confirmation)}
+        onOpenChange={(open: boolean) => {
+          if (!open) void answerConfirmation(false);
+        }}
+        purpose="form"
+        width={480}
+        aria-label={t("confirmationTitle")}
+      >
+        <div className="openpi-dialog cleanup-confirmation">
+          <strong>{t("confirmationTitle")}</strong>
+          <p>{t("confirmationDescription")}</p>
+          <ul>
+            {confirmation?.paths.map((path) => (
+              <li key={path}>{path}</li>
+            ))}
+          </ul>
+          <div className="dialog-actions">
+            <button
+              type="button"
+              disabled={answering}
+              onClick={() => void answerConfirmation(false)}
+            >
+              {t("deny")}
+            </button>
+            <button
+              type="button"
+              className="danger"
+              disabled={answering}
+              onClick={() => void answerConfirmation(true)}
+            >
+              {t("approveDeletion")}
+            </button>
+          </div>
+        </div>
+      </Dialog>
+      {confirmationNotice && (
+        <div className="notice" role="status">
+          <span>{confirmationNotice}</span>
+          <button
+            type="button"
+            aria-label={t("close")}
+            onClick={() => setConfirmationNotice(null)}
+          >
+            <X />
+          </button>
+        </div>
       )}
       <button
         className="sidebar-scrim"

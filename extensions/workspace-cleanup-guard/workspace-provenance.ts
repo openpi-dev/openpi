@@ -16,7 +16,9 @@ interface BashAttempt {
   id: string;
   command: string;
   cwd: string;
-  confirmDelete: (paths: readonly string[]) => Promise<boolean>;
+  confirmDelete: (
+    paths: readonly string[],
+  ) => Promise<boolean | "approved" | "denied" | "unavailable">;
 }
 
 interface WriteAttempt {
@@ -516,14 +518,18 @@ export function createWorkspaceCleanupGuard() {
         removals.push(contained.absolute);
       }
 
-      if (
-        protectedPaths.length > 0 &&
-        !(await attempt.confirmDelete(protectedPaths))
-      ) {
+      const confirmation =
+        protectedPaths.length > 0
+          ? await attempt.confirmDelete(protectedPaths)
+          : true;
+      if (confirmation !== true && confirmation !== "approved") {
         return {
           kind: "block" as const,
           protectedPaths,
-          reason: `Blocked cleanup: ${protectedPaths.join(", ")} existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.`,
+          reason:
+            confirmation === "unavailable"
+              ? `Blocked cleanup: native confirmation is unavailable for ${protectedPaths.join(", ")}. The deletion was not approved; retry in an interactive Pi session or reconnect the controlling Web tab and retry the command.`
+              : `Blocked cleanup: ${protectedPaths.join(", ")} existed before this agent changed it and is not proven session-created scratch. Retry the cleanup without that path, or obtain explicit user confirmation to delete it.`,
         };
       }
 

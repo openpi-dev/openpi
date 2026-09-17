@@ -54,6 +54,8 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { registerWebCleanupConfirmation } from "../../extensions/shared/web-cleanup-confirmation.ts";
+import { WebCleanupConfirmations } from "./confirmation.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -77,6 +79,7 @@ type PromptTrace = {
   startedAt: number;
   started: boolean;
   queued: boolean;
+  confirmationControllerAvailable: boolean;
   userMessageObserved: boolean;
   epoch?: number;
   outcome?: "completed" | "cancelled" | "failed" | "uncertain";
@@ -120,6 +123,10 @@ export class PiWebRuntime implements WebRuntimeController {
   private runtime: AgentSessionRuntime;
   private unsubscribeSession?: () => void;
   private readonly listeners = new Set<(event: WebRuntimeEvent) => void>();
+  private readonly cleanupConfirmations = new WebCleanupConfirmations(() =>
+    this.emit("confirmation_changed"),
+  );
+  private readonly cleanupConfirmationRegistrations = new Map<AgentSessionRuntime, () => void>();
   private readonly retainedRuntimes = new Set<AgentSessionRuntime>();
   private readonly retainedSubscriptions = new Map<AgentSessionRuntime, () => void>();
   private readonly inFlightRuntimes = new Map<AgentSessionRuntime, number>();
@@ -270,6 +277,25 @@ export class PiWebRuntime implements WebRuntimeController {
 
   getActiveTurn() {
     return this.activeTurnFromTrace(this.activePromptTrace);
+  }
+
+  getPendingConfirmations() {
+    return this.cleanupConfirmations.list();
+  }
+
+  answerConfirmation(
+    target: WebActiveTurn & { workspace: string; requestId: string },
+    approved: boolean,
+  ) {
+    const active = this.getActiveTurn();
+    if (
+      this.disposed || !this.hasSelectedWorkspace ||
+      target.workspace !== this.cwd ||
+      target.sessionId !== this.sessionManager.getSessionId() ||
+      active?.commandId !== target.commandId ||
+      active.epoch !== target.epoch
+    ) return "stale" as const;
+    return this.cleanupConfirmations.respond(target, approved);
   }
 
   cancelTurn(options: WebTurnCancellationOptions) {
@@ -671,6 +697,7 @@ export class PiWebRuntime implements WebRuntimeController {
           startedAt,
           started: false,
           queued: false,
+          confirmationControllerAvailable: options.confirmationControllerAvailable === true,
           userMessageObserved: false,
         }
       : undefined;
@@ -929,6 +956,9 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private async disposeInternal() {
     this.disposed = true;
+    this.cleanupConfirmations.invalidate();
+    for (const unregister of this.cleanupConfirmationRegistrations.values()) unregister();
+    this.cleanupConfirmationRegistrations.clear();
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
     const runtimes = new Set([
@@ -1110,6 +1140,22 @@ export class PiWebRuntime implements WebRuntimeController {
       cwd: runtime.cwd,
     });
     await session.bindExtensions({ mode: "print" });
+    this.cleanupConfirmationRegistrations.get(runtime)?.();
+    this.cleanupConfirmationRegistrations.set(
+      runtime,
+      registerWebCleanupConfirmation(session.sessionManager, (paths, signal) => {
+        const turn = this.getActiveTurn();
+        if (
+          this.disposed || !this.hasSelectedWorkspace ||
+          session !== this.runtime.session || !turn ||
+          !this.activePromptTrace?.confirmationControllerAvailable ||
+          turn.sessionId !== session.sessionManager.getSessionId()
+        ) return Promise.resolve("unavailable");
+        return this.cleanupConfirmations.request(
+          { workspace: runtime.cwd, turn }, paths, signal,
+        );
+      }),
+    );
     traceWeb("extensions_bind_finished", {
       sessionId: session.sessionManager.getSessionId(),
       elapsedMs: elapsed(startedAt),
@@ -1121,6 +1167,7 @@ export class PiWebRuntime implements WebRuntimeController {
     session: AgentSession,
   ) {
     this.assertActiveRuntime(runtime);
+    this.cleanupConfirmations.invalidate();
     const unsubscribe = session.subscribe((event) =>
       this.projectEvent(session, event),
     );
@@ -1131,6 +1178,7 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
+    if (event.type === "agent_settled") this.cleanupConfirmations.invalidate();
     if (event.type === "agent_start" && this.activePromptTrace) {
       this.startPromptTrace(this.activePromptTrace);
     }
@@ -1364,6 +1412,8 @@ export class PiWebRuntime implements WebRuntimeController {
   private disposeAgentRuntime(runtime: AgentSessionRuntime) {
     const existing = this.runtimeDisposalPromises.get(runtime);
     if (existing) return existing;
+    this.cleanupConfirmationRegistrations.get(runtime)?.();
+    this.cleanupConfirmationRegistrations.delete(runtime);
     const disposal = Promise.resolve().then(() => runtime.dispose());
     this.runtimeDisposalPromises.set(runtime, disposal);
     this.runtimeDisposals.add(disposal);

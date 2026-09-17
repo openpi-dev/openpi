@@ -584,6 +584,8 @@ Web 可以在选择工作区之前预选可用模型。选择仅保留在当前�
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 
+Web 的检查面板只读展示当前工作区的 Pi Trust 状态，不在浏览器内变更 Trust。对于 cleanup guard 能准确识别的预存文件删除，发起命令的浏览器标签会收到一次有时限的准确路径确认；批准或拒绝只作用于该 Session、运行轮次及命令请求。其他标签不能答复，刷新同一标签可恢复尚未过期的请求；断线、过期、取消、切换会话或关闭 Host 时不默认批准。普通聊天里说“同意”不是原生确认；若确认界面不可用，guard 会阻止删除并指明使用交互式 Pi 或重新连接后重试。此切片仅覆盖 cleanup guard 的删除确认，不代表任意扩展的 `select`、`input` 或自定义 TUI 界面已支持 Web。
+
 ### 命令速查
 
 | 命令                       | 作用                                           |

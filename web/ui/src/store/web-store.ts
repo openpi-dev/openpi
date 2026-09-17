@@ -16,6 +16,7 @@ const collapsedWorkspacesStorageKey = "openpi.collapsed-workspaces";
 const sidebarCollapsedStorageKey = "openpi.sidebar-collapsed";
 const refreshEventTypes = new Set([
   "agent_start",
+  "confirmation_changed",
   "turn_started",
   "turn_settled",
   "agent_settled",

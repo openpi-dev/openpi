@@ -70,6 +70,7 @@ type PromptAdmissionResponse = {
 type PromptAdmission = {
   readonly sessionId: string;
   readonly content: string;
+  readonly controllerId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
@@ -369,6 +370,7 @@ export class WebHost {
     const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
     if (pathname === "/api/prompt") return false;
     if (pathname === "/api/turns/cancel") return true;
+    if (pathname === "/api/confirmations/answer") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname === "/api/model" ||
@@ -663,11 +665,20 @@ export class WebHost {
           error: "sessionId is required",
         });
       }
+      if (body.controllerId !== undefined &&
+          (typeof body.controllerId !== "string" ||
+            !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(body.controllerId))) {
+        return this.json(response, 400, {
+          code: "INVALID_CONTROLLER",
+          error: "a valid browser controller id is required",
+        });
+      }
       const existing = this.promptAdmissions.get(commandId);
       if (existing) {
         if (
           existing.sessionId !== body.sessionId ||
-          existing.content !== content
+          existing.content !== content ||
+          existing.controllerId !== body.controllerId
         ) {
           return this.json(response, 409, {
             code: "COMMAND_CONFLICT",
@@ -713,9 +724,54 @@ export class WebHost {
         commandId,
         body.sessionId,
         content,
+        body.controllerId as string | undefined,
       );
       const result = await admission.completion;
       return this.json(response, result.status, result.body);
+    }
+    if (url.pathname === "/api/confirmations/pending" && request.method === "GET") {
+      if (!this.runtime.getPendingConfirmations) return this.json(response, 501, { code: "CONFIRMATION_UNAVAILABLE", error: "native confirmation is unavailable" });
+      const controllerId = request.headers["x-openpi-web-controller"];
+      const active = this.runtime.getActiveTurn();
+      const admission = active && this.promptAdmissions.get(active.commandId);
+      const owned = typeof controllerId === "string" &&
+        admission?.sessionId === active?.sessionId &&
+        admission?.controllerId === controllerId;
+      const pending = owned
+        ? this.runtime.getPendingConfirmations().filter((item) =>
+            item.sessionId === active?.sessionId &&
+            item.commandId === active.commandId && item.epoch === active.epoch &&
+            item.workspace === this.runtime.cwd)
+        : [];
+      return this.json(response, 200, { pending });
+    }
+    if (url.pathname === "/api/confirmations/answer" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (
+        typeof body.sessionId !== "string" || body.sessionId.length > 128 ||
+        typeof body.commandId !== "string" || body.commandId.length > 128 ||
+        typeof body.workspace !== "string" || body.workspace.length > 4096 ||
+        typeof body.requestId !== "string" || !/^[0-9a-f-]{36}$/iu.test(body.requestId) ||
+        !Number.isSafeInteger(body.epoch) || (body.epoch as number) <= 0 ||
+        typeof body.approved !== "boolean"
+      ) return this.json(response, 400, { code: "INVALID_CONFIRMATION", error: "an exact confirmation target and decision are required" });
+      const admission = this.promptAdmissions.get(body.commandId);
+      const controllerId = request.headers["x-openpi-web-controller"];
+      if (
+        !admission?.controllerId || typeof controllerId !== "string" ||
+        Buffer.byteLength(controllerId) !== Buffer.byteLength(admission.controllerId) ||
+        !timingSafeEqual(Buffer.from(controllerId), Buffer.from(admission.controllerId))
+      ) return this.json(response, 403, { code: "NOT_CONTROLLER", error: "only the initiating browser can answer this confirmation" });
+      if (admission.sessionId !== body.sessionId || !this.runtime.answerConfirmation)
+        return this.json(response, 409, { state: "stale" });
+      const state = this.runtime.answerConfirmation({
+        sessionId: body.sessionId,
+        commandId: body.commandId,
+        epoch: body.epoch as number,
+        workspace: body.workspace,
+        requestId: body.requestId,
+      }, body.approved);
+      return this.json(response, state === "approved" || state === "denied" ? 200 : 409, { state });
     }
     if (url.pathname === "/api/turns/cancel" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -1178,7 +1234,9 @@ export class WebHost {
   private makePromptAdmissionSpace() {
     while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
       const settled = [...this.promptAdmissions.entries()].find(
-        ([, admission]) => admission.result !== undefined,
+        ([commandId, admission]) =>
+          admission.result !== undefined &&
+          commandId !== this.runtime.getActiveTurn()?.commandId,
       );
       if (!settled) return false;
       this.promptAdmissions.delete(settled[0]);
@@ -1190,11 +1248,13 @@ export class WebHost {
     commandId: string,
     sessionId: string,
     content: string,
+    controllerId?: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
       sessionId,
       content,
+      controllerId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
       }),
@@ -1213,6 +1273,7 @@ export class WebHost {
         this.runtime.sendPrompt(content, {
           commandId,
           expectedSessionId: sessionId,
+          confirmationControllerAvailable: controllerId !== undefined,
         }),
       )
       .then(
