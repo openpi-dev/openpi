@@ -211,7 +211,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     },
   };
   const host = new WebHost({ runtime });
-  const context = await browser.newContext();
+  const context = await browser.newContext({ locale: "zh-CN" });
   const page = await context.newPage();
   try {
     await host.start();
@@ -261,8 +261,11 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBeAttached();
     await page.getByRole("button", { name: "Report", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText("Reviewed content");
+    await expect(page.getByRole("dialog", { name: "文件预览" })).toContainText(
+      "只读访问",
+    );
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download", exact: true }).click();
+    await page.getByRole("button", { name: "下载", exact: true }).click();
     const downloaded = await downloadPromise;
     expect(await readFile((await downloaded.path())!, "utf8")).toContain(
       "Reviewed content",
@@ -279,11 +282,11 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("heading", { name: "Related report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: "刷新", exact: true }).click();
     await expect(
       page.getByRole("heading", { name: "Related report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close preview" }).click();
+    await page.getByRole("button", { name: "关闭预览" }).click();
     const prompt = page.getByRole("textbox", { name: /描述任务|Describe/i });
     await prompt.fill("Update the report");
     await prompt.press("Enter");
@@ -301,7 +304,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBeVisible({ timeout: 8_000 });
     await rm(path);
     await expect(page.getByRole("dialog")).toContainText(
-      "Showing an older preview",
+      "当前显示的是旧版预览",
       { timeout: 8_000 },
     );
     await writer.execute("write-restore", {
@@ -313,11 +316,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("heading", { name: "Restored report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close preview" }).click();
+    await page.getByRole("button", { name: "关闭预览" }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText(
-      "File no longer exists",
-    );
+    await expect(page.getByRole("dialog")).toContainText("文件已不存在");
   } finally {
     await context.close();
     await host.stop();

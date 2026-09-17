@@ -198,7 +198,12 @@ export class WebClient {
         );
       }
       const reader = response.body?.getReader();
-      if (!reader) throw new Error("Download body unavailable");
+      if (!reader)
+        throw new WebApiError(
+          "Download body unavailable",
+          0,
+          "ARTIFACT_DOWNLOAD_BODY",
+        );
       const chunks: Uint8Array<ArrayBuffer>[] = [];
       let total = 0;
       try {
@@ -207,7 +212,11 @@ export class WebClient {
           if (done) break;
           total += value.byteLength;
           if (total > ARTIFACT_MAX_BYTES)
-            throw new Error("Download exceeds the 20 MiB limit");
+            throw new WebApiError(
+              "Download exceeds the 20 MiB limit",
+              0,
+              "ARTIFACT_TOO_LARGE",
+            );
           chunks.push(new Uint8Array(value));
         }
       } finally {

@@ -6,8 +6,9 @@ import {
   useState,
   type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type { ArtifactPreview } from "../../../../protocol/artifacts.ts";
-import { WebClient } from "../../protocol/client.ts";
+import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { ArtifactContext } from "./context.ts";
 
@@ -18,6 +19,7 @@ export function ArtifactProvider({
   sessionId?: string;
   children?: ReactNode;
 }) {
+  const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [request, setRequest] = useState<{
     sessionId?: string;
@@ -25,7 +27,10 @@ export function ArtifactProvider({
     parent?: string;
   } | null>(null);
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<{
+    reason: unknown;
+    fallback: "artifactReadFailed" | "artifactDownloadFailed";
+  } | null>(null);
   const [busy, setBusy] = useState(false);
   const opener = useRef<HTMLElement | null>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
@@ -114,10 +119,7 @@ export function ArtifactProvider({
         }
       } catch (reason) {
         delay = Math.min(delay * 2, 30_000);
-        if (!stopped)
-          setError(
-            reason instanceof Error ? reason.message : "Unable to read file",
-          );
+        if (!stopped) setError({ reason, fallback: "artifactReadFailed" });
       } finally {
         // One outstanding read per open preview. No server watcher survives it.
         if (!stopped) timer = setTimeout(update, delay);
@@ -162,7 +164,7 @@ export function ArtifactProvider({
       }, 1_000);
     } catch (reason) {
       if (!controller.signal.aborted)
-        setError(reason instanceof Error ? reason.message : "Download failed");
+        setError({ reason, fallback: "artifactDownloadFailed" });
     } finally {
       if (!controller.signal.aborted) setBusy(false);
     }
@@ -174,7 +176,7 @@ export function ArtifactProvider({
         <dialog
           open
           className="artifact-panel"
-          aria-label="File preview"
+          aria-label={t("artifactPreview")}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
@@ -183,15 +185,15 @@ export function ArtifactProvider({
           }}
         >
           <header>
-            <h2>File preview</h2>
+            <h2>{t("artifactPreview")}</h2>
             <button ref={closeButton} type="button" onClick={close}>
-              Close preview
+              {t("artifactClosePreview")}
             </button>
           </header>
           <p className="artifact-source">
             {preview?.artifact.path ?? request.reference}
           </p>
-          <p>Read-only access · Session {sessionId}</p>
+          <p>{t("artifactReadOnlySession", { sessionId })}</p>
           <div className="artifact-actions">
             <button
               type="button"
@@ -208,36 +210,40 @@ export function ArtifactProvider({
                 );
               }}
             >
-              Refresh
+              {t("artifactRefresh")}
             </button>
             <button
               type="button"
               disabled={!preview || busy}
               onClick={() => void download()}
             >
-              {busy ? "Downloading…" : "Download"}
+              {busy ? t("artifactDownloading") : t("artifactDownload")}
             </button>
           </div>
           {error && (
             <p role="status" className="evidence-warning">
-              {preview ? "Showing an older preview. " : ""}
-              {error}
+              {preview ? `${t("artifactOlderPreview")} ` : ""}
+              {error.reason instanceof WebApiError && error.reason.code
+                ? t(`artifactError_${error.reason.code}`, {
+                    defaultValue: error.reason.message,
+                  })
+                : error.reason instanceof Error
+                  ? error.reason.message
+                  : t(error.fallback)}
             </p>
           )}
-          {!preview && !error && <p role="status">Reading file…</p>}
+          {!preview && !error && <p role="status">{t("artifactReading")}</p>}
           {preview && (
             <>
               <p className="artifact-revision">
-                Version: <code>{preview.artifact.revision}</code> ·{" "}
-                {preview.artifact.bytes} bytes
+                {t("artifactVersion")}: <code>{preview.artifact.revision}</code>{" "}
+                · {t("artifactBytes", { bytes: preview.artifact.bytes })}
               </p>
               {preview.truncated && (
-                <p className="evidence-warning">
-                  Preview truncated. Download the file for the complete content.
-                </p>
+                <p className="evidence-warning">{t("artifactTruncated")}</p>
               )}
               {preview.text === undefined ? (
-                <p>This file type cannot be previewed. Use Download.</p>
+                <p>{t("artifactUnsupported")}</p>
               ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
                 <ArtifactContext.Provider
                   value={{ open, parent: preview.artifact.handle }}
@@ -245,7 +251,7 @@ export function ArtifactProvider({
                   <Markdown>{preview.text}</Markdown>
                 </ArtifactContext.Provider>
               ) : (
-                <section aria-label="File preview content">
+                <section aria-label={t("artifactPreviewContent")}>
                   <pre>{preview.text}</pre>
                 </section>
               )}
