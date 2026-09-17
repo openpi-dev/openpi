@@ -83,6 +83,7 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   projectSubagentCapability,
+  projectSubagentDetail,
   registerWebCapability,
 } from "../shared/web-observer-registry.ts";
 import {
@@ -575,6 +576,10 @@ export default function (
             ? registerWebCapability(scope, {
                 kind: "subagents",
                 snapshot: () => projectSubagentCapability(manager.view.list()),
+                detail: (id) => {
+                  const agent = manager.view.get(id);
+                  return agent ? projectSubagentDetail(agent) : undefined;
+                },
                 subscribe: (listener) => manager.view.subscribe(listener),
               })
             : undefined;

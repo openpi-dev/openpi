@@ -514,6 +514,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .inspection-section dd { margin: 0; overflow-wrap: anywhere; }
 .inspection-section p { font-size: 13px; line-height: 1.6; }
 .inspection-note, .inspection-updated { color: var(--muted); font-size: 12px; line-height: 1.6; }
+.inspection-tool-output { display: block; white-space: pre-wrap; overflow-wrap: anywhere; }
 .inspection-updated { margin: 20px 0 0; }
 .inspection-warning { color: var(--text); padding: 8px 10px; border-left: 2px solid var(--warning); font-size: 13px; overflow-wrap: anywhere; }
 .provider-status { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; margin: 10px 0; overflow-wrap: anywhere; }

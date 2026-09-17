@@ -971,6 +971,129 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
   }
 });
 
+test("inspects Subagent owner evidence without writable controls", async ({
+  page,
+}, testInfo) => {
+  const sessionId = "subagent-browser-session";
+  const startedAt = Date.parse("2026-09-17T08:00:00Z");
+  const reads: string[] = [];
+  const writes: string[] = [];
+  page.on("request", (request) => {
+    if (request.method() !== "GET")
+      writes.push(new URL(request.url()).pathname);
+  });
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.currentSessionId = sessionId;
+    snapshot.selectedSession = {
+      id: sessionId,
+      path: "/repo/web.jsonl",
+      cwd: "/repo",
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = {
+      status: "idle",
+      capabilities: {
+        subagents: {
+          items: [
+            {
+              id: "child-1",
+              title: "Investigate",
+              status: "error",
+              outcome: "interrupted",
+              createdAt: startedAt,
+              settledAt: startedAt + 1000,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
+      },
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/capabilities/detail?**", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    expect(params.get("kind")).toBe("subagents");
+    expect(params.get("id")).toBe("child-1");
+    expect(params.get("sessionId")).toBe(sessionId);
+    reads.push("child-1");
+    return route.fulfill({
+      json: {
+        sessionId,
+        detail: {
+          kind: "subagents",
+          id: "child-1",
+          title: "Investigate",
+          cwd: "/repo",
+          origin: "model",
+          status: "error",
+          outcome: "interrupted",
+          createdAt: startedAt,
+          settledAt: startedAt + 1000,
+          modelLabel: "example/model",
+          turns: 2,
+          transcriptItems: 10,
+          latestOutput: {
+            text: '<script>alert("text only")</script>',
+            omittedBytes: 42,
+          },
+          errorText: "Cancellation confirmed",
+          liveTools: [
+            { name: "read", done: true, outputPreview: "Last file inspected" },
+          ],
+          toolsOmitted: 2,
+          truncated: true,
+        },
+      },
+    });
+  });
+  await openWorkbench(page);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await page.getByRole("button", { name: /Investigate/u }).click();
+    const dialog = page.getByRole("dialog", { name: "子代理详情" });
+    await expect(dialog).toContainText("已中断");
+    await expect(dialog).toContainText("Cancellation confirmed");
+    await expect(dialog).toContainText("Last file inspected");
+    await expect(dialog).toContainText("省略前面 2 个工具");
+    await expect(dialog).toContainText("此输出视图省略了 42 字节");
+    await expect(dialog.locator("script")).toHaveCount(0);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`subagent-${width}.png`),
+      fullPage: true,
+    });
+    await dialog.locator(".inspection-panel").evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+    });
+    await expect(dialog.getByText("此输出视图省略了 42 字节。")).toBeVisible();
+    await dialog.getByRole("button", { name: "刷新状态" }).click();
+    await expect.poll(() => reads.length).toBe(width === 1280 ? 2 : 4);
+    await dialog.getByRole("button", { name: "关闭" }).click();
+  }
+  expect(writes).toEqual([]);
+});
+
 test("restores archived history without switching the active Session", async ({
   page,
 }) => {

@@ -1,4 +1,7 @@
-import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
+import type {
+  WebBackgroundTerminalDetail,
+  WebSubagentDetail,
+} from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 import {
@@ -319,6 +322,13 @@ export class WebClient {
       detail: WebBackgroundTerminalDetail;
     }>(
       `/api/capabilities/detail?kind=background-terminals&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  subagentDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
+      `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

@@ -2,7 +2,10 @@ import { Dialog } from "@astryxdesign/core/Dialog";
 import { RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebBackgroundTerminalDetail } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type {
+  WebBackgroundTerminalDetail,
+  WebSubagentDetail,
+} from "../../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../../runtime/types.ts";
 import { WebClient } from "../../protocol/client.ts";
@@ -14,6 +17,7 @@ export interface InspectionTarget {
   model: string;
   modelKey?: string;
   terminalId?: string;
+  subagentId?: string;
 }
 
 interface InspectionData {
@@ -26,6 +30,7 @@ interface InspectionData {
   trust?: WebProjectTrustStatus;
   auth?: WebProviderAuthProjection;
   terminal?: WebBackgroundTerminalDetail;
+  subagent?: WebSubagentDetail;
   errors: string[];
 }
 
@@ -48,7 +53,27 @@ export function InspectionPanel({
     setUpdatedAt(null);
     const read = async () => {
       const next: InspectionData = { errors: [] };
-      if (target.terminalId) {
+      if (target.subagentId) {
+        try {
+          const response = await client.subagentDetail(
+            target.sessionId,
+            target.subagentId,
+            controller.signal,
+          );
+          if (
+            response.sessionId !== target.sessionId ||
+            response.detail.kind !== "subagents" ||
+            response.detail.id !== target.subagentId
+          ) {
+            throw new Error(t("inspectionChanged"));
+          }
+          next.subagent = response.detail;
+        } catch (error) {
+          next.errors.push(
+            error instanceof Error ? error.message : t("inspectionUnavailable"),
+          );
+        }
+      } else if (target.terminalId) {
         try {
           const response = await client.terminalDetail(
             target.sessionId,
@@ -97,8 +122,13 @@ export function InspectionPanel({
     return () => controller.abort();
   }, [client, target, revision, t]);
 
-  const title = target.terminalId ? t("terminalDetails") : t("runtimeStatus");
+  const title = target.subagentId
+    ? t("subagentDetails")
+    : target.terminalId
+      ? t("terminalDetails")
+      : t("runtimeStatus");
   const terminal = data?.terminal;
+  const subagent = data?.subagent;
   return (
     <Dialog
       isOpen
@@ -141,7 +171,88 @@ export function InspectionPanel({
                 {error}
               </p>
             ))}
-            {terminal ? (
+            {subagent ? (
+              <>
+                <section className="inspection-section">
+                  <h3>{subagent.title || subagent.id}</h3>
+                  <dl>
+                    <dt>{t("executionState")}</dt>
+                    <dd>
+                      {t(`execution_${subagent.status}`, {
+                        defaultValue: subagent.status,
+                      })}
+                      {subagent.outcome &&
+                        ` · ${t(`subagent_${subagent.outcome}`)}`}
+                    </dd>
+                    <dt>{t("subagentModel")}</dt>
+                    <dd>{subagent.modelLabel || t("unknownState")}</dd>
+                    <dt>{t("subagentOrigin")}</dt>
+                    <dd>{t(`subagentOrigin_${subagent.origin}`)}</dd>
+                    <dt>{t("terminalDirectory")}</dt>
+                    <dd>{subagent.cwd}</dd>
+                    <dt>{t("startedAt")}</dt>
+                    <dd>{new Date(subagent.createdAt).toLocaleString()}</dd>
+                    <dt>{t("subagentProgress")}</dt>
+                    <dd>
+                      {t("subagentProgressValue", {
+                        turns: subagent.turns,
+                        items: subagent.transcriptItems,
+                      })}
+                    </dd>
+                  </dl>
+                  {subagent.errorText && (
+                    <p className="inspection-warning">{subagent.errorText}</p>
+                  )}
+                  {subagent.truncated && (
+                    <p className="inspection-note">{t("detailTruncated")}</p>
+                  )}
+                </section>
+                {subagent.liveTools.length > 0 && (
+                  <section className="inspection-section">
+                    <h3>{t("subagentTools")}</h3>
+                    {subagent.liveTools.map((tool, index) => (
+                      <p
+                        className="inspection-note"
+                        // biome-ignore lint/suspicious/noArrayIndexKey: The bounded tool preview has no stable tool ID and is replaced as a whole.
+                        key={`${index}:${tool.name}`}
+                      >
+                        {tool.name} ·{" "}
+                        {tool.done
+                          ? tool.isError
+                            ? t("execution_failed")
+                            : t("execution_done")
+                          : t("execution_running")}
+                        {tool.outputPreview && (
+                          <span className="inspection-tool-output">
+                            {tool.outputPreview}
+                          </span>
+                        )}
+                      </p>
+                    ))}
+                    {subagent.toolsOmitted > 0 && (
+                      <p className="inspection-note">
+                        {t("subagentToolsOmitted", {
+                          count: subagent.toolsOmitted,
+                        })}
+                      </p>
+                    )}
+                  </section>
+                )}
+                <section className="inspection-section">
+                  <h3>{t("subagentLatestOutput")}</h3>
+                  <pre className="terminal-evidence">
+                    {subagent.latestOutput.text || t("noOutput")}
+                  </pre>
+                  {subagent.latestOutput.omittedBytes > 0 && (
+                    <p className="inspection-note">
+                      {t("outputTruncated", {
+                        count: subagent.latestOutput.omittedBytes,
+                      })}
+                    </p>
+                  )}
+                </section>
+              </>
+            ) : terminal ? (
               <>
                 <div className="inspection-section">
                   <h3>{terminal.title || terminal.id}</h3>
@@ -198,7 +309,8 @@ export function InspectionPanel({
                 ))}
               </>
             ) : (
-              !target.terminalId && (
+              !target.terminalId &&
+              !target.subagentId && (
                 <>
                   <section className="inspection-section">
                     <h3>{t("modelAndThinking")}</h3>

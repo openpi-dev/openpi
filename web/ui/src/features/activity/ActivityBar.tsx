@@ -49,9 +49,11 @@ function Chip({
 export function ActivityBar({
   snapshot,
   onInspectTerminal,
+  onInspectSubagent,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
+  onInspectSubagent?: (id: string) => void;
 }) {
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
@@ -97,6 +99,9 @@ export function ActivityBar({
     const elapsed = formatElapsedMs(subagent.createdAt, subagent.settledAt);
     chips.push({
       key: `subagent-${subagent.id}`,
+      onClick: onInspectSubagent
+        ? () => onInspectSubagent(subagent.id)
+        : undefined,
       kind: "subagent",
       label: `${subagent.title || subagent.id}${elapsed ? ` · ${elapsed}` : ""}`,
       status: canonicalStatus(subagent.status),

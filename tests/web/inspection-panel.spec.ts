@@ -181,6 +181,56 @@ it("rejects another Session's same-id terminal and renders output as plain text"
   ).toBeTruthy();
 });
 
+it("shows exact Subagent outcome and bounded text without granting control", async () => {
+  const detail = {
+    kind: "subagents",
+    id: "child-1",
+    title: "Investigate",
+    cwd: "/ws",
+    origin: "model",
+    status: "error",
+    outcome: "interrupted",
+    createdAt: 1,
+    settledAt: 2,
+    modelLabel: "provider/model",
+    turns: 2,
+    transcriptItems: 12,
+    latestOutput: {
+      text: '<img src="https://external.example/x" onerror="alert(1)">',
+      omittedBytes: 20,
+    },
+    errorText: "Stopped after cancellation",
+    liveTools: [{ name: "read", done: true, outputPreview: "partial result" }],
+    toolsOmitted: 3,
+    truncated: true,
+  };
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(reply({ sessionId: "wrong", detail }))
+    .mockResolvedValueOnce(reply({ sessionId: "session-a", detail }));
+  vi.stubGlobal("fetch", fetcher);
+  const view = show({ ...target, subagentId: "child-1" });
+  expect(
+    await screen.findByText("The active session changed. Reopen this panel."),
+  ).toBeTruthy();
+  expect(screen.queryByText("Stopped after cancellation")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
+  expect(await screen.findByText("Stopped after cancellation")).toBeTruthy();
+  expect(screen.getByText("Error · Interrupted")).toBeTruthy();
+  expect(screen.getByText("2 turns · 12 records")).toBeTruthy();
+  expect(screen.getByText("3 earlier tools omitted.")).toBeTruthy();
+  expect(
+    screen.getByText("20 bytes omitted from this output view."),
+  ).toBeTruthy();
+  expect(screen.getByText(detail.latestOutput.text)).toBeTruthy();
+  expect(view.container.querySelector(".terminal-evidence img")).toBeNull();
+  expect(fetcher).toHaveBeenCalledWith(
+    "/api/capabilities/detail?kind=subagents&id=child-1&sessionId=session-a",
+    expect.objectContaining({ signal: expect.any(AbortSignal) }),
+  );
+  expect(fetcher.mock.calls[0]?.[1]).not.toHaveProperty("method");
+});
+
 function thinkingFetcher(thinking: unknown) {
   return vi.fn(async (url: string) => {
     if (url.startsWith("/api/thinking")) return reply(thinking);

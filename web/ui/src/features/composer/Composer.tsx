@@ -30,6 +30,7 @@ interface ComposerProps {
   modelSearch?: WebStoreState["modelSearch"];
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
   onInspect?: (terminalId?: string) => void;
+  onInspectSubagent?: (id: string) => void;
   snapshot: WebSnapshot | null;
   selectedPath?: string | null;
   selectedWorkspace: string | null;
@@ -405,6 +406,7 @@ export function Composer(props: ComposerProps) {
         <ActivityBar
           snapshot={props.snapshot}
           onInspectTerminal={props.onInspect}
+          onInspectSubagent={props.onInspectSubagent}
         />
       )}
       {props.landing && (
