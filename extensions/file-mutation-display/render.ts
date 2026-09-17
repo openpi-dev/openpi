@@ -5,14 +5,21 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component } from "@earendil-works/pi-tui";
 import type { TSchema } from "typebox";
-import { renderPaddedToolActivityLine } from "../shared/tool-activity.ts";
+import {
+  renderPaddedToolActivityLine,
+  type ToolActivityStatus,
+} from "../shared/tool-activity.ts";
 
-type ActivityStatus = "pending" | "success" | "error";
+export interface ConfirmationProjection {
+  isWaiting(toolCallId: string): boolean;
+  track(toolCallId: string, invalidate: () => void): void;
+  forget(toolCallId: string): void;
+}
 
 type ActivityRenderState<TDetails> = {
   openpiActivity?: {
     result?: AgentToolResult<TDetails>;
-    status: ActivityStatus;
+    status: ToolActivityStatus;
     startedAt?: number;
     endedAt?: number;
     interval?: NodeJS.Timeout;
@@ -70,6 +77,7 @@ function activityComponent(
  */
 export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
   definition: ToolDefinition<TParams, TDetails, TState>,
+  confirmation?: ConfirmationProjection,
 ): ToolDefinition<TParams, TDetails, TState & ActivityRenderState<TDetails>> {
   const nativeRenderCall = definition.renderCall;
   const nativeRenderResult = definition.renderResult;
@@ -80,7 +88,25 @@ export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
       const state = context.state as TState & ActivityRenderState<TDetails>;
       state.openpiActivity ??= { status: "pending" };
       const activity = state.openpiActivity;
-      if (context.executionStarted && activity.startedAt === undefined) {
+      if (definition.name === "bash" && confirmation) {
+        confirmation.track(context.toolCallId, context.invalidate);
+        const waiting = confirmation.isWaiting(context.toolCallId);
+        if (waiting) {
+          activity.status = "waiting";
+          activity.startedAt = undefined;
+          if (activity.interval) {
+            clearInterval(activity.interval);
+            activity.interval = undefined;
+          }
+        } else if (activity.status === "waiting") {
+          activity.status = "pending";
+        }
+      }
+      if (
+        context.executionStarted &&
+        activity.status === "pending" &&
+        activity.startedAt === undefined
+      ) {
         activity.startedAt = Date.now();
       }
       if (
@@ -120,6 +146,7 @@ export function withActivityRenderer<TParams extends TSchema, TDetails, TState>(
       state.openpiActivity ??= { status: "pending" };
       const activity = state.openpiActivity;
       activity.result = result;
+      if (!options.isPartial) confirmation?.forget(context.toolCallId);
       activity.status = options.isPartial
         ? "pending"
         : context.isError

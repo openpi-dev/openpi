@@ -346,6 +346,119 @@ test("all activity tools render pending and failure as one explicit row", () => 
   }
 });
 
+test("guard confirmation pauses the bash activity and resumes only after approval", () => {
+  const waiting = new Set<string>();
+  const invalidators = new Map<string, () => void>();
+  const definition = withActivityRenderer(createBashToolDefinition(cwd), {
+    isWaiting: (id) => waiting.has(id),
+    track: (id, invalidate) => invalidators.set(id, invalidate),
+    forget: (id) => {
+      waiting.delete(id);
+      invalidators.delete(id);
+    },
+  });
+  const args = { command: "rm keep.txt" };
+  const state: Parameters<
+    NonNullable<typeof definition.renderCall>
+  >[2]["state"] = {
+    startedAt: undefined,
+    endedAt: undefined,
+    interval: undefined,
+  };
+  const context: Parameters<NonNullable<typeof definition.renderCall>>[2] = {
+    args,
+    toolCallId: "remove-1",
+    invalidate() {},
+    lastComponent: undefined,
+    state,
+    cwd,
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: true,
+    expanded: false,
+    showImages: false,
+    isError: false,
+  };
+  const render = () => {
+    const component = definition.renderCall?.(args, theme, context);
+    assert.ok(component);
+    return component.render(80)[0] ?? "";
+  };
+
+  assert.match(render(), /Running\s+rm keep\.txt/);
+  assert.ok(invalidators.has("remove-1"));
+  waiting.add("remove-1");
+  const waitingRow = render();
+  assert.match(waitingRow, /\? Awaiting approval rm keep\.txt/);
+  assert.doesNotMatch(waitingRow, /Running|\d+s|[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏]/);
+  const activity = state.openpiActivity as {
+    status: string;
+    startedAt?: number;
+    interval?: NodeJS.Timeout;
+  };
+  assert.equal(activity.startedAt, undefined);
+  assert.equal(activity.interval, undefined);
+
+  waiting.delete("remove-1");
+  assert.match(render(), /Running\s+rm keep\.txt/);
+  assert.ok(activity.startedAt);
+  assert.ok(activity.interval);
+  definition.renderResult?.(
+    { content: [{ type: "text", text: "deleted" }], details: undefined },
+    { expanded: false, isPartial: false },
+    theme,
+    { ...context, isPartial: false },
+  );
+  assert.equal(activity.interval, undefined);
+  assert.equal(invalidators.has("remove-1"), false);
+});
+
+test("refused cleanup remains awaiting approval until the blocked result", () => {
+  let waiting = true;
+  const definition = withActivityRenderer(createBashToolDefinition(cwd), {
+    isWaiting: () => waiting,
+    track() {},
+    forget() {
+      waiting = false;
+    },
+  });
+  const args = { command: "rm keep.txt" };
+  const state: Parameters<
+    NonNullable<typeof definition.renderCall>
+  >[2]["state"] = {
+    startedAt: undefined,
+    endedAt: undefined,
+    interval: undefined,
+  };
+  const context: Parameters<NonNullable<typeof definition.renderCall>>[2] = {
+    args,
+    toolCallId: "remove-2",
+    invalidate() {},
+    lastComponent: undefined,
+    state,
+    cwd,
+    executionStarted: true,
+    argsComplete: true,
+    isPartial: true,
+    expanded: false,
+    showImages: false,
+    isError: false,
+  };
+  const row = definition.renderCall?.(args, theme, context);
+  assert.match(row?.render(80)[0] ?? "", /Awaiting approval/);
+  definition.renderResult?.(
+    {
+      content: [{ type: "text", text: "Blocked cleanup" }],
+      details: undefined,
+    },
+    { expanded: false, isPartial: false },
+    theme,
+    { ...context, isPartial: false, isError: true },
+  );
+  assert.match(row?.render(80)[0] ?? "", /Failed\s+rm keep\.txt/);
+  assert.equal(waiting, false);
+});
+
 test("long activity rows stay one line and fit narrow terminals", () => {
   const definition = withActivityRenderer(createBashToolDefinition(cwd));
   const lines = renderCollapsed(

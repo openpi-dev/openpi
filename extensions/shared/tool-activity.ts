@@ -5,7 +5,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { spinnerFrame } from "./spinner.ts";
 import { sanitizeTerminalText } from "./terminal-text.ts";
 
-export type ToolActivityStatus = "pending" | "success" | "error";
+export type ToolActivityStatus = "pending" | "waiting" | "success" | "error";
 
 export interface ToolActivity {
   readonly name: string;
@@ -258,6 +258,9 @@ export function toolActivityText(
 ) {
   const row = activityRow(activity);
   const duration = elapsed(activity, now);
+  if (activity.status === "waiting") {
+    return `${theme.fg("warning", "?")} ${theme.fg("toolTitle", "Awaiting approval")} ${row.target}`;
+  }
   const verbText = (
     activity.status === "pending"
       ? pendingVerb(activity.name)

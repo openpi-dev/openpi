@@ -7,6 +7,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL } from "../../../extensions/shared/tool-confirmation.ts";
 import workspaceCleanupGuard from "../../../extensions/workspace-cleanup-guard/index.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
@@ -27,14 +28,21 @@ interface HarnessOptions {
 
 function harness(options: HarnessOptions) {
   const handlers = new Map<string, Handler[]>();
+  const emitted: Array<{ channel: string; data: unknown }> = [];
   const pi = {
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+    },
+    events: {
+      emit(channel: string, data: unknown) {
+        emitted.push({ channel, data });
+      },
     },
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: options.cwd,
     signal: options.signal,
+    sessionManager: { getSessionId: () => "session-test" },
     ui: {
       confirm: options.confirm ?? (async () => false),
     },
@@ -42,6 +50,7 @@ function harness(options: HarnessOptions) {
   workspaceCleanupGuard(pi);
 
   return {
+    emitted,
     async emit(event: string, value: unknown) {
       let result: unknown;
       for (const handler of handlers.get(event) ?? []) {
@@ -121,6 +130,24 @@ test("confirmed deletion of a pre-existing file proceeds", async () => {
         signal: controller.signal,
       },
     ]);
+    assert.deepEqual(h.emitted, [
+      {
+        channel: WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL,
+        data: {
+          sessionId: "session-test",
+          toolCallId: "remove",
+          waiting: true,
+        },
+      },
+      {
+        channel: WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL,
+        data: {
+          sessionId: "session-test",
+          toolCallId: "remove",
+          waiting: false,
+        },
+      },
+    ]);
   });
 });
 
@@ -137,6 +164,16 @@ test("refused deletion of a pre-existing file is blocked", async () => {
 
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /keep\.txt/u);
+    assert.deepEqual(h.emitted, [
+      {
+        channel: WORKSPACE_CLEANUP_CONFIRMATION_CHANNEL,
+        data: {
+          sessionId: "session-test",
+          toolCallId: "remove",
+          waiting: true,
+        },
+      },
+    ]);
   });
 });
 
@@ -160,6 +197,7 @@ test("an unverified rm target is blocked without opening confirmation", async ()
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /direct rm command/u);
     assert.equal(confirmations, 0);
+    assert.deepEqual(h.emitted, []);
   });
 });
 
