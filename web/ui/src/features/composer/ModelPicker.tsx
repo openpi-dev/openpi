@@ -1,6 +1,6 @@
 import { ComplexSelector } from "@astryxdesign/core/ComplexSelector";
 import { Check, Search } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelSummary,
@@ -11,6 +11,11 @@ import type {
   WebStoreActions,
 } from "../../store/web-store.ts";
 import { modelIdentity } from "./model-identity.ts";
+import {
+  filterModels,
+  listProviders,
+  modelMetaParts,
+} from "./model-picker-utils.ts";
 
 interface ModelPickerProps {
   snapshot: WebSnapshot | null;
@@ -30,6 +35,7 @@ const MODEL_SEARCH_DEBOUNCE_MS = 250;
 export function ModelPicker(props: ModelPickerProps) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [provider, setProvider] = useState<string | null>(null);
   const optionRefs = useRef<Array<HTMLButtonElement | null>>([]);
   const selected = props.draftModel ?? props.currentModel;
   const snapshotModels = props.snapshot?.models ?? [];
@@ -37,26 +43,42 @@ export function ModelPicker(props: ModelPickerProps) {
   const normalizedQuery = query.trim();
   const searchMatchesQuery = props.modelSearch.query === normalizedQuery;
   const searchPending =
+    canSearch &&
     Boolean(normalizedQuery) &&
     (!searchMatchesQuery || props.modelSearch.status === "loading");
-  const models = normalizedQuery
-    ? searchMatchesQuery
-      ? props.modelSearch.models
-      : []
+  const baseModels = normalizedQuery
+    ? canSearch
+      ? searchMatchesQuery
+        ? props.modelSearch.models
+        : []
+      : filterModels(snapshotModels, normalizedQuery)
     : snapshotModels;
+  const models =
+    provider === null
+      ? baseModels
+      : baseModels.filter((model) => model.provider === provider);
+  const providers = useMemo(
+    () => listProviders(snapshotModels),
+    [snapshotModels],
+  );
+  const metaLabels = {
+    reasoning: t("modelMetaReasoning"),
+    imageInput: t("modelMetaImageInput"),
+  };
   const searchModels = props.actions.searchModels;
   const snapshotGeneration = props.snapshot?.generatedAt;
 
   useEffect(() => {
-    if (!normalizedQuery || !snapshotGeneration) return;
+    if (!canSearch || !normalizedQuery || !snapshotGeneration) return;
     const timer = window.setTimeout(() => {
       void searchModels(normalizedQuery);
     }, MODEL_SEARCH_DEBOUNCE_MS);
     return () => window.clearTimeout(timer);
-  }, [normalizedQuery, searchModels, snapshotGeneration]);
+  }, [canSearch, normalizedQuery, searchModels, snapshotGeneration]);
 
   const resetSearch = () => {
     setQuery("");
+    setProvider(null);
     props.actions.clearModelSearch();
   };
 
@@ -101,7 +123,7 @@ export function ModelPicker(props: ModelPickerProps) {
         _onChange: (value: string) => void,
         close: () => void,
       ) => (
-        <div className={`model-search-panel ${canSearch ? "searchable" : ""}`}>
+        <div className="model-search-panel searchable">
           {canSearch && (
             <p className="model-search-truncation" role="status">
               {t("modelsTruncated", {
@@ -110,26 +132,48 @@ export function ModelPicker(props: ModelPickerProps) {
               })}
             </p>
           )}
-          {canSearch && (
-            <label className="model-search-input">
-              <Search aria-hidden="true" />
-              <span className="sr-only">{t("searchModels")}</span>
-              <input
-                value={query}
-                placeholder={t("searchModelsPlaceholder")}
-                onChange={(event) => {
-                  const next = event.currentTarget.value;
-                  setQuery(next);
-                  if (!next.trim()) props.actions.clearModelSearch();
-                }}
-                onKeyDown={(event) => {
-                  if (event.key === "Escape") {
-                    event.preventDefault();
-                    close();
-                  }
-                }}
-              />
-            </label>
+          <label className="model-search-input">
+            <Search aria-hidden="true" />
+            <span className="sr-only">{t("searchModels")}</span>
+            <input
+              value={query}
+              placeholder={t("searchModelsPlaceholder")}
+              onChange={(event) => {
+                const next = event.currentTarget.value;
+                setQuery(next);
+                if (!next.trim()) props.actions.clearModelSearch();
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Escape") {
+                  event.preventDefault();
+                  close();
+                } else if (event.key === "ArrowDown") {
+                  event.preventDefault();
+                  optionRefs.current[0]?.focus();
+                }
+              }}
+            />
+          </label>
+          {providers.length > 1 && (
+            <div className="model-search-providers">
+              <button
+                type="button"
+                className={provider === null ? "active" : ""}
+                onClick={() => setProvider(null)}
+              >
+                {t("allProviders")}
+              </button>
+              {providers.map((name) => (
+                <button
+                  key={name}
+                  type="button"
+                  className={provider === name ? "active" : ""}
+                  onClick={() => setProvider(name)}
+                >
+                  {name}
+                </button>
+              ))}
+            </div>
           )}
           {searchPending && (
             <p className="model-search-status" role="status">
@@ -137,6 +181,7 @@ export function ModelPicker(props: ModelPickerProps) {
             </p>
           )}
           {normalizedQuery &&
+            canSearch &&
             searchMatchesQuery &&
             props.modelSearch.status === "error" && (
               <p
@@ -147,14 +192,18 @@ export function ModelPicker(props: ModelPickerProps) {
               </p>
             )}
           {normalizedQuery &&
-            searchMatchesQuery &&
-            props.modelSearch.status === "ready" &&
-            props.modelSearch.totalMatches === 0 && (
+            !searchPending &&
+            models.length === 0 &&
+            (!canSearch ||
+              (searchMatchesQuery &&
+                props.modelSearch.status === "ready" &&
+                props.modelSearch.totalMatches === 0)) && (
               <p className="model-search-status" role="status">
                 {t("noMatchingModels")}
               </p>
             )}
           {normalizedQuery &&
+            canSearch &&
             searchMatchesQuery &&
             props.modelSearch.status === "ready" &&
             props.modelSearch.matchesOmitted > 0 && (
@@ -174,6 +223,7 @@ export function ModelPicker(props: ModelPickerProps) {
               const isSelected =
                 selected?.provider === model.provider &&
                 selected.id === model.id;
+              const meta = modelMetaParts(model, metaLabels);
               return (
                 <button
                   className="model-search-option"
@@ -202,14 +252,22 @@ export function ModelPicker(props: ModelPickerProps) {
                     optionRefs.current[moveTo]?.focus();
                   }}
                 >
-                  <span className="model-menu-item-label">
-                    {modelIdentity(model)}
+                  <span className="model-search-option-main">
+                    <span className="model-menu-item-label">
+                      {modelIdentity(model)}
+                    </span>
+                    {meta.length > 1 && (
+                      <span className="model-search-option-meta" aria-hidden>
+                        {meta.join(" · ")}
+                      </span>
+                    )}
                   </span>
                   {isSelected && <Check aria-hidden="true" />}
                 </button>
               );
             })}
           </div>
+          <p className="model-search-hints">{t("modelPickerHints")}</p>
         </div>
       )}
     </ComplexSelector>

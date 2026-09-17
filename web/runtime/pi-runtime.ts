@@ -32,9 +32,7 @@ import {
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import {
-  projectMessage,
-} from "../protocol/types.ts";
+import { projectMessage, type WebModelSummary } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
   applyHttpProxySettings,
@@ -88,6 +86,35 @@ type TurnSettlement = WebActiveTurn & {
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
+}
+
+type ModelSummarySource = {
+  provider: string;
+  id: string;
+  name: string;
+  contextWindow?: number;
+  reasoning?: boolean;
+  input?: readonly string[];
+};
+
+function projectModelSummary(
+  model: ModelSummarySource,
+  current: { provider: string; id: string } | undefined,
+): WebModelSummary {
+  return {
+    provider: model.provider,
+    id: model.id,
+    name: model.name,
+    label: model.name || `${model.provider}/${model.id}`,
+    current: current?.provider === model.provider && current.id === model.id,
+    ...(typeof model.contextWindow === "number" &&
+    Number.isFinite(model.contextWindow) &&
+    model.contextWindow > 0
+      ? { contextWindow: Math.round(model.contextWindow) }
+      : {}),
+    ...(model.reasoning === true ? { reasoning: true } : {}),
+    ...(model.input?.includes("image") === true ? { imageInput: true } : {}),
+  };
 }
 
 function safeProviderId(value: string) {
@@ -382,13 +409,7 @@ export class PiWebRuntime implements WebRuntimeController {
     ) {
       available.unshift(current);
     }
-    return available.map((model) => ({
-      provider: model.provider,
-      id: model.id,
-      name: model.name,
-      label: model.name || `${model.provider}/${model.id}`,
-      current: current?.provider === model.provider && current.id === model.id,
-    }));
+    return available.map((model) => projectModelSummary(model, current));
   }
 
   searchModels(query: string, limit?: number) {
@@ -505,14 +526,7 @@ export class PiWebRuntime implements WebRuntimeController {
       const current = agentRuntime.session.model;
       const selected = modelRuntime
         .getAvailableSnapshot()
-        .map((item) => ({
-          provider: item.provider,
-          id: item.id,
-          name: item.name,
-          label: item.name || `${item.provider}/${item.id}`,
-          current:
-            current?.provider === item.provider && current.id === item.id,
-        }))
+        .map((item) => projectModelSummary(item, current))
         .find((item) => item.current);
       if (!selected) throw new Error("Model selection was not confirmed");
       this.emit("model_select", { provider, modelId });
