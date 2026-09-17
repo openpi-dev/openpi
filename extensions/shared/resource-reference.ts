@@ -1,5 +1,13 @@
 import { createHash } from "node:crypto";
-import { lstatSync, readFileSync } from "node:fs";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  openSync,
+  readFileSync,
+  readSync,
+} from "node:fs";
 import path from "node:path";
 
 export const OPENPI_RESOURCE_REF_VERSION = 1 as const;
@@ -45,7 +53,7 @@ export type OpenPiResourceFailure =
   | "stale-resource";
 
 export type OpenPiResourceResolution =
-  | { readonly ok: true; readonly path: string }
+  | { readonly ok: true; readonly bytes: Buffer }
   | {
       readonly ok: false;
       readonly failure: OpenPiResourceFailure;
@@ -173,6 +181,39 @@ function inspectOwnedFile(
           ? ("missing" as const)
           : ("unsafe-path" as const),
     };
+  }
+}
+
+function readVerifiedOwnedFile(file: string, expected: ReturnType<typeof lstatSync>) {
+  const descriptor = openSync(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  try {
+    const before = fstatSync(descriptor);
+    if (
+      !before.isFile() ||
+      before.dev !== expected.dev ||
+      before.ino !== expected.ino ||
+      before.size !== expected.size
+    ) {
+      throw new Error("Resource changed before opening");
+    }
+    const bytes = Buffer.alloc(before.size);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = readSync(descriptor, bytes, offset, bytes.length - offset, offset);
+      if (read === 0) throw new Error("Resource truncated while reading");
+      offset += read;
+    }
+    const after = fstatSync(descriptor);
+    if (
+      after.dev !== before.dev ||
+      after.ino !== before.ino ||
+      after.size !== before.size
+    ) {
+      throw new Error("Resource changed while reading");
+    }
+    return bytes;
+  } finally {
+    closeSync(descriptor);
   }
 }
 
@@ -324,7 +365,17 @@ export function resolveOwnerFileResourceRef(
       message: "Resource bytes no longer match the published reference",
     };
   }
-  const revision = resourceRevisionFile(inspected.file);
+  let bytes: Buffer;
+  try {
+    bytes = readVerifiedOwnedFile(inspected.file, inspected.stat);
+  } catch {
+    return {
+      ok: false,
+      failure: "symlink-substitution",
+      message: "Resource changed before its verified bytes could be read",
+    };
+  }
+  const revision = createHash("sha256").update(bytes).digest("hex");
   if (revision !== ref.resource.revision) {
     return {
       ok: false,
@@ -332,5 +383,5 @@ export function resolveOwnerFileResourceRef(
       message: "Resource revision no longer matches the published reference",
     };
   }
-  return { ok: true, path: inspected.file };
+  return { ok: true, bytes };
 }

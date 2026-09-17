@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import {
+import fs, {
   mkdtempSync,
   rmSync,
   statSync,
@@ -8,6 +8,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { test } from "node:test";
@@ -48,15 +49,16 @@ test("an owner-bound file reference resolves only through its owner adapter", ()
   const item = fixture();
   try {
     assert.equal(isOpenPiResourceRef(item.ref), true);
-    assert.deepEqual(
-      resolveOwnerFileResourceRef(item.ref, {
-        owner: item.owner,
-        root: item.root,
-        ownerAlive: true,
-        authorized: true,
-      }),
-      { ok: true, path: item.file },
-    );
+    const result = resolveOwnerFileResourceRef(item.ref, {
+      owner: item.owner,
+      root: item.root,
+      ownerAlive: true,
+      authorized: true,
+    });
+    assert.equal(result.ok, true);
+    if (result.ok) {
+      assert.equal(result.bytes.toString(), "complete owner value");
+    }
   } finally {
     rmSync(item.root, { recursive: true, force: true });
   }
@@ -145,6 +147,42 @@ test("same-size replacement with the original mtime is stale", () => {
   } finally {
     rmSync(item.root, { recursive: true, force: true });
   }
+});
+
+test("fails closed when the verified file is replaced before opening", (t) => {
+  const item = fixture();
+  const outside = mkdtempSync(path.join(tmpdir(), "openpi-resource-outside-"));
+  const outsideFile = path.join(outside, "outside.txt");
+  writeFileSync(outsideFile, "outside");
+  const originalOpen = fs.openSync;
+  let swapped = false;
+  t.after(() => {
+    fs.openSync = originalOpen;
+    syncBuiltinESMExports();
+    rmSync(item.root, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  });
+  fs.openSync = ((...args: Parameters<typeof fs.openSync>) => {
+    if (!swapped) {
+      swapped = true;
+      unlinkSync(item.file);
+      symlinkSync(outsideFile, item.file);
+    }
+    return originalOpen(...args);
+  }) as typeof fs.openSync;
+  syncBuiltinESMExports();
+
+  assert.equal(
+    failure(
+      resolveOwnerFileResourceRef(item.ref, {
+        owner: item.owner,
+        root: item.root,
+        ownerAlive: true,
+        authorized: true,
+      }),
+    ),
+    "symlink-substitution",
+  );
 });
 
 test("publication refuses an artifact outside the owner root", () => {
