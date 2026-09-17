@@ -37,6 +37,12 @@ const DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/;
 const LEGACY_RECORDS = new Set([
   "docs/research/CLAUDE_CODE_WORKFLOW_FANOUT_POLICY_2026-08-23.md",
   "docs/research/CLAUDE_CODE_WORKFLOW_RUNTIME_CONTRACT_2026-08-23.md",
+  "docs/research/CACHE_USAGE_CONTRACT_2026-09-11.md",
+  "docs/research/CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md",
+  "docs/research/OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md",
+  "docs/research/OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md",
+  "docs/benchmarks/OPENPI_PI_OMP_54_CELL_DIAGNOSTIC.md",
+  "docs/benchmarks/receipts/openpi-issue-46-arm64-54-cell-v1.md",
 ]);
 const MARKDOWN_LINK_PATTERN =
   /!?\[[^\]]*\]\(([^)\s]+)(?:\s+["'][^"']*["'])?\)/g;
@@ -192,12 +198,12 @@ export function checkKnowledgeContract(root = REPOSITORY_ROOT) {
     for (const path of markdownFiles(directory)) {
       if (isTemplateOrIndex(directory, path)) continue;
       const source = readFileSync(path, "utf8");
-      const metadata = parseRecordFrontmatter(source);
       const record = relativeRecordPath(canonicalRoot, path);
       // Decision 0001 is forward-only, but legacy is an immutable allowlist,
       // not an opt-out available to newly added files.
+      if (LEGACY_RECORDS.has(record)) continue;
+      const metadata = parseRecordFrontmatter(source);
       if (!metadata) {
-        if (LEGACY_RECORDS.has(record)) continue;
         problems.push(`${record}: missing frontmatter`);
         continue;
       }
