@@ -64,8 +64,65 @@ export function parseRecordFrontmatter(source) {
   return metadata;
 }
 
-function isTemplateOrIndex(path) {
-  return ["README.md", "TEMPLATE.md"].includes(path.split(sep).at(-1));
+function isTemplateOrIndex(directory, path) {
+  return path === resolve(directory, "README.md") || path === resolve(directory, "TEMPLATE.md");
+}
+
+function markdownLinkTargets(source) {
+  const withoutComments = source.replace(/<!--[\s\S]*?-->/g, "");
+  const prose = withoutComments
+    .split(/\r?\n/)
+    .reduce(
+      (state, line) => {
+        if (/^\s*(```|~~~)/.test(line)) return { ...state, fenced: !state.fenced };
+        if (!state.fenced) state.lines.push(line.replace(/`[^`]*`/g, ""));
+        return state;
+      },
+      { fenced: false, lines: [] },
+    )
+    .lines.join("\n");
+  return [...prose.matchAll(MARKDOWN_LINK_PATTERN)].map((match) => match[1]);
+}
+
+function isRepositoryReference(root, path, value) {
+  if (/^(?:[a-z]+:|#|\/)/i.test(value)) return false;
+  const decoded = decodeURIComponent(value.split(/[?#]/, 1)[0]);
+  const resolved = resolve(dirname(path), decoded);
+  return (
+    (resolved === root || resolved.startsWith(`${root}${sep}`)) &&
+    existsSync(resolved)
+  );
+}
+
+function isExternalOrArchiveIdentity(value) {
+  if (value.startsWith("archive:")) return value.slice("archive:".length).trim().length > 0;
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" || url.protocol === "http:";
+  } catch {
+    return false;
+  }
+}
+
+function validateBenchmarkEvidence({ root, path, metadata, record, problems }) {
+  const evidence = metadata.get("evidence-reference")?.trim() ?? "";
+  if (
+    evidence &&
+    !isRepositoryReference(root, path, evidence) &&
+    !isExternalOrArchiveIdentity(evidence)
+  ) {
+    problems.push(`${record}: invalid evidence-reference ${evidence}`);
+  }
+
+  const rerun = metadata.get("rerun-entry-point")?.trim() ?? "";
+  if (
+    rerun &&
+    !isRepositoryReference(root, path, rerun) &&
+    !/^(?:bun|node|npm|pnpm|yarn)\s+\S/u.test(rerun) &&
+    !isExternalOrArchiveIdentity(rerun)
+  ) {
+    problems.push(`${record}: invalid rerun-entry-point ${rerun}`);
+  }
 }
 
 function relativeRecordPath(root, path) {
@@ -108,14 +165,9 @@ function validateResearchSections({ source, record, problems }) {
 }
 
 function validateLinks({ root, path, source, problems }) {
-  for (const match of source.matchAll(MARKDOWN_LINK_PATTERN)) {
-    const target = match[1];
+  for (const target of markdownLinkTargets(source)) {
     if (/^(?:[a-z]+:|#|\/)/i.test(target)) continue;
-    const decoded = decodeURIComponent(target.split(/[?#]/, 1)[0]);
-    const resolved = resolve(dirname(path), decoded);
-    const withinRoot =
-      resolved === root || resolved.startsWith(`${root}${sep}`);
-    if (!withinRoot || !existsSync(resolved)) {
+    if (!isRepositoryReference(root, path, target)) {
       problems.push(
         `${relativeRecordPath(root, path)}: broken repository link ${target}`,
       );
@@ -138,7 +190,7 @@ export function checkKnowledgeContract(root = REPOSITORY_ROOT) {
       problems.push(`docs/${category}/README.md: missing category index`);
 
     for (const path of markdownFiles(directory)) {
-      if (isTemplateOrIndex(path)) continue;
+      if (isTemplateOrIndex(directory, path)) continue;
       const source = readFileSync(path, "utf8");
       const metadata = parseRecordFrontmatter(source);
       const record = relativeRecordPath(canonicalRoot, path);
@@ -155,8 +207,18 @@ export function checkKnowledgeContract(root = REPOSITORY_ROOT) {
         validateResearchSections({ source, record, problems });
       }
 
+      if (category === "benchmarks") {
+        validateBenchmarkEvidence({
+          root: canonicalRoot,
+          path,
+          metadata,
+          record,
+          problems,
+        });
+      }
+
       const indexTarget = relative(directory, path).split(sep).join("/");
-      if (!indexSource.includes(`](${indexTarget})`)) {
+      if (!markdownLinkTargets(indexSource).includes(indexTarget)) {
         problems.push(
           `${record}: not reachable from docs/${category}/README.md`,
         );

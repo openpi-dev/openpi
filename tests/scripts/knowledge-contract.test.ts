@@ -153,3 +153,27 @@ test("reports unindexed records and broken repository links", () => {
     ),
   );
 });
+
+test("rejects unresolved benchmark metadata and nested index bypasses", () => {
+  const root = fixture();
+  const run = join(root, "docs", "benchmarks", "runs", "run.md");
+  writeFileSync(
+    run,
+    readFileSync(run, "utf8")
+      .replace("evidence-reference: ../evidence.txt", "evidence-reference: missing-evidence.json")
+      .replace("rerun-entry-point: bun run fixture", "rerun-entry-point: missing-command"),
+  );
+  const nested = join(root, "docs", "research", "topic");
+  mkdirSync(nested, { recursive: true });
+  writeFileSync(join(nested, "README.md"), "# Ungoverned record\n");
+  writeFileSync(
+    join(root, "docs", "research", "README.md"),
+    "<!-- [record](record.md) -->\n",
+  );
+
+  const result = checkKnowledgeContract(root);
+  assert(result.problems.includes("docs/benchmarks/runs/run.md: invalid evidence-reference missing-evidence.json"));
+  assert(result.problems.includes("docs/benchmarks/runs/run.md: invalid rerun-entry-point missing-command"));
+  assert(result.problems.includes("docs/research/topic/README.md: missing frontmatter"));
+  assert(result.problems.includes("docs/research/record.md: not reachable from docs/research/README.md"));
+});
