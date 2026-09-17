@@ -14,10 +14,13 @@ import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import { WebApiError } from "../../web/ui/src/protocol/client.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
 
 afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
+  void i18n.changeLanguage("en");
 });
 
 it("renders file context, exact diffs, TAP failures, terminal cancellation and sanitized raw evidence", () => {
@@ -130,6 +133,82 @@ it("opens local links using authenticated API and stops preview reads on close",
   fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
   await waitFor(() => expect(release).toHaveBeenCalledWith("s", "h"));
   expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it("localizes preview controls, accessibility names, and artifact failures without translating file content", async () => {
+  await i18n.changeLanguage("en");
+  vi.spyOn(WebClient.prototype, "resolveArtifact").mockResolvedValue({
+    handle: "h",
+  });
+  const read = vi
+    .spyOn(WebClient.prototype, "artifactPreview")
+    .mockResolvedValue({
+      identity: "one",
+      artifact: {
+        handle: "h",
+        sessionId: "s",
+        path: "/workspace/report.txt",
+        name: "report.txt",
+        revision: "a".repeat(64),
+        bytes: 12,
+        preview: "text",
+      },
+      text: "Original report text",
+      truncated: true,
+    });
+  vi.spyOn(WebClient.prototype, "releaseArtifact").mockResolvedValue({});
+  vi.spyOn(WebClient.prototype, "downloadArtifact").mockRejectedValue(
+    new WebApiError("File changed", 409, "ARTIFACT_CHANGED"),
+  );
+  render(
+    createElement(
+      ArtifactProvider,
+      { sessionId: "s" },
+      createElement(Markdown, null, "[Report](./report.txt)"),
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Report" }));
+  await waitFor(() =>
+    expect(screen.getByText("Original report text")).toBeTruthy(),
+  );
+  expect(screen.getByRole("dialog", { name: "File preview" })).toBeTruthy();
+  expect(
+    screen.getByRole("region", { name: "File preview content" }),
+  ).toBeTruthy();
+  expect(screen.getByText(/Read-only access · Session s/u)).toBeTruthy();
+  expect(screen.getByText(/Preview truncated/u)).toBeTruthy();
+  await act(async () => {
+    await i18n.changeLanguage("zh");
+  });
+  expect(screen.getByRole("dialog", { name: "文件预览" })).toBeTruthy();
+  expect(screen.getByRole("region", { name: "文件预览内容" })).toBeTruthy();
+  expect(screen.getByRole("button", { name: "关闭预览" })).toBeTruthy();
+  expect(screen.getByText("预览已截断。下载文件可查看完整内容。")).toBeTruthy();
+  expect(screen.getByText("Original report text")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "下载" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toContain("文件已变更"),
+  );
+  read.mockRejectedValueOnce(
+    new WebApiError("File no longer exists", 404, "ARTIFACT_MISSING"),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "刷新" }));
+  await waitFor(() =>
+    expect(screen.getByRole("status").textContent).toContain("文件已不存在"),
+  );
+  expect(screen.getByRole("status").textContent).toContain(
+    "当前显示的是旧版预览",
+  );
+  await act(async () => {
+    await i18n.changeLanguage("en");
+  });
+  expect(screen.getByRole("status").textContent).toContain(
+    "File no longer exists",
+  );
+  expect(screen.getByRole("status").textContent).toContain(
+    "Showing an older preview",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
 });
 it("preserves Windows paths through sanitization without allowing unsafe schemes", async () => {
   const resolve = vi
