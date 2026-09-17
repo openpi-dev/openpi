@@ -37,7 +37,7 @@ export function App() {
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
-  const inspect = (terminalId?: string) => {
+  const inspect = (terminalId?: string, subagentId?: string) => {
     const snapshot = state.snapshot;
     const session = snapshot?.selectedSession;
     if (
@@ -55,6 +55,7 @@ export function App() {
       model: currentModel?.label ?? "",
       modelKey,
       terminalId,
+      subagentId,
     });
   };
   const inspectionVisible =
@@ -195,6 +196,7 @@ export function App() {
           modelSearch={state.modelSearch}
           thinkingPendingLevel={state.thinkingPendingLevel}
           onInspect={inspect}
+          onInspectSubagent={(id) => inspect(undefined, id)}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
@@ -226,7 +228,7 @@ export function App() {
       </main>
       {inspectionVisible && (
         <InspectionPanel
-          key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
+          key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? inspection.subagentId ?? "status"}`}
           target={inspection}
           onClose={() => setInspection(null)}
         />

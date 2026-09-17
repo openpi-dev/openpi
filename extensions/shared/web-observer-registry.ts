@@ -77,7 +77,37 @@ export interface WebBackgroundTerminalDetail {
   readonly truncated: boolean;
 }
 
-export type WebCapabilityDetail = WebBackgroundTerminalDetail;
+export interface WebSubagentDetail {
+  readonly kind: "subagents";
+  readonly id: string;
+  readonly title: string;
+  readonly cwd: string;
+  readonly origin: "model" | "btw";
+  readonly status: WebSubagentActivity["status"];
+  readonly outcome?: WebSubagentActivity["outcome"];
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly modelLabel?: string;
+  readonly turns: number;
+  readonly transcriptItems: number;
+  readonly latestOutput: {
+    readonly text: string;
+    readonly omittedBytes: number;
+  };
+  readonly errorText?: string;
+  readonly liveTools: readonly {
+    readonly name: string;
+    readonly done: boolean;
+    readonly isError?: boolean;
+    readonly outputPreview?: string;
+  }[];
+  readonly toolsOmitted: number;
+  readonly truncated: boolean;
+}
+
+export type WebCapabilityDetail =
+  | WebBackgroundTerminalDetail
+  | WebSubagentDetail;
 
 export type WebCapabilityDetailReceipt =
   | { readonly status: "found"; readonly detail: WebCapabilityDetail }
@@ -145,6 +175,91 @@ function boundedUtf8Tail(value: string, maxBytes: number): BoundedUtf8Text {
     value: new TextDecoder().decode(retained),
     bytes: retained.byteLength,
     truncated: true,
+  };
+}
+
+export function projectSubagentDetail(source: {
+  readonly id: string;
+  readonly title: string;
+  readonly cwd: string;
+  readonly origin: WebSubagentDetail["origin"];
+  readonly status: WebSubagentDetail["status"];
+  readonly outcome?: WebSubagentDetail["outcome"];
+  readonly createdAt: number;
+  readonly settledAt?: number;
+  readonly meta: { readonly modelLabel?: string };
+  readonly turns: number;
+  readonly transcript: readonly unknown[];
+  readonly finalText: string;
+  readonly liveAssistant?: { readonly text: string };
+  readonly errorText?: string;
+  readonly liveTools: readonly {
+    readonly name: string;
+    readonly done?: boolean;
+    readonly isError?: boolean;
+    readonly outputPreview?: string;
+  }[];
+}): WebSubagentDetail {
+  const title = boundedActivityText(source.title);
+  const cwd = boundedUtf8Tail(source.cwd, 2 * 1024);
+  const model = source.meta.modelLabel
+    ? boundedActivityText(source.meta.modelLabel)
+    : undefined;
+  const latestOutput =
+    source.status === "running"
+      ? (source.liveAssistant?.text.trim() ?? "")
+      : source.finalText;
+  const output = boundedUtf8Tail(latestOutput, 8 * 1024);
+  const error = source.errorText
+    ? boundedUtf8Tail(source.errorText, 2 * 1024)
+    : undefined;
+  const selectedTools = source.liveTools.slice(-8);
+  const tools = selectedTools.map((tool) => {
+    const name = boundedActivityText(tool.name);
+    const preview = tool.outputPreview
+      ? boundedUtf8Tail(tool.outputPreview, 1024)
+      : undefined;
+    return {
+      item: {
+        name: name.value,
+        done: tool.done === true,
+        ...(tool.isError !== undefined ? { isError: tool.isError } : {}),
+        ...(preview ? { outputPreview: preview.value } : {}),
+      },
+      truncated: name.truncated || preview?.truncated === true,
+    };
+  });
+  const toolsOmitted = source.liveTools.length - selectedTools.length;
+  return {
+    kind: "subagents",
+    id: source.id,
+    title: title.value,
+    cwd: cwd.value,
+    origin: source.origin,
+    status: source.status,
+    ...(source.outcome ? { outcome: source.outcome } : {}),
+    createdAt: source.createdAt,
+    ...(source.settledAt !== undefined ? { settledAt: source.settledAt } : {}),
+    ...(model ? { modelLabel: model.value } : {}),
+    turns: source.turns,
+    transcriptItems: source.transcript.length,
+    latestOutput: {
+      text: output.value,
+      omittedBytes: output.truncated
+        ? new TextEncoder().encode(latestOutput).byteLength - output.bytes
+        : 0,
+    },
+    ...(error ? { errorText: error.value } : {}),
+    liveTools: tools.map(({ item }) => item),
+    toolsOmitted,
+    truncated:
+      title.truncated ||
+      cwd.truncated ||
+      model?.truncated === true ||
+      output.truncated ||
+      error?.truncated === true ||
+      toolsOmitted > 0 ||
+      tools.some(({ truncated }) => truncated),
   };
 }
 

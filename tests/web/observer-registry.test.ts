@@ -10,6 +10,7 @@ import {
   projectBackgroundTerminalCapability,
   projectBackgroundTerminalDetail,
   projectSubagentCapability,
+  projectSubagentDetail,
   projectWorkflowCapability,
   registerWebCapability,
   subscribeWebCapabilities,
@@ -331,4 +332,80 @@ test("detail lookup is Session-scoped, exact, and fail-closed", () => {
   } finally {
     unregister();
   }
+});
+
+test("Subagent detail bounds owner evidence and retains exact outcome", () => {
+  const detail = projectSubagentDetail({
+    id: "child-1",
+    title: "Investigate",
+    cwd: "/repo",
+    origin: "model",
+    status: "error",
+    outcome: "interrupted",
+    createdAt: 1,
+    settledAt: 2,
+    meta: { modelLabel: "provider/model" },
+    turns: 3,
+    transcript: Array.from({ length: 100 }, () => ({})),
+    finalText: "🙂".repeat(6000),
+    errorText: "failure".repeat(1000),
+    liveTools: Array.from({ length: 12 }, (_, index) => ({
+      name: `tool-${index}`,
+      done: index < 10,
+      outputPreview: "x".repeat(3000),
+    })),
+  });
+  assert.equal(detail.outcome, "interrupted");
+  assert.equal(detail.transcriptItems, 100);
+  assert.equal(detail.liveTools.length, 8);
+  assert.equal(detail.toolsOmitted, 4);
+  assert.ok(Buffer.byteLength(detail.latestOutput.text) <= 8 * 1024);
+  assert.ok(detail.latestOutput.omittedBytes > 0);
+  assert.ok(Buffer.byteLength(detail.errorText ?? "") <= 2 * 1024);
+  assert.ok(
+    detail.liveTools.every(
+      (tool) => Buffer.byteLength(tool.outputPreview ?? "") <= 1024,
+    ),
+  );
+  assert.equal(detail.truncated, true);
+
+  const scope = sessionScope();
+  const unregister = registerWebCapability(scope, {
+    kind: "subagents",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) => (id === detail.id ? detail : undefined),
+  });
+  try {
+    assert.deepEqual(webCapabilityDetail(scope, "subagents", "child-1"), {
+      status: "found",
+      detail,
+    });
+    assert.deepEqual(webCapabilityDetail(scope, "subagents", "child-2"), {
+      status: "missing",
+    });
+    assert.deepEqual(
+      webCapabilityDetail(sessionScope(), "subagents", "child-1"),
+      { status: "unavailable" },
+    );
+  } finally {
+    unregister();
+  }
+});
+
+test("a restarted running Subagent does not present the previous run's final text as live output", () => {
+  const detail = projectSubagentDetail({
+    id: "child-2",
+    title: "Continue",
+    cwd: "/repo",
+    origin: "model",
+    status: "running",
+    createdAt: 1,
+    meta: {},
+    turns: 1,
+    transcript: [],
+    finalText: "previous run",
+    liveTools: [],
+  });
+  assert.equal(detail.latestOutput.text, "");
+  assert.equal(detail.truncated, false);
 });

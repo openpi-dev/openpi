@@ -582,6 +582,8 @@ openpi web /path/to/repo      # 指定初始工作区
 
 Web 可以在选择工作区之前预选可用模型。选择仅保留在当前页面，创建会话后确认模型生效再发送第一条消息；模型不可用时会提示并阻止发送，不会自动换成默认模型。打开已有会话时使用该会话的模型。
 
+Web 的 Subagent 活动条可打开当前 Web Session 的只读详情：状态和完成/中断结果来自原有 Subagent manager，模型、轮次、近期工具与输出只以有界文本展示。该面板不控制或接管子代理，不代表完整子 Session transcript；终端中启动的另一 Pi Session 不会自动出现在当前 Web Session 中。
+
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 
 ### 命令速查

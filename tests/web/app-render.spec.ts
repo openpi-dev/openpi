@@ -450,6 +450,28 @@ it("keeps background terminal activity and omission receipts visible", () => {
   expect(screen.getByText("+3")).toBeTruthy();
 });
 
+it("opens Subagent activity by exact id without treating it as a terminal", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.capabilities = {
+    subagents: {
+      items: [
+        {
+          id: "child-1",
+          title: "Investigate",
+          status: "running",
+          createdAt: 1,
+        },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+  };
+  const inspect = vi.fn();
+  render(createElement(ActivityBar, { snapshot, onInspectSubagent: inspect }));
+  fireEvent.click(screen.getByRole("button", { name: /Investigate/u }));
+  expect(inspect).toHaveBeenCalledExactlyOnceWith("child-1");
+});
+
 it("resolves canonical system theme changes and explicit overrides", () => {
   const initial = webStore.getState().snapshot;
   const media = new EventTarget();

@@ -98,6 +98,31 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
           }
         : undefined,
   });
+  const unregisterSubagentDetails = registerWebCapability(sessionManager, {
+    kind: "subagents",
+    snapshot: () => ({ items: [], omitted: 0, truncated: false }),
+    detail: (id) =>
+      id === "child-test"
+        ? {
+            kind: "subagents",
+            id,
+            title: "Investigate",
+            cwd,
+            origin: "model",
+            status: "error",
+            outcome: "interrupted",
+            createdAt: 1,
+            settledAt: 2,
+            modelLabel: "provider/model",
+            turns: 1,
+            transcriptItems: 2,
+            latestOutput: { text: "partial", omittedBytes: 0 },
+            liveTools: [],
+            toolsOmitted: 0,
+            truncated: false,
+          }
+        : undefined,
+  });
   const prompts: string[] = [];
   const creationCommandIds: string[] = [];
   let newSessions = 0;
@@ -582,6 +607,21 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       code: "CAPABILITY_NOT_FOUND",
       error: "capability resource was not found in the active Session",
     });
+    const subagentDetailResponse = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=subagents&id=child-test&sessionId=${encodeURIComponent(sessionManager.getSessionId())}`,
+      { headers: authorized },
+    );
+    assert.equal(subagentDetailResponse.status, 200);
+    const subagentReceipt = await subagentDetailResponse.json();
+    assert.equal(subagentReceipt.sessionId, sessionManager.getSessionId());
+    assert.equal(subagentReceipt.detail.outcome, "interrupted");
+    assert.equal(subagentReceipt.detail.latestOutput.text, "partial");
+    const missingSubagent = await fetch(
+      `${launched.origin}/api/capabilities/detail?kind=subagents&id=child-missing`,
+      { headers: authorized },
+    );
+    assert.equal(missingSubagent.status, 404);
+    assert.equal((await missingSubagent.json()).code, "CAPABILITY_NOT_FOUND");
     const unavailableModel = await fetch(`${launched.origin}/api/model`, {
       method: "POST",
       headers: authorized,
@@ -983,6 +1023,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     await host.stop();
     assert.equal(disposed, true);
     unregisterTerminalDetails();
+    unregisterSubagentDetails();
     unregister();
     await Promise.all(
       [cwd, imported].map((path) => rm(path, { recursive: true, force: true })),
