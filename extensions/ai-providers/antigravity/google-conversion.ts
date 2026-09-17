@@ -34,8 +34,8 @@ const JSON_SCHEMA_META_DECLARATIONS = new Set([
   "definitions",
 ]);
 
-const MAX_SCHEMA_REF_DEPTH = 16;
-const MAX_SCHEMA_REF_NODES = 512;
+const MAX_SCHEMA_REF_DEPTH = 24;
+const MAX_SCHEMA_REF_NODES = 10_000;
 const MAX_SCHEMA_REF_BYTES = 256 * 1024;
 
 interface GoogleFunctionCall {
@@ -403,75 +403,134 @@ function expandLocalSchemaRefs(schema: unknown): unknown {
     return schema;
   }
   const root = schema as Record<string, unknown>;
-  let nodes = 0;
-  const active = new Set<string>();
+  const hasRef = (value: unknown) => {
+    const pending = [value];
+    const seen = new WeakSet<object>();
+    while (pending.length > 0) {
+      const entry = pending.pop();
+      if (!entry || typeof entry !== "object" || seen.has(entry)) continue;
+      seen.add(entry);
+      if (
+        Object.prototype.hasOwnProperty.call(entry, "$ref") &&
+        typeof (entry as Record<string, unknown>).$ref === "string"
+      ) {
+        return true;
+      }
+      pending.push(...Object.values(entry));
+    }
+    return false;
+  };
+  if (!hasRef(schema)) return schema;
 
   const pointer = (ref: string) => {
     if (!ref.startsWith("#/") && ref !== "#") {
-      throw new Error(
-        `Antigravity tool schema has unsupported external $ref: ${ref}`,
-      );
+      throw new Error(`Antigravity tool schema has unsupported external $ref: ${ref}`);
     }
     let value: unknown = root;
-    if (ref !== "#") {
-      for (const segment of ref.slice(2).split("/")) {
-        if (value === null || typeof value !== "object") value = undefined;
-        else
-          value = (value as Record<string, unknown>)[
-            segment.replaceAll("~1", "/").replaceAll("~0", "~")
-          ];
+    for (const segment of ref === "#" ? [] : ref.slice(2).split("/")) {
+      const key = segment.replaceAll("~1", "/").replaceAll("~0", "~");
+      if (
+        !value ||
+        typeof value !== "object" ||
+        !Object.prototype.hasOwnProperty.call(value, key)
+      ) {
+        throw new Error(`Antigravity tool schema has unresolved $ref: ${ref}`);
       }
+      value = (value as Record<string, unknown>)[key];
     }
-    if (value === undefined)
-      throw new Error(`Antigravity tool schema has unresolved $ref: ${ref}`);
     return value;
   };
-
-  const visit = (value: unknown, depth: number): unknown => {
-    if (++nodes > MAX_SCHEMA_REF_NODES || depth > MAX_SCHEMA_REF_DEPTH) {
-      throw new Error(
-        "Antigravity tool schema exceeds local $ref expansion limits",
-      );
+  const assertDepth = (depth: number) => {
+    if (depth > MAX_SCHEMA_REF_DEPTH) {
+      throw new Error("Antigravity tool schema exceeds local $ref expansion limits");
     }
-    if (Array.isArray(value))
-      return value.map((entry) => visit(entry, depth + 1));
+  };
+  const siblingsOf = (object: Record<string, unknown>) =>
+    Object.entries(object).filter(([key]) => key !== "$ref");
+
+  // Count the JSON that expansion will emit before cloning any referenced tree.
+  let bytes = 0;
+  const append = (text: string) => {
+    bytes += Buffer.byteLength(text);
+    if (bytes > MAX_SCHEMA_REF_BYTES) {
+      throw new Error("Antigravity tool schema exceeds local $ref expansion byte limit");
+    }
+  };
+  const measure = (value: unknown, depth: number, active: Set<string>): void => {
+    assertDepth(depth);
+    if (value === null || typeof value !== "object") {
+      append(JSON.stringify(value) ?? "null");
+      return;
+    }
+    if (Array.isArray(value)) {
+      append("[");
+      value.forEach((entry, index) => {
+        if (index > 0) append(",");
+        measure(entry, depth + 1, active);
+      });
+      append("]");
+      return;
+    }
+    const object = value as Record<string, unknown>;
+    if (typeof object.$ref === "string") {
+      const ref = object.$ref;
+      if (active.has(ref)) throw new Error(`Antigravity tool schema has recursive $ref: ${ref}`);
+      active.add(ref);
+      const siblings = siblingsOf(object);
+      if (siblings.length === 0) measure(pointer(ref), depth + 1, active);
+      else {
+        append('{"allOf":[');
+        measure(pointer(ref), depth + 1, active);
+        append(",{");
+        siblings.forEach(([key, entry], index) => {
+          if (index > 0) append(",");
+          append(`${JSON.stringify(key)}:`);
+          measure(entry, depth + 2, active);
+        });
+        append("}]}");
+      }
+      active.delete(ref);
+      return;
+    }
+    append("{");
+    Object.entries(object).forEach(([key, entry], index) => {
+      if (index > 0) append(",");
+      append(`${JSON.stringify(key)}:`);
+      measure(entry, depth + 1, active);
+    });
+    append("}");
+  };
+  measure(schema, 0, new Set());
+
+  let nodes = 0;
+  const active = new Set<string>();
+  const visit = (value: unknown, depth: number): unknown => {
+    assertDepth(depth);
+    if (++nodes > MAX_SCHEMA_REF_NODES) {
+      throw new Error("Antigravity tool schema exceeds local $ref expansion limits");
+    }
+    if (Array.isArray(value)) return value.map((entry) => visit(entry, depth + 1));
     if (value === null || typeof value !== "object") return value;
     const object = value as Record<string, unknown>;
     if (typeof object.$ref === "string") {
       const ref = object.$ref;
-      if (active.has(ref))
-        throw new Error(`Antigravity tool schema has recursive $ref: ${ref}`);
+      if (active.has(ref)) throw new Error(`Antigravity tool schema has recursive $ref: ${ref}`);
       active.add(ref);
-      let target: unknown;
       try {
-        target = visit(pointer(ref), depth + 1);
+        const target = visit(pointer(ref), depth + 1);
+        const siblings = Object.fromEntries(
+          siblingsOf(object).map(([key, entry]) => [key, visit(entry, depth + 2)]),
+        );
+        return Object.keys(siblings).length === 0 ? target : { allOf: [target, siblings] };
       } finally {
         active.delete(ref);
       }
-      const siblings = Object.fromEntries(
-        Object.entries(object)
-          .filter(([key]) => key !== "$ref")
-          .map(([key, entry]) => [key, visit(entry, depth + 2)]),
-      );
-      return { ...(target as Record<string, unknown>), ...siblings };
     }
     return Object.fromEntries(
-      Object.entries(object).map(([key, entry]) => [
-        key,
-        visit(entry, depth + 1),
-      ]),
+      Object.entries(object).map(([key, entry]) => [key, visit(entry, depth + 1)]),
     );
   };
-
-  const expanded = visit(schema, 0);
-  if (
-    Buffer.byteLength(JSON.stringify(expanded) ?? "") > MAX_SCHEMA_REF_BYTES
-  ) {
-    throw new Error(
-      "Antigravity tool schema exceeds local $ref expansion byte limit",
-    );
-  }
-  return expanded;
+  return visit(schema, 0);
 }
 
 function sanitizeForOpenApi(

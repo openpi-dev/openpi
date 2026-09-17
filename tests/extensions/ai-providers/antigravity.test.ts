@@ -539,6 +539,71 @@ test("convertTools bounds the serialized expanded schema size", () => {
   );
 });
 
+test("convertTools preserves ref sibling conjunctions and boolean schemas", () => {
+  const declarations = convertTools(
+    [
+      {
+        name: "conjunction",
+        description: "conjunction",
+        parameters: {
+          type: "object",
+          properties: {
+            value: {
+              $ref: "#/$defs/Value",
+              properties: { extra: { type: "string" } },
+            },
+            denied: { $ref: "#/$defs/Never" },
+          },
+          $defs: {
+            Value: { type: "object", properties: { required: { type: "string" } } },
+            Never: false,
+          },
+        },
+      } as never,
+    ],
+    true,
+  );
+  const parameters = declarations?.[0]?.functionDeclarations[0]?.parameters as {
+    properties?: Record<string, unknown>;
+  };
+  assert.deepEqual(parameters.properties?.value, {
+    allOf: [
+      { type: "object", properties: { required: { type: "string" } } },
+      { properties: { extra: { type: "string" } } },
+    ],
+  });
+  assert.equal(parameters.properties?.denied, false);
+});
+
+test("convertTools keeps ordinary no-ref schemas outside ref expansion limits", () => {
+  const properties = Object.fromEntries(
+    Array.from({ length: 600 }, (_, index) => [`field${index}`, { type: "string" }]),
+  );
+  assert.doesNotThrow(() =>
+    convertTools(
+      [{ name: "ordinary", description: "ordinary", parameters: { type: "object", properties } } as never],
+      true,
+    ),
+  );
+});
+
+test("convertTools rejects inherited local ref targets", () => {
+  assert.throws(
+    () =>
+      convertTools(
+        [
+          {
+            name: "inherited",
+            description: "inherited",
+            parameters: { $defs: {}, $ref: "#/$defs/toString" },
+          } as never,
+        ],
+        true,
+      ),
+    /unresolved \$ref/,
+  );
+});
+
 test("convertTools rejects unsafe local refs before the request", () => {
   assert.throws(
     () =>
