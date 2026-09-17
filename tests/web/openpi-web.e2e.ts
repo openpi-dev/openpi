@@ -388,8 +388,10 @@ test.describe("touch viewport", () => {
       .first();
     await expect(sessionMenu).toBeVisible();
     await sessionMenu.click();
-    await expect(page.getByRole("menu", { name: "会话选项" })).toBeVisible();
-    await page.keyboard.press("Escape");
+    const menu = page.getByRole("menu", { name: "会话选项" });
+    await expect(menu).toBeVisible();
+    await menu.press("Escape");
+    await expect(sidebar).toBeVisible();
 
     await page.getByRole("button", { name: "Workspace options" }).click();
     await page.getByRole("menuitem", { name: "重命名工作区" }).click();
@@ -578,30 +580,38 @@ test("mobile sidebar recovers focus when archived and restored rows disappear", 
     const sidebar = page.locator(".session-sidebar");
     const close = sidebar.getByRole("button", { name: "收起侧边栏" });
     await trigger.click();
-    for (const action of ["归档会话", "恢复会话"]) {
-      const rows = sidebar.locator(".session-row");
-      const count = await rows.count();
-      await rows
-        .filter({ hasNot: page.locator('[aria-current="page"]') })
-        .first()
-        .getByRole("button", { name: "会话选项" })
-        .focus();
-      await page.keyboard.press("Enter");
-      await page.getByRole("menuitem", { name: action }).click();
-      await expect(rows).toHaveCount(count - 1);
-      await expect(close).toBeFocused();
-      await page.keyboard.press("Tab");
-      await expect(
-        sidebar.getByRole("button", { name: "新建会话", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("Escape");
-      await expect(sidebar).not.toBeVisible();
-      await expect(trigger).toBeFocused();
-      await trigger.click();
-      await sidebar
-        .getByRole("button", { name: "已归档", exact: true })
-        .click();
-    }
+    const rows = sidebar.locator(".session-row");
+    const count = await rows.count();
+    await rows
+      .filter({ hasNot: page.locator('[aria-current="page"]') })
+      .first()
+      .getByRole("button", { name: "会话选项" })
+      .focus();
+    await page.keyboard.press("Enter");
+    await page.getByRole("menuitem", { name: "归档会话" }).click();
+    await expect(rows).toHaveCount(count - 1);
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(
+      sidebar.getByRole("button", { name: "新建会话", exact: true }),
+    ).toBeFocused();
+    await page.keyboard.press("Escape");
+    await expect(sidebar).not.toBeVisible();
+    await expect(trigger).toBeFocused();
+    await trigger.click();
+    await sidebar.getByRole("button", { name: "已归档", exact: true }).click();
+    const historyRows = sidebar.locator(".session-history-row");
+    await expect(historyRows).toHaveCount(1);
+    await historyRows
+      .first()
+      .getByRole("button", { name: /恢复会话/u })
+      .click();
+    await expect(historyRows).toHaveCount(0);
+    await expect(close).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(
+      sidebar.getByRole("button", { name: "新建会话", exact: true }),
+    ).toBeFocused();
   } finally {
     await rm(path, { force: true });
   }
@@ -1028,15 +1038,43 @@ test("restores archived history without switching the active Session", async ({
       await route.fulfill({ json: { path, archived: false } });
     }
   });
+  await page.route("**/api/sessions/archived?**", (route) =>
+    route.fulfill({
+      json: {
+        sessions: archived
+          ? [
+              {
+                id: "archived-browser",
+                path,
+                cwd: "/archived",
+                name: "Saved browser work",
+                archived: true,
+                created: "2026-09-07T00:00:00Z",
+                modified: "2026-09-07T00:00:00Z",
+                messageCount: 1,
+                firstMessage: "saved",
+              },
+            ]
+          : [],
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          recordsUnscanned: 0,
+          maxPageSize: 50,
+          maxScanned: 5000,
+        },
+      },
+    }),
+  );
   await openWorkbench(page);
   await page.getByRole("button", { name: "已归档", exact: true }).click();
   await expect(
     page.getByText("Saved browser work", { exact: true }),
   ).toBeVisible();
   for (let attempt = 0; attempt < 2; attempt++) {
-    await page.getByText("Saved browser work", { exact: true }).hover();
-    await page.getByRole("button", { name: "会话选项" }).click();
-    await page.getByRole("menuitem", { name: "恢复会话" }).click();
+    await page
+      .getByRole("button", { name: "恢复会话 Saved browser work" })
+      .click();
     if (!attempt)
       await expect(
         page.getByText("暂时无法确认恢复结果，请刷新后重试。"),
@@ -1055,6 +1093,141 @@ test("restores archived history without switching the active Session", async ({
   await expect(
     page.getByText("Saved browser work", { exact: true }),
   ).toBeVisible();
+});
+
+test("terminal Pi history stays read-only and bounded across desktop and mobile", async ({
+  page,
+}, testInfo) => {
+  let workspace = "";
+  const activations: string[] = [];
+  page.on("request", (request) => {
+    const path = new URL(request.url()).pathname;
+    if (
+      request.method() === "POST" &&
+      ["/api/sessions/select", "/api/sessions", "/api/prompt"].includes(path)
+    )
+      activations.push(path);
+  });
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    workspace = "/repo";
+    snapshot.workspaces = [{ path: workspace, name: "Repo", current: true }];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/terminal-sessions?**", (route) => {
+    const path = new URL(route.request().url()).searchParams.get("path");
+    const summary = {
+      id: "terminal-fixture",
+      path: "/fixture/terminal.jsonl",
+      cwd: workspace,
+      name: "Terminal notes",
+      created: "2026-09-01T00:00:00Z",
+      modified: "2026-09-01T00:00:00Z",
+      messageCount: 2,
+      metadataPartial: false,
+      firstMessage: "Original request",
+      source: "pi-default",
+      origin: "terminal",
+      readOnly: true,
+    };
+    return route.fulfill({
+      json: path
+        ? {
+            ...summary,
+            preview: {
+              messages: [
+                {
+                  role: "user",
+                  content: [{ type: "text", text: "Historical text" }],
+                },
+              ],
+              totalMessages: 2,
+              bytesRead: 90,
+              retainedBytes: 50,
+              truncatedBytes: 40,
+            },
+          }
+        : { sessions: [summary], cursor: 0, total: 1, partial: true },
+    });
+  });
+  await openWorkbench(page);
+  expect(workspace).not.toBe("");
+  await page.getByRole("button", { name: "终端历史", exact: true }).click();
+  await expect(
+    page.getByRole("button", { name: /Terminal notes/u }),
+  ).toBeVisible();
+  await page.getByRole("button", { name: /Terminal notes/u }).click();
+  const dialog = page.getByRole("dialog", { name: "终端会话历史" });
+  await expect(dialog).toContainText("Historical text");
+  await expect(dialog).toContainText("Pi 默认会话 · 终端 · 只读");
+  await expect(dialog).toContainText("显示 1 / 2 条消息");
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 720 });
+    await expect(dialog).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`terminal-history-${width}.png`),
+      fullPage: true,
+    });
+  }
+  expect(activations).toEqual([]);
+});
+
+test("older archived sessions remain discoverable beyond the snapshot limit", async ({
+  page,
+}) => {
+  const queries: string[] = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.sessions = [];
+    snapshot.truncation.sessionsOmitted = 500;
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/sessions/archived?**", (route) => {
+    const params = new URL(route.request().url()).searchParams;
+    queries.push(params.get("cursor") ?? "first");
+    const old = params.has("cursor");
+    return route.fulfill({
+      json: {
+        sessions: [
+          {
+            id: old ? "older" : "recent",
+            path: old ? "/repo/older.jsonl" : "/repo/recent.jsonl",
+            cwd: "/repo",
+            name: old ? "Earlier request" : "Recent request",
+            archived: true,
+            created: "2026-09-01T00:00:00Z",
+            modified: "2026-09-01T00:00:00Z",
+            messageCount: 1,
+            firstMessage: "saved",
+          },
+        ],
+        ...(old ? {} : { nextCursor: "older-page" }),
+        truncation: {
+          truncated: !old,
+          matchesOmitted: old ? 0 : 1,
+          recordsUnscanned: 0,
+          maxPageSize: 50,
+          maxScanned: 5000,
+        },
+      },
+    });
+  });
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "已归档", exact: true }).click();
+  await expect(page.getByText("Recent request", { exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "加载更多" }).click();
+  await expect(
+    page.getByText("Earlier request", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText("已到可用历史末尾")).toBeVisible();
+  expect(queries).toEqual(["first", "older-page"]);
 });
 
 test("trajectory inspects bounded prompt and tool evidence on desktop and mobile", async ({

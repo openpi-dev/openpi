@@ -8,6 +8,9 @@ import {
 } from "../../../protocol/artifacts.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebArchivedSessionPage,
+  type WebTerminalSessionPage,
+  type WebTerminalSessionDetail,
   type WebModelSearchResult,
   type WebModelSummary,
   type WebSnapshot,
@@ -272,6 +275,29 @@ export class WebClient {
     return this.request<{ path: string; archived: false }>(
       `/api/sessions/unarchive?path=${encodeURIComponent(path)}`,
       { method: "POST" },
+    );
+  }
+
+  archivedSessions(query: string, cursor?: string, signal?: AbortSignal) {
+    const params = new URLSearchParams({ q: query, limit: "50" });
+    if (cursor) params.set("cursor", cursor);
+    return this.request<WebArchivedSessionPage>(
+      `/api/sessions/archived?${params}`,
+      { signal },
+    );
+  }
+
+  terminalSessions(workspaceQuery: string, cursor = 0, signal?: AbortSignal) {
+    return this.request<WebTerminalSessionPage>(
+      `/api/terminal-sessions?${new URLSearchParams({ query: workspaceQuery, cursor: String(cursor), limit: "50" })}`,
+      { signal },
+    );
+  }
+
+  terminalSession(path: string, signal?: AbortSignal) {
+    return this.request<WebTerminalSessionDetail>(
+      `/api/terminal-sessions?${new URLSearchParams({ path })}`,
+      { signal },
     );
   }
 

@@ -26,6 +26,7 @@ import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
@@ -616,6 +617,28 @@ it("reports failed copy honestly, supports retry, and cleans up feedback on unmo
 });
 
 it("shows bounded archive history even when its workspace summary was omitted", async () => {
+  vi.spyOn(WebClient.prototype, "archivedSessions").mockResolvedValue({
+    sessions: [
+      {
+        id: "archived",
+        path: "/omitted/a.jsonl",
+        cwd: "/omitted",
+        name: "Archived work",
+        archived: true,
+        modified: "2026-09-01T10:00:00Z",
+        created: "2026-09-01T10:00:00Z",
+        messageCount: 1,
+        firstMessage: "saved",
+      },
+    ],
+    truncation: {
+      truncated: true,
+      matchesOmitted: 0,
+      recordsUnscanned: 20,
+      maxPageSize: 50,
+      maxScanned: 5000,
+    },
+  });
   const store = createWebStore();
   const restore = vi
     .spyOn(store.getState().actions, "unarchiveSession")
@@ -665,16 +688,13 @@ it("shows bounded archive history even when its workspace summary was omitted", 
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(screen.getByText("Archived work")).toBeTruthy();
-  expect(screen.getByText("/omitted")).toBeTruthy();
+  expect(await screen.findByText("Archived work")).toBeTruthy();
+  expect(screen.getByText(/\/omitted/u)).toBeTruthy();
   expect(
-    screen.getByText(
-      "20 more sessions and 1 workspace summaries are not loaded. Search covers the loaded list only.",
-    ),
+    screen.getByText("History scan is partial; some records may not be shown."),
   ).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
-    await screen.findByRole("menuitem", { name: "Restore conversation" }),
+    screen.getByRole("button", { name: "Restore conversation Archived work" }),
   );
   expect(
     await screen.findByText(

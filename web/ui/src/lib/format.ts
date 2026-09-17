@@ -1,7 +1,5 @@
-import type { WebSessionSummary } from "../../../protocol/types.ts";
-
 export function sessionTitle(
-  session: Partial<WebSessionSummary>,
+  session: { name?: string; firstMessage?: string },
   fallback: string,
 ) {
   return session.name?.trim() || session.firstMessage?.trim() || fallback;
