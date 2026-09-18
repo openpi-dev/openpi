@@ -330,6 +330,150 @@ function activeSnapshot(): WebSnapshot {
   };
 }
 
+function renderEditableTranscript(onResend = vi.fn(async () => false)) {
+  const snapshot = activeSnapshot();
+  return renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [
+        {
+          key: "user-edit",
+          message: { role: "user", content: "Original message" },
+        },
+      ],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend,
+    }),
+  );
+}
+
+it("discards cancelled message edits when reopening the editor", () => {
+  renderEditableTranscript();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("editMessage") }));
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Cancelled draft" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("cancel") }));
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("editMessage") }));
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").value).toBe(
+    "Original message",
+  );
+});
+
+it("locks message edits during admission and retains rejected edits for retry", async () => {
+  const result = deferred<boolean>();
+  const resend = vi.fn(() => result.promise);
+  renderEditableTranscript(resend);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("editMessage") }));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "Edited message" } });
+  const confirm = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("confirmEdit"),
+  });
+  fireEvent.click(confirm);
+  expect(input.readOnly).toBe(true);
+  expect(confirm.disabled).toBe(true);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(resend).toHaveBeenCalledTimes(1);
+  await act(async () => {
+    result.resolve(false);
+    await result.promise;
+  });
+  expect(input.value).toBe("Edited message");
+  expect(input.readOnly).toBe(false);
+  expect(confirm.disabled).toBe(false);
+  fireEvent.change(input, { target: { value: "   " } });
+  expect(confirm.disabled).toBe(true);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(resend).toHaveBeenCalledTimes(1);
+});
+
+it("resizes the composer when a session switch clears a tall draft", () => {
+  const snapshot = activeSnapshot();
+  const props = {
+    snapshot,
+    selectedPath: "/tmp/session",
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: createWebStore().getState().actions,
+  };
+  const node = (path: string) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        selectedPath: path,
+        snapshot: {
+          ...snapshot,
+          selectedSession: { ...snapshot.selectedSession!, path },
+        },
+      }),
+    );
+  const view = render(node("/tmp/session"));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  Object.defineProperty(input, "scrollHeight", {
+    configurable: true,
+    get: () => (input.value ? 400 : 52),
+  });
+  fireEvent.change(input, { target: { value: "Long draft" } });
+  expect(input.style.height).toBe("220px");
+  view.rerender(node("/tmp/other-session"));
+  expect(input.value).toBe("");
+  expect(input.style.height).toBe("52px");
+  expect(input.style.overflowY).toBe("hidden");
+});
+
+it("keeps a pinned transcript at the bottom on viewport resize without moving a reader", () => {
+  let resized: ResizeObserverCallback | undefined;
+  const disconnect = vi.fn();
+  vi.stubGlobal(
+    "ResizeObserver",
+    class {
+      constructor(callback: ResizeObserverCallback) {
+        resized = callback;
+      }
+      observe() {}
+      disconnect = disconnect;
+    },
+  );
+  try {
+    const view = renderEditableTranscript();
+    const viewport = screen.getByRole("log");
+    const scroll = vi.fn();
+    viewport.scrollTo = scroll;
+    Object.defineProperties(viewport, {
+      scrollHeight: { configurable: true, value: 1000 },
+      clientHeight: { configurable: true, value: 300 },
+    });
+    expect(resized).toBeDefined();
+    act(() => resized?.([], {} as ResizeObserver));
+    expect(scroll).toHaveBeenCalledWith({ top: 1000, behavior: "instant" });
+    scroll.mockClear();
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    act(() => resized?.([], {} as ResizeObserver));
+    expect(scroll).not.toHaveBeenCalled();
+    view.unmount();
+    expect(disconnect).toHaveBeenCalled();
+  } finally {
+    vi.unstubAllGlobals();
+  }
+});
+
 it("follows same-key streamed growth, preserves reading position, and honors explicit send scroll", () => {
   const snapshot = activeSnapshot();
   const props = {

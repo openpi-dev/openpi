@@ -372,43 +372,51 @@ function MessageActions({
   );
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(content);
+  const [submitting, setSubmitting] = useState(false);
   const editInput = useRef<HTMLTextAreaElement>(null);
   useEffect(() => {
     if (editing) editInput.current?.focus();
   }, [editing]);
+  const submitEdit = async () => {
+    if (submitting || !draft.trim() || !editable) return;
+    setSubmitting(true);
+    try {
+      if (await onResend(draft.trim())) setEditing(false);
+    } finally {
+      setSubmitting(false);
+    }
+  };
   if (editing) {
     return (
       <div className="message-editor">
         <textarea
           ref={editInput}
           value={draft}
+          aria-label={t("editMessage")}
+          readOnly={submitting}
           onChange={(event) => setDraft(event.target.value)}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing || submitting) return;
             if (event.key === "Escape") setEditing(false);
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
-              void onResend(draft.trim()).then(
-                (sent) => sent && setEditing(false),
-              );
+              void submitEdit();
             }
           }}
         />
         <div className="message-edit-actions">
-          <button type="button" onClick={() => setEditing(false)}>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => setEditing(false)}
+          >
             {t("cancel")}
           </button>
           <button
             type="button"
             className="confirm"
-            onClick={() =>
-              void onResend(draft.trim()).then(
-                (sent) => sent && setEditing(false),
-              )
-            }
+            disabled={submitting || !draft.trim() || !editable}
+            onClick={() => void submitEdit()}
           >
             {t("confirmEdit")}
           </button>
@@ -425,7 +433,10 @@ function MessageActions({
           type="button"
           aria-label={t("editMessage")}
           title={t("editMessage")}
-          onClick={() => setEditing(true)}
+          onClick={() => {
+            setDraft(content);
+            setEditing(true);
+          }}
         >
           <Pencil />
         </button>
@@ -614,6 +625,23 @@ export function Transcript(props: TranscriptProps) {
   );
   const selected = props.snapshot.selectedSession;
   const active = selected?.id === props.snapshot.currentSessionId;
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!element || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      // Composer growth and window resizing must preserve bottom following.
+      // Reading older messages still owns the scroll position.
+      if (!pinned.current) return;
+      if (typeof element.scrollTo === "function") {
+        element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
+      } else {
+        element.scrollTop = element.scrollHeight;
+      }
+    });
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   const { rows, turns } = useMemo(() => {
     const results = new Map<string, WebLiveMessage>();

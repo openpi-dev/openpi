@@ -9,7 +9,14 @@ import {
   SlidersHorizontal,
   Square,
 } from "lucide-react";
-import { type FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type FormEvent,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { workspaceName } from "../../lib/format.ts";
@@ -65,6 +72,15 @@ export function Composer(props: ComposerProps) {
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  useLayoutEffect(() => {
+    // Programmatic clears and recovered drafts need the same sizing as typing.
+    void prompt;
+    const element = textarea.current;
+    if (!element) return;
+    element.style.height = "auto";
+    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
+    element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
+  }, [prompt]);
   const restoredRecoveryCommandId = useRef<string | null>(null);
   const commandMenuWasOpen = useRef(false);
   const selected = props.snapshot?.selectedSession;
@@ -174,10 +190,6 @@ export function Composer(props: ComposerProps) {
     if (!resolution) return;
     if (prompt.trim() === resolution.content) {
       setPrompt("");
-      if (textarea.current) {
-        textarea.current.style.height = "auto";
-        textarea.current.style.overflowY = "hidden";
-      }
     }
     props.actions.acknowledgePromptAdmissionResolution(resolution.commandId);
   }, [prompt, props.actions, props.promptAdmissionResolution]);
@@ -227,12 +239,6 @@ export function Composer(props: ComposerProps) {
     sessionPath,
   ]);
 
-  const resize = (element: HTMLTextAreaElement) => {
-    element.style.height = "auto";
-    element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
-    element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
-  };
-
   const sendDraft = async (
     sendPrompt: (content: string) => Promise<boolean>,
   ) => {
@@ -256,10 +262,6 @@ export function Composer(props: ComposerProps) {
         ) {
           draftRevision.current += 1;
           setPrompt("");
-          if (textarea.current) {
-            textarea.current.style.height = "auto";
-            textarea.current.style.overflowY = "hidden";
-          }
         }
       }
     } finally {
@@ -506,7 +508,6 @@ export function Composer(props: ComposerProps) {
             setPrompt(event.target.value);
             setCursor(event.target.selectionStart);
             setMenuDismissed(false);
-            resize(event.currentTarget);
           }}
           onClick={(event) => setCursor(event.currentTarget.selectionStart)}
           onSelect={(event) => setCursor(event.currentTarget.selectionStart)}

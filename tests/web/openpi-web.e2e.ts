@@ -14,6 +14,92 @@ if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
 
+for (const width of [1280, 390]) {
+  test(`message editing and composer resizing preserve readable layout at ${width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width, height: 800 });
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.selectedSession.entries = [
+        {
+          id: "layout-user",
+          type: "message",
+          timestamp: "2026-09-18T00:00:00Z",
+          message: { role: "user", content: "Original message ".repeat(30) },
+        },
+        {
+          id: "layout-assistant",
+          type: "message",
+          timestamp: "2026-09-18T00:00:01Z",
+          message: {
+            role: "assistant",
+            content: Array.from(
+              { length: 50 },
+              (_, index) => `Paragraph ${index + 1}`,
+            ).join("\n\n"),
+          },
+        },
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await openWorkbench(page);
+    const conversation = page.getByRole("log", { name: "Conversation" });
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    const bottomGap = () =>
+      conversation.evaluate(
+        (el) => el.scrollHeight - el.clientHeight - el.scrollTop,
+      );
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await input.fill(
+      Array.from({ length: 14 }, (_, index) => `Draft line ${index}`).join(
+        "\n",
+      ),
+    );
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await input.fill("");
+    await expect.poll(bottomGap).toBeLessThan(2);
+    await conversation.evaluate((el) => {
+      // Establish a reading position, rather than starting the stylesheet's
+      // smooth-scroll animation while a resize notification is still pending.
+      el.scrollTo({ top: 120, behavior: "instant" });
+    });
+    await expect
+      .poll(() => conversation.evaluate((el) => el.scrollTop))
+      .toBe(120);
+    await input.fill("Reading history\n".repeat(12));
+    await expect
+      .poll(() => conversation.evaluate((el) => el.scrollTop))
+      .toBe(120);
+    await input.fill("");
+    await page.getByRole("button", { name: "编辑消息", exact: true }).click();
+    const editor = page.getByRole("textbox", { name: "编辑消息", exact: true });
+    await expect(editor).toBeVisible();
+    await expect(page.locator(".message-row.user .message-body")).toBeHidden();
+    const dimensions = await page.locator(".message-editor").evaluate((el) => ({
+      width: el.getBoundingClientRect().width,
+      rowWidth: el.parentElement!.getBoundingClientRect().width,
+      right: el.getBoundingClientRect().right,
+      viewport: document.documentElement.clientWidth,
+    }));
+    expect(dimensions.width).toBeGreaterThan(
+      Math.min(600, dimensions.rowWidth - 2),
+    );
+    expect(dimensions.right).toBeLessThanOrEqual(dimensions.viewport);
+    await editor.fill("Cancelled edit");
+    await page.getByRole("button", { name: "取消", exact: true }).click();
+    await page.getByRole("button", { name: "编辑消息", exact: true }).click();
+    await expect(editor).toHaveValue("Original message ".repeat(30));
+  });
+}
+
 async function openWorkbench(page: Page) {
   const externalRequests: string[] = [];
   page.on("request", (request) => {
@@ -388,8 +474,14 @@ test.describe("touch viewport", () => {
       .first();
     await expect(sessionMenu).toBeVisible();
     await sessionMenu.click();
-    await expect(page.getByRole("menu", { name: "会话选项" })).toBeVisible();
+    const menu = page.getByRole("menu", { name: "会话选项" });
+    await expect(menu).toBeVisible();
+    // Keyboard dismissal belongs to the menu after its focus handoff, not to
+    // the drawer trigger while the menu is still opening.
+    await expect(menu).toBeFocused();
     await page.keyboard.press("Escape");
+    await expect(menu).toBeHidden();
+    await expect(sidebar).toBeVisible();
 
     await page.getByRole("button", { name: "Workspace options" }).click();
     await page.getByRole("menuitem", { name: "重命名工作区" }).click();
@@ -714,6 +806,9 @@ test("restores a running turn and canonical dark theme without losing cancellati
   await expect.poll(() => cancelRequests).toEqual([turn]);
   const accessibility = await new AxeBuilder({ page }).analyze();
   expect(accessibility.violations).toEqual([]);
+  // Cancel triggers a snapshot reconcile. Finish its route handler before
+  // Playwright disposes the response's request context during teardown.
+  await page.unrouteAll({ behavior: "wait" });
 });
 
 test("recovers an unknown prompt admission only after an explicit user decision", async ({

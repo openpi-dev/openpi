@@ -231,7 +231,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 @keyframes pixel-nudge { 0%, 60% { transform: none; } 65% { transform: translateY(13px); } 71% { transform: translateY(11px); } 82%, 100% { transform: translate(-11px, 11px); } }
 
 .message-row { @apply relative mx-auto; width: min(820px, calc(100% - 48px)); padding: 18px 0 26px; }
-.message-row.user { @apply flex justify-end; padding-top: 26px; }
+.message-row.user { @apply flex flex-col items-end; padding-top: 26px; }
 .message-row.assistant { width: min(840px, calc(100% - 48px)); padding: 6px 0; }
 .message-row.detail-only { padding: 6px 0; }
 .message-content { min-width: 0; max-width: min(78%, 620px); }
@@ -312,6 +312,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-actions svg { width: 13px; height: 13px; }
 .message-editor { width: min(100%, 620px); margin-left: auto; }
 .message-editor textarea { width: 100%; min-height: 52px; max-height: 220px; resize: vertical; padding: 10px 14px; border: 1px solid var(--border-strong); border-radius: 14px; background: var(--page); outline: 0; }
+.message-row.user:has(.message-editor) > .message-content { display: none; }
+.message-editor textarea:focus-visible { outline: 2px solid var(--border-strong); outline-offset: 2px; }
+.message-edit-actions button:disabled { opacity: .45; cursor: not-allowed; }
 .message-edit-actions { @apply mt-2 flex justify-end gap-2; }
 .message-edit-actions button { height: 30px; padding: 0 14px; border: 1px solid var(--border-strong); border-radius: 15px; background: var(--page); font-size: 12.5px; }
 .message-edit-actions .confirm { border-color: var(--text); background: var(--text); color: var(--page); }
