@@ -3,7 +3,7 @@
 - 状态：validated（限下述组件、正式静态页面与本地真实模型体验；不是性能 Benchmark）。
 - 创建 / 验证日期：2026-09-18。
 - 源码边界：上游 main `f6b49ae59605b1276b8267f2886d22c03f01533c`，修复分支 `codex/web-experience-five-fixes`。
-- 跟踪：[Issue #559](https://github.com/openpi-dev/openpi/issues/559)。PR：尚未创建。
+- 跟踪：[Issue #559](https://github.com/openpi-dev/openpi/issues/559)；[PR #561](https://github.com/openpi-dev/openpi/pull/561)。
 - Supersedes：none。
 
 ## 运行来源与体验范围

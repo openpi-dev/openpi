@@ -3,7 +3,7 @@
 - Status: validated（限下述源码、确定性测试与真实模型体验边界）；不是性能 Benchmark。
 - Created / verified: 2026-09-18。
 - Source boundary: main `f6b49ae59605b1276b8267f2886d22c03f01533c`，前一批修复 `e48f2e1`，分支 `codex/web-experience-five-fixes`。
-- Related: [Issue #560](https://github.com/openpi-dev/openpi/issues/560)；[前一批 5 个交互修复](WEB_EXPERIENCE_FIVE_FIXES_2026-09-18.md) / [#559](https://github.com/openpi-dev/openpi/issues/559)。PR 尚未创建。
+- Related: [Issue #560](https://github.com/openpi-dev/openpi/issues/560)；[前一批 5 个交互修复](WEB_EXPERIENCE_FIVE_FIXES_2026-09-18.md) / [#559](https://github.com/openpi-dev/openpi/issues/559)；[PR #561](https://github.com/openpi-dev/openpi/pull/561)。
 - Supersedes: none。本文不是新增的项目架构约束。
 
 ## 用户实际遇到的问题
