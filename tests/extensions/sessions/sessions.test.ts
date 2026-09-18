@@ -4,10 +4,12 @@ import {
   buildSessionDescription,
   buildSessionLabel,
   buildSessionPreview,
+  buildSessionSearchEntries,
   filterSessionEntries,
+  formatRelativeTime,
   parseLimit,
-  selectSessionStatsWindow,
   type SessionInfoLike,
+  selectSessionStatsWindow,
 } from "../../../extensions/sessions/sessions.ts";
 
 const session: SessionInfoLike = {
@@ -143,4 +145,32 @@ test("bounded preview reports omitted messages and content bytes", () => {
     { kind: "notice", text: "… 2048 bytes of preview content omitted" },
   ]);
   assert.match(preview.subtitle, /100 messages/);
+});
+
+test("formatRelativeTime formats today as time and past dates as calendar date with relative duration", () => {
+  const now = new Date();
+
+  // Today
+  const tenMinsAgo = new Date(now.getTime() - 10 * 60 * 1000);
+  assert.match(formatRelativeTime(tenMinsAgo), /^\d{2}:\d{2} \(10m ago\)$/);
+
+  const twoHoursAgo = new Date(now.getTime() - 2 * 3600 * 1000);
+  assert.match(formatRelativeTime(twoHoursAgo), /^\d{2}:\d{2} \(2h ago\)$/);
+
+  // Past days (same year)
+  const threeDaysAgo = new Date(now.getTime() - 3 * 86400 * 1000);
+  assert.match(formatRelativeTime(threeDaysAgo), /^\d{2}-\d{2} \(3d ago\)$/);
+
+  const twelveDaysAgo = new Date(now.getTime() - 12 * 86400 * 1000);
+  assert.match(formatRelativeTime(twelveDaysAgo), /^\d{2}-\d{2} \(12d ago\)$/);
+});
+
+test("session search matches formatted dates and years", () => {
+  const sample = {
+    ...session,
+    modified: new Date("2026-09-06T10:00:00Z"),
+  };
+  const entries = buildSessionSearchEntries([sample]);
+  assert.equal(filterSessionEntries(entries, "2026").length, 1);
+  assert.equal(filterSessionEntries(entries, "09-06").length, 1);
 });

@@ -77,16 +77,37 @@ export function formatTimestamp(date: Date): string {
 export function formatRelativeTime(date: Date): string {
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
+  const diffSec = Math.max(0, Math.floor(diffMs / 1000));
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHour / 24);
 
-  if (diffSec < 60) return "Just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay === 1) return "Yesterday";
-  return `${diffDay}d ago`;
+  const isToday =
+    date.getFullYear() === now.getFullYear() &&
+    date.getMonth() === now.getMonth() &&
+    date.getDate() === now.getDate();
+
+  if (isToday) {
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    if (diffSec < 60) return `${time} (just now)`;
+    if (diffMin < 60) return `${time} (${diffMin}m ago)`;
+    return `${time} (${diffHour}h ago)`;
+  }
+
+  const isCurrentYear = date.getFullYear() === now.getFullYear();
+  const dateStr = isCurrentYear
+    ? `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    : `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+
+  if (diffDay < 60) {
+    return `${dateStr} (${diffDay}d ago)`;
+  }
+  if (diffDay < 365) {
+    const months = Math.max(1, Math.floor(diffDay / 30));
+    return `${dateStr} (${months}mo ago)`;
+  }
+  const years = Math.max(1, Math.floor(diffDay / 365));
+  return `${dateStr} (${years}y ago)`;
 }
 
 const cleanDisplayLine = (text: string) =>
@@ -127,6 +148,8 @@ export const buildSearchText = (session: SessionInfoLike): string =>
     session.id,
     session.cwd,
     session.firstMessage ?? "",
+    formatTimestamp(session.modified),
+    formatRelativeTime(session.modified),
   ]
     .join(" ")
     .toLowerCase();
