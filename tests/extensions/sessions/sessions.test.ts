@@ -1,13 +1,18 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import test from "node:test";
 import {
   buildSessionDescription,
   buildSessionLabel,
   buildSessionPreview,
+  deleteSessionFile,
   filterSessionEntries,
   parseLimit,
-  selectSessionStatsWindow,
   type SessionInfoLike,
+  selectSessionStatsWindow,
 } from "../../../extensions/sessions/sessions.ts";
 
 const session: SessionInfoLike = {
@@ -143,4 +148,20 @@ test("bounded preview reports omitted messages and content bytes", () => {
     { kind: "notice", text: "… 2048 bytes of preview content omitted" },
   ]);
   assert.match(preview.subtitle, /100 messages/);
+});
+
+test("deleteSessionFile removes an existing file", async () => {
+  const file = path.join(tmpdir(), `openpi-del-test-${Date.now()}.jsonl`);
+  await writeFile(file, "{}");
+  assert.equal(existsSync(file), true);
+
+  const result = await deleteSessionFile(file);
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(file), false);
+});
+
+test("deleteSessionFile returns error on non-existent file", async () => {
+  const file = path.join(tmpdir(), `nonexistent-${Date.now()}.jsonl`);
+  const result = await deleteSessionFile(file);
+  assert.equal(result.ok, false);
 });

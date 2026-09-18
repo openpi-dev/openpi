@@ -1,3 +1,6 @@
+import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { unlink } from "node:fs/promises";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 
 export interface SessionInfoLike {
@@ -421,4 +424,30 @@ export function buildPreviewError(
     blocks: [{ kind: "notice", text: `Failed to load preview: ${message}` }],
     error: message,
   };
+}
+
+export async function deleteSessionFile(
+  sessionPath: string,
+): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
+  if (!existsSync(sessionPath)) {
+    return { ok: false, method: "unlink", error: "File not found" };
+  }
+
+  const trashArgs = sessionPath.startsWith("-")
+    ? ["--", sessionPath]
+    : [sessionPath];
+  try {
+    const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
+    if (trashResult.status === 0 || !existsSync(sessionPath)) {
+      return { ok: true, method: "trash" };
+    }
+  } catch {}
+
+  try {
+    await unlink(sessionPath);
+    return { ok: true, method: "unlink" };
+  } catch (err) {
+    const error = err instanceof Error ? err.message : String(err);
+    return { ok: false, method: "unlink", error };
+  }
 }
