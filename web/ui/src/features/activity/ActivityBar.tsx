@@ -1,7 +1,9 @@
 import { Check, X } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
+import { recordedSubagents } from "../subagents/recorded-subagents.ts";
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
 
@@ -49,12 +51,28 @@ function Chip({
 export function ActivityBar({
   snapshot,
   onInspectTerminal,
+  onInspectSubagent,
 }: {
   snapshot: WebSnapshot | null;
   onInspectTerminal?: (id: string) => void;
+  onInspectSubagent?: (id?: string) => void;
 }) {
+  const { t } = useTranslation();
   const [, tick] = useState(0);
   const capabilities = snapshot?.runtime.capabilities;
+  const saved = useMemo(
+    () =>
+      recordedSubagents(
+        (snapshot?.selectedSession?.entries ?? []).flatMap((entry) =>
+          entry.message ? [entry.message] : [],
+        ),
+      ),
+    [snapshot?.selectedSession?.entries],
+  );
+  const subagentCount = new Set([
+    ...(capabilities?.subagents?.items ?? []).map((item) => item.id),
+    ...saved.map((item) => item.id),
+  ]).size;
   const running = [
     ...(capabilities?.subagents?.items ?? []),
     ...(capabilities?.workflows?.items ?? []),
@@ -100,6 +118,9 @@ export function ActivityBar({
       kind: "subagent",
       label: `${subagent.title || subagent.id}${elapsed ? ` · ${elapsed}` : ""}`,
       status: canonicalStatus(subagent.status),
+      onClick: onInspectSubagent
+        ? () => onInspectSubagent(subagent.id)
+        : undefined,
     });
   }
   for (const terminal of capabilities?.["background-terminals"]?.items ?? []) {
@@ -125,9 +146,19 @@ export function ActivityBar({
     (capabilities?.subagents?.omitted ?? 0) +
     (capabilities?.workflows?.omitted ?? 0) +
     (capabilities?.["background-terminals"]?.omitted ?? 0);
-  if (!visible.length && !omitted) return null;
+  if (!visible.length && !omitted && !(onInspectSubagent && subagentCount))
+    return null;
   return (
     <div className="activity-bar" role="status" aria-label="Runtime activity">
+      {onInspectSubagent && subagentCount > 0 && (
+        <button
+          className="activity-chip subagent-list-trigger"
+          type="button"
+          onClick={() => onInspectSubagent()}
+        >
+          {t("subagentList", { count: subagentCount })}
+        </button>
+      )}
       {visible.map(({ key, ...chip }) => (
         <Chip key={key} {...chip} />
       ))}

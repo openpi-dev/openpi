@@ -1,3 +1,10 @@
+import type {
+  LiveToolState,
+  SubagentSnapshot,
+  TranscriptItem,
+  TranscriptPart,
+} from "../subagents/src/domain.ts";
+
 export type WebCapabilityKind =
   | "subagents"
   | "workflows"
@@ -77,7 +84,23 @@ export interface WebBackgroundTerminalDetail {
   readonly truncated: boolean;
 }
 
-export type WebCapabilityDetail = WebBackgroundTerminalDetail;
+export interface WebSubagentDetail extends WebSubagentActivity {
+  readonly kind: "subagents";
+  readonly cwd: string;
+  readonly model?: string;
+  readonly prompt: string;
+  readonly transcript: readonly TranscriptItem[];
+  readonly liveAssistant?: { readonly text: string; readonly thinking: string };
+  readonly liveTools: readonly LiveToolState[];
+  readonly finalText: string;
+  readonly errorText?: string;
+  readonly truncated: boolean;
+  readonly omittedEntries: number;
+}
+
+export type WebCapabilityDetail =
+  | WebBackgroundTerminalDetail
+  | WebSubagentDetail;
 
 export type WebCapabilityDetailReceipt =
   | { readonly status: "found"; readonly detail: WebCapabilityDetail }
@@ -253,6 +276,147 @@ export function projectSubagentCapability(
       truncated: id.truncated || title.truncated,
     };
   });
+}
+
+/** Project only manager-owned display data; never load child session files. */
+export function projectSubagentDetail(
+  source: SubagentSnapshot,
+): WebSubagentDetail {
+  let remainingBytes = 64 * 1024;
+  let truncated = false;
+  const text = (value: string, maxBytes = 4 * 1024) => {
+    if (remainingBytes === 0) {
+      truncated ||= value.length > 0;
+      return "";
+    }
+    const bounded = boundedUtf8Tail(value, Math.min(maxBytes, remainingBytes));
+    remainingBytes -= bounded.bytes;
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const title = text(source.title, 640);
+  const cwd = text(source.cwd, 2 * 1024);
+  const model =
+    source.meta.modelLabel === undefined
+      ? undefined
+      : text(source.meta.modelLabel, 640);
+  const prompt = text(source.prompt);
+  const finalText = text(source.finalText, 8 * 1024);
+  const errorText =
+    source.errorText === undefined ? undefined : text(source.errorText);
+  const liveAssistant = source.liveAssistant && {
+    text: text(source.liveAssistant.text, 8 * 1024),
+    thinking: text(source.liveAssistant.thinking),
+  };
+  // Pairing identities must survive byte bounds exactly, never as shared tails.
+  const toolIdentity = (id: string) => {
+    const bytes = new TextEncoder().encode(id).byteLength;
+    if (
+      !id ||
+      bytes > 640 ||
+      bytes > remainingBytes ||
+      /[\u0000-\u001f\u007f]/u.test(id)
+    ) {
+      truncated = true;
+      return undefined;
+    }
+    remainingBytes -= bytes;
+    return id;
+  };
+  const liveTools = source.liveTools.slice(-16).flatMap((tool) => {
+    const toolId = toolIdentity(tool.toolId);
+    if (toolId === undefined) return [];
+    return [
+      {
+        toolId,
+        name: text(tool.name, 640),
+        ...(tool.argsPreview !== undefined
+          ? { argsPreview: text(tool.argsPreview) }
+          : {}),
+        ...(tool.outputPreview !== undefined
+          ? { outputPreview: text(tool.outputPreview) }
+          : {}),
+        ...(tool.done !== undefined ? { done: tool.done } : {}),
+        ...(tool.isError !== undefined ? { isError: tool.isError } : {}),
+      },
+    ];
+  });
+  // Spend the remaining budget on recent activity first, then restore chronology.
+  const selected = source.transcript.slice(-64);
+  const transcript: TranscriptItem[] = selected
+    .reverse()
+    .flatMap((item): TranscriptItem[] => {
+      if (item.kind === "user")
+        return [{ kind: "user", text: text(item.text) }];
+      if (item.kind === "toolResult") {
+        const toolId = toolIdentity(item.toolId);
+        if (toolId === undefined) return [];
+        return [
+          {
+            kind: "toolResult",
+            toolId,
+            name: text(item.name, 640),
+            isError: item.isError,
+            ...(item.outputPreview !== undefined
+              ? { outputPreview: text(item.outputPreview) }
+              : {}),
+          },
+        ];
+      }
+      truncated ||= item.parts.length > 32;
+      const parts = item.parts.slice(-32).flatMap((part): TranscriptPart[] => {
+        if (part.type === "toolCall") {
+          const toolId = toolIdentity(part.toolId);
+          if (toolId === undefined) return [];
+          return [
+            {
+              type: "toolCall",
+              toolId,
+              name: text(part.name, 640),
+              ...(part.argsPreview !== undefined
+                ? { argsPreview: text(part.argsPreview) }
+                : {}),
+            },
+          ];
+        }
+        if (part.type === "thinking")
+          return [
+            {
+              type: "thinking",
+              text: part.redacted ? "" : text(part.text),
+              ...(part.redacted !== undefined
+                ? { redacted: part.redacted }
+                : {}),
+            },
+          ];
+        return [{ type: "text", text: text(part.text) }];
+      });
+      return [{ kind: "assistant", parts }];
+    })
+    .reverse();
+  const omittedEntries = source.transcript.length - transcript.length;
+  return {
+    kind: "subagents",
+    id: source.id,
+    title,
+    status: source.status,
+    ...(source.outcome !== undefined ? { outcome: source.outcome } : {}),
+    createdAt: source.createdAt,
+    ...(source.settledAt !== undefined ? { settledAt: source.settledAt } : {}),
+    cwd,
+    ...(model !== undefined ? { model } : {}),
+    prompt,
+    transcript,
+    ...(liveAssistant ? { liveAssistant } : {}),
+    liveTools,
+    finalText,
+    ...(errorText !== undefined ? { errorText } : {}),
+    truncated:
+      truncated ||
+      omittedEntries > 0 ||
+      source.liveTools.length > liveTools.length,
+    omittedEntries,
+  };
 }
 
 export function projectWorkflowCapability(

@@ -24,6 +24,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
   WebLiveMessage,
   WebMessagePart,
@@ -61,6 +62,7 @@ interface TranscriptProps {
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
   onResend: (content: string) => Promise<boolean>;
+  onInspectSubagent?: (id: string) => void;
 }
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
@@ -229,22 +231,26 @@ function ActivityCard({
 function familyCard(
   part: Extract<WebMessagePart, { type: "toolCall" }>,
   result?: WebLiveMessage,
+  subagents: readonly WebSubagentActivity[] = [],
+  onInspectSubagent?: (id: string) => void,
 ) {
   const name = part.name || "";
   const args = parseArguments(part.arguments);
   const details = record(result?.details);
   const status = resultStatus(result);
   if (name === "subagent_spawn") {
-    const meta = [args.agent_type, args.model, args.working_dir]
+    const meta = [args.agent_type, details.model || args.model]
       .filter(Boolean)
       .join(" · ");
     return (
-      <ActivityCard
-        family="subagent"
-        title={`Spawn Subagent · ${String(details.title || args.name || "subagent")}`}
-        meta={meta || String(details.cwd || "")}
+      <SubagentCard
+        id={typeof details.id === "string" ? details.id : undefined}
+        title={String(details.title || args.name || "subagent")}
+        meta={meta}
         body={result?.content || String(args.prompt || part.arguments)}
-        status={status}
+        activity={subagents.find((item) => item.id === details.id)}
+        spawnFailed={result?.isError === true}
+        onInspect={onInspectSubagent}
       />
     );
   }
@@ -300,6 +306,61 @@ function familyCard(
     );
   }
   return null;
+}
+
+function SubagentCard({
+  id,
+  title,
+  meta,
+  body,
+  activity,
+  spawnFailed,
+  onInspect,
+}: {
+  id?: string;
+  title: string;
+  meta: string;
+  body: string;
+  activity?: WebSubagentActivity;
+  spawnFailed: boolean;
+  onInspect?: (id: string) => void;
+}) {
+  const { t } = useTranslation();
+  const state =
+    activity?.outcome === "interrupted" ? "interrupted" : activity?.status;
+  const label = state
+    ? t(`subagentState_${state}`)
+    : spawnFailed
+      ? t("subagentSpawnFailed")
+      : id
+        ? t("subagentStateUnavailable")
+        : t("subagentStarting");
+  return (
+    <section className="message-details activity-card subagent">
+      <button
+        className="subagent-card-open"
+        type="button"
+        disabled={!id || !onInspect}
+        aria-label={t("inspectSubagent", { name: title })}
+        onClick={() => id && onInspect?.(id)}
+      >
+        <span className="activity-icon" aria-hidden="true">
+          <Bot />
+        </span>
+        <span className="activity-main">
+          <strong className="activity-title">{title}</strong>
+          {meta && <span className="activity-meta">{meta}</span>}
+        </span>
+        <span className={`subagent-state ${state ?? "unknown"}`}>{label}</span>
+        <span aria-hidden="true">›</span>
+      </button>
+      <details className="subagent-receipt">
+        <summary>{t("subagentSpawnReceipt")}</summary>
+        <p>{t("subagentSpawnReceiptHint")}</p>
+        <pre className="details-body tool-evidence">{body}</pre>
+      </details>
+    </section>
+  );
 }
 
 function useElapsed(start: number | undefined, active: boolean) {
@@ -762,7 +823,14 @@ export function Transcript(props: TranscriptProps) {
                 cwd={selected?.cwd}
               />
             ) : (
-              familyCard(part, result)
+              familyCard(
+                part,
+                result,
+                active
+                  ? props.snapshot.runtime.capabilities.subagents?.items
+                  : undefined,
+                props.onInspectSubagent,
+              )
             );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
@@ -881,6 +949,8 @@ export function Transcript(props: TranscriptProps) {
     entries,
     props.liveRunning,
     props.onResend,
+    props.onInspectSubagent,
+    props.snapshot.runtime.capabilities.subagents,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.thinkingStarts,

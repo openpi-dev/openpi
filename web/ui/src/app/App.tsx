@@ -11,6 +11,8 @@ import {
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
+import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { webStore } from "../store/web-store.ts";
 
 export function App() {
@@ -35,6 +37,38 @@ export function App() {
   }, [actions]);
   const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
+  const [subagentTarget, setSubagentTarget] = useState<{
+    sessionId: string;
+    sessionPath: string;
+    id?: string;
+    navigation: number;
+  } | null>(null);
+  const inspectSubagent = useCallback((id?: string) => {
+    const current = webStore.getState();
+    const session = current.snapshot?.selectedSession;
+    if (
+      current.workspaceDraft ||
+      current.sessionSwitching ||
+      !session ||
+      !session.id
+    )
+      return;
+    setSubagentTarget((previous) => ({
+      sessionId: session.id,
+      sessionPath: session.path,
+      id,
+      navigation: (previous?.navigation ?? 0) + 1,
+    }));
+  }, []);
+  const subagentVisible =
+    subagentTarget &&
+    !state.workspaceDraft &&
+    !state.sessionSwitching &&
+    subagentTarget.sessionId === state.snapshot?.selectedSession?.id &&
+    subagentTarget.sessionPath === state.snapshot?.selectedSession?.path;
+  useEffect(() => {
+    if (subagentTarget && !subagentVisible) setSubagentTarget(null);
+  }, [subagentTarget, subagentVisible]);
   const currentModel = state.snapshot?.models.find((model) => model.current);
   const modelKey = JSON.stringify([currentModel?.provider, currentModel?.id]);
   const inspect = (terminalId?: string) => {
@@ -88,7 +122,7 @@ export function App() {
 
   return (
     <div
-      className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""}`}
+      className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""}`}
     >
       <SessionSidebar
         snapshot={state.snapshot}
@@ -186,6 +220,7 @@ export function App() {
             thinkingDurations={state.thinkingDurations}
             scrollToBottom={state.scrollToBottom}
             onResend={resend}
+            onInspectSubagent={inspectSubagent}
           />
         ) : null}
         <Composer
@@ -195,6 +230,7 @@ export function App() {
           modelSearch={state.modelSearch}
           thinkingPendingLevel={state.thinkingPendingLevel}
           onInspect={inspect}
+          onInspectSubagent={inspectSubagent}
           activeTurn={state.activeTurn}
           turnCancellationPending={state.turnCancellationPending}
           turnTerminalStatus={state.turnTerminalStatus}
@@ -229,6 +265,27 @@ export function App() {
           key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
           target={inspection}
           onClose={() => setInspection(null)}
+        />
+      )}
+      {subagentVisible && (
+        <SubagentPanel
+          key={`${subagentTarget.sessionId}:${subagentTarget.navigation}`}
+          sessionId={subagentTarget.sessionId}
+          initialId={subagentTarget.id}
+          activity={
+            subagentTarget.sessionId === state.snapshot?.currentSessionId
+              ? state.snapshot?.runtime.capabilities.subagents
+              : undefined
+          }
+          records={recordedSubagents(
+            (state.snapshot?.selectedSession?.entries ?? []).flatMap((entry) =>
+              entry.message ? [entry.message] : [],
+            ),
+          )}
+          liveAvailable={
+            subagentTarget.sessionId === state.snapshot?.currentSessionId
+          }
+          onClose={() => setSubagentTarget(null)}
         />
       )}
       <button

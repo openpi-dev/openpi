@@ -5,11 +5,13 @@ import { join } from "node:path";
 import test from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { SubagentSnapshot } from "../../extensions/subagents/src/domain.ts";
 import {
   notifyWebCapabilities,
   projectBackgroundTerminalCapability,
   projectBackgroundTerminalDetail,
   projectSubagentCapability,
+  projectSubagentDetail,
   projectWorkflowCapability,
   registerWebCapability,
   subscribeWebCapabilities,
@@ -19,6 +21,241 @@ import {
 } from "../../extensions/shared/web-observer-registry.ts";
 
 const sessionScope = () => ({}) as unknown as SessionManager;
+
+function subagentSnapshot(
+  overrides: Partial<SubagentSnapshot> = {},
+): SubagentSnapshot {
+  return {
+    id: "sa-1",
+    origin: "model",
+    backend: "pi",
+    title: "Inspect package",
+    prompt: "Read package.json",
+    cwd: "/workspace",
+    status: "running",
+    createdAt: 1,
+    meta: {
+      backend: "pi",
+      modelLabel: "provider/model",
+      sessionFilePath: "/private/child.jsonl",
+    },
+    usage: {},
+    transcript: [],
+    transcriptVersion: 0,
+    liveTools: [],
+    queued: [],
+    finalText: "",
+    turns: 0,
+    ...overrides,
+  };
+}
+
+test("subagent detail clones display data, redacts private thinking, and preserves exact lifecycle", () => {
+  const source = subagentSnapshot({
+    status: "error",
+    outcome: "interrupted",
+    settledAt: 2,
+    transcript: [
+      { kind: "user", text: "inspect" },
+      {
+        kind: "assistant",
+        parts: [
+          { type: "thinking", text: "private reasoning", redacted: true },
+          { type: "text", text: "Checking" },
+          {
+            type: "toolCall",
+            toolId: "call-1",
+            name: "read",
+            argsPreview: "package.json",
+          },
+        ],
+      },
+      {
+        kind: "toolResult",
+        toolId: "call-1",
+        name: "read",
+        isError: false,
+        outputPreview: "package content",
+      },
+    ],
+    liveAssistant: { text: "Partial", thinking: "Visible thought" },
+    liveTools: [{ toolId: "call-2", name: "read", done: false }],
+    errorText: "Interrupted",
+    finalText: "partial answer",
+  });
+  const detail = projectSubagentDetail(source);
+  assert.equal(detail.status, "error");
+  assert.equal(detail.outcome, "interrupted");
+  assert.equal(detail.settledAt, 2);
+  assert.equal(detail.model, "provider/model");
+  assert.equal(detail.prompt, "Read package.json");
+  assert.equal(detail.truncated, false);
+  assert.equal(detail.omittedEntries, 0);
+  assert.equal(JSON.stringify(detail).includes("/private/child.jsonl"), false);
+  assert.equal(JSON.stringify(detail).includes("private reasoning"), false);
+  assert.notEqual(detail.transcript, source.transcript);
+  assert.notEqual(detail.transcript[1], source.transcript[1]);
+  assert.notEqual(detail.liveAssistant, source.liveAssistant);
+  assert.notEqual(detail.liveTools[0], source.liveTools[0]);
+  const assistant = detail.transcript[1];
+  assert.equal(assistant?.kind, "assistant");
+  if (assistant?.kind !== "assistant") throw new Error("Missing assistant");
+  assert.deepEqual(assistant.parts[0], {
+    type: "thinking",
+    text: "",
+    redacted: true,
+  });
+  assert.deepEqual(source.transcript[0], { kind: "user", text: "inspect" });
+});
+
+test("subagent detail bounds nested counts and UTF-8 text with honest omission evidence", () => {
+  const huge = "界".repeat(30_000);
+  const detail = projectSubagentDetail(
+    subagentSnapshot({
+      title: huge,
+      prompt: huge,
+      cwd: huge,
+      finalText: huge,
+      errorText: huge,
+      liveAssistant: { text: huge, thinking: huge },
+      liveTools: Array.from({ length: 30 }, (_, index) => ({
+        toolId: `call-${index}`,
+        name: "read",
+        outputPreview: huge,
+      })),
+      transcript: Array.from({ length: 80 }, () => ({
+        kind: "assistant" as const,
+        parts: Array.from({ length: 50 }, () => ({
+          type: "text" as const,
+          text: huge,
+        })),
+      })),
+    }),
+  );
+  assert.equal(detail.transcript.length, 64);
+  assert.equal(detail.omittedEntries, 16);
+  assert.ok(detail.liveTools.length <= 16);
+  assert.equal(detail.truncated, true);
+  for (const entry of detail.transcript) {
+    if (entry.kind === "assistant") assert.equal(entry.parts.length, 32);
+  }
+  const strings: string[] = [];
+  JSON.stringify(detail, (_key, value: unknown) => {
+    if (typeof value === "string") strings.push(value);
+    return value;
+  });
+  assert.ok(strings.every((value) => !value.includes("\ufffd")));
+  // Includes bounded schema discriminators/keys as well as the 64 KiB text budget.
+  assert.ok(Buffer.byteLength(JSON.stringify(detail)) < 160 * 1024);
+  assert.ok(Buffer.byteLength(detail.prompt) <= 4 * 1024);
+});
+
+test("subagent byte limits omit identities instead of corrupting tool pairing", () => {
+  const suffix = "shared-tail".repeat(100);
+  const ids = [`first-${suffix}`, `second-${suffix}`];
+  const projected = projectSubagentDetail(
+    subagentSnapshot({
+      liveTools: ids.map((toolId) => ({ toolId, name: "read" })),
+      transcript: [
+        {
+          kind: "assistant",
+          parts: ids.map((toolId) => ({
+            type: "toolCall",
+            toolId,
+            name: "read",
+          })),
+        },
+        ...ids.map((toolId) => ({
+          kind: "toolResult" as const,
+          toolId,
+          name: "read",
+          isError: false,
+        })),
+      ],
+    }),
+  );
+  assert.deepEqual(projected.liveTools, []);
+  assert.deepEqual(projected.transcript, [{ kind: "assistant", parts: [] }]);
+  assert.equal(projected.omittedEntries, 2);
+  assert.equal(projected.truncated, true);
+
+  const exhausted = projectSubagentDetail(
+    subagentSnapshot({
+      liveTools: Array.from({ length: 16 }, (_, index) => ({
+        toolId: `live-${index}`,
+        name: "read",
+        argsPreview: "x".repeat(4096),
+        outputPreview: "x".repeat(4096),
+      })),
+      transcript: [
+        {
+          kind: "assistant",
+          parts: [{ type: "toolCall", toolId: "exact-call", name: "read" }],
+        },
+        {
+          kind: "toolResult",
+          toolId: "exact-call",
+          name: "read",
+          isError: true,
+        },
+      ],
+    }),
+  );
+  assert.equal(exhausted.omittedEntries, 1);
+  assert.deepEqual(exhausted.transcript, [{ kind: "assistant", parts: [] }]);
+  assert.ok(
+    exhausted.liveTools.every((tool) => /^live-\d+$/u.test(tool.toolId)),
+  );
+  assert.equal(
+    new Set(exhausted.liveTools.map((tool) => tool.toolId)).size,
+    exhausted.liveTools.length,
+  );
+  assert.equal(exhausted.truncated, true);
+});
+
+test("subagent detail reads exact current manager data only within its Session scope", () => {
+  const scope = sessionScope();
+  let snapshot = subagentSnapshot();
+  const unregister = registerWebCapability(scope, {
+    kind: "subagents",
+    snapshot: () => projectSubagentCapability([snapshot]),
+    detail: (id) =>
+      id === snapshot.id ? projectSubagentDetail(snapshot) : undefined,
+  });
+  try {
+    const running = webCapabilityDetail(scope, "subagents", "sa-1");
+    assert.equal(running.status, "found");
+    if (running.status === "found")
+      assert.equal(running.detail.status, "running");
+    snapshot = {
+      ...snapshot,
+      status: "done",
+      outcome: "completed",
+      finalText: "verified",
+      settledAt: 3,
+    };
+    const finished = webCapabilityDetail(scope, "subagents", "sa-1");
+    assert.equal(finished.status, "found");
+    if (finished.status === "found" && finished.detail.kind === "subagents") {
+      assert.equal(finished.detail.outcome, "completed");
+      assert.equal(finished.detail.finalText, "verified");
+    }
+    assert.deepEqual(webCapabilityDetail(scope, "subagents", "sa-unknown"), {
+      status: "missing",
+    });
+    assert.deepEqual(webCapabilityDetail(sessionScope(), "subagents", "sa-1"), {
+      status: "unavailable",
+    });
+    assert.deepEqual(webCapabilityDetail(scope, "subagents", "sa-1\n"), {
+      status: "invalid",
+    });
+  } finally {
+    unregister();
+  }
+  assert.deepEqual(webCapabilityDetail(scope, "subagents", "sa-1"), {
+    status: "unavailable",
+  });
+});
 
 test("shares providers across separate physical module copies", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-registry-copies-"));
