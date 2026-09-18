@@ -137,6 +137,9 @@ export interface WebLiveMessage {
   parts?: WebMessagePart[];
   toolCallId?: string;
   isError?: boolean;
+  stopReason?: "stop" | "length" | "toolUse" | "aborted" | "error";
+  /** Bounded, redacted provider failure text; not a substitute for the terminal reason. */
+  errorMessage?: string;
   customType?: string;
   display?: boolean;
   details?: unknown;
@@ -220,6 +223,19 @@ function boundedTextProjection(value: string, maxLength: number): BoundedText {
         truncated: true,
       }
     : { value, truncated: false };
+}
+
+const assistantStopReasons = new Set(["stop", "length", "toolUse", "aborted", "error"]);
+
+export function projectAssistantError(value: string) {
+  const cleaned = value
+    .replace(/[\x00-\x1f\x7f-\x9f]/gu, " ")
+    .replace(/https?:\/\/[^\s<>"']+/giu, "[redacted URL]")
+    .replace(/\bBearer\s+[^\s,;]+/giu, "Bearer [redacted]")
+    .replace(/(["']?(?:api[_-]?key|authorization|access[_-]?token|token|secret|password)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1[redacted]")
+    .replace(/(?<![A-Za-z0-9_])[A-Za-z0-9-]{24,}(?![A-Za-z0-9_])/gu, "[redacted]")
+    .trim();
+  return boundedTextProjection(cleaned, WEB_MAX_METADATA_TEXT);
 }
 
 export function boundedText(value: string, maxLength = WEB_MAX_TEXT): string {
@@ -469,6 +485,12 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     typeof value.customType === "string"
       ? boundedTextProjection(value.customType, WEB_MAX_METADATA_TEXT)
       : undefined;
+  const stopReason = value.role === "assistant" && assistantStopReasons.has(String(value.stopReason))
+    ? value.stopReason as WebLiveMessage["stopReason"]
+    : undefined;
+  const errorMessage = stopReason === "error" && typeof value.errorMessage === "string"
+    ? projectAssistantError(value.errorMessage)
+    : undefined;
   const metadataTruncated =
     role?.truncated === true ||
     toolName?.truncated === true ||
@@ -478,7 +500,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     content.textTruncated ||
     content.partsOmitted > 0 ||
     details.truncated ||
-    metadataTruncated;
+    metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
@@ -487,6 +509,8 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    ...(errorMessage ? { errorMessage: errorMessage.value } : {}),
     ...(customType ? { customType: customType.value } : {}),
     ...(typeof value.display === "boolean" ? { display: value.display } : {}),
     ...(details.value !== undefined ? { details: details.value } : {}),
@@ -494,7 +518,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       ? {
           truncation: {
             truncated: true as const,
-            ...(content.textTruncated || metadataTruncated
+            ...(content.textTruncated || metadataTruncated || errorMessage?.truncated
               ? { text: true as const }
               : {}),
             ...(content.partsOmitted > 0

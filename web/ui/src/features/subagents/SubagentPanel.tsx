@@ -101,7 +101,15 @@ function SubagentDetailView({
     }
     const controller = new AbortController();
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let inFlight = false;
     const read = async () => {
+      if (
+        inFlight ||
+        controller.signal.aborted ||
+        document.visibilityState === "hidden"
+      )
+        return;
+      inFlight = true;
       let running = activity?.status === "running";
       try {
         const response = await client.subagentDetail(
@@ -133,16 +141,24 @@ function SubagentDetailView({
               : t("inspectionUnavailable"),
         );
       } finally {
+        inFlight = false;
         if (!controller.signal.aborted) {
           setLoading(false);
           if (running) timer = setTimeout(() => void read(), 1_000);
         }
       }
     };
+    const resume = () => {
+      if (document.visibilityState !== "visible") return;
+      clearTimeout(timer);
+      void read();
+    };
+    document.addEventListener("visibilitychange", resume);
     void read();
     return () => {
       controller.abort();
       clearTimeout(timer);
+      document.removeEventListener("visibilitychange", resume);
     };
   }, [client, sessionId, id, activity?.status, revision, liveAvailable, t]);
 

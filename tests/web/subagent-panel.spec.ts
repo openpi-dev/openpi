@@ -240,6 +240,42 @@ it("polls live evidence, stops when settled, and aborts when closed", async () =
   expect(read).toHaveBeenCalledTimes(2);
 });
 
+it("pauses detail reads while hidden and refreshes on visibility without stopping the child", async () => {
+  vi.useFakeTimers();
+  const read = vi
+    .spyOn(WebClient.prototype, "subagentDetail")
+    .mockResolvedValueOnce(reply())
+    .mockResolvedValueOnce(
+      reply(detail({ status: "done", finalText: "Visible again" })),
+    );
+  const view = showPanel();
+  await flush();
+  expect(read).toHaveBeenCalledTimes(1);
+  Object.defineProperty(document, "visibilityState", {
+    configurable: true,
+    value: "hidden",
+  });
+  try {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(5_000);
+    });
+    expect(read).toHaveBeenCalledTimes(1);
+    Object.defineProperty(document, "visibilityState", {
+      configurable: true,
+      value: "visible",
+    });
+    await act(async () => {
+      fireEvent(document, new Event("visibilitychange"));
+      await Promise.resolve();
+    });
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(screen.getByText("Visible again")).toBeTruthy();
+  } finally {
+    view.unmount();
+    Reflect.deleteProperty(document, "visibilityState");
+  }
+});
+
 it("cancels live polling on unmount and shows unavailable on fetch failure", async () => {
   vi.useFakeTimers();
   const read = vi

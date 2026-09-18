@@ -226,3 +226,88 @@ it("warns with role status when the confirmed level is not available", async () 
   const warning = screen.getByText(i18n.t("thinkingLevelMismatch"));
   expect(warning.getAttribute("role")).toBe("status");
 });
+
+it("separates saved trust from active Session authority and copies only the canonical setup command", async () => {
+  const writeText = vi.fn(async () => undefined);
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: { writeText },
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (url: string) =>
+      url.startsWith("/api/thinking")
+        ? reply({
+            sessionId: target.sessionId,
+            level: "medium",
+            available: ["medium"],
+            supported: true,
+          })
+        : url.startsWith("/api/trust")
+          ? reply({
+              source: "pi-project-trust",
+              workspace: "/ws",
+              state: "trusted",
+              decision: "denied",
+              sessionTrusted: true,
+              refreshRequired: true,
+            })
+          : reply({ providers: [], truncation: { truncated: false } }),
+    ),
+  );
+  show();
+  expect(await screen.findByText("Denied")).toBeTruthy();
+  expect(screen.getByText("Trusted in this Session")).toBeTruthy();
+  expect(screen.getByText(i18n.t("trustRefreshNeeded"))).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "Copy setup command" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("/openpi-setup"));
+  expect(screen.getByRole("status").textContent).toContain("Copied");
+  Reflect.deleteProperty(navigator, "clipboard");
+});
+
+it("copies only the visible terminal stream and reports clipboard failure", async () => {
+  Object.defineProperty(document, "execCommand", {
+    configurable: true,
+    value: vi.fn(() => false),
+  });
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      reply({
+        sessionId: target.sessionId,
+        detail: {
+          id: "bt-1",
+          title: "Build",
+          command: "node build",
+          cwd: "/ws",
+          status: "failed",
+          createdAt: 1,
+          stdout: {
+            text: "visible excerpt",
+            truncated: true,
+            omittedBytes: 500,
+          },
+          stderr: { text: "" },
+          truncated: true,
+        },
+      }),
+    ),
+  );
+  show({ ...target, terminalId: "bt-1" });
+  expect(await screen.findByText("visible excerpt")).toBeTruthy();
+  expect(
+    screen
+      .getByRole("button", { name: "Copy visible Standard error" })
+      .hasAttribute("disabled"),
+  ).toBe(true);
+  fireEvent.click(
+    screen.getByRole("button", { name: "Copy visible Standard output" }),
+  );
+  await waitFor(() =>
+    expect(document.execCommand).toHaveBeenCalledWith("copy"),
+  );
+  expect(screen.getByRole("status").textContent).toContain(
+    i18n.t("copyFailed"),
+  );
+  Reflect.deleteProperty(document, "execCommand");
+});

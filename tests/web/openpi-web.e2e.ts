@@ -100,6 +100,123 @@ for (const width of [1280, 390]) {
   });
 }
 
+for (const viewport of [
+  { width: 768, height: 1024, label: "tablet" },
+  { width: 640, height: 500, label: "effective 200% of 1280x1000" },
+] as const) {
+  test(`composer remains reachable at ${viewport.width}px (${viewport.label})`, async ({
+    page,
+  }, testInfo) => {
+    await page.setViewportSize({
+      width: viewport.width,
+      height: viewport.height,
+    });
+    let admissions = 0;
+    await page.route("**/api/prompt", (route) => {
+      admissions++;
+      return route.abort();
+    });
+    await openWorkbench(page);
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("组合输入");
+    await input.evaluate((element) => {
+      element.dispatchEvent(
+        new CompositionEvent("compositionstart", { bubbles: true }),
+      );
+      element.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "Enter",
+          isComposing: true,
+          bubbles: true,
+        }),
+      );
+    });
+    expect(admissions).toBe(0);
+    await expect(input).toHaveValue("组合输入");
+    await input.evaluate((element) =>
+      element.dispatchEvent(
+        new CompositionEvent("compositionend", { bubbles: true }),
+      ),
+    );
+    await input.press("Shift+Enter");
+    await expect(input).toHaveValue("组合输入\n");
+    await input.fill("多行草稿\n".repeat(12));
+    const send = page.getByRole("button", { name: "发送", exact: true });
+    await expect(send).toBeVisible();
+    const bounds = await send.boundingBox();
+    expect(bounds?.y).toBeGreaterThanOrEqual(0);
+    expect(bounds!.y + bounds!.height).toBeLessThanOrEqual(viewport.height);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`composer-${viewport.width}.png`),
+    });
+    expect(admissions).toBe(0);
+  });
+}
+
+test("provider failures remain visible after refresh without discarding partial text", async ({
+  page,
+}) => {
+  let content = "";
+  let stopReason: "error" | "aborted" = "error";
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.selectedSession.entries = [
+      {
+        id: "failed-user",
+        type: "message",
+        timestamp: "2026-09-18T00:00:00Z",
+        message: { role: "user", content: "Question" },
+      },
+      {
+        id: "failed-assistant",
+        type: "message",
+        timestamp: "2026-09-18T00:00:01Z",
+        message: {
+          role: "assistant",
+          content,
+          stopReason,
+          ...(stopReason === "error"
+            ? { errorMessage: "gateway_concurrency_limit (429)" }
+            : {}),
+        },
+      },
+    ];
+    await route.fulfill({ response, json: snapshot });
+  });
+  await openWorkbench(page);
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  await page.reload();
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  content = "Partial answer";
+  await page.reload();
+  await expect(page.getByText("Partial answer")).toBeVisible();
+  await expect(page.getByRole("alert")).toContainText(
+    "gateway_concurrency_limit (429)",
+  );
+  stopReason = "aborted";
+  await page.reload();
+  await expect(page.getByText("Partial answer")).toBeVisible();
+  await expect(page.getByText("模型请求已停止")).toBeVisible();
+  await expect(page.getByRole("alert")).toHaveCount(0);
+});
+
 async function openWorkbench(page: Page) {
   const externalRequests: string[] = [];
   page.on("request", (request) => {
@@ -122,7 +239,7 @@ test("production workbench is local, keyboard-operable, and accessible", async (
   const externalRequests = await openWorkbench(page);
 
   await expect(
-    page.getByRole("heading", { level: 1, name: "OpenPI" }),
+    page.getByRole("heading", { level: 1, name: "新会话" }),
   ).toBeAttached();
   await expect(page.locator('script[src*="@vite/client"]')).toHaveCount(0);
   await expect.poll(() => externalRequests).toEqual([]);
@@ -1035,6 +1152,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await page.setViewportSize({ width, height: 844 });
     await page.getByRole("button", { name: "运行状态", exact: true }).click();
     const dialog = page.getByRole("dialog");
+    await expect(dialog).toHaveCSS("opacity", "1");
     await expect(dialog).toContainText("medium");
     await expect(dialog).toContainText("Example");
     await expect
@@ -1348,8 +1466,10 @@ test("model picker distinguishes same-named models before choosing a directory",
       const label = element.querySelector(".model-picker-label");
       return (
         label instanceof HTMLElement &&
-        getComputedStyle(label).whiteSpace === "normal" &&
-        label.scrollWidth <= label.clientWidth
+        getComputedStyle(label).whiteSpace === "nowrap" &&
+        getComputedStyle(label).textOverflow === "ellipsis" &&
+        label.getBoundingClientRect().right <=
+          document.documentElement.clientWidth
       );
     }),
   ).toBe(true);

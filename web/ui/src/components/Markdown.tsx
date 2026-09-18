@@ -77,6 +77,18 @@ export const Markdown = memo(function Markdown({
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
+          table({ children, ...props }) {
+            return (
+              <section
+                className="markdown-table-scroll"
+                aria-label="Table"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
+                tabIndex={0}
+              >
+                <table {...props}>{children}</table>
+              </section>
+            );
+          },
           a({ href, node, children: label, ...props }) {
             href = windowsLink(node) ?? href;
             if (isLocalArtifactLink(href ?? ""))

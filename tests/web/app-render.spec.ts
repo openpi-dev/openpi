@@ -810,7 +810,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   );
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
   expect(screen.getByText("Archived work")).toBeTruthy();
-  expect(screen.getByText("/omitted")).toBeTruthy();
+  expect(screen.getAllByText("/omitted").length).toBeGreaterThan(0);
   expect(
     screen.getByText(
       "20 more sessions and 1 workspace summaries are not loaded. Search covers the loaded list only.",
@@ -1136,7 +1136,7 @@ describe("thinking level picker", () => {
       createElement(Composer, { ...props, thinkingPendingLevel: "high" }),
     );
     const picker = screen.getByRole<HTMLButtonElement>("button", {
-      name: thinkingPickerName("high"),
+      name: /^Thinking level: high/u,
     });
     expect(picker.disabled).toBe(false);
     expect(

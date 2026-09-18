@@ -1,0 +1,69 @@
+.session-sidebar .workspace-button {
+  height: auto;
+  min-height: 38px;
+  cursor: default;
+}
+
+.session-sidebar .workspace-label {
+  min-height: 38px;
+  padding: 3px 0;
+  cursor: pointer;
+}
+
+.session-sidebar .workspace-label:disabled {
+  cursor: default;
+  color: inherit;
+}
+
+.session-sidebar .workspace-identity {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  padding: 2px 0;
+}
+
+.session-sidebar .workspace-identity strong,
+.session-sidebar .workspace-identity small {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.3;
+}
+
+.session-sidebar .workspace-identity small {
+  color: var(--muted);
+  font-size: 10px;
+  user-select: text;
+}
+
+.session-sidebar .is-active-workspace > .workspace-button {
+  border-left: 2px solid var(--text);
+}
+
+.session-sidebar .session {
+  height: auto;
+  min-height: 38px;
+  padding-top: 6px;
+  padding-bottom: 6px;
+  align-items: flex-start;
+}
+
+.session-sidebar .session-title {
+  overflow: visible;
+  overflow-wrap: anywhere;
+  white-space: normal;
+  line-height: 1.35;
+}
+
+.session-sidebar .session-time {
+  line-height: 1.7;
+}
+
+.session-sidebar .session.active {
+  box-shadow: inset 2px 0 0 var(--text);
+  font-weight: 600;
+}
+
+.session-sidebar .session-row > .astryx-menu-trigger {
+  top: 5px;
+}

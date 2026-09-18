@@ -1,11 +1,12 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { RefreshCw, X } from "lucide-react";
+import { Clipboard, RefreshCw, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebBackgroundTerminalDetail } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../../runtime/types.ts";
 import { WebClient } from "../../protocol/client.ts";
+import { copyText } from "../../lib/clipboard.ts";
 
 export interface InspectionTarget {
   sessionId: string;
@@ -41,11 +42,21 @@ export function InspectionPanel({
   const [revision, refresh] = useState(0);
   const [data, setData] = useState<InspectionData | null>(null);
   const [updatedAt, setUpdatedAt] = useState<string | null>(null);
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
+    null,
+  );
+  const copy = (value: string) => {
+    setCopyStatus(null);
+    void copyText(value).then((success) =>
+      setCopyStatus(success ? "copied" : "failed"),
+    );
+  };
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
   useEffect(() => {
     const controller = new AbortController();
     setData(null);
     setUpdatedAt(null);
+    setCopyStatus(null);
     const read = async () => {
       const next: InspectionData = { errors: [] };
       if (target.terminalId) {
@@ -132,6 +143,11 @@ export function InspectionPanel({
             </button>
           </div>
         </header>
+        {copyStatus && (
+          <p role="status">
+            {t(copyStatus === "copied" ? "copiedMessage" : "copyFailed")}
+          </p>
+        )}
         {!data ? (
           <p role="status">{t("inspectionLoading")}</p>
         ) : (
@@ -155,6 +171,15 @@ export function InspectionPanel({
                     <dt>{t("terminalCommand")}</dt>
                     <dd>
                       <code>{terminal.command}</code>
+                      <button
+                        type="button"
+                        className="inspection-copy"
+                        aria-label={t("copyTerminalCommand")}
+                        title={t("copyTerminalCommand")}
+                        onClick={() => copy(terminal.command)}
+                      >
+                        <Clipboard aria-hidden="true" />
+                      </button>
                     </dd>
                     <dt>{t("terminalDirectory")}</dt>
                     <dd>{terminal.cwd}</dd>
@@ -176,11 +201,33 @@ export function InspectionPanel({
                 </div>
                 {(["stdout", "stderr"] as const).map((stream) => (
                   <section className="inspection-section" key={stream}>
-                    <h3>
-                      {stream === "stdout"
-                        ? t("standardOutput")
-                        : t("standardError")}
-                    </h3>
+                    <div className="inspection-stream-heading">
+                      <h3>
+                        {stream === "stdout"
+                          ? t("standardOutput")
+                          : t("standardError")}
+                      </h3>
+                      <button
+                        type="button"
+                        className="inspection-copy"
+                        disabled={!terminal[stream].text}
+                        aria-label={t("copyVisibleOutput", {
+                          stream:
+                            stream === "stdout"
+                              ? t("standardOutput")
+                              : t("standardError"),
+                        })}
+                        title={t("copyVisibleOutput", {
+                          stream:
+                            stream === "stdout"
+                              ? t("standardOutput")
+                              : t("standardError"),
+                        })}
+                        onClick={() => copy(terminal[stream].text)}
+                      >
+                        <Clipboard aria-hidden="true" />
+                      </button>
+                    </div>
                     <pre className="terminal-evidence">
                       {terminal[stream].text || t("noOutput")}
                     </pre>
@@ -236,6 +283,22 @@ export function InspectionPanel({
                   <section className="inspection-section">
                     <h3>{t("projectTrust")}</h3>
                     <p>{t(`trust_${data.trust?.state ?? "unknown"}`)}</p>
+                    <dl>
+                      <dt>{t("savedTrustDecision")}</dt>
+                      <dd>
+                        {t(
+                          `trustDecision_${data.trust?.decision ?? "unknown"}`,
+                        )}
+                      </dd>
+                      <dt>{t("activeSessionTrust")}</dt>
+                      <dd>
+                        {data.trust?.sessionTrusted === true
+                          ? t("trustActiveYes")
+                          : data.trust?.sessionTrusted === false
+                            ? t("trustActiveNo")
+                            : t("unknownState")}
+                      </dd>
+                    </dl>
                     {data.trust?.refreshRequired === true && (
                       <p className="inspection-warning">
                         {t("trustRefreshNeeded")}
@@ -262,7 +325,19 @@ export function InspectionPanel({
                     )}
                     <p className="inspection-note">{t("authNotVerified")}</p>
                   </section>
-                  <p className="inspection-note">{t("configurationViaPi")}</p>
+                  <div className="inspection-setup">
+                    <p className="inspection-note">{t("configurationViaPi")}</p>
+                    <code>/openpi-setup</code>
+                    <button
+                      type="button"
+                      className="inspection-copy"
+                      aria-label={t("copySetupCommand")}
+                      title={t("copySetupCommand")}
+                      onClick={() => copy("/openpi-setup")}
+                    >
+                      <Clipboard aria-hidden="true" />
+                    </button>
+                  </div>
                 </>
               )
             )}

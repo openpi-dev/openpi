@@ -34,6 +34,7 @@ import {
 } from "./types.ts";
 import {
   projectMessage,
+  projectAssistantError,
 } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
@@ -810,7 +811,7 @@ export class PiWebRuntime implements WebRuntimeController {
           this.emit("prompt_failed", {
             ...(options?.commandId ? { commandId: options.commandId } : {}),
             sessionId,
-            error: errorText(error),
+            error: projectAssistantError(errorText(error)).value,
           });
         }
         if (promptTrace) {
@@ -819,7 +820,7 @@ export class PiWebRuntime implements WebRuntimeController {
             commandId: promptTrace.commandId,
             sessionId,
             elapsedMs: elapsed(startedAt),
-            error: errorText(error),
+            error: projectAssistantError(errorText(error)).value,
           });
           this.removePromptTrace(promptTrace);
         }
@@ -1161,19 +1162,19 @@ export class PiWebRuntime implements WebRuntimeController {
           eventDetail.stopReason = message.stopReason;
         }
         if (typeof message.errorMessage === "string") {
-          eventDetail.errorMessage = message.errorMessage;
+          eventDetail.errorMessage = projectAssistantError(message.errorMessage).value;
         }
       }
       if (event.type === "auto_retry_start") {
         eventDetail.attempt = event.attempt;
         eventDetail.maxAttempts = event.maxAttempts;
         eventDetail.delayMs = event.delayMs;
-        eventDetail.errorMessage = event.errorMessage;
+        eventDetail.errorMessage = projectAssistantError(event.errorMessage).value;
       }
       if (event.type === "auto_retry_end") {
         eventDetail.attempt = event.attempt;
         eventDetail.success = event.success;
-        if (event.finalError) eventDetail.finalError = event.finalError;
+        if (event.finalError) eventDetail.finalError = projectAssistantError(event.finalError).value;
       }
       if (event.type === "agent_end") eventDetail.willRetry = event.willRetry;
       traceWeb("agent_event", eventDetail);

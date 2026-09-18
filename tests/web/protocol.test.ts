@@ -19,6 +19,50 @@ test("message projection does not create phantom text for detail-only messages",
   assert.equal(projected.parts?.length, 2);
 });
 
+test("assistant failure projection retains terminal evidence without inventing body text", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: "gateway_concurrency_limit (429)",
+    content: [],
+  });
+  assert.equal(projected.content, "");
+  assert.equal(projected.stopReason, "error");
+  assert.equal(projected.errorMessage, "gateway_concurrency_limit (429)");
+  assert.equal(
+    projectMessage({
+      role: "assistant",
+      stopReason: "aborted",
+      content: [{ type: "text", text: "partial" }],
+    }).content,
+    "partial",
+  );
+  assert.equal(
+    projectMessage({ role: "assistant", stopReason: "aborted", content: [] })
+      .stopReason,
+    "aborted",
+  );
+});
+
+test("assistant errors are bounded and redact credentials before they reach the wire", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: `Request https://name:password@example.test/path?api_key=secret failed; Authorization: Bearer example-long-secret-1234567890; token=short-secret; ${"unexpected failure ".repeat(200)}\u0000`,
+    content: [{ type: "text", text: "partial answer" }],
+  });
+  assert.equal(projected.content, "partial answer");
+  assert.equal(projected.stopReason, "error");
+  assert.ok(projected.errorMessage?.includes("Request"));
+  assert.ok(projected.errorMessage?.includes("[redacted]"));
+  assert.ok(!projected.errorMessage?.includes("password"));
+  assert.ok(!projected.errorMessage?.includes("short-secret"));
+  assert.ok(!projected.errorMessage?.includes("example-long-secret"));
+  assert.ok(!projected.errorMessage?.includes("\u0000"));
+  assert.ok((projected.errorMessage?.length ?? 0) < 600);
+  assert.equal(projected.truncation?.text, true);
+});
+
 test("message projection keeps text parts separated without phantom blank lines", () => {
   const projected = projectMessage({
     role: "assistant",

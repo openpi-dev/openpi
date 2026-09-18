@@ -3,6 +3,8 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Brain,
   Check,
+  ChevronRight,
+  Command,
   Folder,
   Plus,
   Send,
@@ -19,7 +21,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
-import { workspaceName } from "../../lib/format.ts";
+import { sessionTitle, workspaceName } from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
@@ -148,6 +150,8 @@ export function Composer(props: ComposerProps) {
     !props.workspaceDraft &&
     commandDiscovery.status === "ready" &&
     filteredCommands.length > 0;
+  const commandEntryAvailable =
+    active && !prompt.trim() && !props.sessionSwitching;
 
   useEffect(() => {
     const opened = commandMenuOpen && !commandMenuWasOpen.current;
@@ -274,6 +278,17 @@ export function Composer(props: ComposerProps) {
 
   const send = async (event?: FormEvent) => {
     event?.preventDefault();
+    if (
+      !canCompose ||
+      props.sessionSwitching ||
+      props.modelSelectionPending ||
+      props.thinkingPendingLevel !== null ||
+      props.promptAdmissionPending ||
+      props.promptAdmissionRecovery ||
+      props.promptAdmissionResolution ||
+      !prompt.trim()
+    )
+      return;
     await sendDraft(props.actions.sendPrompt);
   };
 
@@ -326,6 +341,23 @@ export function Composer(props: ComposerProps) {
     props.draftModel ??
     props.snapshot?.models.find((model) => model.current) ??
     props.snapshot?.models[0];
+  const workspaceLabel =
+    props.snapshot?.workspaces.find(
+      (workspace) => workspace.path === props.selectedWorkspace,
+    )?.name ??
+    (props.selectedWorkspace
+      ? workspaceName(props.selectedWorkspace)
+      : t("selectWorkspace"));
+  const sessionSummary = props.snapshot?.sessions.find(
+    (session) => session.path === sessionPath,
+  );
+  const targetLabel = active
+    ? sessionTitle(sessionSummary ?? {}, selected?.id ?? t("untitledSession"))
+    : draftSession
+      ? t("newSession")
+      : selected
+        ? sessionTitle(sessionSummary ?? {}, selected.id)
+        : t("newSession");
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
     : props.landing
@@ -360,7 +392,7 @@ export function Composer(props: ComposerProps) {
               : null;
   const thinkingAria = !supported
     ? t("thinkingUnsupported")
-    : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}`;
+    : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}${pending !== null ? `. ${t("thinkingPendingHint")}` : ""}`;
   const thinkingMenuItems = thinking
     ? [
         ...(weak
@@ -381,8 +413,9 @@ export function Composer(props: ComposerProps) {
         },
       ]
     : [];
-  const hint =
-    props.thinkingPendingLevel !== null
+  const hint = props.modelSelectionPending
+    ? t("thinkingModelPendingHint")
+    : props.thinkingPendingLevel !== null
       ? t("thinkingPendingHint")
       : props.workspaceDraft
         ? t("enterHint")
@@ -401,6 +434,13 @@ export function Composer(props: ComposerProps) {
                   ? t("queuedHint")
                   : t("enterHint")
                 : t("activeOnlyHint");
+  const showHint =
+    props.modelSelectionPending ||
+    props.thinkingPendingLevel !== null ||
+    props.turnCancellationPending ||
+    props.turnTerminalStatus === "cancelled" ||
+    props.pendingFollowUpsReceipt !== null ||
+    (canCompose && running && Boolean(prompt.trim()));
 
   return (
     <div className="composer-dock">
@@ -479,7 +519,7 @@ export function Composer(props: ComposerProps) {
         </section>
       )}
       <form
-        className={`composer ${props.selectedWorkspace ? "" : "dormant"}`}
+        className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"}`}
         onSubmit={(event) => void send(event)}
       >
         {!props.selectedWorkspace && (
@@ -489,6 +529,17 @@ export function Composer(props: ComposerProps) {
             aria-label={t("selectWorkspace")}
             onClick={() => void props.actions.chooseWorkspace()}
           />
+        )}
+        {props.selectedWorkspace && (
+          <div
+            className="composer-target"
+            title={`${workspaceLabel} / ${targetLabel}`}
+          >
+            <Folder aria-hidden="true" />
+            <span>{workspaceLabel}</span>
+            <ChevronRight aria-hidden="true" />
+            <strong>{targetLabel}</strong>
+          </div>
         )}
         <textarea
           ref={textarea}
@@ -519,6 +570,7 @@ export function Composer(props: ComposerProps) {
           }}
           onBlur={() => setComposerFocused(false)}
           onKeyDown={(event) => {
+            if (event.nativeEvent.isComposing) return;
             if (commandMenuOpen) {
               if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                 event.preventDefault();
@@ -531,9 +583,8 @@ export function Composer(props: ComposerProps) {
                 return;
               }
               if (
-                (event.key === "Tab" ||
-                  (event.key === "Enter" && !event.shiftKey)) &&
-                !event.nativeEvent.isComposing
+                event.key === "Tab" ||
+                (event.key === "Enter" && !event.shiftKey)
               ) {
                 const command = filteredCommands[activeCommand];
                 if (command) {
@@ -543,11 +594,7 @@ export function Composer(props: ComposerProps) {
                 }
               }
             }
-            if (
-              event.key === "Enter" &&
-              !event.shiftKey &&
-              !event.nativeEvent.isComposing
-            ) {
+            if (event.key === "Enter" && !event.shiftKey) {
               event.preventDefault();
               void send();
             }
@@ -565,101 +612,145 @@ export function Composer(props: ComposerProps) {
           />
         )}
         <div className="composer-toolbar">
-          {props.onInspect && (
-            <button
-              type="button"
-              className="icon-button"
-              aria-label={t("runtimeStatus")}
-              title={t("runtimeStatus")}
-              disabled={!active || props.sessionSwitching}
-              onClick={() => props.onInspect?.()}
-            >
-              <SlidersHorizontal />
-            </button>
-          )}
-          <div className="model-picker-wrap">
-            <ModelPicker
-              snapshot={props.snapshot}
-              currentModel={currentModel}
-              draftModel={props.draftModel}
-              modelSearch={modelSearch}
-              modelSelectionPending={Boolean(props.modelSelectionPending)}
-              promptAdmissionPending={props.promptAdmissionPending}
-              sessionSwitching={props.sessionSwitching}
-              liveRunning={running}
-              workspaceDraft={Boolean(props.workspaceDraft)}
-              actions={props.actions}
-            />
-          </div>
-          {thinking && (
-            <div
-              className="thinking-picker-wrap"
-              data-level={confirmed ?? "none"}
-              data-pending={pending !== null}
-              data-warning={weak}
-              title={
-                thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
-              }
-            >
+          <div className="composer-toolbar-context">
+            {commandEntryAvailable ? (
               <DropdownMenu
-                className="thinking-menu"
+                className="composer-context-menu"
                 button={{
-                  label: thinkingAria,
-                  icon: <Brain />,
+                  label: t("commands"),
+                  icon: <Plus />,
                   isIconOnly: true,
                   size: "sm",
                   variant: "ghost",
-                  className: "thinking-picker",
-                  isDisabled:
-                    thinkingDisabledReason !== null ||
-                    thinkingItems.length === 0,
+                  className: "composer-context-trigger",
                 }}
-                items={thinkingMenuItems}
-                menuWidth={220}
+                items={[
+                  {
+                    id: "slash-commands",
+                    label: t("commands"),
+                    icon: <Command />,
+                    onClick: () => {
+                      draftRevision.current += 1;
+                      setPrompt("/");
+                      setCursor(1);
+                      setMenuDismissed(false);
+                      requestAnimationFrame(() => {
+                        textarea.current?.focus();
+                        textarea.current?.setSelectionRange(1, 1);
+                      });
+                    },
+                  },
+                ]}
+                menuWidth={200}
                 placement="above"
-                alignment="end"
+                alignment="start"
                 hasChevron={false}
               />
-            </div>
-          )}
-          {canStop ? (
-            <Tooltip content={t("stopTurn")} placement="above">
+            ) : (
+              <span className="composer-context-placeholder" />
+            )}
+          </div>
+          <div className="composer-toolbar-controls">
+            {props.onInspect && (
               <button
-                className="send-button"
                 type="button"
-                aria-label={t("stopTurn")}
-                disabled={
-                  props.turnCancellationPending || props.sessionSwitching
-                }
-                onClick={() => void props.actions.cancelActiveTurn()}
+                className="icon-button"
+                aria-label={t("runtimeStatus")}
+                title={t("runtimeStatus")}
+                disabled={!active || props.sessionSwitching}
+                onClick={() => props.onInspect?.()}
               >
-                <Square />
+                <SlidersHorizontal />
               </button>
-            </Tooltip>
-          ) : (
-            <Tooltip content={t("send")} placement="above">
-              <button
-                className="send-button"
-                type="submit"
-                aria-label={t("send")}
-                disabled={
-                  props.sessionSwitching ||
-                  props.modelSelectionPending ||
-                  props.thinkingPendingLevel !== null ||
-                  !canCompose ||
-                  !props.selectedWorkspace ||
-                  props.promptAdmissionPending ||
-                  Boolean(props.promptAdmissionRecovery) ||
-                  Boolean(props.promptAdmissionResolution) ||
-                  !prompt.trim()
+            )}
+            <div className="model-picker-wrap">
+              <ModelPicker
+                snapshot={props.snapshot}
+                currentModel={currentModel}
+                draftModel={props.draftModel}
+                modelSearch={modelSearch}
+                modelSelectionPending={Boolean(props.modelSelectionPending)}
+                promptAdmissionPending={props.promptAdmissionPending}
+                sessionSwitching={props.sessionSwitching}
+                liveRunning={running}
+                workspaceDraft={Boolean(props.workspaceDraft)}
+                actions={props.actions}
+              />
+            </div>
+            {thinking && (
+              <div
+                className="thinking-picker-wrap"
+                data-level={confirmed ?? "none"}
+                data-pending={pending !== null}
+                data-warning={weak}
+                title={
+                  thinkingDisabledReason ? t(thinkingDisabledReason) : undefined
                 }
               >
-                <Send />
-              </button>
-            </Tooltip>
-          )}
+                <DropdownMenu
+                  className="thinking-menu"
+                  button={{
+                    label: thinkingAria,
+                    icon: <Brain />,
+                    isIconOnly: true,
+                    size: "sm",
+                    variant: "ghost",
+                    className: "thinking-picker",
+                    isDisabled:
+                      thinkingDisabledReason !== null ||
+                      thinkingItems.length === 0,
+                  }}
+                  items={thinkingMenuItems}
+                  menuWidth={220}
+                  placement="above"
+                  alignment="end"
+                  hasChevron={false}
+                />
+              </div>
+            )}
+            {canStop ? (
+              <Tooltip content={t("stopTurn")} placement="above">
+                <button
+                  className="send-button"
+                  type="button"
+                  aria-label={t("stopTurn")}
+                  disabled={
+                    props.turnCancellationPending || props.sessionSwitching
+                  }
+                  onClick={() => void props.actions.cancelActiveTurn()}
+                >
+                  <Square />
+                </button>
+              </Tooltip>
+            ) : (
+              <Tooltip content={t("send")} placement="above">
+                <button
+                  className="send-button"
+                  type="submit"
+                  aria-label={t("send")}
+                  disabled={
+                    props.sessionSwitching ||
+                    props.modelSelectionPending ||
+                    props.thinkingPendingLevel !== null ||
+                    !canCompose ||
+                    !props.selectedWorkspace ||
+                    props.promptAdmissionPending ||
+                    Boolean(props.promptAdmissionRecovery) ||
+                    Boolean(props.promptAdmissionResolution) ||
+                    !prompt.trim()
+                  }
+                >
+                  <Send />
+                </button>
+              </Tooltip>
+            )}
+          </div>
         </div>
-        <div className="composer-hint" aria-live="polite">
+        <div
+          className="composer-hint"
+          data-visible={showHint}
+          aria-live="polite"
+        >
           {hint}
         </div>
       </form>

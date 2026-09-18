@@ -2,6 +2,7 @@ import {
   Bot,
   Check,
   Clipboard,
+  ArrowDown,
   FilePenLine,
   FileText,
   Folder,
@@ -602,11 +603,15 @@ function buildEntries(
       ? [{ key: entry.id, timestamp: entry.timestamp, message: entry.message }]
       : [],
   );
-  const signatures = new Set(
-    entries.map(
-      (entry) => `${entry.message.role || ""}:${entry.message.content}`,
-    ),
-  );
+  const signature = (message: WebLiveMessage) =>
+    JSON.stringify([
+      message.role,
+      message.content,
+      message.stopReason,
+      message.errorMessage,
+      message.toolCallId,
+    ]);
+  const signatures = new Set(entries.map((entry) => signature(entry.message)));
   const persistedToolIds = new Set(
     entries.flatMap((entry) =>
       entry.message.role === "toolResult" && entry.message.toolCallId
@@ -618,7 +623,7 @@ function buildEntries(
     if (
       live.message.role === "toolResult" && live.message.toolCallId
         ? persistedToolIds.has(live.message.toolCallId)
-        : signatures.has(`${live.message.role || ""}:${live.message.content}`)
+        : signatures.has(signature(live.message))
     )
       continue;
     entries.push({
@@ -678,6 +683,7 @@ export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
+  const [readingHistory, setReadingHistory] = useState(false);
   const lastPath = useRef<string | undefined>(undefined);
   const lastScrollRequest = useRef(props.scrollToBottom);
   const entries = useMemo(
@@ -881,6 +887,32 @@ export function Transcript(props: TranscriptProps) {
               </article>
             ),
           });
+        if (
+          message.stopReason === "error" ||
+          message.stopReason === "aborted"
+        ) {
+          const failed = message.stopReason === "error";
+          detailRows.push({
+            key: `${entry.key}-outcome`,
+            error: failed,
+            content: (
+              <article className="message-row assistant outcome-row">
+                <div
+                  className={`provider-outcome ${failed ? "failed" : "aborted"}`}
+                  role={failed ? "alert" : "status"}
+                >
+                  <strong>
+                    {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
+                  </strong>
+                  {failed && (
+                    <p>{message.errorMessage || t("modelFailureUnknown")}</p>
+                  )}
+                  {failed && <small>{t("modelFailureNextStep")}</small>}
+                </div>
+              </article>
+            ),
+          });
+        }
         return detailRows;
       }
       if (message.role === "toolResult") {
@@ -969,6 +1001,7 @@ export function Transcript(props: TranscriptProps) {
     lastScrollRequest.current = props.scrollToBottom;
     if (changed || requested || pinned.current) {
       pinned.current = true;
+      setReadingHistory(false);
       if (typeof element.scrollTo === "function") {
         element.scrollTo({ top: element.scrollHeight, behavior: "instant" });
       } else {
@@ -999,6 +1032,7 @@ export function Transcript(props: TranscriptProps) {
           pinned.current =
             element.scrollTop + element.clientHeight >=
             element.scrollHeight - 48;
+          setReadingHistory(!pinned.current);
         }}
       >
         {groupRows(rows, t("stepsLabel"))}
@@ -1013,6 +1047,21 @@ export function Transcript(props: TranscriptProps) {
           </div>
         )}
       </div>
+      {readingHistory && rows.length > 0 && (
+        <button
+          className="jump-to-latest"
+          type="button"
+          onClick={() => {
+            const element = viewport.current;
+            if (!element) return;
+            pinned.current = true;
+            setReadingHistory(false);
+            element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
+          }}
+        >
+          <ArrowDown aria-hidden="true" /> {t("jumpToLatest")}
+        </button>
+      )}
       {turns.length > 1 && (
         <nav className="turn-rail" aria-label={t("conversationTurns")}>
           {turns.map((item) => (

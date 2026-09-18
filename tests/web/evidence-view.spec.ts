@@ -14,6 +14,7 @@ import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import "../../web/ui/src/i18n.ts";
 
 afterEach(() => {
   cleanup();
@@ -131,6 +132,80 @@ it("opens local links using authenticated API and stops preview reads on close",
   await waitFor(() => expect(release).toHaveBeenCalledWith("s", "h"));
   expect(screen.queryByRole("dialog")).toBeNull();
 });
+
+it("restores the original opener after nested preview navigation and ignores stale copy feedback", async () => {
+  vi.spyOn(WebClient.prototype, "resolveArtifact")
+    .mockResolvedValueOnce({ handle: "root" })
+    .mockResolvedValueOnce({ handle: "nested" });
+  vi.spyOn(WebClient.prototype, "artifactPreview")
+    .mockResolvedValueOnce({
+      artifact: {
+        handle: "root",
+        sessionId: "s",
+        path: "/workspace/root.md",
+        name: "root.md",
+        revision: "a".repeat(64),
+        bytes: 24,
+        preview: "text",
+      },
+      text: "[Nested](./nested.md)",
+      truncated: false,
+    })
+    .mockResolvedValueOnce({
+      artifact: {
+        handle: "nested",
+        sessionId: "s",
+        path: "/workspace/nested.md",
+        name: "nested.md",
+        revision: "b".repeat(64),
+        bytes: 7,
+        preview: "text",
+      },
+      text: "# Inner",
+      truncated: false,
+    });
+  vi.spyOn(WebClient.prototype, "releaseArtifact").mockResolvedValue({});
+  let finishCopy: (() => void) | undefined;
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      ),
+    },
+  });
+  try {
+    render(
+      createElement(
+        ArtifactProvider,
+        { sessionId: "s" },
+        createElement(Markdown, null, "[Open](./root.md)"),
+      ),
+    );
+    const opener = screen.getByRole("button", { name: "Open" });
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Nested" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Nested" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Inner" })).toBeTruthy(),
+    );
+    await act(async () => finishCopy?.());
+    expect(screen.queryByText("File path copied")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(document.activeElement).toBe(opener);
+  } finally {
+    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+  }
+});
 it("preserves Windows paths through sanitization without allowing unsafe schemes", async () => {
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")
@@ -242,7 +317,7 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
     });
     expect(preview).toHaveBeenCalledTimes(2);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh file" }));
     });
     expect(preview).toHaveBeenCalledTimes(3);
     expect(resolve).toHaveBeenCalledTimes(2);

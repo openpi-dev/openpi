@@ -81,6 +81,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [restoring, setRestoring] = useState<Set<string>>(new Set());
   const restoreInFlight = useRef(new Set<string>());
   const [restoreError, setRestoreError] = useState(false);
+  const [saving, setSaving] = useState(false);
   const restore = async (path: string) => {
     if (restoreInFlight.current.has(path)) return;
     restoreInFlight.current.add(path);
@@ -124,7 +125,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const grouped = useMemo(() => {
     const query = props.query.trim().toLowerCase();
-    const visible = (workspacePath?: string) =>
+    const visible = (workspacePath: string, workspaceMatches: boolean) =>
       (snapshot?.sessions ?? []).filter(
         (session) =>
           Boolean(session.archived) === archived &&
@@ -132,6 +133,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             ? session.ungrouped
             : session.cwd === workspacePath && !session.ungrouped) &&
           (!query ||
+            workspaceMatches ||
             `${sessionTitle(session, t("untitledSession"))} ${session.cwd}`
               .toLowerCase()
               .includes(query)),
@@ -150,23 +152,42 @@ export function SessionSidebar(props: SessionSidebarProps) {
       }
     }
     return [
-      ...workspaces.map((workspace) => ({
-        ...workspace,
-        sessions: visible(workspace.path),
-        ungrouped: false,
-      })),
+      ...workspaces.map((workspace) => {
+        const matches =
+          Boolean(query) &&
+          `${workspace.name} ${workspace.path}`.toLowerCase().includes(query);
+        return {
+          ...workspace,
+          sessions: visible(workspace.path, matches),
+          ungrouped: false,
+          matches,
+        };
+      }),
       {
         path: "__ungrouped__",
         name: t("ungrouped"),
         current: false,
-        sessions: visible("__ungrouped__"),
+        sessions: visible("__ungrouped__", false),
         ungrouped: true,
+        matches: false,
       },
     ].filter(
       (group) =>
-        group.sessions.length > 0 || (!archived && !group.ungrouped && !query),
+        group.sessions.length > 0 ||
+        (!archived && !group.ungrouped && (!query || group.matches)),
     );
   }, [archived, props.query, snapshot, t]);
+
+  const confirmedPath =
+    snapshot?.selectedSession?.id === snapshot?.currentSessionId &&
+    snapshot?.selectedSession?.path === props.selectedPath
+      ? props.selectedPath
+      : null;
+  const activeWorkspace = confirmedPath
+    ? snapshot?.sessions.find((session) => session.path === confirmedPath)?.cwd
+    : props.selectedPath
+      ? null
+      : props.selectedWorkspace;
 
   const openEdit = (target: EditTarget) => {
     setDraft(target.name);
@@ -174,11 +195,18 @@ export function SessionSidebar(props: SessionSidebarProps) {
   };
   const saveEdit = async () => {
     const name = draft.trim();
-    if (!editTarget || !name) return;
-    if (editTarget.kind === "workspace")
-      await props.actions.renameWorkspace(editTarget.path, name);
-    else await props.actions.renameSession(editTarget.path, name);
-    setEditTarget(null);
+    if (!editTarget || !name || saving) return;
+    setSaving(true);
+    try {
+      if (editTarget.kind === "workspace")
+        await props.actions.renameWorkspace(editTarget.path, name);
+      else await props.actions.renameSession(editTarget.path, name);
+      setEditTarget(null);
+    } catch {
+      // The store reports the error; keep the user's draft in the dialog.
+    } finally {
+      setSaving(false);
+    }
   };
 
   return (
@@ -329,7 +357,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
       </fieldset>
       {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
       {Boolean(
-        snapshot?.truncation.sessionsOmitted ||
+        props.query.trim() ||
+          snapshot?.truncation.sessionsOmitted ||
           snapshot?.truncation.workspacesOmitted,
       ) && (
         <p className="sidebar-scope-note">
@@ -347,12 +376,14 @@ export function SessionSidebar(props: SessionSidebarProps) {
       <div className="workspace-tree">
         {grouped.length ? (
           grouped.map((group) => {
-            const collapsed = (
-              archived ? archiveCollapsed : props.collapsed
-            ).has(group.path);
+            const collapsed =
+              (archived ? archiveCollapsed : props.collapsed).has(group.path) &&
+              !props.query.trim();
+            const active =
+              !archived && !group.ungrouped && activeWorkspace === group.path;
             return (
               <section
-                className={`workspace-group ${collapsed ? "collapsed" : ""}`}
+                className={`workspace-group ${collapsed ? "collapsed" : ""} ${active ? "is-active-workspace" : ""}`}
                 key={group.path}
               >
                 <div className="workspace-button">
@@ -360,6 +391,8 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     className="workspace-label"
                     type="button"
                     aria-expanded={!collapsed}
+                    aria-current={active ? "location" : undefined}
+                    disabled={Boolean(props.query.trim())}
                     title={
                       group.path === "__ungrouped__" ? undefined : group.path
                     }
@@ -377,7 +410,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     <span className="workspace-toggle" aria-hidden="true">
                       <span className="workspace-chevron">⌄</span>
                     </span>
-                    <strong>{group.name}</strong>
+                    <span className="workspace-identity">
+                      <strong>{group.name}</strong>
+                      {!group.ungrouped && <small>{group.path}</small>}
+                    </span>
                   </button>
                   {!group.ungrouped && (
                     <span className="workspace-row-actions">
@@ -424,78 +460,85 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     </span>
                   )}
                 </div>
-                <div className="workspace-sessions">
-                  {group.sessions.length ? (
-                    group.sessions.map((session) => (
-                      <div className="session-row" key={session.path}>
-                        <button
-                          className={`session ${session.path === props.selectedPath ? "active" : ""}`}
-                          type="button"
-                          aria-current={
-                            session.path === props.selectedPath
-                              ? "page"
-                              : undefined
-                          }
-                          title={sessionTitle(session, t("untitledSession"))}
-                          onClick={() =>
-                            void props.actions.selectSession(session.path)
-                          }
-                        >
-                          <span className="session-title">
-                            {sessionTitle(session, t("untitledSession"))}
-                          </span>
-                          <span className="session-time">
-                            {relativeTime(session.modified)}
-                          </span>
-                        </button>
-                        <ActionMenu
-                          label={t("conversationOptions")}
-                          items={[
-                            {
-                              id: "rename",
-                              label: t("renameConversation"),
-                              icon: <SquarePen />,
-                              onClick: () =>
-                                openEdit({
-                                  kind: "session",
-                                  path: session.path,
-                                  name: sessionTitle(
-                                    session,
-                                    t("untitledSession"),
-                                  ),
-                                }),
-                            },
-                            {
-                              id: archived ? "restore" : "archive",
-                              label: restoring.has(session.path)
-                                ? t("restoringConversation")
-                                : t(
-                                    archived
-                                      ? "restoreConversation"
-                                      : "archiveConversation",
-                                  ),
-                              icon: archived ? <ArchiveRestore /> : <Archive />,
-                              onClick: () =>
-                                archived
-                                  ? void restore(session.path)
-                                  : void props.actions.archiveSession(
-                                      session.path,
+                {!collapsed && (
+                  <div className="workspace-sessions">
+                    {group.sessions.length ? (
+                      group.sessions.map((session) => (
+                        <div className="session-row" key={session.path}>
+                          <button
+                            className={`session ${session.path === confirmedPath ? "active" : ""}`}
+                            type="button"
+                            aria-current={
+                              session.path === confirmedPath
+                                ? "page"
+                                : undefined
+                            }
+                            aria-label={`${sessionTitle(session, t("untitledSession"))} · ${session.path}`}
+                            onClick={() =>
+                              void props.actions.selectSession(session.path)
+                            }
+                          >
+                            <span className="session-title">
+                              {sessionTitle(session, t("untitledSession"))}
+                            </span>
+                            <span className="session-time">
+                              {relativeTime(session.modified)}
+                            </span>
+                          </button>
+                          <ActionMenu
+                            label={t("conversationOptions")}
+                            items={[
+                              {
+                                id: "rename",
+                                label: t("renameConversation"),
+                                icon: <SquarePen />,
+                                onClick: () =>
+                                  openEdit({
+                                    kind: "session",
+                                    path: session.path,
+                                    name: sessionTitle(
+                                      session,
+                                      t("untitledSession"),
                                     ),
-                            },
-                          ]}
-                        />
-                      </div>
-                    ))
-                  ) : (
-                    <div className="empty">{t("noConversations")}</div>
-                  )}
-                </div>
+                                  }),
+                              },
+                              {
+                                id: archived ? "restore" : "archive",
+                                label: restoring.has(session.path)
+                                  ? t("restoringConversation")
+                                  : t(
+                                      archived
+                                        ? "restoreConversation"
+                                        : "archiveConversation",
+                                    ),
+                                icon: archived ? (
+                                  <ArchiveRestore />
+                                ) : (
+                                  <Archive />
+                                ),
+                                isDisabled: restoring.has(session.path),
+                                onClick: () =>
+                                  archived
+                                    ? void restore(session.path)
+                                    : void props.actions.archiveSession(
+                                        session.path,
+                                      ),
+                              },
+                            ]}
+                          />
+                        </div>
+                      ))
+                    ) : (
+                      <div className="empty">{t("noConversations")}</div>
+                    )}
+                  </div>
+                )}
               </section>
             );
           })
         ) : (
           <div className="empty">
-            {props.query
+            {props.query.trim()
               ? t("noMatching")
               : t(archived ? "noLoadedArchives" : "noSessions")}
           </div>
@@ -504,7 +547,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
       <Dialog
         isOpen={Boolean(editTarget)}
-        onOpenChange={(open: boolean) => !open && setEditTarget(null)}
+        onOpenChange={(open: boolean) =>
+          !open && !saving && setEditTarget(null)
+        }
         purpose="form"
         width={400}
         aria-label={
@@ -540,7 +585,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             <button type="button" onClick={() => setEditTarget(null)}>
               {t("cancel")}
             </button>
-            <button type="submit" className="primary">
+            <button type="submit" className="primary" disabled={saving}>
               {t("save")}
             </button>
           </div>

@@ -1,0 +1,73 @@
+.composer.composer-m02 {
+  min-width: 0;
+  border-radius: 8px;
+}
+
+.composer-m02 .composer-target {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.composer-m02 .composer-target svg {
+  width: 13px;
+  height: 13px;
+  flex: none;
+}
+
+.composer-m02 .composer-target svg:nth-of-type(2) {
+  width: 11px;
+  height: 11px;
+  color: var(--subtle);
+}
+
+.composer-m02 .composer-target span,
+.composer-m02 .composer-target strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-m02 .composer-target span { flex: 0 1 auto; }
+.composer-m02 .composer-target strong { flex: 0 1 auto; color: var(--text); font-weight: 600; }
+
+.composer-m02 .composer-toolbar {
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.composer-m02 .composer-toolbar-context { flex: none; width: 34px; height: 34px; }
+.composer-m02 .composer-context-placeholder { display: block; width: 34px; height: 34px; }
+.composer-m02 .composer-context-trigger { width: 34px; height: 34px; padding: 0; color: var(--muted); }
+.composer-m02 .composer-context-trigger svg { width: 17px; height: 17px; }
+.composer-m02 .composer-toolbar-controls {
+  display: flex;
+  min-width: 0;
+  flex: 1 1 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 7px;
+}
+
+.composer-m02 .model-selector,
+.composer-m02 .model-selector > div { min-width: 0; }
+
+.composer-m02 .composer-hint[data-visible="true"] {
+  display: block;
+  margin-top: 5px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+@media (max-width: 520px) {
+  .composer-m02 .composer-toolbar-controls { gap: 3px; }
+  .composer-m02 .model-picker-wrap { flex: 1 1 90px; min-width: 0; max-width: 100%; }
+}

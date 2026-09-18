@@ -259,10 +259,47 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByText("unknown tool evidence", { exact: true }).first(),
     ).toBeAttached();
+    const reviewTrigger = page.getByRole("button", {
+      name: /(?:变更证据|Change evidence) 2/u,
+    });
+    await reviewTrigger.click();
+    const review = page.getByRole("complementary", {
+      name: /变更证据|Change evidence/u,
+    });
+    await expect(review.locator(".review-entry")).toHaveCount(2);
+    await expect(review).toContainText(
+      /并非 Git 工作树|not the current Git working tree/u,
+    );
+    await review
+      .locator(".review-entry")
+      .last()
+      .locator("summary")
+      .first()
+      .click();
+    await expect(
+      review.getByRole("figure", { name: "Change diff" }),
+    ).toContainText("Reviewed content");
+    await review.getByRole("button", { name: /关闭|Close/u }).click();
+    await expect(reviewTrigger).toBeFocused();
+    await page.setViewportSize({ width: 390, height: 844 });
+    await reviewTrigger.click();
+    const mobileReview = page.getByRole("main", {
+      name: /变更证据|Change evidence/u,
+    });
+    await expect(mobileReview).toBeVisible();
+    await expect(page.locator(".conversation-shell")).toBeHidden();
+    expect(
+      await mobileReview.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
+    await mobileReview.getByRole("button", { name: /关闭|Close/u }).click();
+    await expect(reviewTrigger).toBeFocused();
+    await page.setViewportSize({ width: 1280, height: 844 });
     await page.getByRole("button", { name: "Report", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText("Reviewed content");
     const downloadPromise = page.waitForEvent("download");
-    await page.getByRole("button", { name: "Download", exact: true }).click();
+    await page.getByRole("button", { name: /下载文件|Download file/u }).click();
     const downloaded = await downloadPromise;
     expect(await readFile((await downloaded.path())!, "utf8")).toContain(
       "Reviewed content",
@@ -279,11 +316,11 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("heading", { name: "Related report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Refresh", exact: true }).click();
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
     await expect(
       page.getByRole("heading", { name: "Related report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close preview" }).click();
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     const prompt = page.getByRole("textbox", { name: /描述任务|Describe/i });
     await prompt.fill("Update the report");
     await prompt.press("Enter");
@@ -301,7 +338,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBeVisible({ timeout: 8_000 });
     await rm(path);
     await expect(page.getByRole("dialog")).toContainText(
-      "Showing an older preview",
+      /当前显示旧版预览|Showing an older preview/u,
       { timeout: 8_000 },
     );
     await writer.execute("write-restore", {
@@ -313,7 +350,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("heading", { name: "Restored report" }),
     ).toBeVisible();
-    await page.getByRole("button", { name: "Close preview" }).click();
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText(
       "File no longer exists",
