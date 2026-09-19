@@ -22,45 +22,43 @@ function reply(body: unknown) {
 }
 
 it("sorts configured providers first and supports search and status filters", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () =>
-      reply({
-        providers: [
-          {
-            id: "amazon-bedrock",
-            name: "Amazon Bedrock",
-            authMethods: ["api_key"],
-            configured: false,
-            subscription: false,
-            nameTruncated: false,
-          },
-          {
-            id: "codex-local",
-            name: "Codex Local",
-            authMethods: ["oauth"],
-            configured: true,
-            subscription: true,
-            nameTruncated: false,
-          },
-          {
-            id: "deepseek",
-            name: "DeepSeek",
-            authMethods: ["api_key"],
-            configured: true,
-            subscription: false,
-            nameTruncated: false,
-          },
-        ],
-        truncation: {
-          truncated: false,
-          providersOmitted: 0,
-          namesTruncated: 0,
-          maxProviders: 100,
+  const fetcher = vi.fn(async () =>
+    reply({
+      providers: [
+        {
+          id: "amazon-bedrock",
+          name: "Amazon Bedrock",
+          authMethods: ["api_key"],
+          configured: false,
+          subscription: false,
+          nameTruncated: false,
         },
-      }),
-    ),
+        {
+          id: "codex-local",
+          name: "Codex Local",
+          authMethods: ["oauth"],
+          configured: true,
+          subscription: true,
+          nameTruncated: false,
+        },
+        {
+          id: "deepseek",
+          name: "DeepSeek",
+          authMethods: ["api_key"],
+          configured: true,
+          subscription: false,
+          nameTruncated: false,
+        },
+      ],
+      truncation: {
+        truncated: false,
+        providersOmitted: 0,
+        namesTruncated: 0,
+        maxProviders: 100,
+      },
+    }),
   );
+  vi.stubGlobal("fetch", fetcher);
   const view = render(
     createElement(
       I18nextProvider,
@@ -103,6 +101,20 @@ it("sorts configured providers first and supports search and status filters", as
   expect(screen.getByText("DeepSeek")).toBeTruthy();
   expect(screen.queryByText("Amazon Bedrock")).toBeNull();
   expect(screen.getByText(i18n.t("providerAuth_api_key"))).toBeTruthy();
+
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("runtimeStatus") }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("providerSettings") }),
+  );
+  expect(
+    screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("providerSearchLabel"),
+    }).value,
+  ).toBe("deep");
+  expect(screen.getByText("DeepSeek")).toBeTruthy();
+  expect(fetcher).toHaveBeenCalledTimes(1);
 });
 
 it("refreshes provider status and closes with Escape", async () => {
