@@ -6,6 +6,7 @@ import {
   ChevronRight,
   Command,
   Folder,
+  KeyRound,
   Plus,
   Send,
   SlidersHorizontal,
@@ -43,6 +44,7 @@ interface ComposerProps {
   modelSearch?: WebStoreState["modelSearch"];
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
   onInspect?: (terminalId?: string) => void;
+  onOpenProviders?: () => void;
   onInspectSubagent?: (id?: string) => void;
   snapshot: WebSnapshot | null;
   selectedPath?: string | null;
@@ -668,6 +670,19 @@ export function Composer(props: ComposerProps) {
               >
                 <SlidersHorizontal />
               </button>
+            )}
+            {props.onOpenProviders && (
+              <Tooltip content={t("providerAvailability")} placement="above">
+                <button
+                  type="button"
+                  className="icon-button"
+                  data-provider-settings-trigger
+                  aria-label={t("providerAvailability")}
+                  onClick={props.onOpenProviders}
+                >
+                  <KeyRound />
+                </button>
+              </Tooltip>
             )}
             <div className="model-picker-wrap">
               <ModelPicker

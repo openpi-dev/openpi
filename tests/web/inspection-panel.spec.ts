@@ -41,12 +41,16 @@ const target: InspectionTarget = {
   cwd: "/ws",
   model: "Example",
 };
-function show(value = target) {
+function show(value = target, onOpenProviders = vi.fn()) {
   return render(
     createElement(
       I18nextProvider,
       { i18n },
-      createElement(InspectionPanel, { target: value, onClose: vi.fn() }),
+      createElement(InspectionPanel, {
+        target: value,
+        onClose: vi.fn(),
+        onOpenProviders,
+      }),
     ),
   );
 }
@@ -58,7 +62,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-it("shows independent status failures without claiming that configured credentials were tested", async () => {
+it("keeps provider discovery out of runtime status and links to its page", async () => {
+  const onOpenProviders = vi.fn();
   const fetcher = vi.fn(async (url: string) => {
     expect(url).toContain("sessionId=session-a");
     if (url.startsWith("/api/thinking"))
@@ -69,15 +74,10 @@ it("shows independent status failures without claiming that configured credentia
         state: "restricted",
         refreshRequired: false,
       });
-    return reply({
-      providers: [
-        { id: "example", name: "Example provider", configured: true },
-      ],
-      truncation: { truncated: false },
-    });
+    throw new Error(`Unexpected status request: ${url}`);
   });
   vi.stubGlobal("fetch", fetcher);
-  show();
+  show(target, onOpenProviders);
   expect(
     await screen.findByText("Thinking state is unavailable."),
   ).toBeTruthy();
@@ -86,15 +86,18 @@ it("shows independent status failures without claiming that configured credentia
       "Project resources are restricted pending a trust decision.",
     ),
   ).toBeTruthy();
-  expect(screen.getByText("Configured")).toBeTruthy();
   expect(
     screen.getByText(
       "Configured credentials do not guarantee a successful model request.",
     ),
   ).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(3);
+  expect(fetcher).toHaveBeenCalledTimes(2);
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openProviderSettings") }),
+  );
+  expect(onOpenProviders).toHaveBeenCalledTimes(1);
   fireEvent.click(screen.getByRole("button", { name: "Refresh status" }));
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(6));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
 });
 
 it("aborts closed-panel reads and ignores late old-session results on reopening", async () => {

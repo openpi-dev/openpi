@@ -4,9 +4,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebBackgroundTerminalDetail } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../../runtime/types.ts";
-import { WebClient } from "../../protocol/client.ts";
 import { copyText } from "../../lib/clipboard.ts";
+import { WebClient } from "../../protocol/client.ts";
 
 export interface InspectionTarget {
   sessionId: string;
@@ -25,7 +24,6 @@ interface InspectionData {
     revision?: number;
   };
   trust?: WebProjectTrustStatus;
-  auth?: WebProviderAuthProjection;
   terminal?: WebBackgroundTerminalDetail;
   errors: string[];
 }
@@ -33,9 +31,11 @@ interface InspectionData {
 export function InspectionPanel({
   target,
   onClose,
+  onOpenProviders,
 }: {
   target: InspectionTarget;
   onClose: () => void;
+  onOpenProviders?: () => void;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -79,10 +79,9 @@ export function InspectionPanel({
           );
         }
       } else {
-        const [thinking, trust, auth] = await Promise.allSettled([
+        const [thinking, trust] = await Promise.allSettled([
           client.thinking(target.sessionId, controller.signal),
           client.trust(target.sessionId, controller.signal),
-          client.providerAuth(target.sessionId, controller.signal),
         ]);
         if (
           thinking.status === "fulfilled" &&
@@ -97,8 +96,6 @@ export function InspectionPanel({
         )
           next.trust = trust.value;
         else next.errors.push(t("trustUnavailable"));
-        if (auth.status === "fulfilled") next.auth = auth.value;
-        else next.errors.push(t("authUnavailable"));
       }
       if (controller.signal.aborted) return;
       setData(next);
@@ -305,26 +302,20 @@ export function InspectionPanel({
                       </p>
                     )}
                   </section>
-                  <section className="inspection-section">
-                    <h3>{t("providerAvailability")}</h3>
-                    {data.auth?.providers.map((provider) => (
-                      <div className="provider-status" key={provider.id}>
-                        <span>{provider.name || provider.id}</span>
-                        <span>
-                          {provider.configured
-                            ? t("credentialConfigured")
-                            : t("credentialMissing")}
-                        </span>
-                      </div>
-                    ))}
-                    {data.auth && !data.auth.providers.length && (
-                      <p>{t("noProviders")}</p>
-                    )}
-                    {data.auth?.truncation.truncated && (
-                      <p className="inspection-note">{t("providersBounded")}</p>
-                    )}
-                    <p className="inspection-note">{t("authNotVerified")}</p>
-                  </section>
+                  {onOpenProviders && (
+                    <button
+                      type="button"
+                      className="inspection-provider-link"
+                      aria-label={t("openProviderSettings")}
+                      onClick={onOpenProviders}
+                    >
+                      <span>
+                        <strong>{t("providerAvailability")}</strong>
+                        <small>{t("authNotVerified")}</small>
+                      </span>
+                      {t("openProviderSettings")}
+                    </button>
+                  )}
                   <div className="inspection-setup">
                     <p className="inspection-note">{t("configurationViaPi")}</p>
                     <code>/openpi-setup</code>

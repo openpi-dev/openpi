@@ -1,0 +1,224 @@
+import {
+  CheckCircle2,
+  CircleDashed,
+  KeyRound,
+  RefreshCw,
+  Search,
+  X,
+} from "lucide-react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import type { WebProviderAuthProjection } from "../../../../runtime/types.ts";
+import { WebClient } from "../../protocol/client.ts";
+
+type ProviderFilter = "all" | "configured" | "missing";
+
+export function ProviderSettingsPage({
+  sessionId,
+  cwd,
+  onClose,
+}: {
+  sessionId: string;
+  cwd: string;
+  onClose: () => void;
+}) {
+  const { t } = useTranslation();
+  const client = useMemo(() => new WebClient(), []);
+  const closeButton = useRef<HTMLButtonElement>(null);
+  const [revision, refresh] = useState(0);
+  const [data, setData] = useState<WebProviderAuthProjection | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
+  const [filter, setFilter] = useState<ProviderFilter>("all");
+
+  useEffect(() => {
+    closeButton.current?.focus();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [onClose]);
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
+  useEffect(() => {
+    const controller = new AbortController();
+    setData(null);
+    setError(null);
+    void client
+      .providerAuth(sessionId, controller.signal)
+      .then(setData, (reason) => {
+        if (!controller.signal.aborted)
+          setError(
+            reason instanceof Error ? reason.message : t("providerLoadFailed"),
+          );
+      });
+    return () => controller.abort();
+  }, [client, revision, sessionId, t]);
+
+  const providers = useMemo(() => {
+    const normalized = query.trim().toLocaleLowerCase();
+    return [...(data?.providers ?? [])]
+      .sort(
+        (left, right) =>
+          Number(right.configured) - Number(left.configured) ||
+          (left.name || left.id).localeCompare(right.name || right.id),
+      )
+      .filter((provider) => {
+        if (filter === "configured" && !provider.configured) return false;
+        if (filter === "missing" && provider.configured) return false;
+        if (!normalized) return true;
+        return [
+          provider.name,
+          provider.id,
+          ...(provider.authMethods ?? []),
+        ].some((value) => value.toLocaleLowerCase().includes(normalized));
+      });
+  }, [data, filter, query]);
+  const configured = data?.providers.filter(
+    (provider) => provider.configured,
+  ).length;
+
+  return (
+    <div className="provider-settings-page">
+      <header className="provider-settings-header">
+        <div>
+          <span>{t("settings")}</span>
+          <strong>{t("providerSettings")}</strong>
+        </div>
+        <button
+          ref={closeButton}
+          type="button"
+          className="icon-button"
+          aria-label={t("close")}
+          onClick={onClose}
+        >
+          <X />
+        </button>
+      </header>
+      <div className="provider-settings-layout">
+        <main className="provider-settings-content">
+          <div className="provider-settings-title-row">
+            <div>
+              <h1 id="provider-settings-title">{t("providerSettings")}</h1>
+              <p>{t("providerSettingsIntro")}</p>
+            </div>
+            <button
+              type="button"
+              className="provider-refresh"
+              aria-label={t("refreshStatus")}
+              disabled={!data}
+              onClick={() => refresh((value) => value + 1)}
+            >
+              <RefreshCw aria-hidden="true" />
+              <span>{t("refreshStatus")}</span>
+            </button>
+          </div>
+          <p className="provider-settings-workspace" title={cwd}>
+            {cwd}
+          </p>
+          <div className="provider-settings-toolbar">
+            <label className="provider-search">
+              <Search aria-hidden="true" />
+              <span className="sr-only">{t("providerSearchLabel")}</span>
+              <input
+                value={query}
+                placeholder={t("providerSearchPlaceholder")}
+                onChange={(event) => setQuery(event.target.value)}
+              />
+            </label>
+            <fieldset aria-label={t("providerFilter")}>
+              {(["all", "configured", "missing"] as const).map((value) => (
+                <button
+                  type="button"
+                  key={value}
+                  aria-pressed={filter === value}
+                  onClick={() => setFilter(value)}
+                >
+                  {t(`providerFilter_${value}`)}
+                </button>
+              ))}
+            </fieldset>
+          </div>
+          {data && (
+            <p className="provider-settings-count" role="status">
+              {t("providerConfiguredCount", {
+                configured,
+                total: data.providers.length,
+              })}
+            </p>
+          )}
+          {!data && !error ? (
+            <p className="provider-settings-state" role="status">
+              {t("providerLoading")}
+            </p>
+          ) : error ? (
+            <div className="provider-settings-state error" role="alert">
+              <strong>{t("providerLoadFailed")}</strong>
+              <span>{error}</span>
+              <button
+                type="button"
+                onClick={() => refresh((value) => value + 1)}
+              >
+                {t("retryAdmissionCheck")}
+              </button>
+            </div>
+          ) : providers.length ? (
+            <div className="provider-list">
+              {providers.map((provider) => (
+                <div className="provider-row" key={provider.id}>
+                  <span
+                    className={`provider-state-icon ${provider.configured ? "configured" : "missing"}`}
+                    aria-hidden="true"
+                  >
+                    {provider.configured ? <CheckCircle2 /> : <CircleDashed />}
+                  </span>
+                  <div className="provider-identity">
+                    <strong>{provider.name || provider.id}</strong>
+                    {provider.name !== provider.id && (
+                      <span>{provider.id}</span>
+                    )}
+                    <small>
+                      {(provider.authMethods ?? []).length
+                        ? (provider.authMethods ?? [])
+                            .map((method) => t(`providerAuth_${method}`))
+                            .join(" · ")
+                        : t("providerAuthUnknown")}
+                      {provider.subscription
+                        ? ` · ${t("providerSubscription")}`
+                        : ""}
+                    </small>
+                  </div>
+                  <span
+                    className={`provider-state-label ${provider.configured ? "configured" : "missing"}`}
+                  >
+                    {t(
+                      provider.configured
+                        ? "credentialConfigured"
+                        : "credentialMissing",
+                    )}
+                  </span>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <div className="provider-settings-state">
+              <strong>{t("providerNoMatches")}</strong>
+              <span>{t("providerNoMatchesHint")}</span>
+            </div>
+          )}
+          {data?.truncation.truncated && (
+            <p className="inspection-warning">{t("providersBounded")}</p>
+          )}
+          <aside className="provider-read-only">
+            <KeyRound aria-hidden="true" />
+            <div>
+              <strong>{t("providerReadOnly")}</strong>
+              <p>{t("providerReadOnlyDetail")}</p>
+            </div>
+          </aside>
+        </main>
+      </div>
+    </div>
+  );
+}

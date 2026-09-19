@@ -8,12 +8,13 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { changeCalls, ReviewPanel } from "../features/review/ReviewPanel.tsx";
+import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
+import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
+import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
+import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
-import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
-import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { sessionTitle, workspaceName } from "../lib/format.ts";
 import { webStore } from "../store/web-store.ts";
 
@@ -42,6 +43,11 @@ export function App() {
   }, [actions]);
   const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
+  const [providerSettings, setProviderSettings] = useState<{
+    sessionId: string;
+    sessionPath: string;
+    cwd: string;
+  } | null>(null);
   const [reviewTarget, setReviewTarget] = useState<{
     sessionId: string;
     sessionPath: string;
@@ -126,6 +132,42 @@ export function App() {
   useEffect(() => {
     if (inspection && !inspectionVisible) setInspection(null);
   }, [inspection, inspectionVisible]);
+  const providerSettingsVisible =
+    providerSettings &&
+    !state.workspaceDraft &&
+    !state.sessionSwitching &&
+    providerSettings.sessionId === state.snapshot?.currentSessionId &&
+    providerSettings.sessionPath === state.snapshot?.selectedSession?.path;
+  useEffect(() => {
+    if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
+  }, [providerSettings, providerSettingsVisible]);
+  const openProviderSettings = () => {
+    const snapshot = state.snapshot;
+    const session = snapshot?.selectedSession;
+    if (
+      state.workspaceDraft ||
+      !session ||
+      state.sessionSwitching ||
+      session.id !== snapshot.currentSessionId
+    )
+      return;
+    setInspection(null);
+    setReviewTarget(null);
+    setSubagentTarget(null);
+    setProviderSettings({
+      sessionId: session.id,
+      sessionPath: session.path,
+      cwd: session.cwd,
+    });
+  };
+  const closeProviderSettings = useCallback(() => {
+    setProviderSettings(null);
+    requestAnimationFrame(() => {
+      document
+        .querySelector<HTMLButtonElement>("[data-provider-settings-trigger]")
+        ?.focus();
+    });
+  }, []);
 
   useEffect(() => {
     actions.start();
@@ -204,232 +246,246 @@ export function App() {
   );
 
   return (
-    <div
-      className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${reviewVisible ? "with-review-panel" : ""} ${loading ? "shell-loading" : ""}`}
-    >
-      <SessionSidebar
-        snapshot={state.snapshot}
-        selectedPath={state.workspaceDraft ? null : state.selectedPath}
-        selectedWorkspace={state.selectedWorkspace}
-        collapsed={state.collapsed}
-        query={state.query}
-        searchOpen={state.searchOpen}
-        mobileOpen={mobileSidebarOpen}
-        returnFocusRef={sidebarTrigger}
-        actions={actions}
-      />
-      {state.sidebarCollapsed && (
-        <button
-          className="sidebar-expand"
-          type="button"
-          aria-label={t("expandSidebar")}
-          title={t("expandSidebar")}
-          onClick={() => actions.toggleSidebar(false)}
-        >
-          <PanelLeftOpen />
-        </button>
-      )}
-      <main
-        inert={mobileSidebarOpen}
-        className={`conversation-shell ${selected ? "has-view" : ""} ${landing && (!selected || view === "chat") ? "landing" : ""}`}
+    <>
+      <div
+        inert={providerSettingsVisible ? true : undefined}
+        aria-hidden={providerSettingsVisible ? true : undefined}
+        className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${reviewVisible ? "with-review-panel" : ""} ${loading ? "shell-loading" : ""}`}
       >
-        <header className="task-header">
+        <SessionSidebar
+          snapshot={state.snapshot}
+          selectedPath={state.workspaceDraft ? null : state.selectedPath}
+          selectedWorkspace={state.selectedWorkspace}
+          collapsed={state.collapsed}
+          query={state.query}
+          searchOpen={state.searchOpen}
+          mobileOpen={mobileSidebarOpen}
+          returnFocusRef={sidebarTrigger}
+          actions={actions}
+        />
+        {state.sidebarCollapsed && (
           <button
-            className="task-header-menu"
-            ref={sidebarTrigger}
+            className="sidebar-expand"
             type="button"
-            aria-label={t("openSidebar")}
-            aria-controls="session-sidebar"
-            aria-expanded={mobileSidebarOpen}
-            onClick={() => actions.toggleSidebar(true)}
+            aria-label={t("expandSidebar")}
+            title={t("expandSidebar")}
+            onClick={() => actions.toggleSidebar(false)}
           >
-            <Menu />
+            <PanelLeftOpen />
           </button>
-          <div className="task-identity">
-            {workspacePath && (
-              <span className="task-workspace" title={workspacePath}>
-                {workspace?.name || workspaceName(workspacePath)}
-                <span className="sr-only"> {workspacePath}</span>
-              </span>
-            )}
-            <h1 title={taskTitle}>{taskTitle}</h1>
-          </div>
-          <span className={`connection-state ${state.connection}`}>
-            {t(state.connection)}
-          </span>
-        </header>
-        {selected && !state.sessionSwitching && (
-          <div className="conversation-view-row">
-            <fieldset
-              className="conversation-view-switch"
-              aria-label={t("conversationView")}
-            >
-              <button
-                type="button"
-                aria-pressed={view === "chat"}
-                onClick={() => setView("chat")}
-              >
-                {t("chatView")}
-              </button>
-              <button
-                type="button"
-                aria-pressed={view === "trajectory"}
-                onClick={() => setView("trajectory")}
-              >
-                {t("trajectory")}
-              </button>
-            </fieldset>
-            {changes > 0 && (
-              <button
-                className="review-trigger"
-                type="button"
-                onClick={openReview}
-              >
-                <FileDiff aria-hidden="true" /> {t("changeEvidence")}{" "}
-                <span>{changes}</span>
-              </button>
-            )}
-          </div>
         )}
-        {loading ? (
-          <section className="shell-state" role="status" aria-live="polite">
-            <OpenPiLogo compact />
-            <p>
-              {t(
-                state.connection === "unavailable"
-                  ? "unavailable"
-                  : "connecting",
-              )}
-            </p>
-            {state.connection === "unavailable" && (
-              <button
-                type="button"
-                onClick={() =>
-                  void actions.refreshSnapshot({ resetCursor: true })
-                }
-              >
-                <RefreshCw aria-hidden="true" /> {t("retryAdmissionCheck")}
-              </button>
-            )}
-          </section>
-        ) : state.sessionSwitching ? (
-          <div className="conversation switching" role="status">
-            <div className="conversation-running">
-              <span className="conversation-running-dot" />
-              <span>{t("switchingSession")}</span>
-            </div>
-          </div>
-        ) : view === "trajectory" && selected && state.snapshot ? (
-          <Trajectory
-            key={selected.path}
-            snapshot={state.snapshot}
-            running={state.liveRunning}
-          />
-        ) : landing ? (
-          <section
-            className="conversation landing-conversation"
-            aria-label="Conversation"
-          >
-            <div className="landing-welcome">
-              <OpenPiLogo animated />
-            </div>
-          </section>
-        ) : state.snapshot ? (
-          <Transcript
-            snapshot={state.snapshot}
-            liveMessages={state.liveMessages}
-            liveRunning={state.liveRunning}
-            livePhase={state.livePhase}
-            liveRetry={state.liveRetry}
-            thinkingStarts={state.thinkingStarts}
-            thinkingDurations={state.thinkingDurations}
-            scrollToBottom={state.scrollToBottom}
-            onResend={resend}
-            onInspectSubagent={inspectSubagent}
-          />
-        ) : null}
-        {state.snapshot && (
-          <Composer
-            workspaceDraft={state.workspaceDraft}
-            draftModel={state.draftModel}
-            modelSelectionPending={state.modelSelectionPending}
-            modelSearch={state.modelSearch}
-            thinkingPendingLevel={state.thinkingPendingLevel}
-            onInspect={inspect}
-            onInspectSubagent={inspectSubagent}
-            activeTurn={state.activeTurn}
-            turnCancellationPending={state.turnCancellationPending}
-            turnTerminalStatus={state.turnTerminalStatus}
-            pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
-            commandDiscovery={state.commandDiscovery}
-            snapshot={state.snapshot}
-            selectedPath={state.selectedPath}
-            selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
-            sessionSwitching={state.sessionSwitching}
-            promptAdmissionPending={state.promptAdmissionPending}
-            promptAdmissionRecovery={state.promptAdmissionRecovery}
-            promptAdmissionResolution={state.promptAdmissionResolution}
-            liveRunning={state.liveRunning}
-            landing={landing}
-            actions={actions}
-          />
-        )}
-        {state.notice && (
-          <div className="notice" role="alert">
-            <span>{state.notice}</span>
+        <main
+          inert={mobileSidebarOpen}
+          className={`conversation-shell ${selected ? "has-view" : ""} ${landing && (!selected || view === "chat") ? "landing" : ""}`}
+        >
+          <header className="task-header">
             <button
+              className="task-header-menu"
+              ref={sidebarTrigger}
               type="button"
-              aria-label={t("close")}
-              onClick={actions.clearNotice}
+              aria-label={t("openSidebar")}
+              aria-controls="session-sidebar"
+              aria-expanded={mobileSidebarOpen}
+              onClick={() => actions.toggleSidebar(true)}
             >
-              <X />
+              <Menu />
             </button>
-          </div>
-        )}
-      </main>
-      {inspectionVisible && (
-        <InspectionPanel
-          key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
-          target={inspection}
-          onClose={() => setInspection(null)}
-        />
-      )}
-      {subagentVisible && (
-        <SubagentPanel
-          key={`${subagentTarget.sessionId}:${subagentTarget.navigation}`}
-          sessionId={subagentTarget.sessionId}
-          initialId={subagentTarget.id}
-          activity={
-            subagentTarget.sessionId === state.snapshot?.currentSessionId
-              ? state.snapshot?.runtime.capabilities.subagents
-              : undefined
-          }
-          records={recordedSubagents(
-            (state.snapshot?.selectedSession?.entries ?? []).flatMap((entry) =>
-              entry.message ? [entry.message] : [],
-            ),
+            <div className="task-identity">
+              {workspacePath && (
+                <span className="task-workspace" title={workspacePath}>
+                  {workspace?.name || workspaceName(workspacePath)}
+                  <span className="sr-only"> {workspacePath}</span>
+                </span>
+              )}
+              <h1 title={taskTitle}>{taskTitle}</h1>
+            </div>
+            <span className={`connection-state ${state.connection}`}>
+              {t(state.connection)}
+            </span>
+          </header>
+          {selected && !state.sessionSwitching && (
+            <div className="conversation-view-row">
+              <fieldset
+                className="conversation-view-switch"
+                aria-label={t("conversationView")}
+              >
+                <button
+                  type="button"
+                  aria-pressed={view === "chat"}
+                  onClick={() => setView("chat")}
+                >
+                  {t("chatView")}
+                </button>
+                <button
+                  type="button"
+                  aria-pressed={view === "trajectory"}
+                  onClick={() => setView("trajectory")}
+                >
+                  {t("trajectory")}
+                </button>
+              </fieldset>
+              {changes > 0 && (
+                <button
+                  className="review-trigger"
+                  type="button"
+                  onClick={openReview}
+                >
+                  <FileDiff aria-hidden="true" /> {t("changeEvidence")}{" "}
+                  <span>{changes}</span>
+                </button>
+              )}
+            </div>
           )}
-          liveAvailable={
-            subagentTarget.sessionId === state.snapshot?.currentSessionId
-          }
-          onClose={() => setSubagentTarget(null)}
+          {loading ? (
+            <section className="shell-state" role="status" aria-live="polite">
+              <OpenPiLogo compact />
+              <p>
+                {t(
+                  state.connection === "unavailable"
+                    ? "unavailable"
+                    : "connecting",
+                )}
+              </p>
+              {state.connection === "unavailable" && (
+                <button
+                  type="button"
+                  onClick={() =>
+                    void actions.refreshSnapshot({ resetCursor: true })
+                  }
+                >
+                  <RefreshCw aria-hidden="true" /> {t("retryAdmissionCheck")}
+                </button>
+              )}
+            </section>
+          ) : state.sessionSwitching ? (
+            <div className="conversation switching" role="status">
+              <div className="conversation-running">
+                <span className="conversation-running-dot" />
+                <span>{t("switchingSession")}</span>
+              </div>
+            </div>
+          ) : view === "trajectory" && selected && state.snapshot ? (
+            <Trajectory
+              key={selected.path}
+              snapshot={state.snapshot}
+              running={state.liveRunning}
+            />
+          ) : landing ? (
+            <section
+              className="conversation landing-conversation"
+              aria-label="Conversation"
+            >
+              <div className="landing-welcome">
+                <OpenPiLogo animated />
+              </div>
+            </section>
+          ) : state.snapshot ? (
+            <Transcript
+              snapshot={state.snapshot}
+              liveMessages={state.liveMessages}
+              liveRunning={state.liveRunning}
+              livePhase={state.livePhase}
+              liveRetry={state.liveRetry}
+              thinkingStarts={state.thinkingStarts}
+              thinkingDurations={state.thinkingDurations}
+              scrollToBottom={state.scrollToBottom}
+              onResend={resend}
+              onInspectSubagent={inspectSubagent}
+            />
+          ) : null}
+          {state.snapshot && (
+            <Composer
+              workspaceDraft={state.workspaceDraft}
+              draftModel={state.draftModel}
+              modelSelectionPending={state.modelSelectionPending}
+              modelSearch={state.modelSearch}
+              thinkingPendingLevel={state.thinkingPendingLevel}
+              onInspect={inspect}
+              onOpenProviders={openProviderSettings}
+              onInspectSubagent={inspectSubagent}
+              activeTurn={state.activeTurn}
+              turnCancellationPending={state.turnCancellationPending}
+              turnTerminalStatus={state.turnTerminalStatus}
+              pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
+              commandDiscovery={state.commandDiscovery}
+              snapshot={state.snapshot}
+              selectedPath={state.selectedPath}
+              selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
+              sessionSwitching={state.sessionSwitching}
+              promptAdmissionPending={state.promptAdmissionPending}
+              promptAdmissionRecovery={state.promptAdmissionRecovery}
+              promptAdmissionResolution={state.promptAdmissionResolution}
+              liveRunning={state.liveRunning}
+              landing={landing}
+              actions={actions}
+            />
+          )}
+          {state.notice && (
+            <div className="notice" role="alert">
+              <span>{state.notice}</span>
+              <button
+                type="button"
+                aria-label={t("close")}
+                onClick={actions.clearNotice}
+              >
+                <X />
+              </button>
+            </div>
+          )}
+        </main>
+        {inspectionVisible && (
+          <InspectionPanel
+            key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
+            target={inspection}
+            onClose={() => setInspection(null)}
+            onOpenProviders={openProviderSettings}
+          />
+        )}
+        {subagentVisible && (
+          <SubagentPanel
+            key={`${subagentTarget.sessionId}:${subagentTarget.navigation}`}
+            sessionId={subagentTarget.sessionId}
+            initialId={subagentTarget.id}
+            activity={
+              subagentTarget.sessionId === state.snapshot?.currentSessionId
+                ? state.snapshot?.runtime.capabilities.subagents
+                : undefined
+            }
+            records={recordedSubagents(
+              (state.snapshot?.selectedSession?.entries ?? []).flatMap(
+                (entry) => (entry.message ? [entry.message] : []),
+              ),
+            )}
+            liveAvailable={
+              subagentTarget.sessionId === state.snapshot?.currentSessionId
+            }
+            onClose={() => setSubagentTarget(null)}
+          />
+        )}
+        {reviewVisible && selected && (
+          <ReviewPanel
+            key={selected.path}
+            session={selected}
+            onClose={closeReview}
+          />
+        )}
+        <button
+          className="sidebar-scrim"
+          type="button"
+          tabIndex={-1}
+          aria-hidden="true"
+          aria-label={t("close")}
+          onClick={actions.closeMobileSidebar}
+        />
+      </div>
+      {providerSettingsVisible && (
+        <ProviderSettingsPage
+          key={`${providerSettings.sessionId}:${providerSettings.sessionPath}`}
+          sessionId={providerSettings.sessionId}
+          cwd={providerSettings.cwd}
+          onClose={closeProviderSettings}
         />
       )}
-      {reviewVisible && selected && (
-        <ReviewPanel
-          key={selected.path}
-          session={selected}
-          onClose={closeReview}
-        />
-      )}
-      <button
-        className="sidebar-scrim"
-        type="button"
-        tabIndex={-1}
-        aria-hidden="true"
-        aria-label={t("close")}
-        onClick={actions.closeMobileSidebar}
-      />
-    </div>
+    </>
   );
 }

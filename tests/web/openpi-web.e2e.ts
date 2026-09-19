@@ -1,9 +1,9 @@
-import { AxeBuilder } from "@axe-core/playwright";
-import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { expect, type Page, test } from "@playwright/test";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
+import { AxeBuilder } from "@axe-core/playwright";
+import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { expect, type Page, test } from "@playwright/test";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -1154,7 +1154,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     const dialog = page.getByRole("dialog");
     await expect(dialog).toHaveCSS("opacity", "1");
     await expect(dialog).toContainText("medium");
-    await expect(dialog).toContainText("Example");
+    await expect(dialog).not.toContainText("Example");
     await expect
       .poll(() => reads.filter((x) => x === "thinking").length)
       .toBe(width === 1280 ? 1 : 2);
@@ -1165,6 +1165,24 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     });
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
+    await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
+    const providerSettings = page.getByRole("main");
+    await expect(
+      providerSettings.getByRole("heading", { name: "服务商凭据" }),
+    ).toBeVisible();
+    await expect(providerSettings).toContainText("Example");
+    await expect
+      .poll(() => reads.filter((x) => x === "providers/auth-status").length)
+      .toBe(width === 1280 ? 1 : 2);
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`providers-${width}.png`),
+      fullPage: true,
+    });
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("heading", { name: "服务商凭据" })).toHaveCount(
+      0,
+    );
     await page.getByRole("button", { name: /Build logs/ }).click();
     await expect(dialog.locator("pre").first()).toContainText(
       '<script>alert("literal output")</script>',
