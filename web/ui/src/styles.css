@@ -360,6 +360,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .activity-chip-text { @apply overflow-hidden text-ellipsis whitespace-nowrap; }
 .activity-chip.more { color: var(--muted); }
 .activity-chip.done > svg { color: var(--healthy); } .activity-chip.error > svg { color: var(--error); }
+.activity-chip.interrupted > svg { color:var(--warning); }
 .conversation-running { @apply mx-auto flex items-center gap-2; width: min(840px, calc(100% - 48px)); margin-bottom: 18px; color: var(--muted); font-size: 12px; }
 .jump-to-latest { position:absolute; z-index:12; right:48px; bottom:150px; display:flex; align-items:center; gap:6px; padding:8px 10px; border:1px solid var(--border-strong); border-radius:6px; background:var(--page); color:var(--text); box-shadow:0 4px 16px #0002; cursor:pointer; }
 .jump-to-latest svg { width:14px; height:14px; }

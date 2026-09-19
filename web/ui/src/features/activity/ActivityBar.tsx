@@ -1,13 +1,14 @@
-import { Check, X } from "lucide-react";
+import { Check, CircleStop, X } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { formatElapsedMs } from "../../lib/format.ts";
 import { recordedSubagents } from "../subagents/recorded-subagents.ts";
 
-type Status = "running" | "done" | "error" | "warn" | "unknown";
+type Status = "running" | "done" | "error" | "interrupted" | "warn" | "unknown";
 
-function canonicalStatus(value: string): Status {
+function canonicalStatus(value: string, outcome?: string): Status {
+  if (outcome === "interrupted") return "interrupted";
   if (value === "running") return "running";
   if (value === "done" || value === "completed") return "done";
   if (["error", "failed", "aborted", "killed", "timed_out"].includes(value))
@@ -20,11 +21,13 @@ function Chip({
   kind,
   label,
   status,
+  statusLabel,
   onClick,
 }: {
   kind: string;
   label: string;
   status: Status;
+  statusLabel?: string;
   onClick?: () => void;
 }) {
   const Tag = onClick ? "button" : "span";
@@ -40,10 +43,13 @@ function Chip({
         <Check />
       ) : status === "error" ? (
         <X />
+      ) : status === "interrupted" ? (
+        <CircleStop />
       ) : (
         <span className="activity-chip-glyph">?</span>
       )}
       <span className="activity-chip-text">{label}</span>
+      {statusLabel && <span className="sr-only"> · {statusLabel}</span>}
     </Tag>
   );
 }
@@ -73,6 +79,9 @@ export function ActivityBar({
     ...(capabilities?.subagents?.items ?? []).map((item) => item.id),
     ...saved.map((item) => item.id),
   ]).size;
+  const activeSubagentCount = (capabilities?.subagents?.items ?? []).filter(
+    (item) => item.status === "running",
+  ).length;
   const running = [
     ...(capabilities?.subagents?.items ?? []),
     ...(capabilities?.workflows?.items ?? []),
@@ -92,6 +101,7 @@ export function ActivityBar({
     kind: string;
     label: string;
     status: Status;
+    statusLabel?: string;
     onClick?: () => void;
   }> = [];
   for (const workflow of capabilities?.workflows?.items ?? []) {
@@ -117,7 +127,12 @@ export function ActivityBar({
       key: `subagent-${subagent.id}`,
       kind: "subagent",
       label: `${subagent.title || subagent.id}${elapsed ? ` · ${elapsed}` : ""}`,
-      status: canonicalStatus(subagent.status),
+      status: canonicalStatus(subagent.status, subagent.outcome),
+      statusLabel: t(
+        subagent.outcome === "interrupted"
+          ? "subagentState_interrupted"
+          : `subagentState_${subagent.status}`,
+      ),
       onClick: onInspectSubagent
         ? () => onInspectSubagent(subagent.id)
         : undefined,
@@ -156,7 +171,10 @@ export function ActivityBar({
           type="button"
           onClick={() => onInspectSubagent()}
         >
-          {t("subagentList", { count: subagentCount })}
+          {t("subagentList", {
+            count: subagentCount,
+            running: activeSubagentCount,
+          })}
         </button>
       )}
       {visible.map(({ key, ...chip }) => (

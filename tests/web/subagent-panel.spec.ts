@@ -13,8 +13,8 @@ import type { WebSubagentDetail } from "../../extensions/shared/web-observer-reg
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
-import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
 import { recordedSubagents } from "../../web/ui/src/features/subagents/recorded-subagents.ts";
+import { SubagentPanel } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -519,11 +519,51 @@ it("opens the child list and individual activity chips with exact IDs", () => {
     ),
   );
   fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("subagentList", { count: 2 }) }),
+    screen.getByRole("button", {
+      name: i18n.t("subagentList", { count: 2, running: 2 }),
+    }),
   );
   expect(inspect).toHaveBeenLastCalledWith();
   fireEvent.click(screen.getByRole("button", { name: /Readme review/ }));
   expect(inspect).toHaveBeenLastCalledWith("sa-2");
+});
+
+it("distinguishes interrupted activity and record count from active concurrency", () => {
+  const value = snapshot();
+  value.runtime.capabilities.subagents = {
+    items: [
+      {
+        id: "sa-interrupted",
+        title: "Interrupted review",
+        status: "error",
+        outcome: "interrupted",
+        createdAt: 1,
+        settledAt: 2,
+      },
+    ],
+    omitted: 0,
+    truncated: false,
+  };
+  render(
+    createElement(
+      Providers,
+      null,
+      createElement(ActivityBar, {
+        snapshot: value,
+        onInspectSubagent: vi.fn(),
+      }),
+    ),
+  );
+  expect(
+    screen.getByRole("button", {
+      name: i18n.t("subagentList", { count: 2, running: 0 }),
+    }),
+  ).toBeTruthy();
+  const activityChip = screen.getByRole("button", {
+    name: /Interrupted review.*Interrupted/u,
+  });
+  expect(activityChip.classList.contains("interrupted")).toBe(true);
+  expect(activityChip.classList.contains("error")).toBe(false);
 });
 
 it.each([true, false])(
@@ -630,7 +670,9 @@ it("keeps the overview entry reachable for saved children after the live manager
     ),
   );
   fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("subagentList", { count: 1 }) }),
+    screen.getByRole("button", {
+      name: i18n.t("subagentList", { count: 1, running: 0 }),
+    }),
   );
   expect(inspect).toHaveBeenCalledWith();
 });

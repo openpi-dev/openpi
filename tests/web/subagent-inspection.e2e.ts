@@ -200,7 +200,10 @@ for (const width of [1280, 390]) {
     await expect(dialog).toBeHidden();
     await expect(page.locator(".conversation-shell")).toBeVisible();
     await page
-      .getByRole("button", { name: "子代理（6）", exact: true })
+      .getByRole("button", {
+        name: "子代理：1 运行中 · 6 条记录",
+        exact: true,
+      })
       .click();
     await expect(dialog).toBeVisible();
     await expect(
@@ -209,7 +212,10 @@ for (const width of [1280, 390]) {
     if (width > 1100) {
       await dialog.getByRole("button", { name: /Readonly task 6/ }).click();
       await page
-        .getByRole("button", { name: "子代理（6）", exact: true })
+        .getByRole("button", {
+          name: "子代理：1 运行中 · 6 条记录",
+          exact: true,
+        })
         .click();
       await expect(
         dialog.getByRole("navigation", { name: "子代理任务列表" }),
