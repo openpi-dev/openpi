@@ -1893,6 +1893,83 @@ test("serves Session-bound command discovery with fail-closed request validation
   }
 });
 
+test("serves the canonical setup and current Pi resources through a Session-bound settings catalog", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-settings-"));
+  const runtime = testRuntime(cwd);
+  let workspaceSelected = true;
+  Object.defineProperty(runtime, "workspaceSelected", {
+    configurable: true,
+    get: () => workspaceSelected,
+  });
+  runtime.listSettingsResources = () => ({
+    skills: [],
+    plugins: [],
+    totals: { extensions: 2, skills: 0, prompts: 0, themes: 1 },
+    diagnostics: { extensionErrors: 0, skillErrors: 0 },
+    truncation: {
+      truncated: false,
+      skillsOmitted: 0,
+      pluginsOmitted: 0,
+      resourcesOmitted: 0,
+    },
+  });
+  const { host, launched, headers } = await startTestHost(runtime);
+  const sessionId = runtime.sessionManager.getSessionId();
+  try {
+    const invalid = await fetch(`${launched.origin}/api/settings/catalog`, {
+      headers,
+    });
+    assert.equal(invalid.status, 400);
+    assert.equal(
+      (await invalid.json()).code,
+      "INVALID_SETTINGS_CATALOG_REQUEST",
+    );
+
+    const stale = await fetch(
+      `${launched.origin}/api/settings/catalog?sessionId=stale-session`,
+      { headers },
+    );
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, "SESSION_CHANGED");
+
+    workspaceSelected = false;
+    const noWorkspace = await fetch(
+      `${launched.origin}/api/settings/catalog?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(noWorkspace.status, 409);
+    assert.equal((await noWorkspace.json()).code, "WORKSPACE_REQUIRED");
+
+    workspaceSelected = true;
+    const response = await fetch(
+      `${launched.origin}/api/settings/catalog?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(response.status, 200);
+    const body = (await response.json()) as {
+      sessionId: string;
+      setup: {
+        ui: {
+          webTheme: string;
+          webChatWidth: number;
+          webChatFontSize: number;
+          webExpandThinking: boolean;
+        };
+      };
+      resources: { totals: { extensions: number } };
+    };
+    assert.equal(body.sessionId, sessionId);
+    assert.equal(typeof body.setup.ui.webTheme, "string");
+    assert.equal(typeof body.setup.ui.webChatWidth, "number");
+    assert.equal(typeof body.setup.ui.webChatFontSize, "number");
+    assert.equal(typeof body.setup.ui.webExpandThinking, "boolean");
+    assert.equal(body.resources.totals.extensions, 2);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("classifies invalid and oversized JSON bodies as client errors", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-request-body-"));
   const { host, launched, headers } = await startTestHost(testRuntime(cwd));

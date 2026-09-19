@@ -55,6 +55,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { projectWebSettingsResources } from "./settings-catalog.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -400,6 +401,12 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertActive();
     this.assertWorkspaceSelected();
     return commandsForServices(this.runtime.services);
+  }
+
+  listSettingsResources() {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    return projectWebSettingsResources(this.runtime.services.resourceLoader);
   }
 
   listProviderAuth(): WebProviderAuthProjection {

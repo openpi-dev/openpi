@@ -2,8 +2,6 @@ import type {
   WebBackgroundTerminalDetail,
   WebSubagentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
-import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
@@ -11,13 +9,16 @@ import {
 } from "../../../protocol/artifacts.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebCommandDiscoveryResult,
+  type WebGitReviewResult,
   type WebModelSearchResult,
   type WebModelSummary,
-  type WebGitReviewResult,
+  type WebSettingsCatalog,
   type WebSnapshot,
   type WebThinkingState,
-  type WebCommandDiscoveryResult,
 } from "../../../protocol/types.ts";
+import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
+import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -320,6 +321,13 @@ export class WebClient {
   commands(sessionId: string, signal?: AbortSignal) {
     return this.request<WebCommandDiscoveryResult>(
       `/api/commands?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  settingsCatalog(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebSettingsCatalog>(
+      `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
   }

@@ -1,35 +1,44 @@
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import {
+  Bot,
   Check,
-  Clipboard,
   Cpu,
   KeyRound,
-  Monitor,
-  Moon,
+  Layers3,
+  Plug,
   SlidersHorizontal,
-  Sun,
-  Wrench,
   X,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebModelSummary } from "../../../../protocol/types.ts";
-import { copyText } from "../../lib/clipboard.ts";
+import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
+import type {
+  WebModelSummary,
+  WebThemePreference,
+} from "../../../../protocol/types.ts";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
+import {
+  GeneralSettingsPanel,
+  PluginsSettingsPanel,
+  SkillsSettingsPanel,
+  SubagentsSettingsPanel,
+} from "./SettingsPanels.tsx";
+import { useSettingsCatalog } from "./useSettingsCatalog.ts";
 
-type SettingsSection = "general" | "models" | "openpi";
+type SettingsSection =
+  | "general"
+  | "models"
+  | "skills"
+  | "subagents"
+  | "plugins";
 
 const settingsSections = [
   { id: "general", label: "generalSettings", Icon: SlidersHorizontal },
   { id: "models", label: "modelSettings", Icon: Cpu },
-  { id: "openpi", label: "openPiSettings", Icon: Wrench },
-] as const;
-
-const themeOptions = [
-  { id: "light", label: "themeLight", Icon: Sun },
-  { id: "dark", label: "themeDark", Icon: Moon },
-  { id: "system", label: "themeSystem", Icon: Monitor },
+  { id: "skills", label: "skillsSettings", Icon: Layers3 },
+  { id: "subagents", label: "subagentsSettings", Icon: Bot },
+  { id: "plugins", label: "pluginsSettings", Icon: Plug },
 ] as const;
 
 function modelKey(model: WebModelSummary) {
@@ -43,8 +52,10 @@ export function ProviderSettingsPage({
   currentModel,
   thinkingLevel,
   theme,
+  capabilities,
   modelSelectionPending,
   onSelectModel,
+  onConfigureOpenPi,
   onOpenRuntimeStatus,
   onClose,
 }: {
@@ -53,24 +64,30 @@ export function ProviderSettingsPage({
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
-  theme: "system" | "light" | "dark";
+  theme: WebThemePreference;
+  capabilities?: WebCapabilitySnapshot;
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
+  onConfigureOpenPi: (request: string) => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [section, setSection] = useState<SettingsSection>("models");
+  const [section, setSection] = useState<SettingsSection>("general");
+  const [setupPending, setSetupPending] = useState(false);
+  const [setupError, setSetupError] = useState<string | null>(null);
+  const {
+    catalog,
+    error: catalogError,
+    refresh,
+  } = useSettingsCatalog(sessionId);
   const [selectedModelKey, setSelectedModelKey] = useState(
     currentModel
       ? modelKey(currentModel)
       : models[0]
         ? modelKey(models[0])
         : "",
-  );
-  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
-    null,
   );
 
   const groupedModels = useMemo(() => {
@@ -99,11 +116,24 @@ export function ProviderSettingsPage({
     setSelectedModelKey(modelKey(currentModel ?? models[0]!));
   }, [currentModel, models, selectedModelKey]);
 
-  const copySetup = () => {
-    setCopyStatus(null);
-    void copyText("/openpi-setup").then((success) =>
-      setCopyStatus(success ? "copied" : "failed"),
-    );
+  const configureOpenPi = async (request: string) => {
+    if (setupPending) return false;
+    setSetupPending(true);
+    setSetupError(null);
+    try {
+      const accepted = await onConfigureOpenPi(request);
+      if (!accepted) {
+        setSetupPending(false);
+        setSetupError(t("setupRequestFailed"));
+      }
+      return accepted;
+    } catch (reason) {
+      setSetupPending(false);
+      setSetupError(
+        reason instanceof Error ? reason.message : t("setupRequestFailed"),
+      );
+      return false;
+    }
   };
 
   return (
@@ -135,7 +165,7 @@ export function ProviderSettingsPage({
                 className="provider-settings-tab"
                 onClick={() => {
                   setSection(id);
-                  setCopyStatus(null);
+                  setSetupError(null);
                 }}
               >
                 <Icon aria-hidden="true" />
@@ -155,60 +185,24 @@ export function ProviderSettingsPage({
         </header>
 
         <div className="provider-settings-main">
-          <section
+          <div
             id="settings-panel-general"
-            className="settings-general"
             role="tabpanel"
             hidden={section !== "general"}
           >
-            <h1>{t("generalSettings")}</h1>
-            <section className="settings-general-section">
-              <h2>{t("appearance")}</h2>
-              <p>{t("appearanceDescription")}</p>
-              <ul className="settings-theme-options">
-                {themeOptions.map(({ id, label, Icon }) => (
-                  <li
-                    key={id}
-                    className="settings-theme-option"
-                    data-selected={theme === id ? "true" : undefined}
-                    aria-current={theme === id ? "true" : undefined}
-                  >
-                    <Icon aria-hidden="true" />
-                    <span>{t(label)}</span>
-                  </li>
-                ))}
-              </ul>
-              <p className="settings-managed-note">
-                {t("themeManagedBySetup")}
-              </p>
-            </section>
-            <section className="settings-general-section">
-              <h2>{t("sessionSettings")}</h2>
-              <p>{t("runtimeSettingsIntro")}</p>
-              <dl className="settings-summary-list">
-                <div>
-                  <dt>{t("selectedModel")}</dt>
-                  <dd>{currentModel?.label ?? t("noModels")}</dd>
-                </div>
-                <div>
-                  <dt>{t("thinkingLevel")}</dt>
-                  <dd>{thinkingLevel}</dd>
-                </div>
-                <div>
-                  <dt>{t("currentWorkspace")}</dt>
-                  <dd title={cwd}>{cwd}</dd>
-                </div>
-              </dl>
-              <Button
-                label={t("openRuntimeDetails")}
-                variant="secondary"
-                size="sm"
-                icon={<SlidersHorizontal aria-hidden="true" />}
-                className="settings-runtime-action"
-                onClick={onOpenRuntimeStatus}
-              />
-            </section>
-          </section>
+            <GeneralSettingsPanel
+              catalog={catalog}
+              error={catalogError}
+              currentModel={currentModel}
+              thinkingLevel={thinkingLevel}
+              cwd={cwd}
+              theme={theme}
+              setupPending={setupPending}
+              onConfigure={configureOpenPi}
+              onOpenRuntimeStatus={onOpenRuntimeStatus}
+              onRefresh={refresh}
+            />
+          </div>
 
           <section
             id="settings-panel-models"
@@ -249,13 +243,9 @@ export function ProviderSettingsPage({
                   <p className="settings-model-empty">{t("noModels")}</p>
                 )}
               </div>
-              <button
-                type="button"
-                className="settings-model-provider-link"
-                onClick={() => setSection("openpi")}
-              >
+              <div className="settings-model-provider-link">
                 <KeyRound aria-hidden="true" /> {t("providerReadOnly")}
-              </button>
+              </div>
             </aside>
             <div className="settings-model-detail">
               {selectedModel ? (
@@ -310,51 +300,51 @@ export function ProviderSettingsPage({
             </div>
           </section>
 
-          <section
-            id="settings-panel-openpi"
-            className="settings-openpi"
+          <div
+            id="settings-panel-skills"
             role="tabpanel"
-            hidden={section !== "openpi"}
+            hidden={section !== "skills"}
           >
-            <h1>{t("openPiSettings")}</h1>
-            <p>{t("openPiSettingsIntro")}</p>
-            <div className="settings-command-row">
-              <div>
-                <strong>{t("canonicalSetupCommand")}</strong>
-                <code>/openpi-setup</code>
-              </div>
-              <button
-                type="button"
-                className="icon-button"
-                aria-label={t(
-                  copyStatus === "copied"
-                    ? "copiedMessage"
-                    : "copySetupCommand",
-                )}
-                title={t(
-                  copyStatus === "copied"
-                    ? "copiedMessage"
-                    : "copySetupCommand",
-                )}
-                onClick={copySetup}
-              >
-                {copyStatus === "copied" ? <Check /> : <Clipboard />}
-              </button>
-            </div>
-            {copyStatus === "failed" && (
-              <p className="inspection-warning" role="status">
-                {t("copyFailed")}
-              </p>
-            )}
-            <aside className="provider-read-only">
-              <Wrench aria-hidden="true" />
-              <div>
-                <strong>{t("providerReadOnly")}</strong>
-                <p>{t("configurationViaPi")}</p>
-              </div>
-            </aside>
-          </section>
+            <SkillsSettingsPanel
+              catalog={catalog}
+              error={catalogError}
+              onRefresh={refresh}
+            />
+          </div>
+
+          <div
+            id="settings-panel-subagents"
+            role="tabpanel"
+            hidden={section !== "subagents"}
+          >
+            <SubagentsSettingsPanel
+              catalog={catalog}
+              error={catalogError}
+              currentModel={currentModel}
+              activity={capabilities?.subagents}
+              setupPending={setupPending}
+              onConfigure={configureOpenPi}
+              onRefresh={refresh}
+            />
+          </div>
+
+          <div
+            id="settings-panel-plugins"
+            role="tabpanel"
+            hidden={section !== "plugins"}
+          >
+            <PluginsSettingsPanel
+              catalog={catalog}
+              error={catalogError}
+              onRefresh={refresh}
+            />
+          </div>
         </div>
+        {setupError && (
+          <div className="settings-global-error" role="alert">
+            {setupError}
+          </div>
+        )}
       </section>
     </Dialog>
   );

@@ -3,6 +3,7 @@ import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
   WebModelSummary,
+  WebSettingsResourceCatalog,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 
@@ -141,6 +142,7 @@ export interface WebRuntimeController {
   listModels(): WebModelSummary[];
   searchModels(query: string, limit?: number): WebModelSearchResult;
   listCommands?(): WebCommandDiscoveryResult;
+  listSettingsResources?(): WebSettingsResourceCatalog;
   listProviderAuth?(): WebProviderAuthProjection;
   getThinkingState?(): WebThinkingProjection;
   setThinkingLevel?(

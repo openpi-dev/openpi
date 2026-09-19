@@ -189,6 +189,11 @@ export function App() {
     setProviderSettings(null);
     inspect();
   };
+  const configureOpenPiFromSettings = async (request: string) => {
+    const accepted = await actions.sendPrompt(`/openpi-setup ${request}`);
+    if (accepted) setProviderSettings(null);
+    return accepted;
+  };
 
   useEffect(() => {
     actions.start();
@@ -532,8 +537,10 @@ export function App() {
             t("unknownState")
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
+          capabilities={state.snapshot?.runtime.capabilities}
           modelSelectionPending={state.modelSelectionPending}
           onSelectModel={(value) => void actions.selectModel(value)}
+          onConfigureOpenPi={configureOpenPiFromSettings}
           onOpenRuntimeStatus={openRuntimeStatusFromSettings}
           onClose={closeProviderSettings}
         />

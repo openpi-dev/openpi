@@ -744,13 +744,71 @@ it("resolves canonical system theme changes and explicit overrides", () => {
   expect(document.documentElement.dataset.theme).toBe("dark");
   act(() =>
     webStore.setState({
-      snapshot: { ...snapshot, preferences: { theme: "light" } },
+      snapshot: {
+        ...snapshot,
+        preferences: {
+          theme: "pine",
+          chatWidth: 960,
+          chatFontSize: 16,
+          expandThinking: true,
+        },
+      },
     }),
   );
-  expect(document.documentElement.dataset.theme).toBe("light");
+  expect(document.documentElement.dataset.theme).toBe("pine");
+  expect(
+    document.documentElement.style.getPropertyValue(
+      "--conversation-content-width",
+    ),
+  ).toBe("960px");
+  expect(
+    document.documentElement.style.getPropertyValue("--conversation-font-size"),
+  ).toBe("16px");
   unmount();
   webStore.setState({ snapshot: initial });
   vi.unstubAllGlobals();
+});
+
+it("opens recorded thinking by default only when the canonical preference is enabled", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.preferences.expandThinking = true;
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: "2026-09-19T00:00:00Z",
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "answer",
+      type: "message",
+      timestamp: "2026-09-19T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "Done.",
+        parts: [{ type: "thinking", text: "Check the implementation." }],
+      },
+    },
+  ];
+
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".thinking-line")?.open,
+  ).toBe(true);
 });
 
 it("does not attribute current runtime activity to a historical session", () => {

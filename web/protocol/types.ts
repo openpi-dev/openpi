@@ -107,6 +107,110 @@ export interface WebCommandDiscoveryResult {
   };
 }
 
+export type WebThemePreference =
+  | "light"
+  | "dark"
+  | "mist"
+  | "rose"
+  | "pine"
+  | "system";
+
+export interface WebSettingsSkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  filePath: string;
+  source: string;
+  scope: "user" | "project" | "temporary";
+  origin: "package" | "top-level";
+  disableModelInvocation: boolean;
+}
+
+export interface WebSettingsExtensionSummary {
+  name: string;
+  path: string;
+  toolCount: number;
+  commandCount: number;
+}
+
+export interface WebSettingsPluginSummary {
+  id: string;
+  source: string;
+  scope: "user" | "project" | "temporary";
+  origin: "package" | "top-level";
+  baseDir?: string;
+  extensions: WebSettingsExtensionSummary[];
+  skills: string[];
+  prompts: string[];
+  themes: string[];
+}
+
+export interface WebSettingsResourceCatalog {
+  skills: WebSettingsSkillSummary[];
+  plugins: WebSettingsPluginSummary[];
+  totals: {
+    extensions: number;
+    skills: number;
+    prompts: number;
+    themes: number;
+  };
+  diagnostics: {
+    extensionErrors: number;
+    skillErrors: number;
+  };
+  truncation: {
+    truncated: boolean;
+    skillsOmitted: number;
+    pluginsOmitted: number;
+    resourcesOmitted: number;
+  };
+}
+
+export interface WebOpenPiSetupProjection {
+  capabilities: {
+    discovery: "explicit" | "adaptive";
+  };
+  suggestions: {
+    enabled: boolean;
+    model?: {
+      provider: string;
+      model: string;
+      reasoning: string;
+    };
+  };
+  workflows: {
+    concurrency: number;
+    maxAgentCalls: number;
+  };
+  ui: {
+    webTheme: WebThemePreference;
+    webChatWidth: number;
+    webChatFontSize: number;
+    webExpandThinking: boolean;
+    showHeader: boolean;
+    customFooter: boolean;
+    footerStyle: string;
+    subagentResultDisplay: "full" | "compact";
+    bashToolDisplay: "full" | "compact";
+    fileMutationDisplay: "full" | "compact";
+  };
+  postEditConfigured: boolean;
+  subagents: {
+    roleModels: Partial<
+      Record<
+        "explorer" | "implementer" | "reviewer" | "advisor",
+        { provider: string; model: string }
+      >
+    >;
+  };
+}
+
+export interface WebSettingsCatalog {
+  sessionId: string;
+  setup: WebOpenPiSetupProjection;
+  resources: WebSettingsResourceCatalog;
+}
+
 export interface WebProjectionTruncation {
   readonly truncated: boolean;
   readonly entriesOmitted: number;
@@ -234,7 +338,11 @@ export interface WebSnapshot {
   generatedAt: string;
   cursor: number;
   preferences: {
-    theme: "system" | "light" | "dark";
+    theme: WebThemePreference;
+    /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
+    chatWidth?: number;
+    chatFontSize?: number;
+    expandThinking?: boolean;
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;

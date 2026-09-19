@@ -73,6 +73,7 @@ function renderSettings(overrides: Record<string, unknown> = {}) {
         theme: "system",
         modelSelectionPending: false,
         onSelectModel: vi.fn(),
+        onConfigureOpenPi: vi.fn(async () => true),
         onOpenRuntimeStatus: vi.fn(),
         onClose: vi.fn(),
         ...overrides,
@@ -110,8 +111,87 @@ function providerReply() {
   });
 }
 
+function settingsReply() {
+  return reply({
+    sessionId: "session-a",
+    setup: {
+      capabilities: { discovery: "explicit" },
+      suggestions: { enabled: false },
+      workflows: { concurrency: 6, maxAgentCalls: 64 },
+      ui: {
+        webTheme: "system",
+        webChatWidth: 820,
+        webChatFontSize: 14,
+        webExpandThinking: false,
+        showHeader: false,
+        customFooter: true,
+        footerStyle: "plain",
+        subagentResultDisplay: "compact",
+        bashToolDisplay: "compact",
+        fileMutationDisplay: "compact",
+      },
+      postEditConfigured: false,
+      subagents: {
+        roleModels: {
+          explorer: { provider: "codex-local", model: "gpt-5.6-luna" },
+        },
+      },
+    },
+    resources: {
+      skills: [
+        {
+          id: "openpi:subagents",
+          name: "subagents",
+          description: "Delegate a bounded task.",
+          filePath: "/workspace/openpi/skills/subagents/SKILL.md",
+          source: "openpi",
+          scope: "user",
+          origin: "package",
+          disableModelInvocation: false,
+        },
+      ],
+      plugins: [
+        {
+          id: "user:package:openpi",
+          source: "openpi",
+          scope: "user",
+          origin: "package",
+          baseDir: "/workspace/openpi",
+          extensions: [
+            {
+              name: "subagents",
+              path: "/workspace/openpi/extensions/subagents/index.ts",
+              toolCount: 2,
+              commandCount: 1,
+            },
+          ],
+          skills: ["subagents"],
+          prompts: [],
+          themes: ["openpi"],
+        },
+      ],
+      totals: { extensions: 1, skills: 1, prompts: 0, themes: 1 },
+      diagnostics: { extensionErrors: 0, skillErrors: 0 },
+      truncation: {
+        truncated: false,
+        skillsOmitted: 0,
+        pluginsOmitted: 0,
+        resourcesOmitted: 0,
+      },
+    },
+  });
+}
+
+function settingsFetcher() {
+  return vi.fn(async (input: RequestInfo | URL) =>
+    String(input).includes("/api/settings/catalog")
+      ? settingsReply()
+      : providerReply(),
+  );
+}
+
 it("matches the pi-web settings shell and selects models through Pi", async () => {
-  const fetcher = vi.fn(async () => providerReply());
+  const fetcher = settingsFetcher();
   const onSelectModel = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   const view = renderSettings({ onSelectModel });
@@ -120,13 +200,14 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   const tabs = screen.getByRole("tablist", {
     name: i18n.t("settingsNavigation"),
   });
-  expect(tabs.querySelectorAll('[role="tab"]')).toHaveLength(3);
+  expect(tabs.querySelectorAll('[role="tab"]')).toHaveLength(5);
   expect(
     screen
-      .getByRole("tab", { name: i18n.t("modelSettings") })
+      .getByRole("tab", { name: i18n.t("generalSettings") })
       .getAttribute("aria-selected"),
   ).toBe("true");
 
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
   expect((await screen.findAllByText("Codex Local")).length).toBeGreaterThan(0);
   expect(screen.getByText(i18n.t("credentialConfigured"))).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: /DeepSeek V4/u }));
@@ -135,19 +216,16 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   fireEvent.click(screen.getByRole("button", { name: i18n.t("useThisModel") }));
   expect(onSelectModel).toHaveBeenCalledWith("deepseek/deepseek-v4");
   expect(view.container.querySelector(".settings-model-sidebar")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(1);
+  expect(fetcher).toHaveBeenCalledTimes(2);
 });
 
-it("keeps General read-only and routes runtime details to the existing surface", async () => {
-  vi.stubGlobal(
-    "fetch",
-    vi.fn(async () => providerReply()),
-  );
+it("shows canonical General state and routes real setup/runtime actions", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
   const onOpenRuntimeStatus = vi.fn();
-  const view = renderSettings({ onOpenRuntimeStatus });
-  await screen.findAllByText("Codex Local");
+  const onConfigureOpenPi = vi.fn(async () => false);
+  const view = renderSettings({ onOpenRuntimeStatus, onConfigureOpenPi });
+  await screen.findByText(i18n.t("agentBehavior"));
 
-  fireEvent.click(screen.getByRole("tab", { name: i18n.t("generalSettings") }));
   const generalPanel = screen.getByRole("tabpanel");
   expect(
     within(generalPanel).getByRole("heading", {
@@ -158,27 +236,78 @@ it("keeps General read-only and routes runtime details to the existing surface",
     view.container.querySelector('.settings-theme-option[data-selected="true"]')
       ?.textContent,
   ).toContain(i18n.t("themeSystem"));
+  expect(within(generalPanel).getAllByRole("radio")).toHaveLength(6);
+  expect(
+    within(generalPanel)
+      .getByRole("slider", {
+        name: i18n.t("chatContentWidth"),
+      })
+      .getAttribute("aria-valuenow"),
+  ).toBe("820");
+  expect(
+    within(generalPanel)
+      .getByRole("slider", {
+        name: i18n.t("chatFontSize"),
+      })
+      .getAttribute("aria-valuenow"),
+  ).toBe("14");
   expect(within(generalPanel).getByText("GPT 5.6 Luna")).toBeTruthy();
   expect(within(generalPanel).getByText("medium")).toBeTruthy();
+  expect(within(generalPanel).getByText(/6 concurrent/u)).toBeTruthy();
+  fireEvent.click(
+    within(generalPanel).getByRole("radio", { name: i18n.t("themeDark") }),
+  );
+  expect(onConfigureOpenPi).toHaveBeenCalledWith(
+    i18n.t("setupRequestTheme", { theme: i18n.t("themeDark") }),
+  );
+  await waitFor(() =>
+    expect(
+      within(generalPanel).getByRole<HTMLInputElement>("switch", {
+        name: i18n.t("expandThinkingByDefault"),
+      }).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(
+    within(generalPanel).getByRole("switch", {
+      name: i18n.t("expandThinkingByDefault"),
+    }),
+  );
+  expect(onConfigureOpenPi).toHaveBeenCalledWith(
+    i18n.t("setupRequestExpandThinking"),
+  );
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
   );
   expect(onOpenRuntimeStatus).toHaveBeenCalledTimes(1);
 });
 
-it("refreshes provider status, exposes canonical setup, and closes", async () => {
-  const fetcher = vi.fn(async () => providerReply());
+it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async () => {
+  const fetcher = settingsFetcher();
   const onClose = vi.fn();
   vi.stubGlobal("fetch", fetcher);
   renderSettings({ onClose });
-  await screen.findAllByText("Codex Local");
+  await screen.findByText(i18n.t("agentBehavior"));
+
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  expect(await screen.findByText("Delegate a bounded task.")).toBeTruthy();
+  expect(screen.getByText("/skill:subagents")).toBeTruthy();
+
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("subagentsSettings") }),
+  );
+  expect(
+    screen.getAllByText("codex-local/gpt-5.6-luna").length,
+  ).toBeGreaterThan(0);
+
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("pluginsSettings") }));
+  expect(
+    screen.getByText("/workspace/openpi/extensions/subagents/index.ts"),
+  ).toBeTruthy();
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("refreshStatus") }),
   );
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
 
-  fireEvent.click(screen.getByRole("tab", { name: i18n.t("openPiSettings") }));
-  expect(screen.getByText("/openpi-setup")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("close") }));
   expect(onClose).toHaveBeenCalledTimes(1);
 });

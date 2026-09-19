@@ -216,6 +216,7 @@ function EvidenceDetails({
   status,
   summary,
   thinking = false,
+  defaultOpen = false,
 }: {
   body: string;
   icon: ReactNode;
@@ -223,10 +224,12 @@ function EvidenceDetails({
   status: Status;
   summary?: string;
   thinking?: boolean;
+  defaultOpen?: boolean;
 }) {
   return (
     <details
       className={`message-details tool-line ${status === "error" ? "error" : ""} ${thinking ? "thinking-line" : ""}`}
+      open={defaultOpen || undefined}
     >
       <summary>
         <span className="details-mark" aria-hidden="true" />
@@ -428,12 +431,14 @@ function ThinkingEvidence({
   duration,
   active,
   level,
+  defaultOpen,
 }: {
   body: string;
   start?: number;
   duration?: number;
   active: boolean;
   level?: string;
+  defaultOpen: boolean;
 }) {
   const { t } = useTranslation();
   const elapsed = useElapsed(start, active);
@@ -452,6 +457,7 @@ function ThinkingEvidence({
       status={active ? "running" : "done"}
       summary={settled ? `· ${settled}` : undefined}
       thinking
+      defaultOpen={defaultOpen}
     />
   );
 }
@@ -950,6 +956,9 @@ export function Transcript(props: TranscriptProps) {
                       }
                       start={props.thinkingStarts[entry.key]}
                       duration={props.thinkingDurations[entry.key]}
+                      defaultOpen={
+                        props.snapshot.preferences.expandThinking === true
+                      }
                     />
                   </div>
                 </article>
@@ -1137,6 +1146,7 @@ export function Transcript(props: TranscriptProps) {
     props.onResend,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
+    props.snapshot.preferences.expandThinking,
     props.snapshot.runtime.status,
     props.snapshot.thinking?.level,
     props.thinkingDurations,

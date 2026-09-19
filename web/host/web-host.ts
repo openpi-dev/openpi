@@ -15,6 +15,7 @@ import {
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
+import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import {
   PiWebAdapter,
   WebReadOnlySessionError,
@@ -813,7 +814,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -854,6 +855,37 @@ export class WebHost {
         });
       }
       return this.json(response, 200, this.runtime.listCommands());
+    }
+    if (url.pathname === "/api/settings/catalog") {
+      if (
+        diagnosticSession === null ||
+        diagnosticSession.length === 0 ||
+        diagnosticSession.length > 128 ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        [...url.searchParams.keys()].some((key) => key !== "sessionId")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_SETTINGS_CATALOG_REQUEST",
+          error: "the active Session id is required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before reading settings resources",
+        });
+      }
+      if (!this.runtime.listSettingsResources) {
+        return this.json(response, 501, {
+          code: "SETTINGS_CATALOG_UNAVAILABLE",
+          error: "Pi settings resources are unavailable",
+        });
+      }
+      return this.json(response, 200, {
+        sessionId: diagnosticSession,
+        setup: projectWebSetupConfig(loadSetupConfig()),
+        resources: this.runtime.listSettingsResources(),
+      });
     }
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
@@ -1128,11 +1160,17 @@ export class WebHost {
       const projection = await this.adapter.getSnapshot(
         url.searchParams.get("path") ?? undefined,
       );
+      const setup = loadSetupConfig();
       const snapshot: WebSnapshot = {
         protocolVersion: WEB_PROTOCOL_VERSION,
         generatedAt: new Date().toISOString(),
         cursor,
-        preferences: { theme: loadSetupConfig().ui.webTheme },
+        preferences: {
+          theme: setup.ui.webTheme,
+          chatWidth: setup.ui.webChatWidth,
+          chatFontSize: setup.ui.webChatFontSize,
+          expandThinking: setup.ui.webExpandThinking,
+        },
         ...projection,
         runtime: { ...projection.runtime, liveTools: this.liveTools },
         thinking: projection.thinking
