@@ -3,10 +3,9 @@ import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
   WebModelSummary,
-  WebOpenPiSetupProjection,
-  WebSettingsPreferencesPatch,
   WebSettingsResourceCatalog,
   WebSessionUsage,
+  WebPromptImage,
 } from "../protocol/types.ts";
 import type { WebProjectTrustStatus } from "./trust-status.ts";
 
@@ -69,6 +68,7 @@ export class WebRuntimeRequestError extends Error {
 export interface WebPromptOptions {
   commandId?: string;
   expectedSessionId?: string;
+  images?: readonly WebPromptImage[];
 }
 
 export interface WebPromptAdmissionReceipt {
@@ -100,10 +100,6 @@ export interface WebModelSelectionOptions {
 }
 
 export interface WebThinkingSelectionOptions {
-  expectedSessionId?: string;
-}
-
-export interface WebSettingsPreferencesOptions {
   expectedSessionId?: string;
 }
 
@@ -157,10 +153,6 @@ export interface WebRuntimeController {
     level: string,
     options?: WebThinkingSelectionOptions,
   ): Promise<WebThinkingProjection>;
-  updateWebPreferences?(
-    patch: WebSettingsPreferencesPatch,
-    options?: WebSettingsPreferencesOptions,
-  ): Promise<WebOpenPiSetupProjection>;
   setModel(
     provider: string,
     modelId: string,

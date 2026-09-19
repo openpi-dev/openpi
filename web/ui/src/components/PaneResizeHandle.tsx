@@ -8,6 +8,7 @@ interface PaneResizeHandleProps {
   defaultValue: number;
   collapseThreshold?: number;
   onCollapse?: () => void;
+  onExpandPastMax?: () => void;
   onChange: (value: number) => void;
   onDraggingChange: (dragging: boolean) => void;
 }
@@ -24,6 +25,7 @@ export function PaneResizeHandle({
   defaultValue,
   collapseThreshold,
   onCollapse,
+  onExpandPastMax,
   onChange,
   onDraggingChange,
 }: PaneResizeHandleProps) {
@@ -65,6 +67,11 @@ export function PaneResizeHandle({
         if (!current || current.pointerId !== event.pointerId) return;
         const delta = event.clientX - current.startX;
         const next = current.startValue + (side === "left" ? delta : -delta);
+        if (onExpandPastMax && next >= max + 48) {
+          finishDrag(event.currentTarget, event.pointerId);
+          onExpandPastMax();
+          return;
+        }
         if (
           onCollapse &&
           collapseThreshold !== undefined &&

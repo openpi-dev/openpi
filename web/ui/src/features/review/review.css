@@ -17,6 +17,12 @@
   color: var(--text);
 }
 
+.review-panel.embedded {
+  height: 100%;
+  flex: 1;
+  border-left: 0;
+}
+
 .review-heading {
   display: flex;
   min-height: 64px;

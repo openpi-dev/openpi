@@ -47,14 +47,17 @@ export function ReviewPanel({
   initialFilePath,
   onClose,
   onOpenTools,
+  embedded = false,
 }: {
   review: GitReviewViewState;
   initialFilePath?: string;
   onClose: () => void;
   onOpenTools?: () => void;
+  embedded?: boolean;
 }) {
   const { t } = useTranslation();
   const listCloseButton = useRef<HTMLButtonElement>(null);
+  const listBody = useRef<HTMLDivElement>(null);
   const preview = useRef<HTMLElement>(null);
   const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
   const [selectedPath, setSelectedPath] = useState(initialFilePath ?? null);
@@ -72,7 +75,7 @@ export function ReviewPanel({
   useEffect(() => {
     setSelectedPath(initialFilePath ?? null);
   }, [initialFilePath]);
-  const Surface = narrow ? "main" : "aside";
+  const Surface = embedded ? "section" : narrow ? "main" : "aside";
   const snapshot = review.result?.ok ? review.result.snapshot : null;
   const failure = failureLabel(
     review.result && !review.result.ok ? review.result : null,
@@ -96,27 +99,31 @@ export function ReviewPanel({
 
   useEffect(() => {
     if (selectedFile) preview.current?.focus();
+    else if (embedded) listBody.current?.focus();
     else listCloseButton.current?.focus();
-  }, [selectedFile]);
+  }, [embedded, selectedFile]);
 
   const openFile = (path: string) => {
     setSelectedPath(path);
   };
   const showFileList = () => {
     setSelectedPath(null);
-    requestAnimationFrame(() => listCloseButton.current?.focus());
+    requestAnimationFrame(() => {
+      if (embedded) listBody.current?.focus();
+      else listCloseButton.current?.focus();
+    });
   };
 
   return (
     <Surface
-      className="review-panel"
+      className={`review-panel${embedded ? " embedded" : ""}`}
       aria-label={t("changeEvidence")}
       aria-busy={review.loading || undefined}
       onKeyDown={(event) => {
         if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
         event.preventDefault();
         if (selectedFile) showFileList();
-        else onClose();
+        else if (!embedded) onClose();
       }}
     >
       {selectedFile ? (
@@ -136,26 +143,28 @@ export function ReviewPanel({
               </strong>
               <span title={selectedFile.path}>{selectedFile.path}</span>
             </div>
-            <div className="review-file-actions">
-              {onOpenTools && (
+            {!embedded && (
+              <div className="review-file-actions">
+                {onOpenTools && (
+                  <Button
+                    label={t("openTools")}
+                    variant="ghost"
+                    size="sm"
+                    isIconOnly
+                    icon={<Plus aria-hidden="true" />}
+                    onClick={onOpenTools}
+                  />
+                )}
                 <Button
-                  label={t("openTools")}
+                  label={t("close")}
                   variant="ghost"
                   size="sm"
                   isIconOnly
-                  icon={<Plus aria-hidden="true" />}
-                  onClick={onOpenTools}
+                  icon={<X aria-hidden="true" />}
+                  onClick={onClose}
                 />
-              )}
-              <Button
-                label={t("close")}
-                variant="ghost"
-                size="sm"
-                isIconOnly
-                icon={<X aria-hidden="true" />}
-                onClick={onClose}
-              />
-            </div>
+              </div>
+            )}
           </header>
           <div className="review-file-toolbar">
             <div className="review-file-context">
@@ -212,38 +221,44 @@ export function ReviewPanel({
         </div>
       ) : (
         <>
-          <header className="review-heading">
-            <div>
-              <h2>
-                <FileDiff aria-hidden="true" /> {t("changeEvidence")}
-              </h2>
-              <small>{t("changeEvidenceScope")}</small>
-            </div>
-            <div className="review-heading-actions">
-              {onOpenTools && (
+          {!embedded && (
+            <header className="review-heading">
+              <div>
+                <h2>
+                  <FileDiff aria-hidden="true" /> {t("changeEvidence")}
+                </h2>
+                <small>{t("changeEvidenceScope")}</small>
+              </div>
+              <div className="review-heading-actions">
+                {onOpenTools && (
+                  <button
+                    type="button"
+                    className="icon-button"
+                    aria-label={t("openTools")}
+                    title={t("openTools")}
+                    onClick={onOpenTools}
+                  >
+                    <Plus aria-hidden="true" />
+                  </button>
+                )}
                 <button
+                  ref={listCloseButton}
                   type="button"
-                  className="icon-button"
-                  aria-label={t("openTools")}
-                  title={t("openTools")}
-                  onClick={onOpenTools}
+                  className="icon-button review-close"
+                  aria-label={t("close")}
+                  title={t("close")}
+                  onClick={onClose}
                 >
-                  <Plus aria-hidden="true" />
+                  <X aria-hidden="true" />
                 </button>
-              )}
-              <button
-                ref={listCloseButton}
-                type="button"
-                className="icon-button review-close"
-                aria-label={t("close")}
-                title={t("close")}
-                onClick={onClose}
-              >
-                <X aria-hidden="true" />
-              </button>
-            </div>
-          </header>
-          <div className="review-body">
+              </div>
+            </header>
+          )}
+          <div
+            ref={listBody}
+            className="review-body"
+            tabIndex={embedded ? -1 : undefined}
+          >
             {snapshot && (
               <VStack gap={1} align="stretch" className="review-summary">
                 <HStack gap={3} align="center" justify="between">

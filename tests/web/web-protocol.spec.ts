@@ -97,6 +97,7 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
     content: "once",
     commandId: "stable-command",
     retry: true,
+    images: [],
   });
   expect(vi.getTimerCount()).toBe(0);
 });

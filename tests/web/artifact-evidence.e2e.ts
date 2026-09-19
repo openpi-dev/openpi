@@ -354,7 +354,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       review.getByRole("figure", { name: /变更差异|Change diff/u }),
     ).toContainText("Reviewed content");
-    await review.getByRole("button", { name: /关闭|Close/u }).click();
+    await review.getByRole("button", { name: /^(?:关闭|Close)$/u }).click();
     await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 390, height: 844 });
     await expect(changesTrigger).toBeVisible();
@@ -365,7 +365,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBe(true);
     await changesTrigger.click();
     await reviewTrigger.click();
-    const mobileReview = page.getByRole("main", {
+    const mobileReview = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
     await expect(mobileReview).toBeVisible();
@@ -375,7 +375,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
         (element) => element.scrollWidth <= element.clientWidth,
       ),
     ).toBe(true);
-    await mobileReview.getByRole("button", { name: /关闭|Close/u }).click();
+    await mobileReview
+      .getByRole("button", { name: /^(?:关闭|Close)$/u })
+      .click();
     await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 1280, height: 844 });
     await page.getByRole("button", { name: "Report", exact: true }).click();

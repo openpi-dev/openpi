@@ -25,6 +25,9 @@ export const WEB_MAX_COMMANDS = 250;
 export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
 export const WEB_MAX_COMMAND_NAME = 160;
 export const WEB_MAX_COMMAND_DESCRIPTION = 500;
+export const WEB_PROMPT_IMAGE_MAX_COUNT = 4;
+export const WEB_PROMPT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
 export const WEB_MAX_GIT_REVIEW_FILES = 200;
 export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
@@ -218,12 +221,6 @@ export interface WebSettingsPreferencesPatch {
   expandThinking?: boolean;
 }
 
-export interface WebSettingsPreferencesResult {
-  sessionId: string;
-  setup: WebOpenPiSetupProjection;
-  revision: number;
-}
-
 export interface WebProjectionTruncation {
   readonly truncated: boolean;
   readonly entriesOmitted: number;
@@ -263,6 +260,38 @@ export interface WebInteractiveTerminal {
   reused?: boolean;
 }
 
+export interface WebEmbeddedBrowserState {
+  sessionId: string;
+  url: string;
+  title: string;
+  width: number;
+  height: number;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export type WebEmbeddedBrowserAction =
+  | { type: "navigate"; url: string }
+  | { type: "back" | "forward" | "reload" | "stop" }
+  | { type: "resize"; width: number; height: number }
+  | {
+      type: "mouse";
+      event: "move" | "down" | "up" | "wheel";
+      x: number;
+      y: number;
+      button?: "left" | "middle" | "right";
+      deltaX?: number;
+      deltaY?: number;
+    }
+  | {
+      type: "key";
+      event: "down" | "up";
+      key: string;
+      code?: string;
+      text?: string;
+    };
+
 export type WebInteractiveTerminalEvent =
   | { type: "output"; data: string; offset: number; reset?: boolean }
   | { type: "exit"; exitCode: number }
@@ -292,8 +321,20 @@ export interface WebLiveMessage {
   truncation?: WebMessageTruncation;
 }
 
+export interface WebPromptImage {
+  data: string;
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  name?: string;
+}
+
 export type WebMessagePart =
   | { type: "text"; text: string }
+  | {
+      type: "image";
+      mimeType: string;
+      name?: string;
+      previewUrl?: string;
+    }
   | { type: "thinking"; text: string }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
@@ -593,6 +634,11 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       } else {
         textTruncated = true;
       }
+    } else if (
+      typed.type === "image" &&
+      typeof typed.mimeType === "string"
+    ) {
+      projected = { type: "image", mimeType: typed.mimeType };
     } else if (
       typed.type === "thinking" &&
       typeof typed.thinking === "string"

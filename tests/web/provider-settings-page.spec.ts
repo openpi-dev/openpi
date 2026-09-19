@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -35,6 +36,7 @@ afterAll(() => {
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
   vi.unstubAllGlobals();
 });
 
@@ -59,29 +61,31 @@ const models: WebModelSummary[] = [
   },
 ];
 
-function renderSettings(overrides: Record<string, unknown> = {}) {
-  return render(
-    createElement(
-      I18nextProvider,
-      { i18n },
-      createElement(ProviderSettingsPage, {
-        sessionId: "session-a",
-        cwd: "/workspace/openpi",
-        models,
-        currentModel: models[0],
-        thinkingLevel: "medium",
-        theme: "system",
-        setupBusy: false,
-        modelSelectionPending: false,
-        onSelectModel: vi.fn(),
-        onConfigureOpenPi: vi.fn(async () => true),
-        onPreferencesChanged: vi.fn(async () => true),
-        onOpenRuntimeStatus: vi.fn(),
-        onClose: vi.fn(),
-        ...overrides,
-      }),
-    ),
+function settingsElement(overrides: Record<string, unknown> = {}) {
+  return createElement(
+    I18nextProvider,
+    { i18n },
+    createElement(ProviderSettingsPage, {
+      sessionId: "session-a",
+      cwd: "/workspace/openpi",
+      models,
+      currentModel: models[0],
+      thinkingLevel: "medium",
+      theme: "system",
+      setupBusy: false,
+      modelSelectionPending: false,
+      onSelectModel: vi.fn(),
+      onConfigureOpenPi: vi.fn(async () => true),
+      onPreferencesChanged: vi.fn(async () => true),
+      onOpenRuntimeStatus: vi.fn(),
+      onClose: vi.fn(),
+      ...overrides,
+    }),
   );
+}
+
+function renderSettings(overrides: Record<string, unknown> = {}) {
+  return render(settingsElement(overrides));
 }
 
 function providerReply() {
@@ -185,41 +189,10 @@ function settingsPayload() {
 }
 
 function settingsFetcher() {
-  let setup = settingsPayload().setup;
-  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+  return vi.fn(async (input: RequestInfo | URL) => {
     const path = String(input);
-    if (path.includes("/api/settings/preferences")) {
-      const body = JSON.parse(String(init?.body)) as {
-        sessionId: string;
-        preferences: {
-          theme?: "light" | "dark" | "mist" | "rose" | "pine" | "system";
-          chatWidth?: number;
-          chatFontSize?: number;
-          expandThinking?: boolean;
-        };
-      };
-      setup = {
-        ...setup,
-        ui: {
-          ...setup.ui,
-          ...(body.preferences.theme === undefined
-            ? {}
-            : { webTheme: body.preferences.theme }),
-          ...(body.preferences.chatWidth === undefined
-            ? {}
-            : { webChatWidth: body.preferences.chatWidth }),
-          ...(body.preferences.chatFontSize === undefined
-            ? {}
-            : { webChatFontSize: body.preferences.chatFontSize }),
-          ...(body.preferences.expandThinking === undefined
-            ? {}
-            : { webExpandThinking: body.preferences.expandThinking }),
-        },
-      };
-      return reply({ sessionId: body.sessionId, setup, revision: 2 });
-    }
     if (path.includes("/api/settings/catalog")) {
-      return reply({ ...settingsPayload(), setup });
+      return reply(settingsPayload());
     }
     return providerReply();
   });
@@ -268,7 +241,7 @@ it("shows canonical General state and routes real setup/runtime actions", async 
   const fetcher = settingsFetcher();
   vi.stubGlobal("fetch", fetcher);
   const onOpenRuntimeStatus = vi.fn();
-  const onConfigureOpenPi = vi.fn(async () => false);
+  const onConfigureOpenPi = vi.fn(async () => true);
   const onPreferencesChanged = vi.fn(async () => true);
   const view = renderSettings({
     onOpenRuntimeStatus,
@@ -313,23 +286,25 @@ it("shows canonical General state and routes real setup/runtime actions", async 
   fireEvent.click(
     within(generalPanel).getByRole("radio", { name: i18n.t("themeDark") }),
   );
-  await waitFor(() =>
-    expect(
-      within(generalPanel).getByRole<HTMLInputElement>("radio", {
-        name: i18n.t("themeDark"),
-      }).checked,
-    ).toBe(true),
+  expect(
+    within(generalPanel).getByRole<HTMLInputElement>("radio", {
+      name: i18n.t("themeDark"),
+    }).checked,
+  ).toBe(false);
+  expect(
+    within(generalPanel).getByRole<HTMLInputElement>("radio", {
+      name: i18n.t("themeSystem"),
+    }).checked,
+  ).toBe(true);
+  expect(onConfigureOpenPi).toHaveBeenCalledWith(
+    i18n.t("setupRequestSetTheme", { value: "dark" }),
   );
-  const preferenceCalls = fetcher.mock.calls.filter(([input]) =>
-    String(input).includes("/api/settings/preferences"),
-  );
-  expect(preferenceCalls).toHaveLength(1);
-  expect(JSON.parse(String(preferenceCalls[0]?.[1]?.body))).toEqual({
-    sessionId: "session-a",
-    preferences: { theme: "dark" },
-  });
-  expect(onConfigureOpenPi).not.toHaveBeenCalled();
-  expect(onPreferencesChanged).toHaveBeenCalledTimes(1);
+  expect(
+    fetcher.mock.calls.some(([input]) =>
+      String(input).includes("/api/settings/preferences"),
+    ),
+  ).toBe(false);
+  expect(onPreferencesChanged).not.toHaveBeenCalled();
   expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
   await waitFor(() =>
     expect(
@@ -343,20 +318,10 @@ it("shows canonical General state and routes real setup/runtime actions", async 
       name: i18n.t("expandThinkingByDefault"),
     }),
   );
-  await waitFor(() =>
-    expect(
-      fetcher.mock.calls.filter(([input]) =>
-        String(input).includes("/api/settings/preferences"),
-      ),
-    ).toHaveLength(2),
+  await waitFor(() => expect(onConfigureOpenPi).toHaveBeenCalledTimes(2));
+  expect(onConfigureOpenPi).toHaveBeenLastCalledWith(
+    i18n.t("setupRequestEnableExpandedThinking"),
   );
-  const expandCall = fetcher.mock.calls.filter(([input]) =>
-    String(input).includes("/api/settings/preferences"),
-  )[1];
-  expect(JSON.parse(String(expandCall?.[1]?.body))).toEqual({
-    sessionId: "session-a",
-    preferences: { expandThinking: true },
-  });
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
   );
@@ -380,6 +345,46 @@ it("keeps an accepted OpenPI setup request inside the settings dialog", async ()
   );
   expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
   expect(screen.getByText(i18n.t("setupRequestAccepted"))).toBeTruthy();
+});
+
+it("waits for a running setup request to settle before refreshing", async () => {
+  const fetcher = settingsFetcher();
+  const onConfigureOpenPi = vi.fn(async () => true);
+  const onPreferencesChanged = vi.fn(async () => true);
+  vi.stubGlobal("fetch", fetcher);
+  const view = renderSettings({ onConfigureOpenPi, onPreferencesChanged });
+  await screen.findByText(i18n.t("agentBehavior"));
+  vi.useFakeTimers();
+
+  await act(async () => {
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("configureOpenPi") }),
+    );
+    await Promise.resolve();
+  });
+  view.rerender(
+    settingsElement({
+      onConfigureOpenPi,
+      onPreferencesChanged,
+      setupBusy: true,
+    }),
+  );
+  await act(async () => {
+    vi.advanceTimersByTime(2_100);
+  });
+  expect(onPreferencesChanged).not.toHaveBeenCalled();
+
+  view.rerender(
+    settingsElement({
+      onConfigureOpenPi,
+      onPreferencesChanged,
+      setupBusy: false,
+    }),
+  );
+  await act(async () => {
+    await Promise.resolve();
+  });
+  expect(onPreferencesChanged).toHaveBeenCalledOnce();
 });
 
 it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async () => {

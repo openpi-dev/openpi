@@ -27,6 +27,11 @@ interface TerminalRecord {
   cleanupTimer?: ReturnType<typeof setTimeout>;
 }
 
+interface PendingTerminalCreate {
+  readonly cwd: string;
+  readonly completion: Promise<WebInteractiveTerminal & { reused: boolean }>;
+}
+
 export interface InteractiveTerminalSubscription {
   output: Extract<WebInteractiveTerminalEvent, { type: "output" }>;
   exited: boolean;
@@ -81,6 +86,8 @@ export class InteractiveTerminalManager
   private readonly cleanupMs: number;
   private readonly maxTerminals: number;
   private readonly injectedSpawn?: PtySpawn;
+  private readonly pendingCreates = new Map<string, PendingTerminalCreate>();
+  private readonly reservedSessions = new Set<string>();
   private spawnPromise?: Promise<PtySpawn>;
 
   constructor(options: {
@@ -105,54 +112,92 @@ export class InteractiveTerminalManager
     if (existing && existing.cwd === canonicalCwd) {
       return { ...this.snapshot(existing), reused: true };
     }
+
+    const pending = this.pendingCreates.get(sessionId);
+    if (pending?.cwd === canonicalCwd) {
+      return pending.completion.then((terminal) => ({
+        ...terminal,
+        reused: true,
+      }));
+    }
+    const completion = (pending
+      ? pending.completion.catch(() => undefined)
+      : Promise.resolve()
+    ).then(() => this.createTerminal({ sessionId, cwd: canonicalCwd, cols, rows }));
+    const create = { cwd: canonicalCwd, completion };
+    this.pendingCreates.set(sessionId, create);
+    const clearPending = () => {
+      if (this.pendingCreates.get(sessionId) === create)
+        this.pendingCreates.delete(sessionId);
+    };
+    void completion.then(clearPending, clearPending);
+    return completion;
+  }
+
+  private async createTerminal({ sessionId, cwd, cols, rows }: {
+    sessionId: string;
+    cwd: string;
+    cols: number;
+    rows: number;
+  }) {
+    const existingId = this.sessionTerminals.get(sessionId);
+    const existing = existingId ? this.records.get(existingId) : undefined;
+    if (existing && existing.cwd === cwd) {
+      return { ...this.snapshot(existing), reused: true };
+    }
     if (existing) this.close(sessionId, existing.id, true);
     this.makeSpace();
-    if (this.records.size >= this.maxTerminals) {
+    if (this.records.size + this.reservedSessions.size >= this.maxTerminals) {
       throw new Error("Interactive terminal capacity is full");
     }
+    this.reservedSessions.add(sessionId);
 
-    const spawn = await this.loadSpawn();
-    const shell =
-      process.platform === "win32"
-        ? (process.env.ComSpec ?? "cmd.exe")
-        : (process.env.SHELL ?? "/bin/sh");
-    const args = process.platform === "win32" ? [] : ["-l"];
-    const pty = spawn(shell, args, {
-      name: "xterm-256color",
-      cols: terminalDimension(cols, 80),
-      rows: terminalDimension(rows, 24),
-      cwd: canonicalCwd || homedir(),
-      env: shellEnvironment(),
-    });
-    const record: TerminalRecord = {
-      id: randomUUID(),
-      sessionId,
-      cwd: canonicalCwd,
-      pty,
-      listeners: new Set(),
-      backlog: "",
-      offset: 0,
-      exited: false,
-      exitCode: null,
-    };
-    this.records.set(record.id, record);
-    this.sessionTerminals.set(sessionId, record.id);
-    this.scheduleCleanup(record);
-    pty.onData((data) => {
-      record.backlog = (record.backlog + data).slice(
-        -INTERACTIVE_TERMINAL_MAX_BACKLOG,
-      );
-      record.offset += data.length;
-      this.emit(record, { type: "output", data, offset: record.offset });
-    });
-    pty.onExit(({ exitCode }) => {
-      record.exited = true;
-      record.exitCode = exitCode;
-      this.clearCleanup(record);
-      this.emit(record, { type: "exit", exitCode });
+    try {
+      const spawn = await this.loadSpawn();
+      const shell =
+        process.platform === "win32"
+          ? (process.env.ComSpec ?? "cmd.exe")
+          : (process.env.SHELL ?? "/bin/sh");
+      const args = process.platform === "win32" ? [] : ["-l"];
+      const pty = spawn(shell, args, {
+        name: "xterm-256color",
+        cols: terminalDimension(cols, 80),
+        rows: terminalDimension(rows, 24),
+        cwd: cwd || homedir(),
+        env: shellEnvironment(),
+      });
+      const record: TerminalRecord = {
+        id: randomUUID(),
+        sessionId,
+        cwd,
+        pty,
+        listeners: new Set(),
+        backlog: "",
+        offset: 0,
+        exited: false,
+        exitCode: null,
+      };
+      this.records.set(record.id, record);
+      this.sessionTerminals.set(sessionId, record.id);
       this.scheduleCleanup(record);
-    });
-    return { ...this.snapshot(record), reused: false };
+      pty.onData((data) => {
+        record.backlog = (record.backlog + data).slice(
+          -INTERACTIVE_TERMINAL_MAX_BACKLOG,
+        );
+        record.offset += data.length;
+        this.emit(record, { type: "output", data, offset: record.offset });
+      });
+      pty.onExit(({ exitCode }) => {
+        record.exited = true;
+        record.exitCode = exitCode;
+        this.clearCleanup(record);
+        this.emit(record, { type: "exit", exitCode });
+        this.scheduleCleanup(record);
+      });
+      return { ...this.snapshot(record), reused: false };
+    } finally {
+      this.reservedSessions.delete(sessionId);
+    }
   }
 
   get(sessionId: string, id: string) {

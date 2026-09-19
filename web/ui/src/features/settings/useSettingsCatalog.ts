@@ -1,8 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
-import type {
-  WebSettingsCatalog,
-  WebSettingsPreferencesPatch,
-} from "../../../../protocol/types.ts";
+import type { WebSettingsCatalog } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 
 export function useSettingsCatalog(sessionId: string) {
@@ -31,17 +28,5 @@ export function useSettingsCatalog(sessionId: string) {
     catalog,
     error,
     refresh,
-    updatePreferences: async (preferences: WebSettingsPreferencesPatch) => {
-      const result = await client.updateSettingsPreferences(
-        sessionId,
-        preferences,
-      );
-      setCatalog((current) =>
-        current
-          ? { ...current, sessionId: result.sessionId, setup: result.setup }
-          : current,
-      );
-      return result.setup;
-    },
   };
 }

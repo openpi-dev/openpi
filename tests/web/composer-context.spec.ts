@@ -14,9 +14,9 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { compactSummary } from "../../web/ui/src/lib/format.ts";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
-import { compactSummary } from "../../web/ui/src/lib/format.ts";
 
 beforeAll(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -128,7 +128,8 @@ it("shows the snapshot target and unified context actions", async () => {
   expect(screen.getByText("First task")).toBeTruthy();
   expect(screen.getByText("Workspace")).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
-  expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+  expect(screen.getAllByRole("menuitem")).toHaveLength(3);
+  expect(screen.getByRole("menuitem", { name: /^Add images/u })).toBeTruthy();
   expect(
     screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   ).toBeTruthy();

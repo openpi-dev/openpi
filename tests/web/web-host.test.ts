@@ -12,11 +12,12 @@ import {
   registerWebCapability,
   registerWebCapabilityActions,
 } from "../../extensions/shared/web-observer-registry.ts";
+import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts";
+import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
 import { WebHost, type WebHostOptions } from "../../web/host/web-host.ts";
 import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
-import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -1915,14 +1916,16 @@ async function startTestHost(
   return { host, launched, headers };
 }
 
-test("opens the system browser and exposes an active-Session interactive terminal", async () => {
+test("exposes an embedded browser and an active-Session interactive terminal", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-tools-"));
   const runtime = testRuntime(cwd);
   const sessionId = runtime.sessionManager.getSessionId();
   const opened: string[] = [];
+  const browserActions: unknown[] = [];
   const writes: string[] = [];
   const sizes: Array<[number, number]> = [];
   let disposed = false;
+  let browserDisposed = false;
   let subscribedAfter: number | undefined;
   let terminalListener:
     | ((event: WebInteractiveTerminalEvent) => void)
@@ -1980,11 +1983,61 @@ test("opens the system browser and exposes an active-Session interactive termina
       disposed = true;
     },
   };
-  const { host, launched, headers } = await startTestHost(runtime, {
-    browserOpener: async (url) => {
+  const embeddedBrowser: EmbeddedBrowserService = {
+    async open(owner, url, viewport) {
+      assert.equal(owner, sessionId);
       opened.push(url);
-      return true;
+      return {
+        sessionId,
+        url,
+        title: "Example",
+        width: viewport?.width ?? 1_024,
+        height: viewport?.height ?? 768,
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      };
     },
+    async state(owner) {
+      return owner === sessionId
+        ? {
+            sessionId,
+            url: opened.at(-1) ?? "about:blank",
+            title: "Example",
+            width: 1_024,
+            height: 768,
+            loading: false,
+            canGoBack: false,
+            canGoForward: false,
+          }
+        : undefined;
+    },
+    async frame(owner) {
+      return owner === sessionId
+        ? Buffer.from([0xff, 0xd8, 0xff, 0xd9])
+        : undefined;
+    },
+    async action(owner, action) {
+      if (owner !== sessionId) return undefined;
+      browserActions.push(action);
+      return {
+        sessionId,
+        url: opened.at(-1) ?? "about:blank",
+        title: "Example",
+        width: 1_024,
+        height: 768,
+        loading: false,
+        canGoBack: action.type !== "back",
+        canGoForward: false,
+      };
+    },
+    retain() {},
+    async dispose() {
+      browserDisposed = true;
+    },
+  };
+  const { host, launched, headers } = await startTestHost(runtime, {
+    embeddedBrowser,
     interactiveTerminals,
   });
   const jsonHeaders = { ...headers, "Content-Type": "application/json" };
@@ -2006,10 +2059,39 @@ test("opens the system browser and exposes an active-Session interactive termina
     });
     assert.equal(browser.status, 200);
     assert.deepEqual(await browser.json(), {
-      opened: true,
+      sessionId,
       url: "https://example.com/path",
+      title: "Example",
+      width: 1_024,
+      height: 768,
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
     });
     assert.deepEqual(opened, ["https://example.com/path"]);
+    const browserState = await fetch(
+      `${launched.origin}/api/browser/state?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(browserState.status, 200);
+    assert.equal((await browserState.json()).title, "Example");
+    const browserFrame = await fetch(
+      `${launched.origin}/api/browser/frame?sessionId=${sessionId}`,
+      { headers },
+    );
+    assert.equal(browserFrame.status, 200);
+    assert.equal(browserFrame.headers.get("content-type"), "image/jpeg");
+    assert.deepEqual(
+      Buffer.from(await browserFrame.arrayBuffer()),
+      Buffer.from([0xff, 0xd8, 0xff, 0xd9]),
+    );
+    const browserAction = await fetch(`${launched.origin}/api/browser/action`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({ sessionId, action: "reload" }),
+    });
+    assert.equal(browserAction.status, 200);
+    assert.deepEqual(browserActions, [{ type: "reload" }]);
 
     const created = await fetch(`${launched.origin}/api/terminal`, {
       method: "POST",
@@ -2091,6 +2173,7 @@ test("opens the system browser and exposes an active-Session interactive termina
   } finally {
     await host.stop();
     assert.equal(disposed, true);
+    assert.equal(browserDisposed, true);
     await rm(cwd, { recursive: true, force: true });
   }
 });
@@ -2197,7 +2280,7 @@ test("serves Session-bound command discovery with fail-closed request validation
   }
 });
 
-test("serves the canonical setup and current Pi resources through a Session-bound settings catalog", async () => {
+test("serves a read-only Session-bound settings catalog without a preference write endpoint", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-settings-"));
   const runtime = testRuntime(cwd);
   let workspaceSelected = true;
@@ -2219,28 +2302,6 @@ test("serves the canonical setup and current Pi resources through a Session-boun
   });
   const { host, launched, headers } = await startTestHost(runtime);
   const sessionId = runtime.sessionManager.getSessionId();
-  let receivedPreferences: unknown;
-  runtime.updateWebPreferences = async (patch, options) => {
-    if (options?.expectedSessionId !== sessionId) {
-      throw new WebRuntimeRequestError(
-        "Only the active Web session accepts preference updates",
-        "SESSION_CONFLICT",
-        409,
-      );
-    }
-    receivedPreferences = patch;
-    const setup = projectWebSetupConfig(loadSetupConfig());
-    return {
-      ...setup,
-      ui: {
-        ...setup.ui,
-        webTheme: patch.theme ?? setup.ui.webTheme,
-        webChatWidth: patch.chatWidth ?? setup.ui.webChatWidth,
-        webChatFontSize: patch.chatFontSize ?? setup.ui.webChatFontSize,
-        webExpandThinking: patch.expandThinking ?? setup.ui.webExpandThinking,
-      },
-    };
-  };
   try {
     const invalid = await fetch(`${launched.origin}/api/settings/catalog`, {
       headers,
@@ -2291,59 +2352,26 @@ test("serves the canonical setup and current Pi resources through a Session-boun
     assert.equal(typeof body.setup.ui.webExpandThinking, "boolean");
     assert.equal(body.resources.totals.extensions, 2);
 
-    const invalidPreference = await fetch(
+    const writeAttempt = await fetch(
       `${launched.origin}/api/settings/preferences`,
       {
         method: "POST",
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId,
-          preferences: { theme: "dark", credential: "must-not-pass" },
+          preferences: {
+            theme: "dark",
+            chatWidth: 960,
+            chatFontSize: 16,
+            expandThinking: true,
+          },
         }),
       },
     );
-    assert.equal(invalidPreference.status, 400);
-    assert.equal(
-      (await invalidPreference.json()).code,
-      "INVALID_SETTINGS_PREFERENCES_REQUEST",
-    );
-
-    const updated = await fetch(`${launched.origin}/api/settings/preferences`, {
-      method: "POST",
-      headers: { ...headers, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        preferences: {
-          theme: "dark",
-          chatWidth: 960,
-          chatFontSize: 16,
-          expandThinking: true,
-        },
-      }),
+    assert.equal(writeAttempt.status, 405);
+    assert.deepEqual(await writeAttempt.json(), {
+      error: "method not allowed",
     });
-    assert.equal(updated.status, 200);
-    const updatedBody = (await updated.json()) as {
-      sessionId: string;
-      setup: {
-        ui: {
-          webTheme: string;
-          webChatWidth: number;
-          webChatFontSize: number;
-          webExpandThinking: boolean;
-        };
-      };
-    };
-    assert.equal(updatedBody.sessionId, sessionId);
-    assert.deepEqual(receivedPreferences, {
-      theme: "dark",
-      chatWidth: 960,
-      chatFontSize: 16,
-      expandThinking: true,
-    });
-    assert.equal(updatedBody.setup.ui.webTheme, "dark");
-    assert.equal(updatedBody.setup.ui.webChatWidth, 960);
-    assert.equal(updatedBody.setup.ui.webChatFontSize, 16);
-    assert.equal(updatedBody.setup.ui.webExpandThinking, true);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
@@ -3076,6 +3104,40 @@ test("concurrent stop callers await the same runtime disposal", async () => {
     assert.equal(disposeCalls, 1);
   } finally {
     releaseDispose();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("stop waits for Git review baseline lifecycle cleanup", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-git-cleanup-"));
+  let releaseCleanup!: () => void;
+  const cleanupBarrier = new Promise<void>((resolve) => {
+    releaseCleanup = resolve;
+  });
+  let disposeCalls = 0;
+  const gitReviews: GitReviewService = {
+    capture: async () => undefined,
+    read: async () => ({ ok: false, reason: "git_failed" }),
+    dispose: async () => {
+      disposeCalls++;
+      await cleanupBarrier;
+    },
+  };
+  const { host } = await startTestHost(testRuntime(cwd), { gitReviews });
+  try {
+    const stopping = host.stop();
+    let settled = false;
+    void stopping.then(() => {
+      settled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    assert.equal(disposeCalls, 1);
+    assert.equal(settled, false);
+    releaseCleanup();
+    await stopping;
+  } finally {
+    releaseCleanup();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }

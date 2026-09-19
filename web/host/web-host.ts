@@ -1,5 +1,10 @@
 import { execFile } from "node:child_process";
-import { randomBytes, randomUUID, timingSafeEqual } from "node:crypto";
+import {
+  createHash,
+  randomBytes,
+  randomUUID,
+  timingSafeEqual,
+} from "node:crypto";
 import { readFile } from "node:fs/promises";
 import {
   createServer,
@@ -16,14 +21,7 @@ import {
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import {
-  loadSetupConfig,
-  MAX_WEB_CHAT_FONT_SIZE,
-  MAX_WEB_CHAT_WIDTH,
-  MIN_WEB_CHAT_FONT_SIZE,
-  MIN_WEB_CHAT_WIDTH,
-  WEB_THEMES,
-} from "../../extensions/shared/setup-config.ts";
+import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import {
   PiWebAdapter,
@@ -38,12 +36,15 @@ import {
   WEB_MAX_MODEL_QUERY,
   WEB_MAX_MODEL_SEARCH_RESULTS,
   WEB_MAX_SNAPSHOT_BYTES,
+  WEB_PROMPT_IMAGE_MAX_BYTES,
+  WEB_PROMPT_IMAGE_MAX_COUNT,
+  WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
+  type WebEmbeddedBrowserAction,
   type WebInteractiveTerminalEvent,
-  type WebSettingsPreferencesPatch,
+  type WebPromptImage,
   type WebSnapshot,
-  type WebThemePreference,
 } from "../protocol/types.ts";
 import {
   WebRuntimeRequestError,
@@ -53,7 +54,10 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
-import { openBrowser } from "./browser-launcher.ts";
+import {
+  EmbeddedBrowserManager,
+  type EmbeddedBrowserService,
+} from "./embedded-browser.ts";
 import {
   GitReviewBaselineStore,
   type GitReviewService,
@@ -67,6 +71,7 @@ import {
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
+const MAX_PROMPT_REQUEST_BYTES = 12 * 1024 * 1024;
 const MAX_SSE_CLIENTS = 8;
 const MAX_TERMINAL_STREAMS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
@@ -84,15 +89,197 @@ const THINKING_LEVELS = new Set([
   "xhigh",
   "max",
 ]);
-const WEB_THEME_SET = new Set<string>(WEB_THEMES);
 const execFileAsync = promisify(execFile);
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
-function isWebTheme(value: unknown): value is WebThemePreference {
-  return typeof value === "string" && WEB_THEME_SET.has(value);
+const promptImageMimeTypes = new Set<WebPromptImage["mimeType"]>([
+  "image/png",
+  "image/jpeg",
+  "image/gif",
+  "image/webp",
+]);
+
+function hasImageSignature(bytes: Buffer, mimeType: WebPromptImage["mimeType"]) {
+  if (mimeType === "image/png")
+    return bytes
+      .subarray(0, 8)
+      .equals(Buffer.from("89504e470d0a1a0a", "hex"));
+  if (mimeType === "image/jpeg")
+    return bytes[0] === 0xff && bytes[1] === 0xd8 && bytes[2] === 0xff;
+  if (mimeType === "image/gif") {
+    const signature = bytes.subarray(0, 6).toString("ascii");
+    return signature === "GIF87a" || signature === "GIF89a";
+  }
+  return (
+    bytes.subarray(0, 4).toString("ascii") === "RIFF" &&
+    bytes.subarray(8, 12).toString("ascii") === "WEBP"
+  );
+}
+
+function parsePromptImages(value: unknown) {
+  if (value === undefined)
+    return { ok: true as const, images: [] as WebPromptImage[], bytes: 0 };
+  if (!Array.isArray(value) || value.length > WEB_PROMPT_IMAGE_MAX_COUNT)
+    return { ok: false as const, error: "prompt images exceed the count limit" };
+  const images: WebPromptImage[] = [];
+  let totalBytes = 0;
+  for (const item of value) {
+    if (!isRecord(item))
+      return { ok: false as const, error: "prompt images must be objects" };
+    const mimeType = item.mimeType;
+    const data = item.data;
+    const name = item.name;
+    if (
+      typeof mimeType !== "string" ||
+      !promptImageMimeTypes.has(mimeType as WebPromptImage["mimeType"]) ||
+      typeof data !== "string" ||
+      data.length === 0 ||
+      !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(
+        data,
+      ) ||
+      (name !== undefined &&
+        (typeof name !== "string" || name.length === 0 || name.length > 255)) ||
+      Object.keys(item).some(
+        (key) => !["data", "mimeType", "name"].includes(key),
+      )
+    ) {
+      return { ok: false as const, error: "prompt image metadata is invalid" };
+    }
+    const bytes = Buffer.from(data, "base64");
+    if (
+      bytes.length === 0 ||
+      bytes.length > WEB_PROMPT_IMAGE_MAX_BYTES ||
+      !hasImageSignature(bytes, mimeType as WebPromptImage["mimeType"])
+    ) {
+      return {
+        ok: false as const,
+        error: "prompt image data is invalid or too large",
+      };
+    }
+    totalBytes += bytes.length;
+    if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
+      return {
+        ok: false as const,
+        error: "prompt images exceed the total size limit",
+      };
+    images.push({
+      data,
+      mimeType: mimeType as WebPromptImage["mimeType"],
+      ...(typeof name === "string" ? { name } : {}),
+    });
+  }
+  return { ok: true as const, images, bytes: totalBytes };
+}
+
+function promptImageSignature(images: readonly WebPromptImage[]) {
+  const hash = createHash("sha256");
+  for (const image of images) {
+    hash.update(image.mimeType);
+    hash.update("\0");
+    hash.update(image.name ?? "");
+    hash.update("\0");
+    hash.update(image.data);
+    hash.update("\0");
+  }
+  return hash.digest("hex");
+}
+
+function browserAddress(value: unknown) {
+  if (typeof value !== "string" || value.length === 0 || value.length > 2_048)
+    return undefined;
+  try {
+    const target = new URL(value);
+    if (
+      (target.protocol !== "http:" && target.protocol !== "https:") ||
+      target.username ||
+      target.password
+    )
+      return undefined;
+    return target.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function finiteNumber(
+  value: unknown,
+  min: number,
+  max: number,
+): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= min && value <= max;
+}
+
+function parseBrowserAction(
+  body: Record<string, unknown>,
+): WebEmbeddedBrowserAction | undefined {
+  const action = body.action;
+  if (action === "navigate") {
+    const url = browserAddress(body.url);
+    return url ? ({ type: "navigate", url } satisfies WebEmbeddedBrowserAction) : undefined;
+  }
+  if (
+    action === "back" ||
+    action === "forward" ||
+    action === "reload" ||
+    action === "stop"
+  )
+    return { type: action } satisfies WebEmbeddedBrowserAction;
+  if (
+    action === "resize" &&
+    isBoundedInteger(body.width, 320, 2_560) &&
+    isBoundedInteger(body.height, 240, 2_560)
+  ) {
+    return {
+      type: "resize",
+      width: body.width,
+      height: body.height,
+    } satisfies WebEmbeddedBrowserAction;
+  }
+  if (
+    action === "mouse" &&
+    ["move", "down", "up", "wheel"].includes(String(body.event)) &&
+    finiteNumber(body.x, 0, 4_096) &&
+    finiteNumber(body.y, 0, 4_096) &&
+    (body.button === undefined ||
+      ["left", "middle", "right"].includes(String(body.button))) &&
+    (body.deltaX === undefined || finiteNumber(body.deltaX, -10_000, 10_000)) &&
+    (body.deltaY === undefined || finiteNumber(body.deltaY, -10_000, 10_000))
+  ) {
+    return {
+      type: "mouse",
+      event: body.event as "move" | "down" | "up" | "wheel",
+      x: body.x,
+      y: body.y,
+      ...(body.button
+        ? { button: body.button as "left" | "middle" | "right" }
+        : {}),
+      ...(typeof body.deltaX === "number" ? { deltaX: body.deltaX } : {}),
+      ...(typeof body.deltaY === "number" ? { deltaY: body.deltaY } : {}),
+    } satisfies WebEmbeddedBrowserAction;
+  }
+  if (
+    action === "key" &&
+    (body.event === "down" || body.event === "up") &&
+    typeof body.key === "string" &&
+    body.key.length > 0 &&
+    body.key.length <= 32 &&
+    (body.code === undefined ||
+      (typeof body.code === "string" && body.code.length <= 64)) &&
+    (body.text === undefined ||
+      (typeof body.text === "string" && body.text.length <= 8))
+  ) {
+    return {
+      type: "key",
+      event: body.event,
+      key: body.key,
+      ...(typeof body.code === "string" ? { code: body.code } : {}),
+      ...(typeof body.text === "string" ? { text: body.text } : {}),
+    } satisfies WebEmbeddedBrowserAction;
+  }
+  return undefined;
 }
 
 function isBoundedInteger(
@@ -116,6 +303,7 @@ type PromptAdmissionResponse = {
 type PromptAdmission = {
   readonly sessionId: string;
   readonly content: string;
+  readonly imageSignature: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
@@ -150,7 +338,7 @@ export interface WebHostOptions {
   token?: string;
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
-  browserOpener?: (url: string, signal?: AbortSignal) => Promise<boolean>;
+  embeddedBrowser?: EmbeddedBrowserService;
   gitReviews?: GitReviewService;
   interactiveTerminals?: InteractiveTerminalService;
   shutdownTimeoutMs?: number;
@@ -179,7 +367,7 @@ export class WebHost {
   private readonly directoryChooser: NonNullable<
     WebHostOptions["directoryChooser"]
   >;
-  private readonly browserOpener: NonNullable<WebHostOptions["browserOpener"]>;
+  private readonly embeddedBrowser: EmbeddedBrowserService;
   private readonly gitReviews: GitReviewService;
   private readonly interactiveTerminals: InteractiveTerminalService;
   private readonly shutdownTimeoutMs: number;
@@ -208,7 +396,7 @@ export class WebHost {
     this.allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.directoryChooser =
       options.directoryChooser ?? (() => this.chooseDirectory());
-    this.browserOpener = options.browserOpener ?? openBrowser;
+    this.embeddedBrowser = options.embeddedBrowser ?? new EmbeddedBrowserManager();
     this.gitReviews =
       options.gitReviews ??
       new GitReviewBaselineStore(this.runtime.sessionDirectory);
@@ -300,11 +488,17 @@ export class WebHost {
     if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
       this.artifacts.revoke();
       if (this.runtime.workspaceSelected) {
+        this.embeddedBrowser.retain(
+          this.runtime.sessionManager.getSessionId(),
+        );
         this.interactiveTerminals.retain(
           this.runtime.sessionManager.getSessionId(),
           this.runtime.cwd,
         );
-      } else this.interactiveTerminals.dispose();
+      } else {
+        this.embeddedBrowser.retain();
+        this.interactiveTerminals.dispose();
+      }
     }
     this.liveTools = reduceLiveTools(this.liveTools, type, detail ?? {});
     let event: WebEvent = {
@@ -381,7 +575,11 @@ export class WebHost {
         : Promise.resolve();
       const disposeRuntime = (async () => {
         await this.drainLeaseSensitiveRequests();
-        await this.runtime.dispose();
+        await Promise.all([
+          this.runtime.dispose(),
+          this.gitReviews.dispose?.(),
+          this.embeddedBrowser.dispose(),
+        ]);
       })();
       const cleanup = Promise.all([disposeRuntime, closeServer]).then(
         () => undefined,
@@ -444,11 +642,10 @@ export class WebHost {
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
-      pathname === "/api/browser/open" ||
+      pathname.startsWith("/api/browser") ||
       pathname === "/api/model" ||
       pathname === "/api/thinking" ||
-      pathname === "/api/capabilities/action" ||
-      pathname === "/api/settings/preferences";
+      pathname === "/api/capabilities/action";
   }
 
   private async drainLeaseSensitiveRequests() {
@@ -494,7 +691,7 @@ export class WebHost {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
         "Cross-Origin-Resource-Policy": "same-origin",
         "Cross-Origin-Opener-Policy": "same-origin",
@@ -534,60 +731,102 @@ export class WebHost {
           error: "browser launch requires POST",
         });
       const body = await this.readJson(request);
+      const target = browserAddress(body.url);
       if (
-        Object.keys(body).length !== 2 ||
         typeof body.sessionId !== "string" ||
-        typeof body.url !== "string" ||
-        body.url.length > 2_048
+        !target ||
+        (body.width !== undefined && !isBoundedInteger(body.width, 320, 2_560)) ||
+        (body.height !== undefined && !isBoundedInteger(body.height, 240, 2_560)) ||
+        Object.keys(body).some(
+          (key) => !["sessionId", "url", "width", "height"].includes(key),
+        )
       ) {
         return this.json(response, 400, {
           code: "INVALID_BROWSER_OPEN_REQUEST",
-          error: "an exact Session id and bounded HTTP address are required",
+          error:
+            "an exact Session id, bounded HTTP address, and optional viewport are required",
         });
       }
       if (!(await this.requireActiveToolSession(body.sessionId, response)))
         return;
-      let target: URL;
-      try {
-        target = new URL(body.url);
-      } catch {
+      const state = await this.embeddedBrowser.open(
+        body.sessionId,
+        target,
+        {
+          width: typeof body.width === "number" ? body.width : 1_024,
+          height: typeof body.height === "number" ? body.height : 768,
+        },
+      );
+      return this.json(response, 200, state);
+    }
+    if (url.pathname === "/api/browser/state") {
+      if (request.method !== "GET")
+        return this.json(response, 405, { error: "browser state requires GET" });
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"]))
         return this.json(response, 400, {
-          code: "INVALID_BROWSER_ADDRESS",
-          error: "a valid HTTP or HTTPS address is required",
+          code: "INVALID_BROWSER_TARGET",
+          error: "an exact Session id is required",
         });
-      }
-      if (
-        (target.protocol !== "http:" && target.protocol !== "https:") ||
-        target.username ||
-        target.password
-      ) {
-        return this.json(response, 400, {
-          code: "INVALID_BROWSER_ADDRESS",
-          error: "a credential-free HTTP or HTTPS address is required",
-        });
-      }
-      const controller = new AbortController();
-      const abort = () => controller.abort();
-      request.once("aborted", abort);
-      response.once("close", abort);
-      try {
-        const opened = await this.browserOpener(
-          target.toString(),
-          controller.signal,
-        );
-        if (!opened)
-          return this.json(response, 502, {
-            code: "BROWSER_OPEN_FAILED",
-            error: "the system browser could not be opened",
+      if (!(await this.requireActiveToolSession(sessionId, response))) return;
+      const state = await this.embeddedBrowser.state(sessionId);
+      return state
+        ? this.json(response, 200, state)
+        : this.json(response, 404, {
+            code: "BROWSER_NOT_FOUND",
+            error: "the embedded browser is not running",
           });
-        return this.json(response, 200, {
-          opened: true,
-          url: target.toString(),
+    }
+    if (url.pathname === "/api/browser/frame") {
+      if (request.method !== "GET")
+        return this.json(response, 405, { error: "browser frame requires GET" });
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"]))
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_TARGET",
+          error: "an exact Session id is required",
         });
-      } finally {
-        request.off("aborted", abort);
-        response.off("close", abort);
-      }
+      if (!(await this.requireActiveToolSession(sessionId, response))) return;
+      const frame = await this.embeddedBrowser.frame(sessionId);
+      if (!frame)
+        return this.json(response, 404, {
+          code: "BROWSER_NOT_FOUND",
+          error: "the embedded browser is not running",
+        });
+      response.writeHead(200, {
+        "Content-Type": "image/jpeg",
+        "Content-Length": frame.length,
+        "Cache-Control": "no-store",
+        "Cross-Origin-Resource-Policy": "same-origin",
+        "X-Content-Type-Options": "nosniff",
+      });
+      response.end(frame);
+      return;
+    }
+    if (url.pathname === "/api/browser/action") {
+      if (request.method !== "POST")
+        return this.json(response, 405, { error: "browser actions require POST" });
+      const body = await this.readJson(request);
+      if (typeof body.sessionId !== "string")
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_ACTION",
+          error: "an exact Session id and browser action are required",
+        });
+      const action = parseBrowserAction(body);
+      if (!action)
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_ACTION",
+          error: "the browser action is invalid",
+        });
+      if (!(await this.requireActiveToolSession(body.sessionId, response)))
+        return;
+      const state = await this.embeddedBrowser.action(body.sessionId, action);
+      return state
+        ? this.json(response, 200, state)
+        : this.json(response, 404, {
+            code: "BROWSER_NOT_FOUND",
+            error: "the embedded browser is not running",
+          });
     }
     if (url.pathname === "/api/terminal/events") {
       if (request.method !== "GET")
@@ -905,124 +1144,24 @@ export class WebHost {
         });
       }
     }
-    if (
-      url.pathname === "/api/settings/preferences" &&
-      request.method === "POST"
-    ) {
-      const body = await this.readJson(request);
-      const preferences = body.preferences;
-      const bodyKeys = Object.keys(body);
-      const preferenceKeys = isRecord(preferences)
-        ? Object.keys(preferences)
-        : [];
-      const theme = isRecord(preferences) ? preferences.theme : undefined;
-      const chatWidth = isRecord(preferences)
-        ? preferences.chatWidth
-        : undefined;
-      const chatFontSize = isRecord(preferences)
-        ? preferences.chatFontSize
-        : undefined;
-      const expandThinking = isRecord(preferences)
-        ? preferences.expandThinking
-        : undefined;
-      const allowedPreferenceKeys = new Set([
-        "theme",
-        "chatWidth",
-        "chatFontSize",
-        "expandThinking",
-      ]);
-      if (
-        typeof body.sessionId !== "string" ||
-        body.sessionId.length === 0 ||
-        body.sessionId.length > 128 ||
-        bodyKeys.length !== 2 ||
-        !bodyKeys.includes("sessionId") ||
-        !bodyKeys.includes("preferences") ||
-        !isRecord(preferences) ||
-        preferenceKeys.length === 0 ||
-        preferenceKeys.some((key) => !allowedPreferenceKeys.has(key)) ||
-        (theme !== undefined && !isWebTheme(theme)) ||
-        (chatWidth !== undefined &&
-          !isBoundedInteger(
-            chatWidth,
-            MIN_WEB_CHAT_WIDTH,
-            MAX_WEB_CHAT_WIDTH,
-          )) ||
-        (chatFontSize !== undefined &&
-          !isBoundedInteger(
-            chatFontSize,
-            MIN_WEB_CHAT_FONT_SIZE,
-            MAX_WEB_CHAT_FONT_SIZE,
-          )) ||
-        (expandThinking !== undefined && typeof expandThinking !== "boolean")
-      ) {
-        return this.json(response, 400, {
-          code: "INVALID_SETTINGS_PREFERENCES_REQUEST",
-          error:
-            "an exact Session id and bounded Web preference fields are required",
-        });
-      }
-      if (this.runtime.workspaceSelected !== true) {
-        return this.json(response, 409, {
-          code: "WORKSPACE_REQUIRED",
-          error: "Choose a workspace before changing Web preferences",
-        });
-      }
-      if (!this.runtime.updateWebPreferences) {
-        return this.json(response, 501, {
-          code: "SETTINGS_PREFERENCES_UNAVAILABLE",
-          error: "Web preference updates are unavailable",
-        });
-      }
-      const patch: WebSettingsPreferencesPatch = {
-        ...(isWebTheme(theme) ? { theme } : {}),
-        ...(isBoundedInteger(
-          chatWidth,
-          MIN_WEB_CHAT_WIDTH,
-          MAX_WEB_CHAT_WIDTH,
-        )
-          ? { chatWidth }
-          : {}),
-        ...(isBoundedInteger(
-          chatFontSize,
-          MIN_WEB_CHAT_FONT_SIZE,
-          MAX_WEB_CHAT_FONT_SIZE,
-        )
-          ? { chatFontSize }
-          : {}),
-        ...(typeof expandThinking === "boolean" ? { expandThinking } : {}),
-      };
-      try {
-        const setup = await this.runtime.updateWebPreferences(patch, {
-          expectedSessionId: body.sessionId,
-        });
-        return this.json(response, 200, {
-          sessionId: body.sessionId,
-          setup,
-          revision: this.sequence,
-        });
-      } catch (error) {
-        const failure = this.runtimeRequestFailure(
-          error,
-          "SETTINGS_PREFERENCES_UPDATE_FAILED",
-          "Web preference update failed",
-        );
-        return this.json(response, failure.status, {
-          code: failure.code,
-          error: failure.error,
-        });
-      }
-    }
     if (url.pathname === "/api/prompt" && request.method === "POST") {
       const requestStarted = performance.now();
-      const body = await this.readJson(request);
+      const body = await this.readJson(request, MAX_PROMPT_REQUEST_BYTES);
       const content =
         typeof body.content === "string" ? body.content.trim() : "";
-      if (!content || content.length > 12_000) {
+      const parsedImages = parsePromptImages(body.images);
+      if (!parsedImages.ok) {
         return this.json(response, 400, {
-          error: "prompt must be 1-12000 characters",
+          code: "INVALID_PROMPT_IMAGES",
+          error: parsedImages.error,
         });
       }
+      if ((!content && parsedImages.images.length === 0) || content.length > 12_000) {
+        return this.json(response, 400, {
+          error: "prompt must contain text or images and at most 12000 characters",
+        });
+      }
+      const imageSignature = promptImageSignature(parsedImages.images);
       const commandId =
         typeof body.commandId === "string" && body.commandId.length > 0
           ? body.commandId
@@ -1046,7 +1185,8 @@ export class WebHost {
       if (existing) {
         if (
           existing.sessionId !== body.sessionId ||
-          existing.content !== content
+          existing.content !== content ||
+          existing.imageSignature !== imageSignature
         ) {
           return this.json(response, 409, {
             code: "COMMAND_CONFLICT",
@@ -1092,6 +1232,8 @@ export class WebHost {
         commandId,
         body.sessionId,
         content,
+        parsedImages.images,
+        imageSignature,
       );
       const result = await admission.completion;
       return this.json(response, result.status, result.body);
@@ -1761,11 +1903,14 @@ export class WebHost {
     commandId: string,
     sessionId: string,
     content: string,
+    images: readonly WebPromptImage[],
+    imageSignature: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
       sessionId,
       content,
+      imageSignature,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
       }),
@@ -1777,6 +1922,7 @@ export class WebHost {
         commandId,
         sessionId,
         chars: content.length,
+        images: images.length,
       });
     } catch {}
     void Promise.resolve()
@@ -1784,6 +1930,7 @@ export class WebHost {
         this.runtime.sendPrompt(content, {
           commandId,
           expectedSessionId: sessionId,
+          ...(images.length > 0 ? { images } : {}),
         }),
       )
       .then(
@@ -1848,18 +1995,21 @@ export class WebHost {
     return admission;
   }
 
-  private async readJson(request: IncomingMessage) {
+  private async readJson(
+    request: IncomingMessage,
+    maxBytes = MAX_COMMAND_BYTES,
+  ) {
     const chunks: Buffer[] = [];
     let bytes = 0;
     for await (const chunk of request) {
       const buffer = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
       bytes += buffer.length;
-      if (bytes > MAX_COMMAND_BYTES) {
+      if (bytes > maxBytes) {
         throw new WebRequestError(
           "request body is too large",
           "REQUEST_BODY_TOO_LARGE",
           413,
-          MAX_COMMAND_BYTES,
+          maxBytes,
         );
       }
       chunks.push(buffer);

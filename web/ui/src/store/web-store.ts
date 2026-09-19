@@ -1,16 +1,17 @@
 import { createStore } from "zustand/vanilla";
+import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 import type {
   WebCommandSummary,
   WebEvent,
   WebLiveMessage,
   WebModelSummary,
+  WebPromptImage,
   WebSnapshot,
   WebThinkingState,
 } from "../../../protocol/types.ts";
 import { i18n } from "../i18n.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
-import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 
 const collapsedWorkspacesStorageKey = "openpi.collapsed-workspaces";
 const sidebarCollapsedStorageKey = "openpi.sidebar-collapsed";
@@ -77,6 +78,7 @@ export interface PromptAdmissionRecovery {
   content: string;
   commandId: string;
   optimisticKey: string;
+  images?: readonly WebPromptImage[];
   phase: "checking" | "verification-failed" | "ready" | "submitting";
 }
 
@@ -171,9 +173,15 @@ export interface WebStoreActions {
   clearModelSearch: () => void;
   selectThinking: (level: string) => void;
   cancelActiveTurn: () => Promise<void>;
-  sendPrompt: (content: string) => Promise<boolean>;
+  sendPrompt: (
+    content: string,
+    images?: readonly WebPromptImage[],
+  ) => Promise<boolean>;
   checkPromptAdmissionRecovery: () => Promise<void>;
-  sendPromptAsNew: (content: string) => Promise<boolean>;
+  sendPromptAsNew: (
+    content: string,
+    images?: readonly WebPromptImage[],
+  ) => Promise<boolean>;
   abandonPromptAdmission: () => void;
   acknowledgePromptAdmissionResolution: (commandId: string) => void;
   discoverCommands: () => Promise<void>;
@@ -224,6 +232,8 @@ export function createWebStore(
   let promptAdmission: {
     sessionId: string;
     content: string;
+    imageSignature: string;
+    images: readonly WebPromptImage[];
     commandId: string;
     optimisticKey: string;
   } | null = null;
@@ -1383,15 +1393,23 @@ export function createWebStore(
           if (epoch === sessionEpoch) set({ turnCancellationPending: false });
         }
       },
-      async sendPrompt(rawContent) {
+      async sendPrompt(rawContent, promptImages = []) {
         const content = rawContent.trim();
+        const images = promptImages.map((image) => ({ ...image }));
+        const imageSignature = JSON.stringify(
+          images.map(({ data, mimeType, name }) => [
+            mimeType,
+            name ?? "",
+            data,
+          ]),
+        );
         const initial = get();
         const recovery = initial.promptAdmissionRecovery;
         const replacement = recovery?.phase === "submitting" ? recovery : null;
         const workspace = initial.selectedWorkspace;
         if (
           !workspace ||
-          !content ||
+          (!content && images.length === 0) ||
           initial.sessionSwitching ||
           initial.promptAdmissionPending ||
           (recovery && !replacement) ||
@@ -1455,7 +1473,8 @@ export function createWebStore(
         const admission = ++promptAdmissionSequence;
         const retrying =
           promptAdmission?.sessionId === sessionId &&
-          promptAdmission.content === content;
+          promptAdmission.content === content &&
+          promptAdmission.imageSignature === imageSignature;
         const commandId = retrying
           ? promptAdmission!.commandId
           : (globalThis.crypto?.randomUUID?.() ??
@@ -1463,14 +1482,37 @@ export function createWebStore(
         const optimisticKey = retrying
           ? promptAdmission!.optimisticKey
           : `optimistic-${commandId}`;
-        promptAdmission = { sessionId, content, commandId, optimisticKey };
+        promptAdmission = {
+          sessionId,
+          content,
+          imageSignature,
+          images,
+          commandId,
+          optimisticKey,
+        };
         promptAdmissionToken = admission;
         set({
           liveMessages: retrying
             ? get().liveMessages
             : [
                 ...get().liveMessages,
-                { key: optimisticKey, message: { role: "user", content } },
+                {
+                  key: optimisticKey,
+                  message: {
+                    role: "user",
+                    content,
+                    ...(images.length > 0
+                      ? {
+                          parts: images.map((image) => ({
+                            type: "image" as const,
+                            mimeType: image.mimeType,
+                            ...(image.name ? { name: image.name } : {}),
+                            previewUrl: `data:${image.mimeType};base64,${image.data}`,
+                          })),
+                        }
+                      : {}),
+                  },
+                },
               ].slice(-8),
           notice: null,
           pendingFollowUpsReceipt: null,
@@ -1484,6 +1526,7 @@ export function createWebStore(
             content,
             commandId,
             retrying,
+            images,
           );
           if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
             return false;
@@ -1594,7 +1637,7 @@ export function createWebStore(
           });
         }
       },
-      async sendPromptAsNew(rawContent) {
+      async sendPromptAsNew(rawContent, promptImages) {
         const recovery = get().promptAdmissionRecovery;
         if (
           !recovery ||
@@ -1604,14 +1647,15 @@ export function createWebStore(
           return false;
         }
         const content = rawContent.trim();
-        if (!content) return false;
+        const images = promptImages ?? recovery.images ?? [];
+        if (!content && images.length === 0) return false;
         set({
           promptAdmissionRecovery: { ...recovery, phase: "submitting" },
           notice: null,
         });
         let admitted = false;
         try {
-          admitted = await actions.sendPrompt(content);
+          admitted = await actions.sendPrompt(content, images);
           return admitted;
         } finally {
           const currentRecovery = get().promptAdmissionRecovery;

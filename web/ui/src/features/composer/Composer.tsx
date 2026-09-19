@@ -7,11 +7,13 @@ import {
   Command,
   FileText,
   Folder,
+  ImagePlus,
   KeyRound,
   Plus,
   Send,
   SlidersHorizontal,
   Square,
+  X,
 } from "lucide-react";
 import {
   type FormEvent,
@@ -23,7 +25,12 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSnapshot } from "../../../../protocol/types.ts";
+import {
+  WEB_PROMPT_IMAGE_MAX_COUNT,
+  WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  type WebPromptImage,
+  type WebSnapshot,
+} from "../../../../protocol/types.ts";
 import {
   compactSummary,
   sessionTitle,
@@ -32,6 +39,10 @@ import {
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
+import {
+  type StagedPromptImage,
+  stagePromptImage,
+} from "./image-attachments.ts";
 import { ModelPicker } from "./ModelPicker.tsx";
 import {
   filterWebCommands,
@@ -85,7 +96,13 @@ export function Composer(props: ComposerProps) {
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
+  const [images, setImages] = useState<StagedPromptImage[]>([]);
+  const [attachmentBusy, setAttachmentBusy] = useState(false);
+  const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [dragActive, setDragActive] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const imagePicker = useRef<HTMLInputElement>(null);
+  const attachmentImport = useRef(false);
   const restoreFileReferenceFocus = useRef(false);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
@@ -176,6 +193,47 @@ export function Composer(props: ComposerProps) {
   const contextEntryAvailable =
     canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
 
+  const stageFiles = async (files: Iterable<File>) => {
+    if (attachmentImport.current || !contextEntryAvailable) return;
+    const selectedFiles = [...files];
+    if (selectedFiles.length === 0) return;
+    if (images.length + selectedFiles.length > WEB_PROMPT_IMAGE_MAX_COUNT) {
+      setAttachmentError(
+        t("imageAttachmentCount", { count: WEB_PROMPT_IMAGE_MAX_COUNT }),
+      );
+      return;
+    }
+    attachmentImport.current = true;
+    setAttachmentBusy(true);
+    setAttachmentError(null);
+    try {
+      const staged: StagedPromptImage[] = [];
+      let totalBytes = images.reduce((sum, image) => sum + image.size, 0);
+      for (const file of selectedFiles) {
+        const image = await stagePromptImage(file);
+        totalBytes += image.size;
+        if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
+          throw new Error("image-total-size");
+        staged.push(image);
+      }
+      draftRevision.current += 1;
+      setImages((current) => [...current, ...staged]);
+    } catch (error) {
+      const code = error instanceof Error ? error.message : "image-type";
+      setAttachmentError(
+        code === "image-size"
+          ? t("imageAttachmentTooLarge")
+          : code === "image-total-size"
+            ? t("imageAttachmentTotalTooLarge")
+            : t("imageAttachmentUnsupported"),
+      );
+    } finally {
+      attachmentImport.current = false;
+      setAttachmentBusy(false);
+      if (imagePicker.current) imagePicker.current.value = "";
+    }
+  };
+
   useEffect(() => {
     const opened = commandMenuOpen && !commandMenuWasOpen.current;
     commandMenuWasOpen.current = commandMenuOpen;
@@ -218,6 +276,7 @@ export function Composer(props: ComposerProps) {
     if (!resolution) return;
     if (prompt.trim() === resolution.content) {
       setPrompt("");
+      setImages([]);
     }
     props.actions.acknowledgePromptAdmissionResolution(resolution.commandId);
   }, [prompt, props.actions, props.promptAdmissionResolution]);
@@ -255,6 +314,9 @@ export function Composer(props: ComposerProps) {
 
     draftRevision.current += 1;
     setPrompt("");
+    setImages([]);
+    setAttachmentError(null);
+    setDragActive(false);
     setFileReferenceOpen(false);
     if (submission?.scope === previousScope) {
       submission.canTransferToCreatedSession = false;
@@ -269,7 +331,10 @@ export function Composer(props: ComposerProps) {
   ]);
 
   const sendDraft = async (
-    sendPrompt: (content: string) => Promise<boolean>,
+    sendPrompt: (
+      content: string,
+      images?: readonly WebPromptImage[],
+    ) => Promise<boolean>,
   ) => {
     if (pendingSubmission.current) return;
     if (!props.selectedWorkspace) {
@@ -283,7 +348,11 @@ export function Composer(props: ComposerProps) {
     };
     pendingSubmission.current = submission;
     try {
-      if (await sendPrompt(prompt)) {
+      const accepted =
+        images.length > 0
+          ? await sendPrompt(prompt, images)
+          : await sendPrompt(prompt);
+      if (accepted) {
         if (
           pendingSubmission.current === submission &&
           draftScopeRef.current === submission.scope &&
@@ -291,6 +360,8 @@ export function Composer(props: ComposerProps) {
         ) {
           draftRevision.current += 1;
           setPrompt("");
+          setImages([]);
+          setAttachmentError(null);
         }
       }
     } finally {
@@ -310,7 +381,7 @@ export function Composer(props: ComposerProps) {
       props.promptAdmissionPending ||
       props.promptAdmissionRecovery ||
       props.promptAdmissionResolution ||
-      !prompt.trim()
+      (!prompt.trim() && images.length === 0)
     )
       return;
     await sendDraft(props.actions.sendPrompt);
@@ -480,7 +551,7 @@ export function Composer(props: ComposerProps) {
     props.turnCancellationPending ||
     props.turnTerminalStatus === "cancelled" ||
     props.pendingFollowUpsReceipt !== null ||
-    (canCompose && running && Boolean(prompt.trim()));
+    (canCompose && running && Boolean(prompt.trim() || images.length));
 
   return (
     <div className="composer-dock">
@@ -548,7 +619,7 @@ export function Composer(props: ComposerProps) {
               className="primary"
               disabled={
                 props.promptAdmissionRecovery.phase !== "ready" ||
-                !prompt.trim()
+                (!prompt.trim() && images.length === 0)
               }
               onClick={() => void sendAsNew()}
             >
@@ -560,8 +631,34 @@ export function Composer(props: ComposerProps) {
         </section>
       )}
       <form
-        className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"}`}
+        className={`composer composer-m02 ${props.selectedWorkspace ? "" : "dormant"} ${dragActive ? "is-dragging" : ""}`}
         onSubmit={(event) => void send(event)}
+        onDragEnter={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          if (!contextEntryAvailable) return;
+          setDragActive(true);
+        }}
+        onDragOver={(event) => {
+          if (!event.dataTransfer.types.includes("Files")) return;
+          event.preventDefault();
+          if (!contextEntryAvailable) return;
+          event.dataTransfer.dropEffect = "copy";
+          setDragActive(true);
+        }}
+        onDragLeave={(event) => {
+          const next = event.relatedTarget;
+          if (next instanceof Node && event.currentTarget.contains(next))
+            return;
+          setDragActive(false);
+        }}
+        onDrop={(event) => {
+          setDragActive(false);
+          if (event.dataTransfer.files.length === 0) return;
+          event.preventDefault();
+          if (!contextEntryAvailable) return;
+          void stageFiles(event.dataTransfer.files);
+        }}
       >
         {!props.selectedWorkspace && (
           <button
@@ -580,6 +677,57 @@ export function Composer(props: ComposerProps) {
             <span>{workspaceLabel}</span>
             <ChevronRight aria-hidden="true" />
             <strong>{targetSummary}</strong>
+          </div>
+        )}
+        <input
+          ref={imagePicker}
+          className="sr-only"
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          tabIndex={-1}
+          aria-hidden="true"
+          onChange={(event) => {
+            if (event.currentTarget.files)
+              void stageFiles(event.currentTarget.files);
+          }}
+        />
+        {images.length > 0 && (
+          <section
+            className="composer-attachments"
+            aria-label={t("imageAttachments")}
+          >
+            {images.map((image) => (
+              <div className="composer-attachment" key={image.id}>
+                <img src={image.previewUrl} alt="" />
+                <span title={image.name}>{image.name}</span>
+                <button
+                  type="button"
+                  aria-label={`${t("removeAttachment")} ${image.name}`}
+                  title={t("removeAttachment")}
+                  onClick={() => {
+                    draftRevision.current += 1;
+                    setImages((current) =>
+                      current.filter((item) => item.id !== image.id),
+                    );
+                    setAttachmentError(null);
+                  }}
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </section>
+        )}
+        {attachmentError && (
+          <p className="composer-attachment-error" role="alert">
+            {attachmentError}
+          </p>
+        )}
+        {dragActive && (
+          <div className="composer-drop-overlay" aria-hidden="true">
+            <ImagePlus />
+            <span>{t("dropImagesHere")}</span>
           </div>
         )}
         <textarea
@@ -610,6 +758,15 @@ export function Composer(props: ComposerProps) {
             setMenuDismissed(false);
           }}
           onBlur={() => setComposerFocused(false)}
+          onPaste={(event) => {
+            if (
+              !contextEntryAvailable ||
+              event.clipboardData.files.length === 0
+            )
+              return;
+            event.preventDefault();
+            void stageFiles(event.clipboardData.files);
+          }}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
             if (commandMenuOpen) {
@@ -667,6 +824,16 @@ export function Composer(props: ComposerProps) {
                   className: "composer-context-trigger",
                 }}
                 items={[
+                  {
+                    id: "image-attachment",
+                    label: t("addImages"),
+                    description: t("imageAttachmentDescription"),
+                    icon: <ImagePlus />,
+                    isDisabled:
+                      attachmentBusy ||
+                      images.length >= WEB_PROMPT_IMAGE_MAX_COUNT,
+                    onClick: () => imagePicker.current?.click(),
+                  },
                   {
                     id: "file-reference",
                     label: t("fileReference"),
@@ -804,7 +971,7 @@ export function Composer(props: ComposerProps) {
                     props.promptAdmissionPending ||
                     Boolean(props.promptAdmissionRecovery) ||
                     Boolean(props.promptAdmissionResolution) ||
-                    !prompt.trim()
+                    (!prompt.trim() && images.length === 0)
                   }
                 >
                   <Send />

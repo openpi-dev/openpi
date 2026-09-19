@@ -143,3 +143,45 @@ test("reuses one bounded PTY per Session and replays exact output cursors", asyn
   assert.equal(manager.get("session-a", created.id), undefined);
   manager.dispose();
 });
+
+test("deduplicates concurrent creates and reserves capacity before loading the PTY", async () => {
+  const ptys: FakePty[] = [];
+  const spawn: typeof import("node-pty").spawn = () => {
+    const pty = new FakePty();
+    ptys.push(pty);
+    return pty;
+  };
+  const manager = new InteractiveTerminalManager({
+    spawn,
+    cleanupMs: 60_000,
+    maxTerminals: 1,
+  });
+
+  const first = manager.create({
+    sessionId: "session-a",
+    cwd: ".",
+    cols: 80,
+    rows: 24,
+  });
+  const duplicate = manager.create({
+    sessionId: "session-a",
+    cwd: ".",
+    cols: 120,
+    rows: 40,
+  });
+  const overCapacity = manager.create({
+    sessionId: "session-b",
+    cwd: ".",
+    cols: 80,
+    rows: 24,
+  });
+
+  const [created, reused] = await Promise.all([first, duplicate]);
+  assert.equal(ptys.length, 1);
+  assert.equal(created.id, reused.id);
+  assert.equal(created.reused, false);
+  assert.equal(reused.reused, true);
+  await assert.rejects(overCapacity, /capacity is full/u);
+  assert.equal(ptys.length, 1);
+  manager.dispose();
+});

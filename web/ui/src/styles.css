@@ -289,6 +289,11 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .message-row.assistant.response > .message-actions { width:min(calc(var(--conversation-content-width) - 60px), 100%); }
 .message-body { color: var(--text); font-size: var(--conversation-font-size); line-height: 1.65; overflow-wrap: anywhere; white-space: pre-wrap; }
 .message-row.user .message-body { padding:10px 15px; border-radius:16px 16px 5px 16px; background:var(--sidebar-active); box-shadow:inset 0 0 0 1px oklch(72% .06 85 / 18%); }
+.message-attachments { display:flex; max-width:100%; flex-wrap:wrap; justify-content:flex-end; gap:7px; margin-bottom:7px; }
+.message-attachment { display:flex; max-width:210px; min-height:40px; align-items:center; gap:8px; padding:5px 9px 5px 5px; border:1px solid var(--border); border-radius:8px; background:var(--sidebar); color:var(--muted); font-size:11px; }
+.message-attachment img { width:42px; height:42px; flex:none; border-radius:5px; object-fit:cover; background:var(--sidebar-hover); }
+.message-attachment > svg { width:17px; height:17px; flex:none; margin-left:4px; }
+.message-attachment span { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .markdown { color: var(--text); font-size: var(--conversation-font-size); line-height: 1.72; overflow-wrap: anywhere; }
 .markdown > :first-child { margin-top: 0; }
 .markdown > :last-child { margin-bottom: 0; }

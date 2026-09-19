@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, rm, unlink, writeFile } from "node:fs/promises";
+import { randomBytes } from "node:crypto";
+import { mkdtemp, readdir, rm, unlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
@@ -111,6 +112,75 @@ test("Git review baseline reports only changes made after a Session starts", asy
       ?.status,
     "modified",
   );
+});
+
+test("Git review bounds repeated Session baselines with large dirty files", async () => {
+  const root = await repository();
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-git-review-capacity-"),
+  );
+  roots.add(baselineDirectory);
+  const firstSession = join(baselineDirectory, "first.jsonl");
+  const secondSession = join(baselineDirectory, "second.jsonl");
+  await writeFile(firstSession, "{}\n", "utf8");
+  await writeFile(secondSession, "{}\n", "utf8");
+  const store = new GitReviewBaselineStore(root, baselineDirectory, {
+    maxBaselines: 4,
+    maxBaselineBytes: 64 * 1024,
+    maxTotalBytes: 72 * 1024,
+  });
+
+  await writeFile(join(root, "large.bin"), Buffer.alloc(80 * 1024, 7));
+  await store.capture(firstSession, root);
+  assert.equal(
+    (await readdir(baselineDirectory)).some((entry) =>
+      entry.endsWith(".objects"),
+    ),
+    false,
+  );
+
+  await unlink(join(root, "large.bin"));
+  await writeFile(join(root, "dirty.bin"), randomBytes(48 * 1024));
+  await store.capture(firstSession, root);
+  const firstEntries = await readdir(baselineDirectory);
+  assert.equal(
+    firstEntries.filter((entry) => entry.endsWith(".objects")).length,
+    1,
+  );
+  await store.capture(secondSession, root);
+  const secondEntries = await readdir(baselineDirectory);
+  assert.equal(
+    secondEntries.filter((entry) => entry.endsWith(".objects")).length,
+    1,
+  );
+  assert.equal((await store.read(firstSession, root)).ok, true);
+  assert.deepEqual(await store.read(secondSession, root), {
+    ok: false,
+    reason: "git_failed",
+  });
+});
+
+test("Git review cleanup preserves resumable Sessions and removes deleted ones", async () => {
+  const root = await repository();
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-git-review-cleanup-"),
+  );
+  roots.add(baselineDirectory);
+  const sessionPath = join(baselineDirectory, "session.jsonl");
+  await writeFile(sessionPath, "{}\n", "utf8");
+  const store = new GitReviewBaselineStore(root, baselineDirectory);
+  await store.capture(sessionPath, root);
+  await store.dispose();
+  assert.equal(
+    (await readdir(baselineDirectory)).some((entry) =>
+      entry.endsWith(".objects"),
+    ),
+    true,
+  );
+
+  await unlink(sessionPath);
+  await store.dispose();
+  assert.deepEqual(await readdir(baselineDirectory), []);
 });
 
 test("Git review reports a non-repository instead of an empty snapshot", async () => {

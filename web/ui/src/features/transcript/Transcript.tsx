@@ -8,6 +8,7 @@ import {
   FileText,
   Folder,
   Globe,
+  Image as ImageIcon,
   Lightbulb,
   Pencil,
   RotateCcw,
@@ -65,6 +66,40 @@ interface TranscriptProps {
   scrollToBottom: number;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
+}
+
+function UserImageAttachments({ message }: { message: WebLiveMessage }) {
+  const { t } = useTranslation();
+  const images =
+    message.parts?.filter(
+      (part): part is Extract<WebMessagePart, { type: "image" }> =>
+        part.type === "image",
+    ) ?? [];
+  if (images.length === 0) return null;
+  const occurrences = new Map<string, number>();
+  const keyedImages = images.map((image) => {
+    const identity = `${image.mimeType}:${image.name ?? ""}:${image.previewUrl ?? ""}`;
+    const occurrence = occurrences.get(identity) ?? 0;
+    occurrences.set(identity, occurrence + 1);
+    return { image, key: `${identity}:${occurrence}` };
+  });
+  return (
+    <section className="message-attachments" aria-label={t("imageAttachments")}>
+      {keyedImages.map(({ image, key }) => (
+        <div className="message-attachment" key={key}>
+          {image.previewUrl ? (
+            <img
+              src={image.previewUrl}
+              alt={image.name ?? t("attachedImage")}
+            />
+          ) : (
+            <ImageIcon aria-hidden="true" />
+          )}
+          <span>{image.name ?? t("attachedImage")}</span>
+        </div>
+      ))}
+    </section>
+  );
 }
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
@@ -680,6 +715,11 @@ function buildEntries(
     JSON.stringify([
       message.role,
       message.content,
+      message.parts?.map((part) =>
+        part.type === "image"
+          ? [part.type, part.mimeType, part.name]
+          : part.type,
+      ),
       message.stopReason,
       message.errorMessage,
       message.toolCallId,
@@ -997,10 +1037,14 @@ export function Transcript(props: TranscriptProps) {
         ];
       }
       if (message.role === "user") {
+        const hasImages = message.parts?.some((part) => part.type === "image");
         latestUserPrompt = message.content;
         latestUserIndex = index;
         turn++;
-        turnItems.push({ id: turn, title: turnTitle(message.content) });
+        turnItems.push({
+          id: turn,
+          title: turnTitle(message.content || t("attachedImage")),
+        });
         return [
           {
             key: entry.key,
@@ -1009,11 +1053,14 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article className="message-row user" id={`turn-${turn}`}>
                 <div className="message-content">
-                  <div className="message-body">{message.content}</div>
+                  <UserImageAttachments message={message} />
+                  {message.content && (
+                    <div className="message-body">{message.content}</div>
+                  )}
                 </div>
                 <MessageActions
                   content={message.content}
-                  editable={active && index === lastUserIndex}
+                  editable={active && index === lastUserIndex && !hasImages}
                   timestamp={entry.timestamp}
                   onResend={props.onResend}
                 />

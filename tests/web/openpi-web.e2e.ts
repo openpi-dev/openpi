@@ -383,12 +383,19 @@ async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
 }
 
 async function openWorkbarTool(page: Page, name: string) {
-  await page.getByRole("button", { name: "打开工具", exact: true }).click();
+  await page.locator(".task-tools-trigger").click();
   const workbar = page.locator(".workbar-panel");
   await expect(workbar).toBeVisible();
-  await workbar
-    .getByRole("button", { name: new RegExp(`^${name}`, "u") })
-    .click();
+  const existingTab = workbar
+    .locator(".workbar-tab > button:first-child")
+    .filter({ hasText: name });
+  if (await existingTab.isVisible().catch(() => false)) {
+    await existingTab.click();
+  } else {
+    await workbar
+      .getByRole("button", { name: new RegExp(`^${name}`, "u") })
+      .click();
+  }
   return workbar;
 }
 
@@ -423,6 +430,15 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await expect
     .poll(async () => (await conversation.boundingBox())?.width ?? 0)
     .toBeLessThan(centerBeforeRightDrag!.width - 50);
+
+  await dragPane(page, "right", -360);
+  await expect(conversation).toBeHidden();
+  await expect(workbar).toBeVisible();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
+  await workbar.getByRole("button", { name: "恢复会话", exact: true }).click();
+  await expect(conversation).toBeVisible();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(1);
+
   await dragPane(page, "right", 420);
   await expect(workbar).toBeHidden();
   await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
@@ -508,9 +524,12 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
     "生成文件",
   ]);
   await launcher.getByRole("button", { name: /^变更/u }).click();
-  const review = page.getByRole("complementary", { name: "变更" });
+  const review = launcher.locator(".review-panel");
   await expect(review).toBeVisible();
-  await review.getByRole("button", { name: "关闭", exact: true }).click();
+  await launcher
+    .getByRole("button", { name: "关闭 变更", exact: true })
+    .click();
+  await expect(launcher.locator(".workbar-launcher-list")).toBeVisible();
 
   const workbar = await openWorkbarTool(page, "侧边对话");
   const question = workbar.getByPlaceholder("提出一个侧边问题…");
@@ -554,14 +573,73 @@ test("terminal tool runs a real workspace shell", async ({ page }) => {
     .toContain("OPENPI_WEB_TERMINAL_OK");
 });
 
-test("browser tool launches the system browser without embedding a page", async ({
+test("browser tool keeps an interactive page inside the workbar", async ({
   page,
 }) => {
-  let launch: { sessionId: string; url: string } | undefined;
+  type BrowserState = {
+    sessionId: string;
+    url: string;
+    title: string;
+    width: number;
+    height: number;
+    loading: boolean;
+    canGoBack: boolean;
+    canGoForward: boolean;
+  };
+  let launch:
+    | { sessionId: string; url: string; width: number; height: number }
+    | undefined;
+  let browserState: BrowserState | undefined;
+  const actions: Array<{ action: string }> = [];
   await page.route("**/api/browser/open", async (route) => {
     launch = route.request().postDataJSON();
-    await route.fulfill({ json: { opened: true, url: launch?.url } });
+    browserState = {
+      sessionId: launch!.sessionId,
+      url: launch!.url,
+      title: "Example Domain",
+      width: launch!.width,
+      height: launch!.height,
+      loading: false,
+      canGoBack: false,
+      canGoForward: false,
+    };
+    await route.fulfill({ json: browserState });
   });
+  await page.route("**/api/browser/state?**", async (route) => {
+    if (!browserState) {
+      await route.fulfill({
+        status: 404,
+        json: { error: "Browser is not open" },
+      });
+      return;
+    }
+    await route.fulfill({ json: browserState });
+  });
+  await page.route("**/api/browser/action", async (route) => {
+    const action = route.request().postDataJSON() as {
+      action: string;
+      width?: number;
+      height?: number;
+    };
+    actions.push(action);
+    if (browserState && action.action === "resize") {
+      browserState = {
+        ...browserState,
+        width: action.width ?? browserState.width,
+        height: action.height ?? browserState.height,
+      };
+    }
+    await route.fulfill({ json: browserState });
+  });
+  await page.route("**/api/browser/frame?**", (route) =>
+    route.fulfill({
+      contentType: "image/jpeg",
+      body: Buffer.from(
+        "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAP//////////////////////////////////////////////////////////////////////////////////////2wBDAf//////////////////////////////////////////////////////////////////////////////////////wAARCAABAAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAAAAH/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAEFAqf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAEDAQE/Aaf/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oACAECAQE/Aaf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAY/Aqf/xAAUEAEAAAAAAAAAAAAAAAAAAAAA/9oACAEBAAE/IV//2gAMAwEAAgADAAAAEP/EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQMBAT8QH//EABQRAQAAAAAAAAAAAAAAAAAAABD/2gAIAQIBAT8QH//EABQQAQAAAAAAAAAAAAAAAAAAABD/2gAIAQEAAT8QH//Z",
+        "base64",
+      ),
+    }),
+  );
   await page.setViewportSize({ width: 1440, height: 900 });
   await openWorkbench(page);
   const workbar = await openWorkbarTool(page, "浏览器");
@@ -569,10 +647,62 @@ test("browser tool launches the system browser without embedding a page", async 
     .getByRole("textbox", { name: "浏览器地址" })
     .fill("example.com");
   await workbar.getByRole("button", { name: "打开地址" }).click();
-  await expect(workbar.getByText("已在系统浏览器中打开")).toBeVisible();
+  await expect(
+    workbar.locator(".browser-viewport img[alt='Example Domain']"),
+  ).toBeVisible();
   await expect(workbar.locator("iframe")).toHaveCount(0);
   expect(launch?.url).toBe("https://example.com/");
   expect(launch?.sessionId).toBeTruthy();
+  expect(launch?.width).toBeGreaterThanOrEqual(320);
+  expect(launch?.height).toBeGreaterThanOrEqual(240);
+  await dragPane(page, "right", -70);
+  await expect
+    .poll(() => actions.some((action) => action.action === "resize"))
+    .toBe(true);
+
+  await workbar.getByRole("button", { name: "关闭", exact: true }).click();
+  await expect(workbar).toBeHidden();
+  await page.locator(".task-tools-trigger").click();
+  await expect(workbar).toBeVisible();
+  await expect(
+    workbar.locator(".browser-viewport img[alt='Example Domain']"),
+  ).toBeVisible();
+});
+
+test("composer sends staged image data with the prompt", async ({ page }) => {
+  let admission:
+    | {
+        content: string;
+        images?: Array<{ data: string; mimeType: string }>;
+      }
+    | undefined;
+  await page.route("**/api/prompt", async (route) => {
+    admission = route.request().postDataJSON();
+    await route.fulfill({
+      status: 202,
+      json: { id: "image-prompt", accepted: true },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.locator(".composer input[type=file]").setInputFiles({
+    name: "sample.png",
+    mimeType: "image/png",
+    buffer: Buffer.from(
+      "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Wl2nGQAAAAASUVORK5CYII=",
+      "base64",
+    ),
+  });
+  await expect(page.locator(".composer-attachment")).toContainText(
+    "sample.png",
+  );
+  await page.getByRole("textbox", { name: "描述任务" }).fill("Inspect this");
+  await page.getByRole("button", { name: "发送", exact: true }).click();
+  await expect.poll(() => admission).toBeTruthy();
+  expect(admission?.content).toBe("Inspect this");
+  expect(admission?.images).toHaveLength(1);
+  expect(admission?.images?.[0]?.mimeType).toBe("image/png");
+  expect(admission?.images?.[0]?.data).toMatch(/^iVBOR/u);
 });
 
 test("sidebar settings stays open after an OpenPI configuration request", async ({

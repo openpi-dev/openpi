@@ -19,7 +19,6 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { ReviewPanel } from "../features/review/ReviewPanel.tsx";
 import { SessionChangesPopover } from "../features/review/SessionChangesPopover.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
@@ -56,14 +55,15 @@ export function App() {
   const sidebarTrigger = useRef<HTMLButtonElement>(null);
   const auxiliaryTrigger = useRef<HTMLElement | null>(null);
   const auxiliaryOpen = useRef(false);
-  const reviewTrigger = useRef<HTMLElement | null>(null);
   const inspectionFallbackFocus = useRef<HTMLElement | null>(null);
   const providerSettingsTrigger = useRef<HTMLElement | null>(null);
+  const workbarReturnFocus = useRef<HTMLElement | null>(null);
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
   const artifactOpenFromFiles = useRef(false);
   const artifactReturn = useRef<"files" | null>(null);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [resizingPane, setResizingPane] = useState(false);
+  const [centerCollapsed, setCenterCollapsed] = useState(false);
   const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
   const [paneWidths, setPaneWidths] = useState({
     sidebar: SIDEBAR_DEFAULT_WIDTH,
@@ -96,16 +96,14 @@ export function App() {
     sessionPath: string;
     cwd: string;
   } | null>(null);
-  const [reviewTarget, setReviewTarget] = useState<{
-    sessionId: string;
-    sessionPath: string;
-    filePath?: string;
-  } | null>(null);
   const [workbarTarget, setWorkbarTarget] = useState<{
     sessionId: string;
     sessionPath: string;
-    tool: Exclude<WorkbarTool, "review">;
+    tool: WorkbarTool;
+    requestRevision: number;
+    reviewFilePath?: string;
   } | null>(null);
+  const [workbarOpen, setWorkbarOpen] = useState(false);
   const [subagentTarget, setSubagentTarget] = useState<{
     sessionId: string;
     sessionPath: string;
@@ -128,8 +126,8 @@ export function App() {
           ? document.activeElement
           : null;
     auxiliaryOpen.current = true;
-    setReviewTarget(null);
-    setWorkbarTarget(null);
+    workbarReturnFocus.current = null;
+    setWorkbarOpen(false);
     setSubagentTarget((previous) => ({
       sessionId: session.id,
       sessionPath: session.path,
@@ -168,7 +166,8 @@ export function App() {
       session.id !== snapshot.currentSessionId
     )
       return;
-    setWorkbarTarget(null);
+    workbarReturnFocus.current = null;
+    setWorkbarOpen(false);
     setInspection({
       sessionId: session.id,
       sessionPath: session.path,
@@ -222,9 +221,9 @@ export function App() {
         : null;
     actions.closeMobileSidebar();
     setInspection(null);
-    setReviewTarget(null);
     setSubagentTarget(null);
-    setWorkbarTarget(null);
+    workbarReturnFocus.current = null;
+    setWorkbarOpen(false);
     setProviderSettings({
       sessionId: session.id,
       sessionPath: session.path,
@@ -266,68 +265,74 @@ export function App() {
   const gitSnapshot = gitReview.result?.ok
     ? gitReview.result.snapshot
     : undefined;
-  const reviewVisible = Boolean(
-    reviewTarget &&
-      selected &&
-      !state.sessionSwitching &&
-      reviewTarget.sessionId === selected.id &&
-      reviewTarget.sessionPath === selected.path,
-  );
-  useEffect(() => {
-    if (reviewTarget && !reviewVisible) setReviewTarget(null);
-  }, [reviewTarget, reviewVisible]);
-  const closeReview = useCallback(() => {
-    setReviewTarget(null);
-    const trigger = reviewTrigger.current;
-    reviewTrigger.current = null;
-    queueMicrotask(() => {
-      if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
-    });
-  }, []);
   const openReview = (filePath?: string, returnFocus?: HTMLElement) => {
     if (!selected || state.sessionSwitching) return;
-    reviewTrigger.current =
+    workbarReturnFocus.current =
       returnFocus ??
       (document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null);
     setSubagentTarget(null);
-    setWorkbarTarget(null);
     setInspection(null);
-    setReviewTarget({
+    setWorkbarOpen(true);
+    setWorkbarTarget((current) => ({
       sessionId: selected.id,
       sessionPath: selected.path,
-      ...(filePath ? { filePath } : {}),
-    });
+      tool: "review",
+      requestRevision: (current?.requestRevision ?? 0) + 1,
+      ...(filePath ? { reviewFilePath: filePath } : {}),
+    }));
   };
-  const workbarVisible = Boolean(
+  const workbarBound = Boolean(
     workbarTarget &&
       selected &&
       !state.sessionSwitching &&
       workbarTarget.sessionId === selected.id &&
       workbarTarget.sessionPath === selected.path,
   );
+  const workbarVisible = workbarOpen && workbarBound;
   useEffect(() => {
-    if (workbarTarget && !workbarVisible) setWorkbarTarget(null);
-  }, [workbarTarget, workbarVisible]);
+    if (!workbarTarget || workbarBound) return;
+    workbarReturnFocus.current = null;
+    setWorkbarTarget(null);
+    setWorkbarOpen(false);
+  }, [workbarBound, workbarTarget]);
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
-    if (tool === "review") {
-      openReview();
-      return;
-    }
+    if (!workbarVisible)
+      workbarReturnFocus.current =
+        document.activeElement instanceof HTMLElement
+          ? document.activeElement
+          : null;
     setInspection(null);
     setSubagentTarget(null);
-    setReviewTarget(null);
-    setWorkbarTarget({
+    setWorkbarOpen(true);
+    setWorkbarTarget((current) => ({
       sessionId: selected.id,
       sessionPath: selected.path,
       tool,
+      requestRevision: (current?.requestRevision ?? 0) + 1,
+      ...(tool === "review" && current?.reviewFilePath
+        ? { reviewFilePath: current.reviewFilePath }
+        : {}),
+    }));
+  };
+  const closeWorkbar = () => {
+    setCenterCollapsed(false);
+    setWorkbarOpen(false);
+    const trigger = workbarReturnFocus.current;
+    workbarReturnFocus.current = null;
+    requestAnimationFrame(() => {
+      if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
     });
   };
   const auxiliaryVisible = Boolean(
-    subagentVisible || reviewVisible || workbarVisible || artifactPanelOpen,
+    subagentVisible || workbarVisible || artifactPanelOpen,
   );
+  useEffect(() => {
+    if (!auxiliaryVisible || viewportWidth <= AUXILIARY_BREAKPOINT)
+      setCenterCollapsed(false);
+  }, [auxiliaryVisible, viewportWidth]);
   const sidebarWidth = state.sidebarCollapsed ? 56 : paneWidths.sidebar;
   const auxiliaryMax = Math.max(
     AUXILIARY_MIN_WIDTH,
@@ -365,8 +370,7 @@ export function App() {
   } as CSSProperties;
   const closeAuxiliaryPanel = () => {
     if (artifactPanelOpen) artifactProvider.current?.close();
-    else if (workbarVisible) setWorkbarTarget(null);
-    else if (reviewVisible) closeReview();
+    else if (workbarVisible) closeWorkbar();
     else if (subagentVisible) setSubagentTarget(null);
   };
   const loading = !state.snapshot;
@@ -413,24 +417,21 @@ export function App() {
       <div
         inert={providerSettingsVisible ? true : undefined}
         aria-hidden={providerSettingsVisible ? true : undefined}
-        className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${reviewVisible ? "with-review-panel" : ""} ${workbarVisible ? "with-workbar-panel" : ""} ${artifactPanelOpen ? "with-artifact-panel" : ""} ${resizingPane ? "is-resizing" : ""} ${loading ? "shell-loading" : ""}`}
+        className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${workbarVisible ? "with-workbar-panel" : ""} ${artifactPanelOpen ? "with-artifact-panel" : ""} ${centerCollapsed ? "center-collapsed" : ""} ${resizingPane ? "is-resizing" : ""} ${loading ? "shell-loading" : ""}`}
         style={shellStyle}
       >
         <ArtifactProvider
           ref={artifactProvider}
           sessionId={selected?.id}
-          disabled={Boolean(
-            reviewVisible || subagentVisible || providerSettingsVisible,
-          )}
+          disabled={Boolean(subagentVisible || providerSettingsVisible)}
           onOpen={() => {
             setArtifactPanelOpen(true);
             artifactReturn.current = artifactOpenFromFiles.current
               ? "files"
               : null;
             artifactOpenFromFiles.current = false;
-            setReviewTarget(null);
             setSubagentTarget(null);
-            setWorkbarTarget(null);
+            setWorkbarOpen(false);
             setInspection(null);
           }}
           onClose={() => {
@@ -498,7 +499,11 @@ export function App() {
                 aria-label={t("openTools")}
                 title={t("openTools")}
                 disabled={!selected || state.sessionSwitching}
-                onClick={() => openWorkbar("launcher")}
+                onClick={(event) => {
+                  workbarReturnFocus.current = event.currentTarget;
+                  if (workbarBound && !workbarVisible) setWorkbarOpen(true);
+                  else openWorkbar("launcher");
+                }}
               >
                 <PanelRight aria-hidden="true" />
               </button>
@@ -664,19 +669,12 @@ export function App() {
               onClose={() => setSubagentTarget(null)}
             />
           )}
-          {reviewVisible && selected && (
-            <ReviewPanel
-              key={`${selected.path}:${reviewTarget?.filePath ?? "list"}`}
-              review={gitReview}
-              initialFilePath={reviewTarget?.filePath}
-              onClose={closeReview}
-              onOpenTools={() => openWorkbar("launcher")}
-            />
-          )}
-          {workbarVisible && selected && workbarTarget && (
+          {workbarBound && selected && workbarTarget && (
             <WorkbarPanel
-              key={`${selected.id}:${workbarTarget.tool}`}
-              tool={workbarTarget.tool}
+              key={selected.id}
+              visible={workbarVisible}
+              requestedTool={workbarTarget.tool}
+              requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
               cwd={selected.cwd}
               capabilities={state.snapshot?.runtime.capabilities ?? {}}
@@ -686,11 +684,14 @@ export function App() {
                 ),
                 ...state.liveMessages.map((entry) => entry.message),
               ]}
-              onSelect={openWorkbar}
+              review={gitReview}
+              reviewInitialFilePath={workbarTarget.reviewFilePath}
               onBeforeArtifactOpen={() => {
                 artifactOpenFromFiles.current = true;
               }}
-              onClose={() => setWorkbarTarget(null)}
+              conversationCollapsed={centerCollapsed}
+              onRestoreConversation={() => setCenterCollapsed(false)}
+              onClose={closeWorkbar}
             />
           )}
           {!state.sidebarCollapsed && viewportWidth > AUXILIARY_BREAKPOINT && (
@@ -708,21 +709,26 @@ export function App() {
               onDraggingChange={setResizingPane}
             />
           )}
-          {auxiliaryVisible && viewportWidth > AUXILIARY_BREAKPOINT && (
-            <PaneResizeHandle
-              side="right"
-              value={paneWidths.auxiliary}
-              min={AUXILIARY_MIN_WIDTH}
-              max={auxiliaryMax}
-              defaultValue={AUXILIARY_DEFAULT_WIDTH}
-              collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
-              onCollapse={closeAuxiliaryPanel}
-              onChange={(auxiliary) =>
-                setPaneWidths((current) => ({ ...current, auxiliary }))
-              }
-              onDraggingChange={setResizingPane}
-            />
-          )}
+          {auxiliaryVisible &&
+            !centerCollapsed &&
+            viewportWidth > AUXILIARY_BREAKPOINT && (
+              <PaneResizeHandle
+                side="right"
+                value={paneWidths.auxiliary}
+                min={AUXILIARY_MIN_WIDTH}
+                max={auxiliaryMax}
+                defaultValue={AUXILIARY_DEFAULT_WIDTH}
+                collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
+                onCollapse={closeAuxiliaryPanel}
+                onExpandPastMax={
+                  workbarVisible ? () => setCenterCollapsed(true) : undefined
+                }
+                onChange={(auxiliary) =>
+                  setPaneWidths((current) => ({ ...current, auxiliary }))
+                }
+                onDraggingChange={setResizingPane}
+              />
+            )}
           <button
             className="sidebar-scrim"
             type="button"

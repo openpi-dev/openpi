@@ -26,18 +26,13 @@ import {
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
   type WebSessionCreationResult,
-  type WebSettingsPreferencesOptions,
   type WebThinkingProjection,
   type WebThinkingSelectionOptions,
   type WebTurnCancellationOptions,
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import {
-  projectMessage,
-  projectAssistantError,
-  type WebSettingsPreferencesPatch,
-} from "../protocol/types.ts";
+import { projectMessage, projectAssistantError } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import {
   applyHttpProxySettings,
@@ -59,9 +54,7 @@ import {
 import { projectWebModelSearch } from "./model-discovery.ts";
 import {
   projectWebSettingsResources,
-  projectWebSetupConfig,
 } from "./settings-catalog.ts";
-import { updateSetupConfig } from "../../extensions/shared/setup-config.ts";
 
 const STARTUP_TIMEOUT_MS = 15_000;
 const TURN_CANCELLATION_SETTLEMENT_TIMEOUT_MS = 10_000;
@@ -676,62 +669,6 @@ export class PiWebRuntime implements WebRuntimeController {
     return this.getThinkingState();
   }
 
-  updateWebPreferences(
-    patch: WebSettingsPreferencesPatch,
-    options?: WebSettingsPreferencesOptions,
-  ) {
-    return this.serializeControllerMutation(async () => {
-      this.assertActive();
-      this.assertWorkspaceSelected();
-      const expectedSessionId = options?.expectedSessionId;
-      const assertExpectedSession = () => {
-        if (
-          expectedSessionId !== undefined &&
-          expectedSessionId !== this.runtime.session.sessionManager.getSessionId()
-        ) {
-          throw new WebRuntimeRequestError(
-            "Only the active Web session accepts preference updates",
-            "SESSION_CONFLICT",
-            409,
-          );
-        }
-      };
-      assertExpectedSession();
-      const { config } = await updateSetupConfig((current) => {
-        assertExpectedSession();
-        return {
-          ...current,
-          ui: {
-            ...current.ui,
-            ...(patch.theme === undefined
-              ? {}
-              : { webTheme: patch.theme }),
-            ...(patch.chatWidth === undefined
-              ? {}
-              : { webChatWidth: patch.chatWidth }),
-            ...(patch.chatFontSize === undefined
-              ? {}
-              : { webChatFontSize: patch.chatFontSize }),
-            ...(patch.expandThinking === undefined
-              ? {}
-              : { webExpandThinking: patch.expandThinking }),
-          },
-        };
-      });
-      const projection = projectWebSetupConfig(config);
-      this.emit("web_preferences_updated", {
-        sessionId: this.runtime.session.sessionManager.getSessionId(),
-        preferences: {
-          theme: projection.ui.webTheme,
-          chatWidth: projection.ui.webChatWidth,
-          chatFontSize: projection.ui.webChatFontSize,
-          expandThinking: projection.ui.webExpandThinking,
-        },
-      });
-      return projection;
-    });
-  }
-
   async sendPrompt(content: string, options?: WebPromptOptions) {
     this.assertActive();
     this.assertWorkspaceSelected();
@@ -812,6 +749,15 @@ export class PiWebRuntime implements WebRuntimeController {
           }
         });
         await session.prompt(content, {
+          ...(options?.images?.length
+            ? {
+                images: options.images.map(({ data, mimeType }) => ({
+                  type: "image" as const,
+                  data,
+                  mimeType,
+                })),
+              }
+            : {}),
           ...(session.isStreaming
             ? { streamingBehavior: "followUp" as const }
             : {}),

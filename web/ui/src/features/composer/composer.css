@@ -3,6 +3,11 @@
   border-radius: 8px;
 }
 
+.composer.composer-m02.is-dragging {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent);
+}
+
 .composer-m02 .composer-target {
   display: flex;
   min-width: 0;
@@ -35,6 +40,85 @@
 
 .composer-m02 .composer-target span { flex: 0 1 auto; }
 .composer-m02 .composer-target strong { flex: 0 1 auto; color: var(--text); font-weight: 600; }
+
+.composer-attachments {
+  display: flex;
+  min-width: 0;
+  flex-wrap: wrap;
+  gap: 7px;
+  margin: 0 0 9px;
+}
+
+.composer-attachment {
+  position: relative;
+  display: grid;
+  width: min(176px, calc(50% - 4px));
+  min-width: 112px;
+  height: 48px;
+  grid-template-columns: 38px minmax(0, 1fr) 22px;
+  align-items: center;
+  gap: 7px;
+  padding: 5px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--sidebar);
+}
+
+.composer-attachment img {
+  width: 38px;
+  height: 38px;
+  border-radius: 5px;
+  object-fit: cover;
+  background: var(--sidebar-hover);
+}
+
+.composer-attachment > span {
+  overflow: hidden;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.composer-attachment > button {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.composer-attachment > button:hover { background: var(--sidebar-hover); color: var(--text); }
+.composer-attachment > button svg { width: 13px; height: 13px; }
+
+.composer-attachment-error {
+  margin: 0 2px 8px;
+  color: var(--error);
+  font-size: 10.5px;
+}
+
+.composer-drop-overlay {
+  position: absolute;
+  z-index: 5;
+  inset: 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px dashed var(--accent);
+  border-radius: 7px;
+  background: color-mix(in oklch, var(--page) 92%, var(--accent));
+  color: var(--accent);
+  font-size: 12px;
+  font-weight: 600;
+  pointer-events: none;
+}
+
+.composer-drop-overlay svg { width: 18px; height: 18px; }
 
 .composer-m02 .composer-toolbar {
   justify-content: space-between;

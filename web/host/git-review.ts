@@ -1,10 +1,12 @@
 import { execFile } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
+import type { Dirent } from "node:fs";
 import {
   access,
   chmod,
   lstat,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
@@ -33,12 +35,16 @@ import {
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
-const GIT_REVIEW_BASELINE_VERSION = 1;
+const GIT_REVIEW_BASELINE_VERSION = 2;
+export const GIT_REVIEW_MAX_BASELINES = 64;
+export const GIT_REVIEW_MAX_BASELINE_BYTES = 4 * 1024 * 1024;
+export const GIT_REVIEW_MAX_TOTAL_BYTES = 64 * 1024 * 1024;
 
 type GitEnvironment = Record<string, string | undefined>;
 
 interface GitReviewBaselineMetadata {
   version: typeof GIT_REVIEW_BASELINE_VERSION;
+  sessionPath: string;
   cwd: string;
   repositoryRoot?: string;
   repositoryObjects?: string;
@@ -52,6 +58,13 @@ interface GitReviewBaselineMetadata {
 export interface GitReviewService {
   capture(sessionPath: string, cwd: string): Promise<void>;
   read(sessionPath: string, cwd: string): Promise<WebGitReviewResult>;
+  dispose?(): Promise<void>;
+}
+
+interface GitReviewBaselineLimits {
+  maxBaselines?: number;
+  maxBaselineBytes?: number;
+  maxTotalBytes?: number;
 }
 
 async function git(cwd: string, args: string[], environment?: GitEnvironment) {
@@ -78,6 +91,62 @@ async function git(cwd: string, args: string[], environment?: GitEnvironment) {
 
 function cleanLine(value: string) {
   return value.trim() || null;
+}
+
+function canonicalSessionPath(path: string) {
+  return path.startsWith("current:") ? path : resolve(path);
+}
+
+async function pathBytes(path: string, limit = Number.POSITIVE_INFINITY) {
+  let metadata: Awaited<ReturnType<typeof lstat>>;
+  try {
+    metadata = await lstat(path);
+  } catch {
+    return 0;
+  }
+  if (metadata.isFile()) return metadata.size;
+  if (!metadata.isDirectory()) return 0;
+  let total = 0;
+  for (const entry of await readdir(path, { withFileTypes: true })) {
+    if (!entry.isFile() && !entry.isDirectory()) continue;
+    total += await pathBytes(join(path, entry.name), limit - total);
+    if (total > limit) break;
+  }
+  return total;
+}
+
+async function dirtyWorkingTreeBytes(root: string, limit: number) {
+  const hasHead = await refExists(root, "HEAD");
+  const tracked = await git(
+    root,
+    hasHead
+      ? ["diff", "--name-only", "-z", "HEAD", "--"]
+      : ["ls-files", "-z", "--cached"],
+  );
+  const untracked = await git(root, [
+    "ls-files",
+    "-z",
+    "--others",
+    "--exclude-standard",
+  ]);
+  const paths = new Set(
+    `${tracked}${untracked}`.split("\0").filter(Boolean),
+  );
+  let total = 0;
+  for (const path of paths) {
+    const target = resolve(root, path);
+    const child = relative(root, target);
+    if (!child || child.startsWith("..") || isAbsolute(child)) continue;
+    try {
+      const metadata = await lstat(target);
+      if (!metadata.isFile()) continue;
+      total += metadata.size;
+      if (total >= limit) break;
+    } catch {
+      // Deleted files do not add objects to the isolated baseline.
+    }
+  }
+  return total;
 }
 
 async function refExists(root: string, revision: string) {
@@ -463,7 +532,11 @@ export async function readGitReview(
 
 export class GitReviewBaselineStore implements GitReviewService {
   private readonly directory: string;
+  private readonly maxBaselines: number;
+  private readonly maxBaselineBytes: number;
+  private readonly maxTotalBytes: number;
   private readonly captures = new Map<string, Promise<void>>();
+  private maintenance = Promise.resolve();
 
   constructor(
     sessionDirectory: string,
@@ -471,8 +544,23 @@ export class GitReviewBaselineStore implements GitReviewService {
       dirname(resolve(sessionDirectory)),
       ".openpi-git-review-baselines",
     ),
+    limits: GitReviewBaselineLimits = {},
   ) {
     this.directory = baselineDirectory;
+    this.maxBaselines =
+      limits.maxBaselines ?? GIT_REVIEW_MAX_BASELINES;
+    this.maxBaselineBytes =
+      limits.maxBaselineBytes ?? GIT_REVIEW_MAX_BASELINE_BYTES;
+    this.maxTotalBytes =
+      limits.maxTotalBytes ?? GIT_REVIEW_MAX_TOTAL_BYTES;
+    for (const [name, value] of [
+      ["maxBaselines", this.maxBaselines],
+      ["maxBaselineBytes", this.maxBaselineBytes],
+      ["maxTotalBytes", this.maxTotalBytes],
+    ] as const) {
+      if (!Number.isSafeInteger(value) || value <= 0)
+        throw new Error(`Git review ${name} must be a positive integer`);
+    }
   }
 
   private key(sessionPath: string, cwd: string) {
@@ -498,6 +586,7 @@ export class GitReviewBaselineStore implements GitReviewService {
       ) as Partial<GitReviewBaselineMetadata>;
       if (
         value.version !== GIT_REVIEW_BASELINE_VERSION ||
+        typeof value.sessionPath !== "string" ||
         typeof value.cwd !== "string" ||
         ![
           "ready",
@@ -551,7 +640,38 @@ export class GitReviewBaselineStore implements GitReviewService {
     if (await this.metadata(paths.metadata)) return;
     const pending = this.captures.get(paths.key);
     if (pending) return pending;
-    const capture = this.createBaseline(paths, cwd).finally(() => {
+    const capture = this.serialize(async () => {
+      if (await this.metadata(paths.metadata)) return;
+      const usage = await this.cleanup([sessionPath]);
+      if (usage.baselines >= this.maxBaselines) return;
+      const canonicalCwd = resolve(cwd);
+      let repositoryRoot: string | undefined;
+      try {
+        repositoryRoot =
+          cleanLine(await git(canonicalCwd, ["rev-parse", "--show-toplevel"])) ??
+          undefined;
+      } catch {
+        // createBaseline records the canonical Git failure reason.
+      }
+      if (repositoryRoot) {
+        const dirtyBytes = await dirtyWorkingTreeBytes(
+          repositoryRoot,
+          this.maxBaselineBytes,
+        );
+        if (
+          dirtyBytes >= this.maxBaselineBytes ||
+          usage.bytes + dirtyBytes > this.maxTotalBytes
+        ) {
+          return;
+        }
+      }
+      await this.createBaseline(
+        paths,
+        sessionPath,
+        cwd,
+        usage.bytes,
+      );
+    }).finally(() => {
       this.captures.delete(paths.key);
     });
     this.captures.set(paths.key, capture);
@@ -560,7 +680,9 @@ export class GitReviewBaselineStore implements GitReviewService {
 
   private async createBaseline(
     paths: ReturnType<GitReviewBaselineStore["paths"]>,
+    sessionPath: string,
     cwd: string,
+    existingBytes: number,
   ) {
     await mkdir(this.directory, { recursive: true, mode: 0o700 });
     await chmod(this.directory, 0o700);
@@ -604,8 +726,20 @@ export class GitReviewBaselineStore implements GitReviewService {
         await rm(temporaryIndex, { force: true });
         await rm(`${temporaryIndex}.lock`, { force: true });
       }
+      const bytes =
+        (await pathBytes(paths.index, this.maxBaselineBytes)) +
+        (await pathBytes(paths.objects, this.maxBaselineBytes));
+      if (
+        bytes > this.maxBaselineBytes ||
+        existingBytes + bytes > this.maxTotalBytes
+      ) {
+        await rm(paths.index, { force: true });
+        await rm(paths.objects, { recursive: true, force: true });
+        return;
+      }
       await this.writeMetadata(paths.metadata, {
         version: GIT_REVIEW_BASELINE_VERSION,
+        sessionPath: canonicalSessionPath(sessionPath),
         cwd: canonicalCwd,
         repositoryRoot,
         repositoryObjects,
@@ -616,6 +750,7 @@ export class GitReviewBaselineStore implements GitReviewService {
       await rm(paths.objects, { recursive: true, force: true });
       await this.writeMetadata(paths.metadata, {
         version: GIT_REVIEW_BASELINE_VERSION,
+        sessionPath: canonicalSessionPath(sessionPath),
         cwd: canonicalCwd,
         ...(repositoryRoot ? { repositoryRoot } : {}),
         status: this.failureReason(error),
@@ -658,5 +793,112 @@ export class GitReviewBaselineStore implements GitReviewService {
       return { ok: false, reason: "git_failed" };
     }
     return result;
+  }
+
+  async dispose() {
+    await Promise.allSettled([...this.captures.values()]);
+    await this.serialize(async () => {
+      await this.cleanup([]);
+    });
+  }
+
+  private serialize<T>(operation: () => Promise<T>) {
+    const result = this.maintenance.then(operation, operation);
+    this.maintenance = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  private async cleanup(preservedSessionPaths: string[]) {
+    let entries: Dirent<string>[];
+    try {
+      await chmod(this.directory, 0o700);
+      entries = await readdir(this.directory, { withFileTypes: true });
+    } catch (error) {
+      if (
+        error instanceof Error &&
+        "code" in error &&
+        error.code === "ENOENT"
+      ) {
+        return { baselines: 0, bytes: 0 };
+      }
+      throw error;
+    }
+    const preserved = new Set(
+      preservedSessionPaths.map(canonicalSessionPath),
+    );
+    const metadataEntries = entries.filter(
+      (entry) => entry.isFile() && /^[a-f0-9]{64}\.json$/u.test(entry.name),
+    );
+    const retainedKeys = new Set<string>();
+    let baselines = 0;
+    let bytes = 0;
+    for (const entry of metadataEntries) {
+      const key = entry.name.slice(0, -".json".length);
+      const paths = {
+        key,
+        index: join(this.directory, `${key}.index`),
+        objects: join(this.directory, `${key}.objects`),
+        metadata: join(this.directory, entry.name),
+      };
+      const metadata = await this.metadata(paths.metadata);
+      let retained = false;
+      if (metadata) {
+        const sessionPath = canonicalSessionPath(metadata.sessionPath);
+        if (preserved.has(sessionPath)) retained = true;
+        else if (!sessionPath.startsWith("current:")) {
+          retained = await access(sessionPath).then(
+            () => true,
+            () => false,
+          );
+        }
+      }
+      if (!metadata || !retained) {
+        await this.removeBaseline(paths);
+        continue;
+      }
+      if (metadata.status === "ready") {
+        const actualBytes =
+          (await pathBytes(paths.index, this.maxBaselineBytes)) +
+          (await pathBytes(paths.objects, this.maxBaselineBytes));
+        if (
+          actualBytes === 0 ||
+          actualBytes > this.maxBaselineBytes
+        ) {
+          await this.removeBaseline(paths);
+          continue;
+        }
+        bytes += actualBytes;
+      }
+      retainedKeys.add(key);
+      baselines++;
+    }
+    for (const entry of entries) {
+      const match = /^([a-f0-9]{64})\.(?:index|objects)$/u.exec(entry.name);
+      if (match && !retainedKeys.has(match[1]!)) {
+        await rm(join(this.directory, entry.name), {
+          recursive: entry.isDirectory(),
+          force: true,
+        });
+      } else if (/\.tmp$|\.lock$/u.test(entry.name)) {
+        await rm(join(this.directory, entry.name), {
+          recursive: entry.isDirectory(),
+          force: true,
+        });
+      }
+    }
+    return { baselines, bytes };
+  }
+
+  private async removeBaseline(
+    paths: ReturnType<GitReviewBaselineStore["paths"]>,
+  ) {
+    await Promise.all([
+      rm(paths.index, { force: true }),
+      rm(paths.objects, { recursive: true, force: true }),
+      rm(paths.metadata, { force: true }),
+    ]);
   }
 }

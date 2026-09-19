@@ -83,13 +83,14 @@ export function ProviderSettingsPage({
   const [setupPending, setSetupPending] = useState(false);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const setupRefreshPending = useRef(false);
+  const setupObservedBusy = useRef(false);
+  const setupRefreshTimer = useRef(0);
   const [preferencePending, setPreferencePending] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const {
     catalog,
     error: catalogError,
     refresh,
-    updatePreferences,
   } = useSettingsCatalog(sessionId);
   const [selectedModelKey, setSelectedModelKey] = useState(
     currentModel
@@ -127,19 +128,25 @@ export function ProviderSettingsPage({
   useEffect(() => {
     if (!setupSubmitted) return;
     if (setupBusy) {
-      setupRefreshPending.current = true;
+      setupObservedBusy.current = true;
       return;
     }
-    if (!setupRefreshPending.current) return;
+    if (!setupObservedBusy.current || !setupRefreshPending.current) return;
     setupRefreshPending.current = false;
+    setupObservedBusy.current = false;
+    window.clearTimeout(setupRefreshTimer.current);
     void refresh();
-  }, [refresh, setupBusy, setupSubmitted]);
+    void onPreferencesChanged();
+  }, [onPreferencesChanged, refresh, setupBusy, setupSubmitted]);
+  useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
     if (setupPending) return false;
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
+    setupObservedBusy.current = false;
+    window.clearTimeout(setupRefreshTimer.current);
     setSetupError(null);
     try {
       const accepted = await onConfigureOpenPi(request);
@@ -147,6 +154,14 @@ export function ProviderSettingsPage({
         setSetupError(t("setupRequestFailed"));
       } else {
         setSetupSubmitted(true);
+        setupRefreshPending.current = true;
+        setupRefreshTimer.current = window.setTimeout(() => {
+          if (!setupRefreshPending.current || setupObservedBusy.current) return;
+          setupRefreshPending.current = false;
+          setupObservedBusy.current = false;
+          refresh();
+          void onPreferencesChanged();
+        }, 2_000);
       }
       return accepted;
     } catch (reason) {
@@ -160,14 +175,28 @@ export function ProviderSettingsPage({
     }
   };
 
+  const preferenceRequest = (patch: WebSettingsPreferencesPatch) => {
+    if (patch.theme !== undefined)
+      return t("setupRequestSetTheme", { value: patch.theme });
+    if (patch.chatWidth !== undefined)
+      return t("setupRequestSetChatWidth", { value: patch.chatWidth });
+    if (patch.chatFontSize !== undefined)
+      return t("setupRequestSetChatFontSize", { value: patch.chatFontSize });
+    if (patch.expandThinking !== undefined)
+      return t(
+        patch.expandThinking
+          ? "setupRequestEnableExpandedThinking"
+          : "setupRequestDisableExpandedThinking",
+      );
+    return t("setupRequestReviewAll");
+  };
+
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
     if (preferencePending) return false;
     setPreferencePending(true);
     setSetupError(null);
     try {
-      await updatePreferences(patch);
-      await onPreferencesChanged();
-      return true;
+      return await configureOpenPi(preferenceRequest(patch));
     } catch (reason) {
       setSetupError(
         reason instanceof Error ? reason.message : t("settingsUpdateFailed"),

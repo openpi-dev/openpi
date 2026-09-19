@@ -14,10 +14,11 @@ The optional top-level Session communication package is [pi-intercom](https://gi
 
 The Web workbench terminal lifecycle and presentation were informed by
 [`agegr/pi-web`](https://github.com/agegr/pi-web) revision `8366762` (MIT,
-Copyright (c) 2026 agegr). The browser tool's separate native-page approach was
-informed by [`apache/maka`](https://github.com/apache/maka) revision `ebeb961`
-(Apache License 2.0). OpenPI uses its own host protocol and implementation; it
-does not embed either project or copy Maka's Electron-only `WebContentsView`.
+Copyright (c) 2026 agegr). The browser tool's tab, navigation, and embedded
+viewport interactions were informed by [`apache/maka`](https://github.com/apache/maka)
+revision `ebeb961` (Apache License 2.0). OpenPI uses its own Web host protocol
+and headless Chromium/CDP implementation; it does not embed either project or
+copy Maka's Electron-only `WebContentsView`.
 
 ## OAuth model providers
 

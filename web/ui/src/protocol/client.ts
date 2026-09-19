@@ -11,14 +11,15 @@ import {
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
+  type WebEmbeddedBrowserAction,
+  type WebEmbeddedBrowserState,
   type WebGitReviewResult,
   type WebInteractiveTerminal,
   type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
+  type WebPromptImage,
   type WebSettingsCatalog,
-  type WebSettingsPreferencesPatch,
-  type WebSettingsPreferencesResult,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
@@ -243,12 +244,54 @@ export class WebClient {
     });
   }
 
-  openBrowser(sessionId: string, url: string, signal?: AbortSignal) {
-    return this.request<{ opened: true; url: string }>("/api/browser/open", {
+  openBrowser(
+    sessionId: string,
+    url: string,
+    viewport: { width: number; height: number },
+    signal?: AbortSignal,
+  ) {
+    return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
       method: "POST",
-      body: JSON.stringify({ sessionId, url }),
+      body: JSON.stringify({ sessionId, url, ...viewport }),
       signal,
     });
+  }
+
+  browserState(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebEmbeddedBrowserState>(
+      `/api/browser/state?${new URLSearchParams({ sessionId })}`,
+      { signal },
+    );
+  }
+
+  browserAction(
+    sessionId: string,
+    action: WebEmbeddedBrowserAction,
+    signal?: AbortSignal,
+  ) {
+    const { type, ...detail } = action;
+    return this.request<WebEmbeddedBrowserState>("/api/browser/action", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, action: type, ...detail }),
+      signal,
+    });
+  }
+
+  async browserFrame(sessionId: string, signal?: AbortSignal) {
+    const response = await fetch(
+      `/api/browser/frame?${new URLSearchParams({ sessionId })}`,
+      { headers: this.headers(), signal },
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string; code?: string };
+      throw new WebApiError(
+        body.error || `Request failed (${response.status})`,
+        response.status,
+        body.code,
+      );
+    }
+    return response.blob();
   }
 
   createInteractiveTerminal(
@@ -444,19 +487,6 @@ export class WebClient {
     );
   }
 
-  updateSettingsPreferences(
-    sessionId: string,
-    preferences: WebSettingsPreferencesPatch,
-  ) {
-    return this.request<WebSettingsPreferencesResult>(
-      "/api/settings/preferences",
-      {
-        method: "POST",
-        body: JSON.stringify({ sessionId, preferences }),
-      },
-    );
-  }
-
   terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
     return this.request<{
       sessionId: string;
@@ -522,10 +552,11 @@ export class WebClient {
     content: string,
     commandId: string,
     retry = false,
+    images: readonly WebPromptImage[] = [],
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content, commandId, retry }),
+      body: JSON.stringify({ sessionId, content, commandId, retry, images }),
       timeoutMs: 30_000,
       timeoutMessage:
         "Request timed out; admission may still be pending. Retry the same message to recover its receipt.",
