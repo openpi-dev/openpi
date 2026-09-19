@@ -1270,6 +1270,9 @@ test("model picker distinguishes same-named models before choosing a directory",
       name: "Shared model (provider-beta/two)",
     }),
   ).toBeVisible();
+  const searchInput = page.getByPlaceholder("搜索服务商、模型名称或 ID...");
+  await expect(searchInput).toBeFocused();
+  await searchInput.press("ArrowDown");
   await expect(
     page.getByRole("option", {
       name: "Shared model (provider-alpha/one)",

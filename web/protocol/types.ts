@@ -70,6 +70,9 @@ export interface WebModelSummary {
   name: string;
   label: string;
   current: boolean;
+  contextWindow?: number;
+  reasoning?: boolean;
+  imageInput?: boolean;
 }
 
 export interface WebModelSearchResult {

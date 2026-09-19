@@ -1843,3 +1843,44 @@ test("a merged thinking selection rejects callers whose expected session changed
   // Only the still-active Session's intent is written.
   assert.deepEqual(fixture.state.calls, ["minimal"]);
 });
+
+test("listModels projects context window and capability metadata", () => {
+  const current = {
+    provider: "seal",
+    id: "deepseek-v4-flash",
+    name: "DeepSeek V4 Flash",
+    contextWindow: 256_000,
+    reasoning: true,
+    input: ["text", "image"],
+  };
+  const plain = { provider: "seal", id: "gpt-5.6-sol", name: "" };
+  const modelRuntime = { getAvailableSnapshot: () => [current, plain] };
+  const runtime = Object.create(PiWebRuntime.prototype) as {
+    runtime: {
+      session: { model: typeof current };
+      services: { modelRuntime: typeof modelRuntime };
+    };
+    listModels: PiWebRuntime["listModels"];
+  };
+  runtime.runtime = { session: { model: current }, services: { modelRuntime } };
+
+  assert.deepEqual(runtime.listModels(), [
+    {
+      provider: "seal",
+      id: "deepseek-v4-flash",
+      name: "DeepSeek V4 Flash",
+      label: "DeepSeek V4 Flash",
+      current: true,
+      contextWindow: 256_000,
+      reasoning: true,
+      imageInput: true,
+    },
+    {
+      provider: "seal",
+      id: "gpt-5.6-sol",
+      name: "",
+      label: "seal/gpt-5.6-sol",
+      current: false,
+    },
+  ]);
+});
