@@ -55,8 +55,19 @@ export function changeLineCounts(
   if (!diff) return undefined;
   let additions = 0;
   let deletions = 0;
-  for (const line of diff.split("\n")) {
-    if (line.startsWith("+++") || line.startsWith("---")) continue;
+  const lines = diff.split("\n");
+  const hasHunks = lines.some((line) => line.startsWith("@@"));
+  let inHunk = !hasHunks;
+  for (const line of lines) {
+    if (line.startsWith("diff --git ")) {
+      inHunk = false;
+      continue;
+    }
+    if (line.startsWith("@@")) {
+      inHunk = true;
+      continue;
+    }
+    if (!inHunk) continue;
     if (line.startsWith("+")) additions++;
     else if (line.startsWith("-")) deletions++;
   }

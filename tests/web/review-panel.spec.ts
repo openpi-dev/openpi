@@ -65,7 +65,9 @@ const entries: WebSessionProjection["entries"] = [
       toolCallId: "w2",
       content: "edited",
       isError: false,
-      details: { diff: "-old\n+new" },
+      details: {
+        diff: "--- a/report.md\n+++ b/report.md\n@@ -1 +1 @@\n-old\n+new",
+      },
     },
   },
   {
@@ -114,6 +116,19 @@ it("keeps each exact tool receipt instead of merging a file into a Git snapshot"
     deletions: 1,
   });
   expect(changeLineCounts(rows[0]!.call, rows[0]!.result)).toBeUndefined();
+});
+
+it("ignores metadata between files in a combined diff", () => {
+  const rows = changeCalls(session);
+  const edited = rows[1]!;
+  expect(
+    changeLineCounts(edited.call, {
+      ...edited.result!,
+      details: {
+        diff: "diff --git a/one.txt b/one.txt\n--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two.txt b/two.txt\n--- a/two.txt\n+++ b/two.txt",
+      },
+    }),
+  ).toEqual({ additions: 1, deletions: 1 });
 });
 
 it("leaves ambiguous duplicate call and result IDs unpaired", () => {
