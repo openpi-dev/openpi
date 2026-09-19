@@ -182,10 +182,10 @@ export function InspectionPanel({
                     <dd>{terminal.cwd}</dd>
                     <dt>{t("startedAt")}</dt>
                     <dd>{new Date(terminal.createdAt).toLocaleString()}</dd>
-                    {terminal.exitCode !== undefined && (
+                    {terminal.status !== "running" && (
                       <>
                         <dt>{t("exitCode")}</dt>
-                        <dd>{terminal.exitCode}</dd>
+                        <dd>{terminal.exitCode ?? t("unknownState")}</dd>
                       </>
                     )}
                   </dl>
@@ -225,9 +225,18 @@ export function InspectionPanel({
                         <Clipboard aria-hidden="true" />
                       </button>
                     </div>
-                    <pre className="terminal-evidence">
-                      {terminal[stream].text || t("noOutput")}
-                    </pre>
+                    <section
+                      className="terminal-evidence"
+                      // biome-ignore lint/a11y/noNoninteractiveTabindex: Terminal evidence needs a keyboard-focusable horizontal scroll region.
+                      tabIndex={0}
+                      aria-label={
+                        stream === "stdout"
+                          ? t("standardOutput")
+                          : t("standardError")
+                      }
+                    >
+                      <pre>{terminal[stream].text || t("noOutput")}</pre>
+                    </section>
                     {terminal[stream].truncated && (
                       <p className="inspection-note">
                         {t("outputTruncated", {

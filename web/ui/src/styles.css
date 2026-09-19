@@ -603,7 +603,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .inspection-provider-link:hover { color:var(--accent); }
 .inspection-provider-link > span { display:flex; min-width:0; flex-direction:column; gap:2px; color:var(--text); }
 .inspection-provider-link small { color:var(--muted); font-size:11px; font-weight:400; }
-.terminal-evidence { max-height: 260px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; padding: 12px; border-radius: 6px; background: var(--sidebar-hover); font-size: 12px; line-height: 1.6; }
+.terminal-evidence { max-width:100%; max-height:260px; overflow:auto; padding:12px; border-radius:6px; background:var(--sidebar-hover); }
+.terminal-evidence pre { width:max-content; min-width:100%; margin:0; white-space:pre; font-size:12px; line-height:1.6; }
+.terminal-evidence:focus-visible { outline:2px solid var(--focus); outline-offset:-2px; }
 button.activity-chip { cursor: pointer; font: inherit; }
 button.activity-chip:hover { filter: brightness(1.15); }
 @media (max-width: 600px) { .inspection-panel { padding: 18px; } .inspection-section dl { grid-template-columns: 72px minmax(0, 1fr); gap: 8px; } }

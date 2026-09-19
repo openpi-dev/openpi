@@ -1343,6 +1343,14 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect(dialog.locator("pre").first()).toContainText(
       '<script>alert("literal output")</script>',
     );
+    const terminalOutput = dialog.getByRole("region", { name: "标准输出" });
+    await terminalOutput.click();
+    await expect(terminalOutput).toBeFocused();
+    expect(
+      await terminalOutput.evaluate(
+        (element) => element.scrollWidth > element.clientWidth,
+      ),
+    ).toBe(true);
     await expect(dialog.locator("script")).toHaveCount(0);
     await expect(dialog).toContainText("已完成");
     expect(

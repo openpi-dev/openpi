@@ -182,6 +182,11 @@ it("rejects another Session's same-id terminal and renders output as plain text"
   expect(
     screen.getByText("15 bytes omitted from this output view."),
   ).toBeTruthy();
+  expect(
+    screen
+      .getByRole("region", { name: i18n.t("standardOutput") })
+      .getAttribute("tabindex"),
+  ).toBe("0");
 });
 
 function thinkingFetcher(thinking: unknown) {
@@ -298,6 +303,7 @@ it("copies only the visible terminal stream and reports clipboard failure", asyn
   );
   show({ ...target, terminalId: "bt-1" });
   expect(await screen.findByText("visible excerpt")).toBeTruthy();
+  expect(screen.getByText(i18n.t("unknownState"))).toBeTruthy();
   expect(
     screen
       .getByRole("button", { name: "Copy visible Standard error" })
