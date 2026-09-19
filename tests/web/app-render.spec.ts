@@ -130,6 +130,57 @@ describe("OpenPI React transcript", () => {
     expect(container.querySelector("br")).toBeTruthy();
   });
 
+  it("copies only fenced code and leaves inline code without an action", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText },
+    });
+    const { container } = renderWithI18n(
+      createElement(
+        Markdown,
+        null,
+        "Use `inline()` here.\n\n```ts\nconst value = 42;\nconsole.log(value);\n```",
+      ),
+    );
+
+    expect(container.querySelectorAll(".markdown-code-block")).toHaveLength(1);
+    expect(
+      screen.getAllByRole("button", { name: i18n.t("copyCode") }),
+    ).toHaveLength(1);
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("copyCode") })),
+    );
+    expect(writeText).toHaveBeenCalledWith(
+      "const value = 42;\nconsole.log(value);\n",
+    );
+    expect(
+      screen.getByRole("button", { name: i18n.t("copiedCode") }),
+    ).toBeTruthy();
+  });
+
+  it("keeps a failed code copy visible", async () => {
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn().mockRejectedValue(new Error("blocked")) },
+    });
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: vi.fn(() => false),
+    });
+    renderWithI18n(createElement(Markdown, null, "```\nvalue\n```"));
+
+    await act(async () =>
+      fireEvent.click(screen.getByRole("button", { name: i18n.t("copyCode") })),
+    );
+    expect(screen.getByRole("status").textContent).toBe(
+      i18n.t("copyCodeFailed"),
+    );
+    expect(
+      screen.getByRole("button", { name: i18n.t("copyCode") }),
+    ).toBeTruthy();
+  });
+
   it("matches Session searches after preserving a trailing input space", () => {
     const store = createWebStore();
     store.getState().actions.setQuery("foo ");

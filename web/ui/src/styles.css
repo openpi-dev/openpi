@@ -242,7 +242,15 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .markdown hr { margin: 18px 0; border: 0; border-top: 1px solid var(--border); }
 .markdown a { color: var(--accent); text-decoration: underline; text-decoration-color: oklch(51.6% .151 253 / 35%); text-underline-offset: 2px; }
 .markdown code { padding: 2px 5px; border: 1px solid oklch(86.8% .014 248 / 55%); border-radius: 5px; background: oklch(95.5% .008 249); color: oklch(35% .02 249); font: .9em ui-monospace, SFMono-Regular, Menlo, monospace; }
-.markdown pre { margin: 0 0 14px; overflow-x: auto; padding: 12px 14px; border: 1px solid var(--border); border-radius: 8px; background: oklch(96.8% .006 249 / 90%); }
+.markdown-code-block { max-width: 100%; margin: 0 0 14px; overflow: hidden; border: 1px solid var(--border); border-radius: 8px; background: oklch(96.8% .006 249 / 90%); }
+.markdown-code-toolbar { @apply flex min-h-8 items-center justify-end gap-2; padding: 3px 6px; border-bottom: 1px solid var(--border); color: var(--muted); font-size: 11px; line-height: 1.35; }
+.markdown-code-toolbar span { min-width: 0; overflow-wrap: anywhere; }
+.markdown-code-toolbar button { @apply grid size-6 shrink-0 place-items-center; border: 0; border-radius: 5px; background: transparent; color: var(--muted); }
+.markdown-code-toolbar button:hover:not(:disabled) { background: var(--sidebar-hover); color: var(--text); }
+.markdown-code-toolbar button:disabled { cursor: wait; opacity: .55; }
+.markdown-code-toolbar svg { width: 13px; height: 13px; }
+.markdown-code-scroll { max-width: 100%; overflow-x: auto; }
+.markdown pre { width: max-content; min-width: 100%; margin: 0; padding: 12px 14px; border: 0; background: transparent; }
 .markdown pre code { padding: 0; border: 0; background: transparent; color: var(--text); font-size: 12px; white-space: pre; }
 .markdown-table-scroll { max-width: 100%; margin: 0 0 14px; overflow-x: auto; }
 .markdown table { width: max-content; min-width: 100%; margin: 0; border-collapse: collapse; font-size: .95em; }
@@ -554,7 +562,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 :root[data-theme="dark"] .session-sidebar { background: var(--sidebar); box-shadow: none; border-color: var(--border); }
 :root[data-theme="dark"] .conversation-shell:not(.landing) { background-image: none; background-color: var(--page); }
 :root[data-theme="dark"] .details-body { color: var(--muted); }
-:root[data-theme="dark"] :is(.markdown blockquote, .markdown code, .markdown pre, .markdown th, .tool-evidence, .tool-group, .activity-card, .activity-chip, .mobile-header > button) { background: var(--sidebar); color: var(--text); border-color: var(--border); }
+:root[data-theme="dark"] :is(.markdown blockquote, .markdown code, .markdown-code-block, .markdown th, .tool-evidence, .tool-group, .activity-card, .activity-chip, .mobile-header > button) { background: var(--sidebar); color: var(--text); border-color: var(--border); }
 :root[data-theme="dark"] :is(.new-session-button:hover, .message-details summary:hover, .tool-group > summary:hover, .message-actions button:hover, .turn-tick:hover) { background: var(--sidebar-hover); border-color: var(--border); }
 :root[data-theme="dark"] :is(.turn-rail:hover, .turn-rail:focus-within) { background: var(--page); }
 :root[data-theme="dark"] .model-picker:hover, :root[data-theme="dark"] .model-picker[aria-expanded="true"], :root[data-theme="dark"] .model-selector > div > button:hover, :root[data-theme="dark"] .model-selector > div > button[aria-expanded="true"] { background: var(--sidebar-hover) !important; }

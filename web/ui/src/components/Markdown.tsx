@@ -1,11 +1,15 @@
-import { memo, useContext } from "react";
-import { ArtifactContext } from "../features/artifacts/context.ts";
-import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
+import type { Element, Root } from "hast";
+import { Check, Clipboard } from "lucide-react";
+import type { ComponentPropsWithoutRef } from "react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import type { Root, Element } from "hast";
+import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
+import { ArtifactContext } from "../features/artifacts/context.ts";
+import { copyText } from "../lib/clipboard.ts";
 
 declare module "hast" {
   interface ElementData {
@@ -62,6 +66,69 @@ function safeUrl(value: string) {
   }
 }
 
+function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
+  const { t } = useTranslation();
+  const [copyStatus, setCopyStatus] = useState<
+    "idle" | "copying" | "copied" | "failed"
+  >("idle");
+  const copyGeneration = useRef(0);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const code = useRef<HTMLPreElement>(null);
+  useEffect(
+    () => () => {
+      copyGeneration.current += 1;
+      window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+  const copied = copyStatus === "copied";
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-toolbar">
+        {copyStatus === "failed" && (
+          <span role="status">{t("copyCodeFailed")}</span>
+        )}
+        <button
+          type="button"
+          aria-label={copied ? t("copiedCode") : t("copyCode")}
+          title={copied ? t("copiedCode") : t("copyCode")}
+          disabled={copyStatus === "copying"}
+          onClick={() => {
+            const generation = ++copyGeneration.current;
+            window.clearTimeout(copyTimer.current);
+            setCopyStatus("copying");
+            void copyText(code.current?.textContent ?? "").then((success) => {
+              if (generation !== copyGeneration.current) return;
+              setCopyStatus(success ? "copied" : "failed");
+              if (success)
+                copyTimer.current = window.setTimeout(
+                  () => setCopyStatus("idle"),
+                  1_200,
+                );
+            });
+          }}
+        >
+          {copied ? (
+            <Check aria-hidden="true" />
+          ) : (
+            <Clipboard aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      <section
+        className="markdown-code-scroll"
+        aria-label={t("codeBlock")}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
+        tabIndex={0}
+      >
+        <pre ref={code} {...props}>
+          {children}
+        </pre>
+      </section>
+    </div>
+  );
+}
+
 export const Markdown = memo(function Markdown({
   children,
 }: {
@@ -77,6 +144,9 @@ export const Markdown = memo(function Markdown({
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
+          pre({ node: _node, ...props }) {
+            return <CodeBlock {...props} />;
+          },
           table({ children, ...props }) {
             return (
               <section

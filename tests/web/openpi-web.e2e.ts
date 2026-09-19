@@ -100,6 +100,105 @@ for (const width of [1280, 390]) {
   });
 }
 
+for (const width of [1280, 390]) {
+  test(`long code blocks copy cleanly without widening the page at ${width}px`, async ({
+    page,
+  }, testInfo) => {
+    const source = [
+      'const messages = ["开始处理", "处理中", "处理完成"];',
+      'const greeting = "你好，OpenPI";',
+      'const longLine = "' + "long-code-value-".repeat(20) + '\";',
+      "console.log(messages, greeting, longLine);",
+    ].join("\n");
+    await page.setViewportSize({ width, height: 800 });
+    await page.addInitScript(() => {
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          writeText(text: string) {
+            (
+              window as Window & {
+                __openPiCopiedCode?: string;
+              }
+            ).__openPiCopiedCode = text;
+            return Promise.resolve();
+          },
+        },
+      });
+    });
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.selectedSession.entries = [
+        {
+          id: "code-assistant",
+          type: "message",
+          timestamp: "2026-09-19T00:00:00Z",
+          message: {
+            role: "assistant",
+            content: `Use \`inlineCode\` here.\n\n\`\`\`ts\n${source}\n\`\`\``,
+          },
+        },
+      ];
+      await route.fulfill({ response, json: snapshot });
+    });
+    await openWorkbench(page);
+
+    const block = page.locator(".markdown-code-block");
+    const copy = page.getByRole("button", { name: "复制代码", exact: true });
+    await expect(block).toHaveCount(1);
+    await expect(copy).toBeVisible();
+    const dimensions = await block.evaluate((element) => {
+      const scroll = element.querySelector(".markdown-code-scroll");
+      const button = element.querySelector("button");
+      const bounds = element.getBoundingClientRect();
+      const buttonBounds = button?.getBoundingClientRect();
+      return {
+        pageWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+        blockRight: bounds.right,
+        buttonRight: buttonBounds?.right ?? Number.POSITIVE_INFINITY,
+        preClientWidth: scroll?.clientWidth ?? 0,
+        preScrollWidth: scroll?.scrollWidth ?? 0,
+      };
+    });
+    expect(dimensions.pageWidth).toBeLessThanOrEqual(width);
+    expect(dimensions.blockRight).toBeLessThanOrEqual(width);
+    expect(dimensions.buttonRight).toBeLessThanOrEqual(width);
+    expect(dimensions.preScrollWidth).toBeGreaterThan(
+      dimensions.preClientWidth,
+    );
+
+    await copy.click();
+    await expect(
+      page.getByRole("button", { name: "代码已复制", exact: true }),
+    ).toBeVisible();
+    expect(
+      await page.evaluate(
+        () =>
+          (
+            window as Window & {
+              __openPiCopiedCode?: string;
+            }
+          ).__openPiCopiedCode,
+      ),
+    ).toBe(`${source}\n`);
+    expect(
+      (await new AxeBuilder({ page }).include(".markdown-code-block").analyze())
+        .violations,
+    ).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`code-block-${width}.png`),
+    });
+  });
+}
+
 for (const viewport of [
   { width: 768, height: 1024, label: "tablet" },
   { width: 640, height: 500, label: "effective 200% of 1280x1000" },
