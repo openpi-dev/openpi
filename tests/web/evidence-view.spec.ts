@@ -87,6 +87,32 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   ).toHaveLength(4);
 });
 
+it("opens resolved file evidence through the active artifact context", () => {
+  const open = vi.fn();
+  render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: "report.md" }),
+          evidenceArguments: {
+            path: "report.md",
+            resolvedPath: "/workspace/report.md",
+          },
+        },
+        result: { content: "report", isError: false },
+      }),
+    ),
+  );
+
+  fireEvent.click(screen.getByText("read"));
+  fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
+  expect(open).toHaveBeenCalledWith("/workspace/report.md");
+});
+
 it("opens local links using authenticated API and stops preview reads on close", async () => {
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")

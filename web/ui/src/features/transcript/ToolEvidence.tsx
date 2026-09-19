@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { useContext, type ReactNode } from "react";
 import type {
   WebLiveMessage,
   WebMessagePart,
@@ -7,6 +7,7 @@ import {
   projectToolEvidence,
   type EvidenceState,
 } from "../../../../protocol/evidence.ts";
+import { ArtifactContext } from "../artifacts/context.ts";
 
 function EvidenceBlock({
   children,
@@ -34,7 +35,9 @@ export function ToolEvidence({
   liveState?: EvidenceState;
   cwd?: string;
 }) {
+  const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
+  const fileReference = view.resolvedPath ?? view.path;
   const lines = (view.diff ?? view.output)
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
@@ -52,7 +55,17 @@ export function ToolEvidence({
         {view.path && (
           <p>
             <strong>Requested file:</strong>{" "}
-            <code>{view.resolvedPath ?? view.path}</code>
+            {artifacts && fileReference ? (
+              <button
+                className="artifact-link"
+                type="button"
+                onClick={() => artifacts.open(fileReference)}
+              >
+                <code>{fileReference}</code>
+              </button>
+            ) : (
+              <code>{fileReference}</code>
+            )}
             {cwd && (
               <>
                 <br />

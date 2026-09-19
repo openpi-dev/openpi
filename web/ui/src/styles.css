@@ -645,8 +645,8 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .evidence-content details > summary { cursor:pointer; padding:8px 0; }
 .evidence-lines > span { display:block; white-space:pre; }
 .evidence-line-number { display:inline-block; min-width:4ch; margin-right:2ch; color:var(--muted); user-select:none; text-align:right; }
-.diff-added { background:rgba(30,160,80,.12); }
-.diff-removed { background:rgba(210,60,60,.12); }
+.diff-added { background:rgba(30,160,80,.12); color:var(--text); }
+.diff-removed { background:rgba(210,60,60,.12); color:var(--text); }
 .evidence-warning { color:var(--warning); }
 .artifact-link { color:var(--accent); text-decoration:underline; cursor:pointer; padding:0; border:0; background:transparent; font:inherit; overflow-wrap:anywhere; }
 .artifact-panel { position:fixed; z-index:60; inset:16px 16px 16px auto; width:min(640px,calc(100vw - 32px)); box-sizing:border-box; overflow:auto; padding:20px; border:1px solid var(--border); border-radius:12px; background:var(--page); color:var(--text); box-shadow:0 12px 48px #0003; }

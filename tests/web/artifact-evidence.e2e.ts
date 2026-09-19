@@ -225,6 +225,14 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .locator(".tool-evidence-card > summary")
       .all())
       await summary.click();
+    const readCard = page
+      .locator(".tool-evidence-card")
+      .filter({ has: page.locator("summary strong", { hasText: "read" }) });
+    const evidenceFile = readCard.getByRole("button", { name: path });
+    await evidenceFile.click();
+    await expect(page.getByRole("dialog")).toContainText("Reviewed content");
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
+    await expect(evidenceFile).toBeFocused();
     await expect(
       page.getByRole("figure", { name: "File content" }),
     ).toContainText("Initial content");
