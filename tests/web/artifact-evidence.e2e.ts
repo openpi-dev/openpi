@@ -1,6 +1,8 @@
+import { execFile } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { AxeBuilder } from "@axe-core/playwright";
 import {
   createEditTool,
@@ -15,6 +17,8 @@ import type {
   WebRuntimeEvent,
 } from "../../web/runtime/types.ts";
 import { createEvidenceWriteTool } from "../../web/runtime/write-evidence.ts";
+
+const execFileAsync = promisify(execFile);
 
 test("real file evidence, authenticated downloads, edits, refresh and failure states", async ({
   browser,
@@ -35,6 +39,17 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     path: join(cwd, "sibling.md"),
     content: "# Related report",
   });
+  await execFileAsync("git", ["-C", cwd, "init", "-b", "main"]);
+  await execFileAsync("git", ["-C", cwd, "config", "user.name", "OpenPI Test"]);
+  await execFileAsync("git", [
+    "-C",
+    cwd,
+    "config",
+    "user.email",
+    "openpi@example.invalid",
+  ]);
+  await execFileAsync("git", ["-C", cwd, "add", "."]);
+  await execFileAsync("git", ["-C", cwd, "commit", "-m", "base"]);
   const read = await createReadTool(cwd).execute("read-1", { path });
   const edit = await createEditTool(cwd).execute("edit-1", {
     path,
@@ -219,17 +234,16 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("button", { name: "Report", exact: true }),
     ).toBeVisible();
-    const turnReceipt = page.locator(".turn-change-receipt");
-    await expect(turnReceipt).toHaveCount(1);
-    await expect(turnReceipt).toContainText(/1 (?:个文件已更改|file changed)/u);
-    await turnReceipt.locator("summary").click();
-    await expect(turnReceipt).toContainText("report space.md");
-    await expect(turnReceipt.locator(".turn-change-counts")).toContainText(
-      "+1-1",
+    const changesTrigger = page.locator(".session-changes-trigger");
+    await expect(changesTrigger).toContainText(
+      /1 (?:个文件已更改|file changed)/u,
     );
     await expect(
-      turnReceipt.getByRole("button", { name: /审阅更改|Review changes/u }),
-    ).toBeVisible();
+      changesTrigger.locator(".session-changes-counts"),
+    ).toContainText("+1-1");
+    await changesTrigger.click();
+    const changesPopover = page.locator(".session-changes-popover");
+    await expect(changesPopover).toContainText("report space.md");
     for (const group of await page.locator(".tool-group > summary").all())
       await group.click();
     for (const summary of await page
@@ -278,42 +292,34 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByText("unknown tool evidence", { exact: true }).first(),
     ).toBeAttached();
-    const reviewTrigger = page.getByRole("button", {
-      name: /(?:变更证据|Change evidence) 2/u,
+    await changesTrigger.click();
+    const reviewTrigger = changesPopover.getByRole("button", {
+      name: /report space\.md/u,
     });
     await reviewTrigger.click();
     const review = page.getByRole("complementary", {
-      name: /变更证据|Change evidence/u,
+      name: /变更|Changes/u,
     });
-    await expect(review.locator(".review-entry")).toHaveCount(2);
-    await expect(review.locator(".evidence-summary-meta")).toContainText(
-      "+1-1",
-    );
-    await expect(review).toContainText(
-      /并非 Git 工作树|not the current Git working tree/u,
-    );
-    const reviewedEdit = review.locator(".review-entry").last();
-    await reviewedEdit.locator("summary").first().click();
+    await expect(review.locator(".session-review-file")).toHaveCount(1);
+    await expect(review).toContainText(/对比 HEAD|compared with HEAD/u);
+    const reviewedEdit = review.locator(".session-review-file").first();
+    await reviewedEdit.locator(":scope > button").click();
     await expect(
       review.getByRole("figure", { name: "Change diff" }),
     ).toContainText("Reviewed content");
-    const reviewedFile = reviewedEdit.getByRole("button", { name: path });
-    await reviewedFile.click();
-    await expect(page.getByRole("dialog")).toContainText("Reviewed content");
-    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
-    await expect(reviewedFile).toBeFocused();
     await review.getByRole("button", { name: /关闭|Close/u }).click();
-    await expect(reviewTrigger).toBeFocused();
+    await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(turnReceipt).toBeVisible();
+    await expect(changesTrigger).toBeVisible();
     expect(
-      await turnReceipt.evaluate(
+      await changesTrigger.evaluate(
         (element) => element.scrollWidth <= element.clientWidth,
       ),
     ).toBe(true);
+    await changesTrigger.click();
     await reviewTrigger.click();
     const mobileReview = page.getByRole("main", {
-      name: /变更证据|Change evidence/u,
+      name: /变更|Changes/u,
     });
     await expect(mobileReview).toBeVisible();
     await expect(page.locator(".conversation-shell")).toBeHidden();
@@ -323,7 +329,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       ),
     ).toBe(true);
     await mobileReview.getByRole("button", { name: /关闭|Close/u }).click();
-    await expect(reviewTrigger).toBeFocused();
+    await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 1280, height: 844 });
     await page.getByRole("button", { name: "Report", exact: true }).click();
     await expect(page.getByRole("dialog")).toContainText("Reviewed content");

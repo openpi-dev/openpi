@@ -40,6 +40,7 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
+import { readGitReview } from "./git-review.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
@@ -853,6 +854,33 @@ export class WebHost {
         });
       }
       return this.json(response, 200, this.runtime.listCommands());
+    }
+    if (url.pathname === "/api/git-review") {
+      const sessionId = url.searchParams.get("sessionId");
+      const sessionPath = url.searchParams.get("path");
+      if (
+        !sessionId ||
+        sessionId.length > 256 ||
+        !sessionPath ||
+        url.searchParams.getAll("sessionId").length !== 1 ||
+        url.searchParams.getAll("path").length !== 1 ||
+        [...url.searchParams.keys()].some(
+          (key) => key !== "sessionId" && key !== "path",
+        )
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_GIT_REVIEW_REQUEST",
+          error: "an exact Session id and path are required",
+        });
+      }
+      const session = await this.adapter.getSession(sessionPath);
+      if (!session || session.id !== sessionId) {
+        return this.json(response, 404, {
+          code: "SESSION_NOT_FOUND",
+          error: "the Session is not available in the current workspace",
+        });
+      }
+      return this.json(response, 200, await readGitReview(session.cwd));
     }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();

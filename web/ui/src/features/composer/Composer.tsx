@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  type ReactNode,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -63,6 +64,7 @@ interface ComposerProps {
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
   commandDiscovery?: WebStoreState["commandDiscovery"];
+  accessory?: ReactNode;
 }
 
 export function Composer(props: ComposerProps) {
@@ -489,6 +491,7 @@ export function Composer(props: ComposerProps) {
           onInspectSubagent={props.onInspectSubagent}
         />
       )}
+      {props.accessory}
       {props.landing && (
         <div className="workspace-picker-row">
           <DropdownMenu

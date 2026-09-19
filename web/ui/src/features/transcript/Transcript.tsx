@@ -3,9 +3,7 @@ import {
   ArrowDown,
   Bot,
   Check,
-  ChevronDown,
   Clipboard,
-  FileDiff,
   FilePenLine,
   FileText,
   Folder,
@@ -46,10 +44,6 @@ import {
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
-import {
-  changeCalls,
-  summarizeChangeCalls,
-} from "../review/change-evidence.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 
 type PersistedEntry = NonNullable<
@@ -72,7 +66,6 @@ interface TranscriptProps {
   scrollToBottom: number;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
-  onOpenReview?: () => void;
 }
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
@@ -735,24 +728,16 @@ function groupRows(rows: RenderRow[], stepsLabel: string) {
   });
 }
 
-function fileName(path: string) {
-  return path.split(/[\\/]/u).at(-1) || path;
-}
-
 function ConversationTurn({
   id,
   rows,
   active,
-  changes,
   stepsLabel,
-  onOpenReview,
 }: {
   id: number;
   rows: RenderRow[];
   active: boolean;
-  changes?: ReturnType<typeof summarizeChangeCalls>;
   stepsLabel: string;
-  onOpenReview?: () => void;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -804,71 +789,16 @@ function ConversationTurn({
         </header>
       )}
       {groupRows(rows, stepsLabel)}
-      {changes && (
-        <details className="turn-change-receipt">
-          <summary>
-            <span className="turn-change-title">
-              <FileDiff aria-hidden="true" />
-              <strong>
-                {t("filesChanged", { count: changes.files.length })}
-              </strong>
-            </span>
-            {changes.hasCounts && (
-              <span className="turn-change-total" aria-hidden="true">
-                <span className="review-additions">+{changes.additions}</span>
-                <span className="review-deletions">-{changes.deletions}</span>
-              </span>
-            )}
-            <ChevronDown className="turn-change-chevron" aria-hidden="true" />
-          </summary>
-          <div className="turn-change-body">
-            <ul>
-              {changes.files.map((file) => (
-                <li key={file.path} title={file.path}>
-                  <span>{fileName(file.path)}</span>
-                  {file.hasCounts && (
-                    <span className="turn-change-counts">
-                      <span className="review-additions">
-                        +{file.additions}
-                      </span>
-                      <span className="review-deletions">
-                        -{file.deletions}
-                      </span>
-                    </span>
-                  )}
-                </li>
-              ))}
-            </ul>
-            {onOpenReview && (
-              <button type="button" onClick={onOpenReview}>
-                <FileDiff aria-hidden="true" /> {t("reviewChanges")}
-              </button>
-            )}
-          </div>
-        </details>
-      )}
     </section>
   );
 }
 
-function renderTurns(
-  rows: RenderRow[],
-  stepsLabel: string,
-  running: boolean,
-  changes: ReturnType<typeof changeCalls>,
-  onOpenReview?: () => void,
-) {
+function renderTurns(rows: RenderRow[], stepsLabel: string, running: boolean) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const current = turns.at(-1);
     if (current?.id === row.turn) current.rows.push(row);
     else turns.push({ id: row.turn, rows: [row] });
-  }
-  const changesByTurn = new Map<number, ReturnType<typeof changeCalls>>();
-  for (const change of changes) {
-    const rows = changesByTurn.get(change.turn) ?? [];
-    rows.push(change);
-    changesByTurn.set(change.turn, rows);
   }
   const lastTurn = turns.at(-1)?.id;
   return turns.map((turn) => (
@@ -876,9 +806,7 @@ function renderTurns(
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === lastTurn}
-      changes={summarizeChangeCalls(changesByTurn.get(turn.id) ?? [], turn.id)}
       stepsLabel={stepsLabel}
-      onOpenReview={onOpenReview}
       key={`turn-group-${turn.id}-${turn.rows[0]?.key}`}
     />
   ));
@@ -1242,10 +1170,6 @@ export function Transcript(props: TranscriptProps) {
   const running =
     active &&
     (props.snapshot.runtime.status === "running" || props.liveRunning);
-  const changes = useMemo(
-    () => (selected ? changeCalls(selected) : []),
-    [selected],
-  );
   const runningLabel = props.liveRetry
     ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
     : props.livePhase === "preparing"
@@ -1267,13 +1191,7 @@ export function Transcript(props: TranscriptProps) {
           setReadingHistory(!pinned.current);
         }}
       >
-        {renderTurns(
-          rows,
-          t("stepsLabel"),
-          running,
-          changes,
-          props.onOpenReview,
-        )}
+        {renderTurns(rows, t("stepsLabel"), running)}
         {running && (
           <div
             className="conversation-running"

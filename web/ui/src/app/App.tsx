@@ -1,4 +1,4 @@
-import { FileDiff, Menu, PanelLeftOpen, RefreshCw, X } from "lucide-react";
+import { Menu, PanelLeftOpen, RefreshCw, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
@@ -8,7 +8,9 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { changeCalls, ReviewPanel } from "../features/review/ReviewPanel.tsx";
+import { ReviewPanel } from "../features/review/ReviewPanel.tsx";
+import { SessionChangesPopover } from "../features/review/SessionChangesPopover.tsx";
+import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
 import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
@@ -194,6 +196,10 @@ export function App() {
   const selected = state.workspaceDraft
     ? undefined
     : state.snapshot?.selectedSession;
+  const gitReview = useGitReview(selected, state.snapshot?.cursor);
+  const gitSnapshot = gitReview.result?.ok
+    ? gitReview.result.snapshot
+    : undefined;
   const reviewVisible = Boolean(
     reviewTarget &&
       selected &&
@@ -212,17 +218,17 @@ export function App() {
       if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
     });
   }, []);
-  const openReview = () => {
+  const openReview = (returnFocus?: HTMLElement) => {
     if (!selected || state.sessionSwitching) return;
     reviewTrigger.current =
-      document.activeElement instanceof HTMLElement
+      returnFocus ??
+      (document.activeElement instanceof HTMLElement
         ? document.activeElement
-        : null;
+        : null);
     setSubagentTarget(null);
     setInspection(null);
     setReviewTarget({ sessionId: selected.id, sessionPath: selected.path });
   };
-  const changes = selected ? changeCalls(selected).length : 0;
   const loading = !state.snapshot;
   const workspacePath = state.sessionSwitching
     ? state.snapshot?.sessions.find(
@@ -341,16 +347,6 @@ export function App() {
                   {t("trajectory")}
                 </button>
               </fieldset>
-              {changes > 0 && (
-                <button
-                  className="review-trigger"
-                  type="button"
-                  onClick={openReview}
-                >
-                  <FileDiff aria-hidden="true" /> {t("changeEvidence")}{" "}
-                  <span>{changes}</span>
-                </button>
-              )}
             </div>
           )}
           {loading ? (
@@ -408,7 +404,6 @@ export function App() {
               scrollToBottom={state.scrollToBottom}
               onResend={resend}
               onInspectSubagent={inspectSubagent}
-              onOpenReview={openReview}
             />
           ) : null}
           {state.snapshot && (
@@ -426,6 +421,15 @@ export function App() {
               turnTerminalStatus={state.turnTerminalStatus}
               pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
               commandDiscovery={state.commandDiscovery}
+              accessory={
+                gitSnapshot && gitSnapshot.files.length > 0 ? (
+                  <SessionChangesPopover
+                    key={gitSnapshot.repositoryRoot}
+                    snapshot={gitSnapshot}
+                    onOpenReview={openReview}
+                  />
+                ) : undefined
+              }
               snapshot={state.snapshot}
               selectedPath={state.selectedPath}
               selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
@@ -484,6 +488,7 @@ export function App() {
           <ReviewPanel
             key={selected.path}
             session={selected}
+            review={gitReview}
             onClose={closeReview}
           />
         )}

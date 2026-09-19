@@ -439,7 +439,6 @@ it("groups transcript turns with state and confirmed file change receipts", () =
       message: { role: "assistant", content: "Explanation." },
     },
   ];
-  const openReview = vi.fn();
   const { container } = renderWithI18n(
     createElement(Transcript, {
       snapshot,
@@ -451,7 +450,6 @@ it("groups transcript turns with state and confirmed file change receipts", () =
       thinkingDurations: {},
       scrollToBottom: 0,
       onResend: async () => true,
-      onOpenReview: openReview,
     }),
   );
 
@@ -462,12 +460,6 @@ it("groups transcript turns with state and confirmed file change receipts", () =
   expect(turns[1]?.textContent).toContain("Explain it");
   expect(container.querySelectorAll(".final-response")).toHaveLength(2);
   expect(screen.getAllByText(i18n.t("turnState_complete"))).toHaveLength(2);
-  fireEvent.click(screen.getByText(i18n.t("filesChanged", { count: 1 })));
-  expect(screen.getByText("report.ts")).toBeTruthy();
-  fireEvent.click(
-    screen.getByRole("button", { name: i18n.t("reviewChanges") }),
-  );
-  expect(openReview).toHaveBeenCalledTimes(1);
 });
 
 function renderEditableTranscript(onResend = vi.fn(async () => false)) {

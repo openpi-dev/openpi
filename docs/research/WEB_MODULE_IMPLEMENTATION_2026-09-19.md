@@ -14,13 +14,13 @@
 | M04 | assistant/provider 停止原因、失败与部分输出分开显示；事件和提示失败文本先有界消毒，再经现有协议投影。 |
 | M06 | 子任务详情不可见时停止轮询、重新可见时继续；总览、历史降级及精确身份来自 PR 既有实现。合成六任务 UI 不等于六个真实并发模型。 |
 | M07 | 文件预览显示路径、只读性质、revision、复制状态；保留 Host handle、权限、释放和 abort；内层文件跳转关闭后返回原始焦点。 |
-| M08 | 只读变更证据视图逐次展示 write/edit 工具回执，未知或歧义 ID 不配对；明确不是当前 Git 工作树或 staged diff，有界历史可缺失。 |
+| M08 | 只读 Git 分支／工作区快照：比较当前分支与已识别基准的 merge-base，并合并 staged、unstaged、untracked 文件；底部摘要、文件弹层和直接 diff 与 Session 精确绑定，不提供 Git 写操作。 |
 | M09 / M10 | 已保留命令的可见输出复制，未知退出码不推断；区分已保存 Trust 决策与当前 Session 权限，配置仍指向唯一 `/openpi-setup`。 |
 | M11 / M12 | 768px、390px、短高度、高缩放和组合输入浏览器回归；生产 bundle 的空/长/100/500 条合成场景和断线恢复测量。 |
 
 ## 组件来源与复用结果
 
-本次直接复用仓库现有 React、Astryx、ReactMarkdown、Lucide、Pi Session/Host API、工具证据组件和剪贴板 helper；没有新依赖、复制第三方代码或更换 provider/session 栈。Maka 的导航和 linked-agent 列表、Pi Web 的独立内容区域与工具证据、DeepSeek Harness 的 Markdown/附件/只读子任务组件可作交互及代码组织参考，具体固定源码与版本见既有 [子代理调查](WEB_SUBAGENT_INSPECTION_2026-09-18.md)。Harness Web 不是消费者 DeepSeek 聊天客户端；本次没有取得 Codex/Claude Desktop 客户端的公开组件源码，不能声称其 UI 技术栈已知。
+本次直接复用仓库现有 React、Astryx、ReactMarkdown、Lucide、Pi Session/Host API、工具证据组件和剪贴板 helper；没有新依赖、复制第三方代码或更换 provider/session 栈。Maka 的导航、linked-agent 列表和 `SessionReviewPanel`，Pi Web 的独立内容区域与工具证据，DeepSeek Harness 的 Markdown、附件、只读子任务和 changed-files 分层可作交互及代码组织参考，固定源码与版本见 [组件来源记录](WEB_GAP_ANALYSIS_2026-09-18/SOURCES_AND_COMPONENTS.md)。变更面板不仅复用 Maka 的“摘要 → 文件列表 → 有界 diff”信息架构，还直接使用 OpenPI 已安装的 Astryx `CollapsibleGroup`、`Collapsible`、`Banner`、`Button`、`Skeleton`、`EmptyState`、`Text` 与布局组件；本仓库的 `0.5.2` 已具备所需接口，因此没有为了对齐 Maka 的 `0.6.1` 或 npm 当前 `0.6.2` 做无收益的全站升级。Maka 私有 workspace 包和 `DiffCodePreview` 未复制，diff 仍用本仓库的有界只读渲染。Harness Web 不是消费者 DeepSeek 聊天客户端；本次没有取得 Codex/Claude Desktop 客户端的公开组件源码，不能声称其 UI 技术栈已知。
 
 ## 真实页面复验补充
 
@@ -40,11 +40,15 @@
 
 继续用同一真实 `gpt-5.6-luna / medium` Session 通过新入口连续引用 App、Transcript 和 E2E 文件。模型先因只看 Composer 误判“provider 失败不可见”，补齐证据后修正为：错误、partial output、取消与 admission unknown 已有闭环，剩余最小高频缺口是失败卡片没有直接恢复动作。实现因此只在当前活动 Session 的最后一条用户请求失败时显示“重试消息”，复用既有 `onResend` 和 admission 合同；点击期间锁定，历史失败不提供旧请求重放，运行中也不可重试。消融若移除本地 pending 状态会恢复双击重复提交风险，因此保留小型 `ProviderOutcome`，没有新增重试状态机。
 
+用户随后要求 M08 改为真实 Git 分支快照，而不是从对话工具回执推断最终文件状态。Host 新增 Session 绑定的只读 `/api/git-review`：只接受当前投影中的精确 Session id/path，固定调用 Git 的只读 diff/name-status/ls-files 接口，关闭 external diff 与 textconv，并限制 10 秒、200 文件、最终 4 MiB Web 响应。基准优先取 `origin/HEAD`、`origin/main`/`master`、本地 `main`/`master`；可用时比较 merge-base 到当前工作区，从而同时覆盖分支提交、staged 和 unstaged，再追加 untracked 普通文件。找不到可信基准时明确退化为 HEAD/工作区范围，不伪造分支归因。
+
+UI 参考 Maka `SessionReviewPanel` 的摘要、可折叠文件行和直接 diff，同时保留用户给出的 Codex 风格底部“文件已更改”入口。真实仓库达到响应上限时，仍返回可列出的文件身份和统计；未载入的单文件 diff 明确标记截断，最终 JSON 再按协议字节数硬收口。真实 Host 在当前分支展示 200 个有界文件、`+20035/-5751` 和截断提示；桌面弹层根据触发按钮上方空间定高，390×844 页面与审查面板均无水平溢出，文件展开可直接阅读 diff。这里展示的是仓库当前分支和工作区的快照，可能包含 Session 开始前已有改动，不宣称全部由当前模型产生。
+
 ## 验证与限制
 
-- `bun run check` 与 `bun run test`、静态资产 Playwright、真实 Host 的文件/变更视图 E2E 通过；具体最终计数写在 PR Validation。
+- 本机未安装 `bun`，因此逐项运行 `bun run check` / `bun run test` 对应的配置、文档、纪律、Biome、TypeScript、构建和测试命令；静态资产 Playwright、真实 Host 的文件／Git 变更视图 E2E 也通过。具体最终计数写在 PR Validation。
 - 真实 `gpt-5.6-luna / medium` 单次请求返回 `2` 并在重载后保留；未把合成六任务或页面性能结果冒充真实模型并发。既有 [子代理调查](WEB_SUBAGENT_INSPECTION_2026-09-18.md)单独记录过真实只读子任务和 provider 并发限制。更低的账户/池限制仍优先于声明的上限。
 - Playwright Chromium 结果不覆盖 Safari 真机、Android/iOS 软键盘、长期断网或竞争产品性能。M12 原始合成回执保存在本机临时目录，不是具有冻结模型/任务/验收器/成本与可公共检索证据的正式 Benchmark。
-- 消融：保持纯粹的 `changeCalls` 提取，因为入口数量和面板共用它；重复 ID 的 fail-closed 检查不能移除，专项测试会发现错误配对。保持预览复制代际，因为嵌套跳转晚到回执测试会失败。没有引入虚拟列表、终端 PTY、Git 写入 API、第二套路由或外部组件运行时；当前证据不足以支持它们带来的权限与焦点成本。
+- 消融：旧 `changeCalls` 聚合、逐轮变更卡和全局 review store 已移除；真实 Git snapshot 已能直接满足文件列表与最终工作区审阅，保留两套“变更事实”反而会混淆来源。未加入树状文件浏览、双栏 diff、base 选择器、虚拟列表、Git 写入 API、终端 PTY 或外部组件运行时。保留独立只读 Host 接口，是因为浏览器不能安全地直接执行 Git，且 Session 身份、命令限制、超时和最终响应字节上限必须由运行时强制。
 
 本机私有凭据、用户截图、真实 Session 和原始日志未纳入此公开提交。

@@ -1,254 +1,151 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createElement } from "react";
+import { createElement, type ReactElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
-import type { WebSessionProjection } from "../../web/protocol/types.ts";
-import { summarizeChangeCalls } from "../../web/ui/src/features/review/change-evidence.ts";
-import {
-  changeCalls,
-  changeLineCounts,
-  ReviewPanel,
-} from "../../web/ui/src/features/review/ReviewPanel.tsx";
+import type {
+  WebGitReviewSnapshot,
+  WebSessionProjection,
+} from "../../web/protocol/types.ts";
+import { ReviewPanel } from "../../web/ui/src/features/review/ReviewPanel.tsx";
+import { SessionChangesPopover } from "../../web/ui/src/features/review/SessionChangesPopover.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
 afterEach(cleanup);
-
-const entries: WebSessionProjection["entries"] = [
-  {
-    id: "call-a",
-    type: "message",
-    timestamp: "2026-09-18T00:00:00Z",
-    message: {
-      role: "assistant",
-      content: "",
-      parts: [
-        {
-          type: "toolCall",
-          id: "w1",
-          name: "write",
-          arguments: '{"path":"report.md"}',
-        },
-        {
-          type: "toolCall",
-          id: "w2",
-          name: "edit",
-          arguments: '{"path":"report.md"}',
-        },
-        {
-          type: "toolCall",
-          id: "w3",
-          name: "edit",
-          arguments: '{"path":"other.md"}',
-        },
-      ],
-    },
-  },
-  {
-    id: "result-a",
-    type: "message",
-    timestamp: "2026-09-18T00:00:01Z",
-    message: {
-      role: "toolResult",
-      toolCallId: "w1",
-      content: "created",
-      isError: false,
-      details: { change: "created" },
-    },
-  },
-  {
-    id: "result-b",
-    type: "message",
-    timestamp: "2026-09-18T00:00:02Z",
-    message: {
-      role: "toolResult",
-      toolCallId: "w2",
-      content: "edited",
-      isError: false,
-      details: {
-        diff: "--- a/report.md\n+++ b/report.md\n@@ -1 +1 @@\n-old\n+new",
-      },
-    },
-  },
-  {
-    id: "result-c",
-    type: "message",
-    timestamp: "2026-09-18T00:00:03Z",
-    message: {
-      role: "toolResult",
-      toolCallId: "w3",
-      content: "denied",
-      isError: true,
-    },
-  },
-];
 
 const session: WebSessionProjection = {
   id: "parent",
   path: "/workspace/parent.jsonl",
   cwd: "/workspace",
-  entries,
+  entries: [],
   bytes: 0,
   truncation: {
-    truncated: true,
-    entriesOmitted: 8,
+    truncated: false,
+    entriesOmitted: 0,
     messagesTruncated: 0,
     messagePartsOmitted: 0,
     maxBytes: 2_097_152,
   },
 };
 
-it("keeps each exact tool receipt instead of merging a file into a Git snapshot", () => {
-  const rows = changeCalls(session);
-  expect(rows).toHaveLength(3);
-  expect(rows.map((row) => row.result?.content)).toEqual([
-    "created",
-    "edited",
-    "denied",
-  ]);
-  expect(
-    changeCalls({ ...session, entries: entries.slice(0, 1) }).every(
-      (row) => row.result === undefined,
-    ),
-  ).toBe(true);
-  expect(changeLineCounts(rows[1]!.call, rows[1]!.result)).toEqual({
-    additions: 1,
-    deletions: 1,
-  });
-  expect(changeLineCounts(rows[0]!.call, rows[0]!.result)).toBeUndefined();
-});
+const snapshot: WebGitReviewSnapshot = {
+  repositoryRoot: "/workspace",
+  currentBranch: "feature/review",
+  baseBranch: "main",
+  revision: "a".repeat(64),
+  additions: 8,
+  deletions: 3,
+  truncated: false,
+  files: [
+    {
+      path: "src/features/review/very-long-file-name.tsx",
+      status: "modified",
+      additions: 1,
+      deletions: 1,
+      diffTruncated: false,
+      diff: [
+        "diff --git a/src/features/review/very-long-file-name.tsx b/src/features/review/very-long-file-name.tsx",
+        "--- a/src/features/review/very-long-file-name.tsx",
+        "+++ b/src/features/review/very-long-file-name.tsx",
+        "@@ -1 +1 @@",
+        "-old",
+        "+new",
+      ].join("\n"),
+    },
+    {
+      path: "new-file.ts",
+      status: "untracked",
+      additions: 7,
+      deletions: 2,
+      diffTruncated: false,
+      diff: "@@ -0,0 +1,1 @@\n+export const value = true;",
+    },
+  ],
+};
 
-it("groups only confirmed saved changes by turn and file", () => {
-  const rows = changeCalls({
-    ...session,
-    entries: [
-      {
-        id: "prompt",
-        type: "message",
-        timestamp: "2026-09-18T00:00:00Z",
-        message: { role: "user", content: "Update the report" },
-      },
-      ...entries,
-    ],
-  });
-  expect(rows.every((row) => row.turn === 1)).toBe(true);
-  expect(summarizeChangeCalls(rows, 1)).toEqual({
-    files: [
-      {
-        path: "report.md",
-        additions: 1,
-        deletions: 1,
-        hasCounts: true,
-      },
-    ],
-    additions: 1,
-    deletions: 1,
-    hasCounts: true,
-  });
-  expect(summarizeChangeCalls(rows, 2)).toBeUndefined();
-  expect(summarizeChangeCalls(rows.slice(0, 1), 1)).toEqual({
-    files: [
-      {
-        path: "report.md",
-        additions: 0,
-        deletions: 0,
-        hasCounts: false,
-      },
-    ],
-    additions: 0,
-    deletions: 0,
-    hasCounts: false,
-  });
-});
+function withI18n(element: ReactElement) {
+  return createElement(I18nextProvider, { i18n }, element);
+}
 
-it("ignores metadata between files in a combined diff", () => {
-  const rows = changeCalls(session);
-  const edited = rows[1]!;
-  expect(
-    changeLineCounts(edited.call, {
-      ...edited.result!,
-      details: {
-        diff: "diff --git a/one.txt b/one.txt\n--- a/one.txt\n+++ b/one.txt\n@@ -1 +1 @@\n-old\n+new\ndiff --git a/two.txt b/two.txt\n--- a/two.txt\n+++ b/two.txt",
-      },
-    }),
-  ).toEqual({ additions: 1, deletions: 1 });
-});
-
-it("leaves ambiguous duplicate call and result IDs unpaired", () => {
-  const ambiguousResults = changeCalls({
-    ...session,
-    entries: [
-      ...entries,
-      {
-        type: "message",
-        id: "result-duplicate",
-        timestamp: "2026-09-18T00:00:04Z",
-        message: {
-          role: "toolResult",
-          toolCallId: "w1",
-          content: "another result",
-          isError: false,
-        },
-      },
-    ],
-  });
-  expect(ambiguousResults[0]?.result).toBeUndefined();
-  expect(ambiguousResults[1]?.result?.content).toBe("edited");
-
-  const ambiguousCalls = changeCalls({
-    ...session,
-    entries: [
-      ...entries,
-      {
-        type: "message",
-        id: "call-duplicate",
-        timestamp: "2026-09-18T00:00:04Z",
-        message: {
-          role: "assistant",
-          content: "",
-          parts: [
-            {
-              type: "toolCall",
-              id: "w1",
-              name: "write",
-              arguments: '{"path":"report.md"}',
-            },
-          ],
-        },
-      },
-    ],
-  });
-  expect(ambiguousCalls[0]?.result).toBeUndefined();
-  expect(ambiguousCalls[3]?.result).toBeUndefined();
-});
-
-it("labels partial Session evidence and supports keyboard return without a Git clean claim", () => {
-  const onClose = vi.fn();
+it("shows a Codex-style session change trigger backed by Git files", () => {
+  const onOpenReview = vi.fn();
   const { container } = render(
-    createElement(
-      I18nextProvider,
-      { i18n },
-      createElement(ReviewPanel, { session, onClose }),
+    withI18n(createElement(SessionChangesPopover, { snapshot, onOpenReview })),
+  );
+  const trigger = screen.getByRole("button", {
+    name: /2 files changed/u,
+  });
+  expect(trigger.textContent).toContain("+8");
+  expect(trigger.textContent).toContain("-3");
+  vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
+    top: 280,
+  } as DOMRect);
+  fireEvent.click(trigger);
+  const popover = screen.getByRole("dialog", { name: "Changes" });
+  expect(popover.style.maxHeight).toBe("260px");
+  const file = screen.getByRole("button", {
+    name: /very-long-file-name\.tsx/u,
+  });
+  fireEvent.click(file);
+  expect(onOpenReview).toHaveBeenCalledTimes(1);
+  expect(onOpenReview).toHaveBeenCalledWith(trigger);
+  expect(container.querySelector(".session-changes-popover")).toBeNull();
+  fireEvent.click(trigger);
+  fireEvent.keyDown(document, { key: "Escape" });
+  expect(container.querySelector(".session-changes-popover")).toBeNull();
+  expect(document.activeElement).toBe(trigger);
+});
+
+it("renders a Maka-style file list with branch scope and direct bounded diffs", () => {
+  const onClose = vi.fn();
+  const refresh = vi.fn(async () => {});
+  const { container } = render(
+    withI18n(
+      createElement(ReviewPanel, {
+        session,
+        review: {
+          result: { ok: true, snapshot },
+          loading: false,
+          error: null,
+          refresh,
+        },
+        onClose,
+      }),
     ),
   );
-  expect(screen.getByText(/not the current Git working tree/u)).toBeTruthy();
-  expect(screen.getByText(/earlier changes may be absent/u)).toBeTruthy();
-  expect(container.querySelectorAll(".review-entry")).toHaveLength(3);
-  expect(
-    screen.getByText(
-      i18n.t("changeEvidenceDelta", { additions: 1, deletions: 1 }),
-    ),
-  ).toBeTruthy();
-  const cards = container.querySelectorAll(".review-entry .tool-evidence-card");
-  fireEvent.click(cards[1]!.querySelector("summary")!);
-  expect(
-    screen.getByRole("figure", { name: "Change diff" }).textContent,
-  ).toContain("+new");
-  expect(cards[2]?.textContent).toContain("failed");
-  fireEvent.keyDown(
-    screen.getByRole("complementary", { name: "Change evidence" }),
-    { key: "Escape" },
-  );
+  expect(screen.getByText("feature/review compared with main")).toBeTruthy();
+  expect(container.querySelectorAll(".session-review-file")).toHaveLength(2);
+  const first = container.querySelector(".session-review-file")!;
+  fireEvent.click(first.querySelector(":scope > button")!);
+  expect(first.querySelector("figure")?.textContent).toContain("+new");
+  expect(first.textContent).toContain("+1");
+  expect(first.textContent).toContain("-1");
+  fireEvent.keyDown(screen.getByRole("complementary", { name: "Changes" }), {
+    key: "Escape",
+  });
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("distinguishes Git read failures from an empty repository state", () => {
+  const refresh = vi.fn(async () => {});
+  render(
+    withI18n(
+      createElement(ReviewPanel, {
+        session,
+        review: {
+          result: { ok: false, reason: "not_git_repository" },
+          loading: false,
+          error: null,
+          refresh,
+        },
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+  expect(screen.getByRole("alert").textContent).toContain(
+    "This workspace is not a Git repository.",
+  );
+  fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+  expect(refresh).toHaveBeenCalledTimes(1);
 });

@@ -13,6 +13,7 @@ import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebModelSearchResult,
   type WebModelSummary,
+  type WebGitReviewResult,
   type WebSnapshot,
   type WebThinkingState,
   type WebCommandDiscoveryResult,
@@ -137,6 +138,13 @@ export class WebClient {
   snapshot(path?: string | null) {
     const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
+  }
+
+  gitReview(sessionId: string, path: string, signal?: AbortSignal) {
+    return this.request<WebGitReviewResult>(
+      `/api/git-review?${new URLSearchParams({ sessionId, path })}`,
+      { signal, timeoutMessage: "Git review timed out. Please retry." },
+    );
   }
 
   resolveArtifact(

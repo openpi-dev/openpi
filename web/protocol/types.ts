@@ -25,6 +25,8 @@ export const WEB_MAX_COMMANDS = 250;
 export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
 export const WEB_MAX_COMMAND_NAME = 160;
 export const WEB_MAX_COMMAND_DESCRIPTION = 500;
+export const WEB_MAX_GIT_REVIEW_FILES = 200;
+export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 export const WEB_MAX_THINKING_LEVEL = 500;
@@ -168,6 +170,46 @@ export interface WebThinkingState {
   /** Host-assigned monotonic value (SSE sequence); newer wins. */
   readonly revision: number;
 }
+
+export type WebGitReviewFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "unknown";
+
+export interface WebGitReviewFile {
+  path: string;
+  previousPath?: string;
+  status: WebGitReviewFileStatus;
+  diff: string;
+  diffTruncated: boolean;
+  additions: number;
+  deletions: number;
+}
+
+export interface WebGitReviewSnapshot {
+  repositoryRoot: string;
+  currentBranch: string | null;
+  baseBranch: string | null;
+  revision: string;
+  files: WebGitReviewFile[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+}
+
+export type WebGitReviewResult =
+  | { ok: true; snapshot: WebGitReviewSnapshot }
+  | {
+      ok: false;
+      reason:
+        | "not_git_repository"
+        | "unborn_repository"
+        | "git_failed";
+    };
 
 /**
  * Bounds a runtime thinking projection at the wire boundary. Shared by the
