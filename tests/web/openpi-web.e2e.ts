@@ -1202,6 +1202,106 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
   }
 });
 
+test("adds validated file references without hiding the prompt contract", async ({
+  page,
+}, testInfo) => {
+  const sessionId = "file-reference-browser-session";
+  const references: string[] = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    const selected = snapshot.selectedSession;
+    expect(selected).toBeTruthy();
+    snapshot.currentSessionId = sessionId;
+    snapshot.selectedSession = {
+      ...selected,
+      id: sessionId,
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.sessions = snapshot.sessions.map(
+      (session: { path: string; id: string }) =>
+        session.path === selected.path
+          ? { ...session, id: sessionId }
+          : session,
+    );
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/events?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: ": heartbeat\n\n",
+    }),
+  );
+  await page.route("**/api/artifacts/resolve", async (route) => {
+    const body = route.request().postDataJSON() as { reference: string };
+    references.push(body.reference);
+    if (body.reference.startsWith("..")) {
+      await route.fulfill({
+        status: 403,
+        json: { error: "Host English", code: "ARTIFACT_DENIED" },
+      });
+      return;
+    }
+    await route.fulfill({ json: { handle: "file-reference-handle" } });
+  });
+  await page.route("**/api/artifacts/content?**", async (route) => {
+    if (route.request().method() === "DELETE") {
+      await route.fulfill({ json: { released: true } });
+      return;
+    }
+    await route.fulfill({ json: { identity: "stable" } });
+  });
+
+  await openWorkbench(page);
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    const draft = page.getByRole("textbox", { name: "描述任务" });
+    await page.getByRole("button", { name: "添加上下文" }).click();
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    const dialog = page.getByRole("dialog", { name: "引用工作区文件" });
+    await dialog
+      .getByRole("textbox", { name: "工作区文件路径" })
+      .fill("README.md");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await expect(draft).toHaveValue("`README.md`");
+    await expect(draft).toBeFocused();
+
+    await page.getByRole("button", { name: "添加上下文" }).click();
+    await expect(
+      page.getByRole("menuitem", { name: /斜杠命令/u }),
+    ).toHaveAttribute("aria-disabled", "true");
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    await dialog
+      .getByRole("textbox", { name: "工作区文件路径" })
+      .fill("../outside.txt");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await expect(dialog).toContainText("请选择当前会话工作区内的文件。");
+    await expect(draft).toHaveValue("`README.md`");
+    expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
+    await page.screenshot({
+      path: testInfo.outputPath(`file-reference-${width}.png`),
+      fullPage: true,
+    });
+    await dialog.getByRole("button", { name: "取消" }).click();
+    await draft.fill("");
+  }
+  expect(references).toEqual([
+    "README.md",
+    "../outside.txt",
+    "README.md",
+    "../outside.txt",
+  ]);
+});
+
 test("restores archived history without switching the active Session", async ({
   page,
 }) => {

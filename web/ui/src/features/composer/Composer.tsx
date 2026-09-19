@@ -5,6 +5,7 @@ import {
   Check,
   ChevronRight,
   Command,
+  FileText,
   Folder,
   KeyRound,
   Plus,
@@ -29,6 +30,7 @@ import {
 } from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
+import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
 import {
   filterWebCommands,
@@ -80,7 +82,9 @@ export function Composer(props: ComposerProps) {
   const [composerFocused, setComposerFocused] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
+  const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
+  const restoreFileReferenceFocus = useRef(false);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
     void prompt;
@@ -90,6 +94,15 @@ export function Composer(props: ComposerProps) {
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
     element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
   }, [prompt]);
+  useEffect(() => {
+    if (fileReferenceOpen || !restoreFileReferenceFocus.current) return;
+    restoreFileReferenceFocus.current = false;
+    const timer = window.setTimeout(() => {
+      textarea.current?.focus();
+      textarea.current?.setSelectionRange(cursor, cursor);
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [cursor, fileReferenceOpen]);
   const restoredRecoveryCommandId = useRef<string | null>(null);
   const commandMenuWasOpen = useRef(false);
   const selected = props.snapshot?.selectedSession;
@@ -158,6 +171,8 @@ export function Composer(props: ComposerProps) {
     filteredCommands.length > 0;
   const commandEntryAvailable =
     active && !prompt.trim() && !props.sessionSwitching;
+  const contextEntryAvailable =
+    canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
 
   useEffect(() => {
     const opened = commandMenuOpen && !commandMenuWasOpen.current;
@@ -238,6 +253,7 @@ export function Composer(props: ComposerProps) {
 
     draftRevision.current += 1;
     setPrompt("");
+    setFileReferenceOpen(false);
     if (submission?.scope === previousScope) {
       submission.canTransferToCreatedSession = false;
     }
@@ -324,6 +340,21 @@ export function Composer(props: ComposerProps) {
         return;
       }
     }
+  };
+
+  const insertFileReference = (reference: string) => {
+    const position = Math.min(cursor, prompt.length);
+    const before = prompt.slice(0, position);
+    const after = prompt.slice(position);
+    const formatted = `\`${reference.replaceAll("`", "\\`")}\``;
+    const leading = before && !/\s$/u.test(before) ? " " : "";
+    const trailing = after && !/^\s/u.test(after) ? " " : "";
+    const value = `${before}${leading}${formatted}${trailing}${after}`;
+    const nextCursor = before.length + leading.length + formatted.length;
+    draftRevision.current += 1;
+    setPrompt(value);
+    setCursor(nextCursor);
+    restoreFileReferenceFocus.current = true;
   };
 
   const workspaceItems = [
@@ -621,11 +652,11 @@ export function Composer(props: ComposerProps) {
         )}
         <div className="composer-toolbar">
           <div className="composer-toolbar-context">
-            {commandEntryAvailable ? (
+            {contextEntryAvailable ? (
               <DropdownMenu
                 className="composer-context-menu"
                 button={{
-                  label: t("commands"),
+                  label: t("addContext"),
                   icon: <Plus />,
                   isIconOnly: true,
                   size: "sm",
@@ -634,9 +665,21 @@ export function Composer(props: ComposerProps) {
                 }}
                 items={[
                   {
+                    id: "file-reference",
+                    label: t("fileReference"),
+                    icon: <FileText />,
+                    onClick: () => setFileReferenceOpen(true),
+                  },
+                  {
                     id: "slash-commands",
                     label: t("commands"),
+                    description: !active
+                      ? t("commandsSessionRequired")
+                      : prompt.trim()
+                        ? t("commandsEmptyDraftOnly")
+                        : undefined,
                     icon: <Command />,
+                    isDisabled: !commandEntryAvailable,
                     onClick: () => {
                       draftRevision.current += 1;
                       setPrompt("/");
@@ -775,6 +818,12 @@ export function Composer(props: ComposerProps) {
           {hint}
         </div>
       </form>
+      <FileReferenceDialog
+        open={fileReferenceOpen}
+        sessionId={active ? selected?.id : undefined}
+        onClose={() => setFileReferenceOpen(false)}
+        onInsert={insertFileReference}
+      />
     </div>
   );
 }

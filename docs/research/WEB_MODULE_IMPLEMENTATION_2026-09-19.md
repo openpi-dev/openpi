@@ -34,6 +34,10 @@
 
 该设置页在真实 Host 的 740px 页面中完成搜索、筛选、关闭和焦点返回复验，并在 Playwright 1280px/390px 下通过 axe。消融时移除只有一个项目的设置侧栏，独立页面、搜索和筛选仍满足目标且减少无效层级，因此没有保留为未来功能预建的导航抽象。
 
+后续真实 `gpt-5.6-luna / medium` 只读任务实际调用 `read` 与 `bash`，从差距记录和 Composer 源码指出：统一 `+` 菜单只有 Slash Commands，缺少文件上下文入口。Web 因此复用现有 Astryx `DropdownMenu`、`Dialog`、`TextInput` 与 Host artifact grant，加入“引用工作区文件”：活动 Session 先验证路径仍是工作区内的普通文件，再把反引号包裹的可见路径插入当前光标；新 Session 首条消息只插入路径，不声称文件已上传，实际读取仍由 Pi 工具权限决定。非空草稿继续保留 `+` 入口，Slash Commands 在会覆盖正文时显示禁用原因。
+
+真实 Host 复验覆盖合法 `README.md`、非空草稿继续引用、焦点返回及 `../outside.txt` 越界拒绝；实测还发现 Host 英文错误直接泄漏到中文 UI，随后按 artifact 错误码映射为本地化提示。Playwright 在 1280px/390px 下覆盖合法引用、禁用状态、越界失败与 axe。消融移除了菜单项与对话框重复的二级说明；移除 artifact 校验则会破坏越界拒绝测试，因此保留该运行时边界和独立异步组件。
+
 ## 验证与限制
 
 - `bun run check` 与 `bun run test`、静态资产 Playwright、真实 Host 的文件/变更视图 E2E 通过；具体最终计数写在 PR Validation。

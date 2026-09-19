@@ -67,6 +67,23 @@
   line-height: 1.4;
 }
 
+.file-reference-heading {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.file-reference-heading > svg {
+  width: 18px;
+  height: 18px;
+  flex: none;
+  margin-top: 2px;
+  color: var(--muted);
+}
+
+.file-reference-heading p { margin-top: 3px; }
+.file-reference-error { color: var(--error) !important; }
+
 @media (max-width: 520px) {
   .composer-m02 .composer-toolbar-controls { gap: 3px; }
   .composer-m02 .model-picker-wrap { flex: 1 1 90px; min-width: 0; max-width: 100%; }

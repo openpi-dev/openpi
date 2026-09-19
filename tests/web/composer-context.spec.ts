@@ -10,14 +10,38 @@ import {
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
-import { afterEach, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
+import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
 import { compactSummary } from "../../web/ui/src/lib/format.ts";
 
-afterEach(cleanup);
+beforeAll(() => {
+  Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = true;
+    },
+  });
+  Object.defineProperty(HTMLDialogElement.prototype, "close", {
+    configurable: true,
+    value(this: HTMLDialogElement) {
+      this.open = false;
+    },
+  });
+});
+
+afterAll(() => {
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+  Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+});
+
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 
 function snapshot(
   id = "session-1",
@@ -99,16 +123,18 @@ function setup(overrides: Record<string, unknown> = {}) {
   return { ...view, node, props, sendPrompt, discoverCommands };
 }
 
-it("shows the snapshot target and only an authorized command action", async () => {
+it("shows the snapshot target and unified context actions", async () => {
   const { discoverCommands, sendPrompt } = setup();
   expect(screen.getByText("First task")).toBeTruthy();
   expect(screen.getByText("Workspace")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: i18n.t("commands") }));
-  expect(screen.getAllByRole("menuitem")).toHaveLength(1);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  expect(screen.getAllByRole("menuitem")).toHaveLength(2);
+  expect(
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
+  ).toBeTruthy();
   expect(
     screen.getByRole("menuitem", { name: i18n.t("commands") }),
   ).toBeTruthy();
-  expect(screen.queryByText(/attachment|upload|file reference/iu)).toBeNull();
   fireEvent.click(screen.getByRole("menuitem", { name: i18n.t("commands") }));
   const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
     name: i18n.t("describeTask"),
@@ -142,7 +168,14 @@ it("keeps a nonempty draft and its exact text-only prompt contract", async () =>
   const { sendPrompt } = setup();
   const input = screen.getByRole<HTMLTextAreaElement>("textbox");
   fireEvent.change(input, { target: { value: "  Review this\ncarefully  " } });
-  expect(screen.queryByRole("button", { name: i18n.t("commands") })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  expect(
+    screen
+      .getByRole("menuitem", { name: /Slash commands/u })
+      .getAttribute("aria-disabled"),
+  ).toBe("true");
+  fireEvent.keyDown(screen.getByRole("menu"), { key: "Escape" });
+  input.focus();
   fireEvent(
     input,
     new KeyboardEvent("keydown", {
@@ -156,6 +189,107 @@ it("keeps a nonempty draft and its exact text-only prompt contract", async () =>
   fireEvent.keyDown(input, { key: "Enter" });
   expect(sendPrompt).toHaveBeenCalledWith("  Review this\ncarefully  ");
   await waitFor(() => expect(input.value).toBe(""));
+});
+
+it("validates and inserts a workspace file reference at the caret", async () => {
+  const resolve = vi
+    .spyOn(WebClient.prototype, "resolveArtifact")
+    .mockResolvedValue({ handle: "artifact-1" });
+  const metadata = vi
+    .spyOn(WebClient.prototype, "artifactMetadata")
+    .mockResolvedValue({ identity: "stable" });
+  const release = vi
+    .spyOn(WebClient.prototype, "releaseArtifact")
+    .mockResolvedValue({});
+  setup();
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "Review carefully" } });
+  input.setSelectionRange(7, 7);
+  fireEvent.select(input);
+
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
+  );
+  const reference = "web/ui/src/app/App.tsx";
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("fileReferenceLabel") }),
+    { target: { value: reference } },
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("insertReference") }),
+  );
+
+  await waitFor(() =>
+    expect(input.value).toBe("Review `web/ui/src/app/App.tsx` carefully"),
+  );
+  expect(resolve).toHaveBeenCalledWith(
+    "session-1",
+    reference,
+    undefined,
+    expect.any(AbortSignal),
+  );
+  expect(metadata).toHaveBeenCalledWith(
+    "session-1",
+    "artifact-1",
+    expect.any(AbortSignal),
+  );
+  await waitFor(() =>
+    expect(release).toHaveBeenCalledWith("session-1", "artifact-1"),
+  );
+  expect(document.activeElement).toBe(input);
+  expect(input.selectionStart).toBe(`Review \`${reference}\``.length);
+});
+
+it("keeps a failed active-session reference editable", async () => {
+  vi.spyOn(WebClient.prototype, "resolveArtifact").mockRejectedValue(
+    new WebApiError("Host message", 403, "ARTIFACT_DENIED"),
+  );
+  setup();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
+  );
+  const reference = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("fileReferenceLabel"),
+  });
+  fireEvent.change(reference, { target: { value: "missing.ts" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("insertReference") }),
+  );
+
+  expect((await screen.findByRole("alert")).textContent).toContain(
+    i18n.t("fileReferenceDenied"),
+  );
+  expect(reference.value).toBe("missing.ts");
+  expect(
+    screen.getByRole("dialog", { name: i18n.t("fileReferenceTitle") }),
+  ).toBeTruthy();
+});
+
+it("can add a visible file path to the first message of a new session", async () => {
+  const resolve = vi.spyOn(WebClient.prototype, "resolveArtifact");
+  setup({ workspaceDraft: true });
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
+  );
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("fileReferenceLabel") }),
+    { target: { value: "README.md" } },
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("insertReference") }),
+  );
+
+  await waitFor(() => expect(input.value).toBe("`README.md`"));
+  expect(resolve).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(input);
 });
 
 it("does not submit with Enter while a model choice is unconfirmed", () => {
