@@ -5,6 +5,7 @@ import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebSessionProjection } from "../../web/protocol/types.ts";
+import { summarizeChangeCalls } from "../../web/ui/src/features/review/change-evidence.ts";
 import {
   changeCalls,
   changeLineCounts,
@@ -116,6 +117,49 @@ it("keeps each exact tool receipt instead of merging a file into a Git snapshot"
     deletions: 1,
   });
   expect(changeLineCounts(rows[0]!.call, rows[0]!.result)).toBeUndefined();
+});
+
+it("groups only confirmed saved changes by turn and file", () => {
+  const rows = changeCalls({
+    ...session,
+    entries: [
+      {
+        id: "prompt",
+        type: "message",
+        timestamp: "2026-09-18T00:00:00Z",
+        message: { role: "user", content: "Update the report" },
+      },
+      ...entries,
+    ],
+  });
+  expect(rows.every((row) => row.turn === 1)).toBe(true);
+  expect(summarizeChangeCalls(rows, 1)).toEqual({
+    files: [
+      {
+        path: "report.md",
+        additions: 1,
+        deletions: 1,
+        hasCounts: true,
+      },
+    ],
+    additions: 1,
+    deletions: 1,
+    hasCounts: true,
+  });
+  expect(summarizeChangeCalls(rows, 2)).toBeUndefined();
+  expect(summarizeChangeCalls(rows.slice(0, 1), 1)).toEqual({
+    files: [
+      {
+        path: "report.md",
+        additions: 0,
+        deletions: 0,
+        hasCounts: false,
+      },
+    ],
+    additions: 0,
+    deletions: 0,
+    hasCounts: false,
+  });
 });
 
 it("ignores metadata between files in a combined diff", () => {

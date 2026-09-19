@@ -381,6 +381,95 @@ function activeSnapshot(): WebSnapshot {
   };
 }
 
+it("groups transcript turns with state and confirmed file change receipts", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt-1",
+      type: "message",
+      timestamp: "2026-09-18T00:00:00Z",
+      message: { role: "user", content: "Update report" },
+    },
+    {
+      id: "call-1",
+      type: "message",
+      timestamp: "2026-09-18T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [
+          {
+            type: "toolCall",
+            id: "edit-1",
+            name: "edit",
+            arguments: '{"path":"src/report.ts"}',
+          },
+        ],
+      },
+    },
+    {
+      id: "result-1",
+      type: "message",
+      timestamp: "2026-09-18T00:00:02Z",
+      message: {
+        role: "toolResult",
+        toolCallId: "edit-1",
+        content: "updated",
+        isError: false,
+        details: { diff: "@@ -1 +1 @@\n-old\n+new" },
+      },
+    },
+    {
+      id: "answer-1",
+      type: "message",
+      timestamp: "2026-09-18T00:00:03Z",
+      message: { role: "assistant", content: "Report updated." },
+    },
+    {
+      id: "prompt-2",
+      type: "message",
+      timestamp: "2026-09-18T00:00:04Z",
+      message: { role: "user", content: "Explain it" },
+    },
+    {
+      id: "answer-2",
+      type: "message",
+      timestamp: "2026-09-18T00:00:05Z",
+      message: { role: "assistant", content: "Explanation." },
+    },
+  ];
+  const openReview = vi.fn();
+  const { container } = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+      onOpenReview: openReview,
+    }),
+  );
+
+  const turns = container.querySelectorAll(".conversation-turn");
+  expect(turns).toHaveLength(2);
+  expect(turns[0]?.textContent).toContain("Update report");
+  expect(turns[0]?.textContent).toContain("Report updated.");
+  expect(turns[1]?.textContent).toContain("Explain it");
+  expect(container.querySelectorAll(".final-response")).toHaveLength(2);
+  expect(screen.getAllByText(i18n.t("turnState_complete"))).toHaveLength(2);
+  fireEvent.click(screen.getByText(i18n.t("filesChanged", { count: 1 })));
+  expect(screen.getByText("report.ts")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("reviewChanges") }),
+  );
+  expect(openReview).toHaveBeenCalledTimes(1);
+});
+
 function renderEditableTranscript(onResend = vi.fn(async () => false)) {
   const snapshot = activeSnapshot();
   return renderWithI18n(

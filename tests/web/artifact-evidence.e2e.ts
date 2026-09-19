@@ -219,6 +219,17 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("button", { name: "Report", exact: true }),
     ).toBeVisible();
+    const turnReceipt = page.locator(".turn-change-receipt");
+    await expect(turnReceipt).toHaveCount(1);
+    await expect(turnReceipt).toContainText(/1 (?:个文件已更改|file changed)/u);
+    await turnReceipt.locator("summary").click();
+    await expect(turnReceipt).toContainText("report space.md");
+    await expect(turnReceipt.locator(".turn-change-counts")).toContainText(
+      "+1-1",
+    );
+    await expect(
+      turnReceipt.getByRole("button", { name: /审阅更改|Review changes/u }),
+    ).toBeVisible();
     for (const group of await page.locator(".tool-group > summary").all())
       await group.click();
     for (const summary of await page
@@ -294,6 +305,12 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await review.getByRole("button", { name: /关闭|Close/u }).click();
     await expect(reviewTrigger).toBeFocused();
     await page.setViewportSize({ width: 390, height: 844 });
+    await expect(turnReceipt).toBeVisible();
+    expect(
+      await turnReceipt.evaluate(
+        (element) => element.scrollWidth <= element.clientWidth,
+      ),
+    ).toBe(true);
     await reviewTrigger.click();
     const mobileReview = page.getByRole("main", {
       name: /变更证据|Change evidence/u,

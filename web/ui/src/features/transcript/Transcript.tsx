@@ -1,8 +1,11 @@
+import { StatusDot } from "@astryxdesign/core/StatusDot";
 import {
+  ArrowDown,
   Bot,
   Check,
+  ChevronDown,
   Clipboard,
-  ArrowDown,
+  FileDiff,
   FilePenLine,
   FileText,
   Folder,
@@ -27,6 +30,7 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
+import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
 import type {
   WebLiveMessage,
   WebMessagePart,
@@ -41,9 +45,12 @@ import {
   turnTitle,
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
-import { ToolEvidence } from "./ToolEvidence.tsx";
-import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
 import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
+import {
+  changeCalls,
+  summarizeChangeCalls,
+} from "../review/change-evidence.ts";
+import { ToolEvidence } from "./ToolEvidence.tsx";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -65,15 +72,19 @@ interface TranscriptProps {
   scrollToBottom: number;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
+  onOpenReview?: () => void;
 }
 
 type Status = "running" | "done" | "error" | "warn" | "unknown";
 interface RenderRow {
   key: string;
+  turn: number;
+  kind: "prompt" | "process" | "response" | "outcome" | "custom";
   content: ReactNode;
   groupable?: boolean;
   error?: boolean;
   icon?: ReactNode;
+  outcome?: "failed" | "interrupted";
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -724,6 +735,155 @@ function groupRows(rows: RenderRow[], stepsLabel: string) {
   });
 }
 
+function fileName(path: string) {
+  return path.split(/[\\/]/u).at(-1) || path;
+}
+
+function ConversationTurn({
+  id,
+  rows,
+  active,
+  changes,
+  stepsLabel,
+  onOpenReview,
+}: {
+  id: number;
+  rows: RenderRow[];
+  active: boolean;
+  changes?: ReturnType<typeof summarizeChangeCalls>;
+  stepsLabel: string;
+  onOpenReview?: () => void;
+}) {
+  const { t } = useTranslation();
+  const failed = rows.some((row) => row.outcome === "failed");
+  const interrupted = rows.some((row) => row.outcome === "interrupted");
+  const answered = rows.some((row) => row.kind === "response");
+  const status = failed
+    ? "failed"
+    : interrupted
+      ? "interrupted"
+      : active
+        ? "running"
+        : answered
+          ? "complete"
+          : "waiting";
+  const variant =
+    status === "failed"
+      ? "error"
+      : status === "interrupted"
+        ? "warning"
+        : status === "running"
+          ? "accent"
+          : status === "complete"
+            ? "success"
+            : "neutral";
+  const statusLabel = t(`turnState_${status}`);
+  return (
+    <section
+      className={`conversation-turn${id === 0 ? " prelude" : ""}`}
+      data-turn={id}
+    >
+      {id > 0 && (
+        <header className="turn-heading">
+          <span className="turn-number">{t("turnLabel", { number: id })}</span>
+          <span className={`turn-state ${status}`}>
+            <StatusDot
+              variant={variant}
+              label={statusLabel}
+              isPulsing={status === "running"}
+              icon={
+                status === "complete" ? (
+                  <Check aria-hidden="true" />
+                ) : status === "failed" || status === "interrupted" ? (
+                  <X aria-hidden="true" />
+                ) : undefined
+              }
+            />
+            {statusLabel}
+          </span>
+        </header>
+      )}
+      {groupRows(rows, stepsLabel)}
+      {changes && (
+        <details className="turn-change-receipt">
+          <summary>
+            <span className="turn-change-title">
+              <FileDiff aria-hidden="true" />
+              <strong>
+                {t("filesChanged", { count: changes.files.length })}
+              </strong>
+            </span>
+            {changes.hasCounts && (
+              <span className="turn-change-total" aria-hidden="true">
+                <span className="review-additions">+{changes.additions}</span>
+                <span className="review-deletions">-{changes.deletions}</span>
+              </span>
+            )}
+            <ChevronDown className="turn-change-chevron" aria-hidden="true" />
+          </summary>
+          <div className="turn-change-body">
+            <ul>
+              {changes.files.map((file) => (
+                <li key={file.path} title={file.path}>
+                  <span>{fileName(file.path)}</span>
+                  {file.hasCounts && (
+                    <span className="turn-change-counts">
+                      <span className="review-additions">
+                        +{file.additions}
+                      </span>
+                      <span className="review-deletions">
+                        -{file.deletions}
+                      </span>
+                    </span>
+                  )}
+                </li>
+              ))}
+            </ul>
+            {onOpenReview && (
+              <button type="button" onClick={onOpenReview}>
+                <FileDiff aria-hidden="true" /> {t("reviewChanges")}
+              </button>
+            )}
+          </div>
+        </details>
+      )}
+    </section>
+  );
+}
+
+function renderTurns(
+  rows: RenderRow[],
+  stepsLabel: string,
+  running: boolean,
+  changes: ReturnType<typeof changeCalls>,
+  onOpenReview?: () => void,
+) {
+  const turns: Array<{ id: number; rows: RenderRow[] }> = [];
+  for (const row of rows) {
+    const current = turns.at(-1);
+    if (current?.id === row.turn) current.rows.push(row);
+    else turns.push({ id: row.turn, rows: [row] });
+  }
+  const changesByTurn = new Map<number, ReturnType<typeof changeCalls>>();
+  for (const change of changes) {
+    const rows = changesByTurn.get(change.turn) ?? [];
+    rows.push(change);
+    changesByTurn.set(change.turn, rows);
+  }
+  const lastTurn = turns.at(-1)?.id;
+  return turns.map((turn) => (
+    <ConversationTurn
+      id={turn.id}
+      rows={turn.rows}
+      active={running && turn.id === lastTurn}
+      changes={summarizeChangeCalls(changesByTurn.get(turn.id) ?? [], turn.id)}
+      stepsLabel={stepsLabel}
+      onOpenReview={onOpenReview}
+      key={`turn-group-${turn.id}-${turn.rows[0]?.key}`}
+    />
+  ));
+}
+
 export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
@@ -803,6 +963,8 @@ export function Transcript(props: TranscriptProps) {
         return [
           {
             key: entry.key,
+            turn,
+            kind: "custom",
             content: (
               <article className="message-row assistant detail-only">
                 <div className="message-content">
@@ -821,6 +983,8 @@ export function Transcript(props: TranscriptProps) {
         return [
           {
             key: entry.key,
+            turn,
+            kind: "prompt",
             content: (
               <article className="message-row user" id={`turn-${turn}`}>
                 <div className="message-content">
@@ -845,6 +1009,8 @@ export function Transcript(props: TranscriptProps) {
               active && props.liveRunning && index === entries.length - 1;
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
+              turn,
+              kind: "process",
               icon: <Lightbulb />,
               content: (
                 <article className="message-row assistant detail-only">
@@ -891,6 +1057,8 @@ export function Transcript(props: TranscriptProps) {
             const toolIcon = iconForTool(part.name);
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
+              turn,
+              kind: "process",
               groupable: !card || isEvidenceTool(part.name),
               error: Boolean(result?.isError),
               icon: toolIcon,
@@ -920,8 +1088,12 @@ export function Transcript(props: TranscriptProps) {
         if (message.content.trim())
           detailRows.push({
             key: `${entry.key}-answer`,
+            turn,
+            kind: "response",
             content: (
-              <article className="message-row assistant">
+              <article
+                className={`message-row assistant response${lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+              >
                 <div className="message-content">
                   <Markdown>{message.content}</Markdown>
                 </div>
@@ -945,7 +1117,10 @@ export function Transcript(props: TranscriptProps) {
             latestUserIndex === lastUserIndex ? latestUserPrompt : undefined;
           detailRows.push({
             key: `${entry.key}-outcome`,
+            turn,
+            kind: "outcome",
             error: failed,
+            outcome: failed ? "failed" : "interrupted",
             content: (
               <article className="message-row assistant outcome-row">
                 <ProviderOutcome
@@ -1012,6 +1187,8 @@ export function Transcript(props: TranscriptProps) {
         return [
           {
             key: entry.key,
+            turn,
+            kind: "process",
             groupable: !family,
             error: status === "error",
             icon,
@@ -1065,6 +1242,10 @@ export function Transcript(props: TranscriptProps) {
   const running =
     active &&
     (props.snapshot.runtime.status === "running" || props.liveRunning);
+  const changes = useMemo(
+    () => (selected ? changeCalls(selected) : []),
+    [selected],
+  );
   const runningLabel = props.liveRetry
     ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
     : props.livePhase === "preparing"
@@ -1086,7 +1267,13 @@ export function Transcript(props: TranscriptProps) {
           setReadingHistory(!pinned.current);
         }}
       >
-        {groupRows(rows, t("stepsLabel"))}
+        {renderTurns(
+          rows,
+          t("stepsLabel"),
+          running,
+          changes,
+          props.onOpenReview,
+        )}
         {running && (
           <div
             className="conversation-running"

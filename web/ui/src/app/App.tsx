@@ -408,6 +408,7 @@ export function App() {
               scrollToBottom={state.scrollToBottom}
               onResend={resend}
               onInspectSubagent={inspectSubagent}
+              onOpenReview={openReview}
             />
           ) : null}
           {state.snapshot && (
