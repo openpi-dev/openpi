@@ -1,35 +1,45 @@
 import {
-  CheckCircle2,
-  CircleDashed,
+  Activity,
+  Check,
+  Clipboard,
   KeyRound,
-  RefreshCw,
-  Search,
+  SlidersHorizontal,
   X,
 } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebProviderAuthProjection } from "../../../../runtime/types.ts";
-import { WebClient } from "../../protocol/client.ts";
+import { copyText } from "../../lib/clipboard.ts";
+import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
 
-type ProviderFilter = "all" | "configured" | "missing";
+type SettingsSection = "runtime" | "providers" | "openpi";
+
+const settingsSections = [
+  { id: "runtime", label: "runtimeStatus", Icon: Activity },
+  { id: "providers", label: "providerSettings", Icon: KeyRound },
+  { id: "openpi", label: "openPiSettings", Icon: SlidersHorizontal },
+] as const;
 
 export function ProviderSettingsPage({
   sessionId,
   cwd,
+  model,
+  thinkingLevel,
+  onOpenRuntimeStatus,
   onClose,
 }: {
   sessionId: string;
   cwd: string;
+  model: string;
+  thinkingLevel: string;
+  onOpenRuntimeStatus: () => void;
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const client = useMemo(() => new WebClient(), []);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [revision, refresh] = useState(0);
-  const [data, setData] = useState<WebProviderAuthProjection | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [query, setQuery] = useState("");
-  const [filter, setFilter] = useState<ProviderFilter>("all");
+  const [section, setSection] = useState<SettingsSection>("providers");
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
+    null,
+  );
 
   useEffect(() => {
     closeButton.current?.focus();
@@ -40,51 +50,32 @@ export function ProviderSettingsPage({
     return () => window.removeEventListener("keydown", closeOnEscape);
   }, [onClose]);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
-  useEffect(() => {
-    const controller = new AbortController();
-    setData(null);
-    setError(null);
-    void client
-      .providerAuth(sessionId, controller.signal)
-      .then(setData, (reason) => {
-        if (!controller.signal.aborted)
-          setError(
-            reason instanceof Error ? reason.message : t("providerLoadFailed"),
-          );
-      });
-    return () => controller.abort();
-  }, [client, revision, sessionId, t]);
+  const title =
+    section === "runtime"
+      ? t("runtimeStatus")
+      : section === "openpi"
+        ? t("openPiSettings")
+        : t("providerSettings");
+  const intro =
+    section === "runtime"
+      ? t("runtimeSettingsIntro")
+      : section === "openpi"
+        ? t("openPiSettingsIntro")
+        : t("providerSettingsIntro");
 
-  const providers = useMemo(() => {
-    const normalized = query.trim().toLocaleLowerCase();
-    return [...(data?.providers ?? [])]
-      .sort(
-        (left, right) =>
-          Number(right.configured) - Number(left.configured) ||
-          (left.name || left.id).localeCompare(right.name || right.id),
-      )
-      .filter((provider) => {
-        if (filter === "configured" && !provider.configured) return false;
-        if (filter === "missing" && provider.configured) return false;
-        if (!normalized) return true;
-        return [
-          provider.name,
-          provider.id,
-          ...(provider.authMethods ?? []),
-        ].some((value) => value.toLocaleLowerCase().includes(normalized));
-      });
-  }, [data, filter, query]);
-  const configured = data?.providers.filter(
-    (provider) => provider.configured,
-  ).length;
+  const copySetup = () => {
+    setCopyStatus(null);
+    void copyText("/openpi-setup").then((success) =>
+      setCopyStatus(success ? "copied" : "failed"),
+    );
+  };
 
   return (
     <div className="provider-settings-page">
       <header className="provider-settings-header">
         <div>
           <span>{t("settings")}</span>
-          <strong>{t("providerSettings")}</strong>
+          <strong>{title}</strong>
         </div>
         <button
           ref={closeButton}
@@ -97,127 +88,116 @@ export function ProviderSettingsPage({
         </button>
       </header>
       <div className="provider-settings-layout">
-        <main className="provider-settings-content">
-          <div className="provider-settings-title-row">
-            <div>
-              <h1 id="provider-settings-title">{t("providerSettings")}</h1>
-              <p>{t("providerSettingsIntro")}</p>
+        <nav
+          className="provider-settings-navigation"
+          aria-label={t("settingsNavigation")}
+        >
+          <strong>{t("settings")}</strong>
+          <div>
+            {settingsSections.map(({ id, label, Icon }) => (
+              <button
+                key={id}
+                type="button"
+                aria-current={section === id ? "page" : undefined}
+                onClick={() => {
+                  setSection(id);
+                  setCopyStatus(null);
+                }}
+              >
+                <Icon aria-hidden="true" />
+                <span>{t(label)}</span>
+              </button>
+            ))}
+          </div>
+        </nav>
+        <div className="provider-settings-scroll">
+          <main
+            className="provider-settings-content"
+            aria-labelledby="provider-settings-title"
+          >
+            <div className="provider-settings-title-row">
+              <div>
+                <h1 id="provider-settings-title">{title}</h1>
+                <p>{intro}</p>
+              </div>
             </div>
-            <button
-              type="button"
-              className="provider-refresh"
-              aria-label={t("refreshStatus")}
-              disabled={!data}
-              onClick={() => refresh((value) => value + 1)}
+            <p className="provider-settings-workspace" title={cwd}>
+              {cwd}
+            </p>
+            <section
+              className="settings-summary-section"
+              hidden={section !== "runtime"}
             >
-              <RefreshCw aria-hidden="true" />
-              <span>{t("refreshStatus")}</span>
-            </button>
-          </div>
-          <p className="provider-settings-workspace" title={cwd}>
-            {cwd}
-          </p>
-          <div className="provider-settings-toolbar">
-            <label className="provider-search">
-              <Search aria-hidden="true" />
-              <span className="sr-only">{t("providerSearchLabel")}</span>
-              <input
-                value={query}
-                placeholder={t("providerSearchPlaceholder")}
-                onChange={(event) => setQuery(event.target.value)}
-              />
-            </label>
-            <fieldset aria-label={t("providerFilter")}>
-              {(["all", "configured", "missing"] as const).map((value) => (
-                <button
-                  type="button"
-                  key={value}
-                  aria-pressed={filter === value}
-                  onClick={() => setFilter(value)}
-                >
-                  {t(`providerFilter_${value}`)}
-                </button>
-              ))}
-            </fieldset>
-          </div>
-          {data && (
-            <p className="provider-settings-count" role="status">
-              {t("providerConfiguredCount", {
-                configured,
-                total: data.providers.length,
-              })}
-            </p>
-          )}
-          {!data && !error ? (
-            <p className="provider-settings-state" role="status">
-              {t("providerLoading")}
-            </p>
-          ) : error ? (
-            <div className="provider-settings-state error" role="alert">
-              <strong>{t("providerLoadFailed")}</strong>
-              <span>{error}</span>
+              <dl className="settings-summary-list">
+                <div>
+                  <dt>{t("selectedModel")}</dt>
+                  <dd>{model}</dd>
+                </div>
+                <div>
+                  <dt>{t("thinkingLevel")}</dt>
+                  <dd>{thinkingLevel}</dd>
+                </div>
+                <div>
+                  <dt>{t("currentWorkspace")}</dt>
+                  <dd title={cwd}>{cwd}</dd>
+                </div>
+              </dl>
               <button
                 type="button"
-                onClick={() => refresh((value) => value + 1)}
+                className="settings-primary-action"
+                onClick={onOpenRuntimeStatus}
               >
-                {t("retryAdmissionCheck")}
+                <Activity aria-hidden="true" />
+                {t("openRuntimeDetails")}
               </button>
-            </div>
-          ) : providers.length ? (
-            <div className="provider-list">
-              {providers.map((provider) => (
-                <div className="provider-row" key={provider.id}>
-                  <span
-                    className={`provider-state-icon ${provider.configured ? "configured" : "missing"}`}
-                    aria-hidden="true"
-                  >
-                    {provider.configured ? <CheckCircle2 /> : <CircleDashed />}
-                  </span>
-                  <div className="provider-identity">
-                    <strong>{provider.name || provider.id}</strong>
-                    {provider.name !== provider.id && (
-                      <span>{provider.id}</span>
-                    )}
-                    <small>
-                      {(provider.authMethods ?? []).length
-                        ? (provider.authMethods ?? [])
-                            .map((method) => t(`providerAuth_${method}`))
-                            .join(" · ")
-                        : t("providerAuthUnknown")}
-                      {provider.subscription
-                        ? ` · ${t("providerSubscription")}`
-                        : ""}
-                    </small>
-                  </div>
-                  <span
-                    className={`provider-state-label ${provider.configured ? "configured" : "missing"}`}
-                  >
-                    {t(
-                      provider.configured
-                        ? "credentialConfigured"
-                        : "credentialMissing",
-                    )}
-                  </span>
+              <p className="settings-section-note">{t("configurationViaPi")}</p>
+            </section>
+            <section
+              className="settings-summary-section"
+              hidden={section !== "openpi"}
+            >
+              <div className="settings-command-row">
+                <div>
+                  <strong>{t("canonicalSetupCommand")}</strong>
+                  <code>/openpi-setup</code>
                 </div>
-              ))}
-            </div>
-          ) : (
-            <div className="provider-settings-state">
-              <strong>{t("providerNoMatches")}</strong>
-              <span>{t("providerNoMatchesHint")}</span>
-            </div>
-          )}
-          {data?.truncation.truncated && (
-            <p className="inspection-warning">{t("providersBounded")}</p>
-          )}
-          <aside className="provider-read-only">
-            <KeyRound aria-hidden="true" />
-            <div>
-              <strong>{t("providerReadOnly")}</strong>
-              <p>{t("providerReadOnlyDetail")}</p>
-            </div>
-          </aside>
-        </main>
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={t(
+                    copyStatus === "copied"
+                      ? "copiedMessage"
+                      : "copySetupCommand",
+                  )}
+                  title={t(
+                    copyStatus === "copied"
+                      ? "copiedMessage"
+                      : "copySetupCommand",
+                  )}
+                  onClick={copySetup}
+                >
+                  {copyStatus === "copied" ? <Check /> : <Clipboard />}
+                </button>
+              </div>
+              {copyStatus === "failed" && (
+                <p className="inspection-warning" role="status">
+                  {t("copyFailed")}
+                </p>
+              )}
+              <aside className="provider-read-only">
+                <SlidersHorizontal aria-hidden="true" />
+                <div>
+                  <strong>{t("providerReadOnly")}</strong>
+                  <p>{t("configurationViaPi")}</p>
+                </div>
+              </aside>
+            </section>
+            <ProviderStatusSection
+              sessionId={sessionId}
+              hidden={section !== "providers"}
+            />
+          </main>
+        </div>
       </div>
     </div>
   );

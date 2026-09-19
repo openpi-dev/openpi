@@ -7,6 +7,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WebSessionProjection } from "../../web/protocol/types.ts";
 import {
   changeCalls,
+  changeLineCounts,
   ReviewPanel,
 } from "../../web/ui/src/features/review/ReviewPanel.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
@@ -108,6 +109,11 @@ it("keeps each exact tool receipt instead of merging a file into a Git snapshot"
       (row) => row.result === undefined,
     ),
   ).toBe(true);
+  expect(changeLineCounts(rows[1]!.call, rows[1]!.result)).toEqual({
+    additions: 1,
+    deletions: 1,
+  });
+  expect(changeLineCounts(rows[0]!.call, rows[0]!.result)).toBeUndefined();
 });
 
 it("leaves ambiguous duplicate call and result IDs unpaired", () => {
@@ -170,6 +176,11 @@ it("labels partial Session evidence and supports keyboard return without a Git c
   expect(screen.getByText(/not the current Git working tree/u)).toBeTruthy();
   expect(screen.getByText(/earlier changes may be absent/u)).toBeTruthy();
   expect(container.querySelectorAll(".review-entry")).toHaveLength(3);
+  expect(
+    screen.getByText(
+      i18n.t("changeEvidenceDelta", { additions: 1, deletions: 1 }),
+    ),
+  ).toBeTruthy();
   const cards = container.querySelectorAll(".review-entry .tool-evidence-card");
   fireEvent.click(cards[1]!.querySelector("summary")!);
   expect(

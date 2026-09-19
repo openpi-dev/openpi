@@ -1,7 +1,9 @@
 import { FileDiff, X } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { projectToolEvidence } from "../../../../protocol/evidence.ts";
 import type { WebSessionProjection } from "../../../../protocol/types.ts";
+import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
 import { ToolEvidence } from "../transcript/ToolEvidence.tsx";
 
 export function changeCalls(session: WebSessionProjection) {
@@ -45,6 +47,22 @@ export function changeCalls(session: WebSessionProjection) {
   }));
 }
 
+export function changeLineCounts(
+  call: ReturnType<typeof changeCalls>[number]["call"],
+  result: ReturnType<typeof changeCalls>[number]["result"],
+) {
+  const diff = projectToolEvidence(call, result).diff;
+  if (!diff) return undefined;
+  let additions = 0;
+  let deletions = 0;
+  for (const line of diff.split("\n")) {
+    if (line.startsWith("+++") || line.startsWith("---")) continue;
+    if (line.startsWith("+")) additions++;
+    else if (line.startsWith("-")) deletions++;
+  }
+  return additions || deletions ? { additions, deletions } : undefined;
+}
+
 export function ReviewPanel({
   session,
   onClose,
@@ -70,59 +88,82 @@ export function ReviewPanel({
   const Surface = narrow ? "main" : "aside";
   const Heading = narrow ? "h1" : "h2";
   return (
-    <Surface
-      className="review-panel"
-      aria-label={t("changeEvidence")}
-      onKeyDown={(event) => {
-        if (event.key === "Escape" && !event.nativeEvent.isComposing) {
-          event.preventDefault();
-          onClose();
-        }
-      }}
-    >
-      <header className="review-heading">
-        <div>
-          <Heading>
-            <FileDiff aria-hidden="true" /> {t("changeEvidence")}
-          </Heading>
-          <small>{t("changeEvidenceScope")}</small>
+    <ArtifactProvider sessionId={session.id}>
+      <Surface
+        className="review-panel"
+        aria-label={t("changeEvidence")}
+        onKeyDown={(event) => {
+          if (event.key === "Escape" && !event.nativeEvent.isComposing) {
+            event.preventDefault();
+            onClose();
+          }
+        }}
+      >
+        <header className="review-heading">
+          <div>
+            <Heading>
+              <FileDiff aria-hidden="true" /> {t("changeEvidence")}
+            </Heading>
+            <small>{t("changeEvidenceScope")}</small>
+          </div>
+          <button
+            ref={closeButton}
+            type="button"
+            className="icon-button"
+            aria-label={t("close")}
+            onClick={onClose}
+          >
+            <X aria-hidden="true" />
+          </button>
+        </header>
+        <div className="review-body">
+          <p className="review-source" title={session.cwd}>
+            {session.cwd}
+          </p>
+          {session.truncation.truncated && (
+            <p className="inspection-warning">{t("changeEvidenceBounded")}</p>
+          )}
+          {rows.length === 0 ? (
+            <p>{t("changeEvidenceEmpty")}</p>
+          ) : (
+            rows.map(({ key, call, result }, index) => {
+              const counts = changeLineCounts(call, result);
+              return (
+                <section
+                  key={key}
+                  className="review-entry"
+                  aria-label={t("changeEvidenceItem", { number: index + 1 })}
+                >
+                  <span className="review-order">{index + 1}</span>
+                  <ToolEvidence
+                    call={call}
+                    result={result || undefined}
+                    cwd={session.cwd}
+                    summaryMeta={
+                      counts ? (
+                        <span className="evidence-summary-meta">
+                          <span className="sr-only">
+                            {t("changeEvidenceDelta", {
+                              additions: counts.additions,
+                              deletions: counts.deletions,
+                            })}
+                          </span>
+                          <span className="review-additions" aria-hidden="true">
+                            +{counts.additions}
+                          </span>
+                          <span className="review-deletions" aria-hidden="true">
+                            -{counts.deletions}
+                          </span>
+                        </span>
+                      ) : undefined
+                    }
+                  />
+                </section>
+              );
+            })
+          )}
         </div>
-        <button
-          ref={closeButton}
-          type="button"
-          className="icon-button"
-          aria-label={t("close")}
-          onClick={onClose}
-        >
-          <X aria-hidden="true" />
-        </button>
-      </header>
-      <div className="review-body">
-        <p className="review-source" title={session.cwd}>
-          {session.cwd}
-        </p>
-        {session.truncation.truncated && (
-          <p className="inspection-warning">{t("changeEvidenceBounded")}</p>
-        )}
-        {rows.length === 0 ? (
-          <p>{t("changeEvidenceEmpty")}</p>
-        ) : (
-          rows.map(({ key, call, result }, index) => (
-            <section
-              key={key}
-              className="review-entry"
-              aria-label={t("changeEvidenceItem", { number: index + 1 })}
-            >
-              <span className="review-order">{index + 1}</span>
-              <ToolEvidence
-                call={call}
-                result={result || undefined}
-                cwd={session.cwd}
-              />
-            </section>
-          ))
-        )}
-      </div>
-    </Surface>
+      </Surface>
+    </ArtifactProvider>
   );
 }

@@ -1,20 +1,20 @@
-import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
-import { AxeBuilder } from "@axe-core/playwright";
-import { expect, test } from "@playwright/test";
-import {
-  createReadTool,
-  createEditTool,
-  SessionManager,
-} from "@earendil-works/pi-coding-agent";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { AxeBuilder } from "@axe-core/playwright";
+import {
+  createEditTool,
+  createReadTool,
+  SessionManager,
+} from "@earendil-works/pi-coding-agent";
+import { expect, test } from "@playwright/test";
 import { WebHost } from "../../web/host/web-host.ts";
-import { createEvidenceWriteTool } from "../../web/runtime/write-evidence.ts";
+import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type {
   WebRuntimeController,
   WebRuntimeEvent,
 } from "../../web/runtime/types.ts";
+import { createEvidenceWriteTool } from "../../web/runtime/write-evidence.ts";
 
 test("real file evidence, authenticated downloads, edits, refresh and failure states", async ({
   browser,
@@ -275,18 +275,22 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       name: /变更证据|Change evidence/u,
     });
     await expect(review.locator(".review-entry")).toHaveCount(2);
+    await expect(review.locator(".evidence-summary-meta")).toContainText(
+      "+1-1",
+    );
     await expect(review).toContainText(
       /并非 Git 工作树|not the current Git working tree/u,
     );
-    await review
-      .locator(".review-entry")
-      .last()
-      .locator("summary")
-      .first()
-      .click();
+    const reviewedEdit = review.locator(".review-entry").last();
+    await reviewedEdit.locator("summary").first().click();
     await expect(
       review.getByRole("figure", { name: "Change diff" }),
     ).toContainText("Reviewed content");
+    const reviewedFile = reviewedEdit.getByRole("button", { name: path });
+    await reviewedFile.click();
+    await expect(page.getByRole("dialog")).toContainText("Reviewed content");
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
+    await expect(reviewedFile).toBeFocused();
     await review.getByRole("button", { name: /关闭|Close/u }).click();
     await expect(reviewTrigger).toBeFocused();
     await page.setViewportSize({ width: 390, height: 844 });

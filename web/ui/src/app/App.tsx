@@ -26,6 +26,7 @@ export function App() {
   const auxiliaryTrigger = useRef<HTMLElement | null>(null);
   const auxiliaryOpen = useRef(false);
   const reviewTrigger = useRef<HTMLElement | null>(null);
+  const inspectionFallbackFocus = useRef<HTMLElement | null>(null);
   const [narrow, setNarrow] = useState(
     () => window.matchMedia?.("(max-width: 760px)").matches ?? false,
   );
@@ -132,6 +133,15 @@ export function App() {
   useEffect(() => {
     if (inspection && !inspectionVisible) setInspection(null);
   }, [inspection, inspectionVisible]);
+  const closeInspection = useCallback(() => {
+    setInspection(null);
+    const fallback = inspectionFallbackFocus.current;
+    inspectionFallbackFocus.current = null;
+    if (!fallback) return;
+    requestAnimationFrame(() => {
+      if (fallback.isConnected && fallback.checkVisibility()) fallback.focus();
+    });
+  }, []);
   const providerSettingsVisible =
     providerSettings &&
     !state.workspaceDraft &&
@@ -168,6 +178,13 @@ export function App() {
         ?.focus();
     });
   }, []);
+  const openRuntimeStatusFromSettings = () => {
+    inspectionFallbackFocus.current = document.querySelector<HTMLElement>(
+      "[data-provider-settings-trigger]",
+    );
+    setProviderSettings(null);
+    inspect();
+  };
 
   useEffect(() => {
     actions.start();
@@ -437,7 +454,7 @@ export function App() {
           <InspectionPanel
             key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
             target={inspection}
-            onClose={() => setInspection(null)}
+            onClose={closeInspection}
             onOpenProviders={openProviderSettings}
           />
         )}
@@ -483,6 +500,13 @@ export function App() {
           key={`${providerSettings.sessionId}:${providerSettings.sessionPath}`}
           sessionId={providerSettings.sessionId}
           cwd={providerSettings.cwd}
+          model={currentModel?.label ?? t("noModels")}
+          thinkingLevel={
+            state.thinkingPendingLevel ??
+            state.snapshot?.thinking?.level ??
+            t("unknownState")
+          }
+          onOpenRuntimeStatus={openRuntimeStatusFromSettings}
           onClose={closeProviderSettings}
         />
       )}

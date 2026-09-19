@@ -15,6 +15,8 @@ const resources = {
       changeEvidenceEmpty:
         "No change tool calls in the loaded records. This does not establish a clean working tree.",
       changeEvidenceItem: "Change evidence {{number}}",
+      changeEvidenceDelta:
+        "Saved evidence: {{additions}} added, {{deletions}} removed",
       closePreview: "Close preview",
       artifactReadOnly: "Read-only",
       artifactSession: "Session {{sessionId}}",
@@ -151,9 +153,18 @@ const resources = {
         "The saved decision and active session differ. Refresh the session through Pi to apply it.",
       providerAvailability: "Provider credentials",
       settings: "Settings",
+      settingsNavigation: "Settings navigation",
       providerSettings: "Provider credentials",
       providerSettingsIntro:
         "Inspect which Pi providers can authenticate the current Web session.",
+      runtimeSettingsIntro:
+        "Review this session's model and reasoning, then open the existing Pi-bound diagnostics for trust and runtime evidence.",
+      openRuntimeDetails: "Open runtime details",
+      openPiSettings: "OpenPI setup",
+      openPiSettingsIntro:
+        "OpenPI package options continue through the canonical setup episode.",
+      canonicalSetupCommand: "Canonical setup command",
+      currentWorkspace: "Current workspace",
       providerSearchLabel: "Search providers",
       providerSearchPlaceholder: "Search providers",
       providerFilter: "Provider filter",
@@ -365,6 +376,8 @@ const resources = {
       changeEvidenceEmpty:
         "已加载记录中没有变更工具调用；不能据此认定工作树干净。",
       changeEvidenceItem: "变更证据 {{number}}",
+      changeEvidenceDelta:
+        "已保存证据：新增 {{additions}} 行，删除 {{deletions}} 行",
       closePreview: "关闭预览",
       artifactReadOnly: "只读",
       artifactSession: "所属会话 {{sessionId}}",
@@ -492,8 +505,16 @@ const resources = {
         "保存的信任决定与当前会话不同，请通过 Pi 刷新会话后生效。",
       providerAvailability: "服务商凭据",
       settings: "设置",
+      settingsNavigation: "设置导航",
       providerSettings: "服务商凭据",
       providerSettingsIntro: "查看当前 Web 会话可通过哪些 Pi 服务商完成认证。",
+      runtimeSettingsIntro:
+        "查看当前会话的模型与思考，并进入现有 Pi 运行诊断检查信任和运行证据。",
+      openRuntimeDetails: "打开运行详情",
+      openPiSettings: "OpenPI 配置",
+      openPiSettingsIntro: "OpenPI 包选项继续通过规范的配置流程管理。",
+      canonicalSetupCommand: "规范配置命令",
+      currentWorkspace: "当前工作区",
       providerSearchLabel: "搜索服务商",
       providerSearchPlaceholder: "搜索服务商",
       providerFilter: "服务商筛选",

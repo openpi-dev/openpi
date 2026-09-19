@@ -68,6 +68,9 @@ it("sorts configured providers first and supports search and status filters", as
       createElement(ProviderSettingsPage, {
         sessionId: "session-a",
         cwd: "/workspace/openpi",
+        model: "GPT 5.6 Luna",
+        thinkingLevel: "medium",
+        onOpenRuntimeStatus: vi.fn(),
         onClose: vi.fn(),
       }),
     ),
@@ -123,6 +126,9 @@ it("refreshes provider status and closes with Escape", async () => {
       createElement(ProviderSettingsPage, {
         sessionId: "session-a",
         cwd: "/workspace/openpi",
+        model: "GPT 5.6 Luna",
+        thinkingLevel: "medium",
+        onOpenRuntimeStatus: vi.fn(),
         onClose,
       }),
     ),
@@ -137,4 +143,68 @@ it("refreshes provider status and closes with Escape", async () => {
   await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   fireEvent.keyDown(window, { key: "Escape" });
   expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it("keeps provider status inside a navigable settings surface", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      reply({
+        providers: [],
+        truncation: {
+          truncated: false,
+          providersOmitted: 0,
+          namesTruncated: 0,
+          maxProviders: 100,
+        },
+      }),
+    ),
+  );
+  const onOpenRuntimeStatus = vi.fn();
+  render(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(ProviderSettingsPage, {
+        sessionId: "session-a",
+        cwd: "/workspace/openpi",
+        model: "GPT 5.6 Luna",
+        thinkingLevel: "medium",
+        onOpenRuntimeStatus,
+        onClose: vi.fn(),
+      }),
+    ),
+  );
+
+  await screen.findByText(
+    i18n.t("providerConfiguredCount", { configured: 0, total: 0 }),
+  );
+  const navigation = screen.getByRole("navigation", {
+    name: i18n.t("settingsNavigation"),
+  });
+  const runtime = navigation.querySelector<HTMLButtonElement>(
+    'button[aria-current="page"]',
+  );
+  expect(runtime?.textContent).toContain(i18n.t("providerSettings"));
+
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("runtimeStatus") }),
+  );
+  expect(
+    screen.getByRole("heading", { name: i18n.t("runtimeStatus") }),
+  ).toBeTruthy();
+  expect(screen.getByText("GPT 5.6 Luna")).toBeTruthy();
+  expect(screen.getByText("medium")).toBeTruthy();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
+  );
+  expect(onOpenRuntimeStatus).toHaveBeenCalledTimes(1);
+
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openPiSettings") }),
+  );
+  expect(
+    screen.getByRole("heading", { name: i18n.t("openPiSettings") }),
+  ).toBeTruthy();
+  expect(screen.getByText("/openpi-setup")).toBeTruthy();
 });

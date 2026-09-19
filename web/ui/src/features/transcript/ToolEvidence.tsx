@@ -1,12 +1,12 @@
-import { useContext, type ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
+import {
+  type EvidenceState,
+  projectToolEvidence,
+} from "../../../../protocol/evidence.ts";
 import type {
   WebLiveMessage,
   WebMessagePart,
 } from "../../../../protocol/types.ts";
-import {
-  projectToolEvidence,
-  type EvidenceState,
-} from "../../../../protocol/evidence.ts";
 import { ArtifactContext } from "../artifacts/context.ts";
 
 function EvidenceBlock({
@@ -29,11 +29,13 @@ export function ToolEvidence({
   result,
   liveState,
   cwd,
+  summaryMeta,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   liveState?: EvidenceState;
   cwd?: string;
+  summaryMeta?: ReactNode;
 }) {
   const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
@@ -49,6 +51,7 @@ export function ToolEvidence({
       <summary>
         <strong>{call.name}</strong>
         <span>{view.path || view.command || view.kind}</span>
+        {summaryMeta}
         <span className="evidence-status">{view.state}</span>
       </summary>
       <div className="evidence-content">

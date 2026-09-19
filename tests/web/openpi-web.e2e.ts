@@ -1303,6 +1303,33 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect
       .poll(() => reads.filter((x) => x === "providers/auth-status").length)
       .toBe(width === 1280 ? 1 : 2);
+    const settingsNavigation = page.getByRole("navigation", {
+      name: "设置导航",
+    });
+    await settingsNavigation
+      .getByRole("button", { name: "OpenPI 配置", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "OpenPI 配置" }),
+    ).toBeVisible();
+    await expect(
+      providerSettings.getByText("/openpi-setup", { exact: true }),
+    ).toBeVisible();
+    await settingsNavigation
+      .getByRole("button", { name: "运行状态", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "运行状态" }),
+    ).toBeVisible();
+    await expect(
+      providerSettings.getByRole("button", { name: "打开运行详情" }),
+    ).toBeVisible();
+    await settingsNavigation
+      .getByRole("button", { name: "服务商凭据", exact: true })
+      .click();
+    await expect(
+      providerSettings.getByRole("heading", { name: "服务商凭据" }),
+    ).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
       path: testInfo.outputPath(`providers-${width}.png`),

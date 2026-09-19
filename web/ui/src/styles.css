@@ -637,8 +637,11 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .trajectory-warning { color:var(--warning); font-size:12px; }
 .tool-evidence-card { border:1px solid var(--border); border-radius:8px; margin:8px 0; overflow:hidden; min-width:0; }
 .tool-evidence-card > summary { cursor:pointer; display:flex; align-items:center; gap:12px; padding:10px 12px; font-size:12px; }
-.tool-evidence-card > summary > span:not(.evidence-status) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
+.tool-evidence-card > summary > span:not(.evidence-status):not(.evidence-summary-meta) { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; flex:1; }
 .evidence-status { flex-shrink:0; font-size:11px; color:var(--muted); }
+.evidence-summary-meta { display:inline-flex; flex-shrink:0; gap:5px; font-variant-numeric:tabular-nums; font-size:11px; }
+.review-additions { color:var(--healthy); }
+.review-deletions { color:var(--error); }
 .evidence-content { border-top:1px solid var(--border); padding:12px; font-size:12px; overflow-wrap:anywhere; }
 .evidence-content pre { max-height:360px; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; padding:10px; background:var(--sidebar-hover); line-height:1.65; }
 .evidence-content h4 { margin:12px 0 6px; }
