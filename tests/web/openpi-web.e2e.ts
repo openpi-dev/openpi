@@ -431,27 +431,26 @@ test("production workbench is local, keyboard-operable, and accessible", async (
     const conversation = document.querySelector<HTMLElement>(".conversation");
     if (!shell || !conversation)
       throw new Error("conversation shell is missing");
-    const message = document.createElement("article");
-    message.className = "message-row assistant";
-    message.textContent = "Layout probe";
+    const turn = document.createElement("section");
+    turn.className = "conversation-turn";
     const rail = document.createElement("nav");
     rail.className = "turn-rail";
-    conversation.append(message);
+    conversation.append(turn);
     shell.append(rail);
-    const messageRect = message.getBoundingClientRect();
+    const turnRect = turn.getBoundingClientRect();
     const railRect = rail.getBoundingClientRect();
     const shellRect = shell.getBoundingClientRect();
-    message.remove();
+    turn.remove();
     rail.remove();
     return {
       gutter: shellRect.right - railRect.right,
-      messageRight: messageRect.right,
+      turnRight: turnRect.right,
       railLeft: railRect.left,
     };
   });
   expect(turnRailLayout.gutter).toBeCloseTo(24, 0);
   expect(turnRailLayout.railLeft).toBeGreaterThanOrEqual(
-    turnRailLayout.messageRight,
+    turnRailLayout.turnRight,
   );
 });
 

@@ -215,7 +215,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .conversation-turn { position:relative; width:min(880px, calc(100% - 48px)); margin:0 auto; padding:12px 0 30px; }
 .conversation-turn + .conversation-turn { padding-top:26px; border-top:1px solid var(--border); }
 .turn-heading { display:flex; align-items:center; justify-content:space-between; gap:12px; min-height:24px; margin-bottom:12px; color:var(--muted); font-size:11.5px; }
-.turn-number { font-weight:650; color:var(--subtle); }
+.turn-number { font-weight:650; color:var(--muted); }
 .turn-state { display:inline-flex; align-items:center; gap:7px; white-space:nowrap; }
 .turn-state.complete { color:var(--healthy); }
 .turn-state.failed { color:var(--error); }
