@@ -10,6 +10,7 @@ interface SlashCommandMenuProps {
   commands: WebCommandSummary[];
   draft: boolean;
   preferBelow: boolean;
+  showUnavailableSummary: boolean;
   onComplete: (command: WebCommandSummary) => void;
   onSelect: (index: number) => void;
 }
@@ -25,13 +26,23 @@ export function filterWebCommands(
   query: string,
 ) {
   const normalized = query.trim().toLocaleLowerCase();
-  const matches = normalized
+  const nameMatches = normalized
     ? commands.filter((command) =>
-        [command.name, command.description, command.source].some((value) =>
-          value?.toLocaleLowerCase().includes(normalized),
-        ),
+        command.name.toLocaleLowerCase().includes(normalized),
       )
-    : [...commands];
+    : [];
+  const matches = !normalized
+    ? [...commands]
+    : nameMatches.length > 0
+      ? nameMatches
+      : commands.filter((command) =>
+          [command.description, command.source].some((value) =>
+            value?.toLocaleLowerCase().includes(normalized),
+          ),
+        );
+
+  if (!normalized)
+    return matches.filter((command) => command.availability === "available");
 
   return [
     ...matches.filter((command) => command.availability === "available"),
@@ -154,13 +165,19 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
     props.commandDiscovery.status === "ready" &&
     props.commands.length === 0
   ) {
+    const onlyUnsupported =
+      props.showUnavailableSummary &&
+      props.commandDiscovery.commands.length > 0 &&
+      props.commandDiscovery.commands.every(
+        (command) => command.availability === "unsupported",
+      );
     return (
       <div
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="status"
       >
-        {t("commandsNoMatch")}
+        {t(onlyUnsupported ? "commandsNoAvailable" : "commandsNoMatch")}
       </div>
     );
   }

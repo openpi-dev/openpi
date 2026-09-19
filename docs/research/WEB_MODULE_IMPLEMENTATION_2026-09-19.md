@@ -22,6 +22,14 @@
 
 本次直接复用仓库现有 React、Astryx、ReactMarkdown、Lucide、Pi Session/Host API、工具证据组件和剪贴板 helper；没有新依赖、复制第三方代码或更换 provider/session 栈。Maka 的导航和 linked-agent 列表、Pi Web 的独立内容区域与工具证据、DeepSeek Harness 的 Markdown/附件/只读子任务组件可作交互及代码组织参考，具体固定源码与版本见既有 [子代理调查](WEB_SUBAGENT_INSPECTION_2026-09-18.md)。Harness Web 不是消费者 DeepSeek 聊天客户端；本次没有取得 Codex/Claude Desktop 客户端的公开组件源码，不能声称其 UI 技术栈已知。
 
+## 真实页面复验补充
+
+在当前源码启动的真实 Host 中，使用 `gpt-5.6-luna / medium` 创建并重载一个 Web Session；模型实际调用 `read` 读取工作区 `package.json`，最终回答顶层 `scripts` 数量为 `24`。这只验证单次 provider、工具证据和 Session 持久化链路，不代表并发或跨 provider Benchmark。
+
+真实操作侧栏搜索、输入区、斜杠菜单、工具证据和轨迹后，修复了七项连续性问题：完整历史搜索仍显示“0 条未加载”、工作区绝对路径破坏换行、输入目标重复完整首条提示、轨迹默认选中无信息的尾部事件、成功工具被描述为仍可能运行、空斜杠菜单被 Web 不可运行命令淹没，以及 `/ps` 因描述文本误匹配 `/btw` 和 `/usage`。对应补强覆盖 M02、M03、M04、M05 和 M12；没有新增并行状态机或第二套 Session 来源。
+
+消融时移除命令名优先过滤，专项测试立即重新出现 `/ps` 的描述误匹配；因此保留两阶段过滤。其余改动复用现有格式化、轨迹投影和命令可用性数据，没有引入新的组件依赖或框架抽象。
+
 ## 验证与限制
 
 - `bun run check` 与 `bun run test`、静态资产 Playwright、真实 Host 的文件/变更视图 E2E 通过；具体最终计数写在 PR Validation。

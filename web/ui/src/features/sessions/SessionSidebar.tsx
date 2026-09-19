@@ -17,7 +17,7 @@ import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
 import { OpenPiLogo } from "../../components/OpenPiLogo.tsx";
-import { relativeTime, sessionTitle } from "../../lib/format.ts";
+import { compactPath, relativeTime, sessionTitle } from "../../lib/format.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
 
 interface SessionSidebarProps {
@@ -357,8 +357,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       </fieldset>
       {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
       {Boolean(
-        props.query.trim() ||
-          snapshot?.truncation.sessionsOmitted ||
+        snapshot?.truncation.sessionsOmitted ||
           snapshot?.truncation.workspacesOmitted,
       ) && (
         <p className="sidebar-scope-note">
@@ -412,7 +411,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
                     </span>
                     <span className="workspace-identity">
                       <strong>{group.name}</strong>
-                      {!group.ungrouped && <small>{group.path}</small>}
+                      {!group.ungrouped && (
+                        <small>{compactPath(group.path)}</small>
+                      )}
                     </span>
                   </button>
                   {!group.ungrouped && (

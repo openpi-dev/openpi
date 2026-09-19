@@ -163,6 +163,17 @@ it("searches only the selected view and loaded list, revealing matched workspace
   ).toBe("false");
 });
 
+it("does not claim zero unloaded records during a complete-list search", () => {
+  const data = snapshot([
+    session("/repos/long-example/one.jsonl", "/repos/long-example", "First"),
+  ]);
+  mount(data, { query: "first", searchOpen: true });
+
+  expect(screen.getByText("First")).toBeTruthy();
+  expect(screen.queryByText(/loaded list only/iu)).toBeNull();
+  expect(screen.queryByText(/0 more sessions/iu)).toBeNull();
+});
+
 it("distinguishes identical names by path and marks only a snapshot-confirmed selection", async () => {
   const first = session(
     "/repos/long-example/one.jsonl",

@@ -21,7 +21,11 @@ import {
 } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebSnapshot } from "../../../../protocol/types.ts";
-import { sessionTitle, workspaceName } from "../../lib/format.ts";
+import {
+  compactSummary,
+  sessionTitle,
+  workspaceName,
+} from "../../lib/format.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import { ModelPicker } from "./ModelPicker.tsx";
@@ -358,6 +362,7 @@ export function Composer(props: ComposerProps) {
       : selected
         ? sessionTitle(sessionSummary ?? {}, selected.id)
         : t("newSession");
+  const targetSummary = compactSummary(targetLabel, 48);
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
     : props.landing
@@ -538,7 +543,7 @@ export function Composer(props: ComposerProps) {
             <Folder aria-hidden="true" />
             <span>{workspaceLabel}</span>
             <ChevronRight aria-hidden="true" />
-            <strong>{targetLabel}</strong>
+            <strong>{targetSummary}</strong>
           </div>
         )}
         <textarea
@@ -607,6 +612,7 @@ export function Composer(props: ComposerProps) {
             commands={filteredCommands}
             draft={Boolean(props.workspaceDraft)}
             preferBelow={props.landing}
+            showUnavailableSummary={!commandQuery}
             onComplete={completeCommand}
             onSelect={setActiveCommand}
           />

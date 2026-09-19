@@ -507,7 +507,6 @@ test("discovers and completes Pi commands without submitting unsupported command
     /\/deploy/u,
     /\/inspect/u,
     /\/optimize/u,
-    /\/extension:setup/u,
   ]);
   const menu = page.locator(".slash-command-menu");
   const menuBox = await menu.boundingBox();
@@ -546,6 +545,7 @@ test("discovers and completes Pi commands without submitting unsupported command
   expect(flippedMenuBox!.y + flippedMenuBox!.height).toBeLessThanOrEqual(
     shiftedComposerBox!.y - 7,
   );
+  await input.fill("/extension");
   const extension = page.getByRole("option", { name: /\/extension:setup/u });
   await expect(extension).toBeDisabled();
   await expect(extension).toContainText("当前 Web 不支持");
@@ -1328,6 +1328,11 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
             isError: false,
           },
         },
+        {
+          id: "custom-tail",
+          type: "custom",
+          timestamp: "2026-09-07T00:00:03Z",
+        },
       ],
     };
     await route.fulfill({ response, json: snapshot });
@@ -1342,9 +1347,15 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
   await page.getByRole("button", { name: "执行轨迹", exact: true }).click();
   const view = page.getByRole("region", { name: "执行轨迹", exact: true });
   await expect(view.locator(".trajectory-record")).toHaveCount(50);
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    "printf hello",
+  );
+  await expect(view.locator(".trajectory-inspector")).toContainText(
+    "工具已返回结果。",
+  );
   await expect(view.getByText(/省略 4 条记录/)).toBeVisible();
   await view.getByRole("button", { name: /显示更早记录/ }).click();
-  await expect(view.locator(".trajectory-record")).toHaveCount(56);
+  await expect(view.locator(".trajectory-record")).toHaveCount(57);
   await view.locator(".trajectory-record").filter({ hasText: "bash" }).click();
   await expect(view.locator(".trajectory-inspector")).toContainText(
     "printf hello",

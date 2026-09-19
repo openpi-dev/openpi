@@ -60,8 +60,7 @@ const resources = {
       trajectory_call: "Tool call",
       trajectory_result: "Unpaired result",
       trajectory_event: "Session event",
-      trajectory_returned:
-        "Tool returned successfully; background work may still be active.",
+      trajectory_returned: "Tool returned a result.",
       trajectory_error: "Tool returned an error",
       trajectory_unknown: "Outcome not established",
       runtimeStatus: "Runtime status",
@@ -213,6 +212,8 @@ const resources = {
       commandsLoading: "Loading commands...",
       commandsUnavailable: "Commands are temporarily unavailable.",
       commandsNoMatch: "No matching commands.",
+      commandsNoAvailable:
+        "No discovered commands can run in Web. Type a command name to inspect its availability.",
       commandsBounded: "{{count}} more commands are not shown.",
       commandSessionRequired: "Commands require an active Web session.",
       commandUnsupported: "Not supported in Web",
@@ -350,7 +351,7 @@ const resources = {
       trajectory_call: "工具调用",
       trajectory_result: "未配对结果",
       trajectory_event: "会话事件",
-      trajectory_returned: "工具已成功返回；其启动的后台任务可能仍在进行。",
+      trajectory_returned: "工具已返回结果。",
       trajectory_error: "工具返回错误",
       trajectory_unknown: "尚无法确定结果",
       runtimeStatus: "运行状态",
@@ -495,6 +496,8 @@ const resources = {
       commandsLoading: "正在加载命令…",
       commandsUnavailable: "暂时无法读取命令。",
       commandsNoMatch: "没有匹配的命令。",
+      commandsNoAvailable:
+        "已发现的命令均不能在 Web 中运行。输入具体命令名可查看其可用性。",
       commandsBounded: "另有 {{count}} 个命令未显示。",
       commandSessionRequired: "命令仅在已创建的 Web 会话中可用。",
       commandUnsupported: "当前 Web 不支持",

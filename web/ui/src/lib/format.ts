@@ -11,6 +11,12 @@ export function workspaceName(path: string) {
   return path.split(/[\\/]/u).filter(Boolean).at(-1) || path;
 }
 
+export function compactPath(path: string, segments = 2) {
+  const parts = path.split(/[\\/]/u).filter(Boolean);
+  if (parts.length <= segments) return path;
+  return `…/${parts.slice(-segments).join("/")}`;
+}
+
 export function compactSummary(value: unknown, limit = 96) {
   const text = String(value ?? "")
     .replace(/\s+/gu, " ")

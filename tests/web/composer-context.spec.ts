@@ -15,6 +15,7 @@ import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { createWebStore } from "../../web/ui/src/store/web-store.ts";
+import { compactSummary } from "../../web/ui/src/lib/format.ts";
 
 afterEach(cleanup);
 
@@ -119,6 +120,22 @@ it("shows the snapshot target and only an authorized command action", async () =
   expect(sendPrompt).not.toHaveBeenCalled();
   fireEvent.keyDown(input, { key: "Escape" });
   expect(document.activeElement).toBe(input);
+});
+
+it("bounds a prompt-derived target while retaining the complete identity", () => {
+  const longTitle =
+    "Inspect every workspace interaction and explain all retained evidence without losing the current draft";
+  const data = snapshot();
+  data.sessions[0] = {
+    ...data.sessions[0]!,
+    name: undefined,
+    firstMessage: longTitle,
+  };
+  setup({ snapshot: data });
+
+  expect(screen.getByText(compactSummary(longTitle, 48))).toBeTruthy();
+  expect(screen.getByTitle(`Workspace / ${longTitle}`)).toBeTruthy();
+  expect(screen.queryByText(longTitle)).toBeNull();
 });
 
 it("keeps a nonempty draft and its exact text-only prompt contract", async () => {
