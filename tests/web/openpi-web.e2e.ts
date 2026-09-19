@@ -1304,6 +1304,18 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect(dialog).not.toBeVisible();
     await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
     const providerSettings = page.getByRole("dialog", { name: "设置" });
+    const settingsNavigation = providerSettings.getByRole("tablist", {
+      name: "设置导航",
+    });
+    await expect(
+      providerSettings.getByRole("heading", { name: "常规" }),
+    ).toBeVisible();
+    await expect(
+      providerSettings.getByRole("button", { name: "打开运行详情" }),
+    ).toBeVisible();
+    await settingsNavigation
+      .getByRole("tab", { name: "模型", exact: true })
+      .click();
     await expect(
       providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
@@ -1311,18 +1323,6 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect
       .poll(() => reads.filter((x) => x === "providers/auth-status").length)
       .toBe(width === 1280 ? 1 : 2);
-    const settingsNavigation = providerSettings.getByRole("tablist", {
-      name: "设置导航",
-    });
-    await settingsNavigation
-      .getByRole("tab", { name: "OpenPI 配置", exact: true })
-      .click();
-    await expect(
-      providerSettings.getByRole("heading", { name: "OpenPI 配置" }),
-    ).toBeVisible();
-    await expect(
-      providerSettings.getByText("/openpi-setup", { exact: true }),
-    ).toBeVisible();
     await settingsNavigation
       .getByRole("tab", { name: "常规", exact: true })
       .click();
