@@ -529,20 +529,27 @@ it("opens the child list and individual activity chips with exact IDs", () => {
 });
 
 it("distinguishes interrupted activity and record count from active concurrency", () => {
-  const value = snapshot();
-  value.runtime.capabilities.subagents = {
-    items: [
-      {
-        id: "sa-interrupted",
-        title: "Interrupted review",
-        status: "error",
-        outcome: "interrupted",
-        createdAt: 1,
-        settledAt: 2,
+  const value: WebSnapshot = {
+    ...snapshot(),
+    runtime: {
+      status: "idle",
+      capabilities: {
+        subagents: {
+          items: [
+            {
+              id: "sa-interrupted",
+              title: "Interrupted review",
+              status: "error",
+              outcome: "interrupted",
+              createdAt: 1,
+              settledAt: 2,
+            },
+          ],
+          omitted: 0,
+          truncated: false,
+        },
       },
-    ],
-    omitted: 0,
-    truncated: false,
+    },
   };
   render(
     createElement(
