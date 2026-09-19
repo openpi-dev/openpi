@@ -175,6 +175,15 @@ for (const width of [1280, 390]) {
       dimensions.preClientWidth,
     );
 
+    const scroll = page.locator(".markdown-code-scroll");
+    await scroll.focus();
+    await expect(scroll).toHaveCSS("outline-style", "solid");
+    await expect(scroll).toHaveCSS("outline-width", "2px");
+    for (let index = 0; index < 8; index++) await scroll.press("ArrowRight");
+    await expect
+      .poll(() => scroll.evaluate((element) => element.scrollLeft))
+      .toBeGreaterThan(0);
+
     await copy.click();
     await expect(
       page.getByRole("button", { name: "代码已复制", exact: true }),
