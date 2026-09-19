@@ -174,6 +174,19 @@ it("does not claim zero unloaded records during a complete-list search", () => {
   expect(screen.queryByText(/0 more sessions/iu)).toBeNull();
 });
 
+it("scopes an empty search result to loaded history when sessions are omitted", () => {
+  const data = snapshot([
+    session("/repos/long-example/one.jsonl", "/repos/long-example", "First"),
+  ]);
+  data.truncation.sessionsOmitted = 12;
+  mount(data, { query: "missing", searchOpen: true });
+
+  expect(
+    screen.getByText("No matching conversations in the loaded history"),
+  ).toBeTruthy();
+  expect(screen.queryByText("No matching conversations")).toBeNull();
+});
+
 it("distinguishes identical names by path and marks only a snapshot-confirmed selection", async () => {
   const first = session(
     "/repos/long-example/one.jsonl",

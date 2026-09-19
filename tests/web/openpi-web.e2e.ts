@@ -1493,6 +1493,18 @@ test("restores archived history without switching the active Session", async ({
   await expect(
     page.getByText("Saved browser work", { exact: true }),
   ).toBeVisible();
+  await page.getByRole("button", { name: "搜索会话" }).click();
+  await page
+    .getByRole("searchbox", { name: "搜索会话" })
+    .fill("not-in-loaded-history");
+  await expect(
+    page.getByText("已加载历史中没有匹配的会话", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/搜索仅覆盖已加载列表/u)).toBeVisible();
+  await page.getByRole("button", { name: "关闭搜索" }).click();
+  await expect(
+    page.getByText("Saved browser work", { exact: true }),
+  ).toBeVisible();
   for (let attempt = 0; attempt < 2; attempt++) {
     await page.getByText("Saved browser work", { exact: true }).hover();
     await page.getByRole("button", { name: "会话选项" }).click();

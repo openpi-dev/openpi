@@ -188,6 +188,10 @@ export function SessionSidebar(props: SessionSidebarProps) {
     : props.selectedPath
       ? null
       : props.selectedWorkspace;
+  const loadedHistoryBounded = Boolean(
+    snapshot?.truncation.sessionsOmitted ||
+      snapshot?.truncation.workspacesOmitted,
+  );
 
   const openEdit = (target: EditTarget) => {
     setDraft(target.name);
@@ -356,10 +360,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         </button>
       </fieldset>
       {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
-      {Boolean(
-        snapshot?.truncation.sessionsOmitted ||
-          snapshot?.truncation.workspacesOmitted,
-      ) && (
+      {loadedHistoryBounded && (
         <p className="sidebar-scope-note">
           {t("loadedHistoryBounded", {
             sessions: snapshot?.truncation.sessionsOmitted,
@@ -540,7 +541,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
         ) : (
           <div className="empty">
             {props.query.trim()
-              ? t("noMatching")
+              ? t(loadedHistoryBounded ? "noMatchingLoaded" : "noMatching")
               : t(archived ? "noLoadedArchives" : "noSessions")}
           </div>
         )}
