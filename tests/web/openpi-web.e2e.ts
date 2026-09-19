@@ -161,9 +161,10 @@ for (const viewport of [
 
 test("provider failures remain visible after refresh without discarding partial text", async ({
   page,
-}) => {
+}, testInfo) => {
   let content = "";
   let stopReason: "error" | "aborted" = "error";
+  const retried: string[] = [];
   await page.route("**/events?**", (route) =>
     route.fulfill({
       contentType: "text/event-stream",
@@ -196,10 +197,30 @@ test("provider failures remain visible after refresh without discarding partial 
     ];
     await route.fulfill({ response, json: snapshot });
   });
+  await page.route("**/api/prompt", async (route) => {
+    const body = route.request().postDataJSON() as { content: string };
+    retried.push(body.content);
+    await route.fulfill({ json: { id: "provider-retry", accepted: true } });
+  });
   await openWorkbench(page);
   await expect(page.getByRole("alert")).toContainText(
     "gateway_concurrency_limit (429)",
   );
+  for (const width of [1280, 390]) {
+    await page.setViewportSize({ width, height: 844 });
+    await expect(page.getByRole("button", { name: "重试消息" })).toBeVisible();
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(`provider-retry-${width}.png`),
+      fullPage: true,
+    });
+  }
+  await page.getByRole("button", { name: "重试消息" }).click();
+  await expect.poll(() => retried).toEqual(["Question"]);
   await page.reload();
   await expect(page.getByRole("alert")).toContainText(
     "gateway_concurrency_limit (429)",

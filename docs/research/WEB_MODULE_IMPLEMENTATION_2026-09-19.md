@@ -38,6 +38,8 @@
 
 真实 Host 复验覆盖合法 `README.md`、非空草稿继续引用、焦点返回及 `../outside.txt` 越界拒绝；实测还发现 Host 英文错误直接泄漏到中文 UI，随后按 artifact 错误码映射为本地化提示。Playwright 在 1280px/390px 下覆盖合法引用、禁用状态、越界失败与 axe。消融移除了菜单项与对话框重复的二级说明；移除 artifact 校验则会破坏越界拒绝测试，因此保留该运行时边界和独立异步组件。
 
+继续用同一真实 `gpt-5.6-luna / medium` Session 通过新入口连续引用 App、Transcript 和 E2E 文件。模型先因只看 Composer 误判“provider 失败不可见”，补齐证据后修正为：错误、partial output、取消与 admission unknown 已有闭环，剩余最小高频缺口是失败卡片没有直接恢复动作。实现因此只在当前活动 Session 的最后一条用户请求失败时显示“重试消息”，复用既有 `onResend` 和 admission 合同；点击期间锁定，历史失败不提供旧请求重放，运行中也不可重试。消融若移除本地 pending 状态会恢复双击重复提交风险，因此保留小型 `ProviderOutcome`，没有新增重试状态机。
+
 ## 验证与限制
 
 - `bun run check` 与 `bun run test`、静态资产 Playwright、真实 Host 的文件/变更视图 E2E 通过；具体最终计数写在 PR Validation。

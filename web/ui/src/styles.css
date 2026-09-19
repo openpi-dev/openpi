@@ -221,6 +221,11 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .provider-outcome strong { display: block; font-size: 12px; font-weight: 650; }
 .provider-outcome p { margin: 3px 0; white-space: pre-wrap; }
 .provider-outcome small { display: block; color: var(--muted); font-size: 11px; }
+.provider-outcome-actions { margin-top: 8px; }
+.provider-outcome-actions button { @apply inline-flex items-center gap-1.5; height: 28px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--page); color: var(--text); font-size: 11.5px; }
+.provider-outcome-actions button:hover:not(:disabled) { background: var(--sidebar-hover); }
+.provider-outcome-actions button:disabled { opacity: .5; cursor: not-allowed; }
+.provider-outcome-actions svg { width: 13px; height: 13px; }
 .message-content { min-width: 0; max-width: min(78%, 620px); }
 .message-row.assistant .message-content { width: 100%; max-width: none; }
 .message-body { color: var(--text); font-size: 14px; line-height: 1.7; overflow-wrap: anywhere; white-space: pre-wrap; }

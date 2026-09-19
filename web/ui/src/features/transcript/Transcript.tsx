@@ -9,6 +9,7 @@ import {
   Globe,
   Lightbulb,
   Pencil,
+  RotateCcw,
   Search,
   Terminal,
   Workflow,
@@ -130,6 +131,50 @@ function StatusMark({ status }: { status: Status }) {
       </span>
     );
   return null;
+}
+
+function ProviderOutcome({
+  failed,
+  error,
+  retryPrompt,
+  canRetry,
+  onRetry,
+}: {
+  failed: boolean;
+  error?: string;
+  retryPrompt?: string;
+  canRetry: boolean;
+  onRetry: (content: string) => Promise<boolean>;
+}) {
+  const { t } = useTranslation();
+  const [retrying, setRetrying] = useState(false);
+  return (
+    <div
+      className={`provider-outcome ${failed ? "failed" : "aborted"}`}
+      role={failed ? "alert" : "status"}
+    >
+      <strong>
+        {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
+      </strong>
+      {failed && <p>{error || t("modelFailureUnknown")}</p>}
+      {failed && <small>{t("modelFailureNextStep")}</small>}
+      {failed && retryPrompt && (
+        <div className="provider-outcome-actions">
+          <button
+            type="button"
+            disabled={!canRetry || retrying}
+            onClick={() => {
+              setRetrying(true);
+              void onRetry(retryPrompt).finally(() => setRetrying(false));
+            }}
+          >
+            <RotateCcw aria-hidden="true" />
+            {t(retrying ? "retryingPrompt" : "retryPrompt")}
+          </button>
+        </div>
+      )}
+    </div>
+  );
 }
 
 function iconForTool(name: string) {
@@ -731,6 +776,8 @@ export function Transcript(props: TranscriptProps) {
     });
     const turnItems: Array<{ id: number; title: string }> = [];
     let turn = 0;
+    let latestUserPrompt: string | undefined;
+    let latestUserIndex = -1;
     let lastUserIndex = -1;
     for (let index = entries.length - 1; index >= 0; index--) {
       if (entries[index]?.message.role === "user") {
@@ -767,6 +814,8 @@ export function Transcript(props: TranscriptProps) {
         ];
       }
       if (message.role === "user") {
+        latestUserPrompt = message.content;
+        latestUserIndex = index;
         turn++;
         turnItems.push({ id: turn, title: turnTitle(message.content) });
         return [
@@ -892,23 +941,24 @@ export function Transcript(props: TranscriptProps) {
           message.stopReason === "aborted"
         ) {
           const failed = message.stopReason === "error";
+          const retryPrompt =
+            latestUserIndex === lastUserIndex ? latestUserPrompt : undefined;
           detailRows.push({
             key: `${entry.key}-outcome`,
             error: failed,
             content: (
               <article className="message-row assistant outcome-row">
-                <div
-                  className={`provider-outcome ${failed ? "failed" : "aborted"}`}
-                  role={failed ? "alert" : "status"}
-                >
-                  <strong>
-                    {t(failed ? "modelRequestFailed" : "modelRequestStopped")}
-                  </strong>
-                  {failed && (
-                    <p>{message.errorMessage || t("modelFailureUnknown")}</p>
-                  )}
-                  {failed && <small>{t("modelFailureNextStep")}</small>}
-                </div>
+                <ProviderOutcome
+                  failed={failed}
+                  error={message.errorMessage}
+                  retryPrompt={retryPrompt}
+                  canRetry={
+                    active &&
+                    !props.liveRunning &&
+                    props.snapshot.runtime.status !== "running"
+                  }
+                  onRetry={props.onResend}
+                />
               </article>
             ),
           });
@@ -983,6 +1033,7 @@ export function Transcript(props: TranscriptProps) {
     props.onResend,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
+    props.snapshot.runtime.status,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.thinkingStarts,
