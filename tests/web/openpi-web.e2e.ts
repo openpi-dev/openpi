@@ -716,6 +716,86 @@ test("restores a running turn and canonical dark theme without losing cancellati
   expect(accessibility.violations).toEqual([]);
 });
 
+test("restores a controller-bound cleanup confirmation after refresh", async ({
+  page,
+}, testInfo) => {
+  const turn = {
+    sessionId: "cleanup-browser-session",
+    commandId: "cleanup-browser-turn",
+    epoch: 8,
+  };
+  const workspace = "/cleanup-browser";
+  const requests = ["obsolete.txt", "another-old.txt"].map((path, index) => ({
+    ...turn,
+    workspace,
+    paths: [path],
+    requestId: `f150d4da-958d-4d5a-8f4e-d94b8cb9ca0${index}`,
+    expiresAt: Date.now() + 60_000,
+  }));
+  const answers: unknown[] = [];
+  const controllers: string[] = [];
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.currentSessionId = turn.sessionId;
+    snapshot.selectedSession = {
+      id: turn.sessionId,
+      path: `${workspace}/session.jsonl`,
+      cwd: workspace,
+      entries: [],
+      bytes: 0,
+      truncation: {
+        truncated: false,
+        maxBytes: 2097152,
+        entriesOmitted: 0,
+        messagesTruncated: 0,
+        messagePartsOmitted: 0,
+      },
+    };
+    snapshot.runtime = {
+      status: "running",
+      activeTurn: turn,
+      capabilities: {},
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
+  await page.route("**/api/confirmations/pending", (route) => {
+    controllers.push(
+      route.request().headers()["x-openpi-web-controller"] ?? "",
+    );
+    return route.fulfill({
+      json: { pending: requests.slice(answers.length, answers.length + 1) },
+    });
+  });
+  await page.route("**/api/confirmations/answer", (route) => {
+    answers.push(route.request().postDataJSON());
+    return route.fulfill({
+      json: { state: answers.length === 1 ? "denied" : "approved" },
+    });
+  });
+  await openWorkbench(page);
+  const dialog = page.getByRole("dialog", { name: "删除预存文件？" });
+  await expect(dialog).toContainText("obsolete.txt");
+  await page.waitForTimeout(350);
+  await page.screenshot({
+    path: testInfo.outputPath("cleanup-confirmation.png"),
+  });
+  await dialog.getByRole("button", { name: "拒绝" }).click();
+  await expect.poll(() => answers.length).toBe(1);
+  await page.reload();
+  await expect(dialog).toContainText("another-old.txt");
+  await dialog.getByRole("button", { name: "批准删除" }).click();
+  await expect.poll(() => answers.length).toBe(2);
+  expect(answers).toEqual([
+    { ...turn, workspace, requestId: requests[0]!.requestId, approved: false },
+    { ...turn, workspace, requestId: requests[1]!.requestId, approved: true },
+  ]);
+  expect(controllers[0]).toMatch(/^[0-9a-f-]{36}$/u);
+  expect(controllers.every((id) => id === controllers[0])).toBe(true);
+  const accessibility = await new AxeBuilder({ page }).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
 test("recovers an unknown prompt admission only after an explicit user decision", async ({
   page,
 }, testInfo) => {

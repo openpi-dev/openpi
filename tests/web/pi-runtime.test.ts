@@ -6,6 +6,7 @@ import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { WebCleanupConfirmations } from "../../web/runtime/confirmation.ts";
 import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
@@ -25,6 +26,7 @@ type Trace = {
 
 type RuntimeHarness = {
   runtime: { session: object; dispose?: () => Promise<void> };
+  cleanupConfirmations: WebCleanupConfirmations;
   activePromptTrace?: Trace;
   pendingPromptTraces: Trace[];
   liveMessageSequence: number;
@@ -102,6 +104,8 @@ type FakeAgentRuntime = {
 };
 type PromptRuntimeHarness = {
   runtime: FakeAgentRuntime;
+  cleanupConfirmations: WebCleanupConfirmations;
+  cleanupConfirmationRegistrations: Map<object, () => void>;
   listeners: Set<(event: WebRuntimeEvent) => void>;
   retainedRuntimes: Set<FakeAgentRuntime>;
   retainedSubscriptions: Map<FakeAgentRuntime, () => void>;
@@ -155,6 +159,8 @@ type LifecycleRuntime = {
 
 type LifecycleHarness = {
   runtime: LifecycleRuntime;
+  cleanupConfirmations: WebCleanupConfirmations;
+  cleanupConfirmationRegistrations: Map<object, () => void>;
   unsubscribeSession?: () => void;
   listeners: Set<(event: WebRuntimeEvent) => void>;
   retainedRuntimes: Set<LifecycleRuntime>;
@@ -226,6 +232,8 @@ function lifecycleHarness(runtime: LifecycleRuntime) {
     PiWebRuntime.prototype,
   ) as unknown as LifecycleHarness;
   harness.runtime = runtime;
+  harness.cleanupConfirmations = new WebCleanupConfirmations(() => {});
+  harness.cleanupConfirmationRegistrations = new Map();
   harness.listeners = new Set();
   harness.retainedRuntimes = new Set();
   harness.retainedSubscriptions = new Map();
@@ -265,6 +273,8 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
     PiWebRuntime.prototype,
   ) as unknown as PromptRuntimeHarness;
   harness.runtime = { session, dispose: async () => undefined };
+  harness.cleanupConfirmations = new WebCleanupConfirmations(() => {});
+  harness.cleanupConfirmationRegistrations = new Map();
   harness.listeners = new Set();
   harness.retainedRuntimes = new Set();
   harness.retainedSubscriptions = new Map();
@@ -1369,6 +1379,7 @@ test("message_end and queued prompts do not settle a running turn", () => {
   const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
+  harness.cleanupConfirmations = new WebCleanupConfirmations(() => {});
   harness.pendingPromptTraces = [];
   harness.liveMessageSequence = 0;
   harness.listeners = new Set();
@@ -1518,6 +1529,7 @@ test("toolUse message_end without a terminal result settles as uncertain", () =>
   const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
+  harness.cleanupConfirmations = new WebCleanupConfirmations(() => {});
   harness.pendingPromptTraces = [];
   harness.liveMessageSequence = 0;
   harness.listeners = new Set();

@@ -8,6 +8,7 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import workspaceCleanupGuard from "../../../extensions/workspace-cleanup-guard/index.ts";
+import { registerWebCleanupConfirmation } from "../../../extensions/shared/web-cleanup-confirmation.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -17,6 +18,8 @@ interface ConfirmOptions {
 
 interface HarnessOptions {
   cwd: string;
+  mode?: "print" | "tui";
+  scope?: object;
   signal?: AbortSignal;
   confirm?: (
     title: string,
@@ -34,6 +37,8 @@ function harness(options: HarnessOptions) {
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: options.cwd,
+    mode: options.mode ?? "tui",
+    sessionManager: options.scope ?? {},
     signal: options.signal,
     ui: {
       confirm: options.confirm ?? (async () => false),
@@ -137,6 +142,39 @@ test("refused deletion of a pre-existing file is blocked", async () => {
 
     assert.equal(result?.block, true);
     assert.match(result?.reason ?? "", /keep\.txt/u);
+  });
+});
+
+test("Web approval travels through the exact cleanup request; missing transport is unavailable", async () => {
+  await withWorkspace(async (workspace) => {
+    const target = path.join(workspace, "keep.txt");
+    await writeFile(target, "keep");
+    const scope = {};
+    const h = harness({ cwd: workspace, mode: "print", scope });
+    const unavailable = (await h.emit(
+      "tool_call",
+      bashCall("first", "rm keep.txt"),
+    )) as {
+      block: boolean;
+      reason: string;
+    };
+    assert.equal(unavailable.block, true);
+    assert.match(unavailable.reason, /native confirmation is unavailable/u);
+    let received: unknown;
+    const unregister = registerWebCleanupConfirmation(scope, async (paths) => {
+      received = paths;
+      return "approved";
+    });
+    try {
+      assert.equal(
+        await h.emit("tool_call", bashCall("second", "rm keep.txt")),
+        undefined,
+      );
+      assert.deepEqual(received, ["keep.txt"]);
+      assert.equal(await readFile(target, "utf8"), "keep");
+    } finally {
+      unregister();
+    }
   });
 });
 

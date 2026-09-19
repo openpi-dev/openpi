@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
@@ -10,6 +11,7 @@ import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { registerWebCapability } from "../../extensions/shared/web-observer-registry.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
+import { WebCleanupConfirmations } from "../../web/runtime/confirmation.ts";
 import {
   type WebRuntimeController,
   type WebRuntimeEvent,
@@ -1790,6 +1792,112 @@ async function startTestHost(runtime: WebRuntimeController) {
   const headers = { Authorization: `Bearer ${token}` };
   return { host, launched, headers };
 }
+
+test("only the prompt controller can inspect and answer an exact cleanup confirmation", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-confirmation-"));
+  const runtime = testRuntime(cwd);
+  const turn = {
+    sessionId: runtime.sessionManager.getSessionId(),
+    commandId: "cleanup-command",
+    epoch: 4,
+  };
+  const gate = new WebCleanupConfirmations(() => {});
+  runtime.getActiveTurn = () => turn;
+  runtime.getPendingConfirmations = () => gate.list();
+  runtime.answerConfirmation = (target, approved) =>
+    gate.respond(target, approved);
+  runtime.dispose = async () => gate.invalidate();
+  const { host, launched, headers } = await startTestHost(runtime);
+  const owner = randomUUID();
+  const intruder = randomUUID();
+  const requestHeaders = { ...headers, "Content-Type": "application/json" };
+  const answerTarget = { ...turn, workspace: cwd, approved: true };
+  try {
+    const admission = await fetch(`${launched.origin}/api/prompt`, {
+      method: "POST",
+      headers: requestHeaders,
+      body: JSON.stringify({
+        sessionId: turn.sessionId,
+        commandId: turn.commandId,
+        content: "remove an old file",
+        controllerId: owner,
+      }),
+    });
+    assert.equal(admission.status, 202);
+    const decision = gate.request({ workspace: cwd, turn }, ["old.txt"]);
+    const [pending] = gate.list();
+    assert.ok(pending);
+    host.publish("confirmation_changed");
+    const snapshot = await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).text();
+    assert.equal(snapshot.includes("old.txt"), false);
+    const ownerHeaders = { ...headers, "X-OpenPI-Web-Controller": owner };
+    const intruderHeaders = { ...headers, "X-OpenPI-Web-Controller": intruder };
+    const read = (readHeaders: Record<string, string>) =>
+      fetch(`${launched.origin}/api/confirmations/pending`, {
+        headers: readHeaders,
+      });
+    assert.deepEqual((await (await read(ownerHeaders)).json()).pending, [
+      pending,
+    ]);
+    assert.deepEqual((await (await read(intruderHeaders)).json()).pending, []);
+    assert.deepEqual((await (await read(ownerHeaders)).json()).pending, [
+      pending,
+    ]);
+    const answer = (answerHeaders: Record<string, string>, body: object) =>
+      fetch(`${launched.origin}/api/confirmations/answer`, {
+        method: "POST",
+        headers: { ...answerHeaders, "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+    assert.equal(
+      (
+        await answer(intruderHeaders, {
+          ...answerTarget,
+          requestId: pending.requestId,
+        })
+      ).status,
+      403,
+    );
+    assert.equal(
+      (
+        await (
+          await answer(ownerHeaders, {
+            ...answerTarget,
+            workspace: "/wrong",
+            requestId: pending.requestId,
+          })
+        ).json()
+      ).state,
+      "stale",
+    );
+    assert.equal(gate.list().length, 1);
+    const approved = await answer(ownerHeaders, {
+      ...answerTarget,
+      requestId: pending.requestId,
+    });
+    assert.equal(approved.status, 200);
+    assert.deepEqual(await approved.json(), { state: "approved" });
+    assert.equal(await decision, "approved");
+    assert.equal(
+      (
+        await (
+          await answer(ownerHeaders, {
+            ...answerTarget,
+            requestId: pending.requestId,
+          })
+        ).json()
+      ).state,
+      "already-settled",
+    );
+    assert.deepEqual((await (await read(ownerHeaders)).json()).pending, []);
+  } finally {
+    gate.invalidate();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
 
 test("serves Session-bound command discovery with fail-closed request validation", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-commands-"));

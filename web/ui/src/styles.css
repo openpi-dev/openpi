@@ -421,6 +421,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .openpi-dialog { @apply grid gap-4; padding: 20px; color: var(--text); }
 .openpi-dialog strong { font-size: 15px; font-weight: 650; }
 .openpi-dialog p { margin: 0; color: var(--muted); font-size: 13px; line-height: 1.65; }
+.cleanup-confirmation ul { margin: 0; padding: 8px 8px 8px 30px; max-height: 210px; overflow: auto; border: 1px solid var(--border); border-radius: 5px; font: 12px/1.6 ui-monospace, monospace; overflow-wrap: anywhere; }
 .openpi-dialog input { width: 100%; height: 38px; padding: 0 10px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--page); }
 .dialog-actions { @apply flex justify-end gap-2; }
 .dialog-actions button { height: 34px; padding: 0 13px; border: 1px solid var(--border-strong); border-radius: 5px; background: var(--page); }

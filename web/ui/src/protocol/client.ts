@@ -1,6 +1,10 @@
 import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type {
+  WebCleanupConfirmationRequest,
+  WebConfirmationReceipt,
+} from "../../../runtime/confirmation.ts";
 import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
@@ -16,6 +20,19 @@ import {
 } from "../../../protocol/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+const controllerStorageKey = "openpi.web.controller";
+
+function readControllerId() {
+  try {
+    const existing = window.sessionStorage.getItem(controllerStorageKey);
+    if (existing && /^[0-9a-f-]{36}$/iu.test(existing)) return existing;
+    const id = window.crypto.randomUUID();
+    window.sessionStorage.setItem(controllerStorageKey, id);
+    return id;
+  } catch {
+    return undefined;
+  }
+}
 
 export class WebApiError extends Error {
   constructor(
@@ -78,10 +95,14 @@ export interface WorkspaceSelectionResult {
 
 export class WebClient {
   readonly token = readToken();
+  readonly controllerId = readControllerId();
 
   headers(json = false) {
     return {
       Authorization: `Bearer ${this.token ?? ""}`,
+      ...(this.controllerId
+        ? { "X-OpenPI-Web-Controller": this.controllerId }
+        : {}),
       ...(json ? { "Content-Type": "application/json" } : {}),
     };
   }
@@ -351,6 +372,32 @@ export class WebClient {
     );
   }
 
+  pendingConfirmations() {
+    return this.request<{ pending: WebCleanupConfirmationRequest[] }>(
+      "/api/confirmations/pending",
+    );
+  }
+
+  answerConfirmation(
+    request: WebCleanupConfirmationRequest,
+    approved: boolean,
+  ) {
+    return this.request<{ state: WebConfirmationReceipt }>(
+      "/api/confirmations/answer",
+      {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: request.sessionId,
+          commandId: request.commandId,
+          epoch: request.epoch,
+          workspace: request.workspace,
+          requestId: request.requestId,
+          approved,
+        }),
+      },
+    );
+  }
+
   async prompt(
     sessionId: string,
     content: string,
@@ -359,7 +406,13 @@ export class WebClient {
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content, commandId, retry }),
+      body: JSON.stringify({
+        sessionId,
+        content,
+        commandId,
+        retry,
+        controllerId: this.controllerId,
+      }),
       timeoutMs: 30_000,
       timeoutMessage:
         "Request timed out; admission may still be pending. Retry the same message to recover its receipt.",

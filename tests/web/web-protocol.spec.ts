@@ -79,12 +79,8 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
       }),
   );
   vi.stubGlobal("fetch", fetcher);
-  const request = new WebClient().prompt(
-    "session",
-    "once",
-    "stable-command",
-    true,
-  );
+  const client = new WebClient();
+  const request = client.prompt("session", "once", "stable-command", true);
   const failure = expect(request).rejects.toThrow(
     "admission may still be pending",
   );
@@ -97,6 +93,7 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
     content: "once",
     commandId: "stable-command",
     retry: true,
+    controllerId: client.controllerId,
   });
   expect(vi.getTimerCount()).toBe(0);
 });
