@@ -73,9 +73,10 @@ interface RenderRow {
   turn: number;
   kind: "prompt" | "process" | "response" | "outcome" | "custom";
   content: ReactNode;
-  groupable?: boolean;
+  processType?: "thinking" | "tool" | "activity";
+  processPreview?: string;
+  processStatus?: Status;
   error?: boolean;
-  icon?: ReactNode;
   outcome?: "failed" | "interrupted";
 }
 
@@ -209,6 +210,23 @@ function toolSummary(name: string, args: Record<string, unknown>) {
     : "";
 }
 
+function thinkingPreview(body: string) {
+  const line = body
+    .split("\n")
+    .map((value) => value.trim())
+    .find(Boolean);
+  if (!line) return "";
+  return compactSummary(
+    line
+      .replace(/^#{1,6}\s+/u, "")
+      .replace(/^>\s*/u, "")
+      .replace(/[*_~`]+/gu, "")
+      .replace(/\[([^\]]+)\]\([^)]*\)/gu, "$1")
+      .trim(),
+    110,
+  );
+}
+
 function EvidenceDetails({
   body,
   icon,
@@ -228,7 +246,7 @@ function EvidenceDetails({
 }) {
   return (
     <details
-      className={`message-details tool-line ${status === "error" ? "error" : ""} ${thinking ? "thinking-line" : ""}`}
+      className={`message-details tool-line ${status} ${thinking ? "thinking-line" : ""}`}
       open={defaultOpen || undefined}
     >
       <summary>
@@ -443,6 +461,7 @@ function ThinkingEvidence({
   const { t } = useTranslation();
   const elapsed = useElapsed(start, active);
   const settled = duration ? formatElapsedMs(0, duration) : elapsed;
+  const preview = thinkingPreview(body);
   return (
     <EvidenceDetails
       body={body}
@@ -455,7 +474,7 @@ function ThinkingEvidence({
           : t("thinkingDone")
       }
       status={active ? "running" : "done"}
-      summary={settled ? `· ${settled}` : undefined}
+      summary={[preview, settled].filter(Boolean).join(" · ") || undefined}
       thinking
       defaultOpen={defaultOpen}
     />
@@ -686,19 +705,101 @@ function buildEntries(
       message: live.message,
     });
   }
-  return entries;
+  let setupEpisode = false;
+  return entries.filter(({ message }) => {
+    if (message.customType === "openpi-setup-request") {
+      setupEpisode = true;
+      return false;
+    }
+    if (!setupEpisode) return true;
+    if (message.role === "user") {
+      setupEpisode = false;
+      return true;
+    }
+    return false;
+  });
 }
 
-function groupRows(rows: RenderRow[], stepsLabel: string) {
-  const blocks: Array<{ grouped: boolean; rows: RenderRow[] }> = [];
+function ProcessSequence({
+  rows,
+  active,
+  defaultOpen,
+}: {
+  rows: RenderRow[];
+  active: boolean;
+  defaultOpen: boolean;
+}) {
+  const { t } = useTranslation();
+  const [open, setOpen] = useState(active || defaultOpen);
+  const previous = useRef({ active, defaultOpen });
+  useEffect(() => {
+    const prior = previous.current;
+    if (active && !prior.active) setOpen(true);
+    else if (!active && prior.active) setOpen(defaultOpen);
+    else if (!active && defaultOpen !== prior.defaultOpen) setOpen(defaultOpen);
+    previous.current = { active, defaultOpen };
+  }, [active, defaultOpen]);
+  const thinking = rows.filter((row) => row.processType === "thinking").length;
+  const tools = rows.filter((row) => row.processType === "tool").length;
+  const activities = rows.filter(
+    (row) => row.processType === "activity",
+  ).length;
+  const counts = [
+    thinking ? t("processThinkingCount", { count: thinking }) : "",
+    tools ? t("processToolCount", { count: tools }) : "",
+    activities ? t("processActivityCount", { count: activities }) : "",
+  ].filter(Boolean);
+  const preview = rows.find((row) => row.processPreview)?.processPreview;
+  const failed = rows.some((row) => row.error);
+  const status: Status = active ? "running" : failed ? "error" : "done";
+  return (
+    <details
+      className={`process-sequence ${status}`}
+      open={open}
+      data-status={status}
+      data-running={active ? "true" : undefined}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+    >
+      <summary>
+        <span className="details-mark" aria-hidden="true" />
+        <span className="process-sequence-title">
+          <strong>{t(active ? "processRunning" : "processDetails")}</strong>
+          {counts.length > 0 && <small>{counts.join(" · ")}</small>}
+        </span>
+        {preview && <span className="process-sequence-preview">{preview}</span>}
+        <StatusMark status={status} />
+      </summary>
+      <div className="process-sequence-body">
+        <div>
+          {rows.map((row) => (
+            <div
+              className={`process-step ${row.processStatus ?? "unknown"}`}
+              data-status={row.processStatus ?? "unknown"}
+              key={row.key}
+            >
+              {row.content}
+            </div>
+          ))}
+        </div>
+      </div>
+    </details>
+  );
+}
+
+function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
+  const blocks: Array<{ process: boolean; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const last = blocks.at(-1);
-    if (row.groupable && last?.grouped) last.rows.push(row);
-    else blocks.push({ grouped: Boolean(row.groupable), rows: [row] });
+    if (row.kind === "process" && last?.process) last.rows.push(row);
+    else blocks.push({ process: row.kind === "process", rows: [row] });
   }
-  return blocks.map((block) => {
-    const blockKey = `${block.grouped ? "group" : "rows"}-${block.rows[0]?.key}`;
-    if (!block.grouped || block.rows.length < 4) {
+  let lastProcess = -1;
+  blocks.forEach((block, index) => {
+    if (block.process) lastProcess = index;
+  });
+  return blocks.map((block, index) => {
+    const blockKey = `${block.process ? "process" : "rows"}-${block.rows[0]?.key}`;
+    if (!block.process) {
       return (
         <Fragment key={blockKey}>
           {block.rows.map((row) => (
@@ -708,27 +809,12 @@ function groupRows(rows: RenderRow[], stepsLabel: string) {
       );
     }
     return (
-      <details
-        className={`tool-group ${block.rows.some((row) => row.error) ? "error" : ""}`}
+      <ProcessSequence
         key={blockKey}
-      >
-        <summary>
-          <span className="details-mark" aria-hidden="true" />
-          <span className="tool-group-icons" aria-hidden="true">
-            {block.rows.slice(0, 4).map((row) => (
-              <Fragment key={row.key}>{row.icon}</Fragment>
-            ))}
-          </span>
-          <span>
-            {block.rows.length} {stepsLabel}
-          </span>
-        </summary>
-        <div className="tool-group-body">
-          {block.rows.map((row) => (
-            <Fragment key={row.key}>{row.content}</Fragment>
-          ))}
-        </div>
-      </details>
+        rows={block.rows}
+        active={active && index === lastProcess}
+        defaultOpen={defaultOpen}
+      />
     );
   });
 }
@@ -737,12 +823,12 @@ function ConversationTurn({
   id,
   rows,
   active,
-  stepsLabel,
+  expandProcesses,
 }: {
   id: number;
   rows: RenderRow[];
   active: boolean;
-  stepsLabel: string;
+  expandProcesses: boolean;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -773,18 +859,16 @@ function ConversationTurn({
       className={`conversation-turn${id === 0 ? " prelude" : ""}`}
       data-turn={id}
     >
-      {id > 0 && (
+      {id > 0 && status !== "complete" && (
         <header className="turn-heading">
-          <span className="turn-number">{t("turnLabel", { number: id })}</span>
+          <span className="sr-only">{t("turnLabel", { number: id })}</span>
           <span className={`turn-state ${status}`}>
             <StatusDot
               variant={variant}
               label={statusLabel}
               isPulsing={status === "running"}
               icon={
-                status === "complete" ? (
-                  <Check aria-hidden="true" />
-                ) : status === "failed" || status === "interrupted" ? (
+                status === "failed" || status === "interrupted" ? (
                   <X aria-hidden="true" />
                 ) : undefined
               }
@@ -793,12 +877,16 @@ function ConversationTurn({
           </span>
         </header>
       )}
-      {groupRows(rows, stepsLabel)}
+      {groupRows(rows, active, expandProcesses)}
     </section>
   );
 }
 
-function renderTurns(rows: RenderRow[], stepsLabel: string, running: boolean) {
+function renderTurns(
+  rows: RenderRow[],
+  running: boolean,
+  expandProcesses: boolean,
+) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
     const current = turns.at(-1);
@@ -811,7 +899,7 @@ function renderTurns(rows: RenderRow[], stepsLabel: string, running: boolean) {
       id={turn.id}
       rows={turn.rows}
       active={running && turn.id === lastTurn}
-      stepsLabel={stepsLabel}
+      expandProcesses={expandProcesses}
       key={`turn-group-${turn.id}-${turn.rows[0]?.key}`}
     />
   ));
@@ -944,7 +1032,9 @@ export function Transcript(props: TranscriptProps) {
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
               kind: "process",
-              icon: <Lightbulb />,
+              processType: "thinking",
+              processPreview: thinkingPreview(part.text),
+              processStatus: isLive ? "running" : "done",
               content: (
                 <article className="message-row assistant detail-only">
                   <div className="message-content">
@@ -991,13 +1081,16 @@ export function Transcript(props: TranscriptProps) {
             );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
+            const status = resultStatus(result);
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
               turn,
               kind: "process",
-              groupable: !card || isEvidenceTool(part.name),
+              processType: /^(subagent|workflow)/u.test(part.name)
+                ? "activity"
+                : "tool",
+              processStatus: status,
               error: Boolean(result?.isError),
-              icon: toolIcon,
               content: (
                 <article className="message-row assistant detail-only">
                   <div className="message-content">
@@ -1012,7 +1105,7 @@ export function Transcript(props: TranscriptProps) {
                         icon={toolIcon}
                         name={part.name || "tool"}
                         summary={toolSummary(part.name, args)}
-                        status={resultStatus(result)}
+                        status={status}
                       />
                     )}
                   </div>
@@ -1125,9 +1218,9 @@ export function Transcript(props: TranscriptProps) {
             key: entry.key,
             turn,
             kind: "process",
-            groupable: !family,
+            processType: family ? "activity" : "tool",
+            processStatus: status,
             error: status === "error",
-            icon,
             content: (
               <article className="message-row assistant detail-only">
                 <div className="message-content">{content}</div>
@@ -1200,7 +1293,11 @@ export function Transcript(props: TranscriptProps) {
           setReadingHistory(!pinned.current);
         }}
       >
-        {renderTurns(rows, t("stepsLabel"), running)}
+        {renderTurns(
+          rows,
+          running,
+          props.snapshot.preferences.expandThinking === true,
+        )}
         {running && (
           <div
             className="conversation-running"

@@ -46,6 +46,42 @@ function deferred() {
   return { promise, resolve, reject };
 }
 
+test("projects current Pi token and context statistics without inference", () => {
+  const getSessionUsage = PiWebRuntime.prototype.getSessionUsage;
+  const usage = getSessionUsage.call({
+    runtime: {
+      session: {
+        getSessionStats: () => ({
+          tokens: {
+            input: 53_000,
+            output: 13_000,
+            cacheRead: 480_000,
+            cacheWrite: 2_000,
+            total: 548_000,
+          },
+          contextUsage: {
+            tokens: 43_520,
+            contextWindow: 272_000,
+            percent: 16,
+          },
+        }),
+      },
+    },
+  } as unknown as PiWebRuntime);
+  assert.deepEqual(usage, {
+    input: 53_000,
+    output: 13_000,
+    cacheRead: 480_000,
+    cacheWrite: 2_000,
+    total: 548_000,
+    context: {
+      tokens: 43_520,
+      contextWindow: 272_000,
+      percent: 16,
+    },
+  });
+});
+
 type PromptOptions = {
   preflightResult?: (accepted: boolean) => void;
 };

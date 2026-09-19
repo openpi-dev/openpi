@@ -71,9 +71,11 @@ function renderSettings(overrides: Record<string, unknown> = {}) {
         currentModel: models[0],
         thinkingLevel: "medium",
         theme: "system",
+        setupBusy: false,
         modelSelectionPending: false,
         onSelectModel: vi.fn(),
         onConfigureOpenPi: vi.fn(async () => true),
+        onPreferencesChanged: vi.fn(async () => true),
         onOpenRuntimeStatus: vi.fn(),
         onClose: vi.fn(),
         ...overrides,
@@ -111,8 +113,8 @@ function providerReply() {
   });
 }
 
-function settingsReply() {
-  return reply({
+function settingsPayload() {
+  return {
     sessionId: "session-a",
     setup: {
       capabilities: { discovery: "explicit" },
@@ -179,15 +181,48 @@ function settingsReply() {
         resourcesOmitted: 0,
       },
     },
-  });
+  };
 }
 
 function settingsFetcher() {
-  return vi.fn(async (input: RequestInfo | URL) =>
-    String(input).includes("/api/settings/catalog")
-      ? settingsReply()
-      : providerReply(),
-  );
+  let setup = settingsPayload().setup;
+  return vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const path = String(input);
+    if (path.includes("/api/settings/preferences")) {
+      const body = JSON.parse(String(init?.body)) as {
+        sessionId: string;
+        preferences: {
+          theme?: "light" | "dark" | "mist" | "rose" | "pine" | "system";
+          chatWidth?: number;
+          chatFontSize?: number;
+          expandThinking?: boolean;
+        };
+      };
+      setup = {
+        ...setup,
+        ui: {
+          ...setup.ui,
+          ...(body.preferences.theme === undefined
+            ? {}
+            : { webTheme: body.preferences.theme }),
+          ...(body.preferences.chatWidth === undefined
+            ? {}
+            : { webChatWidth: body.preferences.chatWidth }),
+          ...(body.preferences.chatFontSize === undefined
+            ? {}
+            : { webChatFontSize: body.preferences.chatFontSize }),
+          ...(body.preferences.expandThinking === undefined
+            ? {}
+            : { webExpandThinking: body.preferences.expandThinking }),
+        },
+      };
+      return reply({ sessionId: body.sessionId, setup, revision: 2 });
+    }
+    if (path.includes("/api/settings/catalog")) {
+      return reply({ ...settingsPayload(), setup });
+    }
+    return providerReply();
+  });
 }
 
 it("matches the pi-web settings shell and selects models through Pi", async () => {
@@ -210,6 +245,16 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
   expect((await screen.findAllByText("Codex Local")).length).toBeGreaterThan(0);
   expect(screen.getByText(i18n.t("credentialConfigured"))).toBeTruthy();
+  expect(
+    view.container.querySelector(".provider-connection-card"),
+  ).toBeTruthy();
+  expect(screen.getByText(i18n.t("providerAccessSubscription"))).toBeTruthy();
+  expect(
+    screen.getAllByText(i18n.t("providerReadOnly")).length,
+  ).toBeGreaterThan(0);
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("generalSettings") }));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
   fireEvent.click(screen.getByRole("button", { name: /DeepSeek V4/u }));
   expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
   expect(screen.getByText(i18n.t("credentialMissing"))).toBeTruthy();
@@ -220,11 +265,22 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
 });
 
 it("shows canonical General state and routes real setup/runtime actions", async () => {
-  vi.stubGlobal("fetch", settingsFetcher());
+  const fetcher = settingsFetcher();
+  vi.stubGlobal("fetch", fetcher);
   const onOpenRuntimeStatus = vi.fn();
   const onConfigureOpenPi = vi.fn(async () => false);
-  const view = renderSettings({ onOpenRuntimeStatus, onConfigureOpenPi });
+  const onPreferencesChanged = vi.fn(async () => true);
+  const view = renderSettings({
+    onOpenRuntimeStatus,
+    onConfigureOpenPi,
+    onPreferencesChanged,
+  });
   await screen.findByText(i18n.t("agentBehavior"));
+  expect(
+    fetcher.mock.calls.filter(([input]) =>
+      String(input).includes("/api/providers/auth-status"),
+    ),
+  ).toHaveLength(0);
 
   const generalPanel = screen.getByRole("tabpanel");
   expect(
@@ -257,9 +313,24 @@ it("shows canonical General state and routes real setup/runtime actions", async 
   fireEvent.click(
     within(generalPanel).getByRole("radio", { name: i18n.t("themeDark") }),
   );
-  expect(onConfigureOpenPi).toHaveBeenCalledWith(
-    i18n.t("setupRequestTheme", { theme: i18n.t("themeDark") }),
+  await waitFor(() =>
+    expect(
+      within(generalPanel).getByRole<HTMLInputElement>("radio", {
+        name: i18n.t("themeDark"),
+      }).checked,
+    ).toBe(true),
   );
+  const preferenceCalls = fetcher.mock.calls.filter(([input]) =>
+    String(input).includes("/api/settings/preferences"),
+  );
+  expect(preferenceCalls).toHaveLength(1);
+  expect(JSON.parse(String(preferenceCalls[0]?.[1]?.body))).toEqual({
+    sessionId: "session-a",
+    preferences: { theme: "dark" },
+  });
+  expect(onConfigureOpenPi).not.toHaveBeenCalled();
+  expect(onPreferencesChanged).toHaveBeenCalledTimes(1);
+  expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
   await waitFor(() =>
     expect(
       within(generalPanel).getByRole<HTMLInputElement>("switch", {
@@ -272,13 +343,43 @@ it("shows canonical General state and routes real setup/runtime actions", async 
       name: i18n.t("expandThinkingByDefault"),
     }),
   );
-  expect(onConfigureOpenPi).toHaveBeenCalledWith(
-    i18n.t("setupRequestExpandThinking"),
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("/api/settings/preferences"),
+      ),
+    ).toHaveLength(2),
   );
+  const expandCall = fetcher.mock.calls.filter(([input]) =>
+    String(input).includes("/api/settings/preferences"),
+  )[1];
+  expect(JSON.parse(String(expandCall?.[1]?.body))).toEqual({
+    sessionId: "session-a",
+    preferences: { expandThinking: true },
+  });
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
   );
   expect(onOpenRuntimeStatus).toHaveBeenCalledTimes(1);
+});
+
+it("keeps an accepted OpenPI setup request inside the settings dialog", async () => {
+  const fetcher = settingsFetcher();
+  const onConfigureOpenPi = vi.fn(async () => true);
+  vi.stubGlobal("fetch", fetcher);
+  renderSettings({ onConfigureOpenPi });
+  await screen.findByText(i18n.t("agentBehavior"));
+
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("configureOpenPi") }),
+  );
+
+  await waitFor(() => expect(onConfigureOpenPi).toHaveBeenCalledTimes(1));
+  expect(onConfigureOpenPi).toHaveBeenCalledWith(
+    i18n.t("setupRequestReviewAll"),
+  );
+  expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
+  expect(screen.getByText(i18n.t("setupRequestAccepted"))).toBeTruthy();
 });
 
 it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async () => {
@@ -290,6 +391,9 @@ it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async ()
 
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
   expect(await screen.findByText("Delegate a bounded task.")).toBeTruthy();
+  expect(
+    screen.getAllByText(i18n.t("resourceScope_user")).length,
+  ).toBeGreaterThan(0);
   expect(screen.getByText("/skill:subagents")).toBeTruthy();
 
   fireEvent.click(
@@ -306,7 +410,18 @@ it("renders Pi skills, subagent roles, plugins, refreshes, and closes", async ()
   fireEvent.click(
     screen.getByRole("button", { name: i18n.t("refreshStatus") }),
   );
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("/api/settings/catalog"),
+      ),
+    ).toHaveLength(2),
+  );
+  expect(
+    fetcher.mock.calls.filter(([input]) =>
+      String(input).includes("/api/providers/auth-status"),
+    ),
+  ).toHaveLength(0);
 
   fireEvent.click(screen.getByRole("button", { name: i18n.t("close") }));
   expect(onClose).toHaveBeenCalledTimes(1);

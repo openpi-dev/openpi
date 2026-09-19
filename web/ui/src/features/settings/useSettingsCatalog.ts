@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
-import type { WebSettingsCatalog } from "../../../../protocol/types.ts";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type {
+  WebSettingsCatalog,
+  WebSettingsPreferencesPatch,
+} from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
 
 export function useSettingsCatalog(sessionId: string) {
@@ -7,6 +10,7 @@ export function useSettingsCatalog(sessionId: string) {
   const [revision, setRevision] = useState(0);
   const [catalog, setCatalog] = useState<WebSettingsCatalog | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const refresh = useCallback(() => setRevision((value) => value + 1), []);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly triggers a manual refresh.
   useEffect(() => {
@@ -26,6 +30,18 @@ export function useSettingsCatalog(sessionId: string) {
   return {
     catalog,
     error,
-    refresh: () => setRevision((value) => value + 1),
+    refresh,
+    updatePreferences: async (preferences: WebSettingsPreferencesPatch) => {
+      const result = await client.updateSettingsPreferences(
+        sessionId,
+        preferences,
+      );
+      setCatalog((current) =>
+        current
+          ? { ...current, sessionId: result.sessionId, setup: result.setup }
+          : current,
+      );
+      return result.setup;
+    },
   };
 }

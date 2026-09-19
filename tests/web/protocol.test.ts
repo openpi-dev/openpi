@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   projectEntries,
+  projectEntry,
   projectMessage,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
@@ -136,6 +137,25 @@ test("message projection keeps custom delivery messages", () => {
   assert.equal(projected.customType, "subagent-result");
   assert.equal(projected.display, true);
   assert.deepEqual(projected.details, { id: "sa-1", status: "done" });
+});
+
+test("entry projection preserves custom messages as transcript messages", () => {
+  const projected = projectEntry({
+    type: "custom_message",
+    id: "setup-request",
+    parentId: null,
+    timestamp: "2026-09-19T10:00:00.000Z",
+    customType: "openpi-setup-request",
+    content: "Apply a dark theme",
+    display: false,
+    details: { source: "settings" },
+  });
+  assert.equal(projected.type, "message");
+  assert.equal(projected.message?.role, "custom");
+  assert.equal(projected.message?.customType, "openpi-setup-request");
+  assert.equal(projected.message?.content, "Apply a dark theme");
+  assert.equal(projected.message?.display, false);
+  assert.deepEqual(projected.message?.details, { source: "settings" });
 });
 
 test("message projection bounds parts and reports exact omissions", () => {

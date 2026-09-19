@@ -12,6 +12,13 @@ Web workbench contributions include:
 
 The optional top-level Session communication package is [pi-intercom](https://github.com/nicobailon/pi-intercom).
 
+The Web workbench terminal lifecycle and presentation were informed by
+[`agegr/pi-web`](https://github.com/agegr/pi-web) revision `8366762` (MIT,
+Copyright (c) 2026 agegr). The browser tool's separate native-page approach was
+informed by [`apache/maka`](https://github.com/apache/maka) revision `ebeb961`
+(Apache License 2.0). OpenPI uses its own host protocol and implementation; it
+does not embed either project or copy Maka's Electron-only `WebContentsView`.
+
 ## OAuth model providers
 
 `extensions/ai-providers/` adapts protocol and OAuth details from
@@ -88,6 +95,15 @@ Copyright (c) Espen Hovlandsdal:
 Copyright (c) 2019 Paul Henschel:
 
 - `zustand@5.0.15`
+
+Copyright (c) 2017-2019, The xterm.js authors; Copyright (c) 2014-2016,
+SourceLair Private Company; Copyright (c) 2012-2013, Christopher Jeffrey:
+
+- `@xterm/xterm@6.0.0`
+
+Copyright (c) 2019, The xterm.js authors:
+
+- `@xterm/addon-fit@0.11.0`
 
 Copyright (c) Sindre Sorhus <sindresorhus@gmail.com>
 (<https://sindresorhus.com>):
@@ -206,6 +222,17 @@ The MIT terms for the packages above are:
 > LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 > OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 > SOFTWARE.
+
+## Host runtime dependencies
+
+The Web host uses `node-pty@1.2.0-beta.15` to provide a real workspace PTY.
+It retains these MIT notices:
+
+- Copyright (c) 2012-2015, Christopher Jeffrey
+- Copyright (c) 2016, Daniel Imms
+- Copyright (c) 2018-present Microsoft Corporation
+
+The MIT terms are the same as reproduced above.
 
 ### ISC-licensed packages
 

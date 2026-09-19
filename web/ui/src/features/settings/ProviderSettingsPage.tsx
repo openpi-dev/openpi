@@ -15,6 +15,7 @@ import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
   WebModelSummary,
+  WebSettingsPreferencesPatch,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
@@ -53,9 +54,11 @@ export function ProviderSettingsPage({
   thinkingLevel,
   theme,
   capabilities,
+  setupBusy,
   modelSelectionPending,
   onSelectModel,
   onConfigureOpenPi,
+  onPreferencesChanged,
   onOpenRuntimeStatus,
   onClose,
 }: {
@@ -66,9 +69,11 @@ export function ProviderSettingsPage({
   thinkingLevel: string;
   theme: WebThemePreference;
   capabilities?: WebCapabilitySnapshot;
+  setupBusy: boolean;
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
+  onPreferencesChanged: () => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
   onClose: () => void;
 }) {
@@ -76,11 +81,15 @@ export function ProviderSettingsPage({
   const closeButton = useRef<HTMLButtonElement>(null);
   const [section, setSection] = useState<SettingsSection>("general");
   const [setupPending, setSetupPending] = useState(false);
+  const [setupSubmitted, setSetupSubmitted] = useState(false);
+  const setupRefreshPending = useRef(false);
+  const [preferencePending, setPreferencePending] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
   const {
     catalog,
     error: catalogError,
     refresh,
+    updatePreferences,
   } = useSettingsCatalog(sessionId);
   const [selectedModelKey, setSelectedModelKey] = useState(
     currentModel
@@ -115,16 +124,29 @@ export function ProviderSettingsPage({
     if (models.some((model) => modelKey(model) === selectedModelKey)) return;
     setSelectedModelKey(modelKey(currentModel ?? models[0]!));
   }, [currentModel, models, selectedModelKey]);
+  useEffect(() => {
+    if (!setupSubmitted) return;
+    if (setupBusy) {
+      setupRefreshPending.current = true;
+      return;
+    }
+    if (!setupRefreshPending.current) return;
+    setupRefreshPending.current = false;
+    void refresh();
+  }, [refresh, setupBusy, setupSubmitted]);
 
   const configureOpenPi = async (request: string) => {
     if (setupPending) return false;
     setSetupPending(true);
+    setSetupSubmitted(false);
+    setupRefreshPending.current = false;
     setSetupError(null);
     try {
       const accepted = await onConfigureOpenPi(request);
       if (!accepted) {
-        setSetupPending(false);
         setSetupError(t("setupRequestFailed"));
+      } else {
+        setSetupSubmitted(true);
       }
       return accepted;
     } catch (reason) {
@@ -133,6 +155,26 @@ export function ProviderSettingsPage({
         reason instanceof Error ? reason.message : t("setupRequestFailed"),
       );
       return false;
+    } finally {
+      setSetupPending(false);
+    }
+  };
+
+  const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
+    if (preferencePending) return false;
+    setPreferencePending(true);
+    setSetupError(null);
+    try {
+      await updatePreferences(patch);
+      await onPreferencesChanged();
+      return true;
+    } catch (reason) {
+      setSetupError(
+        reason instanceof Error ? reason.message : t("settingsUpdateFailed"),
+      );
+      return false;
+    } finally {
+      setPreferencePending(false);
     }
   };
 
@@ -163,6 +205,7 @@ export function ProviderSettingsPage({
                 aria-selected={section === id}
                 aria-controls={`settings-panel-${id}`}
                 className="provider-settings-tab"
+                title={t(label)}
                 onClick={() => {
                   setSection(id);
                   setSetupError(null);
@@ -197,8 +240,10 @@ export function ProviderSettingsPage({
               thinkingLevel={thinkingLevel}
               cwd={cwd}
               theme={theme}
-              setupPending={setupPending}
+              setupPending={setupPending || setupBusy}
+              preferencePending={preferencePending}
               onConfigure={configureOpenPi}
+              onUpdatePreferences={updateWebPreferences}
               onOpenRuntimeStatus={onOpenRuntimeStatus}
               onRefresh={refresh}
             />
@@ -217,6 +262,7 @@ export function ProviderSettingsPage({
                     <h2>
                       <Cpu aria-hidden="true" />
                       <span>{provider}</span>
+                      <small>{providerModels.length}</small>
                     </h2>
                     {providerModels.map((model) => {
                       const key = modelKey(model);
@@ -230,7 +276,12 @@ export function ProviderSettingsPage({
                           className="settings-model-item"
                           onClick={() => setSelectedModelKey(key)}
                         >
-                          <span>{model.name || model.id}</span>
+                          <span>
+                            <strong>{model.name || model.id}</strong>
+                            {model.name !== model.id && (
+                              <small>{model.id}</small>
+                            )}
+                          </span>
                           {model.current && (
                             <Check aria-label={t("currentModel")} />
                           )}
@@ -252,7 +303,7 @@ export function ProviderSettingsPage({
                 <>
                   <header className="settings-model-detail-heading">
                     <div>
-                      <span>{t("modelSettings")}</span>
+                      <span>{t("model")}</span>
                       <h1>{selectedModel.name || selectedModel.id}</h1>
                       <code>{modelKey(selectedModel)}</code>
                     </div>
@@ -289,7 +340,7 @@ export function ProviderSettingsPage({
                   <ProviderStatusSection
                     sessionId={sessionId}
                     providerId={selectedModel.provider}
-                    hidden={false}
+                    active={section === "models"}
                   />
                 </>
               ) : (
@@ -322,7 +373,7 @@ export function ProviderSettingsPage({
               error={catalogError}
               currentModel={currentModel}
               activity={capabilities?.subagents}
-              setupPending={setupPending}
+              setupPending={setupPending || setupBusy}
               onConfigure={configureOpenPi}
               onRefresh={refresh}
             />
@@ -343,6 +394,11 @@ export function ProviderSettingsPage({
         {setupError && (
           <div className="settings-global-error" role="alert">
             {setupError}
+          </div>
+        )}
+        {setupSubmitted && !setupError && (
+          <div className="settings-global-status" role="status">
+            {t(setupBusy ? "setupRequestRunning" : "setupRequestAccepted")}
           </div>
         )}
       </section>

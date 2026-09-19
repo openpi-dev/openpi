@@ -16,6 +16,7 @@ const snapshot: WebGitReviewSnapshot = {
   repositoryRoot: "/workspace",
   currentBranch: "feature/review",
   baseBranch: "main",
+  comparison: "branch",
   revision: "a".repeat(64),
   additions: 8,
   deletions: 3,

@@ -6,6 +6,7 @@ import { join } from "node:path";
 import test from "node:test";
 import { promisify } from "node:util";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import { GitReviewBaselineStore } from "../../web/host/git-review.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type { WebRuntimeController } from "../../web/runtime/types.ts";
@@ -14,6 +15,9 @@ const execFileAsync = promisify(execFile);
 
 test("Git review HTTP access authenticates and binds the exact Session", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-git-review-http-"));
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-git-review-http-baseline-"),
+  );
   const sessionManager = SessionManager.inMemory(cwd);
   const runtime: WebRuntimeController = {
     searchModels: (query, limit) =>
@@ -38,7 +42,10 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
       throw new Error("unused");
     },
   };
-  const host = new WebHost({ runtime });
+  const host = new WebHost({
+    runtime,
+    gitReviews: new GitReviewBaselineStore(cwd, baselineDirectory),
+  });
   try {
     await execFileAsync("git", ["-C", cwd, "init", "-b", "main"]);
     await writeFile(join(cwd, "review.txt"), "review\n", "utf8");
@@ -87,12 +94,34 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
       snapshot?: { files: Array<{ path: string }> };
     };
     assert.equal(result.ok, true);
+    assert.deepEqual(result.snapshot?.files, []);
+
+    await writeFile(
+      join(cwd, "review.txt"),
+      "review\nsession change\n",
+      "utf8",
+    );
+    const changedResponse = await fetch(
+      `${host.origin}/api/git-review?${query}`,
+      { headers },
+    );
+    assert.equal(changedResponse.status, 200);
+    const changed = (await changedResponse.json()) as {
+      ok: boolean;
+      snapshot?: {
+        comparison: string;
+        files: Array<{ path: string }>;
+      };
+    };
+    assert.equal(changed.ok, true);
+    assert.equal(changed.snapshot?.comparison, "session");
     assert.deepEqual(
-      result.snapshot?.files.map((file) => file.path),
+      changed.snapshot?.files.map((file) => file.path),
       ["review.txt"],
     );
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
+    await rm(baselineDirectory, { recursive: true, force: true });
   }
 });

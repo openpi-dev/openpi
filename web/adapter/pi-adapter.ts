@@ -947,6 +947,10 @@ export class PiWebAdapter {
     const selectedSession = path
       ? await this.getSession(path, sessions)
       : undefined;
+    const usage =
+      selectedSession?.id === this.runtime.sessionManager.getSessionId()
+        ? this.runtime.getSessionUsage?.()
+        : undefined;
     const allModels = this.runtime.listModels();
     const currentModel = allModels.find((model) => model.current);
     const retainedModels = currentModel ? [currentModel] : [];
@@ -971,6 +975,7 @@ export class PiWebAdapter {
       models,
       ...(thinking ? { thinking } : {}),
       ...(selectedSession ? { selectedSession } : {}),
+      ...(usage ? { usage } : {}),
       runtime: {
         status: this.runtime.isIdle()
           ? ("idle" as const)

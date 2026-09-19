@@ -1,7 +1,23 @@
 import { execFile } from "node:child_process";
-import { createHash } from "node:crypto";
-import { lstat, readFile } from "node:fs/promises";
-import { isAbsolute, relative, resolve } from "node:path";
+import { createHash, randomUUID } from "node:crypto";
+import {
+  access,
+  chmod,
+  lstat,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
+import {
+  delimiter,
+  dirname,
+  isAbsolute,
+  join,
+  relative,
+  resolve,
+} from "node:path";
 import { promisify } from "node:util";
 import {
   WEB_MAX_GIT_REVIEW_DIFF_BYTES,
@@ -17,8 +33,28 @@ import {
 const execFileAsync = promisify(execFile);
 const GIT_TIMEOUT_MS = 10_000;
 const GIT_MAX_BUFFER_BYTES = 32 * 1024 * 1024;
+const GIT_REVIEW_BASELINE_VERSION = 1;
 
-async function git(cwd: string, args: string[]) {
+type GitEnvironment = Record<string, string | undefined>;
+
+interface GitReviewBaselineMetadata {
+  version: typeof GIT_REVIEW_BASELINE_VERSION;
+  cwd: string;
+  repositoryRoot?: string;
+  repositoryObjects?: string;
+  status:
+    | "ready"
+    | "not_git_repository"
+    | "unborn_repository"
+    | "git_failed";
+}
+
+export interface GitReviewService {
+  capture(sessionPath: string, cwd: string): Promise<void>;
+  read(sessionPath: string, cwd: string): Promise<WebGitReviewResult>;
+}
+
+async function git(cwd: string, args: string[], environment?: GitEnvironment) {
   const { stdout } = await execFileAsync(
     "git",
     ["-C", cwd, ...args],
@@ -28,6 +64,7 @@ async function git(cwd: string, args: string[]) {
       maxBuffer: GIT_MAX_BUFFER_BYTES,
       env: {
         ...process.env,
+        ...environment,
         GIT_CONFIG_COUNT: "2",
         GIT_CONFIG_KEY_0: "diff.external",
         GIT_CONFIG_VALUE_0: "",
@@ -157,7 +194,11 @@ function dedupe(files: WebGitReviewFile[]) {
   return [...byPath.values()];
 }
 
-async function trackedChanges(root: string, comparisons: string[][]) {
+async function trackedChanges(
+  root: string,
+  comparisons: string[][],
+  environment?: GitEnvironment,
+) {
   const files: WebGitReviewFile[] = [];
   let diffBytes = 0;
   let truncated = false;
@@ -171,7 +212,7 @@ async function trackedChanges(root: string, comparisons: string[][]) {
         "--no-ext-diff",
         "--no-textconv",
         ...comparison,
-      ]),
+      ], environment),
       git(root, [
         "diff",
         "--no-color",
@@ -181,7 +222,7 @@ async function trackedChanges(root: string, comparisons: string[][]) {
         "--find-renames",
         "--full-index",
         ...comparison,
-      ]),
+      ], environment),
     ]);
     const entries = parseNameStatus(status);
     const chunks = splitDiff(diff);
@@ -237,13 +278,14 @@ async function untrackedChanges(
   root: string,
   room: number,
   diffByteRoom: number,
+  environment?: GitEnvironment,
 ) {
   const paths = (await git(root, [
     "ls-files",
     "-z",
     "--others",
     "--exclude-standard",
-  ]))
+  ], environment))
     .split("\0")
     .filter(Boolean);
   const files: WebGitReviewFile[] = [];
@@ -321,7 +363,16 @@ function boundSnapshot(snapshot: WebGitReviewSnapshot) {
   return snapshot;
 }
 
-export async function readGitReview(cwd: string): Promise<WebGitReviewResult> {
+export async function readGitReview(
+  cwd: string,
+  options?: {
+    baseline?: {
+      index: string;
+      objects: string;
+      repositoryObjects: string;
+    };
+  },
+): Promise<WebGitReviewResult> {
   try {
     const root = cleanLine(
       await git(cwd, ["rev-parse", "--show-toplevel"]),
@@ -331,25 +382,46 @@ export async function readGitReview(cwd: string): Promise<WebGitReviewResult> {
       await git(root, ["branch", "--show-current"]),
     );
     const hasHead = await refExists(root, "HEAD");
-    const base = hasHead ? await baseBranch(root, currentBranch) : null;
-    const mergeBase = base
-      ? cleanLine(await git(root, ["merge-base", base, "HEAD"]))
-      : null;
+    const environment = options?.baseline
+      ? {
+          GIT_INDEX_FILE: options.baseline.index,
+          GIT_OBJECT_DIRECTORY: options.baseline.objects,
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+            options.baseline.repositoryObjects,
+            process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+          ]
+            .filter(Boolean)
+            .join(delimiter),
+        }
+      : undefined;
+    const base =
+      !options?.baseline && hasHead
+        ? await baseBranch(root, currentBranch)
+        : null;
+    const mergeBase =
+      base && !options?.baseline
+        ? cleanLine(await git(root, ["merge-base", base, "HEAD"]))
+        : null;
     const tracked = await trackedChanges(
       root,
-      mergeBase
-        ? [[mergeBase]]
-        : [hasHead ? ["--cached"] : ["--cached", "--root"], []],
+      options?.baseline
+        ? [[]]
+        : mergeBase
+          ? [[mergeBase]]
+          : [hasHead ? ["--cached"] : ["--cached", "--root"], []],
+      environment,
     );
     const untracked = await untrackedChanges(
       root,
       WEB_MAX_GIT_REVIEW_FILES - tracked.files.length,
       WEB_MAX_GIT_REVIEW_DIFF_BYTES - tracked.diffBytes,
+      environment,
     );
     const snapshot = boundSnapshot({
       repositoryRoot: root,
       currentBranch,
       baseBranch: base,
+      comparison: options?.baseline ? "session" : "branch",
       revision: "0".repeat(64),
       files: dedupe([...tracked.files, ...untracked.files]),
       additions: 0,
@@ -386,5 +458,205 @@ export async function readGitReview(cwd: string): Promise<WebGitReviewResult> {
     if (/bad revision|unknown revision|ambiguous argument 'HEAD'/iu.test(message))
       return { ok: false, reason: "unborn_repository" };
     return { ok: false, reason: "git_failed" };
+  }
+}
+
+export class GitReviewBaselineStore implements GitReviewService {
+  private readonly directory: string;
+  private readonly captures = new Map<string, Promise<void>>();
+
+  constructor(
+    sessionDirectory: string,
+    baselineDirectory = join(
+      dirname(resolve(sessionDirectory)),
+      ".openpi-git-review-baselines",
+    ),
+  ) {
+    this.directory = baselineDirectory;
+  }
+
+  private key(sessionPath: string, cwd: string) {
+    return createHash("sha256")
+      .update(`${resolve(cwd)}\0${sessionPath}`)
+      .digest("hex");
+  }
+
+  private paths(sessionPath: string, cwd: string) {
+    const key = this.key(sessionPath, cwd);
+    return {
+      key,
+      index: join(this.directory, `${key}.index`),
+      objects: join(this.directory, `${key}.objects`),
+      metadata: join(this.directory, `${key}.json`),
+    };
+  }
+
+  private async metadata(path: string) {
+    try {
+      const value = JSON.parse(
+        await readFile(path, "utf8"),
+      ) as Partial<GitReviewBaselineMetadata>;
+      if (
+        value.version !== GIT_REVIEW_BASELINE_VERSION ||
+        typeof value.cwd !== "string" ||
+        ![
+          "ready",
+          "not_git_repository",
+          "unborn_repository",
+          "git_failed",
+        ].includes(value.status ?? "")
+      ) {
+        return undefined;
+      }
+      if (
+        value.status === "ready" &&
+        (typeof value.repositoryRoot !== "string" ||
+          typeof value.repositoryObjects !== "string")
+      ) {
+        return undefined;
+      }
+      return value as GitReviewBaselineMetadata;
+    } catch {
+      return undefined;
+    }
+  }
+
+  private async writeMetadata(
+    path: string,
+    metadata: GitReviewBaselineMetadata,
+  ) {
+    const temporary = `${path}.${randomUUID()}.tmp`;
+    try {
+      await writeFile(temporary, `${JSON.stringify(metadata)}\n`, {
+        encoding: "utf8",
+        mode: 0o600,
+      });
+      await rename(temporary, path);
+    } finally {
+      await rm(temporary, { force: true });
+    }
+  }
+
+  private failureReason(error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (/not a git repository/iu.test(message))
+      return "not_git_repository" as const;
+    if (/bad revision|unknown revision|ambiguous argument 'HEAD'/iu.test(message))
+      return "unborn_repository" as const;
+    return "git_failed" as const;
+  }
+
+  async capture(sessionPath: string, cwd: string) {
+    const paths = this.paths(sessionPath, cwd);
+    if (await this.metadata(paths.metadata)) return;
+    const pending = this.captures.get(paths.key);
+    if (pending) return pending;
+    const capture = this.createBaseline(paths, cwd).finally(() => {
+      this.captures.delete(paths.key);
+    });
+    this.captures.set(paths.key, capture);
+    return capture;
+  }
+
+  private async createBaseline(
+    paths: ReturnType<GitReviewBaselineStore["paths"]>,
+    cwd: string,
+  ) {
+    await mkdir(this.directory, { recursive: true, mode: 0o700 });
+    await chmod(this.directory, 0o700);
+    const canonicalCwd = resolve(cwd);
+    let repositoryRoot: string | undefined;
+    let repositoryObjects: string | undefined;
+    try {
+      repositoryRoot =
+        cleanLine(await git(canonicalCwd, ["rev-parse", "--show-toplevel"])) ??
+        undefined;
+      if (!repositoryRoot) throw new Error("not a git repository");
+      const commonDirectory = cleanLine(
+        await git(repositoryRoot, ["rev-parse", "--git-common-dir"]),
+      );
+      if (!commonDirectory) throw new Error("Git common directory unavailable");
+      repositoryObjects = join(
+        resolve(repositoryRoot, commonDirectory),
+        "objects",
+      );
+      await mkdir(paths.objects, { recursive: true, mode: 0o700 });
+      await chmod(paths.objects, 0o700);
+      const temporaryIndex = `${paths.index}.${randomUUID()}.tmp`;
+      try {
+        const environment = {
+          GIT_INDEX_FILE: temporaryIndex,
+          GIT_OBJECT_DIRECTORY: paths.objects,
+          GIT_ALTERNATE_OBJECT_DIRECTORIES: [
+            repositoryObjects,
+            process.env.GIT_ALTERNATE_OBJECT_DIRECTORIES,
+          ]
+            .filter(Boolean)
+            .join(delimiter),
+        };
+        if (await refExists(repositoryRoot, "HEAD"))
+          await git(repositoryRoot, ["read-tree", "HEAD"], environment);
+        else await git(repositoryRoot, ["read-tree", "--empty"], environment);
+        await git(repositoryRoot, ["add", "-A", "--", "."], environment);
+        await chmod(temporaryIndex, 0o600);
+        await rename(temporaryIndex, paths.index);
+      } finally {
+        await rm(temporaryIndex, { force: true });
+        await rm(`${temporaryIndex}.lock`, { force: true });
+      }
+      await this.writeMetadata(paths.metadata, {
+        version: GIT_REVIEW_BASELINE_VERSION,
+        cwd: canonicalCwd,
+        repositoryRoot,
+        repositoryObjects,
+        status: "ready",
+      });
+    } catch (error) {
+      await rm(paths.index, { force: true });
+      await rm(paths.objects, { recursive: true, force: true });
+      await this.writeMetadata(paths.metadata, {
+        version: GIT_REVIEW_BASELINE_VERSION,
+        cwd: canonicalCwd,
+        ...(repositoryRoot ? { repositoryRoot } : {}),
+        status: this.failureReason(error),
+      });
+    }
+  }
+
+  async read(sessionPath: string, cwd: string): Promise<WebGitReviewResult> {
+    await this.capture(sessionPath, cwd);
+    const paths = this.paths(sessionPath, cwd);
+    const metadata = await this.metadata(paths.metadata);
+    if (!metadata || metadata.status !== "ready") {
+      const reason =
+        metadata?.status === "not_git_repository" ||
+        metadata?.status === "unborn_repository"
+          ? metadata.status
+          : "git_failed";
+      return {
+        ok: false,
+        reason,
+      };
+    }
+    try {
+      await Promise.all([access(paths.index), access(paths.objects)]);
+    } catch {
+      return { ok: false, reason: "git_failed" };
+    }
+    const result = await readGitReview(cwd, {
+      baseline: {
+        index: paths.index,
+        objects: paths.objects,
+        repositoryObjects: metadata.repositoryObjects!,
+      },
+    });
+    if (
+      result.ok &&
+      resolve(result.snapshot.repositoryRoot) !==
+        resolve(metadata.repositoryRoot!)
+    ) {
+      return { ok: false, reason: "git_failed" };
+    }
+    return result;
   }
 }

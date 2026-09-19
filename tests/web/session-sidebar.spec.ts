@@ -99,6 +99,8 @@ function mount(
     query: "",
     searchOpen: false,
     mobileOpen: false,
+    settingsDisabled: false,
+    onOpenSettings: vi.fn(),
     actions,
     ...overrides,
   };

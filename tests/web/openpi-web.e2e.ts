@@ -154,6 +154,14 @@ for (const width of [1280, 390]) {
     const copy = page.getByRole("button", { name: "复制代码", exact: true });
     await expect(block).toHaveCount(1);
     await expect(copy).toBeVisible();
+    await expect
+      .poll(() =>
+        block.evaluate((element) => {
+          const scroll = element.querySelector(".markdown-code-scroll");
+          return scroll ? scroll.scrollWidth - scroll.clientWidth : 0;
+        }),
+      )
+      .toBeGreaterThan(0);
     const dimensions = await block.evaluate((element) => {
       const scroll = element.querySelector(".markdown-code-scroll");
       const button = element.querySelector("button");
@@ -361,6 +369,235 @@ async function openWorkbench(page: Page) {
   await expect(page.getByRole("textbox", { name: "描述任务" })).toBeVisible();
   return externalRequests;
 }
+
+async function dragPane(page: Page, side: "left" | "right", deltaX: number) {
+  const handle = page.locator(`[data-pane-resizer="${side}"]`);
+  const bounds = await handle.boundingBox();
+  expect(bounds).not.toBeNull();
+  const startX = bounds!.x + bounds!.width / 2;
+  const y = bounds!.y + Math.min(120, bounds!.height / 2);
+  await page.mouse.move(startX, y);
+  await page.mouse.down();
+  await page.mouse.move(startX + deltaX, y, { steps: 8 });
+  await page.mouse.up();
+}
+
+async function openWorkbarTool(page: Page, name: string) {
+  await page.getByRole("button", { name: "打开工具", exact: true }).click();
+  const workbar = page.locator(".workbar-panel");
+  await expect(workbar).toBeVisible();
+  await workbar
+    .getByRole("button", { name: new RegExp(`^${name}`, "u") })
+    .click();
+  return workbar;
+}
+
+test("desktop panes resize by pointer and collapse beyond their thresholds", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const sidebar = page.locator(".session-sidebar");
+  const conversation = page.locator(".conversation-shell");
+  const initialSidebar = await sidebar.boundingBox();
+  const initialConversation = await conversation.boundingBox();
+  expect(initialSidebar).not.toBeNull();
+  expect(initialConversation).not.toBeNull();
+
+  await dragPane(page, "left", 80);
+  await expect
+    .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
+    .toBeGreaterThan(initialSidebar!.width + 60);
+  await expect
+    .poll(async () => (await conversation.boundingBox())?.width ?? 0)
+    .toBeLessThan(initialConversation!.width - 60);
+
+  await dragPane(page, "left", -240);
+  await expect(sidebar).toHaveCSS("width", "56px");
+  await expect(page.locator('[data-pane-resizer="left"]')).toHaveCount(0);
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+
+  const workbar = await openWorkbarTool(page, "生成文件");
+  const centerBeforeRightDrag = await conversation.boundingBox();
+  await dragPane(page, "right", -70);
+  await expect
+    .poll(async () => (await conversation.boundingBox())?.width ?? 0)
+    .toBeLessThan(centerBeforeRightDrag!.width - 50);
+  await dragPane(page, "right", 420);
+  await expect(workbar).toBeHidden();
+  await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
+});
+
+test("workbar exposes five tools and completes a side conversation lifecycle", async ({
+  page,
+}) => {
+  type SideAction = {
+    sessionId: string;
+    kind: "subagents";
+    action: "spawn-btw" | "send-btw" | "cancel-btw";
+    prompt?: string;
+    id?: string;
+    text?: string;
+  };
+  const actions: SideAction[] = [];
+  const turns: Array<{ question: string; answer: string }> = [];
+  let status: "running" | "done" = "running";
+  const detail = () => ({
+    kind: "subagents" as const,
+    id: "btw-e2e",
+    title: "Focused side question",
+    origin: "btw" as const,
+    status,
+    ...(status === "done"
+      ? { outcome: "interrupted" as const, settledAt: 2 }
+      : {}),
+    createdAt: 1,
+    cwd: "/workspace",
+    model: "fixture/model",
+    prompt: turns[0]?.question ?? "",
+    transcript: turns.flatMap((turn) => [
+      { kind: "user" as const, text: turn.question },
+      {
+        kind: "assistant" as const,
+        parts: [{ type: "text" as const, text: turn.answer }],
+      },
+    ]),
+    liveTools: [],
+    finalText: turns.at(-1)?.answer ?? "",
+    truncated: false,
+    omittedEntries: 0,
+  });
+  await page.route("**/api/capabilities/action", async (route) => {
+    const action = route.request().postDataJSON() as SideAction;
+    actions.push(action);
+    if (action.action === "spawn-btw") {
+      turns.push({
+        question: action.prompt ?? "",
+        answer: "Side response",
+      });
+    } else if (action.action === "send-btw") {
+      turns.push({
+        question: action.text ?? "",
+        answer: "Follow-up response",
+      });
+    } else {
+      status = "done";
+    }
+    await route.fulfill({
+      json: { sessionId: action.sessionId, detail: detail() },
+    });
+  });
+  await page.route("**/api/capabilities/detail?**", async (route) => {
+    const sessionId = new URL(route.request().url()).searchParams.get(
+      "sessionId",
+    );
+    await route.fulfill({ json: { sessionId, detail: detail() } });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "打开工具", exact: true }).click();
+  const launcher = page.locator(".workbar-panel");
+  const launcherButtons = launcher.locator(".workbar-launcher-list > button");
+  await expect(launcherButtons).toHaveCount(5);
+  expect(await launcherButtons.locator("strong").allTextContents()).toEqual([
+    "侧边对话",
+    "变更",
+    "终端",
+    "浏览器",
+    "生成文件",
+  ]);
+  await launcher.getByRole("button", { name: /^变更/u }).click();
+  const review = page.getByRole("complementary", { name: "变更" });
+  await expect(review).toBeVisible();
+  await review.getByRole("button", { name: "关闭", exact: true }).click();
+
+  const workbar = await openWorkbarTool(page, "侧边对话");
+  const question = workbar.getByPlaceholder("提出一个侧边问题…");
+  await question.fill("Inspect this in isolation");
+  await question.press("Enter");
+  await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw"]);
+
+  const followUp = workbar.getByPlaceholder("继续追问…");
+  await followUp.fill("Check one more detail");
+  await followUp.press("Enter");
+  await expect(workbar.getByText("Follow-up response")).toBeVisible();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw", "send-btw"]);
+  await workbar.getByRole("button", { name: "停止", exact: true }).click();
+  await expect
+    .poll(() => actions.map((action) => action.action))
+    .toEqual(["spawn-btw", "send-btw", "cancel-btw"]);
+  await expect(workbar.getByRole("button", { name: "停止" })).toHaveCount(0);
+  expect(
+    (await new AxeBuilder({ page }).include(".workbar-panel").analyze())
+      .violations,
+  ).toEqual([]);
+});
+
+test("terminal tool runs a real workspace shell", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await openWorkbarTool(page, "终端");
+  const terminal = page.locator(".interactive-terminal");
+  await expect(terminal.locator(".terminal-status-dot.ready")).toBeVisible();
+  const input = terminal.locator(".xterm-helper-textarea");
+  await input.focus();
+  await page.keyboard.type("printf 'OPENPI_WEB_TERMINAL_OK\\n'");
+  await page.keyboard.press("Enter");
+  await expect
+    .poll(() => terminal.locator(".xterm-rows").textContent())
+    .toContain("OPENPI_WEB_TERMINAL_OK");
+});
+
+test("browser tool launches the system browser without embedding a page", async ({
+  page,
+}) => {
+  let launch: { sessionId: string; url: string } | undefined;
+  await page.route("**/api/browser/open", async (route) => {
+    launch = route.request().postDataJSON();
+    await route.fulfill({ json: { opened: true, url: launch?.url } });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const workbar = await openWorkbarTool(page, "浏览器");
+  await workbar
+    .getByRole("textbox", { name: "浏览器地址" })
+    .fill("example.com");
+  await workbar.getByRole("button", { name: "打开地址" }).click();
+  await expect(workbar.getByText("已在系统浏览器中打开")).toBeVisible();
+  await expect(workbar.locator("iframe")).toHaveCount(0);
+  expect(launch?.url).toBe("https://example.com/");
+  expect(launch?.sessionId).toBeTruthy();
+});
+
+test("sidebar settings stays open after an OpenPI configuration request", async ({
+  page,
+}) => {
+  let request = "";
+  await page.route("**/api/prompt", async (route) => {
+    request = (route.request().postDataJSON() as { content: string }).content;
+    await route.fulfill({
+      status: 202,
+      json: { id: "settings-request", accepted: true },
+    });
+  });
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const settings = page.getByRole("dialog", { name: "设置" });
+  await expect(settings).toBeVisible();
+  await settings
+    .getByRole("button", { name: "配置 OpenPI", exact: true })
+    .click();
+  await expect(settings).toBeVisible();
+  await expect(settings.getByText("配置请求已接收。")).toBeVisible();
+  expect(request).toBe("/openpi-setup 和我一起检查全部 OpenPI 配置项");
+});
 
 test("production workbench is local, keyboard-operable, and accessible", async ({
   page,
@@ -766,7 +1003,10 @@ for (const width of [320, 390]) {
     await expect(close).toBeFocused();
     await expect.poll(async () => (await sidebar.boundingBox())?.x).toBe(0);
 
-    const last = sidebar.getByRole("button", { name: "会话选项" }).last();
+    const last = sidebar.getByRole("button", { name: "设置", exact: true });
+    const sessionOptions = sidebar
+      .getByRole("button", { name: "会话选项" })
+      .last();
     for (const source of ["brand", "search"] as const) {
       for (const key of ["Tab", "Shift+Tab", "Escape"]) {
         if (source === "brand") {
@@ -797,11 +1037,13 @@ for (const width of [320, 390]) {
     await expect(last).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(close).toBeFocused();
-    await last.focus();
+    await sessionOptions.focus();
     await page.keyboard.press("Enter");
     await expect(
       page.getByRole("menuitem", { name: "重命名会话" }),
     ).toBeFocused();
+    await page.keyboard.press("Tab");
+    await expect(last).toBeFocused();
     await page.keyboard.press("Tab");
     await expect(close).toBeFocused();
     for (let step = 0; step < 15; step++) {

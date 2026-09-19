@@ -141,18 +141,22 @@ for (const width of [1280, 390]) {
       });
     });
     await page.goto("/");
-    const card = page.getByRole("button", {
-      name: "打开子代理：Readonly task 1",
-      exact: true,
-    });
-    await expect(card).toContainText("运行中");
-    await expect(card).not.toContainText("已完成");
-    await card.click();
+    await page
+      .getByRole("button", {
+        name: "子代理：1 运行中 · 6 条记录",
+        exact: true,
+      })
+      .click();
     const dialog = page.getByRole(width > 1100 ? "complementary" : "main", {
       name: "子代理",
       exact: true,
     });
     await expect(dialog).toBeVisible();
+    const list = dialog.getByRole("navigation", { name: "子代理任务列表" });
+    const card = list.getByRole("button", { name: /Readonly task 1/ });
+    await expect(card).toContainText("运行中");
+    await expect(card).not.toContainText("已完成");
+    await card.click();
     await expect(page.locator("dialog:modal")).toHaveCount(0);
     if (width > 1100)
       await expect(page.locator(".conversation-shell")).toBeVisible();
@@ -166,7 +170,6 @@ for (const width of [1280, 390]) {
       dialog.getByText('{"name":"example-app"}', { exact: true }),
     ).toBeVisible();
     await dialog.getByRole("button", { name: "返回子代理列表" }).click();
-    const list = dialog.getByRole("navigation", { name: "子代理任务列表" });
     await expect(list.getByRole("button")).toHaveCount(6);
     if (width > 1100) {
       await card.click();

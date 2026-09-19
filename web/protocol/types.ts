@@ -211,6 +211,19 @@ export interface WebSettingsCatalog {
   resources: WebSettingsResourceCatalog;
 }
 
+export interface WebSettingsPreferencesPatch {
+  theme?: WebThemePreference;
+  chatWidth?: number;
+  chatFontSize?: number;
+  expandThinking?: boolean;
+}
+
+export interface WebSettingsPreferencesResult {
+  sessionId: string;
+  setup: WebOpenPiSetupProjection;
+  revision: number;
+}
+
 export interface WebProjectionTruncation {
   readonly truncated: boolean;
   readonly entriesOmitted: number;
@@ -227,6 +240,33 @@ export interface WebSessionProjection {
   bytes: number;
   truncation: WebProjectionTruncation;
 }
+
+export interface WebSessionUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  context?: {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  };
+}
+
+export interface WebInteractiveTerminal {
+  id: string;
+  sessionId: string;
+  cwd: string;
+  exited: boolean;
+  exitCode: number | null;
+  reused?: boolean;
+}
+
+export type WebInteractiveTerminalEvent =
+  | { type: "output"; data: string; offset: number; reset?: boolean }
+  | { type: "exit"; exitCode: number }
+  | { type: "closed" };
 
 export interface WebMessageTruncation {
   readonly truncated: true;
@@ -298,6 +338,7 @@ export interface WebGitReviewSnapshot {
   repositoryRoot: string;
   currentBranch: string | null;
   baseBranch: string | null;
+  comparison: "branch" | "session";
   revision: string;
   files: WebGitReviewFile[];
   additions: number;
@@ -349,6 +390,8 @@ export interface WebSnapshot {
   workspaces: WebWorkspaceSummary[];
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
+  /** Current Pi Session only. Historical projections do not invent live context usage. */
+  usage?: WebSessionUsage;
   models: WebModelSummary[];
   /** Optional diagnostic; absent when the runtime cannot report it. */
   thinking?: WebThinkingState;
@@ -682,6 +725,23 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
 }
 
 export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
+  if (entry.type === "custom_message") {
+    return {
+      type: "message" as const,
+      id: entry.id,
+      timestamp: entry.timestamp,
+      message: projectMessage(
+        {
+          role: "custom",
+          customType: entry.customType,
+          content: entry.content,
+          details: entry.details,
+          display: entry.display,
+        },
+        resolvePath,
+      ),
+    };
+  }
   if (entry.type !== "message") {
     return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
   }

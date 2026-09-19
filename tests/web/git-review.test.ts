@@ -5,7 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, test } from "node:test";
 import { promisify } from "node:util";
-import { countGitDiffLines, readGitReview } from "../../web/host/git-review.ts";
+import {
+  countGitDiffLines,
+  GitReviewBaselineStore,
+  readGitReview,
+} from "../../web/host/git-review.ts";
 import {
   jsonByteLength,
   WEB_MAX_SNAPSHOT_BYTES,
@@ -21,7 +25,15 @@ after(async () => {
 });
 
 async function git(root: string, ...args: string[]) {
-  await execFileAsync("git", ["-C", root, ...args], { encoding: "utf8" });
+  const { stdout } = await execFileAsync("git", ["-C", root, ...args], {
+    encoding: "utf8",
+  });
+  return stdout;
+}
+
+async function looseObjectCount(root: string) {
+  const output = await git(root, "count-objects", "-v");
+  return Number(/^count: (\d+)$/mu.exec(output)?.[1] ?? -1);
 }
 
 async function repository() {
@@ -52,6 +64,7 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   if (!result.ok) return;
   assert.equal(result.snapshot.currentBranch, "feature/review");
   assert.equal(result.snapshot.baseBranch, "main");
+  assert.equal(result.snapshot.comparison, "branch");
   assert.deepEqual(result.snapshot.files.map((file) => file.path).sort(), [
     "base.txt",
     "feature.txt",
@@ -60,6 +73,44 @@ test("Git review combines branch, staged, unstaged, and untracked changes", asyn
   ]);
   assert.ok(result.snapshot.additions >= 4);
   assert.equal(result.snapshot.truncated, false);
+});
+
+test("Git review baseline reports only changes made after a Session starts", async () => {
+  const root = await repository();
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-git-review-baseline-"),
+  );
+  roots.add(baselineDirectory);
+  await writeFile(join(root, "base.txt"), "base\npreexisting\n", "utf8");
+  await writeFile(join(root, "preexisting.txt"), "before\n", "utf8");
+  const store = new GitReviewBaselineStore(root, baselineDirectory);
+  const sessionPath = join(baselineDirectory, "session.jsonl");
+  const repositoryObjectsBefore = await looseObjectCount(root);
+
+  await store.capture(sessionPath, root);
+  assert.equal(await looseObjectCount(root), repositoryObjectsBefore);
+  const initial = await store.read(sessionPath, root);
+  assert.equal(initial.ok, true);
+  if (!initial.ok) return;
+  assert.equal(initial.snapshot.comparison, "session");
+  assert.deepEqual(initial.snapshot.files, []);
+
+  await writeFile(join(root, "base.txt"), "base\nsession change\n", "utf8");
+  await writeFile(join(root, "preexisting.txt"), "after\n", "utf8");
+  await writeFile(join(root, "created.txt"), "created\n", "utf8");
+  const changed = await store.read(sessionPath, root);
+  assert.equal(changed.ok, true);
+  if (!changed.ok) return;
+  assert.deepEqual(changed.snapshot.files.map((file) => file.path).sort(), [
+    "base.txt",
+    "created.txt",
+    "preexisting.txt",
+  ]);
+  assert.equal(
+    changed.snapshot.files.find((file) => file.path === "preexisting.txt")
+      ?.status,
+    "modified",
+  );
 });
 
 test("Git review reports a non-repository instead of an empty snapshot", async () => {

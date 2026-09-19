@@ -14,6 +14,8 @@ import {
   projectSubagentDetail,
   projectWorkflowCapability,
   registerWebCapability,
+  registerWebCapabilityActions,
+  runWebCapabilityAction,
   subscribeWebCapabilities,
   type WebCapabilityScope,
   webCapabilityDetail,
@@ -255,6 +257,49 @@ test("subagent detail reads exact current manager data only within its Session s
   assert.deepEqual(webCapabilityDetail(scope, "subagents", "sa-1"), {
     status: "unavailable",
   });
+});
+
+test("capability actions stay scoped to one SessionManager identity", async () => {
+  const sessionA = sessionScope();
+  const sessionB = sessionScope();
+  const requests: string[] = [];
+  const unregister = registerWebCapabilityActions(sessionA, {
+    kind: "subagents",
+    async run(request) {
+      requests.push(request.action);
+      return projectSubagentDetail(
+        subagentSnapshot({ id: "btw-1", origin: "btw", prompt: "aside" }),
+      );
+    },
+  });
+  try {
+    const detail = await runWebCapabilityAction(sessionA, {
+      kind: "subagents",
+      action: "spawn-btw",
+      prompt: "aside",
+    });
+    assert.equal(detail?.kind, "subagents");
+    assert.equal(detail?.id, "btw-1");
+    assert.deepEqual(requests, ["spawn-btw"]);
+    assert.equal(
+      await runWebCapabilityAction(sessionB, {
+        kind: "subagents",
+        action: "spawn-btw",
+        prompt: "aside",
+      }),
+      undefined,
+    );
+  } finally {
+    unregister();
+  }
+  assert.equal(
+    await runWebCapabilityAction(sessionA, {
+      kind: "subagents",
+      action: "spawn-btw",
+      prompt: "aside",
+    }),
+    undefined,
+  );
 });
 
 test("shares providers across separate physical module copies", async () => {

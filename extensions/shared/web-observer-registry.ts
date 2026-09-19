@@ -23,6 +23,7 @@ const WEB_MAX_TERMINAL_STDERR_BYTES = 8 * 1024;
 export interface WebSubagentActivity {
   readonly id: string;
   readonly title: string;
+  readonly origin?: "model" | "btw";
   readonly status: "running" | "done" | "error";
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly createdAt: number;
@@ -96,6 +97,32 @@ export interface WebSubagentDetail extends WebSubagentActivity {
   readonly errorText?: string;
   readonly truncated: boolean;
   readonly omittedEntries: number;
+}
+
+export type WebCapabilityActionRequest =
+  | {
+      readonly kind: "subagents";
+      readonly action: "spawn-btw";
+      readonly prompt: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "send-btw";
+      readonly id: string;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "cancel-btw";
+      readonly id: string;
+    };
+
+export interface WebCapabilityActionProvider {
+  readonly kind: WebCapabilityKind;
+  readonly run: (
+    request: WebCapabilityActionRequest,
+    signal?: AbortSignal,
+  ) => Promise<WebCapabilityDetail>;
 }
 
 export type WebCapabilityDetail =
@@ -253,6 +280,7 @@ export function projectSubagentCapability(
   source: readonly {
     readonly id: string;
     readonly title: string;
+    readonly origin?: WebSubagentActivity["origin"];
     readonly status: WebSubagentActivity["status"];
     readonly outcome?: WebSubagentActivity["outcome"];
     readonly createdAt: number;
@@ -266,6 +294,7 @@ export function projectSubagentCapability(
       item: {
         id: id.value,
         title: title.value,
+        ...(value.origin ? { origin: value.origin } : {}),
         status: value.status,
         ...(value.outcome ? { outcome: value.outcome } : {}),
         createdAt: value.createdAt,
@@ -399,6 +428,7 @@ export function projectSubagentDetail(
     kind: "subagents",
     id: source.id,
     title,
+    origin: source.origin,
     status: source.status,
     ...(source.outcome !== undefined ? { outcome: source.outcome } : {}),
     createdAt: source.createdAt,
@@ -598,6 +628,10 @@ interface WebObserverRegistry {
     WebCapabilityScope,
     Map<WebCapabilityKind, WebCapabilityProvider>
   >;
+  readonly actions: Map<
+    WebCapabilityScope,
+    Map<WebCapabilityKind, WebCapabilityActionProvider>
+  >;
   readonly listeners: Map<CapabilityListener, ProviderSubscriptions>;
 }
 
@@ -617,11 +651,21 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
     ) {
       throw new Error("Incompatible OpenPI Web observer registry");
     }
-    return existing as WebObserverRegistry;
+    const registry = existing as WebObserverRegistry;
+    if (!(registry.actions instanceof Map)) {
+      Object.defineProperty(registry, "actions", {
+        value: new Map(),
+        configurable: false,
+        enumerable: true,
+        writable: false,
+      });
+    }
+    return registry;
   }
   const registry: WebObserverRegistry = {
     version: 1,
     providers: new Map(),
+    actions: new Map(),
     listeners: new Map(),
   };
   Object.defineProperty(globalThis, WEB_OBSERVER_REGISTRY_KEY, {
@@ -636,7 +680,35 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
 // Pi may load package extensions from a managed install while the standalone
 // CLI runs from a global npm install. Symbol.for keeps those same-process module
 // copies on one versioned registry without adding a second persistence layer.
-const { providers, listeners } = sharedWebObserverRegistry();
+const { providers, actions, listeners } = sharedWebObserverRegistry();
+
+export function registerWebCapabilityActions(
+  scope: WebCapabilityScope,
+  provider: WebCapabilityActionProvider,
+) {
+  let scopedActions = actions.get(scope);
+  if (!scopedActions) {
+    scopedActions = new Map();
+    actions.set(scope, scopedActions);
+  }
+  scopedActions.set(provider.kind, provider);
+  return () => {
+    const current = actions.get(scope);
+    if (current?.get(provider.kind) !== provider) return;
+    current.delete(provider.kind);
+    if (current.size === 0) actions.delete(scope);
+  };
+}
+
+export async function runWebCapabilityAction(
+  scope: WebCapabilityScope,
+  request: WebCapabilityActionRequest,
+  signal?: AbortSignal,
+) {
+  const provider = actions.get(scope)?.get(request.kind);
+  if (!provider) return undefined;
+  return provider.run(request, signal);
+}
 
 function connect(
   scope: WebCapabilityScope,

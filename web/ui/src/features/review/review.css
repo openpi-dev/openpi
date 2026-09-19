@@ -1,9 +1,9 @@
 .app-shell.with-review-panel {
-  grid-template-columns: 240px minmax(0, 1fr) clamp(420px, 42vw, 640px);
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr) var(--auxiliary-width);
 }
 
 .app-shell.with-review-panel.sidebar-collapsed {
-  grid-template-columns: 56px minmax(0, 1fr) clamp(420px, 42vw, 640px);
+  grid-template-columns: 56px minmax(0, 1fr) var(--auxiliary-width);
 }
 
 .review-panel {
@@ -49,6 +49,14 @@
 
 .review-close {
   flex: none;
+}
+
+.review-heading-actions,
+.review-file-actions {
+  display: flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
 }
 
 .review-body {

@@ -506,7 +506,7 @@ it("derives saved ownership from exact structured IDs, never spawn success or te
   ]);
 });
 
-it("opens the child list and individual activity chips with exact IDs", () => {
+it("opens the child list without duplicating child records in the activity bar", () => {
   const inspect = vi.fn();
   render(
     createElement(
@@ -524,8 +524,7 @@ it("opens the child list and individual activity chips with exact IDs", () => {
     }),
   );
   expect(inspect).toHaveBeenLastCalledWith();
-  fireEvent.click(screen.getByRole("button", { name: /Readme review/ }));
-  expect(inspect).toHaveBeenLastCalledWith("sa-2");
+  expect(screen.queryByRole("button", { name: /Readme review/ })).toBeNull();
 });
 
 it("distinguishes interrupted activity and record count from active concurrency", () => {
@@ -566,11 +565,9 @@ it("distinguishes interrupted activity and record count from active concurrency"
       name: i18n.t("subagentList", { count: 2, running: 0 }),
     }),
   ).toBeTruthy();
-  const activityChip = screen.getByRole("button", {
-    name: /Interrupted review.*Interrupted/u,
-  });
-  expect(activityChip.classList.contains("interrupted")).toBe(true);
-  expect(activityChip.classList.contains("error")).toBe(false);
+  expect(
+    screen.queryByRole("button", { name: /Interrupted review/u }),
+  ).toBeNull();
 });
 
 it.each([true, false])(

@@ -1,9 +1,19 @@
-import { Menu, PanelLeftOpen, RefreshCw, X } from "lucide-react";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Menu, PanelLeftOpen, PanelRight, RefreshCw, X } from "lucide-react";
+import {
+  type CSSProperties,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
 import { useStore } from "zustand";
 import { OpenPiLogo } from "../components/OpenPiLogo.tsx";
-import { ArtifactProvider } from "../features/artifacts/Artifacts.tsx";
+import { PaneResizeHandle } from "../components/PaneResizeHandle.tsx";
+import {
+  ArtifactProvider,
+  type ArtifactProviderHandle,
+} from "../features/artifacts/Artifacts.tsx";
 import { Composer } from "../features/composer/Composer.tsx";
 import {
   InspectionPanel,
@@ -18,8 +28,26 @@ import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
+import type { WorkbarTool } from "../features/workbar/types.ts";
+import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
 import { sessionTitle, workspaceName } from "../lib/format.ts";
 import { webStore } from "../store/web-store.ts";
+
+const SIDEBAR_DEFAULT_WIDTH = 280;
+const SIDEBAR_MIN_WIDTH = 220;
+const SIDEBAR_MAX_WIDTH = 420;
+const SIDEBAR_COLLAPSE_THRESHOLD = 190;
+const AUXILIARY_DEFAULT_WIDTH = 520;
+const AUXILIARY_MIN_WIDTH = 360;
+const AUXILIARY_MAX_WIDTH = 720;
+const AUXILIARY_COLLAPSE_THRESHOLD = 320;
+const CENTER_MIN_WIDTH = 440;
+const AUXILIARY_BREAKPOINT = 1_100;
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
+}
 
 export function App() {
   const state = useStore(webStore);
@@ -30,6 +58,17 @@ export function App() {
   const auxiliaryOpen = useRef(false);
   const reviewTrigger = useRef<HTMLElement | null>(null);
   const inspectionFallbackFocus = useRef<HTMLElement | null>(null);
+  const providerSettingsTrigger = useRef<HTMLElement | null>(null);
+  const artifactProvider = useRef<ArtifactProviderHandle>(null);
+  const artifactOpenFromFiles = useRef(false);
+  const artifactReturn = useRef<"files" | null>(null);
+  const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
+  const [resizingPane, setResizingPane] = useState(false);
+  const [viewportWidth, setViewportWidth] = useState(() => window.innerWidth);
+  const [paneWidths, setPaneWidths] = useState({
+    sidebar: SIDEBAR_DEFAULT_WIDTH,
+    auxiliary: AUXILIARY_DEFAULT_WIDTH,
+  });
   const [narrow, setNarrow] = useState(
     () => window.matchMedia?.("(max-width: 760px)").matches ?? false,
   );
@@ -45,6 +84,11 @@ export function App() {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, [actions]);
+  useEffect(() => {
+    const update = () => setViewportWidth(window.innerWidth);
+    window.addEventListener("resize", update);
+    return () => window.removeEventListener("resize", update);
+  }, []);
   const [view, setView] = useState<"chat" | "trajectory">("chat");
   const [inspection, setInspection] = useState<InspectionTarget | null>(null);
   const [providerSettings, setProviderSettings] = useState<{
@@ -56,6 +100,11 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     filePath?: string;
+  } | null>(null);
+  const [workbarTarget, setWorkbarTarget] = useState<{
+    sessionId: string;
+    sessionPath: string;
+    tool: Exclude<WorkbarTool, "review">;
   } | null>(null);
   const [subagentTarget, setSubagentTarget] = useState<{
     sessionId: string;
@@ -80,6 +129,7 @@ export function App() {
           : null;
     auxiliaryOpen.current = true;
     setReviewTarget(null);
+    setWorkbarTarget(null);
     setSubagentTarget((previous) => ({
       sessionId: session.id,
       sessionPath: session.path,
@@ -118,6 +168,7 @@ export function App() {
       session.id !== snapshot.currentSessionId
     )
       return;
+    setWorkbarTarget(null);
     setInspection({
       sessionId: session.id,
       sessionPath: session.path,
@@ -165,9 +216,15 @@ export function App() {
       session.id !== snapshot.currentSessionId
     )
       return;
+    providerSettingsTrigger.current =
+      document.activeElement instanceof HTMLElement
+        ? document.activeElement
+        : null;
+    actions.closeMobileSidebar();
     setInspection(null);
     setReviewTarget(null);
     setSubagentTarget(null);
+    setWorkbarTarget(null);
     setProviderSettings({
       sessionId: session.id,
       sessionPath: session.path,
@@ -177,22 +234,24 @@ export function App() {
   const closeProviderSettings = useCallback(() => {
     setProviderSettings(null);
     requestAnimationFrame(() => {
-      document
-        .querySelector<HTMLButtonElement>("[data-provider-settings-trigger]")
-        ?.focus();
+      const trigger = providerSettingsTrigger.current;
+      providerSettingsTrigger.current = null;
+      if (trigger?.isConnected && trigger.checkVisibility()) trigger.focus();
+      else
+        document
+          .querySelector<HTMLButtonElement>("[data-provider-settings-trigger]")
+          ?.focus();
     });
   }, []);
   const openRuntimeStatusFromSettings = () => {
-    inspectionFallbackFocus.current = document.querySelector<HTMLElement>(
-      "[data-provider-settings-trigger]",
-    );
+    inspectionFallbackFocus.current =
+      providerSettingsTrigger.current ??
+      document.querySelector<HTMLElement>("[data-provider-settings-trigger]");
     setProviderSettings(null);
     inspect();
   };
   const configureOpenPiFromSettings = async (request: string) => {
-    const accepted = await actions.sendPrompt(`/openpi-setup ${request}`);
-    if (accepted) setProviderSettings(null);
-    return accepted;
+    return actions.sendPrompt(`/openpi-setup ${request}`);
   };
 
   useEffect(() => {
@@ -233,12 +292,82 @@ export function App() {
         ? document.activeElement
         : null);
     setSubagentTarget(null);
+    setWorkbarTarget(null);
     setInspection(null);
     setReviewTarget({
       sessionId: selected.id,
       sessionPath: selected.path,
       ...(filePath ? { filePath } : {}),
     });
+  };
+  const workbarVisible = Boolean(
+    workbarTarget &&
+      selected &&
+      !state.sessionSwitching &&
+      workbarTarget.sessionId === selected.id &&
+      workbarTarget.sessionPath === selected.path,
+  );
+  useEffect(() => {
+    if (workbarTarget && !workbarVisible) setWorkbarTarget(null);
+  }, [workbarTarget, workbarVisible]);
+  const openWorkbar = (tool: WorkbarTool = "launcher") => {
+    if (!selected || state.sessionSwitching) return;
+    if (tool === "review") {
+      openReview();
+      return;
+    }
+    setInspection(null);
+    setSubagentTarget(null);
+    setReviewTarget(null);
+    setWorkbarTarget({
+      sessionId: selected.id,
+      sessionPath: selected.path,
+      tool,
+    });
+  };
+  const auxiliaryVisible = Boolean(
+    subagentVisible || reviewVisible || workbarVisible || artifactPanelOpen,
+  );
+  const sidebarWidth = state.sidebarCollapsed ? 56 : paneWidths.sidebar;
+  const auxiliaryMax = Math.max(
+    AUXILIARY_MIN_WIDTH,
+    Math.min(
+      AUXILIARY_MAX_WIDTH,
+      viewportWidth - sidebarWidth - CENTER_MIN_WIDTH,
+    ),
+  );
+  const sidebarMax = Math.max(
+    SIDEBAR_MIN_WIDTH,
+    Math.min(
+      SIDEBAR_MAX_WIDTH,
+      viewportWidth -
+        CENTER_MIN_WIDTH -
+        (auxiliaryVisible ? paneWidths.auxiliary : 0),
+    ),
+  );
+  useEffect(() => {
+    if (viewportWidth <= AUXILIARY_BREAKPOINT) return;
+    setPaneWidths((current) => {
+      const sidebar = clamp(current.sidebar, SIDEBAR_MIN_WIDTH, sidebarMax);
+      const auxiliary = clamp(
+        current.auxiliary,
+        AUXILIARY_MIN_WIDTH,
+        auxiliaryMax,
+      );
+      return sidebar === current.sidebar && auxiliary === current.auxiliary
+        ? current
+        : { sidebar, auxiliary };
+    });
+  }, [auxiliaryMax, sidebarMax, viewportWidth]);
+  const shellStyle = {
+    "--sidebar-width": `${paneWidths.sidebar}px`,
+    "--auxiliary-width": `${paneWidths.auxiliary}px`,
+  } as CSSProperties;
+  const closeAuxiliaryPanel = () => {
+    if (artifactPanelOpen) artifactProvider.current?.close();
+    else if (workbarVisible) setWorkbarTarget(null);
+    else if (reviewVisible) closeReview();
+    else if (subagentVisible) setSubagentTarget(null);
   };
   const loading = !state.snapshot;
   const workspacePath = state.sessionSwitching
@@ -284,17 +413,31 @@ export function App() {
       <div
         inert={providerSettingsVisible ? true : undefined}
         aria-hidden={providerSettingsVisible ? true : undefined}
-        className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${reviewVisible ? "with-review-panel" : ""} ${loading ? "shell-loading" : ""}`}
+        className={`app-shell ${state.sidebarCollapsed ? "sidebar-collapsed" : ""} ${state.mobileSidebarOpen ? "sidebar-open" : ""} ${subagentVisible ? "with-subagent-panel" : ""} ${reviewVisible ? "with-review-panel" : ""} ${workbarVisible ? "with-workbar-panel" : ""} ${artifactPanelOpen ? "with-artifact-panel" : ""} ${resizingPane ? "is-resizing" : ""} ${loading ? "shell-loading" : ""}`}
+        style={shellStyle}
       >
         <ArtifactProvider
+          ref={artifactProvider}
           sessionId={selected?.id}
           disabled={Boolean(
             reviewVisible || subagentVisible || providerSettingsVisible,
           )}
           onOpen={() => {
+            setArtifactPanelOpen(true);
+            artifactReturn.current = artifactOpenFromFiles.current
+              ? "files"
+              : null;
+            artifactOpenFromFiles.current = false;
             setReviewTarget(null);
             setSubagentTarget(null);
+            setWorkbarTarget(null);
             setInspection(null);
+          }}
+          onClose={() => {
+            setArtifactPanelOpen(false);
+            const target = artifactReturn.current;
+            artifactReturn.current = null;
+            if (target) openWorkbar(target);
           }}
         >
           <SessionSidebar
@@ -305,7 +448,11 @@ export function App() {
             query={state.query}
             searchOpen={state.searchOpen}
             mobileOpen={mobileSidebarOpen}
+            settingsDisabled={Boolean(
+              state.workspaceDraft || state.sessionSwitching || !selected,
+            )}
             returnFocusRef={sidebarTrigger}
+            onOpenSettings={openProviderSettings}
             actions={actions}
           />
           {state.sidebarCollapsed && (
@@ -344,6 +491,17 @@ export function App() {
                 )}
                 <h1 title={taskTitle}>{taskTitle}</h1>
               </div>
+              <SessionUsageBar usage={state.snapshot?.usage} />
+              <button
+                type="button"
+                className="task-tools-trigger"
+                aria-label={t("openTools")}
+                title={t("openTools")}
+                disabled={!selected || state.sessionSwitching}
+                onClick={() => openWorkbar("launcher")}
+              >
+                <PanelRight aria-hidden="true" />
+              </button>
               <span className={`connection-state ${state.connection}`}>
                 {t(state.connection)}
               </span>
@@ -512,6 +670,57 @@ export function App() {
               review={gitReview}
               initialFilePath={reviewTarget?.filePath}
               onClose={closeReview}
+              onOpenTools={() => openWorkbar("launcher")}
+            />
+          )}
+          {workbarVisible && selected && workbarTarget && (
+            <WorkbarPanel
+              key={`${selected.id}:${workbarTarget.tool}`}
+              tool={workbarTarget.tool}
+              sessionId={selected.id}
+              cwd={selected.cwd}
+              capabilities={state.snapshot?.runtime.capabilities ?? {}}
+              messages={[
+                ...selected.entries.flatMap((entry) =>
+                  entry.message ? [entry.message] : [],
+                ),
+                ...state.liveMessages.map((entry) => entry.message),
+              ]}
+              onSelect={openWorkbar}
+              onBeforeArtifactOpen={() => {
+                artifactOpenFromFiles.current = true;
+              }}
+              onClose={() => setWorkbarTarget(null)}
+            />
+          )}
+          {!state.sidebarCollapsed && viewportWidth > AUXILIARY_BREAKPOINT && (
+            <PaneResizeHandle
+              side="left"
+              value={paneWidths.sidebar}
+              min={SIDEBAR_MIN_WIDTH}
+              max={sidebarMax}
+              defaultValue={SIDEBAR_DEFAULT_WIDTH}
+              collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
+              onCollapse={() => actions.toggleSidebar(false)}
+              onChange={(sidebar) =>
+                setPaneWidths((current) => ({ ...current, sidebar }))
+              }
+              onDraggingChange={setResizingPane}
+            />
+          )}
+          {auxiliaryVisible && viewportWidth > AUXILIARY_BREAKPOINT && (
+            <PaneResizeHandle
+              side="right"
+              value={paneWidths.auxiliary}
+              min={AUXILIARY_MIN_WIDTH}
+              max={auxiliaryMax}
+              defaultValue={AUXILIARY_DEFAULT_WIDTH}
+              collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
+              onCollapse={closeAuxiliaryPanel}
+              onChange={(auxiliary) =>
+                setPaneWidths((current) => ({ ...current, auxiliary }))
+              }
+              onDraggingChange={setResizingPane}
             />
           )}
           <button
@@ -538,9 +747,15 @@ export function App() {
           }
           theme={state.snapshot?.preferences.theme ?? "system"}
           capabilities={state.snapshot?.runtime.capabilities}
+          setupBusy={
+            state.liveRunning ||
+            state.promptAdmissionPending ||
+            Boolean(state.activeTurn)
+          }
           modelSelectionPending={state.modelSelectionPending}
           onSelectModel={(value) => void actions.selectModel(value)}
           onConfigureOpenPi={configureOpenPiFromSettings}
+          onPreferencesChanged={() => actions.refreshSnapshot()}
           onOpenRuntimeStatus={openRuntimeStatusFromSettings}
           onClose={closeProviderSettings}
         />

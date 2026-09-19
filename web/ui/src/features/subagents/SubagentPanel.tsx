@@ -1,6 +1,6 @@
-import { ArrowLeft, Bot, ChevronRight, RefreshCw, X } from "lucide-react";
 import { List, ListItem } from "@astryxdesign/core/List";
 import { StatusDot } from "@astryxdesign/core/StatusDot";
+import { ArrowLeft, Bot, ChevronRight, RefreshCw, X } from "lucide-react";
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
@@ -39,7 +39,7 @@ function ToolStep({
 }) {
   const { t } = useTranslation();
   return (
-    <details className="subagent-tool">
+    <details className={`subagent-tool ${state}`} data-status={state}>
       <summary>
         <code>{name}</code>
         <span className={`subagent-state ${state}`}>
@@ -66,7 +66,7 @@ function ToolStep({
   );
 }
 
-function SubagentDetailView({
+export function SubagentDetailView({
   sessionId,
   id,
   activity,
@@ -74,6 +74,7 @@ function SubagentDetailView({
   saved,
   liveAvailable,
   fullView,
+  readOnlyNote = true,
 }: {
   sessionId: string;
   id: string;
@@ -82,6 +83,7 @@ function SubagentDetailView({
   saved?: RecordedSubagent;
   liveAvailable: boolean;
   fullView: boolean;
+  readOnlyNote?: boolean;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<WebSubagentDetail | null>(null);
@@ -263,7 +265,11 @@ function SubagentDetailView({
             }}
           >
             {withContentKeys(detail.transcript).map(({ item, key }) => (
-              <div className={`subagent-message ${item.kind}`} key={key}>
+              <div
+                className={`subagent-message ${item.kind}`}
+                data-role={item.kind}
+                key={key}
+              >
                 {item.kind === "user" ? (
                   <p className="subagent-user-message">{item.text}</p>
                 ) : item.kind === "toolResult" ? (
@@ -280,7 +286,11 @@ function SubagentDetailView({
                       part.type === "text" ? (
                         <Markdown key={partKey}>{part.text}</Markdown>
                       ) : part.type === "thinking" ? (
-                        <details className="subagent-thinking" key={partKey}>
+                        <details
+                          className="subagent-thinking done"
+                          data-status="done"
+                          key={partKey}
+                        >
                           <summary>{t("thinkingDone")}</summary>
                           <pre>
                             {part.redacted
@@ -318,13 +328,21 @@ function SubagentDetailView({
               </div>
             ))}
             {detail.liveAssistant?.thinking && (
-              <details className="subagent-thinking">
+              <details
+                className="subagent-thinking running"
+                data-status="running"
+              >
                 <summary>{t("thinkingActive")}</summary>
                 <pre>{detail.liveAssistant.thinking}</pre>
               </details>
             )}
             {detail.liveAssistant?.text && (
-              <Markdown>{detail.liveAssistant.text}</Markdown>
+              <div
+                className="subagent-message assistant live"
+                data-role="assistant"
+              >
+                <Markdown>{detail.liveAssistant.text}</Markdown>
+              </div>
             )}
             {detail.liveTools
               .filter((tool) => !calls.has(tool.toolId))
@@ -354,10 +372,13 @@ function SubagentDetailView({
               !detail.liveAssistant?.text &&
               !detail.finalText && <p>{t("subagentNoMessages")}</p>}
           </div>
-          <p className="subagent-footnote">
-            {t("subagentReadOnly")}
-            {updatedAt && ` · ${updatedAt}`}
-          </p>
+          {(readOnlyNote || updatedAt) && (
+            <p className="subagent-footnote">
+              {readOnlyNote && t("subagentReadOnly")}
+              {readOnlyNote && updatedAt && " · "}
+              {updatedAt}
+            </p>
+          )}
         </>
       )}
       {!detail && !loading && saved && (

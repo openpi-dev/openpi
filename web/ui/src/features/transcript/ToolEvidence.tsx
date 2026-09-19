@@ -47,9 +47,12 @@ export function ToolEvidence({
     view.tests?.failures.map((text, index) => ({ text, number: index + 1 })) ??
     [];
   return (
-    <details className={`tool-evidence-card evidence-${view.kind}`}>
+    <details
+      className={`tool-evidence-card evidence-${view.kind}`}
+      data-state={view.state}
+    >
       <summary>
-        <strong>{call.name}</strong>
+        <strong className="tool-name">{call.name}</strong>
         <span>{view.path || view.command || view.kind}</span>
         {summaryMeta}
         <span className="evidence-status">{view.state}</span>

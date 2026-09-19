@@ -1,8 +1,10 @@
 import { Check, Clipboard, Download, RefreshCw, X } from "lucide-react";
 import {
+  forwardRef,
   type ReactNode,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
@@ -14,17 +16,23 @@ import { copyText } from "../../lib/clipboard.ts";
 import { WebClient } from "../../protocol/client.ts";
 import { ArtifactContext } from "./context.ts";
 
-export function ArtifactProvider({
-  sessionId,
-  children,
-  disabled = false,
-  onOpen,
-}: {
-  sessionId?: string;
-  children?: ReactNode;
-  disabled?: boolean;
-  onOpen?: () => void;
-}) {
+export interface ArtifactProviderHandle {
+  close: () => void;
+}
+
+export const ArtifactProvider = forwardRef<
+  ArtifactProviderHandle,
+  {
+    sessionId?: string;
+    children?: ReactNode;
+    disabled?: boolean;
+    onOpen?: () => void;
+    onClose?: () => void;
+  }
+>(function ArtifactProvider(
+  { sessionId, children, disabled = false, onOpen, onClose },
+  ref,
+) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [request, setRequest] = useState<{
@@ -65,8 +73,10 @@ export function ArtifactProvider({
     setRequest(null);
     setPreview(null);
     setCopyStatus(null);
+    onClose?.();
     opener.current?.focus();
-  }, []);
+  }, [onClose]);
+  useImperativeHandle(ref, () => ({ close }), [close]);
   useEffect(() => {
     if (request && request.sessionId !== sessionId) {
       copyGeneration.current++;
@@ -324,4 +334,4 @@ export function ArtifactProvider({
       )}
     </ArtifactContext.Provider>
   );
-}
+});

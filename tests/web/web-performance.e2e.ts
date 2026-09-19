@@ -245,7 +245,9 @@ for (const width of [1280, 390]) {
           ),
         ).toBe(true);
         await expect(
-          conversation.locator(".tool-group, .tool-evidence-card").first(),
+          conversation
+            .locator(".process-sequence, .tool-evidence-card")
+            .first(),
         ).toBeAttached();
         await conversation.evaluate((element) => {
           const target = element.querySelector(".message-body");

@@ -4,7 +4,14 @@ import { EmptyState } from "@astryxdesign/core/EmptyState";
 import { HStack, VStack } from "@astryxdesign/core/Layout";
 import { Skeleton } from "@astryxdesign/core/Skeleton";
 import { Text } from "@astryxdesign/core/Text";
-import { ArrowLeft, FileCode2, FileDiff, GitBranch, X } from "lucide-react";
+import {
+  ArrowLeft,
+  FileCode2,
+  FileDiff,
+  GitBranch,
+  Plus,
+  X,
+} from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebGitReviewResult } from "../../../../protocol/types.ts";
@@ -39,10 +46,12 @@ export function ReviewPanel({
   review,
   initialFilePath,
   onClose,
+  onOpenTools,
 }: {
   review: GitReviewViewState;
   initialFilePath?: string;
   onClose: () => void;
+  onOpenTools?: () => void;
 }) {
   const { t } = useTranslation();
   const listCloseButton = useRef<HTMLButtonElement>(null);
@@ -75,12 +84,14 @@ export function ReviewPanel({
   const files = snapshot?.files.slice(0, visibleFiles) ?? [];
   const remaining = Math.max(0, (snapshot?.files.length ?? 0) - files.length);
   const comparison = snapshot
-    ? snapshot.baseBranch
-      ? t("gitReviewComparison", {
-          current: snapshot.currentBranch ?? t("gitReviewDetached"),
-          base: snapshot.baseBranch,
-        })
-      : t("gitReviewWorkingTree")
+    ? snapshot.comparison === "session"
+      ? t("gitReviewSessionSnapshot")
+      : snapshot.baseBranch
+        ? t("gitReviewComparison", {
+            current: snapshot.currentBranch ?? t("gitReviewDetached"),
+            base: snapshot.baseBranch,
+          })
+        : t("gitReviewWorkingTree")
     : null;
 
   useEffect(() => {
@@ -125,14 +136,26 @@ export function ReviewPanel({
               </strong>
               <span title={selectedFile.path}>{selectedFile.path}</span>
             </div>
-            <Button
-              label={t("close")}
-              variant="ghost"
-              size="sm"
-              isIconOnly
-              icon={<X aria-hidden="true" />}
-              onClick={onClose}
-            />
+            <div className="review-file-actions">
+              {onOpenTools && (
+                <Button
+                  label={t("openTools")}
+                  variant="ghost"
+                  size="sm"
+                  isIconOnly
+                  icon={<Plus aria-hidden="true" />}
+                  onClick={onOpenTools}
+                />
+              )}
+              <Button
+                label={t("close")}
+                variant="ghost"
+                size="sm"
+                isIconOnly
+                icon={<X aria-hidden="true" />}
+                onClick={onClose}
+              />
+            </div>
           </header>
           <div className="review-file-toolbar">
             <div className="review-file-context">
@@ -196,16 +219,29 @@ export function ReviewPanel({
               </h2>
               <small>{t("changeEvidenceScope")}</small>
             </div>
-            <button
-              ref={listCloseButton}
-              type="button"
-              className="icon-button review-close"
-              aria-label={t("close")}
-              title={t("close")}
-              onClick={onClose}
-            >
-              <X aria-hidden="true" />
-            </button>
+            <div className="review-heading-actions">
+              {onOpenTools && (
+                <button
+                  type="button"
+                  className="icon-button"
+                  aria-label={t("openTools")}
+                  title={t("openTools")}
+                  onClick={onOpenTools}
+                >
+                  <Plus aria-hidden="true" />
+                </button>
+              )}
+              <button
+                ref={listCloseButton}
+                type="button"
+                className="icon-button review-close"
+                aria-label={t("close")}
+                title={t("close")}
+                onClick={onClose}
+              >
+                <X aria-hidden="true" />
+              </button>
+            </div>
           </header>
           <div className="review-body">
             {snapshot && (

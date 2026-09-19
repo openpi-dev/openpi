@@ -22,12 +22,13 @@ import {
   TreePine,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { WebCapabilitySnapshot } from "../../../../../extensions/shared/web-observer-registry.ts";
 import type {
   WebModelSummary,
   WebSettingsCatalog,
+  WebSettingsPreferencesPatch,
   WebSettingsPluginSummary,
   WebSettingsSkillSummary,
   WebThemePreference,
@@ -107,7 +108,9 @@ export function GeneralSettingsPanel({
   cwd,
   theme,
   setupPending,
+  preferencePending,
   onConfigure,
+  onUpdatePreferences,
   onOpenRuntimeStatus,
   onRefresh,
 }: {
@@ -118,12 +121,15 @@ export function GeneralSettingsPanel({
   cwd: string;
   theme: WebThemePreference;
   setupPending: boolean;
+  preferencePending: boolean;
   onConfigure: (request: string) => Promise<boolean>;
+  onUpdatePreferences: (patch: WebSettingsPreferencesPatch) => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
   onRefresh: () => void;
 }) {
   const { t } = useTranslation();
   const setup = catalog?.setup;
+  const selectedTheme = setup?.ui.webTheme ?? theme;
   const [chatWidth, setChatWidth] = useState(setup?.ui.webChatWidth ?? 820);
   const [chatFontSize, setChatFontSize] = useState(
     setup?.ui.webChatFontSize ?? 14,
@@ -160,16 +166,16 @@ export function GeneralSettingsPanel({
             <label
               key={id}
               className="settings-theme-option"
-              data-selected={theme === id ? "true" : undefined}
+              data-selected={selectedTheme === id ? "true" : undefined}
             >
               <input
                 type="radio"
                 name="openpi-web-theme"
                 value={id}
-                checked={theme === id}
-                disabled={setupPending}
+                checked={selectedTheme === id}
+                disabled={preferencePending}
                 onChange={() => {
-                  void onConfigure(t("setupRequestTheme", { theme: t(label) }));
+                  void onUpdatePreferences({ theme: id });
                 }}
               />
               <Icon aria-hidden="true" />
@@ -189,16 +195,10 @@ export function GeneralSettingsPanel({
             width="100%"
             labelPosition="start"
             labelSpacing="spread"
-            isDisabled={setupPending}
-            isLoading={setupPending}
+            isDisabled={preferencePending}
+            isLoading={preferencePending}
             onChange={(checked: boolean) => {
-              void onConfigure(
-                t(
-                  checked
-                    ? "setupRequestExpandThinking"
-                    : "setupRequestCollapseThinking",
-                ),
-              );
+              void onUpdatePreferences({ expandThinking: checked });
             }}
           />
           <div className="settings-slider-control">
@@ -211,11 +211,11 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="text"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={setupPending}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatWidth(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatWidth) {
-                  void onConfigure(t("setupRequestChatWidth", { value })).then(
+                  void onUpdatePreferences({ chatWidth: value }).then(
                     (accepted) => {
                       if (!accepted) setChatWidth(setup.ui.webChatWidth);
                     },
@@ -234,17 +234,17 @@ export function GeneralSettingsPanel({
               width="100%"
               valueDisplay="text"
               formatValue={(value: number) => `${value}px`}
-              isDisabled={setupPending}
+              isDisabled={preferencePending}
               onChange={(value: number) => setChatFontSize(value)}
               onChangeEnd={(value: number) => {
                 if (value !== setup.ui.webChatFontSize) {
-                  void onConfigure(
-                    t("setupRequestChatFontSize", { value }),
-                  ).then((accepted) => {
-                    if (!accepted) {
-                      setChatFontSize(setup.ui.webChatFontSize);
-                    }
-                  });
+                  void onUpdatePreferences({ chatFontSize: value }).then(
+                    (accepted) => {
+                      if (!accepted) {
+                        setChatFontSize(setup.ui.webChatFontSize);
+                      }
+                    },
+                  );
                 }
               }}
             />
@@ -373,6 +373,15 @@ export function SkillsSettingsPanel({
 }) {
   const { t } = useTranslation();
   const skills = catalog?.resources.skills ?? [];
+  const skillGroups = useMemo(() => {
+    const order = ["project", "user", "temporary"] as const;
+    return order
+      .map((scope) => ({
+        scope,
+        skills: skills.filter((skill) => skill.scope === scope),
+      }))
+      .filter((group) => group.skills.length > 0);
+  }, [skills]);
   const [selectedId, setSelectedId] = useState("");
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
     null,
@@ -396,23 +405,30 @@ export function SkillsSettingsPanel({
     <section className="settings-split-panel">
       <aside className="settings-resource-sidebar">
         <div className="settings-resource-list">
-          {skills.map((skill) => (
-            <button
-              key={skill.id}
-              type="button"
-              className="settings-resource-item"
-              aria-current={skill.id === selected?.id ? "page" : undefined}
-              onClick={() => {
-                setSelectedId(skill.id);
-                setCopyStatus(null);
-              }}
-            >
-              <Sparkles aria-hidden="true" />
-              <span>
-                <strong>{skill.name}</strong>
-                <small>{resourceSourceLabel(skill.source)}</small>
+          {skillGroups.map((group) => (
+            <section className="settings-resource-group" key={group.scope}>
+              <span className="settings-sidebar-label">
+                {t(`resourceScope_${group.scope}`)}
               </span>
-            </button>
+              {group.skills.map((skill) => (
+                <button
+                  key={skill.id}
+                  type="button"
+                  className="settings-resource-item"
+                  aria-current={skill.id === selected?.id ? "page" : undefined}
+                  onClick={() => {
+                    setSelectedId(skill.id);
+                    setCopyStatus(null);
+                  }}
+                >
+                  <Sparkles aria-hidden="true" />
+                  <span>
+                    <strong>{skill.name}</strong>
+                    <small>{resourceSourceLabel(skill.source)}</small>
+                  </span>
+                </button>
+              ))}
+            </section>
           ))}
           {!catalog && !error && (
             <SettingsLoadState

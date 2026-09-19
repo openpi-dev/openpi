@@ -10,11 +10,20 @@ import {
 import { URL } from "node:url";
 import { promisify } from "node:util";
 import {
+  runWebCapabilityAction,
   subscribeWebCapabilities,
+  type WebCapabilityActionRequest,
   webCapabilityDetail,
   webCapabilitySnapshot,
 } from "../../extensions/shared/web-observer-registry.ts";
-import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
+import {
+  loadSetupConfig,
+  MAX_WEB_CHAT_FONT_SIZE,
+  MAX_WEB_CHAT_WIDTH,
+  MIN_WEB_CHAT_FONT_SIZE,
+  MIN_WEB_CHAT_WIDTH,
+  WEB_THEMES,
+} from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
 import {
   PiWebAdapter,
@@ -31,7 +40,10 @@ import {
   WEB_MAX_SNAPSHOT_BYTES,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
+  type WebInteractiveTerminalEvent,
+  type WebSettingsPreferencesPatch,
   type WebSnapshot,
+  type WebThemePreference,
 } from "../protocol/types.ts";
 import {
   WebRuntimeRequestError,
@@ -41,12 +53,22 @@ import { elapsed, traceWeb } from "../trace.ts";
 import { reduceLiveTools } from "../protocol/live-tools.ts";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import { ArtifactError, ArtifactReader } from "./artifacts.ts";
-import { readGitReview } from "./git-review.ts";
+import { openBrowser } from "./browser-launcher.ts";
+import {
+  GitReviewBaselineStore,
+  type GitReviewService,
+} from "./git-review.ts";
+import {
+  InteractiveTerminalManager,
+  INTERACTIVE_TERMINAL_MAX_INPUT,
+  type InteractiveTerminalService,
+} from "./interactive-terminal.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
 const MAX_COMMAND_BYTES = 16 * 1024;
 const MAX_SSE_CLIENTS = 8;
+const MAX_TERMINAL_STREAMS = 8;
 const MAX_SSE_BUFFER_BYTES = 256 * 1024;
 const MAX_SSE_REPLAY_BYTES = MAX_SSE_BUFFER_BYTES;
 const DEFAULT_SSE_HEARTBEAT_MS = 15_000;
@@ -62,7 +84,29 @@ const THINKING_LEVELS = new Set([
   "xhigh",
   "max",
 ]);
+const WEB_THEME_SET = new Set<string>(WEB_THEMES);
 const execFileAsync = promisify(execFile);
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function isWebTheme(value: unknown): value is WebThemePreference {
+  return typeof value === "string" && WEB_THEME_SET.has(value);
+}
+
+function isBoundedInteger(
+  value: unknown,
+  min: number,
+  max: number,
+): value is number {
+  return (
+    typeof value === "number" &&
+    Number.isSafeInteger(value) &&
+    value >= min &&
+    value <= max
+  );
+}
 
 type PromptAdmissionResponse = {
   readonly status: number;
@@ -106,6 +150,9 @@ export interface WebHostOptions {
   token?: string;
   allowedOrigins?: readonly string[];
   directoryChooser?: (signal: AbortSignal) => Promise<string | undefined>;
+  browserOpener?: (url: string, signal?: AbortSignal) => Promise<boolean>;
+  gitReviews?: GitReviewService;
+  interactiveTerminals?: InteractiveTerminalService;
   shutdownTimeoutMs?: number;
   sseHeartbeatMs?: number;
 }
@@ -115,6 +162,7 @@ export class WebHost {
   private readonly token: Buffer;
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
+  private readonly terminalStreams = new Set<ServerResponse>();
   private readonly clientHeartbeats = new Map<
     ServerResponse,
     ReturnType<typeof setInterval>
@@ -131,6 +179,9 @@ export class WebHost {
   private readonly directoryChooser: NonNullable<
     WebHostOptions["directoryChooser"]
   >;
+  private readonly browserOpener: NonNullable<WebHostOptions["browserOpener"]>;
+  private readonly gitReviews: GitReviewService;
+  private readonly interactiveTerminals: InteractiveTerminalService;
   private readonly shutdownTimeoutMs: number;
   private readonly sseHeartbeatMs: number;
   private readonly unsubscribeCapabilities: () => void;
@@ -157,6 +208,12 @@ export class WebHost {
     this.allowedOrigins = new Set(options.allowedOrigins ?? []);
     this.directoryChooser =
       options.directoryChooser ?? (() => this.chooseDirectory());
+    this.browserOpener = options.browserOpener ?? openBrowser;
+    this.gitReviews =
+      options.gitReviews ??
+      new GitReviewBaselineStore(this.runtime.sessionDirectory);
+    this.interactiveTerminals =
+      options.interactiveTerminals ?? new InteractiveTerminalManager();
     this.shutdownTimeoutMs =
       options.shutdownTimeoutMs ?? DEFAULT_SHUTDOWN_TIMEOUT_MS;
     if (
@@ -240,7 +297,15 @@ export class WebHost {
   }
 
   publish(type: string, detail?: Record<string, unknown>) {
-    if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) this.artifacts.revoke();
+    if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
+      this.artifacts.revoke();
+      if (this.runtime.workspaceSelected) {
+        this.interactiveTerminals.retain(
+          this.runtime.sessionManager.getSessionId(),
+          this.runtime.cwd,
+        );
+      } else this.interactiveTerminals.dispose();
+    }
     this.liveTools = reduceLiveTools(this.liveTools, type, detail ?? {});
     let event: WebEvent = {
       protocolVersion: WEB_PROTOCOL_VERSION,
@@ -287,9 +352,14 @@ export class WebHost {
     this.stopPromise = (async () => {
       this.unsubscribeCapabilities();
       this.artifacts.dispose();
+      this.interactiveTerminals.dispose();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
+      for (const stream of [...this.terminalStreams]) {
+        if (!stream.writableEnded) stream.end();
+      }
+      this.terminalStreams.clear();
       const closeServer = this.server.listening
         ? new Promise<void>((resolve) => {
             const forceClose = setTimeout(
@@ -373,8 +443,12 @@ export class WebHost {
     if (pathname === "/api/turns/cancel") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
+      pathname.startsWith("/api/terminal") ||
+      pathname === "/api/browser/open" ||
       pathname === "/api/model" ||
-      pathname === "/api/thinking";
+      pathname === "/api/thinking" ||
+      pathname === "/api/capabilities/action" ||
+      pathname === "/api/settings/preferences";
   }
 
   private async drainLeaseSensitiveRequests() {
@@ -420,7 +494,7 @@ export class WebHost {
         "Content-Type": "text/html; charset=utf-8",
         "Cache-Control": "no-store",
         "Content-Security-Policy":
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'",
         "Referrer-Policy": "no-referrer",
         "Cross-Origin-Resource-Policy": "same-origin",
         "Cross-Origin-Opener-Policy": "same-origin",
@@ -454,6 +528,196 @@ export class WebHost {
     }
     if (!this.authorized(request))
       return this.json(response, 401, { error: "invalid or missing token" });
+    if (url.pathname === "/api/browser/open") {
+      if (request.method !== "POST")
+        return this.json(response, 405, {
+          error: "browser launch requires POST",
+        });
+      const body = await this.readJson(request);
+      if (
+        Object.keys(body).length !== 2 ||
+        typeof body.sessionId !== "string" ||
+        typeof body.url !== "string" ||
+        body.url.length > 2_048
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_OPEN_REQUEST",
+          error: "an exact Session id and bounded HTTP address are required",
+        });
+      }
+      if (!(await this.requireActiveToolSession(body.sessionId, response)))
+        return;
+      let target: URL;
+      try {
+        target = new URL(body.url);
+      } catch {
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_ADDRESS",
+          error: "a valid HTTP or HTTPS address is required",
+        });
+      }
+      if (
+        (target.protocol !== "http:" && target.protocol !== "https:") ||
+        target.username ||
+        target.password
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_BROWSER_ADDRESS",
+          error: "a credential-free HTTP or HTTPS address is required",
+        });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      try {
+        const opened = await this.browserOpener(
+          target.toString(),
+          controller.signal,
+        );
+        if (!opened)
+          return this.json(response, 502, {
+            code: "BROWSER_OPEN_FAILED",
+            error: "the system browser could not be opened",
+          });
+        return this.json(response, 200, {
+          opened: true,
+          url: target.toString(),
+        });
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
+    }
+    if (url.pathname === "/api/terminal/events") {
+      if (request.method !== "GET")
+        return this.json(response, 405, {
+          error: "terminal events require GET",
+        });
+      return this.interactiveTerminalEvents(request, response, url);
+    }
+    if (url.pathname === "/api/terminal") {
+      if (request.method === "POST") {
+        const body = await this.readJson(request);
+        if (
+          Object.keys(body).length !== 3 ||
+          typeof body.sessionId !== "string" ||
+          !isBoundedInteger(body.cols, 2, 1_000) ||
+          !isBoundedInteger(body.rows, 2, 1_000)
+        ) {
+          return this.json(response, 400, {
+            code: "INVALID_TERMINAL_CREATE_REQUEST",
+            error:
+              "an exact Session id and bounded terminal dimensions are required",
+          });
+        }
+        const cwd = await this.requireActiveToolSession(
+          body.sessionId,
+          response,
+        );
+        if (!cwd) return;
+        const terminal = await this.interactiveTerminals.create({
+          sessionId: body.sessionId,
+          cwd,
+          cols: body.cols,
+          rows: body.rows,
+        });
+        return this.json(response, terminal.reused ? 200 : 201, terminal);
+      }
+      const sessionId = url.searchParams.get("sessionId");
+      const id = url.searchParams.get("id");
+      if (
+        !this.validTerminalQuery(url, ["sessionId", "id"]) ||
+        !sessionId ||
+        !id
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_TERMINAL_TARGET",
+          error: "an exact terminal and Session id are required",
+        });
+      }
+      if (!(await this.requireActiveToolSession(sessionId, response))) return;
+      if (request.method === "GET") {
+        const terminal = this.interactiveTerminals.get(sessionId, id);
+        return terminal
+          ? this.json(response, 200, terminal)
+          : this.json(response, 404, {
+              code: "TERMINAL_NOT_FOUND",
+              error: "the interactive terminal expired or closed",
+            });
+      }
+      if (request.method === "DELETE") {
+        this.interactiveTerminals.close(sessionId, id);
+        return this.json(response, 200, { closed: true });
+      }
+      return this.json(response, 405, {
+        error: "terminal accepts GET, POST, or DELETE",
+      });
+    }
+    if (url.pathname === "/api/terminal/input") {
+      if (request.method !== "POST")
+        return this.json(response, 405, {
+          error: "terminal input requires POST",
+        });
+      const body = await this.readJson(request);
+      if (
+        Object.keys(body).length !== 3 ||
+        typeof body.sessionId !== "string" ||
+        typeof body.id !== "string" ||
+        typeof body.data !== "string" ||
+        body.data.length === 0 ||
+        body.data.length > INTERACTIVE_TERMINAL_MAX_INPUT
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_TERMINAL_INPUT",
+          error: "bounded input for an exact terminal is required",
+        });
+      }
+      if (!(await this.requireActiveToolSession(body.sessionId, response)))
+        return;
+      return this.interactiveTerminals.write(
+        body.sessionId,
+        body.id,
+        body.data,
+      )
+        ? this.json(response, 200, { written: true })
+        : this.json(response, 404, {
+            code: "TERMINAL_NOT_FOUND",
+            error: "the interactive terminal expired or closed",
+          });
+    }
+    if (url.pathname === "/api/terminal/resize") {
+      if (request.method !== "POST")
+        return this.json(response, 405, {
+          error: "terminal resize requires POST",
+        });
+      const body = await this.readJson(request);
+      if (
+        Object.keys(body).length !== 4 ||
+        typeof body.sessionId !== "string" ||
+        typeof body.id !== "string" ||
+        !isBoundedInteger(body.cols, 2, 1_000) ||
+        !isBoundedInteger(body.rows, 2, 1_000)
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_TERMINAL_RESIZE",
+          error: "bounded dimensions for an exact terminal are required",
+        });
+      }
+      if (!(await this.requireActiveToolSession(body.sessionId, response)))
+        return;
+      return this.interactiveTerminals.resize(
+        body.sessionId,
+        body.id,
+        body.cols,
+        body.rows,
+      )
+        ? this.json(response, 200, { resized: true })
+        : this.json(response, 404, {
+            code: "TERMINAL_NOT_FOUND",
+            error: "the interactive terminal expired or closed",
+          });
+    }
     if (url.pathname.startsWith("/api/artifacts/")) {
       try { await this.adapter.requireWorkspace(this.runtime.cwd); }
       catch { throw new ArtifactError("ARTIFACT_DENIED", 403, "File access requires an available Session workspace."); }
@@ -549,6 +813,11 @@ export class WebHost {
       const result = await this.runtime.newSession(workspacePath, {
         commandId: body.commandId,
       });
+      const sessionPath =
+        result.sessionPath ??
+        this.runtime.sessionManager.getSessionFile() ??
+        `current:${result.sessionId}`;
+      await this.gitReviews.capture(sessionPath, this.runtime.cwd);
       if (!result.replayed) this.publish("session_created", {
         workspacePath,
         sessionId: result.sessionId,
@@ -629,6 +898,114 @@ export class WebHost {
           error,
           "MODEL_SELECTION_FAILED",
           "model selection failed",
+        );
+        return this.json(response, failure.status, {
+          code: failure.code,
+          error: failure.error,
+        });
+      }
+    }
+    if (
+      url.pathname === "/api/settings/preferences" &&
+      request.method === "POST"
+    ) {
+      const body = await this.readJson(request);
+      const preferences = body.preferences;
+      const bodyKeys = Object.keys(body);
+      const preferenceKeys = isRecord(preferences)
+        ? Object.keys(preferences)
+        : [];
+      const theme = isRecord(preferences) ? preferences.theme : undefined;
+      const chatWidth = isRecord(preferences)
+        ? preferences.chatWidth
+        : undefined;
+      const chatFontSize = isRecord(preferences)
+        ? preferences.chatFontSize
+        : undefined;
+      const expandThinking = isRecord(preferences)
+        ? preferences.expandThinking
+        : undefined;
+      const allowedPreferenceKeys = new Set([
+        "theme",
+        "chatWidth",
+        "chatFontSize",
+        "expandThinking",
+      ]);
+      if (
+        typeof body.sessionId !== "string" ||
+        body.sessionId.length === 0 ||
+        body.sessionId.length > 128 ||
+        bodyKeys.length !== 2 ||
+        !bodyKeys.includes("sessionId") ||
+        !bodyKeys.includes("preferences") ||
+        !isRecord(preferences) ||
+        preferenceKeys.length === 0 ||
+        preferenceKeys.some((key) => !allowedPreferenceKeys.has(key)) ||
+        (theme !== undefined && !isWebTheme(theme)) ||
+        (chatWidth !== undefined &&
+          !isBoundedInteger(
+            chatWidth,
+            MIN_WEB_CHAT_WIDTH,
+            MAX_WEB_CHAT_WIDTH,
+          )) ||
+        (chatFontSize !== undefined &&
+          !isBoundedInteger(
+            chatFontSize,
+            MIN_WEB_CHAT_FONT_SIZE,
+            MAX_WEB_CHAT_FONT_SIZE,
+          )) ||
+        (expandThinking !== undefined && typeof expandThinking !== "boolean")
+      ) {
+        return this.json(response, 400, {
+          code: "INVALID_SETTINGS_PREFERENCES_REQUEST",
+          error:
+            "an exact Session id and bounded Web preference fields are required",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before changing Web preferences",
+        });
+      }
+      if (!this.runtime.updateWebPreferences) {
+        return this.json(response, 501, {
+          code: "SETTINGS_PREFERENCES_UNAVAILABLE",
+          error: "Web preference updates are unavailable",
+        });
+      }
+      const patch: WebSettingsPreferencesPatch = {
+        ...(isWebTheme(theme) ? { theme } : {}),
+        ...(isBoundedInteger(
+          chatWidth,
+          MIN_WEB_CHAT_WIDTH,
+          MAX_WEB_CHAT_WIDTH,
+        )
+          ? { chatWidth }
+          : {}),
+        ...(isBoundedInteger(
+          chatFontSize,
+          MIN_WEB_CHAT_FONT_SIZE,
+          MAX_WEB_CHAT_FONT_SIZE,
+        )
+          ? { chatFontSize }
+          : {}),
+        ...(typeof expandThinking === "boolean" ? { expandThinking } : {}),
+      };
+      try {
+        const setup = await this.runtime.updateWebPreferences(patch, {
+          expectedSessionId: body.sessionId,
+        });
+        return this.json(response, 200, {
+          sessionId: body.sessionId,
+          setup,
+          revision: this.sequence,
+        });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(
+          error,
+          "SETTINGS_PREFERENCES_UPDATE_FAILED",
+          "Web preference update failed",
         );
         return this.json(response, failure.status, {
           code: failure.code,
@@ -808,6 +1185,130 @@ export class WebHost {
         });
       }
     }
+    if (
+      url.pathname === "/api/capabilities/action" &&
+      request.method === "POST"
+    ) {
+      const body = await this.readJson(request);
+      const keys = Object.keys(body);
+      const sessionId = body.sessionId;
+      const kind = body.kind;
+      const action = body.action;
+      const id = body.id;
+      const prompt = body.prompt;
+      const text = body.text;
+      const validBase =
+        typeof sessionId === "string" &&
+        sessionId.length > 0 &&
+        sessionId.length <= 128 &&
+        kind === "subagents";
+      const validId =
+        typeof id === "string" &&
+        id.length > 0 &&
+        id.length <= 160 &&
+        !/[\u0000-\u001f\u007f]/u.test(id);
+      const validPrompt =
+        typeof prompt === "string" &&
+        prompt.trim().length > 0 &&
+        prompt.length <= 12_000;
+      const validText =
+        typeof text === "string" &&
+        text.trim().length > 0 &&
+        text.length <= 12_000;
+      const validAction =
+        (action === "spawn-btw" &&
+          validPrompt &&
+          keys.length === 4 &&
+          keys.every((key) =>
+            ["sessionId", "kind", "action", "prompt"].includes(key),
+          )) ||
+        (action === "send-btw" &&
+          validId &&
+          validText &&
+          keys.length === 5 &&
+          keys.every((key) =>
+            ["sessionId", "kind", "action", "id", "text"].includes(key),
+          )) ||
+        (action === "cancel-btw" &&
+          validId &&
+          keys.length === 4 &&
+          keys.every((key) =>
+            ["sessionId", "kind", "action", "id"].includes(key),
+          ));
+      if (!validBase || !validAction) {
+        return this.json(response, 400, {
+          code: "INVALID_CAPABILITY_ACTION",
+          error: "a bounded action for the active Session is required",
+        });
+      }
+      if (sessionId !== this.runtime.sessionManager.getSessionId()) {
+        return this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Reopen the tool panel.",
+        });
+      }
+      if (this.runtime.workspaceSelected !== true) {
+        return this.json(response, 409, {
+          code: "WORKSPACE_REQUIRED",
+          error: "Choose a workspace before using Session tools",
+        });
+      }
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      request.once("aborted", abort);
+      response.once("close", abort);
+      try {
+        let requestAction: WebCapabilityActionRequest;
+        if (action === "spawn-btw" && typeof prompt === "string") {
+          requestAction = {
+            kind: "subagents",
+            action,
+            prompt: prompt.trim(),
+          };
+        } else if (
+          action === "send-btw" &&
+          typeof id === "string" &&
+          typeof text === "string"
+        ) {
+          requestAction = {
+            kind: "subagents",
+            action,
+            id,
+            text: text.trim(),
+          };
+        } else if (action === "cancel-btw" && typeof id === "string") {
+          requestAction = { kind: "subagents", action, id };
+        } else {
+          return this.json(response, 400, {
+            code: "INVALID_CAPABILITY_ACTION",
+            error: "a bounded action for the active Session is required",
+          });
+        }
+        const detail = await runWebCapabilityAction(
+          this.runtime.sessionManager,
+          requestAction,
+          controller.signal,
+        );
+        if (!detail) {
+          return this.json(response, 501, {
+            code: "CAPABILITY_ACTION_UNAVAILABLE",
+            error: "This Session does not expose the requested action",
+          });
+        }
+        return this.json(response, 200, { sessionId, detail });
+      } catch (error) {
+        return this.json(response, 409, {
+          code: "CAPABILITY_ACTION_FAILED",
+          error:
+            error instanceof Error
+              ? error.message
+              : "The capability action failed",
+        });
+      } finally {
+        request.off("aborted", abort);
+        response.off("close", abort);
+      }
+    }
     if (request.method !== "GET") {
       return this.json(response, 405, { error: "method not allowed" });
     }
@@ -912,7 +1413,11 @@ export class WebHost {
           error: "the Session is not available in the current workspace",
         });
       }
-      return this.json(response, 200, await readGitReview(session.cwd));
+      return this.json(
+        response,
+        200,
+        await this.gitReviews.read(session.path, session.cwd),
+      );
     }
     if (url.pathname === "/api/sessions") {
       const projection = await this.adapter.listSessionProjection();
@@ -1377,6 +1882,170 @@ export class WebHost {
       );
     }
     return value as Record<string, unknown>;
+  }
+
+  private async requireActiveToolSession(
+    sessionId: string,
+    response: ServerResponse,
+  ) {
+    if (
+      sessionId.length === 0 ||
+      sessionId.length > 128 ||
+      /[\u0000-\u001f\u007f]/u.test(sessionId)
+    ) {
+      this.json(response, 400, {
+        code: "INVALID_SESSION_ID",
+        error: "a bounded active Session id is required",
+      });
+      return undefined;
+    }
+    if (!this.runtime.workspaceSelected) {
+      this.json(response, 409, {
+        code: "WORKSPACE_REQUIRED",
+        error: "Choose a workspace before using Session tools",
+      });
+      return undefined;
+    }
+    if (sessionId !== this.runtime.sessionManager.getSessionId()) {
+      this.json(response, 409, {
+        code: "SESSION_CHANGED",
+        error: "The active Session changed. Reopen the tool panel.",
+      });
+      return undefined;
+    }
+    try {
+      return await this.adapter.requireWorkspace(this.runtime.cwd);
+    } catch {
+      this.json(response, 403, {
+        code: "WORKSPACE_UNAVAILABLE",
+        error: "The active Session workspace is unavailable",
+      });
+      return undefined;
+    }
+  }
+
+  private validTerminalQuery(
+    url: URL,
+    required: readonly string[],
+    optional: readonly string[] = [],
+  ) {
+    const allowed = new Set([...required, ...optional]);
+    const keys = [...url.searchParams.keys()];
+    return (
+      required.every(
+        (key) => url.searchParams.getAll(key).length === 1,
+      ) &&
+      optional.every(
+        (key) => url.searchParams.getAll(key).length <= 1,
+      ) &&
+      keys.every((key) => allowed.has(key))
+    );
+  }
+
+  private async interactiveTerminalEvents(
+    request: IncomingMessage,
+    response: ServerResponse,
+    url: URL,
+  ) {
+    const sessionId = url.searchParams.get("sessionId");
+    const id = url.searchParams.get("id");
+    const afterValue = url.searchParams.get("after");
+    const after = this.parseCursor(afterValue);
+    if (
+      !this.validTerminalQuery(url, ["sessionId", "id"], ["after"]) ||
+      !sessionId ||
+      !id ||
+      id.length > 128 ||
+      /[\u0000-\u001f\u007f]/u.test(id) ||
+      after.invalid ||
+      (url.searchParams.has("after") && afterValue === "")
+    ) {
+      return this.json(response, 400, {
+        code: "INVALID_TERMINAL_STREAM",
+        error: "an exact terminal, Session, and optional output cursor are required",
+      });
+    }
+    if (!(await this.requireActiveToolSession(sessionId, response))) return;
+    if (this.terminalStreams.size >= MAX_TERMINAL_STREAMS) {
+      return this.json(response, 503, {
+        code: "TERMINAL_STREAM_LIMIT",
+        error: "too many interactive terminal streams",
+      });
+    }
+
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let closed = false;
+    let ready = false;
+    const pendingEvents: WebInteractiveTerminalEvent[] = [];
+    let subscription: ReturnType<
+      InteractiveTerminalService["subscribe"]
+    >;
+    const cleanup = (close?: "end" | "destroy") => {
+      if (closed) return;
+      closed = true;
+      if (heartbeat) clearInterval(heartbeat);
+      subscription?.unsubscribe();
+      this.terminalStreams.delete(response);
+      request.off("aborted", abort);
+      response.off("close", onClose);
+      if (close === "end" && !response.writableEnded) response.end();
+      else if (close === "destroy" && !response.destroyed) response.destroy();
+    };
+    const abort = () => cleanup("destroy");
+    const onClose = () => cleanup();
+    const send = (event: WebInteractiveTerminalEvent) => {
+      if (!ready) {
+        pendingEvents.push(event);
+        return;
+      }
+      if (closed || response.destroyed || response.writableEnded) return;
+      if (response.writableLength > MAX_SSE_BUFFER_BYTES) {
+        cleanup("destroy");
+        return;
+      }
+      const eventId = event.type === "output" ? `id: ${event.offset}\n` : "";
+      response.write(`${eventId}data: ${JSON.stringify(event)}\n\n`);
+      if (event.type === "exit" || event.type === "closed") cleanup("end");
+    };
+    subscription = this.interactiveTerminals.subscribe(
+      sessionId,
+      id,
+      send,
+      after.value,
+    );
+    if (!subscription) {
+      return this.json(response, 404, {
+        code: "TERMINAL_NOT_FOUND",
+        error: "the interactive terminal expired or closed",
+      });
+    }
+    response.writeHead(200, {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    });
+    this.terminalStreams.add(response);
+    request.once("aborted", abort);
+    response.once("close", onClose);
+    ready = true;
+    response.write(": connected\n\n");
+    send(subscription.output);
+    for (const event of pendingEvents.splice(0)) send(event);
+    if (subscription.exited && !closed) {
+      send({ type: "exit", exitCode: subscription.exitCode ?? 0 });
+    }
+    if (closed) return;
+    heartbeat = setInterval(() => {
+      if (
+        response.destroyed ||
+        response.writableEnded ||
+        response.writableLength > MAX_SSE_BUFFER_BYTES
+      ) {
+        cleanup("destroy");
+      } else response.write(": heartbeat\n\n");
+    }, this.sseHeartbeatMs);
+    heartbeat.unref();
   }
 
   private authorized(request: IncomingMessage) {

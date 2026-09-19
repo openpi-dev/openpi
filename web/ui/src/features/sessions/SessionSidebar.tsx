@@ -1,14 +1,15 @@
 import { Dialog } from "@astryxdesign/core/Dialog";
-import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import type { DropdownMenuOption } from "@astryxdesign/core/DropdownMenu";
+import { DropdownMenu } from "@astryxdesign/core/DropdownMenu";
 import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Archive,
   ArchiveRestore,
-  ChevronsLeft,
   MoreHorizontal,
+  PanelLeftClose,
   Plus,
   Search,
+  Settings,
   SquarePen,
   Trash2,
   X,
@@ -28,7 +29,9 @@ interface SessionSidebarProps {
   query: string;
   searchOpen: boolean;
   mobileOpen: boolean;
+  settingsDisabled: boolean;
   returnFocusRef?: RefObject<HTMLButtonElement | null>;
+  onOpenSettings: () => void;
   actions: WebStoreActions;
 }
 
@@ -273,7 +276,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 : props.actions.toggleSidebar(false)
             }
           >
-            <ChevronsLeft />
+            <PanelLeftClose />
           </button>
         </Tooltip>
       </div>
@@ -545,6 +548,21 @@ export function SessionSidebar(props: SessionSidebarProps) {
               : t(archived ? "noLoadedArchives" : "noSessions")}
           </div>
         )}
+      </div>
+
+      <div className="sidebar-footer">
+        <button
+          className="sidebar-settings-button"
+          type="button"
+          aria-label={t("settings")}
+          title={t("settings")}
+          data-provider-settings-trigger
+          disabled={props.settingsDisabled}
+          onClick={props.onOpenSettings}
+        >
+          <Settings aria-hidden="true" />
+          <span>{t("settings")}</span>
+        </button>
       </div>
 
       <Dialog

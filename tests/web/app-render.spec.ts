@@ -10,7 +10,7 @@ import {
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { projectEntry, type WebSnapshot } from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
@@ -18,6 +18,7 @@ import { OpenPiLogo } from "../../web/ui/src/components/OpenPiLogo.tsx";
 import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
+import { SubagentDetailView } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -220,6 +221,8 @@ describe("OpenPI React transcript", () => {
         query: store.getState().query,
         searchOpen: true,
         mobileOpen: false,
+        settingsDisabled: false,
+        onOpenSettings: vi.fn(),
         actions: store.getState().actions,
       }),
     );
@@ -345,9 +348,19 @@ describe("OpenPI React transcript", () => {
       }),
     );
 
-    expect(container.querySelectorAll(".tool-group")).toHaveLength(1);
-    expect(screen.getAllByText(/4 (steps|个步骤)/u)).toHaveLength(1);
+    const process =
+      container.querySelector<HTMLDetailsElement>(".process-sequence");
+    expect(process).toBeTruthy();
+    expect(process?.open).toBe(false);
+    expect(screen.getByText(/4 (tool calls|次工具调用)/u)).toBeTruthy();
+    expect(screen.getByText(/1 (agent activity|项 Agent 活动)/u)).toBeTruthy();
+    expect(
+      container.querySelector(".process-sequence-preview")?.textContent,
+    ).not.toMatch(/[*_`]/u);
     expect(container.querySelectorAll(".tool-evidence-card")).toHaveLength(4);
+    expect(
+      container.querySelectorAll(".tool-evidence-card .tool-name"),
+    ).toHaveLength(4);
     expect(container.querySelectorAll(".activity-card.subagent")).toHaveLength(
       1,
     );
@@ -355,7 +368,221 @@ describe("OpenPI React transcript", () => {
     expect(
       container.querySelectorAll("[aria-label=completed]").length,
     ).toBeGreaterThan(0);
+
+    fireEvent.click(process!.querySelector("summary")!);
+    expect(process?.open).toBe(true);
+    expect(process?.querySelectorAll(".process-step")).toHaveLength(6);
   });
+});
+
+it("marks only live execution evidence for shimmer styling", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: "2026-09-19T10:00:00Z",
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "assistant",
+      type: "message",
+      timestamp: "2026-09-19T10:00:01Z",
+      message: {
+        role: "assistant",
+        content: "",
+        parts: [
+          { type: "thinking", text: "Checking the current state." },
+          {
+            type: "toolCall",
+            id: "read-live",
+            name: "read",
+            arguments: '{"path":"src/index.ts"}',
+          },
+        ],
+      },
+    },
+  ];
+
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: { assistant: Date.now() },
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+
+  const process = view.container.querySelector<HTMLDetailsElement>(
+    ".process-sequence.running",
+  );
+  expect(process?.dataset.status).toBe("running");
+  expect(process?.open).toBe(true);
+  expect(process?.querySelectorAll(".process-step.running")).toHaveLength(2);
+});
+
+it("keeps OpenPI setup episodes out of the main conversation", () => {
+  const snapshot = activeSnapshot();
+  snapshot.selectedSession!.entries = [
+    {
+      id: "before-user",
+      type: "message",
+      timestamp: "2026-09-19T10:00:00Z",
+      message: { role: "user", content: "Keep this task message" },
+    },
+    {
+      id: "before-assistant",
+      type: "message",
+      timestamp: "2026-09-19T10:00:01Z",
+      message: { role: "assistant", content: "Visible task response" },
+    },
+    projectEntry({
+      id: "setup-request",
+      parentId: "before-assistant",
+      type: "custom_message",
+      timestamp: "2026-09-19T10:00:02Z",
+      customType: "openpi-setup-request",
+      content: "Apply a dark theme",
+      display: false,
+    }),
+    {
+      id: "setup-assistant",
+      type: "message",
+      timestamp: "2026-09-19T10:00:03Z",
+      message: {
+        role: "assistant",
+        content: "Hidden configuration response",
+      },
+    },
+    {
+      id: "setup-result",
+      type: "message",
+      timestamp: "2026-09-19T10:00:04Z",
+      message: {
+        role: "toolResult",
+        toolName: "configure_my_pi_setup",
+        toolCallId: "setup-call",
+        content: "Hidden configuration evidence",
+        isError: false,
+      },
+    },
+    {
+      id: "after-user",
+      type: "message",
+      timestamp: "2026-09-19T10:00:05Z",
+      message: { role: "user", content: "Continue the actual task" },
+    },
+    {
+      id: "after-assistant",
+      type: "message",
+      timestamp: "2026-09-19T10:00:06Z",
+      message: { role: "assistant", content: "Visible continuation" },
+    },
+  ];
+
+  renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+
+  expect(screen.getAllByText("Keep this task message").length).toBeGreaterThan(
+    0,
+  );
+  expect(screen.getByText("Visible task response")).toBeTruthy();
+  expect(
+    screen.getAllByText("Continue the actual task").length,
+  ).toBeGreaterThan(0);
+  expect(screen.getByText("Visible continuation")).toBeTruthy();
+  expect(screen.queryByText("Hidden configuration response")).toBeNull();
+  expect(screen.queryByText("Hidden configuration evidence")).toBeNull();
+});
+
+it("renders side conversation messages with transcript role styling", async () => {
+  const client = new WebClient();
+  const detail = vi.spyOn(client, "subagentDetail").mockResolvedValue({
+    sessionId: "session",
+    detail: {
+      kind: "subagents",
+      id: "btw-1",
+      title: "Aside",
+      origin: "btw",
+      status: "done",
+      outcome: "completed",
+      createdAt: 1,
+      settledAt: 2,
+      cwd: "/tmp",
+      model: "test/model",
+      prompt: "Initial question",
+      transcript: [
+        { kind: "user", text: "Right aligned question" },
+        {
+          kind: "assistant",
+          parts: [
+            { type: "text", text: "Natural assistant answer" },
+            { type: "thinking", text: "Checked the evidence" },
+            {
+              type: "toolCall",
+              toolId: "tool-live",
+              name: "read",
+              argsPreview: "src/index.ts",
+            },
+          ],
+        },
+      ],
+      liveTools: [
+        {
+          toolId: "tool-live",
+          name: "read",
+          argsPreview: "src/index.ts",
+          done: false,
+        },
+      ],
+      finalText: "",
+      truncated: false,
+      omittedEntries: 0,
+    },
+  });
+
+  const view = renderWithI18n(
+    createElement(SubagentDetailView, {
+      sessionId: "session",
+      id: "btw-1",
+      client,
+      liveAvailable: true,
+      fullView: false,
+      readOnlyNote: false,
+    }),
+  );
+
+  const user = await screen.findByText("Right aligned question");
+  const assistant = await screen.findByText("Natural assistant answer");
+  expect(
+    user.closest<HTMLElement>(".subagent-message.user")?.dataset.role,
+  ).toBe("user");
+  expect(
+    assistant.closest<HTMLElement>(".subagent-message.assistant")?.dataset.role,
+  ).toBe("assistant");
+  expect(view.container.querySelector(".subagent-thinking.done")).toBeTruthy();
+  expect(view.container.querySelector(".subagent-tool.running")).toBeTruthy();
+  expect(detail).toHaveBeenCalledWith(
+    "session",
+    "btw-1",
+    expect.any(AbortSignal),
+  );
 });
 
 function activeSnapshot(): WebSnapshot {
@@ -459,7 +686,7 @@ it("groups transcript turns with state and confirmed file change receipts", () =
   expect(turns[0]?.textContent).toContain("Report updated.");
   expect(turns[1]?.textContent).toContain("Explain it");
   expect(container.querySelectorAll(".final-response")).toHaveLength(2);
-  expect(screen.getAllByText(i18n.t("turnState_complete"))).toHaveLength(2);
+  expect(container.querySelectorAll(".turn-heading")).toHaveLength(0);
 });
 
 function renderEditableTranscript(onResend = vi.fn(async () => false)) {
@@ -811,6 +1038,68 @@ it("opens recorded thinking by default only when the canonical preference is ena
   ).toBe(true);
 });
 
+it("applies the thinking preference to grouped completed process evidence", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.preferences.expandThinking = true;
+  snapshot.selectedSession!.entries = [
+    {
+      id: "prompt",
+      type: "message",
+      timestamp: "2026-09-19T00:00:00Z",
+      message: { role: "user", content: "Inspect it" },
+    },
+    {
+      id: "answer",
+      type: "message",
+      timestamp: "2026-09-19T00:00:01Z",
+      message: {
+        role: "assistant",
+        content: "Done.",
+        parts: [
+          { type: "thinking", text: "Check the implementation." },
+          {
+            type: "toolCall",
+            id: "read-1",
+            name: "read",
+            arguments: '{"path":"src/index.ts"}',
+          },
+        ],
+      },
+    },
+    {
+      id: "result",
+      type: "message",
+      timestamp: "2026-09-19T00:00:02Z",
+      message: {
+        role: "toolResult",
+        toolName: "read",
+        toolCallId: "read-1",
+        content: "source",
+        isError: false,
+      },
+    },
+  ];
+
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+
+  expect(
+    view.container.querySelector<HTMLDetailsElement>(".process-sequence")?.open,
+  ).toBe(true);
+});
+
 it("does not attribute current runtime activity to a historical session", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.capabilities = {
@@ -995,6 +1284,8 @@ it("shows bounded archive history even when its workspace summary was omitted", 
       query: "",
       searchOpen: false,
       mobileOpen: false,
+      settingsDisabled: false,
+      onOpenSettings: vi.fn(),
       actions: store.getState().actions,
     }),
   );

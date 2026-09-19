@@ -10,6 +10,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { expect, test } from "@playwright/test";
+import { GitReviewBaselineStore } from "../../web/host/git-review.ts";
 import { WebHost } from "../../web/host/web-host.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import type {
@@ -50,6 +51,11 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
   ]);
   await execFileAsync("git", ["-C", cwd, "add", "."]);
   await execFileAsync("git", ["-C", cwd, "commit", "-m", "base"]);
+  const baselineDirectory = await mkdtemp(
+    join(tmpdir(), "openpi-evidence-git-baseline-"),
+  );
+  const gitReviews = new GitReviewBaselineStore(cwd, baselineDirectory);
+  await gitReviews.capture(`current:${manager.getSessionId()}`, cwd);
   const read = await createReadTool(cwd).execute("read-1", { path });
   const edit = await createEditTool(cwd).execute("edit-1", {
     path,
@@ -225,7 +231,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       return { pendingFollowUps: 0 };
     },
   };
-  const host = new WebHost({ runtime });
+  const host = new WebHost({ runtime, gitReviews });
   const context = await browser.newContext();
   const page = await context.newPage();
   try {
@@ -234,6 +240,25 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(
       page.getByRole("button", { name: "Report", exact: true }),
     ).toBeVisible();
+    await page
+      .getByRole("button", { name: /打开工具|Open tools/u, exact: true })
+      .click();
+    const workbar = page.locator(".workbar-panel");
+    await workbar
+      .getByRole("button", { name: /^(生成文件|Generated files)/u })
+      .click();
+    const generatedReport = workbar.getByRole("button", {
+      name: /report space\.md/u,
+    });
+    await expect(generatedReport).toBeVisible();
+    await generatedReport.click();
+    const generatedPreview = page.getByRole("complementary", {
+      name: /文件预览|File preview/u,
+    });
+    await expect(generatedPreview).toContainText("Reviewed content");
+    await generatedPreview
+      .getByRole("button", { name: /关闭预览|Close preview/u })
+      .click();
     const changesTrigger = page.locator(".session-changes-trigger");
     await expect(changesTrigger).toContainText(
       /1 (?:个文件已更改|file changed)/u,
@@ -244,7 +269,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await changesTrigger.click();
     const changesPopover = page.locator(".session-changes-popover");
     await expect(changesPopover).toContainText("report space.md");
-    for (const group of await page.locator(".tool-group > summary").all())
+    for (const group of await page.locator(".process-sequence > summary").all())
       await group.click();
     for (const summary of await page
       .locator(".tool-evidence-card > summary")
@@ -253,6 +278,19 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     const readCard = page
       .locator(".tool-evidence-card")
       .filter({ has: page.locator("summary strong", { hasText: "read" }) });
+    const toolTitleColors = await readCard
+      .locator(":scope > summary")
+      .evaluate((summary) => {
+        const label = summary.querySelector<HTMLElement>(".tool-name");
+        const detail = summary.querySelector<HTMLElement>(
+          ":scope > span:not(.evidence-status):not(.evidence-summary-meta)",
+        );
+        return {
+          label: label ? getComputedStyle(label).color : "",
+          detail: detail ? getComputedStyle(detail).color : "",
+        };
+      });
+    expect(toolTitleColors.label).not.toBe(toolTitleColors.detail);
     const evidenceFile = readCard.getByRole("button", { name: path });
     await evidenceFile.click();
     await expect(
@@ -302,7 +340,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     const review = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
-    await expect(review).toContainText(/对比 HEAD|compared with HEAD/u);
+    await expect(review).toContainText(
+      /自本会话开始后的变更|Changes since this session started/u,
+    );
     await expect(
       review.getByRole("figure", { name: /变更差异|Change diff/u }),
     ).toContainText("Reviewed content");
@@ -402,5 +442,6 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await context.close();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
+    await rm(baselineDirectory, { recursive: true, force: true });
   }
 });

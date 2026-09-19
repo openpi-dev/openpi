@@ -66,7 +66,11 @@ function safeUrl(value: string) {
   }
 }
 
-function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
+function CodeBlock({
+  children,
+  node: _node,
+  ...props
+}: ComponentPropsWithoutRef<"pre"> & { node?: Element }) {
   const { t } = useTranslation();
   const [copyStatus, setCopyStatus] = useState<
     "idle" | "copying" | "copied" | "failed"
@@ -120,6 +124,13 @@ function CodeBlock({ children, ...props }: ComponentPropsWithoutRef<"pre">) {
         aria-label={t("codeBlock")}
         // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
         tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          const target = event.currentTarget;
+          if (target.scrollWidth <= target.clientWidth) return;
+          event.preventDefault();
+          target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
+        }}
       >
         <pre ref={code} {...props}>
           {children}
@@ -144,9 +155,7 @@ export const Markdown = memo(function Markdown({
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
-          pre({ node: _node, ...props }) {
-            return <CodeBlock {...props} />;
-          },
+          pre: CodeBlock,
           table({ children, ...props }) {
             return (
               <section
