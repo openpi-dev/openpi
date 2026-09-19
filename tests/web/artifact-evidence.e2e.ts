@@ -255,7 +255,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       .filter({ has: page.locator("summary strong", { hasText: "read" }) });
     const evidenceFile = readCard.getByRole("button", { name: path });
     await evidenceFile.click();
-    await expect(page.getByRole("dialog")).toContainText("Reviewed content");
+    await expect(
+      page.getByRole("complementary", { name: /文件预览|File preview/u }),
+    ).toContainText("Reviewed content");
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await expect(evidenceFile).toBeFocused();
     await expect(
@@ -300,12 +302,17 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     const review = page.getByRole("complementary", {
       name: /变更|Changes/u,
     });
-    await expect(review.locator(".session-review-file")).toHaveCount(1);
     await expect(review).toContainText(/对比 HEAD|compared with HEAD/u);
-    const reviewedEdit = review.locator(".session-review-file").first();
-    await reviewedEdit.locator(":scope > button").click();
     await expect(
-      review.getByRole("figure", { name: "Change diff" }),
+      review.getByRole("figure", { name: /变更差异|Change diff/u }),
+    ).toContainText("Reviewed content");
+    await review
+      .getByRole("button", { name: /返回变更文件|Back to changed files/u })
+      .click();
+    await expect(review.locator(".session-review-file")).toHaveCount(1);
+    await review.locator(".session-review-file").click();
+    await expect(
+      review.getByRole("figure", { name: /变更差异|Change diff/u }),
     ).toContainText("Reviewed content");
     await review.getByRole("button", { name: /关闭|Close/u }).click();
     await expect(changesTrigger).toBeFocused();
@@ -332,7 +339,10 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await expect(changesTrigger).toBeFocused();
     await page.setViewportSize({ width: 1280, height: 844 });
     await page.getByRole("button", { name: "Report", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText("Reviewed content");
+    const artifactPanel = page.getByRole("complementary", {
+      name: /文件预览|File preview/u,
+    });
+    await expect(artifactPanel).toContainText("Reviewed content");
     const downloadPromise = page.waitForEvent("download");
     await page.getByRole("button", { name: /下载文件|Download file/u }).click();
     const downloaded = await downloadPromise;
@@ -372,7 +382,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       page.getByRole("heading", { name: "Latest report" }),
     ).toBeVisible({ timeout: 8_000 });
     await rm(path);
-    await expect(page.getByRole("dialog")).toContainText(
+    await expect(artifactPanel).toContainText(
       /当前显示旧版预览|Showing an older preview/u,
       { timeout: 8_000 },
     );
@@ -387,9 +397,7 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     ).toBeVisible();
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
-    await expect(page.getByRole("dialog")).toContainText(
-      "File no longer exists",
-    );
+    await expect(artifactPanel).toContainText("File no longer exists");
   } finally {
     await context.close();
     await host.stop();

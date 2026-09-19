@@ -426,6 +426,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .session-changes-file { display:flex; width:100%; min-width:0; min-height:42px; align-items:center; justify-content:space-between; gap:18px; padding:8px 10px; border:0; border-radius:5px; background:transparent; text-align:left; cursor:pointer; }
 .session-changes-file:hover, .session-changes-file:focus-visible { background:var(--sidebar-hover); }
 .session-changes-file > span:first-child { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:13px; }
+.session-changes-footer { position:sticky; bottom:0; padding:8px 12px 10px; border-top:1px solid var(--border); background:var(--page); }
+.session-changes-footer button { width:100%; min-height:32px; border:1px solid var(--border); border-radius:5px; background:var(--page); color:var(--text); cursor:pointer; font-size:11px; font-weight:600; }
+.session-changes-footer button:hover { background:var(--sidebar-hover); }
 .prompt-recovery { @apply mx-auto flex w-full items-center justify-between gap-4; max-width: 840px; padding: 10px 12px; border: 1px solid oklch(74% .11 78); border-radius: 8px; background: oklch(98% .025 88); color: var(--text); font-size: 12px; }
 .prompt-recovery > div:first-child { @apply flex min-w-0 flex-col gap-0.5; }
 .prompt-recovery strong { font-size: 13px; }
@@ -688,21 +691,33 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .diff-removed { background:rgba(210,60,60,.12); color:var(--text); }
 .evidence-warning { color:var(--warning); }
 .artifact-link { color:var(--accent); text-decoration:underline; cursor:pointer; padding:0; border:0; background:transparent; font:inherit; overflow-wrap:anywhere; }
-.artifact-panel { position:fixed; z-index:60; inset:16px 16px 16px auto; width:min(640px,calc(100vw - 32px)); box-sizing:border-box; overflow:auto; padding:20px; border:1px solid var(--border); border-radius:12px; background:var(--page); color:var(--text); box-shadow:0 12px 48px #0003; }
-.artifact-panel header { display:flex; justify-content:space-between; align-items:flex-start; gap:12px; border-bottom:1px solid var(--border); }
-.artifact-panel header small { color:var(--muted); font-size:11px; }
-.artifact-panel h2 { max-width:100%; margin:5px 0 12px; font-size:17px; overflow-wrap:anywhere; }
-.artifact-panel p { font-size:12px; overflow-wrap:anywhere; }
-.artifact-panel button:not(.artifact-link) { display:inline-flex; align-items:center; justify-content:center; gap:6px; padding:7px 10px; border:1px solid var(--border); border-radius:6px; background:var(--sidebar-hover); color:var(--text); cursor:pointer; }
+.app-shell:has(> .artifact-panel) { grid-template-columns:240px minmax(0,1fr) clamp(420px,42vw,640px); }
+.app-shell.sidebar-collapsed:has(> .artifact-panel) { grid-template-columns:56px minmax(0,1fr) clamp(420px,42vw,640px); }
+.artifact-panel { min-width:0; min-height:0; height:100dvh; display:flex; flex-direction:column; overflow:hidden; border:0; border-left:1px solid var(--border); background:var(--page); color:var(--text); }
+.artifact-panel header { display:grid; min-height:52px; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:10px; padding:6px 8px 6px 12px; border-bottom:1px solid var(--border); }
+.artifact-panel header > div { min-width:0; }
+.artifact-panel header small, .artifact-panel h2 { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.artifact-panel header small { color:var(--muted); font-size:10px; }
+.artifact-panel h2 { max-width:100%; margin:2px 0 0; font-size:12px; }
+.artifact-panel-body { min-width:0; min-height:0; flex:1; overflow:auto; padding:12px 14px 24px; }
+.artifact-panel p { font-size:11px; overflow-wrap:anywhere; }
+.artifact-panel button:not(.artifact-link) { display:inline-flex; min-height:30px; align-items:center; justify-content:center; gap:6px; padding:5px 8px; border:1px solid var(--border); border-radius:5px; background:var(--page); color:var(--text); cursor:pointer; }
+.artifact-panel button:not(.artifact-link):hover { background:var(--sidebar-hover); }
 .artifact-panel button svg { width:15px; height:15px; }
 .artifact-source { display:flex; align-items:center; gap:6px; min-width:0; margin-top:12px; }
-.artifact-source code { min-width:0; flex:1; overflow-wrap:anywhere; font-size:11px; }
+.artifact-source code { min-width:0; flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; font-size:10.5px; }
 .artifact-session { color:var(--muted); }
 .artifact-panel button:disabled { opacity:.5; cursor:default; }
-.artifact-panel pre { max-height:65vh; overflow:auto; white-space:pre-wrap; overflow-wrap:anywhere; font-size:12px; line-height:1.7; }
+.artifact-panel pre { width:max-content; min-width:100%; margin:0; padding:12px; overflow:auto; white-space:pre; font-size:11.5px; line-height:1.65; }
+.artifact-panel section[aria-label="File preview content"] { min-width:0; overflow:auto; border:1px solid var(--border); border-radius:6px; background:var(--sidebar); }
 .artifact-actions { display:flex; gap:8px; }
 .artifact-revision { color:var(--muted); }
 .artifact-link-path { font-size:11px; color:var(--muted); text-decoration:none; }
+@media(max-width:1100px) {
+  .app-shell:has(> .artifact-panel), .app-shell.sidebar-collapsed:has(> .artifact-panel) { grid-template-columns:minmax(0,1fr); }
+  .app-shell:has(> .artifact-panel) > .conversation-shell, .app-shell:has(> .artifact-panel) > .session-sidebar, .app-shell:has(> .artifact-panel) > .sidebar-expand { display:none; }
+  .artifact-panel { grid-column:1 / -1; border-left:0; }
+}
 .trajectory-load { padding:10px; color:var(--text); background:transparent; border:1px solid var(--border); border-radius:6px; margin-bottom:12px; cursor:pointer; }
 @media(max-width:700px) { .trajectory { padding:66px 16px 16px; } .trajectory-body { grid-template-columns:1fr; gap:16px; } .trajectory-ledger { max-height:200px; overflow:auto; } .trajectory-inspector { position:static; padding:16px; } }
 

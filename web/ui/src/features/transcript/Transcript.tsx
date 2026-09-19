@@ -43,7 +43,6 @@ import {
   turnTitle,
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
-import { ArtifactProvider } from "../artifacts/Artifacts.tsx";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 
 type PersistedEntry = NonNullable<
@@ -1177,7 +1176,7 @@ export function Transcript(props: TranscriptProps) {
       : t("modelRunning");
 
   return (
-    <ArtifactProvider sessionId={selected?.id}>
+    <>
       <div
         ref={viewport}
         className="conversation"
@@ -1238,6 +1237,6 @@ export function Transcript(props: TranscriptProps) {
           ))}
         </nav>
       )}
-    </ArtifactProvider>
+    </>
   );
 }

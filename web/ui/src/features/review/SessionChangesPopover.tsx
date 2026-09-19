@@ -12,7 +12,7 @@ export function SessionChangesPopover({
   onOpenReview,
 }: {
   snapshot: WebGitReviewSnapshot;
-  onOpenReview: (returnFocus?: HTMLElement) => void;
+  onOpenReview: (filePath?: string, returnFocus?: HTMLElement) => void;
 }) {
   const { t } = useTranslation();
   const root = useRef<HTMLDivElement>(null);
@@ -67,7 +67,7 @@ export function SessionChangesPopover({
                   title={file.path}
                   onClick={() => {
                     setOpen(false);
-                    onOpenReview(trigger.current ?? undefined);
+                    onOpenReview(file.path, trigger.current ?? undefined);
                   }}
                 >
                   <span>{fileName(file.path)}</span>
@@ -85,6 +85,17 @@ export function SessionChangesPopover({
               </li>
             ))}
           </ul>
+          <footer className="session-changes-footer">
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false);
+                onOpenReview(undefined, trigger.current ?? undefined);
+              }}
+            >
+              {t("reviewChanges")}
+            </button>
+          </footer>
         </section>
       )}
       <button

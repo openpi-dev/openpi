@@ -1217,6 +1217,15 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
         },
       },
     };
+    snapshot.models = [
+      {
+        provider: "example",
+        id: "example-model",
+        name: "Inspection Model",
+        label: "Inspection Model",
+        current: true,
+      },
+    ];
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -1294,19 +1303,19 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await page.keyboard.press("Escape");
     await expect(dialog).not.toBeVisible();
     await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
-    const providerSettings = page.getByRole("main");
+    const providerSettings = page.getByRole("dialog", { name: "设置" });
     await expect(
-      providerSettings.getByRole("heading", { name: "服务商凭据" }),
+      providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
     await expect(providerSettings).toContainText("Example");
     await expect
       .poll(() => reads.filter((x) => x === "providers/auth-status").length)
       .toBe(width === 1280 ? 1 : 2);
-    const settingsNavigation = page.getByRole("navigation", {
+    const settingsNavigation = providerSettings.getByRole("tablist", {
       name: "设置导航",
     });
     await settingsNavigation
-      .getByRole("button", { name: "OpenPI 配置", exact: true })
+      .getByRole("tab", { name: "OpenPI 配置", exact: true })
       .click();
     await expect(
       providerSettings.getByRole("heading", { name: "OpenPI 配置" }),
@@ -1315,19 +1324,19 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
       providerSettings.getByText("/openpi-setup", { exact: true }),
     ).toBeVisible();
     await settingsNavigation
-      .getByRole("button", { name: "运行状态", exact: true })
+      .getByRole("tab", { name: "常规", exact: true })
       .click();
     await expect(
-      providerSettings.getByRole("heading", { name: "运行状态" }),
+      providerSettings.getByRole("heading", { name: "常规" }),
     ).toBeVisible();
     await expect(
       providerSettings.getByRole("button", { name: "打开运行详情" }),
     ).toBeVisible();
     await settingsNavigation
-      .getByRole("button", { name: "服务商凭据", exact: true })
+      .getByRole("tab", { name: "模型", exact: true })
       .click();
     await expect(
-      providerSettings.getByRole("heading", { name: "服务商凭据" }),
+      providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
@@ -1335,9 +1344,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
       fullPage: true,
     });
     await page.keyboard.press("Escape");
-    await expect(page.getByRole("heading", { name: "服务商凭据" })).toHaveCount(
-      0,
-    );
+    await expect(providerSettings).not.toBeVisible();
     await page.getByRole("button", { name: /Build logs/ }).click();
     await expect(dialog.locator("pre").first()).toContainText(
       '<script>alert("literal output")</script>',

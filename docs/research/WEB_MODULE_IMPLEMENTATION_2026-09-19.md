@@ -20,7 +20,7 @@
 
 ## 组件来源与复用结果
 
-本次直接复用仓库现有 React、Astryx、ReactMarkdown、Lucide、Pi Session/Host API、工具证据组件和剪贴板 helper；没有新依赖、复制第三方代码或更换 provider/session 栈。Maka 的导航、linked-agent 列表和 `SessionReviewPanel`，Pi Web 的独立内容区域与工具证据，DeepSeek Harness 的 Markdown、附件、只读子任务和 changed-files 分层可作交互及代码组织参考，固定源码与版本见 [组件来源记录](WEB_GAP_ANALYSIS_2026-09-18/SOURCES_AND_COMPONENTS.md)。变更面板不仅复用 Maka 的“摘要 → 文件列表 → 有界 diff”信息架构，还直接使用 OpenPI 已安装的 Astryx `CollapsibleGroup`、`Collapsible`、`Banner`、`Button`、`Skeleton`、`EmptyState`、`Text` 与布局组件；本仓库的 `0.5.2` 已具备所需接口，因此没有为了对齐 Maka 的 `0.6.1` 或 npm 当前 `0.6.2` 做无收益的全站升级。Maka 私有 workspace 包和 `DiffCodePreview` 未复制，diff 仍用本仓库的有界只读渲染。Harness Web 不是消费者 DeepSeek 聊天客户端；本次没有取得 Codex/Claude Desktop 客户端的公开组件源码，不能声称其 UI 技术栈已知。
+本次直接复用仓库现有 React、Astryx、ReactMarkdown、Lucide、Pi Session/Host API、工具证据组件和剪贴板 helper；没有新依赖、复制第三方代码或更换 provider/session 栈。设置外形与导航以实际运行的 [`@agegr/pi-web@0.9.1`](https://github.com/agegr/pi-web/releases/tag/v0.9.1) General / Models 页面为视觉和交互参照；文件栏状态转换参考 Apache Maka 固定提交 `5b9db1c` 的 [`ArtifactPane`](https://github.com/apache/maka/blob/5b9db1ce8fdb83f0841cfd058084abe143847348/apps/desktop/src/renderer/features/workbar/tools/artifacts/artifact-pane.tsx)“列表 ↔ 单个全栏预览”，早期的 Maka `SessionReviewPanel`、Pi Web 工具证据和 DeepSeek Harness [`ChangedFiles`](https://github.com/deepseek-ai/deepseek-harness/blob/ddefc45fbc7f8e46dd73185e68295696d1297887/packages/client/ui-deliverables/src/client/ChangedFiles.tsx) 仍只作为信息组织参考。实现直接使用 OpenPI 已安装的 Astryx `Dialog`、`Button`、`Banner`、`Skeleton`、`EmptyState`、`Text` 与布局组件；本仓库的 `0.5.2` 已具备本轮所需接口，因此没有为了版本数字对齐 Maka 的 `0.6.1` 或 npm 后续版本而做全站升级。Maka 私有 workspace 包没有导入，本地 `DiffCodePreview` 只负责有界解析和代码行展示，并非第三方源码移植。Harness Web 不是消费者 DeepSeek 聊天客户端；本次没有取得 Codex/Claude Desktop 客户端的公开组件源码，不能声称其 UI 技术栈已知。
 
 ## 真实页面复验补充
 
@@ -43,6 +43,16 @@
 用户随后要求 M08 改为真实 Git 分支快照，而不是从对话工具回执推断最终文件状态。Host 新增 Session 绑定的只读 `/api/git-review`：只接受当前投影中的精确 Session id/path，固定调用 Git 的只读 diff/name-status/ls-files 接口，关闭 external diff 与 textconv，并限制 10 秒、200 文件、最终 4 MiB Web 响应。基准优先取 `origin/HEAD`、`origin/main`/`master`、本地 `main`/`master`；可用时比较 merge-base 到当前工作区，从而同时覆盖分支提交、staged 和 unstaged，再追加 untracked 普通文件。找不到可信基准时明确退化为 HEAD/工作区范围，不伪造分支归因。
 
 UI 参考 Maka `SessionReviewPanel` 的摘要、可折叠文件行和直接 diff，同时保留用户给出的 Codex 风格底部“文件已更改”入口。真实仓库达到响应上限时，仍返回可列出的文件身份和统计；未载入的单文件 diff 明确标记截断，最终 JSON 再按协议字节数硬收口。真实 Host 在当前分支展示 200 个有界文件、`+20035/-5751` 和截断提示；桌面弹层根据触发按钮上方空间定高，390×844 页面与审查面板均无水平溢出，文件展开可直接阅读 diff。这里展示的是仓库当前分支和工作区的快照，可能包含 Session 开始前已有改动，不宣称全部由当前模型产生。
+
+## 设置与独立文件栏复验补充
+
+2026-09-19 的后续实页对照使用本机实际运行的 `@agegr/pi-web@0.9.1`，而不是早期记录中的另一个同名仓库。1440×960 下，参照设置面板为 `1080×806`、左侧模型栏为 `240px`；OpenPI 最终面板为 `1080×808`、模型栏同为 `240px`。General、Models、OpenPI 作为顶部分段页签，Models 保持“服务商分组列表 → 当前模型详情”结构，并通过既有 `selectModel` action 切换模型。General 只展示主题、当前模型、thinking 与工作区等已有状态；服务商凭据仍是 Pi 只读投影，包级配置继续由唯一 `/openpi-setup` 拥有，未为了视觉一致而复制另一套配置写入来源。
+
+此前记录的“文件行内展开 diff”仅代表中间迭代的 UI，现由最终交互取代；Git 快照接口、Session 绑定、只读命令与响应上限等运行时事实不变。底部摘要弹层仍快速列出文件和增删统计，但点击文件后会打开与对话区并列的独立右栏，列表态再切换为单文件全栏预览；返回按钮和 `Escape` 回到列表，关闭后焦点返回原关闭按钮。1440×960 下最终布局为 `240px` 侧栏、`595px` 对话区和 `605px` 审阅栏；390×844 下审阅栏占满视口，桌面和移动端均无水平溢出。
+
+artifact 文件也从浮层改成应用网格的直接第三列，保留原 Host handle、权限、刷新、下载与释放语义。变更审阅和 artifact 预览互斥，避免窄屏或桌面同时打开两个辅助栏。真实 Chromium E2E 覆盖“底部弹层 → 文件栏 → 返回/关闭”、独立 artifact 第三列、桌面/移动设置页和无障碍检查；实页焦点探针确认返回后焦点为关闭按钮，随后 `Escape` 能关闭审阅栏。
+
+消融复验移除了 `ReviewPanel` 未使用的 Session prop，专项测试与类型检查仍通过，因此不保留该耦合；设置、Git 审阅和 artifact 各自拥有不同数据与生命周期，没有合并成总控状态机。`DiffCodePreview` 保留，因为它集中承担统一 diff 解析、双行号、增删/上下文状态和行数上限；移除后会把同一协议解析重新散落到列表和预览层。Astryx `0.5.2` 的现有组件已满足 Dialog、按钮和状态呈现要求，升级不能改善本轮验收结果，因此未产生依赖锁文件噪声。
 
 ## 验证与限制
 

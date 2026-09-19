@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement } from "react";
+
 import {
   act,
   cleanup,
@@ -8,11 +8,12 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
-import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
+import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
+import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import "../../web/ui/src/i18n.ts";
 
@@ -153,10 +154,12 @@ it("opens local links using authenticated API and stops preview reads on close",
     undefined,
     expect.any(AbortSignal),
   );
-  expect(screen.getByRole("dialog", { name: "File preview" })).toBeTruthy();
+  expect(
+    screen.getByRole("complementary", { name: "File preview" }),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
   await waitFor(() => expect(release).toHaveBeenCalledWith("s", "h"));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("complementary")).toBeNull();
 });
 
 it("restores the original opener after nested preview navigation and ignores stale copy feedback", async () => {

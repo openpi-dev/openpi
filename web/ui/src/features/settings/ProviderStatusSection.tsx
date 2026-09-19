@@ -15,9 +15,11 @@ type ProviderFilter = "all" | "configured" | "missing";
 export function ProviderStatusSection({
   sessionId,
   hidden,
+  providerId,
 }: {
   sessionId: string;
   hidden: boolean;
+  providerId?: string;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -65,6 +67,88 @@ export function ProviderStatusSection({
   const configured = data?.providers.filter(
     (provider) => provider.configured,
   ).length;
+
+  if (providerId) {
+    const provider = data?.providers.find((item) => item.id === providerId);
+    return (
+      <section
+        className="provider-status-section provider-status-detail"
+        hidden={hidden}
+      >
+        <div className="provider-detail-heading">
+          <div>
+            <span>{t("providerAvailability")}</span>
+            <strong>{provider?.name || providerId}</strong>
+          </div>
+          <button
+            type="button"
+            className="provider-refresh"
+            aria-label={t("refreshStatus")}
+            disabled={!data}
+            onClick={() => refresh((value) => value + 1)}
+          >
+            <RefreshCw aria-hidden="true" />
+            <span>{t("refreshStatus")}</span>
+          </button>
+        </div>
+        {!data && !error ? (
+          <p className="provider-settings-state" role="status">
+            {t("providerLoading")}
+          </p>
+        ) : error ? (
+          <div className="provider-settings-state error" role="alert">
+            <strong>{t("providerLoadFailed")}</strong>
+            <span>{error}</span>
+            <button type="button" onClick={() => refresh((value) => value + 1)}>
+              {t("retryAdmissionCheck")}
+            </button>
+          </div>
+        ) : provider ? (
+          <div className="provider-detail-card">
+            <span
+              className={`provider-state-icon ${provider.configured ? "configured" : "missing"}`}
+              aria-hidden="true"
+            >
+              {provider.configured ? <CheckCircle2 /> : <CircleDashed />}
+            </span>
+            <div className="provider-identity">
+              <strong>{provider.name || provider.id}</strong>
+              {provider.name !== provider.id && <span>{provider.id}</span>}
+              <small>
+                {(provider.authMethods ?? []).length
+                  ? (provider.authMethods ?? [])
+                      .map((method) => t(`providerAuth_${method}`))
+                      .join(" · ")
+                  : t("providerAuthUnknown")}
+                {provider.subscription ? ` · ${t("providerSubscription")}` : ""}
+              </small>
+            </div>
+            <span
+              className={`provider-state-label ${provider.configured ? "configured" : "missing"}`}
+            >
+              {t(
+                provider.configured
+                  ? "credentialConfigured"
+                  : "credentialMissing",
+              )}
+            </span>
+          </div>
+        ) : (
+          <div className="provider-settings-state">
+            <strong>{providerId}</strong>
+            <span>{t("providerStatusUnavailable")}</span>
+          </div>
+        )}
+        <aside className="provider-read-only">
+          <KeyRound aria-hidden="true" />
+          <div>
+            <strong>{t("providerReadOnly")}</strong>
+            <p>{t("providerReadOnlyDetail")}</p>
+          </div>
+        </aside>
+      </section>
+    );
+  }
 
   return (
     <section className="provider-status-section" hidden={hidden}>
