@@ -85,7 +85,7 @@ pi install npm:@tt-a1i/openpi
 <summary>能力如何按需开启，以及原生 Skill 的使用方式</summary>
 
 > [!TIP]
-> Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。英文 `subagent` 与 `workflow` 是保留授权词，单独输入也会加载对应能力。
+> Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。整条输入只有英文 `subagent` / `subagents` 或 `workflow` / `workflows` 时，视为主动选择对应能力（忽略大小写与首尾空白），名称会高亮，提交后加载工具组。加载不等于立即启动任务，模型仍根据任务上下文决定是否调用。普通句子中仅提及名称不会因此加载；也可以明确要求「用 subagent 帮我查」。
 > 例如 `subagent, workflow` → 同时加载两组；「在后台运行 dev server」→ 后台终端；「用/使用子代理检查」或句首「子代理了解下项目」→ Subagent；「用工作流编排」→ Workflow；「用 fd/rg 搜索」或「用 git diff 比较分支」→ 搜索与只读 Git 工具。
 > 关键是把意图说清楚（说「用子代理」「子代理检查项目」「后台运行」这类带执行动作的短语），不需要记住任何工具名。仅讨论能力的「子代理是什么」不会加载；否定或条件表达也继续 fail closed。
 > `/plan` 是一个运行时安全例外：进入或恢复 Plan Mode 时会为当前 Session 自动加载 `search` 组，让只读调研直接使用结构化 Git 工具。
