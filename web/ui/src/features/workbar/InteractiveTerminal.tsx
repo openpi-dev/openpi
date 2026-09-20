@@ -101,7 +101,12 @@ export function InteractiveTerminal({
     };
     const enqueueInput = (request: () => Promise<unknown>) => {
       if (inputStopped || disposed) return;
-      pendingInput = pendingInput.then(request).catch(failInput);
+      pendingInput = pendingInput
+        .then(() => {
+          if (!disposed && !inputStopped && connected && !exited)
+            return request();
+        })
+        .catch(failInput);
     };
     const writeInput = (data: string) => {
       const id = terminalId.current;

@@ -16,7 +16,10 @@ import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts"
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
 import { WebHost, type WebHostOptions } from "../../web/host/web-host.ts";
-import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
+import {
+  WEB_BROWSER_TEXT_MAX_LENGTH,
+  type WebInteractiveTerminalEvent,
+} from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import {
   type WebRuntimeController,
@@ -2092,6 +2095,48 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
     });
     assert.equal(browserAction.status, 200);
     assert.deepEqual(browserActions, [{ type: "reload" }]);
+
+    for (const action of [
+      { action: "text", text: "paste 中文\nnext line" },
+      { action: "key", event: "down", key: "Tab", modifiers: 8 },
+    ]) {
+      const response = await fetch(`${launched.origin}/api/browser/action`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ sessionId, ...action }),
+      });
+      assert.equal(response.status, 200);
+      const { action: type, ...detail } = action;
+      assert.deepEqual(browserActions.at(-1), { type, ...detail });
+    }
+    const acceptedCount = browserActions.length;
+    for (const action of [
+      { action: "text", text: "" },
+      { action: "text", text: "x".repeat(WEB_BROWSER_TEXT_MAX_LENGTH + 1) },
+      { action: "text", text: 42 },
+      { action: "key", event: "down", key: "Tab", modifiers: -1 },
+      { action: "key", event: "down", key: "Tab", modifiers: 16 },
+      { action: "key", event: "down", key: "Tab", modifiers: 1.5 },
+    ]) {
+      const response = await fetch(`${launched.origin}/api/browser/action`, {
+        method: "POST",
+        headers: jsonHeaders,
+        body: JSON.stringify({ sessionId, ...action }),
+      });
+      assert.equal(response.status, 400);
+    }
+    assert.equal(browserActions.length, acceptedCount);
+    const stalePaste = await fetch(`${launched.origin}/api/browser/action`, {
+      method: "POST",
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        sessionId: "another-session",
+        action: "text",
+        text: "private draft",
+      }),
+    });
+    assert.equal(stalePaste.status, 409);
+    assert.equal(browserActions.length, acceptedCount);
 
     const created = await fetch(`${launched.origin}/api/terminal`, {
       method: "POST",

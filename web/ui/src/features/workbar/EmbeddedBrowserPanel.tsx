@@ -15,7 +15,10 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebEmbeddedBrowserState } from "../../../../protocol/types.ts";
+import {
+  WEB_BROWSER_TEXT_MAX_LENGTH,
+  type WebEmbeddedBrowserState,
+} from "../../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 
 function normalizedBrowserUrl(value: string) {
@@ -345,6 +348,20 @@ export function EmbeddedBrowserPanel({
         role="application"
         aria-label={state?.title || t("browser")}
         aria-busy={state?.loading || undefined}
+        onPaste={(event) => {
+          if (!state) return;
+          const text = event.clipboardData.getData("text/plain");
+          if (!text) return;
+          event.preventDefault();
+          event.stopPropagation();
+          if (text.length > WEB_BROWSER_TEXT_MAX_LENGTH) {
+            setError(
+              t("browserPasteTooLarge", { count: WEB_BROWSER_TEXT_MAX_LENGTH }),
+            );
+            return;
+          }
+          void action({ type: "text", text });
+        }}
         onPointerDown={(event) => {
           const point = browserPoint(event);
           if (!point) return;
@@ -399,6 +416,7 @@ export function EmbeddedBrowserPanel({
             event: "down",
             key: event.key,
             code: event.code,
+            modifiers: event.shiftKey ? 8 : 0,
             ...(event.key.length === 1 ? { text: event.key } : {}),
           });
         }}
@@ -411,6 +429,7 @@ export function EmbeddedBrowserPanel({
             event: "up",
             key: event.key,
             code: event.code,
+            modifiers: event.shiftKey ? 8 : 0,
           });
         }}
       >

@@ -315,12 +315,15 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
             ? { deltaX: action.deltaX ?? 0, deltaY: action.deltaY ?? 0 }
             : {}),
         });
+      } else if (action.type === "text") {
+        await session.cdp.send("Input.insertText", { text: action.text });
       } else if (action.type === "key") {
         const keyCode = virtualKeyCode(action.key);
         await session.cdp.send("Input.dispatchKeyEvent", {
           type: action.event === "down" ? "keyDown" : "keyUp",
           key: action.key,
           code: action.code ?? "",
+          modifiers: action.modifiers ?? 0,
           ...(keyCode ? { windowsVirtualKeyCode: keyCode } : {}),
           ...(action.event === "down" && action.text
             ? { text: action.text }

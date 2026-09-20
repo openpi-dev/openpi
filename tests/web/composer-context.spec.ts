@@ -13,6 +13,7 @@ import { I18nextProvider } from "react-i18next";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
+import { FileReferenceDialog } from "../../web/ui/src/features/composer/FileReferenceDialog.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { compactSummary } from "../../web/ui/src/lib/format.ts";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
@@ -270,6 +271,79 @@ it("keeps a failed active-session reference editable", async () => {
   ).toBeTruthy();
 });
 
+it("allows cancelling a file reference while validation is pending", async () => {
+  const resolve = vi
+    .spyOn(WebClient.prototype, "resolveArtifact")
+    .mockImplementation(() => new Promise(() => {}));
+  setup();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  fireEvent.click(
+    screen.getByRole("menuitem", { name: /Reference workspace file/u }),
+  );
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("fileReferenceLabel") }),
+    { target: { value: "README.md" } },
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("insertReference") }),
+  );
+  const cancel = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("cancel"),
+  });
+  expect(cancel.disabled).toBe(false);
+  fireEvent.click(cancel);
+  expect(resolve.mock.calls[0]?.[3]?.aborted).toBe(true);
+  expect(screen.queryByRole("dialog")).toBeNull();
+});
+
+it.each(["session-change", "unmount"])(
+  "never inserts a pending file reference after %s",
+  async (boundary) => {
+    let finish!: (value: { handle: string }) => void;
+    const resolve = vi
+      .spyOn(WebClient.prototype, "resolveArtifact")
+      .mockImplementation(
+        () =>
+          new Promise((done) => {
+            finish = done;
+          }),
+      );
+    vi.spyOn(WebClient.prototype, "artifactMetadata").mockResolvedValue({
+      identity: "stable",
+    });
+    const release = vi
+      .spyOn(WebClient.prototype, "releaseArtifact")
+      .mockResolvedValue({});
+    const onInsert = vi.fn();
+    const node = (sessionId: string) =>
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(FileReferenceDialog, {
+          open: true,
+          sessionId,
+          onClose: vi.fn(),
+          onInsert,
+        }),
+      );
+    const view = render(node("a"));
+    fireEvent.change(
+      screen.getByRole("textbox", { name: i18n.t("fileReferenceLabel") }),
+      { target: { value: "README.md" } },
+    );
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("insertReference") }),
+    );
+    if (boundary === "unmount") view.unmount();
+    else view.rerender(node("b"));
+    const cancelled = resolve.mock.calls[0]?.[3]?.aborted;
+    await act(async () => finish({ handle: "old-handle" }));
+    expect(cancelled).toBe(true);
+    expect(onInsert).not.toHaveBeenCalled();
+    expect(release).toHaveBeenCalledWith("a", "old-handle");
+  },
+);
+
 it("can add a visible file path to the first message of a new session", async () => {
   const resolve = vi.spyOn(WebClient.prototype, "resolveArtifact");
   setup({ workspaceDraft: true });
@@ -277,6 +351,12 @@ it("can add a visible file path to the first message of a new session", async ()
     name: i18n.t("describeTask"),
   });
   fireEvent.click(screen.getByRole("button", { name: i18n.t("addContext") }));
+  // Astryx commits menu focus on the next animation frame.
+  await waitFor(() =>
+    expect(document.activeElement).toBe(
+      screen.getByRole("menuitem", { name: /^Add images/u }),
+    ),
+  );
   fireEvent.click(
     screen.getByRole("menuitem", { name: /Reference workspace file/u }),
   );
@@ -290,7 +370,7 @@ it("can add a visible file path to the first message of a new session", async ()
 
   await waitFor(() => expect(input.value).toBe("`README.md`"));
   expect(resolve).not.toHaveBeenCalled();
-  expect(document.activeElement).toBe(input);
+  await waitFor(() => expect(document.activeElement).toBe(input));
 });
 
 it("does not submit with Enter while a model choice is unconfirmed", () => {
@@ -301,6 +381,95 @@ it("does not submit with Enter while a model choice is unconfirmed", () => {
   fireEvent.keyDown(input, { key: "Enter" });
   expect(sendPrompt).not.toHaveBeenCalled();
   expect(input.value).toBe("keep me");
+});
+
+function pendingImage(name = "delayed.png") {
+  const file = new File(["pending"], name, { type: "image/png" });
+  const bytes = new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10]).buffer;
+  let finish!: (bytes: ArrayBuffer) => void;
+  const reading = new Promise<ArrayBuffer>((resolve) => {
+    finish = resolve;
+  });
+  Object.defineProperty(file, "arrayBuffer", { value: () => reading });
+  return { file, finish: () => finish(bytes) };
+}
+
+it("waits for an in-progress attachment before either send gesture", async () => {
+  const { container, sendPrompt } = setup();
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "Inspect the attached image" } });
+  const image = pendingImage();
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [image.file] },
+  });
+  const send = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("send"),
+  });
+  expect(send.disabled).toBe(true);
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(sendPrompt).not.toHaveBeenCalled();
+  await act(async () => image.finish());
+  expect(send.disabled).toBe(false);
+  fireEvent.click(send);
+  expect(sendPrompt).toHaveBeenCalledWith("Inspect the attached image", [
+    expect.objectContaining({ mimeType: "image/png", name: "delayed.png" }),
+  ]);
+});
+
+it("discards an attachment that finishes reading after switching sessions", async () => {
+  const { container, node, props, rerender } = setup();
+  const image = pendingImage();
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [image.file] },
+  });
+  rerender(
+    node({
+      ...props,
+      snapshot: snapshot("session-2", "/tmp/workspace/two.jsonl"),
+      selectedPath: "/tmp/workspace/two.jsonl",
+    }),
+  );
+  await act(async () => image.finish());
+  expect(screen.queryByText("delayed.png")).toBeNull();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(true);
+});
+
+it("does not let an old import settle a newer import after returning to the same session", async () => {
+  const { container, node, props, rerender } = setup();
+  const old = pendingImage("old.png");
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [old.file] },
+  });
+  rerender(
+    node({
+      ...props,
+      snapshot: snapshot("session-2", "/tmp/workspace/two.jsonl"),
+      selectedPath: "/tmp/workspace/two.jsonl",
+    }),
+  );
+  rerender(node(props));
+  const current = pendingImage("current.png");
+  fireEvent.change(container.querySelector('input[type="file"]')!, {
+    target: { files: [current.file] },
+  });
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "new draft" },
+  });
+  await act(async () => old.finish());
+  expect(screen.queryByText("old.png")).toBeNull();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(true);
+  await act(async () => current.finish());
+  expect(screen.getByText("current.png")).toBeTruthy();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(false);
 });
 
 it("does not transfer a settled submission into a different session", async () => {

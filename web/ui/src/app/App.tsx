@@ -694,41 +694,47 @@ export function App() {
               onClose={closeWorkbar}
             />
           )}
-          {!state.sidebarCollapsed && viewportWidth > AUXILIARY_BREAKPOINT && (
-            <PaneResizeHandle
-              side="left"
-              value={paneWidths.sidebar}
-              min={SIDEBAR_MIN_WIDTH}
-              max={sidebarMax}
-              defaultValue={SIDEBAR_DEFAULT_WIDTH}
-              collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
-              onCollapse={() => actions.toggleSidebar(false)}
-              onChange={(sidebar) =>
-                setPaneWidths((current) => ({ ...current, sidebar }))
-              }
-              onDraggingChange={setResizingPane}
-            />
-          )}
-          {auxiliaryVisible &&
-            !centerCollapsed &&
-            viewportWidth > AUXILIARY_BREAKPOINT && (
-              <PaneResizeHandle
-                side="right"
-                value={paneWidths.auxiliary}
-                min={AUXILIARY_MIN_WIDTH}
-                max={auxiliaryMax}
-                defaultValue={AUXILIARY_DEFAULT_WIDTH}
-                collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
-                onCollapse={closeAuxiliaryPanel}
-                onExpandPastMax={
-                  workbarVisible ? () => setCenterCollapsed(true) : undefined
-                }
-                onChange={(auxiliary) =>
-                  setPaneWidths((current) => ({ ...current, auxiliary }))
-                }
-                onDraggingChange={setResizingPane}
-              />
-            )}
+          <section
+            aria-label={t("resizePanes")}
+            style={{ display: "contents" }}
+          >
+            {!state.sidebarCollapsed &&
+              viewportWidth > AUXILIARY_BREAKPOINT && (
+                <PaneResizeHandle
+                  side="left"
+                  value={paneWidths.sidebar}
+                  min={SIDEBAR_MIN_WIDTH}
+                  max={sidebarMax}
+                  defaultValue={SIDEBAR_DEFAULT_WIDTH}
+                  collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
+                  onCollapse={() => actions.toggleSidebar(false)}
+                  onChange={(sidebar) =>
+                    setPaneWidths((current) => ({ ...current, sidebar }))
+                  }
+                  onDraggingChange={setResizingPane}
+                />
+              )}
+            {auxiliaryVisible &&
+              !centerCollapsed &&
+              viewportWidth > AUXILIARY_BREAKPOINT && (
+                <PaneResizeHandle
+                  side="right"
+                  value={paneWidths.auxiliary}
+                  min={AUXILIARY_MIN_WIDTH}
+                  max={auxiliaryMax}
+                  defaultValue={AUXILIARY_DEFAULT_WIDTH}
+                  collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
+                  onCollapse={closeAuxiliaryPanel}
+                  onExpandPastMax={
+                    workbarVisible ? () => setCenterCollapsed(true) : undefined
+                  }
+                  onChange={(auxiliary) =>
+                    setPaneWidths((current) => ({ ...current, auxiliary }))
+                  }
+                  onDraggingChange={setResizingPane}
+                />
+              )}
+          </section>
           <button
             className="sidebar-scrim"
             type="button"

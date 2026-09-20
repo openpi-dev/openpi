@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type {
   WebGitReviewResult,
   WebSessionProjection,
@@ -10,15 +17,23 @@ export function useGitReview(
   refreshKey: number | undefined,
 ) {
   const client = useMemo(() => new WebClient(), []);
-  const generation = useRef(0);
   const request = useRef<AbortController | null>(null);
   const [result, setResult] = useState<WebGitReviewResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const sessionId = session?.id;
+  const sessionPath = session?.path;
+
+  useLayoutEffect(() => {
+    // A new target must not display the previous target's files, even briefly.
+    void sessionPath;
+    setResult(null);
+    setError(null);
+    setLoading(Boolean(sessionId));
+  }, [sessionId, sessionPath]);
 
   const refresh = useCallback(async () => {
-    if (!session) return;
-    const current = ++generation.current;
+    if (!sessionId || !sessionPath) return;
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
@@ -26,50 +41,43 @@ export function useGitReview(
     setError(null);
     try {
       const next = await client.gitReview(
-        session.id,
-        session.path,
+        sessionId,
+        sessionPath,
         controller.signal,
       );
-      if (generation.current === current) setResult(next);
+      if (!controller.signal.aborted) setResult(next);
     } catch (nextError) {
-      if (generation.current === current)
+      if (!controller.signal.aborted)
         setError(
           nextError instanceof Error
             ? nextError.message
             : "Git review unavailable",
         );
     } finally {
-      if (generation.current === current) {
+      if (!controller.signal.aborted) {
         request.current = null;
         setLoading(false);
       }
     }
-  }, [client, session]);
+  }, [client, sessionId, sessionPath]);
 
   useEffect(() => {
     void refreshKey;
-    if (!session) {
-      request.current?.abort();
-      request.current = null;
-      generation.current++;
-      setResult(null);
-      setLoading(false);
-      setError(null);
-      return;
-    }
+    if (!sessionId) return;
     const timer = window.setTimeout(() => void refresh(), 200);
     return () => {
       window.clearTimeout(timer);
       request.current?.abort();
+      request.current = null;
     };
-  }, [refresh, refreshKey, session]);
+  }, [refresh, refreshKey, sessionId]);
 
   useEffect(() => {
-    if (!session) return;
+    if (!sessionId) return;
     const onFocus = () => void refresh();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);
-  }, [refresh, session]);
+  }, [refresh, sessionId]);
 
   return { result, loading, error, refresh };
 }

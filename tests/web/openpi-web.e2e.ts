@@ -411,6 +411,14 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   expect(initialSidebar).not.toBeNull();
   expect(initialConversation).not.toBeNull();
 
+  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
+  await sidebarHandle.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "296");
+  await expect(sidebar).toHaveCSS("width", "296px");
+  await page.keyboard.press("Enter");
+  await expect(sidebar).toHaveCSS("width", "280px");
+
   await dragPane(page, "left", 80);
   await expect
     .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
@@ -425,6 +433,12 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
 
   const workbar = await openWorkbarTool(page, "生成文件");
+  const workbarHandle = page.getByRole("separator", { name: "调整工具栏宽度" });
+  await workbarHandle.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(workbarHandle).toHaveAttribute("aria-valuenow", "536");
+  await page.keyboard.press("Enter");
+  await expect(workbarHandle).toHaveAttribute("aria-valuenow", "520");
   const centerBeforeRightDrag = await conversation.boundingBox();
   await dragPane(page, "right", -70);
   await expect
@@ -442,6 +456,93 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await dragPane(page, "right", 420);
   await expect(workbar).toBeHidden();
   await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
+});
+
+test("refreshing an open diff preserves the draft and composer focus", async ({
+  page,
+}) => {
+  let refreshed = false;
+  await page.route("**/api/git-review?**", (route) =>
+    route.fulfill({
+      json: {
+        ok: true,
+        snapshot: {
+          repositoryRoot: "/workspace",
+          currentBranch: "main",
+          baseBranch: null,
+          comparison: "session",
+          revision: refreshed ? "new" : "old",
+          additions: 1,
+          deletions: 0,
+          truncated: false,
+          files: [
+            {
+              path: "focus-note.txt",
+              status: "untracked",
+              additions: 1,
+              deletions: 0,
+              diff: `@@ -0,0 +1 @@\n+${refreshed ? "refreshed" : "original"}`,
+              diffTruncated: false,
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const workbar = await openWorkbarTool(page, "变更");
+  await workbar
+    .getByRole("button", { name: "focus-note.txt", exact: true })
+    .click();
+  const input = page.getByRole("textbox", { name: "描述任务" });
+  await input.fill("Keep editing this draft");
+  refreshed = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(workbar.getByRole("figure")).toContainText("refreshed");
+  await expect(input).toBeFocused();
+  await input.press("End");
+  await input.pressSequentially(" safely");
+  await expect(input).toHaveValue("Keep editing this draft safely");
+});
+
+test("file reference validation can be cancelled without changing the draft", async ({
+  page,
+}) => {
+  let release!: () => void;
+  let started!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requested = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  await page.route("**/api/artifacts/resolve", async (route) => {
+    started();
+    await pending;
+    await route
+      .fulfill({ status: 503, json: { error: "fixture unavailable" } })
+      .catch(() => {});
+  });
+  try {
+    await openWorkbench(page);
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("Keep this draft");
+    await page.getByRole("button", { name: "添加上下文", exact: true }).click();
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("textbox").fill("README.md");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await requested;
+    const cancel = dialog.getByRole("button", { name: "取消", exact: true });
+    await expect(cancel).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toBeHidden();
+    await expect(input).toHaveValue("Keep this draft");
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
 });
 
 test("workbar exposes five tools and completes a side conversation lifecycle", async ({

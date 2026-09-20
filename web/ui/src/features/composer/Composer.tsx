@@ -102,7 +102,7 @@ export function Composer(props: ComposerProps) {
   const [dragActive, setDragActive] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
-  const attachmentImport = useRef(false);
+  const attachmentImport = useRef<symbol | null>(null);
   const restoreFileReferenceFocus = useRef(false);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
@@ -135,6 +135,14 @@ export function Composer(props: ComposerProps) {
     (props.workspaceDraft ? null : sessionPath) ??
     (props.selectedWorkspace ? `new:${props.selectedWorkspace}` : "none");
   const draftScopeRef = useRef(draftScope);
+  useLayoutEffect(() => {
+    // Imports belong to the draft that selected the files, even across A → B → A.
+    void draftScope;
+    setAttachmentBusy(false);
+    return () => {
+      attachmentImport.current = null;
+    };
+  }, [draftScope]);
   const draftRevision = useRef(0);
   const transferDraftToCreatedSession = useRef(false);
   const pendingSubmission = useRef<{
@@ -203,7 +211,8 @@ export function Composer(props: ComposerProps) {
       );
       return;
     }
-    attachmentImport.current = true;
+    const importId = Symbol();
+    attachmentImport.current = importId;
     setAttachmentBusy(true);
     setAttachmentError(null);
     try {
@@ -211,6 +220,7 @@ export function Composer(props: ComposerProps) {
       let totalBytes = images.reduce((sum, image) => sum + image.size, 0);
       for (const file of selectedFiles) {
         const image = await stagePromptImage(file);
+        if (attachmentImport.current !== importId) return;
         totalBytes += image.size;
         if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
           throw new Error("image-total-size");
@@ -219,6 +229,7 @@ export function Composer(props: ComposerProps) {
       draftRevision.current += 1;
       setImages((current) => [...current, ...staged]);
     } catch (error) {
+      if (attachmentImport.current !== importId) return;
       const code = error instanceof Error ? error.message : "image-type";
       setAttachmentError(
         code === "image-size"
@@ -228,9 +239,11 @@ export function Composer(props: ComposerProps) {
             : t("imageAttachmentUnsupported"),
       );
     } finally {
-      attachmentImport.current = false;
-      setAttachmentBusy(false);
-      if (imagePicker.current) imagePicker.current.value = "";
+      if (attachmentImport.current === importId) {
+        attachmentImport.current = null;
+        setAttachmentBusy(false);
+        if (imagePicker.current) imagePicker.current.value = "";
+      }
     }
   };
 
@@ -336,7 +349,7 @@ export function Composer(props: ComposerProps) {
       images?: readonly WebPromptImage[],
     ) => Promise<boolean>,
   ) => {
-    if (pendingSubmission.current) return;
+    if (pendingSubmission.current || attachmentImport.current) return;
     if (!props.selectedWorkspace) {
       await props.actions.chooseWorkspace();
       return;
@@ -618,6 +631,7 @@ export function Composer(props: ComposerProps) {
               type="button"
               className="primary"
               disabled={
+                attachmentBusy ||
                 props.promptAdmissionRecovery.phase !== "ready" ||
                 (!prompt.trim() && images.length === 0)
               }
@@ -963,6 +977,7 @@ export function Composer(props: ComposerProps) {
                   type="submit"
                   aria-label={t("send")}
                   disabled={
+                    attachmentBusy ||
                     props.sessionSwitching ||
                     props.modelSelectionPending ||
                     props.thinkingPendingLevel !== null ||

@@ -42,6 +42,7 @@ import {
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebEmbeddedBrowserAction,
+  WEB_BROWSER_TEXT_MAX_LENGTH,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
   type WebSnapshot,
@@ -216,6 +217,12 @@ function parseBrowserAction(
   body: Record<string, unknown>,
 ): WebEmbeddedBrowserAction | undefined {
   const action = body.action;
+  if (
+    action === "text" &&
+    typeof body.text === "string" &&
+    body.text.length > 0 &&
+    body.text.length <= WEB_BROWSER_TEXT_MAX_LENGTH
+  ) return { type: "text", text: body.text };
   if (action === "navigate") {
     const url = browserAddress(body.url);
     return url ? ({ type: "navigate", url } satisfies WebEmbeddedBrowserAction) : undefined;
@@ -266,6 +273,7 @@ function parseBrowserAction(
     typeof body.key === "string" &&
     body.key.length > 0 &&
     body.key.length <= 32 &&
+    (body.modifiers === undefined || isBoundedInteger(body.modifiers, 0, 15)) &&
     (body.code === undefined ||
       (typeof body.code === "string" && body.code.length <= 64)) &&
     (body.text === undefined ||
@@ -275,6 +283,7 @@ function parseBrowserAction(
       type: "key",
       event: body.event,
       key: body.key,
+      ...(typeof body.modifiers === "number" ? { modifiers: body.modifiers } : {}),
       ...(typeof body.code === "string" ? { code: body.code } : {}),
       ...(typeof body.text === "string" ? { text: body.text } : {}),
     } satisfies WebEmbeddedBrowserAction;
@@ -806,7 +815,8 @@ export class WebHost {
     if (url.pathname === "/api/browser/action") {
       if (request.method !== "POST")
         return this.json(response, 405, { error: "browser actions require POST" });
-      const body = await this.readJson(request);
+      // JSON can escape each UTF-16 code unit into six ASCII bytes.
+      const body = await this.readJson(request, WEB_BROWSER_TEXT_MAX_LENGTH * 6 + MAX_COMMAND_BYTES);
       if (typeof body.sessionId !== "string")
         return this.json(response, 400, {
           code: "INVALID_BROWSER_ACTION",

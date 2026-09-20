@@ -33,13 +33,16 @@ export function FileReferenceDialog({
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (open) return;
-    request.current?.abort();
-    request.current = null;
+    void open;
+    void sessionId;
     setReference("");
     setBusy(false);
     setError(null);
-  }, [open]);
+    return () => {
+      request.current?.abort();
+      request.current = null;
+    };
+  }, [open, sessionId]);
 
   const close = () => {
     request.current?.abort();
@@ -49,7 +52,7 @@ export function FileReferenceDialog({
 
   const insert = async () => {
     const value = reference.trim();
-    if (!value || busy) return;
+    if (!value || request.current) return;
     setError(null);
     if (!sessionId) {
       onInsert(value);
@@ -70,6 +73,7 @@ export function FileReferenceDialog({
           controller.signal,
         )
       ).handle;
+      if (controller.signal.aborted) return;
       await client.artifactMetadata(sessionId, handle, controller.signal);
       if (controller.signal.aborted) return;
       onInsert(value);
@@ -89,7 +93,7 @@ export function FileReferenceDialog({
         );
       }
     } finally {
-      request.current = null;
+      if (request.current === controller) request.current = null;
       if (handle)
         void client.releaseArtifact(sessionId, handle).catch(() => undefined);
       if (!controller.signal.aborted) setBusy(false);
@@ -139,7 +143,7 @@ export function FileReferenceDialog({
           </p>
         )}
         <div className="dialog-actions">
-          <button type="button" disabled={busy} onClick={close}>
+          <button type="button" onClick={close}>
             {t("cancel")}
           </button>
           <button

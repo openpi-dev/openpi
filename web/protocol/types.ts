@@ -271,10 +271,13 @@ export interface WebEmbeddedBrowserState {
   canGoForward: boolean;
 }
 
+export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
+
 export type WebEmbeddedBrowserAction =
   | { type: "navigate"; url: string }
   | { type: "back" | "forward" | "reload" | "stop" }
   | { type: "resize"; width: number; height: number }
+  | { type: "text"; text: string }
   | {
       type: "mouse";
       event: "move" | "down" | "up" | "wheel";
@@ -290,6 +293,7 @@ export type WebEmbeddedBrowserAction =
       key: string;
       code?: string;
       text?: string;
+      modifiers?: number;
     };
 
 export type WebInteractiveTerminalEvent =

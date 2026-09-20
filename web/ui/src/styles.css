@@ -69,6 +69,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   transition: none;
 }
 .pane-resizer {
+  height: auto;
+  margin: 0;
+  border: 0;
   position: absolute;
   z-index: 35;
   top: 0;
@@ -88,6 +91,7 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
   transition: background-color 120ms ease;
 }
 .pane-resizer:hover::after,
+.pane-resizer:focus-visible::after,
 .app-shell.is-resizing .pane-resizer::after {
   background: var(--focus);
 }

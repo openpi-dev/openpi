@@ -8,6 +8,10 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_PR561_ASYNC_ITERATION_2026-09-20.md`](WEB_PR561_ASYNC_ITERATION_2026-09-20.md) — 第二轮 PR #561 测试：会话级变更投影、diff 焦点、终端队列及创建取消、文件引用清理；含合并后整合范围（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
+
+- [`WEB_PR561_USAGE_ITERATION_2026-09-20.md`](WEB_PR561_USAGE_ITERATION_2026-09-20.md) — PR #561 使用测试：图片导入的发送与会话边界、浏览器粘贴与 Shift、键盘分栏（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
+
 - [`WEB_MODULE_IMPLEMENTATION_2026-09-19.md`](WEB_MODULE_IMPLEMENTATION_2026-09-19.md) — Web 工作区十二模块的实现边界、现有/第三方组件复用判断、测试与非 Benchmark 的性能限制（[#559](https://github.com/openpi-dev/openpi/issues/559)、[#560](https://github.com/openpi-dev/openpi/issues/560)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
 
 - [`WEB_SUBAGENT_INSPECTION_2026-09-18.md`](WEB_SUBAGENT_INSPECTION_2026-09-18.md) — 子代理任务总览、真实状态和只读子对话；含 Pi Web / Maka 组件参考及验证边界（[#560](https://github.com/openpi-dev/openpi/issues/560)）。

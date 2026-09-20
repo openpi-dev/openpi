@@ -97,11 +97,12 @@ export function ReviewPanel({
         : t("gitReviewWorkingTree")
     : null;
 
+  const selectedFilePath = selectedFile?.path;
   useEffect(() => {
-    if (selectedFile) preview.current?.focus();
+    if (selectedFilePath) preview.current?.focus();
     else if (embedded) listBody.current?.focus();
     else listCloseButton.current?.focus();
-  }, [embedded, selectedFile]);
+  }, [embedded, selectedFilePath]);
 
   const openFile = (path: string) => {
     setSelectedPath(path);

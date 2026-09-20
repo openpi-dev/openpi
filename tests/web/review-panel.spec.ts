@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { createElement, type ReactElement } from "react";
+import { createElement, Fragment, type ReactElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
 import type { WebGitReviewSnapshot } from "../../web/protocol/types.ts";
@@ -155,6 +155,35 @@ it("opens a selected popover file directly in the dedicated preview", () => {
   expect(
     screen.getByRole("figure", { name: "Change diff" }).textContent,
   ).toContain("export const value");
+});
+
+it("does not steal composer focus when the selected diff refreshes", () => {
+  const node = (data: WebGitReviewSnapshot) =>
+    withI18n(
+      createElement(
+        Fragment,
+        null,
+        createElement("textarea", { "aria-label": "draft" }),
+        createElement(ReviewPanel, {
+          review: {
+            result: { ok: true, snapshot: data },
+            loading: false,
+            error: null,
+            refresh: vi.fn(async () => {}),
+          },
+          initialFilePath: "new-file.ts",
+          onClose: vi.fn(),
+          embedded: true,
+        }),
+      ),
+    );
+  const { rerender } = render(node(snapshot));
+  const input = screen.getByRole("textbox", { name: "draft" });
+  input.focus();
+  rerender(
+    node({ ...snapshot, files: snapshot.files.map((file) => ({ ...file })) }),
+  );
+  expect(document.activeElement).toBe(input);
 });
 
 it("distinguishes Git read failures from an empty repository state", () => {
