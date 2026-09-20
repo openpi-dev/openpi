@@ -160,6 +160,7 @@ function SideConversationPanel({
           : { kind: "subagents", action: "spawn-btw", prompt: text },
         controller.signal,
       );
+      if (controller.signal.aborted) return;
       if (response.sessionId !== sessionId)
         throw new Error(t("inspectionChanged"));
       setSelectedId(response.detail.id);
@@ -256,7 +257,11 @@ function SideConversationPanel({
           {error}
         </p>
       )}
-      <form className="side-conversation-composer" onSubmit={submit}>
+      <form
+        className="side-conversation-composer"
+        onSubmit={submit}
+        aria-busy={busy}
+      >
         <textarea
           value={draft}
           disabled={busy}
@@ -290,7 +295,9 @@ function SideConversationPanel({
           )}
           <button type="submit" disabled={busy || !draft.trim()}>
             <Send aria-hidden="true" />
-            {t(selectedId ? "send" : "start")}
+            {t(
+              busy ? "sideConversationPending" : selectedId ? "send" : "start",
+            )}
           </button>
         </div>
       </form>

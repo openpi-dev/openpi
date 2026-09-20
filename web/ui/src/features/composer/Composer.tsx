@@ -54,6 +54,7 @@ import {
 interface ComposerProps {
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
+  createdSession?: WebStoreState["createdSession"];
   modelSelectionPending?: boolean;
   modelSearch?: WebStoreState["modelSearch"];
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
@@ -96,6 +97,7 @@ export function Composer(props: ComposerProps) {
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
+  const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
   const [images, setImages] = useState<StagedPromptImage[]>([]);
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
@@ -302,7 +304,11 @@ export function Composer(props: ComposerProps) {
     const submission = pendingSubmission.current;
     const createdSession =
       !props.workspaceDraft &&
-      (transferDraftToCreatedSession.current ||
+      ((props.createdSession?.sessionId === selected?.id &&
+        props.createdSession?.workspacePath === props.selectedWorkspace &&
+        previousScope === `new:${props.selectedWorkspace}`) ||
+        (transferDraftToCreatedSession.current &&
+          previousScope === `new:${props.selectedWorkspace}`) ||
         (submission?.canTransferToCreatedSession &&
           submission.scope === previousScope)) &&
       Boolean(sessionPath) &&
@@ -341,6 +347,8 @@ export function Composer(props: ComposerProps) {
     props.selectedWorkspace,
     props.workspaceDraft,
     sessionPath,
+    selected?.id,
+    props.createdSession,
   ]);
 
   const sendDraft = async (
@@ -494,6 +502,7 @@ export function Composer(props: ComposerProps) {
   const pending = props.thinkingPendingLevel ?? null;
   const shown = pending ?? confirmed;
   const supported = thinking?.supported ?? false;
+  const thinkingNeedsSession = !active && (draftSession || !selected);
   const weak = thinking ? !thinking.available.includes(confirmed ?? "") : false;
   const thinkingItems = (thinking?.available ?? []).map((lvl) => ({
     id: lvl,
@@ -503,20 +512,19 @@ export function Composer(props: ComposerProps) {
   }));
   const thinkingDisabledReason = !thinking
     ? null
-    : !supported
+    : !supported && !thinkingNeedsSession
       ? "thinkingUnsupportedHint"
-      : props.workspaceDraft
-        ? "thinkingDraftHint"
-        : !active
-          ? "thinkingInactiveHint"
-          : running
-            ? "thinkingLockedRunning"
-            : props.modelSelectionPending
-              ? "thinkingModelPendingHint"
-              : null;
-  const thinkingAria = !supported
-    ? t("thinkingUnsupported")
-    : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}${pending !== null ? `. ${t("thinkingPendingHint")}` : ""}`;
+      : !active && !thinkingNeedsSession
+        ? "thinkingInactiveHint"
+        : running
+          ? "thinkingLockedRunning"
+          : props.modelSelectionPending
+            ? "thinkingModelPendingHint"
+            : null;
+  const thinkingAria =
+    !supported && !thinkingNeedsSession
+      ? t("thinkingUnsupported")
+      : `${t("thinkingLevel")}: ${shown ?? t("unknownState")}${pending !== null ? `. ${t("thinkingPendingHint")}` : ""}`;
   const thinkingMenuItems = thinking
     ? [
         ...(weak
@@ -937,6 +945,24 @@ export function Composer(props: ComposerProps) {
               >
                 <DropdownMenu
                   className="thinking-menu"
+                  isMenuOpen={
+                    thinkingMenuOpen &&
+                    thinkingDisabledReason === null &&
+                    !props.sessionSwitching
+                  }
+                  onOpenChange={(open: boolean) => {
+                    if (!open) {
+                      setThinkingMenuOpen(false);
+                      return;
+                    }
+                    if (!thinkingNeedsSession) {
+                      setThinkingMenuOpen(true);
+                      return;
+                    }
+                    void props.actions.prepareSession().then((target) => {
+                      if (target) setThinkingMenuOpen(true);
+                    });
+                  }}
                   button={{
                     label: thinkingAria,
                     icon: <Brain />,
@@ -945,8 +971,9 @@ export function Composer(props: ComposerProps) {
                     variant: "ghost",
                     className: "thinking-picker",
                     isDisabled:
+                      props.sessionSwitching ||
                       thinkingDisabledReason !== null ||
-                      thinkingItems.length === 0,
+                      (thinkingItems.length === 0 && !thinkingNeedsSession),
                   }}
                   items={thinkingMenuItems}
                   menuWidth={220}

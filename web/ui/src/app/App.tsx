@@ -205,20 +205,24 @@ export function App() {
   useEffect(() => {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
-  const openProviderSettings = () => {
-    const snapshot = state.snapshot;
-    const session = snapshot?.selectedSession;
-    if (
-      state.workspaceDraft ||
-      !session ||
-      state.sessionSwitching ||
-      session.id !== snapshot.currentSessionId
-    )
-      return;
+  const openProviderSettings = async () => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    const target = await actions.prepareSession();
+    if (!target) return;
+    const current = webStore.getState();
+    const snapshot = current.snapshot;
+    const session = snapshot?.selectedSession;
+    if (
+      current.workspaceDraft ||
+      !session ||
+      current.sessionSwitching ||
+      session.id !== snapshot.currentSessionId ||
+      session.id !== target.sessionId
+    )
+      return;
     actions.closeMobileSidebar();
     setInspection(null);
     setSubagentTarget(null);
@@ -450,7 +454,9 @@ export function App() {
             searchOpen={state.searchOpen}
             mobileOpen={mobileSidebarOpen}
             settingsDisabled={Boolean(
-              state.workspaceDraft || state.sessionSwitching || !selected,
+              state.sessionSwitching ||
+                state.modelSelectionPending ||
+                !state.snapshot,
             )}
             returnFocusRef={sidebarTrigger}
             onOpenSettings={openProviderSettings}
@@ -595,6 +601,7 @@ export function App() {
               <Composer
                 workspaceDraft={state.workspaceDraft}
                 draftModel={state.draftModel}
+                createdSession={state.createdSession}
                 modelSelectionPending={state.modelSelectionPending}
                 modelSearch={state.modelSearch}
                 thinkingPendingLevel={state.thinkingPendingLevel}

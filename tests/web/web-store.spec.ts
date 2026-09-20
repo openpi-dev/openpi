@@ -1996,6 +1996,28 @@ describe("draft model selection", () => {
     return { client, store };
   }
 
+  it("prepares settings before the first prompt and reuses the confirmed Session", async () => {
+    const { client, store } = draftHarness();
+    store.getState().actions.setWorkspace("/tmp/ws");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const target = await store.getState().actions.prepareSession();
+    expect(target?.sessionId).toBe("session-1");
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toHaveLength(0);
+    expect(await store.getState().actions.prepareSession()).toMatchObject({
+      sessionId: target?.sessionId,
+      workspacePath: "/tmp/ws",
+    });
+    expect(client.creations).toHaveLength(1);
+  });
+
+  it("does not prepare or prompt when initial workspace selection is cancelled", async () => {
+    const { client, store } = draftHarness();
+    expect(await store.getState().actions.prepareSession()).toBeNull();
+    expect(client.creations).toHaveLength(0);
+    expect(client.prompts).toHaveLength(0);
+  });
+
   it("selects before a workspace without creating or mutating a Session and retains it after chooser cancellation", async () => {
     const { client, store } = draftHarness();
     await store.getState().actions.selectModel("test/model");

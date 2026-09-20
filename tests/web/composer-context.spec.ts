@@ -17,7 +17,10 @@ import { FileReferenceDialog } from "../../web/ui/src/features/composer/FileRefe
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { compactSummary } from "../../web/ui/src/lib/format.ts";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
-import { createWebStore } from "../../web/ui/src/store/web-store.ts";
+import {
+  createWebStore,
+  type WebStoreState,
+} from "../../web/ui/src/store/web-store.ts";
 
 beforeAll(() => {
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
@@ -103,6 +106,8 @@ function setup(overrides: Record<string, unknown> = {}) {
   const sendPrompt = vi.fn(async (_content: string) => true);
   const discoverCommands = vi.fn(async () => {});
   const props = {
+    workspaceDraft: false,
+    createdSession: null as WebStoreState["createdSession"],
     snapshot: snapshot(),
     selectedPath: "/tmp/workspace/one.jsonl",
     selectedWorkspace: "/tmp/workspace",
@@ -381,6 +386,34 @@ it("does not submit with Enter while a model choice is unconfirmed", () => {
   fireEvent.keyDown(input, { key: "Enter" });
   expect(sendPrompt).not.toHaveBeenCalled();
   expect(input.value).toBe("keep me");
+});
+
+it("retains the first draft when opening a control prepares an empty Session", () => {
+  const empty = snapshot();
+  delete empty.selectedSession;
+  delete empty.currentSessionId;
+  const { props, node, rerender, sendPrompt } = setup({
+    workspaceDraft: true,
+    snapshot: empty,
+  });
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox");
+  fireEvent.change(input, { target: { value: "do not lose my first draft" } });
+  rerender(node({ ...props, sessionSwitching: true }));
+  rerender(
+    node({
+      ...props,
+      workspaceDraft: false,
+      snapshot: snapshot(),
+      createdSession: {
+        epoch: 1,
+        sessionId: "session-1",
+        sessionPath: "/tmp/workspace/one.jsonl",
+        workspacePath: "/tmp/workspace",
+      },
+    }),
+  );
+  expect(input.value).toBe("do not lose my first draft");
+  expect(sendPrompt).not.toHaveBeenCalled();
 });
 
 function pendingImage(name = "delayed.png") {

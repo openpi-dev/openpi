@@ -4,6 +4,8 @@ import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, type Page, test } from "@playwright/test";
+import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
+import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -13,6 +15,178 @@ const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
+
+for (const firstControl of ["settings", "thinking"] as const) {
+  test(`first-use ${firstControl} works before sending a message and preserves the draft`, async ({
+    page,
+  }) => {
+    const sessionId = "first-use-session";
+    const path = "/first-use/session.jsonl";
+    let created = false;
+    let level = "high";
+    let revision = 10_000;
+    let creations = 0;
+    const prompts: unknown[] = [];
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.cursor = revision;
+      snapshot.workspaces = [
+        { path: "/first-use", name: "First use", current: created },
+      ];
+      snapshot.sessions = [];
+      snapshot.models = [
+        {
+          provider: "test",
+          id: "reasoner",
+          name: "Reasoner",
+          label: "Reasoner",
+          current: true,
+        },
+      ];
+      snapshot.thinking = {
+        supported: true,
+        available: ["low", "high"],
+        level,
+        revision,
+      };
+      snapshot.runtime = { status: "idle", capabilities: {} };
+      if (created) {
+        snapshot.currentSessionId = sessionId;
+        snapshot.sessions = [
+          {
+            id: sessionId,
+            path,
+            cwd: "/first-use",
+            source: "web-session",
+            origin: "web",
+            controller: "web",
+            readOnly: false,
+            name: "New session",
+            created: "2026-09-20T00:00:00Z",
+            modified: "2026-09-20T00:00:00Z",
+            messageCount: 0,
+            firstMessage: "",
+          },
+        ];
+        snapshot.selectedSession = {
+          id: sessionId,
+          path,
+          cwd: "/first-use",
+          entries: [],
+          bytes: 0,
+          truncation: {
+            truncated: false,
+            maxBytes: 1024,
+            entriesOmitted: 0,
+            messagesTruncated: 0,
+            messagePartsOmitted: 0,
+          },
+        };
+      } else {
+        delete snapshot.currentSessionId;
+        delete snapshot.selectedSession;
+      }
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.route("**/api/sessions", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.workspacePath).toBe("/first-use");
+      created = true;
+      creations++;
+      revision++;
+      await route.fulfill({
+        status: 201,
+        json: { commandId: body.commandId, sessionId, sessionPath: path },
+      });
+    });
+    await page.route("**/api/thinking", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.sessionId).toBe(sessionId);
+      level = body.level;
+      revision++;
+      await route.fulfill({
+        json: {
+          sessionId,
+          supported: true,
+          available: ["low", "high"],
+          level,
+          revision,
+        },
+      });
+    });
+    await page.route("**/api/settings/catalog?**", (route) =>
+      route.fulfill({
+        json: {
+          sessionId,
+          setup: projectWebSetupConfig(DEFAULT_SETUP_CONFIG),
+          resources: {
+            skills: [],
+            plugins: [],
+            totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+            diagnostics: { extensionErrors: 0, skillErrors: 0 },
+            truncation: {
+              truncated: false,
+              skillsOmitted: 0,
+              pluginsOmitted: 0,
+              resourcesOmitted: 0,
+            },
+          },
+        },
+      }),
+    );
+    await page.route("**/api/prompts", (route) => {
+      prompts.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 500,
+        json: { error: "No prompt expected" },
+      });
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    const settings = page.getByRole("button", { name: "设置", exact: true });
+    const thinking = page.locator(".thinking-picker");
+    await expect(settings).toBeEnabled();
+    await expect(thinking).toBeEnabled();
+    await page.locator(".workspace-picker").click();
+    await page
+      .getByRole("menuitem", { name: "First use", exact: true })
+      .click();
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("Keep my first message");
+    const openSettings = async () => {
+      await settings.click();
+      const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(
+        dialog.getByRole("heading", { name: "常规", exact: true }),
+      ).toBeVisible();
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+    };
+    const chooseThinking = async () => {
+      await thinking.click();
+      await page.getByRole("menuitem", { name: "low", exact: true }).click();
+      await expect(thinking).toHaveAttribute("aria-label", "思考等级: low");
+    };
+    if (firstControl === "settings") {
+      await openSettings();
+      await chooseThinking();
+    } else {
+      await chooseThinking();
+      await openSettings();
+    }
+    expect(creations).toBe(1);
+    expect(prompts).toEqual([]);
+    await expect(input).toHaveValue("Keep my first message");
+    await page.unrouteAll({ behavior: "wait" });
+  });
+}
 
 for (const width of [1280, 390]) {
   test(`message editing and composer resizing preserve readable layout at ${width}px`, async ({
@@ -548,6 +722,17 @@ test("file reference validation can be cancelled without changing the draft", as
 test("workbar exposes five tools and completes a side conversation lifecycle", async ({
   page,
 }) => {
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.runtime.status = "running";
+    snapshot.runtime.activeTurn = {
+      sessionId: snapshot.currentSessionId,
+      commandId: "busy-parent",
+      epoch: 1,
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
   type SideAction = {
     sessionId: string;
     kind: "subagents";
@@ -637,6 +822,9 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await question.fill("Inspect this in isolation");
   await question.press("Enter");
   await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "停止当前轮次", exact: true }),
+  ).toBeVisible();
   await expect
     .poll(() => actions.map((action) => action.action))
     .toEqual(["spawn-btw"]);
@@ -1659,6 +1847,24 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.currentSessionId = sessionId;
+    snapshot.workspaces = [
+      { path: "/inspection", name: "Inspection", current: true },
+    ];
+    snapshot.sessions = [
+      {
+        id: sessionId,
+        path: "/inspection/session.jsonl",
+        cwd: "/inspection",
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        created: "2026-09-20T00:00:00Z",
+        modified: "2026-09-20T00:00:00Z",
+        messageCount: 0,
+        firstMessage: "",
+      },
+    ];
     snapshot.selectedSession = {
       id: sessionId,
       path: "/inspection/session.jsonl",

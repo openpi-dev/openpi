@@ -117,6 +117,7 @@ export interface WebStoreState {
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
   draftModel: WebModelSummary | null;
+  createdSession: SessionTarget | null;
   modelSelectionPending: boolean;
   modelSearch: ModelSearchState;
   snapshot: WebSnapshot | null;
@@ -164,6 +165,7 @@ export interface WebStoreActions {
   renameWorkspace: (path: string, name: string) => Promise<void>;
   removeWorkspace: (path: string) => Promise<void>;
   createSession: (workspacePath: string) => Promise<SessionTarget | null>;
+  prepareSession: () => Promise<SessionTarget | null>;
   selectSession: (path: string) => Promise<void>;
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
@@ -1016,6 +1018,7 @@ export function createWebStore(
           ...resetLivePatch(),
           ...resetModelSearch(),
           selectedWorkspace: path,
+          createdSession: null,
           workspaceDraft: true,
           sessionSwitching: false,
           modelSelectionPending: false,
@@ -1053,6 +1056,28 @@ export function createWebStore(
           showError(error);
         }
       },
+      async prepareSession() {
+        if (get().sessionSwitching || get().modelSelectionPending) return null;
+        if (!get().selectedWorkspace) await actions.chooseWorkspace();
+        const state = get();
+        const workspace = state.selectedWorkspace;
+        if (!workspace || state.sessionSwitching || state.modelSelectionPending)
+          return null;
+        const session = state.snapshot?.selectedSession;
+        if (
+          !state.workspaceDraft &&
+          session?.id === state.snapshot?.currentSessionId &&
+          session?.cwd === workspace
+        ) {
+          return {
+            epoch: sessionEpoch,
+            sessionId: session.id,
+            sessionPath: session.path,
+            workspacePath: workspace,
+          };
+        }
+        return actions.createSession(workspace);
+      },
       async createSession(workspacePath) {
         if (!workspacePath || get().modelSelectionPending) return null;
         const current = get();
@@ -1082,6 +1107,7 @@ export function createWebStore(
             : current.promptAdmissionResolution,
           selectedPath: null,
           selectedWorkspace: workspacePath,
+          createdSession: null,
           workspaceDraft: true,
           sessionSwitching: true,
         });
@@ -1142,7 +1168,11 @@ export function createWebStore(
               );
               return;
             }
-            set({ workspaceDraft: false, notice: null });
+            set({
+              workspaceDraft: false,
+              createdSession: target,
+              notice: null,
+            });
             const draft = get().draftModel;
             if (draft && !(await applyModel(draft, epoch, target.sessionId))) {
               return;
@@ -1182,6 +1212,7 @@ export function createWebStore(
           ...resetModelSearch(),
           workspaceDraft: false,
           draftModel: null,
+          createdSession: null,
           modelSelectionPending: false,
         });
         const epoch = ++sessionEpoch;
@@ -1811,6 +1842,7 @@ export function createWebStore(
       selectedWorkspace: null,
       workspaceDraft: false,
       draftModel: null,
+      createdSession: null,
       modelSelectionPending: false,
       modelSearch: {
         query: "",

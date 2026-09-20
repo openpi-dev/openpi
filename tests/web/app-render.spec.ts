@@ -1507,19 +1507,27 @@ describe("thinking level picker", () => {
     ).toBe(i18n.t("thinkingUnsupportedHint"));
   });
 
-  it("disables the picker for a workspace draft", () => {
+  it("prepares a native session when opening thinking from a workspace draft", async () => {
     const props = thinkingProps(idleThinkingSnapshot());
-    const { container } = renderWithI18n(
-      createElement(Composer, { ...props, workspaceDraft: true }),
+    const prepareSession = vi.fn(async () => null);
+    renderWithI18n(
+      createElement(Composer, {
+        ...props,
+        workspaceDraft: true,
+        actions: { ...props.actions, prepareSession },
+      }),
     );
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: thinkingPickerName("medium"),
       }).disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
-    ).toBe(i18n.t("thinkingDraftHint"));
+    ).toBe(false);
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: thinkingPickerName("medium") }),
+      ),
+    );
+    expect(prepareSession).toHaveBeenCalledOnce();
   });
 
   it("disables the picker for a non-current session", () => {
