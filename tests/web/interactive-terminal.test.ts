@@ -185,3 +185,48 @@ test("deduplicates concurrent creates and reserves capacity before loading the P
   assert.equal(ptys.length, 1);
   manager.dispose();
 });
+
+test("cancels pending creates when the retained Session changes or the manager disposes", async () => {
+  const scenarios = ["retain", "dispose"] as const;
+  for (const scenario of scenarios) {
+    const ptys: FakePty[] = [];
+    let release!: (spawn: typeof import("node-pty").spawn) => void;
+    const delayedSpawn = new Promise<typeof import("node-pty").spawn>(
+      (resolve) => {
+        release = resolve;
+      },
+    );
+    const manager = new InteractiveTerminalManager({ maxTerminals: 1 });
+    const internals = manager as unknown as {
+      loadSpawn: () => Promise<typeof import("node-pty").spawn>;
+    };
+    internals.loadSpawn = () => delayedSpawn;
+
+    const pending = manager.create({
+      sessionId: "session-a",
+      cwd: ".",
+      cols: 80,
+      rows: 24,
+    });
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    if (scenario === "retain") manager.retain("session-b", ".");
+    else manager.dispose();
+    release(() => {
+      const pty = new FakePty();
+      ptys.push(pty);
+      return pty;
+    });
+
+    await assert.rejects(pending, /creation was cancelled/u);
+    assert.equal(ptys.length, 0, scenario);
+    const replacement = await manager.create({
+      sessionId: "session-b",
+      cwd: ".",
+      cols: 80,
+      rows: 24,
+    });
+    assert.equal(replacement.sessionId, "session-b");
+    assert.equal(ptys.length, 1, scenario);
+    manager.dispose();
+  }
+});

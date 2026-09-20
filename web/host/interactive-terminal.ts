@@ -29,6 +29,7 @@ interface TerminalRecord {
 
 interface PendingTerminalCreate {
   readonly cwd: string;
+  readonly generation: number;
   readonly completion: Promise<WebInteractiveTerminal & { reused: boolean }>;
 }
 
@@ -87,7 +88,9 @@ export class InteractiveTerminalManager
   private readonly maxTerminals: number;
   private readonly injectedSpawn?: PtySpawn;
   private readonly pendingCreates = new Map<string, PendingTerminalCreate>();
-  private readonly reservedSessions = new Set<string>();
+  private readonly reservations = new Set<symbol>();
+  private retainedScope?: string;
+  private lifecycleGeneration = 0;
   private spawnPromise?: Promise<PtySpawn>;
 
   constructor(options: {
@@ -107,13 +110,17 @@ export class InteractiveTerminalManager
     rows: number;
   }) {
     const canonicalCwd = resolve(cwd);
+    const scope = this.scope(sessionId, canonicalCwd);
+    this.retainedScope ??= scope;
+    const generation = this.lifecycleGeneration;
     const existingId = this.sessionTerminals.get(sessionId);
     const existing = existingId ? this.records.get(existingId) : undefined;
     if (existing && existing.cwd === canonicalCwd) {
       return { ...this.snapshot(existing), reused: true };
     }
 
-    const pending = this.pendingCreates.get(sessionId);
+    const candidate = this.pendingCreates.get(sessionId);
+    const pending = candidate?.generation === generation ? candidate : undefined;
     if (pending?.cwd === canonicalCwd) {
       return pending.completion.then((terminal) => ({
         ...terminal,
@@ -123,8 +130,16 @@ export class InteractiveTerminalManager
     const completion = (pending
       ? pending.completion.catch(() => undefined)
       : Promise.resolve()
-    ).then(() => this.createTerminal({ sessionId, cwd: canonicalCwd, cols, rows }));
-    const create = { cwd: canonicalCwd, completion };
+    ).then(() =>
+      this.createTerminal({
+        sessionId,
+        cwd: canonicalCwd,
+        cols,
+        rows,
+        generation,
+      }),
+    );
+    const create = { cwd: canonicalCwd, generation, completion };
     this.pendingCreates.set(sessionId, create);
     const clearPending = () => {
       if (this.pendingCreates.get(sessionId) === create)
@@ -134,12 +149,14 @@ export class InteractiveTerminalManager
     return completion;
   }
 
-  private async createTerminal({ sessionId, cwd, cols, rows }: {
+  private async createTerminal({ sessionId, cwd, cols, rows, generation }: {
     sessionId: string;
     cwd: string;
     cols: number;
     rows: number;
+    generation: number;
   }) {
+    this.assertCurrentGeneration(generation);
     const existingId = this.sessionTerminals.get(sessionId);
     const existing = existingId ? this.records.get(existingId) : undefined;
     if (existing && existing.cwd === cwd) {
@@ -147,13 +164,15 @@ export class InteractiveTerminalManager
     }
     if (existing) this.close(sessionId, existing.id, true);
     this.makeSpace();
-    if (this.records.size + this.reservedSessions.size >= this.maxTerminals) {
+    if (this.records.size + this.reservations.size >= this.maxTerminals) {
       throw new Error("Interactive terminal capacity is full");
     }
-    this.reservedSessions.add(sessionId);
+    const reservation = Symbol(sessionId);
+    this.reservations.add(reservation);
 
     try {
       const spawn = await this.loadSpawn();
+      this.assertCurrentGeneration(generation);
       const shell =
         process.platform === "win32"
           ? (process.env.ComSpec ?? "cmd.exe")
@@ -196,7 +215,7 @@ export class InteractiveTerminalManager
       });
       return { ...this.snapshot(record), reused: false };
     } finally {
-      this.reservedSessions.delete(sessionId);
+      this.reservations.delete(reservation);
     }
   }
 
@@ -268,6 +287,12 @@ export class InteractiveTerminalManager
 
   retain(sessionId: string, cwd: string) {
     const canonicalCwd = resolve(cwd);
+    const scope = this.scope(sessionId, canonicalCwd);
+    if (this.retainedScope !== scope) {
+      this.retainedScope = scope;
+      this.lifecycleGeneration++;
+      this.reservations.clear();
+    }
     for (const record of [...this.records.values()]) {
       if (record.sessionId !== sessionId || record.cwd !== canonicalCwd)
         this.remove(record, true);
@@ -275,7 +300,19 @@ export class InteractiveTerminalManager
   }
 
   dispose() {
+    this.retainedScope = undefined;
+    this.lifecycleGeneration++;
+    this.reservations.clear();
     for (const record of [...this.records.values()]) this.remove(record, true);
+  }
+
+  private scope(sessionId: string, cwd: string) {
+    return `${sessionId}\0${cwd}`;
+  }
+
+  private assertCurrentGeneration(generation: number) {
+    if (generation !== this.lifecycleGeneration)
+      throw new Error("Interactive terminal creation was cancelled");
   }
 
   private async loadSpawn() {
