@@ -98,6 +98,11 @@ function completionAlerts(details: WorkflowDetails) {
   if (details.logsDropped) {
     alerts.push(`${details.logsDropped} earlier log line(s) dropped`);
   }
+  if (details.transcriptsOmitted) {
+    alerts.push(
+      `${details.transcriptsOmitted.agents} agent transcript(s) omitted from transcripts.json (byte budget)`,
+    );
+  }
 
   for (const entry of details.logs ?? []) {
     if (!isDroppedWorkLog(entry)) continue;

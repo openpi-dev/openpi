@@ -305,6 +305,22 @@ function normalizeDelivery(value: unknown): WorkflowDetails["delivery"] {
   };
 }
 
+function normalizeTranscriptsOmitted(
+  value: unknown,
+): WorkflowDetails["transcriptsOmitted"] {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const positiveInt = (candidate: unknown) =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate > 0
+      ? candidate
+      : 0;
+  const agents = positiveInt(record.agents);
+  if (agents <= 0) return undefined;
+  return { agents, entries: positiveInt(record.entries) };
+}
+
 function normalizeTranscript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
   const transcript: TranscriptEntry[] = [];
@@ -518,6 +534,10 @@ export function normalizePersistedWorkflowDetails(
     }
   }
 
+  const transcriptsOmitted = normalizeTranscriptsOmitted(
+    record.transcriptsOmitted,
+  );
+
   return {
     runId,
     sessionId:
@@ -550,6 +570,7 @@ export function normalizePersistedWorkflowDetails(
     ...(typeof record.logsDropped === "number" && record.logsDropped > 0
       ? { logsDropped: record.logsDropped }
       : {}),
+    ...(transcriptsOmitted ? { transcriptsOmitted } : {}),
     ...(agents.some((agent) => agent.callId)
       ? {
           graph: projectWorkflowGraph(workflowGraphRecords(agents)),
@@ -819,6 +840,13 @@ export function buildWorkflowReport(details: WorkflowDetails): string {
   if (totals) lines.push(`- Usage: ${totals}`);
   if (details.description) lines.push("", details.description);
   if (details.error) lines.push("", `**Error:** ${details.error}`);
+  if (details.transcriptsOmitted) {
+    const { agents, entries } = details.transcriptsOmitted;
+    lines.push(
+      "",
+      `_${agents} of ${details.agents.length} agent transcript(s) (${entries} entries) omitted from transcripts.json to stay within its byte budget; execution facts above are complete._`,
+    );
+  }
 
   for (const group of phaseGroups(details, true)) {
     lines.push("", `## ${group.title}`, "");
