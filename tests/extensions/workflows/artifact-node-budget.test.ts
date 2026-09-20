@@ -7,6 +7,7 @@ import {
   boundedTranscriptsArtifact,
   persistWorkflowJson,
 } from "../../../extensions/workflows/artifacts.ts";
+import { buildWorkflowCompletionDisplay } from "../../../extensions/workflows/completion-projection.ts";
 import {
   buildWorkflowReport,
   normalizePersistedWorkflowDetails,
@@ -17,6 +18,7 @@ import {
   type TranscriptEntry,
   type WorkflowDetails,
 } from "../../../extensions/workflows/model.ts";
+import { projectWorkflowDetails } from "../../../extensions/workflows/retention.ts";
 
 // The upstream ceiling for a single agent's transcript. A run of ordinary
 // review agents each reaching this is what surfaced the silent node-budget
@@ -251,4 +253,41 @@ test("result.json overflow is reported honestly, not silently lossy", () => {
     assert.equal(parsed.truncated, true);
     assert.match(String(parsed.reason ?? ""), /exceeded/);
   });
+});
+
+test("transcriptsOmitted survives the settled in-memory projection", () => {
+  const source = details(
+    Array.from({ length: 3 }, (_, index) => agent(index, [])),
+  );
+  source.transcriptsOmitted = { agents: 4, entries: 800 };
+
+  const projection = projectWorkflowDetails(source, 1_000_000);
+  assert.ok(projection, "a generous budget must retain a projection");
+  assert.deepEqual(projection?.transcriptsOmitted, {
+    agents: 4,
+    entries: 800,
+  });
+});
+
+test("transcriptsOmitted surfaces through the completion display projection", () => {
+  const source = details(
+    Array.from({ length: 2 }, (_, index) => agent(index, [])),
+  );
+  source.transcriptsOmitted = { agents: 5, entries: 1010 };
+
+  const display = buildWorkflowCompletionDisplay([
+    {
+      deliveryId: "wf_deadbeef:1",
+      details: source,
+      runDir: "/tmp/wf_deadbeef",
+    },
+  ]);
+  const entry = display.entries[0];
+  assert.ok(entry, "the display must contain the run");
+  // Collapsed evidence (alerts) and expanded operator report both carry it.
+  assert.ok(
+    entry.alerts.some((alert) => /agent transcript\(s\) omitted/.test(alert)),
+    "an alert must report the omitted transcripts",
+  );
+  assert.match(entry.expanded, /omitted from transcripts\.json/);
 });

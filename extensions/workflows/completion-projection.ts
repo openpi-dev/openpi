@@ -176,6 +176,11 @@ function buildOperatorReport(
       : undefined,
   ].filter((entry): entry is string => entry !== undefined);
   if (artifacts.length > 0) lines.push("", "Artifacts:", ...artifacts);
+  if (details.transcriptsOmitted) {
+    lines.push(
+      `  (${details.transcriptsOmitted.agents} agent transcript(s), ${details.transcriptsOmitted.entries} entr${details.transcriptsOmitted.entries === 1 ? "y" : "ies"} omitted from transcripts.json to stay within its byte budget)`,
+    );
+  }
 
   const replayed = details.agents.filter((agent) => agent.replayed).length;
   if (details.resumedFrom) {
