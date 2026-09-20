@@ -5,6 +5,7 @@
 - 源码边界：PR #561 head `089d3d48d5df80adcaf3a7a9d8b2bbd6a2d5de18`，修复分支 `codex/pr-561-usage-fixes`。
 - 关联讨论：[Issue #559](https://github.com/openpi-dev/openpi/issues/559)、[Issue #560](https://github.com/openpi-dev/openpi/issues/560)；原始 [PR #561](https://github.com/openpi-dev/openpi/pull/561)。合并后的持续优化由 [Issue #597](https://github.com/openpi-dev/openpi/issues/597) 跟踪。
 - Supersedes：none；补充此前体验记录，不改写历史结论。
+- 后续提交：[PR #598](https://github.com/openpi-dev/openpi/pull/598) 将本轮与第二轮修复合并到一个 PR。
 
 ## 运行来源
 

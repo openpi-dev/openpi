@@ -5,6 +5,7 @@
 - 源码边界：第一轮修复 `2ea045f290b0df4217a730a61948e8160714620b`，分支 `codex/pr-561-usage-fixes`，在同一独立 worktree 上继续。
 - 关联：[Issue #559](https://github.com/openpi-dev/openpi/issues/559)、[Issue #560](https://github.com/openpi-dev/openpi/issues/560)、原始 [PR #561](https://github.com/openpi-dev/openpi/pull/561)。合并后的持续优化由 [Issue #597](https://github.com/openpi-dev/openpi/issues/597) 跟踪。
 - Supersedes：none；补充[第一轮记录](WEB_PR561_USAGE_ITERATION_2026-09-20.md)，保留其历史验证范围。
+- 后续提交：[PR #598](https://github.com/openpi-dev/openpi/pull/598) 将前两轮修复合并提交。
 
 ## 运行与证据边界
 
@@ -44,4 +45,4 @@
 
 2026-09-20，PR #561 的最终 head `c2f5b10` 已补入 PTY 创建取消修复，并通过 `45f12a4` 合并到 main。为 Issue #597 准备后续 PR 时，从该 main 建立 `codex/web-ux-597`，保留其 `InteractiveTerminalManager` 实现，只增加本轮的六条取消边界回归。本记录表格保留原始发现与当时验证的历史事实；后续 PR 的新增修复范围因此为其余九类问题，不能将上游已合并的实现再次算作新增贡献。
 
-整合后的源码由最终 PR 的 Validation 段记录检查结果。此前真实模型、真实 PTY 和界面观察仍只证明上文明确标出的原验证版本，不能替代新基线验证。
+整合后在 `45f12a4` main 加本轮修复上重新验证：`bun run check` 通过；`bun run test` 为 Node 1703 passed / 1 platform skip / 0 failed，Vitest 309 / 309；Chromium 端到端 52 / 52。日志另存于原本地证据目录下的 `publish-597/`。此前真实模型、真实 PTY 和界面观察仍只证明上文明确标出的原验证版本，不能替代新基线的人工验证。
