@@ -2227,6 +2227,14 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
     for (const action of [
       { action: "text", text: "paste 中文\nnext line" },
       { action: "key", event: "down", key: "Tab", modifiers: 8 },
+      {
+        action: "mouse",
+        event: "move",
+        x: 20,
+        y: 20,
+        button: "left",
+        buttons: 1,
+      },
     ]) {
       const response = await fetch(`${launched.origin}/api/browser/action`, {
         method: "POST",
@@ -2245,6 +2253,9 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
       { action: "key", event: "down", key: "Tab", modifiers: -1 },
       { action: "key", event: "down", key: "Tab", modifiers: 16 },
       { action: "key", event: "down", key: "Tab", modifiers: 1.5 },
+      { action: "mouse", event: "move", x: 20, y: 20, buttons: 8 },
+      { action: "mouse", event: "move", x: 20, y: 20, buttons: -1 },
+      { action: "mouse", event: "move", x: 20, y: 20, buttons: 1.5 },
     ]) {
       const response = await fetch(`${launched.origin}/api/browser/action`, {
         method: "POST",

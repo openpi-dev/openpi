@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelConfiguration,
@@ -32,25 +32,50 @@ export function ModelConfigurationEditor({
     useState<WebModelConfigurations | null>(null);
   const [model, setModel] = useState(emptyModel);
   const [selected, setSelected] = useState("");
-  const [revision, refresh] = useState(0);
+  const [load, reload] = useState<{
+    selection?: string;
+    saved?: boolean;
+    clearMissing?: boolean;
+  }>({});
+  const saveOperation = useRef<AbortController | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(false);
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly reloads the native configuration after a save or retry.
+  useEffect(() => () => saveOperation.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
     setConfiguration(null);
     setError(false);
+    setSaved(false);
     void client.modelConfigurations(sessionId, controller.signal).then(
       (value) => {
-        if (!controller.signal.aborted) setConfiguration(value);
+        if (controller.signal.aborted) return;
+        setConfiguration(value);
+        if (load.selection !== undefined) {
+          const latest = value.models.find(
+            (item) => `${item.provider}/${item.id}` === load.selection,
+          );
+          if (latest) {
+            setModel(latest);
+            setSelected(load.selection);
+          } else if (load.clearMissing) {
+            setModel(emptyModel);
+            setSelected("");
+          }
+          setSaved(Boolean(latest && load.saved));
+        }
       },
       () => {
         if (!controller.signal.aborted) setError(true);
       },
     );
     return () => controller.abort();
-  }, [client, sessionId, revision]);
+  }, [client, sessionId, load]);
+
+  const editModel = (patch: Partial<WebModelConfiguration>) => {
+    setModel((current) => ({ ...current, ...patch }));
+    setSaved(false);
+  };
 
   return (
     <section className="settings-section-block">
@@ -64,17 +89,32 @@ export function ModelConfigurationEditor({
           setSaving(true);
           setError(false);
           setSaved(false);
+          const controller = new AbortController();
+          saveOperation.current = controller;
           void client
-            .saveModelConfiguration(sessionId, configuration.revision, model)
+            .saveModelConfiguration(
+              sessionId,
+              configuration.revision,
+              model,
+              controller.signal,
+            )
             .then(
               async () => {
-                setSaved(true);
-                refresh((value) => value + 1);
-                await onSaved();
+                if (controller.signal.aborted) return;
+                reload({
+                  selection: `${model.provider}/${model.id}`,
+                  saved: true,
+                  clearMissing: true,
+                });
+                await onSaved().catch(() => false);
               },
-              () => setError(true),
+              () => {
+                if (!controller.signal.aborted) setError(true);
+              },
             )
-            .finally(() => setSaving(false));
+            .finally(() => {
+              if (!controller.signal.aborted) setSaving(false);
+            });
         }}
       >
         <label className="settings-form-field">
@@ -118,11 +158,11 @@ export function ModelConfigurationEditor({
               disabled={
                 saving ||
                 busy ||
+                !configuration ||
                 (!!selected && (field === "provider" || field === "id"))
               }
               onChange={(event) => {
-                setModel({ ...model, [field]: event.target.value });
-                setSaved(false);
+                editModel({ [field]: event.target.value });
               }}
             />
           </label>
@@ -131,7 +171,7 @@ export function ModelConfigurationEditor({
           {t("modelConfig_api")}
           <select
             value={model.api}
-            disabled={saving || busy}
+            disabled={saving || busy || !configuration}
             onChange={(event) => {
               const api = event.target.value;
               if (
@@ -139,7 +179,7 @@ export function ModelConfigurationEditor({
                 api === "openai-completions" ||
                 api === "anthropic-messages"
               )
-                setModel({ ...model, api });
+                editModel({ api });
             }}
           >
             <option value="openai-responses">OpenAI Responses</option>
@@ -157,9 +197,9 @@ export function ModelConfigurationEditor({
               max={100000000}
               step={1}
               value={model[field]}
-              disabled={saving || busy}
+              disabled={saving || busy || !configuration}
               onChange={(event) =>
-                setModel({ ...model, [field]: Number(event.target.value) })
+                editModel({ [field]: Number(event.target.value) })
               }
             />
           </label>
@@ -168,10 +208,8 @@ export function ModelConfigurationEditor({
           <input
             type="checkbox"
             checked={model.reasoning}
-            disabled={saving || busy}
-            onChange={(event) =>
-              setModel({ ...model, reasoning: event.target.checked })
-            }
+            disabled={saving || busy || !configuration}
+            onChange={(event) => editModel({ reasoning: event.target.checked })}
           />{" "}
           {t("modelConfig_reasoning")}
         </label>
@@ -185,9 +223,14 @@ export function ModelConfigurationEditor({
             <button
               type="button"
               disabled={saving}
-              onClick={() => refresh((value) => value + 1)}
+              onClick={() =>
+                reload({
+                  selection: selected || `${model.provider}/${model.id}`,
+                  clearMissing: Boolean(selected),
+                })
+              }
             >
-              {t("refreshStatus")}
+              {t("reloadModelConfiguration")}
             </button>
           </div>
         )}

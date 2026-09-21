@@ -225,6 +225,64 @@ it("drops an unsent pointer update when the browser tool closes", async () => {
 });
 
 it.each(["left", "right"] as const)(
+  "captures %s-button drags and releases them when capture is lost",
+  async (buttonName) => {
+    const { viewport, action } = await browserPanel();
+    class TestPointerEvent extends MouseEvent {
+      pointerId: number;
+      constructor(type: string, init: PointerEventInit = {}) {
+        super(type, init);
+        this.pointerId = init.pointerId ?? 7;
+      }
+    }
+    vi.stubGlobal("PointerEvent", TestPointerEvent);
+    const capture = vi.fn();
+    Object.defineProperty(viewport, "setPointerCapture", { value: capture });
+    vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+      left: 0,
+      top: 0,
+      width: 800,
+      height: 600,
+    } as DOMRect);
+    const button = buttonName === "left" ? 0 : 2;
+    const buttons = buttonName === "left" ? 1 : 2;
+    fireEvent.pointerDown(viewport, {
+      pointerId: 7,
+      button,
+      buttons,
+      clientX: 20,
+      clientY: 20,
+    });
+    expect(action).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({
+        type: "mouse",
+        event: "down",
+        button: buttonName,
+        buttons,
+      }),
+    );
+    expect(capture).toHaveBeenCalledWith(7);
+    fireEvent.pointerMove(viewport, {
+      pointerId: 7,
+      buttons,
+      clientX: 30,
+      clientY: 20,
+    });
+    expect(action).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ event: "move", button: buttonName, buttons }),
+    );
+    fireEvent.lostPointerCapture(viewport, { pointerId: 7 });
+    await act(async () => {});
+    expect(action).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ event: "up", button: buttonName, buttons: 0 }),
+    );
+  },
+);
+
+it.each(["left", "right"] as const)(
   "exposes bounded keyboard resizing for the %s pane",
   (side) => {
     const change = vi.fn();

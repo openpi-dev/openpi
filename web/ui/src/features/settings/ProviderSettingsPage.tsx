@@ -80,6 +80,7 @@ export function ProviderSettingsPage({
 }) {
   const { t } = useTranslation();
   const closeButton = useRef<HTMLButtonElement>(null);
+  const tabs = useRef<HTMLDivElement>(null);
   const [section, setSection] = useState<SettingsSection>("general");
   const [modelsVisited, setModelsVisited] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
@@ -210,6 +211,12 @@ export function ProviderSettingsPage({
     }
   };
 
+  const selectSection = (next: SettingsSection) => {
+    setSection(next);
+    if (next === "models") setModelsVisited(true);
+    setSetupError(null);
+  };
+
   return (
     <Dialog
       isOpen
@@ -226,22 +233,47 @@ export function ProviderSettingsPage({
           <strong className="provider-settings-title">{t("settings")}</strong>
           <div
             className="provider-settings-navigation"
+            ref={tabs}
             aria-label={t("settingsNavigation")}
             role="tablist"
           >
-            {settingsSections.map(({ id, label, Icon }) => (
+            {settingsSections.map(({ id, label, Icon }, index) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
+                id={`settings-tab-${id}`}
+                tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
                 aria-controls={`settings-panel-${id}`}
                 className="provider-settings-tab"
                 title={t(label)}
-                onClick={() => {
-                  setSection(id);
-                  if (id === "models") setModelsVisited(true);
-                  setSetupError(null);
+                onClick={() => selectSection(id)}
+                onKeyDown={(event) => {
+                  if (
+                    event.altKey ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.nativeEvent.isComposing
+                  )
+                    return;
+                  const next =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? settingsSections.length - 1
+                        : event.key === "ArrowRight"
+                          ? (index + 1) % settingsSections.length
+                          : event.key === "ArrowLeft"
+                            ? (index + settingsSections.length - 1) %
+                              settingsSections.length
+                            : undefined;
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  selectSection(settingsSections[next]!.id);
+                  tabs.current
+                    ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                    [next]?.focus();
                 }}
               >
                 <Icon aria-hidden="true" />
@@ -263,6 +295,7 @@ export function ProviderSettingsPage({
         <div className="provider-settings-main">
           <div
             id="settings-panel-general"
+            aria-labelledby="settings-tab-general"
             role="tabpanel"
             hidden={section !== "general"}
           >
@@ -284,6 +317,7 @@ export function ProviderSettingsPage({
 
           <section
             id="settings-panel-models"
+            aria-labelledby="settings-tab-models"
             className="settings-models"
             role="tabpanel"
             hidden={section !== "models"}
@@ -400,6 +434,7 @@ export function ProviderSettingsPage({
 
           <div
             id="settings-panel-skills"
+            aria-labelledby="settings-tab-skills"
             role="tabpanel"
             hidden={section !== "skills"}
           >
@@ -414,6 +449,7 @@ export function ProviderSettingsPage({
 
           <div
             id="settings-panel-subagents"
+            aria-labelledby="settings-tab-subagents"
             role="tabpanel"
             hidden={section !== "subagents"}
           >
@@ -431,6 +467,7 @@ export function ProviderSettingsPage({
 
           <div
             id="settings-panel-plugins"
+            aria-labelledby="settings-tab-plugins"
             role="tabpanel"
             hidden={section !== "plugins"}
           >

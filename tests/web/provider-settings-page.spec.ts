@@ -200,6 +200,25 @@ function settingsFetcher() {
   });
 }
 
+it("supports arrow, Home and End navigation with one tabbable settings tab", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings();
+  const general = screen.getByRole("tab", { name: i18n.t("generalSettings") });
+  general.focus();
+  fireEvent.keyDown(general, { key: "ArrowRight" });
+  const modelsTab = screen.getByRole("tab", { name: i18n.t("modelSettings") });
+  expect(modelsTab.getAttribute("aria-selected")).toBe("true");
+  expect(document.activeElement).toBe(modelsTab);
+  fireEvent.keyDown(modelsTab, { key: "End" });
+  const plugins = screen.getByRole("tab", { name: i18n.t("pluginsSettings") });
+  expect(document.activeElement).toBe(plugins);
+  fireEvent.keyDown(plugins, { key: "Home" });
+  expect(document.activeElement).toBe(general);
+  expect(
+    screen.getAllByRole("tab").filter((tab) => tab.tabIndex === 0),
+  ).toHaveLength(1);
+});
+
 it("preserves an unfinished model configuration when changing settings tabs", async () => {
   vi.stubGlobal("fetch", settingsFetcher());
   renderSettings();

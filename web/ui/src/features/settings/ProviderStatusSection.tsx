@@ -32,8 +32,10 @@ export function ProviderStatusSection({
     setSelectedProvider(providerId);
     setApiKey("");
     setSaved(false);
+    setSaving(false);
+    setError(null);
+    return () => saveOperation.current?.abort();
   }, [providerId]);
-  useEffect(() => () => saveOperation.current?.abort(), []);
 
   useEffect(() => {
     if (!active) return;
@@ -201,7 +203,7 @@ export function ProviderStatusSection({
                   if (operation.signal.aborted) return;
                   setSaved(true);
                   refresh((value) => value + 1);
-                  await onSaved?.();
+                  await onSaved?.().catch(() => false);
                 },
                 () => {
                   if (!operation.signal.aborted)

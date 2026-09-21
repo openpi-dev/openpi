@@ -292,6 +292,7 @@ export type WebEmbeddedBrowserAction =
       x: number;
       y: number;
       button?: "left" | "middle" | "right";
+      buttons?: number;
       deltaX?: number;
       deltaY?: number;
     }

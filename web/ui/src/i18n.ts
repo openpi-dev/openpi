@@ -368,6 +368,7 @@ const resources = {
       modelConfig_maxTokens: "Maximum output (tokens)",
       modelConfig_reasoning: "Supports reasoning",
       saveModelConfiguration: "Save model",
+      reloadModelConfiguration: "Load latest configuration",
       modelConfigurationSaved:
         "Saved to Pi models.json. Configure the provider API key to make this model available.",
       modelConfigurationFailed:
@@ -992,6 +993,7 @@ const resources = {
       modelConfig_maxTokens: "最大输出（tokens）",
       modelConfig_reasoning: "支持推理",
       saveModelConfiguration: "保存模型",
+      reloadModelConfiguration: "载入最新配置",
       modelConfigurationSaved:
         "已保存到 Pi models.json。配置服务商密钥后即可选择此模型。",
       modelConfigurationFailed:

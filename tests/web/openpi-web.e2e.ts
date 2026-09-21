@@ -872,7 +872,12 @@ test("model configuration drafts survive switching settings tabs", async ({
   await openWorkbench(page);
   await page.getByRole("button", { name: "设置", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "设置" });
-  await dialog.getByRole("tab", { name: "模型", exact: true }).click();
+  const generalTab = dialog.getByRole("tab", { name: "常规", exact: true });
+  await generalTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    dialog.getByRole("tab", { name: "模型", exact: true }),
+  ).toBeFocused();
   await dialog
     .getByRole("textbox", { name: "API 地址", exact: true })
     .fill("http://localhost:12345/v1");
@@ -880,7 +885,12 @@ test("model configuration drafts survive switching settings tabs", async ({
     .getByRole("textbox", { name: "显示名称", exact: true })
     .fill("Unfinished model");
   await dialog.getByRole("tab", { name: "技能", exact: true }).click();
-  await dialog.getByRole("tab", { name: "插件", exact: true }).click();
+  await page.keyboard.press("End");
+  await expect(
+    dialog.getByRole("tab", { name: "插件", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(generalTab).toBeFocused();
   await dialog.getByRole("tab", { name: "模型", exact: true }).click();
   await expect(
     dialog.getByRole("textbox", { name: "API 地址", exact: true }),
@@ -894,8 +904,22 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
   page,
 }, testInfo) => {
   const inputs: string[] = [];
+  const mouseEvents: Array<{
+    phase: string | null;
+    button: string | null;
+    buttons: string | null;
+  }> = [];
   const fixture = createServer((request, response) => {
     const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname === "/mouse") {
+      mouseEvents.push({
+        phase: url.searchParams.get("phase"),
+        button: url.searchParams.get("button"),
+        buttons: url.searchParams.get("buttons"),
+      });
+      response.end("ok");
+      return;
+    }
     if (url.pathname === "/event") {
       inputs.push(url.searchParams.get("text") ?? "");
       response.end("ok");
@@ -903,7 +927,7 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
     }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.end(
-      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div>`,
+      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div><script>for(const phase of ['mousedown','mouseup'])document.addEventListener(phase,e=>fetch('/mouse?phase='+phase+'&button='+e.button+'&buttons='+e.buttons));document.addEventListener('contextmenu',e=>e.preventDefault());</script>`,
     );
   });
   await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
@@ -962,6 +986,18 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
       await expect.poll(() => inputs.at(-1)).toBe("original text");
       await expect.poll(painted).toBe(false);
     }
+    const bounds = await viewport.boundingBox();
+    if (!bounds) throw new Error("Browser viewport missing");
+    await page.mouse.move(bounds.x + 40, bounds.y + 30);
+    await page.mouse.down();
+    await expect.poll(() => mouseEvents.at(-1)?.phase).toBe("mousedown");
+    await page.mouse.move(bounds.x - 40, bounds.y + 30, { steps: 3 });
+    await page.mouse.up();
+    await expect.poll(() => mouseEvents.at(-1)?.phase).toBe("mouseup");
+    await viewport.click({ button: "right", position: { x: 40, y: 100 } });
+    await expect
+      .poll(() => mouseEvents.at(-1))
+      .toEqual({ phase: "mouseup", button: "2", buttons: "0" });
     const evidencePath = testInfo.outputPath("input-to-painted-frame.json");
     await writeFile(
       evidencePath,

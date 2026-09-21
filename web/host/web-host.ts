@@ -255,6 +255,7 @@ function parseBrowserAction(
     finiteNumber(body.y, 0, 4_096) &&
     (body.button === undefined ||
       ["left", "middle", "right"].includes(String(body.button))) &&
+    (body.buttons === undefined || isBoundedInteger(body.buttons, 0, 7)) &&
     (body.deltaX === undefined || finiteNumber(body.deltaX, -10_000, 10_000)) &&
     (body.deltaY === undefined || finiteNumber(body.deltaY, -10_000, 10_000))
   ) {
@@ -265,7 +266,8 @@ function parseBrowserAction(
       y: body.y,
       ...(body.button
         ? { button: body.button as "left" | "middle" | "right" }
-        : {}),
+          : {}),
+      ...(typeof body.buttons === "number" ? { buttons: body.buttons } : {}),
       ...(typeof body.deltaX === "number" ? { deltaX: body.deltaX } : {}),
       ...(typeof body.deltaY === "number" ? { deltaY: body.deltaY } : {}),
     } satisfies WebEmbeddedBrowserAction;

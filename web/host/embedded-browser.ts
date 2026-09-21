@@ -342,6 +342,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
           x: action.x,
           y: action.y,
           button: action.button ?? "none",
+          ...(action.buttons !== undefined ? { buttons: action.buttons } : {}),
           ...(action.event === "down" ? { clickCount: 1 } : {}),
           ...(action.event === "up" ? { clickCount: 1 } : {}),
           ...(action.event === "wheel"

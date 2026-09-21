@@ -96,7 +96,17 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const stateRef = useRef<WebEmbeddedBrowserState | null>(null);
   const addressEditing = useRef(false);
   const addressDirty = useRef(false);
-  const pointerMovePoint = useRef<{ x: number; y: number } | null>(null);
+  const pointerMovePoint = useRef<{
+    x: number;
+    y: number;
+    button?: "left" | "middle" | "right";
+    buttons: number;
+  } | null>(null);
+  const pressedPointer = useRef<{
+    id: number;
+    button: "left" | "middle" | "right";
+    point: { x: number; y: number };
+  } | null>(null);
   const pointerMoveSending = useRef(false);
   const pointerMoveEnabled = useRef(active);
   const storageKey = `openpi.browser.${sessionId}`;
@@ -378,14 +388,14 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         x: Math.max(
           0,
           Math.min(
-            current.width,
+            current.width - 1,
             ((event.clientX - bounds.left) / bounds.width) * current.width,
           ),
         ),
         y: Math.max(
           0,
           Math.min(
-            current.height,
+            current.height - 1,
             ((event.clientY - bounds.top) / bounds.height) * current.height,
           ),
         ),
@@ -412,6 +422,31 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         void flushPointerMove();
     }
   }, [action]);
+
+  const releasePointer = useCallback(
+    (point?: { x: number; y: number }) => {
+      const pressed = pressedPointer.current;
+      if (!pressed) return;
+      pressedPointer.current = null;
+      // A queued drag position must never reassert pressed buttons after release.
+      pointerMovePoint.current = null;
+      if (viewport.current?.hasPointerCapture?.(pressed.id))
+        viewport.current.releasePointerCapture(pressed.id);
+      void action({
+        type: "mouse",
+        event: "up",
+        button: pressed.button,
+        buttons: 0,
+        ...(point ?? pressed.point),
+      });
+    },
+    [action],
+  );
+
+  useEffect(() => {
+    if (!active) releasePointer();
+    return () => releasePointer();
+  }, [active, releasePointer]);
 
   useEffect(() => {
     const element = viewport.current;
@@ -563,29 +598,52 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         }}
         onPointerDown={(event) => {
           const point = browserPoint(event);
-          if (!point) return;
+          const button =
+            event.button === 0
+              ? "left"
+              : event.button === 1
+                ? "middle"
+                : event.button === 2
+                  ? "right"
+                  : undefined;
+          if (!point || !button || pressedPointer.current) return;
+          event.preventDefault();
           event.currentTarget.focus();
+          pressedPointer.current = { id: event.pointerId, button, point };
+          event.currentTarget.setPointerCapture?.(event.pointerId);
           void action({
             type: "mouse",
             event: "down",
-            button: "left",
+            button,
+            buttons: event.buttons & 7,
             ...point,
           });
         }}
         onPointerUp={(event) => {
-          const point = browserPoint(event);
-          if (!point) return;
-          void action({
-            type: "mouse",
-            event: "up",
-            button: "left",
-            ...point,
-          });
+          if (pressedPointer.current?.id === event.pointerId)
+            releasePointer(browserPoint(event) ?? undefined);
+        }}
+        onPointerCancel={(event) => {
+          if (pressedPointer.current?.id === event.pointerId) releasePointer();
+        }}
+        onLostPointerCapture={(event) => {
+          if (pressedPointer.current?.id === event.pointerId) releasePointer();
+        }}
+        onBlur={() => releasePointer()}
+        onContextMenu={(event) => {
+          if (state) event.preventDefault();
         }}
         onPointerMove={(event) => {
           const point = browserPoint(event);
           if (!point) return;
-          pointerMovePoint.current = point;
+          const pressed = pressedPointer.current;
+          if (pressed && pressed.id !== event.pointerId) return;
+          if (pressed) pressed.point = point;
+          pointerMovePoint.current = {
+            ...point,
+            buttons: pressed ? event.buttons & 7 : 0,
+            ...(pressed ? { button: pressed.button } : {}),
+          };
           void flushPointerMove();
         }}
         onKeyDown={(event) => {
