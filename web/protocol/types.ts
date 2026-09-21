@@ -269,6 +269,14 @@ export interface WebEmbeddedBrowserState {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  deviceScaleFactor?: number;
+}
+
+export interface WebBrowserFrame {
+  data: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
 }
 
 export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
@@ -276,7 +284,7 @@ export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
 export type WebEmbeddedBrowserAction =
   | { type: "navigate"; url: string }
   | { type: "back" | "forward" | "reload" | "stop" }
-  | { type: "resize"; width: number; height: number }
+  | { type: "resize"; width: number; height: number; deviceScaleFactor?: number }
   | { type: "text"; text: string }
   | {
       type: "mouse";
@@ -375,15 +383,18 @@ export interface WebGitReviewFile {
   status: WebGitReviewFileStatus;
   diff: string;
   diffTruncated: boolean;
+  diffLoaded?: boolean;
   additions: number;
   deletions: number;
 }
+
+export type WebGitReviewSource = "unstaged" | "staged" | "branch" | "session";
 
 export interface WebGitReviewSnapshot {
   repositoryRoot: string;
   currentBranch: string | null;
   baseBranch: string | null;
-  comparison: "branch" | "session";
+  comparison: WebGitReviewSource;
   revision: string;
   files: WebGitReviewFile[];
   additions: number;
@@ -398,6 +409,7 @@ export type WebGitReviewResult =
       reason:
         | "not_git_repository"
         | "unborn_repository"
+        | "baseline_unavailable"
         | "git_failed";
     };
 

@@ -14,7 +14,11 @@ import {
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { WebGitReviewResult } from "../../../../protocol/types.ts";
+import type {
+  WebGitReviewFile,
+  WebGitReviewResult,
+  WebGitReviewSource,
+} from "../../../../protocol/types.ts";
 import { DiffCodePreview } from "./DiffCodePreview.tsx";
 
 const FILE_PAGE_SIZE = 20;
@@ -32,6 +36,8 @@ function failureLabel(
   if (result.reason === "not_git_repository")
     return t("gitReviewNotRepository");
   if (result.reason === "unborn_repository") return t("gitReviewUnborn");
+  if (result.reason === "baseline_unavailable")
+    return t("gitReviewBaselineUnavailable");
   return t("gitReviewFailed");
 }
 
@@ -40,6 +46,12 @@ export interface GitReviewViewState {
   loading: boolean;
   error: string | null;
   refresh: () => Promise<void>;
+  source?: WebGitReviewSource;
+  setSource?: (source: WebGitReviewSource) => void;
+  readFile?: (
+    path: string,
+    signal: AbortSignal,
+  ) => Promise<WebGitReviewFile | undefined>;
 }
 
 export function ReviewPanel({
@@ -48,12 +60,14 @@ export function ReviewPanel({
   onClose,
   onOpenTools,
   embedded = false,
+  onOpenFiles,
 }: {
   review: GitReviewViewState;
   initialFilePath?: string;
   onClose: () => void;
   onOpenTools?: () => void;
   embedded?: boolean;
+  onOpenFiles?: () => void;
 }) {
   const { t } = useTranslation();
   const listCloseButton = useRef<HTMLButtonElement>(null);
@@ -61,6 +75,12 @@ export function ReviewPanel({
   const preview = useRef<HTMLElement>(null);
   const [visibleFiles, setVisibleFiles] = useState(FILE_PAGE_SIZE);
   const [selectedPath, setSelectedPath] = useState(initialFilePath ?? null);
+  const [loadedFile, setLoadedFile] = useState<{
+    revision: string;
+    file: WebGitReviewFile;
+  } | null>(null);
+  const [fileError, setFileError] = useState<string | null>(null);
+  const [fileRetry, setFileRetry] = useState(0);
   const [narrow, setNarrow] = useState(
     () => window.matchMedia?.("(max-width: 1100px)").matches ?? false,
   );
@@ -81,20 +101,65 @@ export function ReviewPanel({
     review.result && !review.result.ok ? review.result : null,
     t,
   );
-  const selectedFile = snapshot?.files.find(
+  const fileSummary = snapshot?.files.find(
     (file) => file.path === selectedPath,
   );
+  const selectedFile =
+    loadedFile?.revision === snapshot?.revision &&
+    loadedFile?.file.path === selectedPath
+      ? loadedFile.file
+      : fileSummary;
+  useEffect(() => {
+    void fileRetry;
+    const path = fileSummary?.path;
+    if (
+      !path ||
+      fileSummary?.diffLoaded !== false ||
+      !review.readFile ||
+      !snapshot
+    )
+      return;
+    const revision = snapshot.revision;
+    const controller = new AbortController();
+    setFileError(null);
+    void review.readFile(path, controller.signal).then(
+      (file) => {
+        if (!controller.signal.aborted) {
+          if (file) setLoadedFile({ revision, file });
+          else setFileError(t("gitReviewFileMissing"));
+        }
+      },
+      (error) => {
+        if (!controller.signal.aborted)
+          setFileError(
+            error instanceof Error ? error.message : t("gitReviewFailed"),
+          );
+      },
+    );
+    return () => controller.abort();
+  }, [
+    fileSummary?.path,
+    fileSummary?.diffLoaded,
+    snapshot,
+    review.readFile,
+    fileRetry,
+    t,
+  ]);
   const files = snapshot?.files.slice(0, visibleFiles) ?? [];
   const remaining = Math.max(0, (snapshot?.files.length ?? 0) - files.length);
   const comparison = snapshot
     ? snapshot.comparison === "session"
       ? t("gitReviewSessionSnapshot")
-      : snapshot.baseBranch
-        ? t("gitReviewComparison", {
-            current: snapshot.currentBranch ?? t("gitReviewDetached"),
-            base: snapshot.baseBranch,
-          })
-        : t("gitReviewWorkingTree")
+      : snapshot.comparison === "unstaged"
+        ? t("gitReviewUnstaged")
+        : snapshot.comparison === "staged"
+          ? t("gitReviewStaged")
+          : snapshot.baseBranch
+            ? t("gitReviewComparison", {
+                current: snapshot.currentBranch ?? t("gitReviewDetached"),
+                base: snapshot.baseBranch,
+              })
+            : t("gitReviewWorkingTree")
     : null;
 
   const selectedFilePath = selectedFile?.path;
@@ -127,6 +192,31 @@ export function ReviewPanel({
         else if (!embedded) onClose();
       }}
     >
+      {review.setSource && (
+        <div className="review-source-picker">
+          <label>
+            {t("gitReviewSource")}{" "}
+            <select
+              value={review.source ?? "unstaged"}
+              onChange={(event) =>
+                review.setSource?.(
+                  event.currentTarget.value as WebGitReviewSource,
+                )
+              }
+            >
+              <option value="unstaged">{t("gitReviewUnstaged")}</option>
+              <option value="staged">{t("gitReviewStaged")}</option>
+              <option value="branch">{t("gitReviewBranch")}</option>
+              <option value="session">{t("gitReviewSessionSnapshot")}</option>
+            </select>
+          </label>
+          {onOpenFiles && (
+            <button type="button" onClick={onOpenFiles}>
+              {t("sessionFileRecords")}
+            </button>
+          )}
+        </div>
+      )}
       {selectedFile ? (
         <div className="review-file-screen">
           <header className="review-file-header">
@@ -204,7 +294,19 @@ export function ReviewPanel({
             })}
             tabIndex={-1}
           >
-            {selectedFile.diff ? (
+            {fileError ? (
+              <div role="alert">
+                <p>{fileError}</p>
+                <button
+                  type="button"
+                  onClick={() => setFileRetry((value) => value + 1)}
+                >
+                  {t("retryAdmissionCheck")}
+                </button>
+              </div>
+            ) : selectedFile.diffLoaded === false && review.readFile ? (
+              <p role="status">{t("gitReviewLoading")}</p>
+            ) : selectedFile.diff ? (
               <DiffCodePreview file={selectedFile} />
             ) : (
               <EmptyState
@@ -266,27 +368,32 @@ export function ReviewPanel({
                   <Text type="label">
                     {t("filesChanged", { count: snapshot.files.length })}
                   </Text>
-                  <HStack
-                    gap={2}
-                    align="center"
-                    className="review-summary-counts"
-                    aria-hidden="true"
-                  >
-                    <Text
-                      type="supporting"
-                      hasTabularNumbers
-                      className="review-additions"
+                  {!snapshot.files.some(
+                    (file) =>
+                      file.status === "untracked" && file.diffLoaded === false,
+                  ) && (
+                    <HStack
+                      gap={2}
+                      align="center"
+                      className="review-summary-counts"
+                      aria-hidden="true"
                     >
-                      +{snapshot.additions}
-                    </Text>
-                    <Text
-                      type="supporting"
-                      hasTabularNumbers
-                      className="review-deletions"
-                    >
-                      -{snapshot.deletions}
-                    </Text>
-                  </HStack>
+                      <Text
+                        type="supporting"
+                        hasTabularNumbers
+                        className="review-additions"
+                      >
+                        +{snapshot.additions}
+                      </Text>
+                      <Text
+                        type="supporting"
+                        hasTabularNumbers
+                        className="review-deletions"
+                      >
+                        -{snapshot.deletions}
+                      </Text>
+                    </HStack>
+                  )}
                 </HStack>
                 <Text type="supporting" color="secondary" maxLines={1}>
                   {comparison}

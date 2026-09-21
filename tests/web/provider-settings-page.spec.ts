@@ -194,9 +194,95 @@ function settingsFetcher() {
     if (path.includes("/api/settings/catalog")) {
       return reply(settingsPayload());
     }
+    if (path.includes("/api/models/configuration"))
+      return reply({ revision: "revision", models: [] });
     return providerReply();
   });
 }
+
+it("saves a write-only key directly to Pi without submitting a setup prompt", async () => {
+  const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
+  const fetcher = settingsFetcher();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        requests.push({
+          path: String(input),
+          body: JSON.parse(String(init.body)),
+        });
+        return reply({ saved: true });
+      }
+      return fetcher(input);
+    }),
+  );
+  const configure = vi.fn(async () => true);
+  const refreshed = vi.fn(async () => true);
+  renderSettings({
+    onConfigureOpenPi: configure,
+    onPreferencesChanged: refreshed,
+  });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  await screen.findByText(i18n.t("credentialConfigured"));
+  fireEvent.change(screen.getByLabelText(i18n.t("provider")), {
+    target: { value: "deepseek" },
+  });
+  const input = screen.getByLabelText(
+    i18n.t("providerApiKey"),
+  ) as HTMLInputElement;
+  expect(input.type).toBe("password");
+  expect(input.value).toBe("");
+  fireEvent.change(input, { target: { value: "fixture-private-key" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("saveProviderKey") }),
+  );
+  await screen.findByText(i18n.t("providerKeySaved"));
+  expect(input.value).toBe("");
+  expect(requests).toEqual([
+    {
+      path: "/api/providers/api-key",
+      body: {
+        sessionId: "session-a",
+        provider: "deepseek",
+        apiKey: "fixture-private-key",
+      },
+    },
+  ]);
+  expect(configure).not.toHaveBeenCalled();
+  expect(refreshed).toHaveBeenCalled();
+});
+
+it("submits role and skill changes through the canonical setup entry", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const configure = vi.fn(async () => true);
+  renderSettings({ onConfigureOpenPi: configure });
+  await screen.findByText(i18n.t("agentBehavior"));
+  fireEvent.click(
+    screen.getByRole("tab", { name: i18n.t("subagentsSettings") }),
+  );
+  fireEvent.change(screen.getByLabelText(i18n.t("workflowConcurrencyLabel")), {
+    target: { value: "3" },
+  });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("configureViaSetup") }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(expect.stringContaining("3")),
+  );
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  fireEvent.change(
+    within(screen.getByRole("tabpanel")).getByLabelText(
+      i18n.t("setupConfigurationRequest"),
+    ),
+    { target: { value: "Configure the local skill" } },
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("configureViaSetup") }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith("Configure the local skill"),
+  );
+});
 
 it("matches the pi-web settings shell and selects models through Pi", async () => {
   const fetcher = settingsFetcher();
@@ -227,14 +313,14 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   ).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("generalSettings") }));
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(2));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
   fireEvent.click(screen.getByRole("button", { name: /DeepSeek V4/u }));
   expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
   expect(screen.getByText(i18n.t("credentialMissing"))).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("useThisModel") }));
   expect(onSelectModel).toHaveBeenCalledWith("deepseek/deepseek-v4");
   expect(view.container.querySelector(".settings-model-sidebar")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(2);
+  expect(fetcher).toHaveBeenCalledTimes(4);
 });
 
 it("shows canonical General state and routes real setup/runtime actions", async () => {

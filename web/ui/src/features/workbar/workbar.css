@@ -779,3 +779,6 @@
 @media (prefers-reduced-motion: reduce) {
   .browser-loading-line { animation: none; }
 }
+.generated-file-edit { margin: 0 12px 12px; font-size: 12px; }
+.generated-file-edit summary { cursor: pointer; color: var(--muted); }
+.generated-file-edit pre { margin: 8px 0; padding: 10px; overflow: auto; max-height: 360px; white-space: pre; background: var(--sidebar); border-radius: 6px; }

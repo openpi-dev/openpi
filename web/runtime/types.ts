@@ -37,6 +37,22 @@ export interface WebProviderAuthProjection {
   };
 }
 
+export interface WebModelConfiguration {
+  provider: string;
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: "openai-responses" | "openai-completions" | "anthropic-messages";
+  reasoning: boolean;
+  contextWindow: number;
+  maxTokens: number;
+}
+
+export interface WebModelConfigurations {
+  revision: string;
+  models: WebModelConfiguration[];
+}
+
 export interface WebRuntimeEvent {
   type: string;
   detail?: Record<string, unknown>;
@@ -147,6 +163,9 @@ export interface WebRuntimeController {
   listCommands?(): WebCommandDiscoveryResult;
   listSettingsResources?(): WebSettingsResourceCatalog;
   listProviderAuth?(): WebProviderAuthProjection;
+  saveProviderKey?(sessionId: string, provider: string, apiKey: string): Promise<void>;
+  readModelConfigurations?(): Promise<WebModelConfigurations>;
+  saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
   setThinkingLevel?(

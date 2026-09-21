@@ -13,7 +13,7 @@ import { useTranslation } from "react-i18next";
 import type { ArtifactPreview } from "../../../../protocol/artifacts.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
-import { WebClient } from "../../protocol/client.ts";
+import { WebApiError, WebClient } from "../../protocol/client.ts";
 import { ArtifactContext } from "./context.ts";
 
 export interface ArtifactProviderHandle {
@@ -39,9 +39,11 @@ export const ArtifactProvider = forwardRef<
     sessionId?: string;
     reference: string;
     parent?: string;
+    external?: boolean;
   } | null>(null);
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [accessDenied, setAccessDenied] = useState(false);
   const [busy, setBusy] = useState(false);
   const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
     null,
@@ -62,6 +64,7 @@ export const ArtifactProvider = forwardRef<
       copyGeneration.current++;
       setPreview(null);
       setError(null);
+      setAccessDenied(false);
       setCopyStatus(null);
       nextParent.current = parent;
       setRequest({ reference, parent, sessionId });
@@ -110,12 +113,18 @@ export const ArtifactProvider = forwardRef<
       try {
         if (!handle)
           handle = (
-            await client.resolveArtifact(
-              sessionId,
-              request.reference,
-              parent,
-              controller.signal,
-            )
+            await (request.external
+              ? client.authorizeArtifact(
+                  sessionId,
+                  request.reference,
+                  controller.signal,
+                )
+              : client.resolveArtifact(
+                  sessionId,
+                  request.reference,
+                  parent,
+                  controller.signal,
+                ))
           ).handle;
         if (parent) {
           void client.releaseArtifact(sessionId, parent).catch(() => undefined);
@@ -149,6 +158,10 @@ export const ArtifactProvider = forwardRef<
           setError(null);
         }
       } catch (reason) {
+        if (!stopped)
+          setAccessDenied(
+            reason instanceof WebApiError && reason.code === "ARTIFACT_DENIED",
+          );
         delay = Math.min(delay * 2, 30_000);
         if (!stopped)
           setError(
@@ -277,7 +290,10 @@ export const ArtifactProvider = forwardRef<
                     value
                       ? {
                           sessionId,
-                          reference: preview?.artifact.path ?? value.reference,
+                          reference: preview
+                            ? encodeURI(preview.artifact.path)
+                            : value.reference,
+                          ...(value.external ? { external: true } : {}),
                           ...(preview ? {} : { parent: value.parent }),
                         }
                       : null,
@@ -301,6 +317,27 @@ export const ArtifactProvider = forwardRef<
                 {error}
               </p>
             )}
+            {accessDenied &&
+              !request.external &&
+              /^(?:\/(?!\/)|[a-z]:[\\/])/iu.test(request.reference) && (
+                <div className="artifact-external-access">
+                  <p>{t("artifactExternalAccess")}</p>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setAccessDenied(false);
+                      setRequest({
+                        ...request,
+                        parent: undefined,
+                        external: true,
+                      });
+                    }}
+                  >
+                    {t("artifactAuthorizeFile")}
+                  </button>
+                </div>
+              )}
             {!preview && !error && <p role="status">{t("readingFile")}</p>}
             {preview && (
               <>

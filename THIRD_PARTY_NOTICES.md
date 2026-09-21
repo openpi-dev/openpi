@@ -20,6 +20,15 @@ revision `ebeb961` (Apache License 2.0). OpenPI uses its own Web host protocol
 and headless Chromium/CDP implementation; it does not embed either project or
 copy Maka's Electron-only `WebContentsView`.
 
+The follow-up Git, file-preview and settings investigation also consulted
+`agegr/pi-web` revision `1eb5e66a37c468aca7f0d338edb23de4fd84433e` (MIT),
+`jmfederico/pi-web` revision `60a29acbfc710908e73b0df9857cb63b53b672d3` (MIT),
+and `apache/maka` revision `0dc1142aa90000e45627017e846b6d57d1e165e0`
+(Apache License 2.0). These are architectural references, not embedded packages.
+The screencast sizing approach was informed by Chromium DevTools'
+[`ScreencastView.ts`](https://github.com/ChromeDevTools/devtools-frontend/blob/main/front_end/panels/screencast/ScreencastView.ts)
+(BSD-3-Clause). OpenPI retains its own bounded transport and Session authority.
+
 ## OAuth model providers
 
 `extensions/ai-providers/` adapts protocol and OAuth details from

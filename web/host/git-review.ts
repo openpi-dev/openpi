@@ -29,6 +29,7 @@ import {
   type WebGitReviewFileStatus,
   type WebGitReviewResult,
   type WebGitReviewSnapshot,
+  type WebGitReviewSource,
   jsonByteLength,
 } from "../protocol/types.ts";
 
@@ -57,8 +58,14 @@ interface GitReviewBaselineMetadata {
 
 export interface GitReviewService {
   capture(sessionPath: string, cwd: string): Promise<void>;
-  read(sessionPath: string, cwd: string): Promise<WebGitReviewResult>;
+  read(sessionPath: string, cwd: string, options?: GitReviewReadOptions): Promise<WebGitReviewResult>;
   dispose?(): Promise<void>;
+}
+
+export interface GitReviewReadOptions {
+  source?: WebGitReviewSource;
+  filePath?: string;
+  summary?: boolean;
 }
 
 interface GitReviewBaselineLimits {
@@ -267,11 +274,13 @@ async function trackedChanges(
   root: string,
   comparisons: string[][],
   environment?: GitEnvironment,
+  options: GitReviewReadOptions = {},
 ) {
   const files: WebGitReviewFile[] = [];
   let diffBytes = 0;
   let truncated = false;
   for (const comparison of comparisons) {
+    const target = [...comparison, "--", ...(options.filePath ? [options.filePath] : [])];
     const [status, diff] = await Promise.all([
       git(root, [
         "diff",
@@ -280,21 +289,34 @@ async function trackedChanges(
         "--find-renames",
         "--no-ext-diff",
         "--no-textconv",
-        ...comparison,
+        ...target,
       ], environment),
       git(root, [
         "diff",
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
-        "--binary",
+        ...(options.summary ? ["--numstat", "-z"] : []),
         "--find-renames",
         "--full-index",
-        ...comparison,
+        ...target,
       ], environment),
     ]);
     const entries = parseNameStatus(status);
-    const chunks = splitDiff(diff);
+    const chunks = options.summary ? [] : splitDiff(diff);
+    const stats = new Map<string, { additions: number; deletions: number }>();
+    if (options.summary) {
+      const records = diff.split("\0");
+      for (let index = 0; index < records.length; index++) {
+        const record = records[index]!;
+        const first = record.indexOf("\t");
+        const second = record.indexOf("\t", first + 1);
+        if (first < 0 || second < 0) continue;
+        let path = record.slice(second + 1);
+        if (!path) { index++; path = records[++index] ?? ""; }
+        stats.set(path, { additions: Number(record.slice(0, first)) || 0, deletions: Number(record.slice(first + 1, second)) || 0 });
+      }
+    }
     for (const [index, entry] of entries.entries()) {
       const body = chunks[index] ?? "";
       if (files.length >= WEB_MAX_GIT_REVIEW_FILES) {
@@ -306,9 +328,10 @@ async function trackedChanges(
         diffBytes + bodyBytes <= WEB_MAX_GIT_REVIEW_DIFF_BYTES;
       files.push({
         ...entry,
+        ...(options.summary ? { diffLoaded: false } : { diffLoaded: true }),
         diff: includeDiff ? body : "",
         diffTruncated: !includeDiff,
-        ...countGitDiffLines(body),
+        ...(options.summary ? stats.get(entry.path) ?? { additions: 0, deletions: 0 } : countGitDiffLines(body)),
       });
       if (includeDiff) diffBytes += bodyBytes;
       else truncated = true;
@@ -348,6 +371,7 @@ async function untrackedChanges(
   room: number,
   diffByteRoom: number,
   environment?: GitEnvironment,
+  options: GitReviewReadOptions = {},
 ) {
   const paths = (await git(root, [
     "ls-files",
@@ -356,7 +380,7 @@ async function untrackedChanges(
     "--exclude-standard",
   ], environment))
     .split("\0")
-    .filter(Boolean);
+    .filter((path) => Boolean(path) && (!options.filePath || path === options.filePath));
   const files: WebGitReviewFile[] = [];
   let diffBytes = 0;
   let truncated = paths.length > room;
@@ -365,6 +389,10 @@ async function untrackedChanges(
     const child = relative(root, target);
     if (!child || child.startsWith("..") || isAbsolute(child)) {
       truncated = true;
+      continue;
+    }
+    if (options.summary) {
+      files.push({ path, status: "untracked", diff: "", diffLoaded: false, diffTruncated: false, additions: 0, deletions: 0 });
       continue;
     }
     let bytes: Buffer | null = null;
@@ -440,13 +468,19 @@ export async function readGitReview(
       objects: string;
       repositoryObjects: string;
     };
-  },
+  } & GitReviewReadOptions,
 ): Promise<WebGitReviewResult> {
   try {
     const root = cleanLine(
       await git(cwd, ["rev-parse", "--show-toplevel"]),
     );
     if (!root) return { ok: false, reason: "not_git_repository" };
+    if (options?.filePath) {
+      const child = relative(root, resolve(root, options.filePath));
+      if (isAbsolute(options.filePath) || !child || child === ".." || child.startsWith("../") || child.startsWith("..\\") || options.filePath.includes("\0"))
+        return { ok: false, reason: "git_failed" };
+    }
+    const source = options?.baseline ? "session" : options?.source ?? "branch";
     const currentBranch = cleanLine(
       await git(root, ["branch", "--show-current"]),
     );
@@ -464,7 +498,7 @@ export async function readGitReview(
         }
       : undefined;
     const base =
-      !options?.baseline && hasHead
+      source === "branch" && hasHead
         ? await baseBranch(root, currentBranch)
         : null;
     const mergeBase =
@@ -475,41 +509,57 @@ export async function readGitReview(
       root,
       options?.baseline
         ? [[]]
+        : source === "unstaged"
+          ? [[]]
+          : source === "staged"
+            ? [hasHead ? ["--cached"] : ["--cached", "--root"]]
         : mergeBase
           ? [[mergeBase]]
           : [hasHead ? ["--cached"] : ["--cached", "--root"], []],
       environment,
+      options,
     );
-    const untracked = await untrackedChanges(
+    const untracked = source === "staged" ? { files: [], diffBytes: 0, truncated: false } : await untrackedChanges(
       root,
       WEB_MAX_GIT_REVIEW_FILES - tracked.files.length,
       WEB_MAX_GIT_REVIEW_DIFF_BYTES - tracked.diffBytes,
       environment,
+      options,
     );
     const snapshot = boundSnapshot({
       repositoryRoot: root,
       currentBranch,
       baseBranch: base,
-      comparison: options?.baseline ? "session" : "branch",
+      comparison: source,
       revision: "0".repeat(64),
       files: dedupe([...tracked.files, ...untracked.files]),
       additions: 0,
       deletions: 0,
       truncated: tracked.truncated || untracked.truncated,
     });
+    const fileIdentities = options?.summary ? await Promise.all(snapshot.files.map(async file => {
+      try {
+        const info = await lstat(resolve(root, file.path), { bigint: true });
+        return [file.path, String(info.size), String(info.mtimeNs), String(info.ctimeNs)];
+      } catch { return [file.path, "missing"]; }
+    })) : undefined;
     const revision = createHash("sha256")
       .update(
         JSON.stringify({
           root,
+          source,
+          fileIdentities,
           currentBranch,
           base,
           files: snapshot.files.map(
-            ({ path, previousPath, status, diff, diffTruncated }) => ({
+            ({ path, previousPath, status, diff, diffTruncated, additions, deletions }) => ({
               path,
               previousPath,
               status,
               diff,
               diffTruncated,
+              additions,
+              deletions,
             }),
           ),
         }),
@@ -758,7 +808,8 @@ export class GitReviewBaselineStore implements GitReviewService {
     }
   }
 
-  async read(sessionPath: string, cwd: string): Promise<WebGitReviewResult> {
+  async read(sessionPath: string, cwd: string, options: GitReviewReadOptions = {}): Promise<WebGitReviewResult> {
+    if (options.source && options.source !== "session") return readGitReview(cwd, options);
     await this.capture(sessionPath, cwd);
     const paths = this.paths(sessionPath, cwd);
     const metadata = await this.metadata(paths.metadata);
@@ -767,7 +818,7 @@ export class GitReviewBaselineStore implements GitReviewService {
         metadata?.status === "not_git_repository" ||
         metadata?.status === "unborn_repository"
           ? metadata.status
-          : "git_failed";
+          : "baseline_unavailable";
       return {
         ok: false,
         reason,
@@ -776,9 +827,10 @@ export class GitReviewBaselineStore implements GitReviewService {
     try {
       await Promise.all([access(paths.index), access(paths.objects)]);
     } catch {
-      return { ok: false, reason: "git_failed" };
+      return { ok: false, reason: "baseline_unavailable" };
     }
     const result = await readGitReview(cwd, {
+      ...options,
       baseline: {
         index: paths.index,
         objects: paths.objects,

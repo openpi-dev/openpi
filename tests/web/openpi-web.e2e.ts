@@ -865,6 +865,12 @@ test("terminal tool runs a real workspace shell", async ({ page }) => {
 test("browser tool keeps an interactive page inside the workbar", async ({
   page,
 }) => {
+  await page.route("**/api/browser/frames?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=", width: 400, height: 600 })}\n\n`,
+    }),
+  );
   type BrowserState = {
     sessionId: string;
     url: string;

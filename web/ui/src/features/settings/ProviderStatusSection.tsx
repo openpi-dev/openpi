@@ -8,10 +8,14 @@ export function ProviderStatusSection({
   sessionId,
   providerId,
   active,
+  busy = false,
+  onSaved,
 }: {
   sessionId: string;
   providerId: string;
   active: boolean;
+  busy?: boolean;
+  onSaved?: () => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -19,6 +23,17 @@ export function ProviderStatusSection({
   const [data, setData] = useState<WebProviderAuthProjection | null>(null);
   const [error, setError] = useState<string | null>(null);
   const loadedRequest = useRef<string | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState(providerId);
+  const [apiKey, setApiKey] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const saveOperation = useRef<AbortController | null>(null);
+  useEffect(() => {
+    setSelectedProvider(providerId);
+    setApiKey("");
+    setSaved(false);
+  }, [providerId]);
+  useEffect(() => () => saveOperation.current?.abort(), []);
 
   useEffect(() => {
     if (!active) return;
@@ -43,7 +58,7 @@ export function ProviderStatusSection({
     return () => controller.abort();
   }, [active, client, revision, sessionId, t]);
 
-  const provider = data?.providers.find((item) => item.id === providerId);
+  const provider = data?.providers.find((item) => item.id === selectedProvider);
   const authMethods = Array.isArray(provider?.authMethods)
     ? provider.authMethods
     : [];
@@ -53,6 +68,33 @@ export function ProviderStatusSection({
 
   return (
     <section className="provider-status-section provider-status-detail">
+      {data && (
+        <label className="settings-form-field">
+          {t("provider")}
+          <select
+            aria-label={t("provider")}
+            value={selectedProvider}
+            disabled={saving}
+            onChange={(event) => {
+              setSelectedProvider(event.target.value);
+              setApiKey("");
+              setSaved(false);
+              setError(null);
+            }}
+          >
+            {!data.providers.some((item) => item.id === selectedProvider) && (
+              <option value={selectedProvider}>
+                {selectedProvider || t("selectProvider")}
+              </option>
+            )}
+            {data.providers.map((item) => (
+              <option key={item.id} value={item.id}>
+                {item.name || item.id}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
       <div className="provider-detail-heading">
         <div>
           <span>{t("modelConnection")}</span>
@@ -134,11 +176,69 @@ export function ProviderStatusSection({
           <span>{t("providerStatusUnavailable")}</span>
         </div>
       )}
+      {authMethods.includes("api_key") && (
+        <form
+          className="settings-edit-form"
+          onSubmit={(event) => {
+            event.preventDefault();
+            if (saving || busy || !apiKey.trim()) return;
+            const operation = new AbortController();
+            saveOperation.current = operation;
+            setSaving(true);
+            setSaved(false);
+            setError(null);
+            const key = apiKey.trim();
+            setApiKey("");
+            void client
+              .saveProviderKey(
+                sessionId,
+                selectedProvider,
+                key,
+                operation.signal,
+              )
+              .then(
+                async () => {
+                  if (operation.signal.aborted) return;
+                  setSaved(true);
+                  refresh((value) => value + 1);
+                  await onSaved?.();
+                },
+                () => {
+                  if (!operation.signal.aborted)
+                    setError(t("providerSaveFailed"));
+                },
+              )
+              .finally(() => {
+                if (!operation.signal.aborted) setSaving(false);
+              });
+          }}
+        >
+          <label className="settings-form-field">
+            {t("providerApiKey")}
+            <input
+              type="password"
+              autoComplete="new-password"
+              spellCheck={false}
+              value={apiKey}
+              disabled={saving || busy}
+              placeholder={t("providerKeyPlaceholder")}
+              onChange={(event) => {
+                setApiKey(event.target.value);
+                setSaved(false);
+              }}
+            />
+          </label>
+          <button type="submit" disabled={saving || busy || !apiKey.trim()}>
+            {t(saving ? "savingSettings" : "saveProviderKey")}
+          </button>
+          {saved && <p role="status">{t("providerKeySaved")}</p>}
+        </form>
+      )}
       <aside className="provider-read-only">
         <KeyRound aria-hidden="true" />
         <div>
           <strong>{t("providerReadOnly")}</strong>
-          <p>{t("providerReadOnlyDetail")}</p>
+          <p>{t("providerWriteDetail")}</p>
           <small>{t("authNotVerified")}</small>
         </div>
       </aside>

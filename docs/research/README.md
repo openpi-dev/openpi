@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_NATIVE_INTERACTIONS_2026-09-20.md`](WEB_NATIVE_INTERACTIONS_2026-09-20.md) — Git 原生比较范围、CDP 浏览器、外部文件预览和 Pi 原生可编辑设置的参考调查与修复验收（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_PR561_ASYNC_ITERATION_2026-09-20.md`](WEB_PR561_ASYNC_ITERATION_2026-09-20.md) — 第二轮 PR #561 测试：会话级变更投影、diff 焦点、终端队列及创建取消、文件引用清理；含合并后整合范围（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
 
 - [`WEB_PR561_USAGE_ITERATION_2026-09-20.md`](WEB_PR561_USAGE_ITERATION_2026-09-20.md) — PR #561 使用测试：图片导入的发送与会话边界、浏览器粘贴与 Shift、键盘分栏（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。

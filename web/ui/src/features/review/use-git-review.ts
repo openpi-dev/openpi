@@ -8,6 +8,7 @@ import {
 } from "react";
 import type {
   WebGitReviewResult,
+  WebGitReviewSource,
   WebSessionProjection,
 } from "../../../../protocol/types.ts";
 import { WebClient } from "../../protocol/client.ts";
@@ -21,16 +22,18 @@ export function useGitReview(
   const [result, setResult] = useState<WebGitReviewResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [source, setSource] = useState<WebGitReviewSource>("unstaged");
   const sessionId = session?.id;
   const sessionPath = session?.path;
 
   useLayoutEffect(() => {
     // A new target must not display the previous target's files, even briefly.
     void sessionPath;
+    void source;
     setResult(null);
     setError(null);
     setLoading(Boolean(sessionId));
-  }, [sessionId, sessionPath]);
+  }, [sessionId, sessionPath, source]);
 
   const refresh = useCallback(async () => {
     if (!sessionId || !sessionPath) return;
@@ -44,6 +47,7 @@ export function useGitReview(
         sessionId,
         sessionPath,
         controller.signal,
+        { source },
       );
       if (!controller.signal.aborted) setResult(next);
     } catch (nextError) {
@@ -59,7 +63,20 @@ export function useGitReview(
         setLoading(false);
       }
     }
-  }, [client, sessionId, sessionPath]);
+  }, [client, sessionId, sessionPath, source]);
+
+  const readFile = useCallback(
+    async (file: string, signal: AbortSignal) => {
+      if (!sessionId || !sessionPath) return;
+      const response = await client.gitReview(sessionId, sessionPath, signal, {
+        source,
+        file,
+      });
+      if (!response.ok) throw new Error("File diff unavailable");
+      return response.snapshot.files.find((entry) => entry.path === file);
+    },
+    [client, sessionId, sessionPath, source],
+  );
 
   useEffect(() => {
     void refreshKey;
@@ -79,5 +96,5 @@ export function useGitReview(
     return () => window.removeEventListener("focus", onFocus);
   }, [refresh, sessionId]);
 
-  return { result, loading, error, refresh };
+  return { result, loading, error, refresh, source, setSource, readFile };
 }

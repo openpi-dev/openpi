@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
@@ -1919,6 +1919,134 @@ async function startTestHost(
   return { host, launched, headers };
 }
 
+test("external file preview requires an explicit authenticated single-file grant", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-external-http-"));
+  const outside = await mkdtemp(join(tmpdir(), "openpi-external-source-"));
+  const file = join(outside, "index.ts");
+  await writeFile(file, "export const verified = true;");
+  const runtime = testRuntime(cwd);
+  const sessionId = runtime.sessionManager.getSessionId();
+  const { host, launched, headers } = await startTestHost(runtime);
+  const body = JSON.stringify({
+    sessionId,
+    reference: file,
+    access: "read-external-file",
+  });
+  try {
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/artifacts/authorize-file`, {
+          method: "POST",
+          body,
+        })
+      ).status,
+      401,
+    );
+    const ordinary = await fetch(`${launched.origin}/api/artifacts/resolve`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({ sessionId, reference: file, access: "read-file" }),
+    });
+    assert.equal(ordinary.status, 403);
+    const allowed = await fetch(
+      `${launched.origin}/api/artifacts/authorize-file`,
+      { method: "POST", headers, body },
+    );
+    assert.equal(allowed.status, 200);
+    const { handle } = await allowed.json();
+    const preview = await fetch(
+      `${launched.origin}/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,
+      { headers },
+    );
+    assert.equal(preview.status, 200);
+    assert.equal((await preview.json()).text, "export const verified = true;");
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
+  }
+});
+
+test("browser frame streaming authenticates, keeps the latest frame and releases subscribers", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-browser-stream-"));
+  const runtime = testRuntime(cwd);
+  const sessionId = runtime.sessionManager.getSessionId();
+  const state = {
+    sessionId,
+    url: "https://example.com/",
+    title: "Example",
+    width: 800,
+    height: 600,
+    loading: false,
+    canGoBack: false,
+    canGoForward: false,
+  };
+  let subscriptions = 0;
+  const embeddedBrowser: EmbeddedBrowserService = {
+    open: async () => state,
+    state: async () => state,
+    frame: async () => undefined,
+    action: async () => state,
+    retain() {},
+    async dispose() {},
+    async subscribeFrames(_id, listener) {
+      subscriptions++;
+      listener({
+        data: "old-frame",
+        mimeType: "image/png",
+        width: 800,
+        height: 600,
+      });
+      listener({
+        data: "new-frame",
+        mimeType: "image/png",
+        width: 800,
+        height: 600,
+      });
+      return () => {
+        subscriptions--;
+      };
+    },
+  };
+  const { host, launched, headers } = await startTestHost(runtime, {
+    embeddedBrowser,
+  });
+  const controller = new AbortController();
+  try {
+    const url = `${launched.origin}/api/browser/frames?${new URLSearchParams({ sessionId })}`;
+    assert.equal((await fetch(url)).status, 401);
+    const response = await fetch(url, {
+      headers,
+      signal: AbortSignal.any([controller.signal, AbortSignal.timeout(3_000)]),
+    });
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("content-type"), "text/event-stream");
+    const reader = response.body!.getReader();
+    let body = "";
+    while (!body.includes("new-frame")) {
+      const { value, done } = await reader.read();
+      assert.equal(done, false);
+      body += new TextDecoder().decode(value);
+    }
+    assert.equal(body.includes("old-frame"), false);
+    assert.equal(subscriptions, 1);
+    for (let index = 0; index < 3; index++) {
+      const viewer = await fetch(url, { headers, signal: controller.signal });
+      assert.equal(viewer.status, 200);
+    }
+    assert.equal((await fetch(url, { headers })).status, 429);
+    assert.equal(subscriptions, 4);
+    await reader.cancel();
+    controller.abort();
+    await host.stop();
+    assert.equal(subscriptions, 0);
+  } finally {
+    controller.abort();
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("exposes an embedded browser and an active-Session interactive terminal", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-tools-"));
   const runtime = testRuntime(cwd);
@@ -3443,6 +3571,53 @@ test("stop aborts an open workspace picker", async () => {
 
     assert.equal(chooserAborted, true);
     assert.equal((await pickerRequest).status, 200);
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("provider key writes require authentication and sanitize provider failures", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-provider-write-"));
+  const runtime = testRuntime(cwd);
+  const calls: string[] = [];
+  runtime.saveProviderKey = async (_session, _provider, key) => {
+    calls.push(key);
+    if (key === "fixture-secret-failure")
+      throw new Error(`Provider echoed ${key}`);
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  try {
+    const body = JSON.stringify({
+      sessionId: runtime.sessionManager.getSessionId(),
+      provider: "fixture",
+      apiKey: "fixture-secret-success",
+    });
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/providers/api-key`, {
+          method: "POST",
+          body,
+        })
+      ).status,
+      401,
+    );
+    assert.deepEqual(calls, []);
+    const saved = await fetch(`${launched.origin}/api/providers/api-key`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body,
+    });
+    assert.equal(saved.status, 200);
+    assert.doesNotMatch(await saved.text(), /fixture-secret/u);
+    const failure = await fetch(`${launched.origin}/api/providers/api-key`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: body.replace("fixture-secret-success", "fixture-secret-failure"),
+    });
+    assert.equal(failure.status, 422);
+    assert.doesNotMatch(await failure.text(), /fixture-secret-failure/u);
+    assert.equal(calls.length, 2);
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

@@ -100,6 +100,44 @@ function SetupAction({
   );
 }
 
+function SetupRequestForm({
+  pending,
+  onConfigure,
+  placeholder,
+}: {
+  pending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
+  placeholder: string;
+}) {
+  const { t } = useTranslation();
+  const [request, setRequest] = useState("");
+  return (
+    <form
+      className="settings-edit-form"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (!pending && request.trim()) void onConfigure(request.trim());
+      }}
+    >
+      <label className="settings-form-field">
+        {t("setupConfigurationRequest")}
+        <textarea
+          required
+          maxLength={2000}
+          value={request}
+          disabled={pending}
+          placeholder={placeholder}
+          onChange={(event) => setRequest(event.target.value)}
+        />
+      </label>
+      <button type="submit" disabled={pending || !request.trim()}>
+        {t("configureViaSetup")}
+      </button>
+      <small>{t("setupFormDetail")}</small>
+    </form>
+  );
+}
+
 export function GeneralSettingsPanel({
   catalog,
   error,
@@ -366,10 +404,14 @@ export function SkillsSettingsPanel({
   catalog,
   error,
   onRefresh,
+  setupPending,
+  onConfigure,
 }: {
   catalog: WebSettingsCatalog | null;
   error: string | null;
   onRefresh: () => void;
+  setupPending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const skills = catalog?.resources.skills ?? [];
@@ -453,6 +495,11 @@ export function SkillsSettingsPanel({
         </div>
       </aside>
       <div className="settings-resource-detail">
+        <SetupRequestForm
+          pending={setupPending}
+          onConfigure={onConfigure}
+          placeholder={t("setupSkillsPlaceholder")}
+        />
         {error ? (
           <SettingsLoadState
             catalog={catalog}
@@ -512,6 +559,19 @@ export function SkillsSettingsPanel({
                 <code>{selected.filePath}</code>
               </div>
             </section>
+            <SetupAction
+              isPending={setupPending}
+              onConfigure={onConfigure}
+              label={t(
+                selected.disableModelInvocation
+                  ? "enableSkillInvocation"
+                  : "disableSkillInvocation",
+              )}
+              request={t("setupSkillInvocationRequest", {
+                path: selected.filePath,
+                disabled: !selected.disableModelInvocation,
+              })}
+            />
             {copyStatus === "failed" && (
               <p className="inspection-warning">{t("copyFailed")}</p>
             )}
@@ -531,6 +591,7 @@ export function SubagentsSettingsPanel({
   catalog,
   error,
   currentModel,
+  models,
   activity,
   setupPending,
   onConfigure,
@@ -539,6 +600,7 @@ export function SubagentsSettingsPanel({
   catalog: WebSettingsCatalog | null;
   error: string | null;
   currentModel?: WebModelSummary;
+  models: WebModelSummary[];
   activity?: WebCapabilitySnapshot["subagents"];
   setupPending: boolean;
   onConfigure: (request: string) => Promise<boolean>;
@@ -548,6 +610,15 @@ export function SubagentsSettingsPanel({
   const [selectedRole, setSelectedRole] =
     useState<(typeof roles)[number]>("explorer");
   const assignment = catalog?.setup.subagents.roleModels[selectedRole];
+  const [roleModel, setRoleModel] = useState("");
+  const [concurrency, setConcurrency] = useState(1);
+  useEffect(() => {
+    const assignment = catalog?.setup.subagents.roleModels[selectedRole];
+    setRoleModel(
+      assignment ? `${assignment.provider}/${assignment.model}` : "",
+    );
+    setConcurrency(catalog?.setup.workflows.concurrency ?? 1);
+  }, [selectedRole, catalog]);
   const active =
     activity?.items.filter((item) => item.status === "running").length ?? 0;
   const completed =
@@ -644,6 +715,62 @@ export function SubagentsSettingsPanel({
                 </div>
               </dl>
               <section className="settings-role-principles">
+                <form
+                  className="settings-edit-form"
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (setupPending) return;
+                    void onConfigure(
+                      t("setupRoleFormRequest", {
+                        role: selectedRole,
+                        model: roleModel || t("inheritParentModel"),
+                        concurrency,
+                      }),
+                    );
+                  }}
+                >
+                  <label className="settings-form-field">
+                    {t("modelAssignment")}
+                    <select
+                      value={roleModel}
+                      disabled={setupPending}
+                      onChange={(event) => setRoleModel(event.target.value)}
+                    >
+                      <option value="">{t("inheritParentModel")}</option>
+                      {roleModel &&
+                        !models.some(
+                          (model) =>
+                            `${model.provider}/${model.id}` === roleModel,
+                        ) && <option value={roleModel}>{roleModel}</option>}
+                      {models.map((model) => (
+                        <option
+                          key={`${model.provider}/${model.id}`}
+                          value={`${model.provider}/${model.id}`}
+                        >
+                          {model.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="settings-form-field">
+                    {t("workflowConcurrencyLabel")}
+                    <input
+                      type="number"
+                      min={1}
+                      max={64}
+                      required
+                      value={concurrency}
+                      disabled={setupPending}
+                      onChange={(event) =>
+                        setConcurrency(Number(event.target.value))
+                      }
+                    />
+                  </label>
+                  <button type="submit" disabled={setupPending}>
+                    {t("configureViaSetup")}
+                  </button>
+                  <small>{t("setupFormDetail")}</small>
+                </form>
                 <h2>{t("runtimeBoundaries")}</h2>
                 <div>
                   <KeyRound aria-hidden="true" />
@@ -675,10 +802,14 @@ export function PluginsSettingsPanel({
   catalog,
   error,
   onRefresh,
+  setupPending,
+  onConfigure,
 }: {
   catalog: WebSettingsCatalog | null;
   error: string | null;
   onRefresh: () => void;
+  setupPending: boolean;
+  onConfigure: (request: string) => Promise<boolean>;
 }) {
   const { t } = useTranslation();
   const plugins = catalog?.resources.plugins ?? [];
@@ -740,6 +871,11 @@ export function PluginsSettingsPanel({
         </div>
       </aside>
       <div className="settings-resource-detail">
+        <SetupRequestForm
+          pending={setupPending}
+          onConfigure={onConfigure}
+          placeholder={t("setupPluginsPlaceholder")}
+        />
         {error ? (
           <SettingsLoadState
             catalog={catalog}

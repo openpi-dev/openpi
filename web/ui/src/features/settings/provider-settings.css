@@ -1379,3 +1379,34 @@
     animation: none;
   }
 }
+.settings-edit-form {
+  display: grid;
+  gap: 12px;
+  padding-block: 16px;
+}
+
+.settings-form-field {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.settings-form-field input,
+.settings-form-field select,
+.settings-form-field textarea {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: inherit;
+  background: var(--page);
+  font: inherit;
+}
+
+.settings-edit-form button {
+  justify-self: start;
+  padding: 8px 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}

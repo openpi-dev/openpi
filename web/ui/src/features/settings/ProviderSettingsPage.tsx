@@ -19,6 +19,7 @@ import type {
   WebThemePreference,
 } from "../../../../protocol/types.ts";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
+import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
 import {
   GeneralSettingsPanel,
   PluginsSettingsPanel,
@@ -81,6 +82,7 @@ export function ProviderSettingsPage({
   const closeButton = useRef<HTMLButtonElement>(null);
   const [section, setSection] = useState<SettingsSection>("general");
   const [setupPending, setSetupPending] = useState(false);
+  const [providerRevision, refreshProviders] = useState(0);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
@@ -366,16 +368,29 @@ export function ProviderSettingsPage({
                       <dd>{selectedModel.id}</dd>
                     </div>
                   </dl>
-                  <ProviderStatusSection
-                    sessionId={sessionId}
-                    providerId={selectedModel.provider}
-                    active={section === "models"}
-                  />
                 </>
               ) : (
                 <div className="provider-settings-state">
                   <strong>{t("noModels")}</strong>
                 </div>
+              )}
+              <ProviderStatusSection
+                key={`${sessionId}:${providerRevision}`}
+                sessionId={sessionId}
+                providerId={selectedModel?.provider ?? ""}
+                active={section === "models"}
+                busy={setupBusy}
+                onSaved={onPreferencesChanged}
+              />
+              {section === "models" && (
+                <ModelConfigurationEditor
+                  sessionId={sessionId}
+                  busy={setupBusy}
+                  onSaved={async () => {
+                    refreshProviders((value) => value + 1);
+                    return onPreferencesChanged();
+                  }}
+                />
               )}
             </div>
           </section>
@@ -389,6 +404,8 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
 
@@ -401,6 +418,7 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               currentModel={currentModel}
+              models={models}
               activity={capabilities?.subagents}
               setupPending={setupPending || setupBusy}
               onConfigure={configureOpenPi}
@@ -417,6 +435,8 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
         </div>

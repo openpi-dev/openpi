@@ -10,6 +10,8 @@ export interface GeneratedFileRecord {
   reference: string;
   tool: "write" | "edit";
   change?: string;
+  diff?: string;
+  diffTruncated?: boolean;
 }
 
 export function generatedFiles(
@@ -50,6 +52,9 @@ export function generatedFiles(
       reference,
       tool: call.name,
       ...(evidence.change ? { change: evidence.change } : {}),
+      ...(evidence.diff
+        ? { diff: evidence.diff, diffTruncated: evidence.truncated }
+        : {}),
     });
   }
   return [...files.values()].reverse();

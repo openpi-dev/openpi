@@ -114,10 +114,14 @@ export function SessionChangesPopover({
         }}
       >
         <strong>{t("filesChanged", { count: snapshot.files.length })}</strong>
-        <span className="session-changes-counts" aria-hidden="true">
-          <span className="review-additions">+{snapshot.additions}</span>
-          <span className="review-deletions">-{snapshot.deletions}</span>
-        </span>
+        {!snapshot.files.some(
+          (file) => file.status === "untracked" && file.diffLoaded === false,
+        ) && (
+          <span className="session-changes-counts" aria-hidden="true">
+            <span className="review-additions">+{snapshot.additions}</span>
+            <span className="review-deletions">-{snapshot.deletions}</span>
+          </span>
+        )}
         <ChevronDown aria-hidden="true" />
       </button>
     </div>

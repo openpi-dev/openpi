@@ -388,3 +388,10 @@
     transition: none;
   }
 }
+.review-source-picker {
+  flex: 0 0 auto;
+  padding: 10px 16px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+}
+.review-source-picker select { margin-left: 8px; padding: 4px 8px; color: var(--text); background: var(--sidebar); border: 1px solid var(--border); border-radius: 6px; }

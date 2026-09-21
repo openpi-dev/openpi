@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -25,6 +25,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
   browser,
 }) => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-evidence-browser-"));
+  const outside = await mkdtemp(join(tmpdir(), "openpi-external-file-"));
+  const externalPath = join(outside, "external%25.ts");
+  await writeFile(externalPath, "export const otherWorktree = 42;");
   const manager = SessionManager.inMemory(cwd);
   const path = join(cwd, "report space.md");
   const writeTool = createEvidenceWriteTool(cwd);
@@ -180,7 +183,9 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
       isError: row.isError,
       timestamp: Date.now(),
     });
-  assistant("[Report](./report%20space.md)\n\n[Missing](./missing.md)");
+  assistant(
+    `[Report](./report%20space.md)\n\n[Missing](./missing.md)\n\n[Other worktree](${encodeURI(externalPath)})`,
+  );
   const listeners = new Set<(event: WebRuntimeEvent) => void>();
   const runtime: WebRuntimeController = {
     searchModels: (query, limit) =>
@@ -440,10 +445,26 @@ test("real file evidence, authenticated downloads, edits, refresh and failure st
     await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
     await page.getByRole("button", { name: "Missing", exact: true }).click();
     await expect(artifactPanel).toContainText("File no longer exists");
+    await page.getByRole("button", { name: /关闭预览|Close preview/u }).click();
+    await page
+      .getByRole("button", { name: "Other worktree", exact: true })
+      .click();
+    await expect(artifactPanel).not.toContainText("export const otherWorktree");
+    await page
+      .getByRole("button", { name: /只读打开此文件|Open this file read-only/u })
+      .click();
+    await expect(artifactPanel).toContainText(
+      "export const otherWorktree = 42;",
+    );
+    await page.getByRole("button", { name: /刷新文件|Refresh file/u }).click();
+    await expect(artifactPanel).toContainText(
+      "export const otherWorktree = 42;",
+    );
   } finally {
     await context.close();
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
+    await rm(outside, { recursive: true, force: true });
     await rm(baselineDirectory, { recursive: true, force: true });
   }
 });

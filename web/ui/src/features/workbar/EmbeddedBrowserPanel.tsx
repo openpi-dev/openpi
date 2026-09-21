@@ -8,6 +8,7 @@ import {
 } from "lucide-react";
 import {
   type FormEvent,
+  memo,
   useCallback,
   useEffect,
   useMemo,
@@ -35,7 +36,7 @@ function normalizedBrowserUrl(value: string) {
   }
 }
 
-export function EmbeddedBrowserPanel({
+export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   sessionId,
   active,
 }: {
@@ -46,6 +47,7 @@ export function EmbeddedBrowserPanel({
   const client = useMemo(() => new WebClient(), []);
   const abort = useRef<AbortController | null>(null);
   const viewport = useRef<HTMLDivElement>(null);
+  const frameImage = useRef<HTMLImageElement>(null);
   const frameUrl = useRef<string | null>(null);
   const stateRef = useRef<WebEmbeddedBrowserState | null>(null);
   const addressEditing = useRef(false);
@@ -65,7 +67,7 @@ export function EmbeddedBrowserPanel({
   const [draft, setDraft] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [state, setState] = useState<WebEmbeddedBrowserState | null>(null);
-  const [frame, setFrame] = useState<string | null>(null);
+  const [frameReady, setFrameReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const browserStarted = state !== null;
 
@@ -114,20 +116,36 @@ export function EmbeddedBrowserPanel({
     if (!active || !browserStarted) return;
     const controller = new AbortController();
     let timer = 0;
-    let ticks = 0;
-    const refresh = async () => {
+    let reconnect = 0;
+    let pending:
+      | import("../../../../protocol/types.ts").WebBrowserFrame
+      | undefined;
+    let decoding = false;
+    let decodingUrl: string | undefined;
+    const paint = async () => {
+      if (decoding || !pending || controller.signal.aborted) return;
+      decoding = true;
+      const next = pending;
+      pending = undefined;
       try {
-        const image = await client.browserFrame(sessionId, controller.signal);
-        if (controller.signal.aborted || !image) return;
-        const nextUrl = URL.createObjectURL(image);
-        const previous = frameUrl.current;
-        frameUrl.current = nextUrl;
-        setFrame(nextUrl);
-        if (previous) URL.revokeObjectURL(previous);
-        ticks++;
-        if (ticks % 4 === 0) {
-          const next = await client.browserState(sessionId, controller.signal);
-          if (!controller.signal.aborted) applyState(next);
+        const bytes = Uint8Array.from(atob(next.data), (character) =>
+          character.charCodeAt(0),
+        );
+        const url = URL.createObjectURL(
+          new Blob([bytes], { type: next.mimeType }),
+        );
+        decodingUrl = url;
+        const image = new Image();
+        image.src = url;
+        await image.decode();
+        if (!controller.signal.aborted && frameImage.current) {
+          const previous = frameUrl.current;
+          frameImage.current.src = url;
+          frameUrl.current = url;
+          decodingUrl = undefined;
+          setFrameReady(true);
+          setError(null);
+          if (previous) URL.revokeObjectURL(previous);
         }
       } catch (caught) {
         if (!controller.signal.aborted)
@@ -135,13 +153,50 @@ export function EmbeddedBrowserPanel({
             caught instanceof Error ? caught.message : t("browserOpenFailed"),
           );
       } finally {
-        if (!controller.signal.aborted) timer = window.setTimeout(refresh, 120);
+        if (decodingUrl) URL.revokeObjectURL(decodingUrl);
+        decodingUrl = undefined;
+        decoding = false;
+        if (pending) void paint();
       }
     };
-    void refresh();
+    const connect = async () => {
+      try {
+        await client.streamBrowserFrames(
+          sessionId,
+          controller.signal,
+          (frame) => {
+            pending = frame;
+            void paint();
+          },
+        );
+      } catch (caught) {
+        if (!controller.signal.aborted)
+          setError(
+            caught instanceof Error ? caught.message : t("browserOpenFailed"),
+          );
+      } finally {
+        if (!controller.signal.aborted)
+          reconnect = window.setTimeout(connect, 1_000);
+      }
+    };
+    const refreshState = async () => {
+      try {
+        const next = await client.browserState(sessionId, controller.signal);
+        if (!controller.signal.aborted) applyState(next);
+      } catch {
+      } finally {
+        if (!controller.signal.aborted)
+          timer = window.setTimeout(refreshState, 1_000);
+      }
+    };
+    void connect();
+    void refreshState();
     return () => {
       controller.abort();
+      pending = undefined;
       window.clearTimeout(timer);
+      window.clearTimeout(reconnect);
+      if (decodingUrl) URL.revokeObjectURL(decodingUrl);
     };
   }, [active, applyState, browserStarted, client, sessionId, t]);
 
@@ -168,7 +223,15 @@ export function EmbeddedBrowserPanel({
         if (!current || (width === current.width && height === current.height))
           return;
         void client
-          .browserAction(sessionId, { type: "resize", width, height })
+          .browserAction(sessionId, {
+            type: "resize",
+            width,
+            height,
+            deviceScaleFactor: Math.max(
+              1,
+              Math.min(2, window.devicePixelRatio || 1),
+            ),
+          })
           .then((next) => applyState(next))
           .catch(() => undefined);
       }, 160);
@@ -185,6 +248,7 @@ export function EmbeddedBrowserPanel({
     return {
       width: Math.max(320, Math.min(2_560, Math.round(bounds?.width ?? 1_024))),
       height: Math.max(240, Math.min(2_560, Math.round(bounds?.height ?? 768))),
+      deviceScaleFactor: Math.max(1, Math.min(2, window.devicePixelRatio || 1)),
     };
   };
 
@@ -230,43 +294,107 @@ export function EmbeddedBrowserPanel({
     void launchBrowser();
   };
 
-  const action = async (
-    browserAction: Parameters<WebClient["browserAction"]>[1],
-    syncAddress = false,
-  ) => {
-    try {
-      const next = await client.browserAction(sessionId, browserAction);
-      if (syncAddress) addressDirty.current = false;
-      applyState(next, syncAddress);
-      setError(null);
-    } catch (caught) {
-      setError(
-        caught instanceof Error ? caught.message : t("browserOpenFailed"),
-      );
-    }
-  };
+  const action = useCallback(
+    async (
+      browserAction: Parameters<WebClient["browserAction"]>[1],
+      syncAddress = false,
+    ) => {
+      try {
+        const next = await client.browserAction(sessionId, browserAction);
+        if (["mouse", "key", "text"].includes(browserAction.type)) {
+          setError(null);
+          return;
+        }
+        if (syncAddress) addressDirty.current = false;
+        applyState(next, syncAddress);
+        setError(null);
+      } catch (caught) {
+        setError(
+          caught instanceof Error ? caught.message : t("browserOpenFailed"),
+        );
+      }
+    },
+    [applyState, client, sessionId, t],
+  );
 
-  const browserPoint = (event: { clientX: number; clientY: number }) => {
-    const bounds = viewport.current?.getBoundingClientRect();
-    const current = stateRef.current;
-    if (!bounds || !current) return null;
-    return {
-      x: Math.max(
-        0,
-        Math.min(
-          current.width,
-          ((event.clientX - bounds.left) / bounds.width) * current.width,
+  const browserPoint = useCallback(
+    (event: { clientX: number; clientY: number }) => {
+      const bounds = viewport.current?.getBoundingClientRect();
+      const current = stateRef.current;
+      if (!bounds || !current || !bounds.width || !bounds.height) return null;
+      return {
+        x: Math.max(
+          0,
+          Math.min(
+            current.width,
+            ((event.clientX - bounds.left) / bounds.width) * current.width,
+          ),
         ),
-      ),
-      y: Math.max(
-        0,
-        Math.min(
-          current.height,
-          ((event.clientY - bounds.top) / bounds.height) * current.height,
+        y: Math.max(
+          0,
+          Math.min(
+            current.height,
+            ((event.clientY - bounds.top) / bounds.height) * current.height,
+          ),
         ),
-      ),
+      };
+    },
+    [],
+  );
+
+  useEffect(() => {
+    const element = viewport.current;
+    if (!active || !browserStarted || !element) return;
+    let disposed = false;
+    let sending = false;
+    let pending: {
+      x: number;
+      y: number;
+      deltaX: number;
+      deltaY: number;
+    } | null = null;
+    const flush = async () => {
+      if (disposed || sending || !pending) return;
+      const next = pending;
+      pending = null;
+      sending = true;
+      try {
+        await action({ type: "mouse", event: "wheel", ...next });
+      } finally {
+        sending = false;
+        if (!disposed && pending) void flush();
+      }
     };
-  };
+    const wheel = (event: WheelEvent) => {
+      const point = browserPoint(event);
+      if (!point) return;
+      event.preventDefault();
+      const unit =
+        event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? element.clientHeight
+            : 1;
+      pending = {
+        ...point,
+        deltaX: Math.max(
+          -10_000,
+          Math.min(10_000, (pending?.deltaX ?? 0) + event.deltaX * unit),
+        ),
+        deltaY: Math.max(
+          -10_000,
+          Math.min(10_000, (pending?.deltaY ?? 0) + event.deltaY * unit),
+        ),
+      };
+      void flush();
+    };
+    element.addEventListener("wheel", wheel, { passive: false });
+    return () => {
+      disposed = true;
+      pending = null;
+      element.removeEventListener("wheel", wheel);
+    };
+  }, [active, action, browserPoint, browserStarted]);
 
   return (
     <div className="browser-tool">
@@ -395,18 +523,6 @@ export function EmbeddedBrowserPanel({
               void action({ type: "mouse", event: "move", ...latest });
           }, 60);
         }}
-        onWheel={(event) => {
-          const point = browserPoint(event);
-          if (!point) return;
-          event.preventDefault();
-          void action({
-            type: "mouse",
-            event: "wheel",
-            deltaX: event.deltaX,
-            deltaY: event.deltaY,
-            ...point,
-          });
-        }}
         onKeyDown={(event) => {
           event.stopPropagation();
           if (!state || event.metaKey || event.ctrlKey || event.altKey) return;
@@ -433,13 +549,13 @@ export function EmbeddedBrowserPanel({
           });
         }}
       >
-        {frame ? (
-          <img
-            src={frame}
-            alt={state?.title || state?.url || t("browser")}
-            draggable={false}
-          />
-        ) : (
+        <img
+          ref={frameImage}
+          hidden={!frameReady}
+          alt={state?.title || state?.url || t("browser")}
+          draggable={false}
+        />
+        {!frameReady && (
           <div className="browser-empty">
             <Globe2 aria-hidden="true" />
             <h3>{t(busy ? "browserStarting" : "browserReady")}</h3>
@@ -450,4 +566,4 @@ export function EmbeddedBrowserPanel({
       </div>
     </div>
   );
-}
+});

@@ -24,7 +24,11 @@ import {
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type {
+  WebProviderAuthProjection,
+  WebModelConfiguration,
+  WebModelConfigurations,
+} from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
 
@@ -147,9 +151,17 @@ export class WebClient {
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
   }
 
-  gitReview(sessionId: string, path: string, signal?: AbortSignal) {
+  gitReview(
+    sessionId: string,
+    path: string,
+    signal?: AbortSignal,
+    options?: {
+      source: import("../../../protocol/types.ts").WebGitReviewSource;
+      file?: string;
+    },
+  ) {
     return this.request<WebGitReviewResult>(
-      `/api/git-review?${new URLSearchParams({ sessionId, path })}`,
+      `/api/git-review?${new URLSearchParams({ sessionId, path, ...options })}`,
       { signal, timeoutMessage: "Git review timed out. Please retry." },
     );
   }
@@ -184,6 +196,22 @@ export class WebClient {
       `/api/artifacts/content?${new URLSearchParams({ sessionId, handle })}`,
       { signal },
     );
+  }
+
+  authorizeArtifact(
+    sessionId: string,
+    reference: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ handle: string }>("/api/artifacts/authorize-file", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        reference,
+        access: "read-external-file",
+      }),
+      signal,
+    });
   }
 
   releaseArtifact(sessionId: string, handle: string) {
@@ -247,7 +275,7 @@ export class WebClient {
   openBrowser(
     sessionId: string,
     url: string,
-    viewport: { width: number; height: number },
+    viewport: { width: number; height: number; deviceScaleFactor?: number },
     signal?: AbortSignal,
   ) {
     return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
@@ -292,6 +320,52 @@ export class WebClient {
       );
     }
     return response.blob();
+  }
+
+  async streamBrowserFrames(
+    sessionId: string,
+    signal: AbortSignal,
+    onFrame: (
+      frame: import("../../../protocol/types.ts").WebBrowserFrame,
+    ) => void,
+  ) {
+    const response = await fetch(
+      `/api/browser/frames?${new URLSearchParams({ sessionId })}`,
+      { headers: this.headers(), signal },
+    );
+    if (!response.ok)
+      throw new WebApiError("Browser stream unavailable", response.status);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Browser stream unavailable");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > 25 * 1024 * 1024)
+          throw new Error("Browser frame exceeds its limit");
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const record = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (record.startsWith("data: ")) {
+            const frame = JSON.parse(
+              record.slice(6),
+            ) as import("../../../protocol/types.ts").WebBrowserFrame;
+            if (
+              frame.mimeType === "image/png" &&
+              typeof frame.data === "string"
+            )
+              onFrame(frame);
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
   }
 
   createInteractiveTerminal(
@@ -471,6 +545,39 @@ export class WebClient {
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
+  }
+
+  saveProviderKey(
+    sessionId: string,
+    provider: string,
+    apiKey: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/providers/api-key", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider, apiKey }),
+      signal,
+    });
+  }
+
+  modelConfigurations(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebModelConfigurations>(
+      `/api/models/configuration?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  saveModelConfiguration(
+    sessionId: string,
+    revision: string,
+    model: WebModelConfiguration,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/models/configuration", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, model }),
+      signal,
+    });
   }
 
   commands(sessionId: string, signal?: AbortSignal) {

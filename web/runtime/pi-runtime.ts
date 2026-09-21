@@ -18,6 +18,7 @@ import {
 import {
   type WebActiveTurn,
   type WebModelSelectionOptions,
+  type WebModelConfiguration,
   type WebPromptOptions,
   type WebPromptAdmissionReceipt,
   type WebProviderAuthProjection,
@@ -52,6 +53,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { readModelConfigurations, saveModelConfiguration } from "./model-configuration.ts";
 import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
@@ -461,6 +463,67 @@ export class PiWebRuntime implements WebRuntimeController {
         maxProviders: WEB_MAX_PROVIDER_AUTH_ITEMS,
       },
     };
+  }
+
+  private assertSettingsWritable(sessionId: string) {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    if (sessionId !== this.sessionManager.getSessionId() || !this.isIdle()) {
+      throw new WebRuntimeRequestError("Wait for the active Session to become idle before saving settings", "SESSION_CONFLICT", 409);
+    }
+  }
+
+  private async mutateSettings(sessionId: string, operation: () => Promise<void>) {
+    // Reuse prompt admission: a second tab cannot begin a turn halfway through
+    // a configuration write, and already-admitted turns are checked for idle.
+    const previousAdmission = this.promptAdmission;
+    let release = () => {};
+    this.promptAdmission = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await previousAdmission;
+      this.assertSettingsWritable(sessionId);
+      await operation();
+    } finally { release(); }
+  }
+
+  saveProviderKey(sessionId: string, provider: string, apiKey: string) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      const models = this.runtime.services.modelRuntime;
+      if (!models.getProvider(provider)?.auth.apiKey?.login) throw new Error("API key login is unavailable for this provider");
+      let submitted = false;
+      await models.login(provider, "api_key", {
+        signal: AbortSignal.timeout(10_000),
+        notify: () => undefined,
+        prompt: async (prompt) => {
+          if (prompt.type === "select") {
+            const option = prompt.options.find((item) => item.id === "api-key" || item.id === "bearer-token");
+            if (option) return option.id;
+          }
+          if (prompt.type === "secret" && !submitted) {
+            submitted = true;
+            return apiKey;
+          }
+          throw new Error("This provider needs additional authentication settings");
+        },
+      });
+    }));
+  }
+
+  readModelConfigurations() {
+    return readModelConfigurations(this.runtime.services.agentDir);
+  }
+
+  saveModelConfiguration(sessionId: string, revision: string, model: WebModelConfiguration) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      await saveModelConfiguration(this.runtime.services.agentDir, revision, model);
+      await this.runtime.services.modelRuntime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(10_000) });
+      const updated = this.runtime.services.modelRuntime.getModel(model.provider, model.id);
+      if (!updated) throw new Error("Saved model was not loaded by Pi");
+      const current = this.runtime.session.model;
+      if (current?.provider === model.provider && current.id === model.id) {
+        await this.runtime.session.setModel(updated);
+      }
+    }));
   }
 
   getSessionUsage() {

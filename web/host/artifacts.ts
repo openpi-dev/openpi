@@ -26,7 +26,7 @@ function inside(root: string, path: string) {
 }
 
 interface Scope { sessionId: string; cwd: string }
-interface Grant { scope: Scope; path: string; requested: string; touched: number }
+interface Grant { scope: Scope; path: string; requested: string; readRoot: string; touched: number }
 
 function metadataIdentity(info: import("node:fs").BigIntStats) {
   return [info.dev, info.ino, info.size, info.mtimeNs, info.ctimeNs].join(":");
@@ -51,13 +51,16 @@ export class ArtifactReader {
     return scope;
   }
 
-  private async canonical(scope: Scope, reference: string, base?: string) {
+  private decodeReference(reference: string) {
     if (!reference || reference.length > 4096 || /[\x00-\x1f\x7f]/u.test(reference) || /^(?:\\\\|\/\/)/u.test(reference)) throw denied();
     let decoded: string;
     try { decoded = decodeURIComponent(reference); } catch { throw denied(); }
     if (/[\x00-\x1f\x7f]/u.test(decoded) || /^(?:\\\\|\/\/)/u.test(decoded) || /:/u.test(decoded.replace(/^[a-z]:[\\/]/iu, ""))) throw denied();
-    const root = await realpath(scope.cwd);
-    const requested = resolve(base ?? root, decoded);
+    return decoded;
+  }
+
+  private async canonical(scope: Scope, requested: string, readRoot = scope.cwd) {
+    const root = await realpath(readRoot);
     // Find the actual workspace boundary, including Windows short-name aliases
     // in any ancestor. Never follow a link below that boundary.
     const volumeRoot = parse(requested).root;
@@ -75,7 +78,7 @@ export class ArtifactReader {
           // pointing at the root is not an additional grant. Compare identity,
           // so alternate 8.3 spellings of the selected junction still work.
           if (info.isSymbolicLink()) {
-            const selected = await lstat(scope.cwd, { bigint: true });
+            const selected = await lstat(readRoot, { bigint: true });
             if (!selected.isSymbolicLink() || selected.dev !== info.dev || selected.ino !== info.ino) throw denied();
           }
           reachedRoot = true;
@@ -99,15 +102,30 @@ export class ArtifactReader {
   }
 
   async resolveFile(sessionId: string, reference: string, parent?: string) {
+    return this.issueGrant(sessionId, reference, parent, false);
+  }
+
+  /** Explicit operator consent grants this file only, never its directory. */
+  async authorizeFile(sessionId: string, reference: string) {
+    return this.issueGrant(sessionId, reference, undefined, true);
+  }
+
+  private async issueGrant(sessionId: string, reference: string, parent: string | undefined, external: boolean) {
     const scope = this.scope();
     if (sessionId !== scope.sessionId) throw denied();
     const base = parent ? this.requireGrant(parent, sessionId).path : undefined;
     try {
-      const { path, requested } = await this.canonical(scope, reference, base ? dirname(base) : undefined);
+      const decoded = this.decodeReference(reference);
+      if (external && !isAbsolute(decoded)) throw denied();
+      const requested = resolve(base ? dirname(base) : await realpath(scope.cwd), decoded);
+      const readRoot = external ? dirname(requested) : scope.cwd;
+      const { path } = await this.canonical(scope, requested, readRoot);
+      const info = await lstat(path);
+      if (external && !info.isFile()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only regular files can be opened.");
       this.assertScope(scope);
       if (this.handles.size >= MAX_HANDLES) throw new ArtifactError("ARTIFACT_LIMIT", 429, "Too many open files. Close a preview before opening another.");
       const handle = randomUUID();
-      this.handles.set(handle, { scope, path, requested, touched: Date.now() });
+      this.handles.set(handle, { scope, path, requested, readRoot, touched: Date.now() });
       return handle;
     } catch (error) { throw this.classify(error); }
   }
@@ -123,7 +141,7 @@ export class ArtifactReader {
   async metadata(handle: string, sessionId: string) {
     const grant = this.requireGrant(handle, sessionId);
     try {
-      const current = await this.canonical(grant.scope, grant.requested);
+      const current = await this.canonical(grant.scope, grant.requested, grant.readRoot);
       if (current.path !== grant.path) throw denied();
       const info = await lstat(current.path, { bigint: true });
       if (!info.isFile()) throw denied();
@@ -137,7 +155,7 @@ export class ArtifactReader {
     if (this.reads >= MAX_READS) throw new ArtifactError("ARTIFACT_BUSY", 429, "File reads are busy. Try again shortly.");
     this.reads++;
     try {
-      const canonical = await this.canonical(grant.scope, grant.requested);
+      const canonical = await this.canonical(grant.scope, grant.requested, grant.readRoot);
       if (canonical.path !== grant.path) throw denied();
       const beforePath = await stat(grant.path, { bigint: true });
       if (!beforePath.isFile()) throw new ArtifactError("ARTIFACT_UNSUPPORTED", 415, "Only regular files can be opened.");
@@ -154,7 +172,7 @@ export class ArtifactReader {
           length += bytesRead;
         }
         const after = await file.stat({ bigint: true });
-        const current = await this.canonical(grant.scope, grant.requested);
+        const current = await this.canonical(grant.scope, grant.requested, grant.readRoot);
         const afterPath = await stat(current.path, { bigint: true });
         this.assertScope(grant.scope);
         if (before.size !== BigInt(length) || after.size !== before.size || after.mtimeNs !== before.mtimeNs || after.ctimeNs !== before.ctimeNs || afterPath.ino !== before.ino || afterPath.dev !== before.dev || current.path !== grant.path) throw new ArtifactError("ARTIFACT_CHANGED", 409, "File changed while being read. Refresh to load a stable version.");

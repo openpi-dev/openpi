@@ -23,6 +23,7 @@ import {
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
+import { validModelConfiguration } from "../runtime/model-configuration.ts";
 import {
   PiWebAdapter,
   WebReadOnlySessionError,
@@ -237,12 +238,14 @@ function parseBrowserAction(
   if (
     action === "resize" &&
     isBoundedInteger(body.width, 320, 2_560) &&
-    isBoundedInteger(body.height, 240, 2_560)
+    isBoundedInteger(body.height, 240, 2_560) &&
+    (body.deviceScaleFactor === undefined || finiteNumber(body.deviceScaleFactor, 1, 2))
   ) {
     return {
       type: "resize",
       width: body.width,
       height: body.height,
+      ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
     } satisfies WebEmbeddedBrowserAction;
   }
   if (
@@ -360,6 +363,7 @@ export class WebHost {
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
   private readonly terminalStreams = new Set<ServerResponse>();
+  private readonly browserStreams = new Set<() => void>();
   private readonly clientHeartbeats = new Map<
     ServerResponse,
     ReturnType<typeof setInterval>
@@ -556,6 +560,7 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.artifacts.dispose();
       this.interactiveTerminals.dispose();
+      for (const close of this.browserStreams) close();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
@@ -746,8 +751,9 @@ export class WebHost {
         !target ||
         (body.width !== undefined && !isBoundedInteger(body.width, 320, 2_560)) ||
         (body.height !== undefined && !isBoundedInteger(body.height, 240, 2_560)) ||
+        (body.deviceScaleFactor !== undefined && !finiteNumber(body.deviceScaleFactor, 1, 2)) ||
         Object.keys(body).some(
-          (key) => !["sessionId", "url", "width", "height"].includes(key),
+          (key) => !["sessionId", "url", "width", "height", "deviceScaleFactor"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -764,6 +770,7 @@ export class WebHost {
         {
           width: typeof body.width === "number" ? body.width : 1_024,
           height: typeof body.height === "number" ? body.height : 768,
+          ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
         },
       );
       return this.json(response, 200, state);
@@ -785,6 +792,56 @@ export class WebHost {
             code: "BROWSER_NOT_FOUND",
             error: "the embedded browser is not running",
           });
+    }
+    if (url.pathname === "/api/browser/frames") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "Browser frames require GET" });
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"])) return this.json(response, 400, { error: "An exact Session id is required" });
+      if (!(await this.requireActiveToolSession(sessionId, response))) return;
+      if (!this.embeddedBrowser.subscribeFrames) return this.json(response, 501, { error: "Browser streaming is unavailable" });
+      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
+      if (!(await this.embeddedBrowser.state(sessionId))) return this.json(response, 404, { error: "Browser is not open" });
+      if (response.destroyed || response.writableEnded) return;
+      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
+      let stop: (() => void) | undefined;
+      let pending: import("../protocol/types.ts").WebBrowserFrame | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let closed = false;
+      let unsubscribe = () => {};
+      const flush = () => {
+        timer = undefined;
+        if (closed || !pending || response.writableNeedDrain) return;
+        if (this.runtime.sessionManager.getSessionId() !== sessionId) { close(); return; }
+        const frame = pending; pending = undefined;
+        response.write(`data: ${JSON.stringify(frame)}\n\n`);
+      };
+      const schedule = () => { if (!closed && !timer) timer = setTimeout(flush, 16); };
+      const heartbeat = setInterval(() => { if (!closed && !response.writableNeedDrain) response.write(": heartbeat\n\n"); }, 15_000);
+      const close = () => {
+        if (closed) return;
+        closed = true; pending = undefined;
+        clearTimeout(timer); clearInterval(heartbeat);
+        stop?.(); unsubscribe();
+        this.browserStreams.delete(close);
+        response.off("drain", schedule);
+        response.destroy();
+      };
+      this.browserStreams.add(close);
+      response.once("close", close);
+      response.on("drain", schedule);
+      unsubscribe = this.runtime.subscribe(() => {
+        if (this.runtime.sessionManager.getSessionId() !== sessionId) close();
+      });
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      response.write(": connected\n\n");
+      try {
+        stop = await this.embeddedBrowser.subscribeFrames(sessionId, frame => {
+          if (!frame) { close(); return; }
+          if (!closed) { pending = frame; schedule(); }
+        });
+        if (!stop || closed) { stop?.(); close(); }
+      } catch { close(); }
+      return;
     }
     if (url.pathname === "/api/browser/frame") {
       if (request.method !== "GET")
@@ -978,6 +1035,14 @@ export class WebHost {
       const handle = await this.artifacts.resolveFile(body.sessionId, body.reference, body.parent);
       return this.json(response, 200, { handle });
     }
+    if (url.pathname === "/api/artifacts/authorize-file") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "File authorization requires POST" });
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.reference !== "string" || body.access !== "read-external-file")
+        return this.json(response, 400, { error: "An explicit single-file authorization is required" });
+      const handle = await this.artifacts.authorizeFile(body.sessionId, body.reference);
+      return this.json(response, 200, { handle });
+    }
     if (url.pathname === "/api/artifacts/content") {
       const handle = url.searchParams.get("handle");
       const sessionId = url.searchParams.get("sessionId");
@@ -1115,6 +1180,35 @@ export class WebHost {
           : await this.runtime.switchSession(session.path);
       this.publish("session_selected", { sessionPath: session.path });
       return this.json(response, 200, result);
+    }
+    if (url.pathname === "/api/providers/api-key" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.provider !== "string" || body.provider.length > 160 || typeof body.apiKey !== "string" || !body.apiKey.trim() || body.apiKey.length > 8192 || /[\r\n\u0000]/u.test(body.apiKey)) {
+        return this.json(response, 400, { error: "sessionId, provider and a valid API key are required" });
+      }
+      if (!this.runtime.saveProviderKey) return this.json(response, 501, { error: "Provider configuration unavailable" });
+      try {
+        await this.runtime.saveProviderKey(body.sessionId, body.provider, body.apiKey.trim());
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch (error) {
+        // Provider errors can contain credential material. Never project them.
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not complete credential save. Wait for an idle Session, refresh status and retry; this provider may require additional authentication settings.",
+        });
+      }
+    }
+    if (url.pathname === "/api/models/configuration" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.revision !== "string" || !validModelConfiguration(body.model)) return this.json(response, 400, { error: "Invalid model configuration" });
+      if (!this.runtime.saveModelConfiguration) return this.json(response, 501, { error: "Model configuration unavailable" });
+      try {
+        await this.runtime.saveModelConfiguration(body.sessionId, body.revision, body.model);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch {
+        return this.json(response, 409, { error: "Could not complete model save. Wait for an idle Session and refresh configuration before retrying." });
+      }
     }
     if (url.pathname === "/api/model" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -1467,7 +1561,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -1543,14 +1637,20 @@ export class WebHost {
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
       const sessionPath = url.searchParams.get("path");
+      const source = url.searchParams.get("source") ?? "unstaged";
+      const filePath = url.searchParams.get("file");
       if (
+        !["unstaged", "staged", "branch", "session"].includes(source) ||
+        (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||
+        url.searchParams.getAll("source").length > 1 ||
+        url.searchParams.getAll("file").length > 1 ||
         !sessionId ||
         sessionId.length > 256 ||
         !sessionPath ||
         url.searchParams.getAll("sessionId").length !== 1 ||
         url.searchParams.getAll("path").length !== 1 ||
         [...url.searchParams.keys()].some(
-          (key) => key !== "sessionId" && key !== "path",
+          (key) => !["sessionId", "path", "source", "file"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -1568,7 +1668,11 @@ export class WebHost {
       return this.json(
         response,
         200,
-        await this.gitReviews.read(session.path, session.cwd),
+        await this.gitReviews.read(session.path, session.cwd, {
+          source: source as import("../protocol/types.ts").WebGitReviewSource,
+          summary: filePath === null,
+          ...(filePath === null ? {} : { filePath }),
+        }),
       );
     }
     if (url.pathname === "/api/sessions") {
@@ -1777,6 +1881,14 @@ export class WebHost {
         workspaceSelected: this.runtime.workspaceSelected,
         models: this.runtime.listModels().filter((model) => model.current),
       });
+    if (url.pathname === "/api/models/configuration") {
+      if (!this.runtime.readModelConfigurations) return this.json(response, 501, { error: "Model configuration unavailable" });
+      try {
+        return this.json(response, 200, await this.runtime.readModelConfigurations());
+      } catch {
+        return this.json(response, 422, { error: "Cannot read models.json; check its JSON format" });
+      }
+    }
     if (url.pathname === "/api/providers/auth-status") {
       if (!this.runtime.listProviderAuth) {
         return this.json(response, 501, {

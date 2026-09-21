@@ -115,6 +115,17 @@ const resources = {
       terminalDisconnected: "Terminal connection ended unexpectedly.",
       terminalError: "Terminal unavailable.",
       browser: "Browser",
+      sessionFileRecords: "Session file records",
+      recordedFileEdit: "View recorded edit",
+      gitReviewSource: "Changes",
+      gitReviewUnstaged: "Unstaged changes",
+      gitReviewStaged: "Staged changes",
+      gitReviewBranch: "Branch changes",
+      gitReviewFileMissing:
+        "This file no longer has changes in this view. Refresh the file list.",
+      artifactExternalAccess:
+        "This file is in another working directory. You can authorize read-only access to this file for this session; other files remain inaccessible.",
+      artifactAuthorizeFile: "Open this file read-only",
       sideConversationPending: "Preparing side conversation…",
       resizeSidebar: "Resize sidebar",
       resizePanes: "Resize panes",
@@ -330,6 +341,51 @@ const resources = {
       providerLoading: "Loading provider status…",
       providerLoadFailed: "Could not load provider status.",
       providerReadOnly: "Managed by Pi",
+      selectProvider: "Select a provider",
+      gitReviewBaselineUnavailable:
+        "No usable session baseline was retained (it may exceed the capture limit). Choose Unstaged, Staged or Branch to inspect Git changes, or open the session file records.",
+      providerApiKey: "New API key",
+      providerKeyPlaceholder: "Paste a key to add or replace it",
+      saveProviderKey: "Save API key",
+      savingSettings: "Saving…",
+      providerKeySaved:
+        "Saved to Pi credentials. Existing keys are never displayed.",
+      providerSaveFailed:
+        "Credential save did not complete. Wait until the session is idle, refresh status and retry. Some providers need additional authentication settings.",
+      providerWriteDetail:
+        "Save API keys here directly to Pi. Keys never enter a model conversation. For OAuth or additional provider fields, use Pi's native login.",
+      editModelConfiguration: "Add or edit a custom model",
+      modelConfigurationDetail:
+        "Uses Pi models.json. Configure authentication separately below. Saving does not send a model request.",
+      configuredModels: "Custom model configuration",
+      addModel: "Add a model",
+      modelConfig_provider: "Provider ID",
+      modelConfig_id: "Model ID",
+      modelConfig_name: "Display name",
+      modelConfig_baseUrl: "API base URL",
+      modelConfig_api: "API format",
+      modelConfig_contextWindow: "Context window (tokens)",
+      modelConfig_maxTokens: "Maximum output (tokens)",
+      modelConfig_reasoning: "Supports reasoning",
+      saveModelConfiguration: "Save model",
+      modelConfigurationSaved:
+        "Saved to Pi models.json. Configure the provider API key to make this model available.",
+      modelConfigurationFailed:
+        "Could not load or complete the save. Check models.json, wait until the session is idle and refresh before retrying.",
+      setupConfigurationRequest: "Configuration request",
+      configureViaSetup: "Apply via OpenPI setup",
+      setupFormDetail:
+        "Uses /openpi-setup. Follow progress and any required confirmation in the conversation; submission does not mean the configuration is saved.",
+      setupSkillsPlaceholder:
+        "Describe the skill to add or configure, including its source or local path",
+      setupPluginsPlaceholder:
+        "Describe the Pi package to configure, including its exact package name or local path",
+      enableSkillInvocation: "Allow model invocation",
+      disableSkillInvocation: "Require explicit invocation",
+      setupSkillInvocationRequest:
+        "Configure this Pi skill: {{path}}. Set its native disable-model-invocation field to {{disabled}}. Preserve other content and explain when the change takes effect.",
+      setupRoleFormRequest:
+        "Configure the OpenPI {{role}} role to use {{model}} and set workflow concurrency to {{concurrency}}. Inherit parent thinking, validate the selection and preserve unrelated configuration.",
       providerReadOnlyDetail:
         "This page is read-only and never receives credential values. Configure provider authentication through Pi, then refresh this status.",
       openProviderSettings: "Open provider settings",
@@ -412,7 +468,7 @@ const resources = {
       pluginResourceSummary:
         "{{extensions}} ext · {{skills}} skills · {{prompts}} prompts · {{themes}} themes",
       pluginsManagedByPi:
-        "This is Pi's loaded-resource snapshot. Install, update, disable, or remove packages through Pi, then refresh this view.",
+        "These resources are loaded by Pi. Submit changes using the setup form above. Package changes follow native confirmation and take effect through Pi's reload lifecycle.",
       selectPlugin: "Select a plugin source",
       statusCaptured: "Snapshot at {{time}} · refresh for the latest state",
       conversationViews: "Conversation views",
@@ -599,7 +655,7 @@ const resources = {
       jumpToLatest: "跳至最新",
       filePreview: "文件预览",
       changeEvidence: "变更",
-      changeEvidenceScope: "当前会话开始后的只读 Git 工作区快照。",
+      changeEvidenceScope: "按所选范围查看当前工作目录的只读 Git 变更。",
       turnLabel: "第 {{number}} 轮",
       turnState_running: "运行中",
       turnState_complete: "已完成",
@@ -618,7 +674,7 @@ const resources = {
       gitReviewUnborn: "此仓库还没有可读取的 HEAD。",
       gitReviewFailed: "无法读取 Git 变更。",
       gitReviewTruncated: "变更快照已达到文件数或 diff 大小上限。",
-      gitReviewEmpty: "本会话开始后没有文件变更。",
+      gitReviewEmpty: "当前范围内没有文件变更。",
       gitReviewHiddenLines: "另有 {{count}} 行 diff 未显示。",
       gitReviewDiffTruncated: "快照已达到大小上限，未加载此文件的 diff。",
       gitReviewShowMore: "再显示 {{count}} 个文件",
@@ -685,7 +741,8 @@ const resources = {
       sideConversation: "侧边对话",
       sideConversationDescription:
         "在独立 Pi 会话中追问具体问题，不打断当前主任务。",
-      workbarChangesDescription: "查看本会话开始后的 Git 工作区变更。",
+      workbarChangesDescription:
+        "查看当前目录的未暂存、已暂存、分支或会话变更。",
       terminal: "终端",
       workbarTerminalDescription: "打开当前工作区的交互式终端。",
       backgroundTerminalActivity: "Agent 命令活动",
@@ -696,6 +753,16 @@ const resources = {
       terminalDisconnected: "终端连接意外中断。",
       terminalError: "终端不可用。",
       browser: "浏览器",
+      sessionFileRecords: "本会话文件记录",
+      recordedFileEdit: "查看本次编辑记录",
+      gitReviewSource: "变更范围",
+      gitReviewUnstaged: "未暂存变更",
+      gitReviewStaged: "已暂存变更",
+      gitReviewBranch: "分支变更",
+      gitReviewFileMissing: "此文件在当前范围内已无变更，请刷新文件列表。",
+      artifactExternalAccess:
+        "此文件位于其他工作目录。可为当前会话授权只读打开这一个文件，不会开放其他文件的访问。",
+      artifactAuthorizeFile: "只读打开此文件",
       sideConversationPending: "正在准备侧边会话…",
       resizeSidebar: "调整侧边栏宽度",
       resizePanes: "调整面板宽度",
@@ -899,6 +966,48 @@ const resources = {
       providerLoading: "正在加载服务商状态…",
       providerLoadFailed: "无法加载服务商状态。",
       providerReadOnly: "由 Pi 管理",
+      selectProvider: "选择服务商",
+      gitReviewBaselineUnavailable:
+        "未保留可用的会话基线，可能超出了捕获限额。请切换到未暂存、已暂存或分支查看 Git 变更，也可打开本会话文件记录。",
+      providerApiKey: "新 API 密钥",
+      providerKeyPlaceholder: "粘贴密钥以添加或替换",
+      saveProviderKey: "保存密钥",
+      savingSettings: "正在保存…",
+      providerKeySaved: "已保存到 Pi 凭据存储。已有密钥不会回显。",
+      providerSaveFailed:
+        "密钥保存未完成。请等待会话空闲，刷新状态后重试；部分服务商需要额外认证信息。",
+      providerWriteDetail:
+        "在这里直接保存到 Pi 凭据存储，密钥不会进入模型对话。OAuth 或需要额外字段的认证请使用 Pi 原生登录。",
+      editModelConfiguration: "添加或编辑自定义模型",
+      modelConfigurationDetail:
+        "使用 Pi 原生 models.json。服务商认证单独配置，保存不会发起模型请求。",
+      configuredModels: "自定义模型配置",
+      addModel: "添加模型",
+      modelConfig_provider: "服务商 ID",
+      modelConfig_id: "模型 ID",
+      modelConfig_name: "显示名称",
+      modelConfig_baseUrl: "API 地址",
+      modelConfig_api: "API 格式",
+      modelConfig_contextWindow: "上下文长度（tokens）",
+      modelConfig_maxTokens: "最大输出（tokens）",
+      modelConfig_reasoning: "支持推理",
+      saveModelConfiguration: "保存模型",
+      modelConfigurationSaved:
+        "已保存到 Pi models.json。配置服务商密钥后即可选择此模型。",
+      modelConfigurationFailed:
+        "读取或保存未完成。请检查 models.json，等待会话空闲，刷新配置后重试。",
+      setupConfigurationRequest: "配置需求",
+      configureViaSetup: "通过 OpenPI setup 应用",
+      setupFormDetail:
+        "统一走 /openpi-setup。请在对话中查看进度及必要的确认；提交成功不等于配置已保存。",
+      setupSkillsPlaceholder: "填写要添加或调整的技能，以及来源或本地路径",
+      setupPluginsPlaceholder: "填写要配置的 Pi 插件，以及准确的包名或本地路径",
+      enableSkillInvocation: "允许模型调用",
+      disableSkillInvocation: "改为仅显式调用",
+      setupSkillInvocationRequest:
+        "配置这个 Pi 技能：{{path}}。将原生 disable-model-invocation 字段设为 {{disabled}}，保留其余内容，并说明何时生效。",
+      setupRoleFormRequest:
+        "将 OpenPI 的 {{role}} 角色配置为使用 {{model}}，工作流并发设为 {{concurrency}}。推理级别继承父会话，校验选择有效性，并保留其他配置。",
       providerReadOnlyDetail:
         "此页面只读且不会接收凭据内容。请通过 Pi 配置服务商认证，然后刷新此状态。",
       openProviderSettings: "打开服务商设置",
@@ -978,7 +1087,7 @@ const resources = {
       pluginResourceSummary:
         "{{extensions}} 扩展 · {{skills}} 技能 · {{prompts}} 提示词 · {{themes}} 主题",
       pluginsManagedByPi:
-        "这里显示 Pi 当前已加载的资源快照。请通过 Pi 安装、更新、停用或移除软件包，然后刷新此页面。",
+        "这些资源由 Pi 加载。可通过上方 setup 表单提交变更；软件包操作沿用原生确认，并通过 Pi 的重新加载流程生效。",
       selectPlugin: "选择一个插件来源",
       statusCaptured: "采集于 {{time}} · 刷新查看最新状态",
       conversationViews: "会话视图",

@@ -156,7 +156,7 @@ test("Git review bounds repeated Session baselines with large dirty files", asyn
   assert.equal((await store.read(firstSession, root)).ok, true);
   assert.deepEqual(await store.read(secondSession, root), {
     ok: false,
-    reason: "git_failed",
+    reason: "baseline_unavailable",
   });
 });
 
@@ -190,6 +190,53 @@ test("Git review reports a non-repository instead of an empty snapshot", async (
     ok: false,
     reason: "not_git_repository",
   });
+});
+
+test("native Git views remain usable with an oversized untracked file and load diffs on demand", async () => {
+  const root = await repository();
+  await writeFile(join(root, "large.bin"), Buffer.alloc(8 * 1024 * 1024));
+  await writeFile(join(root, "small.txt"), "small change\n");
+  const overview = await readGitReview(root, {
+    source: "unstaged",
+    summary: true,
+  });
+  assert.equal(overview.ok, true);
+  if (!overview.ok) return;
+  assert.equal(overview.snapshot.comparison, "unstaged");
+  assert.equal(
+    overview.snapshot.files.find((file) => file.path === "large.bin")
+      ?.diffLoaded,
+    false,
+  );
+  assert.ok(overview.snapshot.files.every((file) => file.diff === ""));
+  const detail = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "small.txt",
+  });
+  assert.equal(detail.ok, true);
+  if (!detail.ok) return;
+  assert.deepEqual(
+    detail.snapshot.files.map((file) => file.path),
+    ["small.txt"],
+  );
+  assert.match(detail.snapshot.files[0]!.diff, /small change/u);
+  const large = await readGitReview(root, {
+    source: "unstaged",
+    filePath: "large.bin",
+  });
+  assert.equal(large.ok, true);
+  if (large.ok) assert.equal(large.snapshot.files[0]?.diffTruncated, true);
+  const staged = await readGitReview(root, { source: "staged", summary: true });
+  assert.equal(staged.ok, true);
+  if (staged.ok) assert.equal(staged.snapshot.files.length, 0);
+  await git(root, "add", "small.txt");
+  const stagedFile = await readGitReview(root, {
+    source: "staged",
+    filePath: "small.txt",
+  });
+  assert.equal(stagedFile.ok, true);
+  if (stagedFile.ok)
+    assert.match(stagedFile.snapshot.files[0]!.diff, /small change/u);
 });
 
 test("Git diff counts ignore metadata outside hunks", () => {

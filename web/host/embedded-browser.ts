@@ -5,6 +5,7 @@ import { join } from "node:path";
 import type {
   WebEmbeddedBrowserAction,
   WebEmbeddedBrowserState,
+  WebBrowserFrame,
 } from "../protocol/types.ts";
 
 const START_TIMEOUT_MS = 8_000;
@@ -15,10 +16,11 @@ export interface EmbeddedBrowserService {
   open(
     sessionId: string,
     url: string,
-    viewport?: { width: number; height: number },
+    viewport?: { width: number; height: number; deviceScaleFactor?: number },
   ): Promise<WebEmbeddedBrowserState>;
   state(sessionId: string): Promise<WebEmbeddedBrowserState | undefined>;
   frame(sessionId: string): Promise<Buffer | undefined>;
+  subscribeFrames?(sessionId: string, listener: (frame: WebBrowserFrame | null) => void): Promise<(() => void) | undefined>;
   action(
     sessionId: string,
     action: WebEmbeddedBrowserAction,
@@ -51,15 +53,16 @@ class CdpConnection {
   constructor(url: string) {
     this.socket = new WebSocket(url);
     this.opened = new Promise((resolve, reject) => {
-      this.socket.addEventListener("open", () => resolve(), { once: true });
+      const timer = setTimeout(() => { reject(new Error("Embedded browser connection timed out")); this.socket.close(); }, 5_000);
+      this.socket.addEventListener("open", () => { clearTimeout(timer); resolve(); }, { once: true });
       this.socket.addEventListener(
         "error",
-        () => reject(new Error("Embedded browser connection failed")),
+        () => { clearTimeout(timer); reject(new Error("Embedded browser connection failed")); },
         { once: true },
       );
       this.socket.addEventListener(
         "close",
-        () => reject(new Error("Embedded browser connection closed")),
+        () => { clearTimeout(timer); reject(new Error("Embedded browser connection closed")); },
         { once: true },
       );
     });
@@ -96,9 +99,17 @@ class CdpConnection {
     await this.opened;
     const id = ++this.nextId;
     const response = new Promise<Record<string, unknown>>((resolve, reject) => {
-      this.pending.set(id, { resolve, reject });
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`Embedded browser command timed out: ${method}`));
+      }, 5_000);
+      this.pending.set(id, {
+        resolve: value => { clearTimeout(timer); resolve(value); },
+        reject: error => { clearTimeout(timer); reject(error); },
+      });
     });
-    this.socket.send(JSON.stringify({ id, method, params }));
+    try { this.socket.send(JSON.stringify({ id, method, params })); }
+    catch (error) { this.pending.get(id)?.reject(error instanceof Error ? error : new Error(String(error))); this.pending.delete(id); }
     return response;
   }
 
@@ -124,12 +135,14 @@ interface BrowserSession {
   cdp: CdpConnection;
   width: number;
   height: number;
+  deviceScaleFactor: number;
   url: string;
   title: string;
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
-  latestFrame?: Buffer;
+  latestFrame?: WebBrowserFrame;
+  frameListeners: Set<(frame: WebBrowserFrame | null) => void>;
   stopListening: () => void;
 }
 
@@ -203,8 +216,8 @@ async function waitForDebugPort(profile: string, processHandle: ChildProcess) {
   throw new Error("Embedded browser startup timed out");
 }
 
-function boundedViewport(value: number, fallback: number) {
-  return Number.isSafeInteger(value) && value >= 320 && value <= 2_560
+function boundedViewport(value: number, fallback: number, minimum = 320) {
+  return Number.isSafeInteger(value) && value >= minimum && value <= 2_560
     ? value
     : fallback;
 }
@@ -231,16 +244,16 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
   async open(
     sessionId: string,
     url: string,
-    viewport = { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT },
+    viewport: { width: number; height: number; deviceScaleFactor?: number } = { width: DEFAULT_WIDTH, height: DEFAULT_HEIGHT },
   ) {
     return this.serialize(async () => {
       const width = boundedViewport(viewport.width, DEFAULT_WIDTH);
-      const height = boundedViewport(viewport.height, DEFAULT_HEIGHT);
-      if (!this.session || this.session.sessionId !== sessionId) {
+      const height = boundedViewport(viewport.height, DEFAULT_HEIGHT, 240);
+      if (!this.session || this.session.sessionId !== sessionId || this.session.process.exitCode !== null || this.session.process.signalCode !== null) {
         await this.disposeCurrent();
         this.session = await this.start(sessionId, width, height);
       }
-      await this.resize(this.session, width, height);
+      await this.resize(this.session, width, height, viewport.deviceScaleFactor);
       this.session.url = url;
       this.session.loading = true;
       await this.session.cdp.send("Page.navigate", { url });
@@ -256,16 +269,36 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
   async frame(sessionId: string) {
     const session = this.forSession(sessionId);
     if (!session) return undefined;
-    if (session.latestFrame) return session.latestFrame;
     const result = await session.cdp.send("Page.captureScreenshot", {
       format: "jpeg",
-      quality: 76,
+      quality: 95,
       fromSurface: true,
       captureBeyondViewport: false,
     });
     return typeof result.data === "string"
       ? Buffer.from(result.data, "base64")
       : undefined;
+  }
+
+  async subscribeFrames(sessionId: string, listener: (frame: WebBrowserFrame | null) => void) {
+    return this.serialize(async () => {
+      const session = this.forSession(sessionId);
+      if (!session) return;
+      const first = session.frameListeners.size === 0;
+      session.frameListeners.add(listener);
+      if (first) session.latestFrame = undefined;
+      try { if (first) await this.startFrames(session); }
+      catch (error) { session.frameListeners.delete(listener); throw error; }
+      if (session.latestFrame) listener(session.latestFrame);
+      return () => {
+        session.frameListeners.delete(listener);
+        if (session.frameListeners.size === 0)
+          void this.serialize(async () => {
+            if (this.session === session && session.frameListeners.size === 0)
+              await session.cdp.send("Page.stopScreencast");
+          }).catch(() => undefined);
+      };
+    });
   }
 
   async action(sessionId: string, action: WebEmbeddedBrowserAction) {
@@ -296,7 +329,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
           });
         }
       } else if (action.type === "resize") {
-        await this.resize(session, action.width, action.height);
+        await this.resize(session, action.width, action.height, action.deviceScaleFactor);
       } else if (action.type === "mouse") {
         const mouseType = {
           move: "mouseMoved",
@@ -330,7 +363,10 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
             : {}),
         });
       }
-      return this.readState(session);
+      // Input dispatch must not wait for three unrelated page-state queries.
+      return action.type === "mouse" || action.type === "key" || action.type === "text"
+        ? this.snapshot(session)
+        : this.readState(session);
     });
   }
 
@@ -358,6 +394,8 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
     const session = this.session;
     this.session = undefined;
     if (!session) return;
+    for (const listener of session.frameListeners) listener(null);
+    session.frameListeners.clear();
     session.stopListening();
     session.cdp.close();
     if (session.process.exitCode === null) session.process.kill("SIGKILL");
@@ -377,7 +415,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       "--remote-debugging-port=0",
       `--user-data-dir=${profile}`,
       `--window-size=${width},${height}`,
-      "--force-device-scale-factor=1",
+      "--force-device-scale-factor=2",
       "--disable-background-networking",
       "--disable-component-update",
       "--disable-default-apps",
@@ -418,6 +456,8 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         cdp,
         width,
         height,
+        deviceScaleFactor: 1,
+        frameListeners: new Set(),
         url: "about:blank",
         title: "",
         loading: false,
@@ -436,8 +476,11 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
           session.loading = false;
         }),
         cdp.on("Page.screencastFrame", (params) => {
-          if (typeof params.data === "string")
-            session.latestFrame = Buffer.from(params.data, "base64");
+          if (typeof params.data === "string" && params.data.length <= 24 * 1024 * 1024) {
+            const frame: WebBrowserFrame = { data: params.data, mimeType: "image/png", width: session.width, height: session.height };
+            session.latestFrame = frame;
+            for (const listener of session.frameListeners) listener(frame);
+          }
           if (typeof params.sessionId === "number")
             void cdp
               .send("Page.screencastFrameAck", {
@@ -477,11 +520,6 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         for (const stop of stops) stop();
       };
       await this.resize(session, width, height);
-      await cdp.send("Page.startScreencast", {
-        format: "jpeg",
-        quality: 76,
-        everyNthFrame: 1,
-      });
       return session;
     } catch (error) {
       if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
@@ -490,16 +528,28 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
     }
   }
 
-  private async resize(session: BrowserSession, width: number, height: number) {
+  private async startFrames(session: BrowserSession) {
+    const scale = Math.min(session.deviceScaleFactor, Math.sqrt(4_194_304 / (session.width * session.height)));
+    await session.cdp.send("Page.startScreencast", {
+      format: "png", everyNthFrame: 1,
+      maxWidth: Math.floor(session.width * scale),
+      maxHeight: Math.floor(session.height * scale),
+    });
+  }
+
+  private async resize(session: BrowserSession, width: number, height: number, deviceScaleFactor = session.deviceScaleFactor) {
     session.width = boundedViewport(width, session.width);
-    session.height = boundedViewport(height, session.height);
+    session.height = boundedViewport(height, session.height, 240);
+    session.deviceScaleFactor = Math.max(1, Math.min(2, Number.isFinite(deviceScaleFactor) ? deviceScaleFactor : 1, Math.sqrt(4_194_304 / (session.width * session.height))));
     session.latestFrame = undefined;
+    if (session.frameListeners.size) await session.cdp.send("Page.stopScreencast");
     await session.cdp.send("Emulation.setDeviceMetricsOverride", {
       width: session.width,
       height: session.height,
-      deviceScaleFactor: 1,
+      deviceScaleFactor: session.deviceScaleFactor,
       mobile: false,
     });
+    if (session.frameListeners.size) await this.startFrames(session);
   }
 
   private async readState(session: BrowserSession) {
@@ -532,6 +582,10 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       : [];
     session.canGoBack = index > 0;
     session.canGoForward = index >= 0 && index < entries.length - 1;
+    return this.snapshot(session);
+  }
+
+  private snapshot(session: BrowserSession) {
     return {
       sessionId: session.sessionId,
       url: session.url,
@@ -541,6 +595,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       loading: session.loading,
       canGoBack: session.canGoBack,
       canGoForward: session.canGoForward,
+      deviceScaleFactor: session.deviceScaleFactor,
     } satisfies WebEmbeddedBrowserState;
   }
 }

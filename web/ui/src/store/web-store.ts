@@ -28,6 +28,7 @@ const refreshEventTypes = new Set([
   "session_progress",
   "prompt_failed",
   "model_select",
+  "settings_changed",
   "workspace_imported",
   "workspace_removed",
   "workspace_renamed",

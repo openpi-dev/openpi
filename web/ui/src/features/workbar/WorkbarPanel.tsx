@@ -348,15 +348,20 @@ function TerminalPanel({
 }
 
 function GeneratedFilesPanel({
+  active,
   messages,
   onBeforeOpen,
 }: {
+  active: boolean;
   messages: readonly WebLiveMessage[];
   onBeforeOpen: () => void;
 }) {
   const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
-  const files = useMemo(() => generatedFiles(messages), [messages]);
+  const files = useMemo(
+    () => (active ? generatedFiles(messages) : []),
+    [active, messages],
+  );
   return (
     <div className="workbar-resource-list generated-files-list">
       {files.length === 0 ? (
@@ -376,7 +381,7 @@ function GeneratedFilesPanel({
                 onClick={() => {
                   if (!artifacts) return;
                   onBeforeOpen();
-                  artifacts.open(file.reference);
+                  artifacts.open(encodeURI(file.reference));
                 }}
               >
                 <FileCode2 aria-hidden="true" />
@@ -389,6 +394,13 @@ function GeneratedFilesPanel({
                 <em>{t(`fileChange_${file.change ?? file.tool}`)}</em>
                 <ChevronRight aria-hidden="true" />
               </button>
+              {file.diff && (
+                <details className="generated-file-edit">
+                  <summary>{t("recordedFileEdit")}</summary>
+                  {file.diffTruncated && <p>{t("artifactPreviewTruncated")}</p>}
+                  <pre>{file.diff}</pre>
+                </details>
+              )}
             </li>
           ))}
         </ul>
@@ -578,6 +590,7 @@ export function WorkbarPanel({
               <ReviewPanel
                 review={review}
                 initialFilePath={reviewInitialFilePath}
+                onOpenFiles={() => select("files")}
                 onClose={() =>
                   setTabs((current) => closeWorkbarTool(current, "review"))
                 }
@@ -598,6 +611,9 @@ export function WorkbarPanel({
               />
             ) : (
               <GeneratedFilesPanel
+                active={
+                  visible && !tabs.launcherOpen && tabs.active === "files"
+                }
                 messages={messages}
                 onBeforeOpen={onBeforeArtifactOpen}
               />
