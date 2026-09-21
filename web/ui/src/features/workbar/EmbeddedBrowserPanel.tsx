@@ -23,17 +23,61 @@ import {
 import { WebApiError, WebClient } from "../../protocol/client.ts";
 
 function normalizedBrowserUrl(value: string) {
-  const candidate = /^https?:\/\//iu.test(value.trim())
-    ? value.trim()
-    : `https://${value.trim()}`;
+  const trimmed = value.trim();
+  if (!trimmed) return null;
+  const explicitScheme = /^[a-z][a-z\d+.-]*:\/\//iu.test(trimmed);
+  const candidate = explicitScheme ? trimmed : `https://${trimmed}`;
   try {
     const url = new URL(candidate);
+    if (
+      !explicitScheme &&
+      (url.hostname === "localhost" ||
+        url.hostname.endsWith(".localhost") ||
+        url.hostname === "[::1]" ||
+        /^127\.\d{1,3}\.\d{1,3}\.\d{1,3}$/u.test(url.hostname))
+    )
+      return new URL(`http://${trimmed}`).toString();
     return url.protocol === "http:" || url.protocol === "https:"
       ? url.toString()
       : null;
   } catch {
     return null;
   }
+}
+
+const editingKeys = new Set([
+  "a",
+  "z",
+  "y",
+  "arrowleft",
+  "arrowright",
+  "arrowup",
+  "arrowdown",
+  "backspace",
+  "delete",
+  "home",
+  "end",
+]);
+function forwardedKeyModifiers(event: {
+  key: string;
+  ctrlKey: boolean;
+  metaKey: boolean;
+  altKey: boolean;
+  shiftKey: boolean;
+}) {
+  // Clipboard shortcuts must stay in the host browser so paste can supply the
+  // clipboard text; browser-window shortcuts must not be swallowed by the pane.
+  if (
+    (event.ctrlKey || event.metaKey || event.altKey) &&
+    !editingKeys.has(event.key.toLowerCase())
+  )
+    return null;
+  return (
+    (event.altKey ? 1 : 0) |
+    (event.ctrlKey ? 2 : 0) |
+    (event.metaKey ? 4 : 0) |
+    (event.shiftKey ? 8 : 0)
+  );
 }
 
 export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
@@ -52,8 +96,9 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const stateRef = useRef<WebEmbeddedBrowserState | null>(null);
   const addressEditing = useRef(false);
   const addressDirty = useRef(false);
-  const pointerMoveTimer = useRef(0);
   const pointerMovePoint = useRef<{ x: number; y: number } | null>(null);
+  const pointerMoveSending = useRef(false);
+  const pointerMoveEnabled = useRef(active);
   const storageKey = `openpi.browser.${sessionId}`;
   const initial = (() => {
     try {
@@ -74,11 +119,18 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   useEffect(
     () => () => {
       abort.current?.abort();
-      window.clearTimeout(pointerMoveTimer.current);
       if (frameUrl.current) URL.revokeObjectURL(frameUrl.current);
     },
     [],
   );
+
+  useEffect(() => {
+    pointerMoveEnabled.current = active;
+    return () => {
+      pointerMoveEnabled.current = false;
+      pointerMovePoint.current = null;
+    };
+  }, [active]);
 
   const applyState = useCallback(
     (next: WebEmbeddedBrowserState, forceAddress = false) => {
@@ -342,6 +394,25 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     [],
   );
 
+  const flushPointerMove = useCallback(async () => {
+    if (
+      !pointerMoveEnabled.current ||
+      pointerMoveSending.current ||
+      !pointerMovePoint.current
+    )
+      return;
+    const point = pointerMovePoint.current;
+    pointerMovePoint.current = null;
+    pointerMoveSending.current = true;
+    try {
+      await action({ type: "mouse", event: "move", ...point });
+    } finally {
+      pointerMoveSending.current = false;
+      if (pointerMoveEnabled.current && pointerMovePoint.current)
+        void flushPointerMove();
+    }
+  }, [action]);
+
   useEffect(() => {
     const element = viewport.current;
     if (!active || !browserStarted || !element) return;
@@ -515,37 +586,37 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           const point = browserPoint(event);
           if (!point) return;
           pointerMovePoint.current = point;
-          if (pointerMoveTimer.current) return;
-          pointerMoveTimer.current = window.setTimeout(() => {
-            pointerMoveTimer.current = 0;
-            const latest = pointerMovePoint.current;
-            if (latest)
-              void action({ type: "mouse", event: "move", ...latest });
-          }, 60);
+          void flushPointerMove();
         }}
         onKeyDown={(event) => {
           event.stopPropagation();
-          if (!state || event.metaKey || event.ctrlKey || event.altKey) return;
+          const modifiers = forwardedKeyModifiers(event);
+          if (!state || modifiers === null || event.nativeEvent.isComposing)
+            return;
           event.preventDefault();
           void action({
             type: "key",
             event: "down",
             key: event.key,
             code: event.code,
-            modifiers: event.shiftKey ? 8 : 0,
-            ...(event.key.length === 1 ? { text: event.key } : {}),
+            modifiers,
+            ...(event.key.length === 1 && !(modifiers & 7)
+              ? { text: event.key }
+              : {}),
           });
         }}
         onKeyUp={(event) => {
           event.stopPropagation();
-          if (!state || event.metaKey || event.ctrlKey || event.altKey) return;
+          const modifiers = forwardedKeyModifiers(event);
+          if (!state || modifiers === null || event.nativeEvent.isComposing)
+            return;
           event.preventDefault();
           void action({
             type: "key",
             event: "up",
             key: event.key,
             code: event.code,
-            modifiers: event.shiftKey ? 8 : 0,
+            modifiers,
           });
         }}
       >

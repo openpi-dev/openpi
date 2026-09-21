@@ -200,6 +200,25 @@ function settingsFetcher() {
   });
 }
 
+it("preserves an unfinished model configuration when changing settings tabs", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings();
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  const address = await screen.findByRole("textbox", {
+    name: i18n.t("modelConfig_baseUrl"),
+  });
+  fireEvent.change(address, { target: { value: "http://localhost:12345/v1" } });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  expect(
+    (
+      screen.getByRole("textbox", {
+        name: i18n.t("modelConfig_baseUrl"),
+      }) as HTMLInputElement
+    ).value,
+  ).toBe("http://localhost:12345/v1");
+});
+
 it("saves a write-only key directly to Pi without submitting a setup prompt", async () => {
   const requests: Array<{ path: string; body: Record<string, unknown> }> = [];
   const fetcher = settingsFetcher();
@@ -313,14 +332,14 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   ).toBeGreaterThan(0);
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("generalSettings") }));
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
-  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(4));
+  await waitFor(() => expect(fetcher).toHaveBeenCalledTimes(3));
   fireEvent.click(screen.getByRole("button", { name: /DeepSeek V4/u }));
   expect((await screen.findAllByText("DeepSeek")).length).toBeGreaterThan(0);
   expect(screen.getByText(i18n.t("credentialMissing"))).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: i18n.t("useThisModel") }));
   expect(onSelectModel).toHaveBeenCalledWith("deepseek/deepseek-v4");
   expect(view.container.querySelector(".settings-model-sidebar")).toBeTruthy();
-  expect(fetcher).toHaveBeenCalledTimes(4);
+  expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
 it("shows canonical General state and routes real setup/runtime actions", async () => {

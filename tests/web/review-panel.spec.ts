@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+} from "@testing-library/react";
 import { createElement, Fragment, type ReactElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
@@ -11,6 +17,44 @@ import { SessionChangesPopover } from "../../web/ui/src/features/review/SessionC
 import { i18n } from "../../web/ui/src/i18n.ts";
 
 afterEach(cleanup);
+
+it("does not reload the selected diff for an unchanged snapshot revision", async () => {
+  const readFile = vi.fn(async () => snapshot.files[0]);
+  const makePanel = (revision: string) =>
+    withI18n(
+      createElement(ReviewPanel, {
+        review: {
+          result: {
+            ok: true,
+            snapshot: {
+              ...snapshot,
+              revision,
+              files: snapshot.files.map((file) => ({
+                ...file,
+                diff: "",
+                diffLoaded: false,
+              })),
+            },
+          },
+          loading: false,
+          error: null,
+          refresh: async () => {},
+          readFile,
+        },
+        initialFilePath: snapshot.files[0]!.path,
+        onClose: () => {},
+      }),
+    );
+  const { rerender } = render(makePanel("unchanged"));
+  await act(async () => {});
+  expect(readFile).toHaveBeenCalledTimes(1);
+  rerender(makePanel("unchanged"));
+  await act(async () => {});
+  expect(readFile).toHaveBeenCalledTimes(1);
+  rerender(makePanel("changed"));
+  await act(async () => {});
+  expect(readFile).toHaveBeenCalledTimes(2);
+});
 
 const snapshot: WebGitReviewSnapshot = {
   repositoryRoot: "/workspace",

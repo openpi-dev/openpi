@@ -17,6 +17,8 @@ import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
 afterEach(() => {
   cleanup();
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -42,7 +44,7 @@ async function browserPanel() {
   const action = vi
     .spyOn(WebClient.prototype, "browserAction")
     .mockResolvedValue(state);
-  render(
+  const view = render(
     createElement(
       I18nextProvider,
       { i18n },
@@ -56,6 +58,7 @@ async function browserPanel() {
     state,
     viewport: await screen.findByRole("application", { name: "Input fixture" }),
     action,
+    unmount: view.unmount,
   };
 }
 
@@ -114,6 +117,111 @@ it("preserves Shift when navigating the embedded page backwards", async () => {
     "session-1",
     expect.objectContaining({ event: "up", modifiers: 8 }),
   );
+});
+
+it.each([
+  ["127.0.0.1:12345/test", "http://127.0.0.1:12345/test"],
+  ["localhost:12345/test", "http://localhost:12345/test"],
+  ["[::1]:12345/test", "http://[::1]:12345/test"],
+  ["localhost:443", "http://localhost:443/"],
+  ["127.example.com/test", "https://127.example.com/test"],
+  ["https://localhost:12345/test", "https://localhost:12345/test"],
+])("chooses the correct protocol and port for %s", async (input, expected) => {
+  const { state } = await browserPanel();
+  const open = vi
+    .spyOn(WebClient.prototype, "openBrowser")
+    .mockResolvedValue(state);
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("browserAddress") }),
+    { target: { value: input } },
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+  expect(open).toHaveBeenCalledWith(
+    "session-1",
+    expected,
+    expect.any(Object),
+    expect.any(AbortSignal),
+  );
+  await act(async () => {});
+});
+
+it.each([
+  { metaKey: true, modifiers: 4 },
+  { ctrlKey: true, modifiers: 2 },
+])(
+  "forwards editing shortcuts without inserting a literal letter (%j)",
+  async ({ modifiers, ...keys }) => {
+    const { viewport, action } = await browserPanel();
+    fireEvent.keyDown(viewport, { key: "a", code: "KeyA", ...keys });
+    expect(action).toHaveBeenCalledWith("session-1", {
+      type: "key",
+      event: "down",
+      key: "a",
+      code: "KeyA",
+      modifiers,
+    });
+    fireEvent.keyUp(viewport, { key: "a", code: "KeyA", ...keys });
+    expect(action).toHaveBeenLastCalledWith(
+      "session-1",
+      expect.objectContaining({ event: "up", modifiers }),
+    );
+    const count = action.mock.calls.length;
+    fireEvent.keyDown(viewport, { key: "v", code: "KeyV", ...keys });
+    expect(action).toHaveBeenCalledTimes(count);
+  },
+);
+
+it("keeps only the newest pointer position while the host is slow", async () => {
+  const { viewport, action, state } = await browserPanel();
+  vi.useFakeTimers();
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 800,
+    height: 600,
+  } as DOMRect);
+  let finish!: (value: typeof state) => void;
+  action.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  for (let x = 1; x <= 20; x++) {
+    fireEvent.pointerMove(viewport, { clientX: x, clientY: 10 });
+    await act(() => vi.advanceTimersByTimeAsync(60));
+  }
+  expect(action).toHaveBeenCalledTimes(1);
+  await act(async () => finish(state));
+  await act(() => vi.advanceTimersByTimeAsync(60));
+  expect(action).toHaveBeenCalledTimes(2);
+  expect(action).toHaveBeenLastCalledWith(
+    "session-1",
+    expect.objectContaining({ type: "mouse", event: "move", x: 20 }),
+  );
+});
+
+it("drops an unsent pointer update when the browser tool closes", async () => {
+  const { viewport, action, state, unmount } = await browserPanel();
+  vi.stubGlobal("PointerEvent", MouseEvent);
+  vi.spyOn(viewport, "getBoundingClientRect").mockReturnValue({
+    left: 0,
+    top: 0,
+    width: 800,
+    height: 600,
+  } as DOMRect);
+  let finish!: (value: typeof state) => void;
+  action.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  fireEvent.pointerMove(viewport, { clientX: 10, clientY: 10 });
+  fireEvent.pointerMove(viewport, { clientX: 20, clientY: 10 });
+  expect(action).toHaveBeenCalledTimes(1);
+  unmount();
+  await act(async () => finish(state));
+  expect(action).toHaveBeenCalledTimes(1);
 });
 
 it.each(["left", "right"] as const)(

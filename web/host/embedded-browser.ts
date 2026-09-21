@@ -352,11 +352,17 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         await session.cdp.send("Input.insertText", { text: action.text });
       } else if (action.type === "key") {
         const keyCode = virtualKeyCode(action.key);
+        const modifiers = action.modifiers ?? 0;
+        const key = action.key.toLowerCase();
+        const editingCommand = action.event === "down" && (modifiers & 6) && !(modifiers & 1)
+          ? key === "a" ? "selectAll" : key === "z" ? (modifiers & 8 ? "redo" : "undo") : key === "y" ? "redo" : undefined
+          : undefined;
         await session.cdp.send("Input.dispatchKeyEvent", {
           type: action.event === "down" ? "keyDown" : "keyUp",
           key: action.key,
           code: action.code ?? "",
           modifiers: action.modifiers ?? 0,
+          ...(editingCommand ? { commands: [editingCommand] } : {}),
           ...(keyCode ? { windowsVirtualKeyCode: keyCode } : {}),
           ...(action.event === "down" && action.text
             ? { text: action.text }

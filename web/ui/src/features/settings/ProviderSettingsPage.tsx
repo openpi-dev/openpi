@@ -81,6 +81,7 @@ export function ProviderSettingsPage({
   const { t } = useTranslation();
   const closeButton = useRef<HTMLButtonElement>(null);
   const [section, setSection] = useState<SettingsSection>("general");
+  const [modelsVisited, setModelsVisited] = useState(false);
   const [setupPending, setSetupPending] = useState(false);
   const [providerRevision, refreshProviders] = useState(0);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
@@ -239,6 +240,7 @@ export function ProviderSettingsPage({
                 title={t(label)}
                 onClick={() => {
                   setSection(id);
+                  if (id === "models") setModelsVisited(true);
                   setSetupError(null);
                 }}
               >
@@ -382,8 +384,9 @@ export function ProviderSettingsPage({
                 busy={setupBusy}
                 onSaved={onPreferencesChanged}
               />
-              {section === "models" && (
+              {modelsVisited && (
                 <ModelConfigurationEditor
+                  key={sessionId}
                   sessionId={sessionId}
                   busy={setupBusy}
                   onSaved={async () => {

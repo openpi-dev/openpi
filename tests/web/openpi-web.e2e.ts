@@ -1,4 +1,5 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
@@ -860,6 +861,130 @@ test("terminal tool runs a real workspace shell", async ({ page }) => {
   await expect
     .poll(() => terminal.locator(".xterm-rows").textContent())
     .toContain("OPENPI_WEB_TERMINAL_OK");
+});
+
+test("model configuration drafts survive switching settings tabs", async ({
+  page,
+}) => {
+  await page.route("**/api/models/configuration?**", (route) =>
+    route.fulfill({ json: { revision: "draft-test", models: [] } }),
+  );
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  await dialog.getByRole("tab", { name: "模型", exact: true }).click();
+  await dialog
+    .getByRole("textbox", { name: "API 地址", exact: true })
+    .fill("http://localhost:12345/v1");
+  await dialog
+    .getByRole("textbox", { name: "显示名称", exact: true })
+    .fill("Unfinished model");
+  await dialog.getByRole("tab", { name: "技能", exact: true }).click();
+  await dialog.getByRole("tab", { name: "插件", exact: true }).click();
+  await dialog.getByRole("tab", { name: "模型", exact: true }).click();
+  await expect(
+    dialog.getByRole("textbox", { name: "API 地址", exact: true }),
+  ).toHaveValue("http://localhost:12345/v1");
+  await expect(
+    dialog.getByRole("textbox", { name: "显示名称", exact: true }),
+  ).toHaveValue("Unfinished model");
+});
+
+test("real embedded Chromium opens bare local addresses and paints shortcut edits", async ({
+  page,
+}, testInfo) => {
+  const inputs: string[] = [];
+  const fixture = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname === "/event") {
+      inputs.push(url.searchParams.get("text") ?? "");
+      response.end("ok");
+      return;
+    }
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.end(
+      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div>`,
+    );
+  });
+  await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
+  const address = fixture.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing fixture port");
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    const workbar = await openWorkbarTool(page, "浏览器");
+    await workbar
+      .getByRole("textbox", { name: "浏览器地址" })
+      .fill(`127.0.0.1:${address.port}`);
+    await workbar
+      .getByRole("button", { name: "打开地址", exact: true })
+      .click();
+    const viewport = workbar.locator(".browser-viewport");
+    const frame = viewport.locator("img");
+    await expect(frame).toBeVisible();
+    const painted = () =>
+      frame.evaluate((image) => {
+        if (
+          !(image instanceof HTMLImageElement) ||
+          !image.complete ||
+          !image.naturalWidth
+        )
+          return false;
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d");
+        if (!context) return false;
+        context.drawImage(image, image.naturalWidth - 20, 20, 1, 1, 0, 0, 1, 1);
+        const [red, green] = context.getImageData(0, 0, 1, 1).data;
+        return green! > 150 && red! < 50;
+      });
+    const samples: Array<{
+      shortcut: string;
+      inputToPaintUpperBoundMs: number;
+    }> = [];
+    for (const modifier of ["Control", "Meta"]) {
+      await viewport.click({ position: { x: 30, y: 30 } });
+      const started = performance.now();
+      await viewport.press(`${modifier}+a`);
+      await viewport.press("X");
+      await expect.poll(() => inputs.at(-1)).toBe("X");
+      await expect.poll(painted).toBe(true);
+      samples.push({
+        shortcut: `${modifier}+a`,
+        inputToPaintUpperBoundMs: Math.round(performance.now() - started),
+      });
+      if (modifier === "Control")
+        await viewport.screenshot({
+          path: testInfo.outputPath("browser-input.png"),
+        });
+      await viewport.press(`${modifier}+z`);
+      await expect.poll(() => inputs.at(-1)).toBe("original text");
+      await expect.poll(painted).toBe(false);
+    }
+    const evidencePath = testInfo.outputPath("input-to-painted-frame.json");
+    await writeFile(
+      evidencePath,
+      JSON.stringify(
+        {
+          samples,
+          limitation:
+            "Local smoke including automation and polling overhead; not a benchmark.",
+        },
+        null,
+        2,
+      ),
+    );
+    await testInfo.attach("input-to-painted-frame", {
+      path: evidencePath,
+      contentType: "application/json",
+    });
+  } finally {
+    fixture.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      fixture.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
 });
 
 test("browser tool keeps an interactive page inside the workbar", async ({

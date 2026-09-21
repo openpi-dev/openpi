@@ -109,6 +109,7 @@ export function ReviewPanel({
     loadedFile?.file.path === selectedPath
       ? loadedFile.file
       : fileSummary;
+  const revision = snapshot?.revision;
   useEffect(() => {
     void fileRetry;
     const path = fileSummary?.path;
@@ -116,10 +117,9 @@ export function ReviewPanel({
       !path ||
       fileSummary?.diffLoaded !== false ||
       !review.readFile ||
-      !snapshot
+      !revision
     )
       return;
-    const revision = snapshot.revision;
     const controller = new AbortController();
     setFileError(null);
     void review.readFile(path, controller.signal).then(
@@ -140,7 +140,7 @@ export function ReviewPanel({
   }, [
     fileSummary?.path,
     fileSummary?.diffLoaded,
-    snapshot,
+    revision,
     review.readFile,
     fileRetry,
     t,

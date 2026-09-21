@@ -1,7 +1,7 @@
 import { tmpdir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { defineConfig } from "@playwright/test";
+import { chromium, defineConfig } from "@playwright/test";
 
 const repositoryRoot = resolve(
   dirname(fileURLToPath(import.meta.url)),
@@ -46,6 +46,7 @@ export default defineConfig({
       ...process.env,
       OPENPI_WEB_TOKEN: token,
       PI_CODING_AGENT_DIR: agentDirectory,
+      OPENPI_CHROME_PATH: browserExecutable ?? chromium.executablePath(),
     },
     reuseExistingServer: false,
     timeout: 30_000,
