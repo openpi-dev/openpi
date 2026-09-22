@@ -8,11 +8,12 @@ import type {
   ExtensionCommandContext,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { SUBAGENT_ROLE_NAMES } from "../../../extensions/shared/subagent-roles.ts";
 import {
   OPENPI_SETUP_EPISODE_CHANNEL,
   type OpenPiSetupEpisodeState,
 } from "../../../extensions/shared/setup-episode-state.ts";
+import { SUBAGENT_ROLE_NAMES } from "../../../extensions/shared/subagent-roles.ts";
+
 const setupAgentDir = mkdtempSync(join(tmpdir(), "openpi-setup-index-"));
 process.env.PI_CODING_AGENT_DIR = setupAgentDir;
 
@@ -212,6 +213,23 @@ test("setup broadcasts its episode demand for interaction tools", async () => {
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
 });
 
+test("both setup entry flows require an explicit user choice before replacing invalid requested values", async () => {
+  for (const request of [
+    "",
+    'Set ui.footerStyle to "compact" and workflows.concurrency to 0.',
+  ]) {
+    const h = visibilityHarness();
+    await h.emit("session_start");
+    await h.runCommand("openpi-setup", request);
+    const prompt = JSON.stringify(h.setupRequests());
+    assert.match(prompt, /invalid requested value/);
+    assert.match(prompt, /legal values or range/);
+    assert.match(prompt, /Do not clamp, substitute, or reinterpret/);
+    assert.match(prompt, /explicitly chooses a legal alternative/);
+    assert.match(prompt, /prior assistant explanation is not user consent/);
+  }
+});
+
 test("registers the canonical setup command, legacy alias, and one constrained tool", () => {
   const h = visibilityHarness();
   assert.deepEqual([...h.commands.keys()].sort(), [
@@ -227,6 +245,9 @@ test("registers the canonical setup command, legacy alias, and one constrained t
   assert.equal("suggestion_model" in parameters.properties, true);
   assert.equal("capability_discovery" in parameters.properties, true);
   assert.equal("ui_web_theme" in parameters.properties, true);
+  assert.equal("ui_web_chat_width" in parameters.properties, true);
+  assert.equal("ui_web_chat_font_size" in parameters.properties, true);
+  assert.equal("ui_web_expand_thinking" in parameters.properties, true);
   const postEdit = parameters.properties.post_edit_command as {
     description?: string;
   };
@@ -259,6 +280,15 @@ test("post-edit stays off or preserved unless the setup request changes it", asy
 
   await apply({ ui_web_theme: "dark" });
   assert.equal(loadSetupConfig().ui.webTheme, "dark");
+
+  await apply({
+    ui_web_chat_width: 960,
+    ui_web_chat_font_size: 16,
+    ui_web_expand_thinking: true,
+  });
+  assert.equal(loadSetupConfig().ui.webChatWidth, 960);
+  assert.equal(loadSetupConfig().ui.webChatFontSize, 16);
+  assert.equal(loadSetupConfig().ui.webExpandThinking, true);
 
   await apply({ post_edit_command: "  npm run format  " });
   assert.equal(loadSetupConfig().postEdit.command, "npm run format");
@@ -690,8 +720,11 @@ test("builds a model-guided first-run setup prompt with impacts", () => {
   assert.match(message, /Right accepts it without submitting/);
   assert.match(message, /concurrency controls simultaneous agents/);
   assert.match(message, /large header costs vertical space/);
-  assert.match(message, /Web theme is system \(default\), light, or dark/);
+  assert.match(message, /OpenPI Web themes are system \(default\).*mist.*pine/);
   assert.match(message, /ui_web_theme=dark/);
+  assert.match(message, /Chat content width.*820-2000px/);
+  assert.match(message, /ui_web_chat_width=960/);
+  assert.match(message, /ui_web_expand_thinking=true/);
   assert.match(message, /powerline.*powerline-mono.*compact/);
   assert.match(message, /Nerd Font/);
   assert.match(message, /ui_footer_preset=powerline/);
@@ -760,7 +793,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, UI theme\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

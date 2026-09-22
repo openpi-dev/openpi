@@ -27,6 +27,8 @@ export interface PreviewMessageLike {
   isError?: boolean;
   command?: string;
   output?: string;
+  exitCode?: number;
+  cancelled?: boolean;
   summary?: string;
 }
 
@@ -322,7 +324,10 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
             kind: "bash",
             command: cleanPreviewText(command),
             output: cleanPreviewText(message.output ?? ""),
-            isError: message.isError,
+            isError:
+              message.cancelled ||
+              (message.exitCode !== undefined && message.exitCode !== 0) ||
+              message.isError,
           },
         ]
       : [];

@@ -7,12 +7,13 @@
  */
 
 import assert from "node:assert/strict";
-import type { ChildProcess } from "node:child_process";
+import { ChildProcess } from "node:child_process";
 import { EventEmitter } from "node:events";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import test from "node:test";
+import { getSystemErrorMap } from "node:util";
 import { Effect, ManagedRuntime } from "effect";
 import type { TerminalSnapshot } from "../../../extensions/background-terminals/src/domain.ts";
 import {
@@ -938,6 +939,113 @@ test("a process 'error' event settles failed with errorText and no bogus exit co
     assert.equal(failed.signal, undefined);
   });
 });
+
+for (const exitCode of [0, 7]) {
+  test(`post-spawn signal errors retain a live terminal until exit ${exitCode}`, async (t) => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "terminal-error-"));
+    const continueFile = path.join(dir, "continue");
+    const releaseFile = path.join(dir, "release");
+    let child: ChildProcess | undefined;
+    const originalEmit = ChildProcess.prototype.emit;
+    const capture = t.mock.method(
+      ChildProcess.prototype,
+      "emit",
+      function (
+        this: ChildProcess,
+        event: string | symbol,
+        ...args: unknown[]
+      ) {
+        if (event === "spawn" && !child) child = this;
+        return originalEmit.call(this, event, ...args);
+      },
+    );
+    try {
+      await withManager(async (manager, runtime) => {
+        const completions: string[] = [];
+        manager.view.setOnSettled((snap) => completions.push(snap.id));
+        const snap = await runTool(
+          runtime,
+          manager.start({
+            title: "signal-error",
+            cwd: dir,
+            command: nodeCmd(`
+              const fs = require("node:fs");
+              let continued = false;
+              process.stdout.write("ready\\n");
+              const timer = setInterval(() => {
+                if (!continued && fs.existsSync(${JSON.stringify(continueFile)})) {
+                  continued = true;
+                  process.stdout.write("after-error\\n");
+                }
+                if (fs.existsSync(${JSON.stringify(releaseFile)})) {
+                  clearInterval(timer);
+                  process.stdout.write("finished\\n");
+                  process.exitCode = ${exitCode};
+                }
+              }, 20);
+              setTimeout(() => process.exit(99), 10000).unref();
+            `),
+          }),
+        );
+        try {
+          assert.ok(await pollUntil(() => snap.stdout.text.includes("ready")));
+          assert.ok(child?.pid);
+          capture.mock.restore();
+          // Make the real ChildProcess.kill() encounter EPERM at its native
+          // binding, without sending a signal or inventing a terminal exit.
+          const handle = (
+            child as ChildProcess & {
+              _handle?: { kill: (signal: number) => number };
+            }
+          )._handle;
+          assert.ok(handle);
+          const deniedCode = [...getSystemErrorMap()].find(
+            ([, [name]]) => name === "EPERM",
+          )?.[0];
+          assert.equal(typeof deniedCode, "number");
+          const denySignal = t.mock.method(handle, "kill", () => deniedCode!);
+          try {
+            assert.equal(child.kill("SIGTERM"), false);
+            assert.equal(processGone(child.pid), false);
+            assert.ok(child.listenerCount("error") > 0);
+            assert.equal(child.kill("SIGTERM"), false);
+          } finally {
+            denySignal.mock.restore();
+          }
+          fs.writeFileSync(continueFile, "continue");
+          assert.ok(
+            await pollUntil(() => snap.stdout.text.includes("after-error")),
+          );
+          assert.equal(snap.status, "running");
+          assert.equal(snap.settledAt, undefined);
+          assert.deepEqual(completions, []);
+          assert.match(snap.errorText ?? "", /EPERM/);
+          fs.writeFileSync(releaseFile, "release");
+          const { snap: done } = await settlement(manager, snap.id);
+          assert.equal(done.status, exitCode === 0 ? "done" : "failed");
+          assert.equal(done.exitCode, exitCode);
+          assert.deepEqual(completions, [snap.id]);
+          assert.equal(done.stdout.text, "ready\nafter-error\nfinished\n");
+          assert.ok(done.stdout.spillPath);
+          assert.equal(
+            fs.readFileSync(done.stdout.spillPath, "utf8"),
+            done.stdout.text,
+          );
+        } finally {
+          // Release the real process even when an assertion fails. Do not
+          // dispose the runtime while this fixture still owns a live child.
+          fs.writeFileSync(releaseFile, "release");
+          if (child?.exitCode === null && child.signalCode === null) {
+            await new Promise<void>((resolve) => child?.once("close", resolve));
+          }
+        }
+      });
+    } finally {
+      capture.mock.restore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+}
 
 test("the spill file holds the complete capture when the settle hook fires, beyond the in-memory cap", async () => {
   await withManager(async (manager, runtime) => {

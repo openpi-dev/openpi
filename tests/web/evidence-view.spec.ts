@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { createElement } from "react";
+
 import {
   act,
   cleanup,
@@ -8,12 +8,14 @@ import {
   screen,
   waitFor,
 } from "@testing-library/react";
+import { createElement } from "react";
 import { afterEach, expect, it, vi } from "vitest";
-import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
-import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
+import { ArtifactProvider } from "../../web/ui/src/features/artifacts/Artifacts.tsx";
 import { ArtifactContext } from "../../web/ui/src/features/artifacts/context.ts";
+import { ToolEvidence } from "../../web/ui/src/features/transcript/ToolEvidence.tsx";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import "../../web/ui/src/i18n.ts";
 
 afterEach(() => {
   cleanup();
@@ -86,6 +88,32 @@ it("renders file context, exact diffs, TAP failures, terminal cancellation and s
   ).toHaveLength(4);
 });
 
+it("opens resolved file evidence through the active artifact context", () => {
+  const open = vi.fn();
+  render(
+    createElement(
+      ArtifactContext.Provider,
+      { value: { open } },
+      createElement(ToolEvidence, {
+        call: {
+          type: "toolCall",
+          name: "read",
+          arguments: JSON.stringify({ path: "report.md" }),
+          evidenceArguments: {
+            path: "report.md",
+            resolvedPath: "/workspace/report.md",
+          },
+        },
+        result: { content: "report", isError: false },
+      }),
+    ),
+  );
+
+  fireEvent.click(screen.getByText("read"));
+  fireEvent.click(screen.getByRole("button", { name: "/workspace/report.md" }));
+  expect(open).toHaveBeenCalledWith("/workspace/report.md");
+});
+
 it("opens local links using authenticated API and stops preview reads on close", async () => {
   const resolve = vi
     .spyOn(WebClient.prototype, "resolveArtifact")
@@ -126,10 +154,86 @@ it("opens local links using authenticated API and stops preview reads on close",
     undefined,
     expect.any(AbortSignal),
   );
-  expect(screen.getByRole("dialog", { name: "File preview" })).toBeTruthy();
+  expect(
+    screen.getByRole("complementary", { name: "File preview" }),
+  ).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
   await waitFor(() => expect(release).toHaveBeenCalledWith("s", "h"));
-  expect(screen.queryByRole("dialog")).toBeNull();
+  expect(screen.queryByRole("complementary")).toBeNull();
+});
+
+it("restores the original opener after nested preview navigation and ignores stale copy feedback", async () => {
+  vi.spyOn(WebClient.prototype, "resolveArtifact")
+    .mockResolvedValueOnce({ handle: "root" })
+    .mockResolvedValueOnce({ handle: "nested" });
+  vi.spyOn(WebClient.prototype, "artifactPreview")
+    .mockResolvedValueOnce({
+      artifact: {
+        handle: "root",
+        sessionId: "s",
+        path: "/workspace/root.md",
+        name: "root.md",
+        revision: "a".repeat(64),
+        bytes: 24,
+        preview: "text",
+      },
+      text: "[Nested](./nested.md)",
+      truncated: false,
+    })
+    .mockResolvedValueOnce({
+      artifact: {
+        handle: "nested",
+        sessionId: "s",
+        path: "/workspace/nested.md",
+        name: "nested.md",
+        revision: "b".repeat(64),
+        bytes: 7,
+        preview: "text",
+      },
+      text: "# Inner",
+      truncated: false,
+    });
+  vi.spyOn(WebClient.prototype, "releaseArtifact").mockResolvedValue({});
+  let finishCopy: (() => void) | undefined;
+  const clipboard = Object.getOwnPropertyDescriptor(navigator, "clipboard");
+  Object.defineProperty(navigator, "clipboard", {
+    configurable: true,
+    value: {
+      writeText: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            finishCopy = resolve;
+          }),
+      ),
+    },
+  });
+  try {
+    render(
+      createElement(
+        ArtifactProvider,
+        { sessionId: "s" },
+        createElement(Markdown, null, "[Open](./root.md)"),
+      ),
+    );
+    const opener = screen.getByRole("button", { name: "Open" });
+    opener.focus();
+    fireEvent.click(opener);
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Nested" })).toBeTruthy(),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Copy file path" }));
+    fireEvent.click(screen.getByRole("button", { name: "Nested" }));
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { name: "Inner" })).toBeTruthy(),
+    );
+    await act(async () => finishCopy?.());
+    expect(screen.queryByText("File path copied")).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "Close preview" }));
+    expect(document.activeElement).toBe(opener);
+  } finally {
+    if (clipboard) Object.defineProperty(navigator, "clipboard", clipboard);
+    else Reflect.deleteProperty(navigator, "clipboard");
+  }
 });
 it("preserves Windows paths through sanitization without allowing unsafe schemes", async () => {
   const resolve = vi
@@ -242,7 +346,7 @@ it("polls metadata with backoff, rereads changes and refreshes, and stops on clo
     });
     expect(preview).toHaveBeenCalledTimes(2);
     await act(async () => {
-      fireEvent.click(screen.getByRole("button", { name: "Refresh" }));
+      fireEvent.click(screen.getByRole("button", { name: "Refresh file" }));
     });
     expect(preview).toHaveBeenCalledTimes(3);
     expect(resolve).toHaveBeenCalledTimes(2);

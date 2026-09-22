@@ -7,9 +7,13 @@ import { i18n } from "../i18n.ts";
 import { webStore } from "../store/web-store.ts";
 
 export function Providers({ children }: PropsWithChildren) {
-  const preference =
-    useStore(webStore, (state) => state.snapshot?.preferences?.theme) ??
-    "system";
+  const preferences = useStore(
+    webStore,
+    (state) => state.snapshot?.preferences,
+  );
+  const preference = preferences?.theme ?? "system";
+  const chatWidth = preferences?.chatWidth ?? 820;
+  const chatFontSize = preferences?.chatFontSize ?? 14;
   const [systemDark, setSystemDark] = useState(
     () => window.matchMedia?.("(prefers-color-scheme: dark)").matches ?? false,
   );
@@ -21,13 +25,16 @@ export function Providers({ children }: PropsWithChildren) {
     media.addEventListener("change", update);
     return () => media.removeEventListener("change", update);
   }, []);
+  const resolvedTheme =
+    preference === "system" ? (systemDark ? "dark" : "light") : preference;
   const mode =
-    preference === "dark" || (preference === "system" && systemDark)
-      ? "dark"
-      : "light";
+    resolvedTheme === "dark" || resolvedTheme === "pine" ? "dark" : "light";
   useEffect(() => {
-    document.documentElement.dataset.theme = mode;
-  }, [mode]);
+    const root = document.documentElement;
+    root.dataset.theme = resolvedTheme;
+    root.style.setProperty("--conversation-content-width", `${chatWidth}px`);
+    root.style.setProperty("--conversation-font-size", `${chatFontSize}px`);
+  }, [chatFontSize, chatWidth, resolvedTheme]);
   return (
     <I18nextProvider i18n={i18n}>
       <Theme theme={neutralTheme} mode={mode}>

@@ -163,8 +163,9 @@ export class ArtifactReader {
         if (expectedRevision && revision !== expectedRevision) throw new ArtifactError("ARTIFACT_CHANGED", 409, "The file has a newer version. Refresh before downloading.");
         const textual = (TEXT_EXTENSIONS.test(grant.path) || !basename(grant.path).includes(".")) && !bytes.subarray(0, ARTIFACT_PREVIEW_BYTES).includes(0);
         const artifact: ArtifactMetadata = { handle, sessionId, path: grant.path, name: basename(grant.path), revision, bytes: length, preview: textual ? "text" : "unsupported" };
-        const text = textual ? bytes.subarray(0, ARTIFACT_PREVIEW_BYTES).toString("utf8").replace(/\ufffd$/u, "").split("\n").slice(0, ARTIFACT_PREVIEW_LINES).join("\n") : undefined;
-        return { bytes, preview: { artifact, identity: metadataIdentity(after), text, truncated: textual && (length > ARTIFACT_PREVIEW_BYTES || (text?.split("\n").length ?? 0) >= ARTIFACT_PREVIEW_LINES) } };
+        const lines = textual ? new TextDecoder("utf-8", { ignoreBOM: true }).decode(bytes.subarray(0, ARTIFACT_PREVIEW_BYTES), { stream: length > ARTIFACT_PREVIEW_BYTES }).split("\n") : undefined;
+        const text = lines?.slice(0, ARTIFACT_PREVIEW_LINES).join("\n");
+        return { bytes, preview: { artifact, identity: metadataIdentity(after), text, truncated: textual && (length > ARTIFACT_PREVIEW_BYTES || (lines?.length ?? 0) > ARTIFACT_PREVIEW_LINES) } };
       } finally { await file.close(); }
     } catch (error) { throw this.classify(error); }
     finally { this.reads--; }

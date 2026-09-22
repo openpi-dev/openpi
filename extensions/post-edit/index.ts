@@ -6,7 +6,9 @@
  * tool_result handler only flips a flag — it never awaits or executes, so it
  * cannot slow or wedge the tool pipeline. Execution happens once per turn on
  * agent_settled, which debounces an edit burst into a single run, and is
- * fire-and-forget so a failing command cannot block the session.
+ * asynchronous. The next agent start and tool calls join outstanding runs so
+ * a foreground formatter cannot race the next turn's reads or writes. This is
+ * session-local coordination, not a workspace lock or an acceptance gate.
  */
 
 import type {
@@ -36,29 +38,27 @@ export default function postEdit(
 ) {
   let command = loadCommand();
   let filesChanged = false;
-  let pendingRuns = 0;
+  const pendingRuns: Array<{
+    command: string;
+    cwd: string;
+    ctx: ExtensionContext;
+    generation: number;
+  }> = [];
   let generation = 0;
-  let active: { controller: AbortController } | undefined;
+  let active: { controller: AbortController; done: Promise<void> } | undefined;
 
   // Re-read on change, matching the sibling extensions' pattern.
   pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
     command = loadCommand();
-    if (!command) pendingRuns = 0;
+    if (!command) pendingRuns.length = 0;
   });
 
-  const runNext = (ctx: ExtensionContext, runGeneration: number) => {
-    if (
-      runGeneration !== generation ||
-      active ||
-      pendingRuns === 0 ||
-      !command
-    ) {
-      return;
-    }
-    pendingRuns--;
-    const ran = command;
+  const runNext = () => {
+    if (active) return;
+    const run = pendingRuns.shift();
+    if (!run) return;
+    const { command: ran, cwd, ctx, generation: runGeneration } = run;
     const controller = new AbortController();
-    active = { controller };
 
     // Notification is best-effort: the context can go stale (session change,
     // shutdown) while the command runs, and a throwing notify must not become
@@ -76,12 +76,19 @@ export default function postEdit(
 
     // Fire-and-forget: never block settlement on the command. Runs are drained
     // serially so two closely settled changed turns cannot lose the latter.
-    void pi
-      .exec("sh", ["-c", ran], {
-        cwd: ctx.cwd,
-        signal: controller.signal,
+    const done = Promise.resolve()
+      .then(() => {
+        if (controller.signal.aborted) return;
+        return pi.exec("sh", ["-c", ran], { cwd, signal: controller.signal });
       })
       .then((result) => {
+        if (!result) return;
+        if (result.killed) {
+          warn(
+            `post-edit command interrupted: ${boundedNoticeText(ran, NOTICE_COMMAND_MAX_CHARS)}`,
+          );
+          return;
+        }
         if (result.code === 0) return;
         const commandPreview = boundedNoticeText(ran, NOTICE_COMMAND_MAX_CHARS);
         const detail = boundedNoticeText(
@@ -100,9 +107,52 @@ export default function postEdit(
       })
       .finally(() => {
         if (active?.controller === controller) active = undefined;
-        if (generation === runGeneration) runNext(ctx, runGeneration);
+        runNext();
       });
+    active = { controller, done };
   };
+
+  const joinRuns = async (signal?: AbortSignal) => {
+    if (!active || signal?.aborted) return;
+    let onAbort!: () => void;
+    const aborted = new Promise<void>((resolve) => {
+      onAbort = resolve;
+    });
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      // Cancellation releases the Agent, not the still-running command. This
+      // lets session teardown reach session_shutdown and request termination.
+      // finally starts the next queued run before resolving the previous one.
+      while (active && !signal?.aborted) {
+        await Promise.race([active.done, aborted]);
+      }
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
+    }
+  };
+
+  pi.on("agent_start", async (_event, ctx) => {
+    // Unlike prompt preflight, this also covers native custom-message wakeups
+    // and runs after Pi has installed the current Agent's cancellation signal.
+    if (ctx.mode === "tui") await joinRuns(ctx.signal);
+  });
+
+  pi.on("tool_call", async (_event, ctx) => {
+    if (ctx.mode !== "tui") return;
+    // Backstop for a command scheduled after this Agent's start event.
+    // Custom tools can also read the workspace, so do not filter by tool name.
+    // Fencing a tool does not make its result schedule post-edit.
+    const callGeneration = generation;
+    const signal = ctx.signal;
+    await joinRuns(signal);
+    if (signal?.aborted || callGeneration !== generation) {
+      return {
+        block: true,
+        reason:
+          "Agent interrupted or session changed while waiting for post-edit.",
+      };
+    }
+  });
 
   pi.on("tool_result", (event) => {
     // Hot path: only a boolean flip. No await, no exec, no config read that
@@ -117,23 +167,19 @@ export default function postEdit(
     // `hasUI` is also true in headless RPC mode. This command is intentionally
     // limited to the interactive terminal session that configured it.
     if (ctx.mode !== "tui" || !command) return;
-    pendingRuns++;
-    runNext(ctx, generation);
+    pendingRuns.push({ command, cwd: ctx.cwd, ctx, generation });
+    runNext();
   });
 
-  pi.on("session_start", () => {
+  const reset = () => {
     generation++;
     filesChanged = false;
-    pendingRuns = 0;
+    pendingRuns.length = 0;
+    // Abort requests termination; only completion of pi.exec releases active.
+    // Pi does not promise termination of detached command descendants.
     active?.controller.abort();
-    active = undefined;
-  });
+  };
 
-  pi.on("session_shutdown", () => {
-    generation++;
-    filesChanged = false;
-    pendingRuns = 0;
-    active?.controller.abort();
-    active = undefined;
-  });
+  pi.on("session_start", reset);
+  pi.on("session_shutdown", reset);
 }

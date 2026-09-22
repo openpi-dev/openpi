@@ -172,7 +172,19 @@ export function foldUserMessage(markdown: string): string {
       if (preview.length > 0 && cost > proseCharsLeft) break;
       if (preview.length === 0 && line.length > proseCharsLeft) {
         // A single giant first line is the only case that cuts mid-line.
-        preview.push(`${line.slice(0, proseCharsLeft)}…`);
+        let end = proseCharsLeft;
+        const before = line.charCodeAt(end - 1);
+        const after = line.charCodeAt(end);
+        // Keep the existing code-unit budget without splitting a code point.
+        if (
+          before >= 0xd800 &&
+          before <= 0xdbff &&
+          after >= 0xdc00 &&
+          after <= 0xdfff
+        ) {
+          end -= 1;
+        }
+        preview.push(`${line.slice(0, end)}…`);
         proseLinesLeft = 0;
         proseCharsLeft = 0;
         break;

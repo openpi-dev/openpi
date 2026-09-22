@@ -40,14 +40,21 @@ test("thinking level reaches the provider request end to end", async ({
     const initialSnapshot = await page.request.get("/api/snapshot", {
       headers: authHeaders,
     });
-    const sessionId = (await initialSnapshot.json()).currentSessionId as string;
+    const snapshot = await initialSnapshot.json();
+    const sessionId = snapshot.currentSessionId as string;
+    const sessionPath = snapshot.selectedSession.path as string;
     expect(typeof sessionId).toBe("string");
     expect(sessionId.length).toBeGreaterThan(0);
 
     // Select the fake reasoning model through the real Web runtime.
     const selected = await page.request.post("/api/model", {
       headers: authHeaders,
-      data: { provider: PROVIDER_ID, modelId: MODEL_ID, sessionId },
+      data: {
+        provider: PROVIDER_ID,
+        modelId: MODEL_ID,
+        sessionId,
+        sessionPath,
+      },
     });
     expect(selected.status()).toBe(200);
 

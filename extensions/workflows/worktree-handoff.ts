@@ -48,21 +48,20 @@ function boundedGit(cwd: string, args: readonly string[], deadline: number) {
   if (remaining <= 0) throw new Error("Git handoff deadline exceeded");
   const output = execFileSync("git", ["-c", "core.fsmonitor=false", ...args], {
     cwd,
-    encoding: "utf8",
     maxBuffer: GIT_MAX_BUFFER,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: Math.min(remaining, HANDOFF_GIT_TIMEOUT_MS),
   });
-  if (output.includes("\uFFFD")) {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      output,
+    );
+  } catch {
     throw new Error("Git handoff output is not valid UTF-8");
   }
-  return output;
 }
 
 function nulPaths(value: string) {
-  if (value.includes("\uFFFD")) {
-    throw new Error("Git path inventory is not valid UTF-8");
-  }
   return value.split("\0").filter(Boolean).sort();
 }
 

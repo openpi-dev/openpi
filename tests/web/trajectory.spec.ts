@@ -1,6 +1,12 @@
+// @vitest-environment jsdom
+
 import { expect, it } from "vitest";
-import { buildTrajectory } from "../../web/ui/src/features/trajectory/trajectory.ts";
+import {
+  buildTrajectory,
+  defaultTrajectoryNode,
+} from "../../web/ui/src/features/trajectory/trajectory.ts";
 import type { WebLiveMessage } from "../../web/protocol/types.ts";
+import { i18n } from "../../web/ui/src/i18n.ts";
 function entry(id: string, message: WebLiveMessage) {
   return {
     id,
@@ -95,4 +101,18 @@ it("does not pair a result that precedes its only retained call", () => {
   ]);
   expect(nodes.map((node) => node.kind)).toEqual(["result", "call"]);
   expect(nodes[1]?.result).toBeUndefined();
+});
+
+it("defaults to the latest meaningful record instead of a metadata-only event", () => {
+  const nodes = buildTrajectory([
+    entry("u", { role: "user", content: "question" }),
+    entry("a", { role: "assistant", content: "answer" }),
+    { id: "custom", type: "custom" as const, timestamp: "now" },
+  ]);
+
+  expect(defaultTrajectoryNode(nodes)?.key).toBe("a");
+  expect(i18n.getFixedT("en")("trajectory_returned")).toBe(
+    "Tool returned a result.",
+  );
+  expect(i18n.getFixedT("zh")("trajectory_returned")).toBe("工具已返回结果。");
 });

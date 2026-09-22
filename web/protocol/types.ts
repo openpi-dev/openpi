@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
@@ -25,6 +26,11 @@ export const WEB_MAX_COMMANDS = 250;
 export const WEB_MAX_COMMAND_BYTES = 64 * 1024;
 export const WEB_MAX_COMMAND_NAME = 160;
 export const WEB_MAX_COMMAND_DESCRIPTION = 500;
+export const WEB_PROMPT_IMAGE_MAX_COUNT = 4;
+export const WEB_PROMPT_IMAGE_MAX_BYTES = 3 * 1024 * 1024;
+export const WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES = 8 * 1024 * 1024;
+export const WEB_MAX_GIT_REVIEW_FILES = 200;
+export const WEB_MAX_GIT_REVIEW_DIFF_BYTES = 3 * 1024 * 1024;
 export const WEB_MAX_SELECTED_TRANSCRIPT_BYTES = 2 * 1024 * 1024;
 export const WEB_MAX_SNAPSHOT_BYTES = 4 * 1024 * 1024;
 export const WEB_MAX_THINKING_LEVEL = 500;
@@ -91,6 +97,7 @@ export interface WebCommandSummary {
   source: "extension" | "prompt" | "skill";
   availability: "available" | "unsupported";
   argumentHint?: string;
+  support?: "plan" | "setup";
 }
 
 export interface WebCommandDiscoveryResult {
@@ -103,6 +110,117 @@ export interface WebCommandDiscoveryResult {
     maxBytes: number;
     bytes: number;
   };
+}
+
+export type WebThemePreference =
+  | "light"
+  | "dark"
+  | "mist"
+  | "rose"
+  | "pine"
+  | "system";
+
+export interface WebSettingsSkillSummary {
+  id: string;
+  name: string;
+  description: string;
+  filePath: string;
+  source: string;
+  scope: "user" | "project" | "temporary";
+  origin: "package" | "top-level";
+  disableModelInvocation: boolean;
+}
+
+export interface WebSettingsExtensionSummary {
+  name: string;
+  path: string;
+  toolCount: number;
+  commandCount: number;
+}
+
+export interface WebSettingsPluginSummary {
+  id: string;
+  source: string;
+  scope: "user" | "project" | "temporary";
+  origin: "package" | "top-level";
+  baseDir?: string;
+  extensions: WebSettingsExtensionSummary[];
+  skills: string[];
+  prompts: string[];
+  themes: string[];
+}
+
+export interface WebSettingsResourceCatalog {
+  skills: WebSettingsSkillSummary[];
+  plugins: WebSettingsPluginSummary[];
+  totals: {
+    extensions: number;
+    skills: number;
+    prompts: number;
+    themes: number;
+  };
+  diagnostics: {
+    extensionErrors: number;
+    skillErrors: number;
+  };
+  truncation: {
+    truncated: boolean;
+    skillsOmitted: number;
+    pluginsOmitted: number;
+    resourcesOmitted: number;
+  };
+}
+
+export interface WebOpenPiSetupProjection {
+  capabilities: {
+    discovery: "explicit" | "adaptive";
+  };
+  suggestions: {
+    enabled: boolean;
+    model?: {
+      provider: string;
+      model: string;
+      reasoning: string;
+    };
+  };
+  workflows: {
+    concurrency: number;
+    maxAgentCalls: number;
+  };
+  ui: {
+    webTheme: WebThemePreference;
+    webChatWidth: number;
+    webChatFontSize: number;
+    webExpandThinking: boolean;
+    showHeader: boolean;
+    customFooter: boolean;
+    footerStyle: string;
+    subagentResultDisplay: "full" | "compact";
+    bashToolDisplay: "full" | "compact";
+    fileMutationDisplay: "full" | "compact";
+  };
+  postEditConfigured: boolean;
+  subagents: {
+    roleModels: Partial<
+      Record<
+        "explorer" | "implementer" | "reviewer" | "advisor",
+        { provider: string; model: string }
+      >
+    >;
+  };
+}
+
+export interface WebSettingsCatalog {
+  sessionId: string;
+  setup: WebOpenPiSetupProjection;
+  resources: WebSettingsResourceCatalog;
+}
+
+export interface WebSettingsPreferencesPatch {
+  theme?: WebThemePreference;
+  chatWidth?: number;
+  chatFontSize?: number;
+  expandThinking?: boolean;
 }
 
 export interface WebProjectionTruncation {
@@ -122,6 +240,65 @@ export interface WebSessionProjection {
   truncation: WebProjectionTruncation;
 }
 
+export interface WebSessionUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  total: number;
+  context?: {
+    tokens: number | null;
+    contextWindow: number;
+    percent: number | null;
+  };
+}
+
+export interface WebInteractiveTerminal {
+  id: string;
+  sessionId: string;
+  cwd: string;
+  exited: boolean;
+  exitCode: number | null;
+  reused?: boolean;
+}
+
+export interface WebEmbeddedBrowserState {
+  sessionId: string;
+  url: string;
+  title: string;
+  width: number;
+  height: number;
+  loading: boolean;
+  canGoBack: boolean;
+  canGoForward: boolean;
+}
+
+export type WebEmbeddedBrowserAction =
+  | { type: "navigate"; url: string }
+  | { type: "back" | "forward" | "reload" | "stop" }
+  | { type: "resize"; width: number; height: number }
+  | {
+      type: "mouse";
+      event: "move" | "down" | "up" | "wheel";
+      x: number;
+      y: number;
+      button?: "left" | "middle" | "right";
+      deltaX?: number;
+      deltaY?: number;
+    }
+  | {
+      type: "key";
+      event: "down" | "up";
+      key: string;
+      code?: string;
+      text?: string;
+    };
+
+export type WebInteractiveTerminalEvent =
+  | { type: "output"; data: string; offset: number; reset?: boolean }
+  | { type: "exit"; exitCode: number }
+  | { type: "closed" };
+
 export interface WebMessageTruncation {
   readonly truncated: true;
   readonly text?: true;
@@ -130,6 +307,8 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  timestamp?: number;
+  commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
   role?: string;
   toolName?: string;
@@ -137,14 +316,29 @@ export interface WebLiveMessage {
   parts?: WebMessagePart[];
   toolCallId?: string;
   isError?: boolean;
+  stopReason?: "stop" | "length" | "toolUse" | "aborted" | "error";
+  /** Bounded, redacted provider failure text; not a substitute for the terminal reason. */
+  errorMessage?: string;
   customType?: string;
   display?: boolean;
   details?: unknown;
   truncation?: WebMessageTruncation;
 }
 
+export interface WebPromptImage {
+  data: string;
+  mimeType: "image/png" | "image/jpeg" | "image/gif" | "image/webp";
+  name?: string;
+}
+
 export type WebMessagePart =
   | { type: "text"; text: string }
+  | {
+      type: "image";
+      mimeType: string;
+      name?: string;
+      previewUrl?: string;
+    }
   | { type: "thinking"; text: string }
   | { type: "toolCall"; id?: string; name: string; arguments: string; evidenceArguments?: Record<string, unknown>; evidenceTruncated?: boolean };
 
@@ -165,6 +359,47 @@ export interface WebThinkingState {
   /** Host-assigned monotonic value (SSE sequence); newer wins. */
   readonly revision: number;
 }
+
+export type WebGitReviewFileStatus =
+  | "added"
+  | "modified"
+  | "deleted"
+  | "renamed"
+  | "copied"
+  | "untracked"
+  | "unknown";
+
+export interface WebGitReviewFile {
+  path: string;
+  previousPath?: string;
+  status: WebGitReviewFileStatus;
+  diff: string;
+  diffTruncated: boolean;
+  additions: number;
+  deletions: number;
+}
+
+export interface WebGitReviewSnapshot {
+  repositoryRoot: string;
+  currentBranch: string | null;
+  baseBranch: string | null;
+  comparison: "branch" | "session";
+  revision: string;
+  files: WebGitReviewFile[];
+  additions: number;
+  deletions: number;
+  truncated: boolean;
+}
+
+export type WebGitReviewResult =
+  | { ok: true; snapshot: WebGitReviewSnapshot }
+  | {
+      ok: false;
+      reason:
+        | "not_git_repository"
+        | "unborn_repository"
+        | "git_failed";
+    };
 
 /**
  * Bounds a runtime thinking projection at the wire boundary. Shared by the
@@ -189,17 +424,26 @@ export interface WebSnapshot {
   generatedAt: string;
   cursor: number;
   preferences: {
-    theme: "system" | "light" | "dark";
+    theme: WebThemePreference;
+    /** Optional for compatibility with snapshots emitted before Web display preferences existed. */
+    chatWidth?: number;
+    chatFontSize?: number;
+    expandThinking?: boolean;
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
   workspaces: WebWorkspaceSummary[];
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
+  /** Current Pi Session only. Historical projections do not invent live context usage. */
+  usage?: WebSessionUsage;
   models: WebModelSummary[];
   /** Optional diagnostic; absent when the runtime cannot report it. */
   thinking?: WebThinkingState;
   runtime: {
+    plan?: "inactive" | "planning" | "ready" | "invalid";
+    planRevision?: string | null;
+    planHasPrompt?: boolean;
     liveTools?: LiveToolEvidence[];
     status: "idle" | "running" | "unknown";
     activeTurn?: WebActiveTurn;
@@ -220,6 +464,19 @@ function boundedTextProjection(value: string, maxLength: number): BoundedText {
         truncated: true,
       }
     : { value, truncated: false };
+}
+
+const assistantStopReasons = new Set(["stop", "length", "toolUse", "aborted", "error"]);
+
+export function projectAssistantError(value: string) {
+  const cleaned = value
+    .replace(/[\x00-\x1f\x7f-\x9f]/gu, " ")
+    .replace(/https?:\/\/[^\s<>"']+/giu, "[redacted URL]")
+    .replace(/\bBearer\s+[^\s,;]+/giu, "Bearer [redacted]")
+    .replace(/(["']?(?:api[_-]?key|authorization|access[_-]?token|token|secret|password)["']?\s*[:=]\s*)(?:"[^"]*"|'[^']*'|[^\s,;]+)/giu, "$1[redacted]")
+    .replace(/(?<![A-Za-z0-9_])[A-Za-z0-9-]{24,}(?![A-Za-z0-9_])/gu, "[redacted]")
+    .trim();
+  return boundedTextProjection(cleaned, WEB_MAX_METADATA_TEXT);
 }
 
 export function boundedText(value: string, maxLength = WEB_MAX_TEXT): string {
@@ -385,6 +642,11 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
         textTruncated = true;
       }
     } else if (
+      typed.type === "image" &&
+      typeof typed.mimeType === "string"
+    ) {
+      projected = { type: "image", mimeType: typed.mimeType };
+    } else if (
       typed.type === "thinking" &&
       typeof typed.thinking === "string"
     ) {
@@ -469,6 +731,12 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     typeof value.customType === "string"
       ? boundedTextProjection(value.customType, WEB_MAX_METADATA_TEXT)
       : undefined;
+  const stopReason = value.role === "assistant" && assistantStopReasons.has(String(value.stopReason))
+    ? value.stopReason as WebLiveMessage["stopReason"]
+    : undefined;
+  const errorMessage = stopReason === "error" && typeof value.errorMessage === "string"
+    ? projectAssistantError(value.errorMessage)
+    : undefined;
   const metadataTruncated =
     role?.truncated === true ||
     toolName?.truncated === true ||
@@ -478,15 +746,18 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     content.textTruncated ||
     content.partsOmitted > 0 ||
     details.truncated ||
-    metadataTruncated;
+    metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
     content: content.content,
     ...(content.parts.length > 0 ? { parts: content.parts } : {}),
     ...(toolCallId ? { toolCallId: toolCallId.value } : {}),
     ...(typeof value.isError === "boolean" ? { isError: value.isError } : {}),
+    ...(stopReason ? { stopReason } : {}),
+    ...(errorMessage ? { errorMessage: errorMessage.value } : {}),
     ...(customType ? { customType: customType.value } : {}),
     ...(typeof value.display === "boolean" ? { display: value.display } : {}),
     ...(details.value !== undefined ? { details: details.value } : {}),
@@ -494,7 +765,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
       ? {
           truncation: {
             truncated: true as const,
-            ...(content.textTruncated || metadataTruncated
+            ...(content.textTruncated || metadataTruncated || errorMessage?.truncated
               ? { text: true as const }
               : {}),
             ...(content.partsOmitted > 0
@@ -508,6 +779,33 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
 }
 
 export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
+  if (entry.type === "custom_message") {
+    return {
+      type: "message" as const,
+      id: entry.id,
+      timestamp: entry.timestamp,
+      message: projectMessage(
+        {
+          role: "custom",
+          customType: entry.customType,
+          content: entry.content,
+          details: entry.details,
+          display: entry.display,
+        },
+        resolvePath,
+      ),
+    };
+  }
+  if (entry.type === "custom" && (entry.customType === WEB_COMMAND_INPUT || entry.customType === WEB_COMMAND_FEEDBACK)) {
+    const data: unknown = entry.data;
+    if (data && typeof data === "object" && "text" in data && typeof data.text === "string") {
+      const message: WebLiveMessage = { role: entry.customType === WEB_COMMAND_INPUT ? "user" : "custom", content: data.text.slice(0, WEB_MAX_TEXT), customType: entry.customType,
+        ...("commandId" in data && typeof data.commandId === "string" ? { commandId: data.commandId.slice(0, 200) } : {}),
+        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true } } : {}) };
+      return { type: "message", id: entry.id, timestamp: entry.timestamp,
+        message };
+    }
+  }
   if (entry.type !== "message") {
     return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
   }

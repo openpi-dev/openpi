@@ -18,6 +18,7 @@ test("buildShowArgs validates revisions and paths", () => {
     "--no-textconv",
     "--format=fuller",
     "HEAD",
+    "--",
   ]);
   assert.deepEqual(buildShowArgs({ revision: "  abc123  " }), [
     "show",
@@ -26,6 +27,7 @@ test("buildShowArgs validates revisions and paths", () => {
     "--no-textconv",
     "--format=fuller",
     "abc123",
+    "--",
   ]);
   assert.deepEqual(buildShowArgs({ revision: "HEAD~2", path: "src/a.ts" }), [
     "show",
@@ -76,6 +78,7 @@ test("buildDiffArgs composes only read-only diff forms", () => {
     "--no-color",
     "--no-ext-diff",
     "--no-textconv",
+    "--",
   ]);
   assert.deepEqual(buildDiffArgs({ staged: true }), [
     "diff",
@@ -83,6 +86,7 @@ test("buildDiffArgs composes only read-only diff forms", () => {
     "--no-ext-diff",
     "--no-textconv",
     "--cached",
+    "--",
   ]);
   assert.deepEqual(buildDiffArgs({ from: "main", to: "feat" }), [
     "diff",
@@ -90,6 +94,7 @@ test("buildDiffArgs composes only read-only diff forms", () => {
     "--no-ext-diff",
     "--no-textconv",
     "main...feat",
+    "--",
   ]);
   assert.deepEqual(buildDiffArgs({ from: "HEAD", stat: true, path: "src" }), [
     "diff",
@@ -125,6 +130,7 @@ test("buildLogArgs clamps the limit and validates inputs", () => {
     "--oneline",
     "-n",
     String(GIT_LOG_DEFAULT_LIMIT),
+    "--",
   ]);
   assert.deepEqual(buildLogArgs({ limit: 10_000, revision: "main" }), [
     "log",
@@ -134,6 +140,7 @@ test("buildLogArgs clamps the limit and validates inputs", () => {
     "-n",
     "1000",
     "main",
+    "--",
   ]);
   assert.deepEqual(
     buildLogArgs({ limit: 0, file: "src/a.ts", oneline: false }),

@@ -41,6 +41,7 @@ import type {
   WebRuntimeController,
   WebThinkingProjection,
 } from "../runtime/types.ts";
+import { matchesSessionIdentity } from "../runtime/session-identity.ts";
 
 export class WebReadOnlySessionError extends Error {
   readonly code = "SESSION_NOT_FOUND" as const;
@@ -534,7 +535,7 @@ export class PiWebAdapter {
       throw new Error("Conversation name must be 1-80 visible characters");
     }
     const manager =
-      session.id === this.runtime.sessionManager.getSessionId()
+      this.isCurrentSession(session)
         ? this.runtime.sessionManager
         : SessionManager.open(session.path, this.runtime.sessionDirectory);
     manager.appendSessionInfo(normalized);
@@ -693,12 +694,11 @@ export class PiWebAdapter {
     // only the Web projection below is retained and bounded.
     const sorted = allSessions;
     const currentId = this.runtime.sessionManager.getSessionId();
-    const currentFile = this.runtime.sessionManager.getSessionFile();
     const pinned = new Set(
       sorted
         .filter(
           (session) =>
-            session.id === currentId ||
+            this.isCurrentSession(session) ||
             (pinnedPath !== undefined && session.path === pinnedPath),
         )
         .map((session) => session.path),
@@ -716,7 +716,7 @@ export class PiWebAdapter {
         cwd: resolve(session.cwd),
         source: "web-session" as const,
         origin: "web" as const,
-        controller: session.id === currentId && currentFile !== undefined && resolve(session.path) === resolve(currentFile) ? ("web" as const) : ("none" as const),
+        controller: this.isCurrentSession(session) ? ("web" as const) : ("none" as const),
         readOnly: false as const,
         ...(session.name
           ? { name: boundedText(session.name, WEB_MAX_SESSION_PREVIEW) }
@@ -733,7 +733,7 @@ export class PiWebAdapter {
       }));
     if (
       this.runtime.workspaceSelected === true &&
-      !projected.some((session) => session.id === currentId)
+      !projected.some((session) => this.isCurrentSession(session))
     ) {
       const entries = this.runtime.sessionManager.getBranch();
       let firstUser = "";
@@ -795,7 +795,7 @@ export class PiWebAdapter {
       omitted: Math.max(
         0,
         allSessions.length +
-          (allSessions.some((session) => session.id === currentId) ||
+          (allSessions.some((session) => this.isCurrentSession(session)) ||
           this.runtime.workspaceSelected !== true
             ? 0
             : 1) -
@@ -942,11 +942,15 @@ export class PiWebAdapter {
     const path =
       selectedPath ??
       sessions.find(
-        (session) => session.id === this.runtime.sessionManager.getSessionId(),
+        (session) => this.isCurrentSession(session),
       )?.path;
     const selectedSession = path
       ? await this.getSession(path, sessions)
       : undefined;
+    const usage =
+      selectedSession?.id === this.runtime.sessionManager.getSessionId()
+        ? this.runtime.getSessionUsage?.()
+        : undefined;
     const allModels = this.runtime.listModels();
     const currentModel = allModels.find((model) => model.current);
     const retainedModels = currentModel ? [currentModel] : [];
@@ -971,6 +975,7 @@ export class PiWebAdapter {
       models,
       ...(thinking ? { thinking } : {}),
       ...(selectedSession ? { selectedSession } : {}),
+      ...(usage ? { usage } : {}),
       runtime: {
         status: this.runtime.isIdle()
           ? ("idle" as const)
@@ -1043,7 +1048,7 @@ export class PiWebAdapter {
       for (let candidate = snapshot.sessions.length - 1; candidate >= 0; candidate--) {
         const session = snapshot.sessions[candidate]!;
         if (
-          session.id !== snapshot.currentSessionId &&
+          !this.isCurrentSession(session) &&
           session.path !== selectedPath
         ) {
           index = candidate;
@@ -1136,6 +1141,14 @@ export class PiWebAdapter {
     ]);
   }
 
+  isCurrentSession(session: Pick<WebSessionSummary, "id" | "path">) {
+    // A copied JSONL retains its ID, but does not own the active runtime.
+    return matchesSessionIdentity(this.runtime.sessionManager, {
+      expectedSessionId: session.id,
+      expectedSessionPath: session.path,
+    });
+  }
+
   async getSession(
     path: string,
     knownSessions?: WebSessionSummary[],
@@ -1145,7 +1158,7 @@ export class PiWebAdapter {
     if (!summary) return undefined;
 
     const manager =
-      summary.id === this.runtime.sessionManager.getSessionId()
+      this.isCurrentSession(summary)
         ? this.runtime.sessionManager
         : SessionManager.open(path);
     const projected = projectEntries(manager.getBranch(), (path) => resolve(summary.cwd, path));

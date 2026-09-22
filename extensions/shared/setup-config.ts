@@ -1,11 +1,11 @@
 import { execFile } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import { existsSync, readFileSync, watch, type Stats } from "node:fs";
+import { existsSync, readFileSync, type Stats, watch } from "node:fs";
 import {
   link,
   mkdir,
-  readFile,
   readdir,
+  readFile,
   rename,
   stat,
   unlink,
@@ -63,8 +63,22 @@ export type FooterLines = readonly (readonly FooterLayoutItem[])[];
 export const DETAIL_DISPLAYS = ["full", "compact"] as const;
 export type DetailDisplay = (typeof DETAIL_DISPLAYS)[number];
 
-export const WEB_THEMES = ["system", "light", "dark"] as const;
+export const WEB_THEMES = [
+  "light",
+  "dark",
+  "mist",
+  "rose",
+  "pine",
+  "system",
+] as const;
 export type WebTheme = (typeof WEB_THEMES)[number];
+
+export const DEFAULT_WEB_CHAT_WIDTH = 820;
+export const MIN_WEB_CHAT_WIDTH = 820;
+export const MAX_WEB_CHAT_WIDTH = 2_000;
+export const DEFAULT_WEB_CHAT_FONT_SIZE = 14;
+export const MIN_WEB_CHAT_FONT_SIZE = 12;
+export const MAX_WEB_CHAT_FONT_SIZE = 24;
 
 export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
 export type CapabilityDiscoveryMode =
@@ -153,6 +167,9 @@ export interface MyPiSetupConfig {
   };
   readonly ui: {
     readonly webTheme: WebTheme;
+    readonly webChatWidth: number;
+    readonly webChatFontSize: number;
+    readonly webExpandThinking: boolean;
     readonly showHeader: boolean;
     readonly customFooter: boolean;
     readonly footerStyle: FooterStyle;
@@ -184,6 +201,9 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
   },
   ui: {
     webTheme: "system",
+    webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
+    webChatFontSize: DEFAULT_WEB_CHAT_FONT_SIZE,
+    webExpandThinking: false,
     showHeader: false,
     customFooter: true,
     footerStyle: DEFAULT_FOOTER_STYLE,
@@ -437,6 +457,20 @@ function boundedInteger(value: unknown, fallback: number, maximum: number) {
     : fallback;
 }
 
+function boundedIntegerRange(
+  value: unknown,
+  fallback: number,
+  minimum: number,
+  maximum: number,
+) {
+  return typeof value === "number" &&
+    Number.isInteger(value) &&
+    value >= minimum &&
+    value <= maximum
+    ? value
+    : fallback;
+}
+
 export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   if (!isRecord(value)) return DEFAULT_SETUP_CONFIG;
 
@@ -494,6 +528,22 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
+      webChatWidth: boundedIntegerRange(
+        ui.webChatWidth,
+        DEFAULT_WEB_CHAT_WIDTH,
+        MIN_WEB_CHAT_WIDTH,
+        MAX_WEB_CHAT_WIDTH,
+      ),
+      webChatFontSize: boundedIntegerRange(
+        ui.webChatFontSize,
+        DEFAULT_WEB_CHAT_FONT_SIZE,
+        MIN_WEB_CHAT_FONT_SIZE,
+        MAX_WEB_CHAT_FONT_SIZE,
+      ),
+      webExpandThinking:
+        typeof ui.webExpandThinking === "boolean"
+          ? ui.webExpandThinking
+          : false,
       showHeader: typeof ui.showHeader === "boolean" ? ui.showHeader : false,
       customFooter:
         typeof ui.customFooter === "boolean" ? ui.customFooter : true,
@@ -1025,7 +1075,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
-    `UI: Web theme ${config.ui.webTheme} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
+    `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
     `Write/Edit operations: ${config.ui.fileMutationDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,
@@ -1034,7 +1084,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
   ].join("\n");
 }
 
-export { isFooterItem, isFooterLayoutItem, isFooterStyle, isFooterPreset };
+export { isFooterItem, isFooterLayoutItem, isFooterPreset, isFooterStyle };
 
 /**
  * Read-modify-write against the document as it is on disk right now, so a

@@ -1,3 +1,10 @@
+import type {
+  LiveToolState,
+  SubagentSnapshot,
+  TranscriptItem,
+  TranscriptPart,
+} from "../subagents/src/domain.ts";
+
 export type WebCapabilityKind =
   | "subagents"
   | "workflows"
@@ -16,6 +23,7 @@ const WEB_MAX_TERMINAL_STDERR_BYTES = 8 * 1024;
 export interface WebSubagentActivity {
   readonly id: string;
   readonly title: string;
+  readonly origin?: "model" | "btw";
   readonly status: "running" | "done" | "error";
   readonly outcome?: "completed" | "failed" | "interrupted";
   readonly createdAt: number;
@@ -77,7 +85,49 @@ export interface WebBackgroundTerminalDetail {
   readonly truncated: boolean;
 }
 
-export type WebCapabilityDetail = WebBackgroundTerminalDetail;
+export interface WebSubagentDetail extends WebSubagentActivity {
+  readonly kind: "subagents";
+  readonly cwd: string;
+  readonly model?: string;
+  readonly prompt: string;
+  readonly transcript: readonly TranscriptItem[];
+  readonly liveAssistant?: { readonly text: string; readonly thinking: string };
+  readonly liveTools: readonly LiveToolState[];
+  readonly finalText: string;
+  readonly errorText?: string;
+  readonly truncated: boolean;
+  readonly omittedEntries: number;
+}
+
+export type WebCapabilityActionRequest =
+  | {
+      readonly kind: "subagents";
+      readonly action: "spawn-btw";
+      readonly prompt: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "send-btw";
+      readonly id: string;
+      readonly text: string;
+    }
+  | {
+      readonly kind: "subagents";
+      readonly action: "cancel-btw";
+      readonly id: string;
+    };
+
+export interface WebCapabilityActionProvider {
+  readonly kind: WebCapabilityKind;
+  readonly run: (
+    request: WebCapabilityActionRequest,
+    signal?: AbortSignal,
+  ) => Promise<WebCapabilityDetail>;
+}
+
+export type WebCapabilityDetail =
+  | WebBackgroundTerminalDetail
+  | WebSubagentDetail;
 
 export type WebCapabilityDetailReceipt =
   | { readonly status: "found"; readonly detail: WebCapabilityDetail }
@@ -230,6 +280,7 @@ export function projectSubagentCapability(
   source: readonly {
     readonly id: string;
     readonly title: string;
+    readonly origin?: WebSubagentActivity["origin"];
     readonly status: WebSubagentActivity["status"];
     readonly outcome?: WebSubagentActivity["outcome"];
     readonly createdAt: number;
@@ -243,6 +294,7 @@ export function projectSubagentCapability(
       item: {
         id: id.value,
         title: title.value,
+        ...(value.origin ? { origin: value.origin } : {}),
         status: value.status,
         ...(value.outcome ? { outcome: value.outcome } : {}),
         createdAt: value.createdAt,
@@ -253,6 +305,148 @@ export function projectSubagentCapability(
       truncated: id.truncated || title.truncated,
     };
   });
+}
+
+/** Project only manager-owned display data; never load child session files. */
+export function projectSubagentDetail(
+  source: SubagentSnapshot,
+): WebSubagentDetail {
+  let remainingBytes = 64 * 1024;
+  let truncated = false;
+  const text = (value: string, maxBytes = 4 * 1024) => {
+    if (remainingBytes === 0) {
+      truncated ||= value.length > 0;
+      return "";
+    }
+    const bounded = boundedUtf8Tail(value, Math.min(maxBytes, remainingBytes));
+    remainingBytes -= bounded.bytes;
+    truncated ||= bounded.truncated;
+    return bounded.value;
+  };
+  const title = text(source.title, 640);
+  const cwd = text(source.cwd, 2 * 1024);
+  const model =
+    source.meta.modelLabel === undefined
+      ? undefined
+      : text(source.meta.modelLabel, 640);
+  const prompt = text(source.prompt);
+  const finalText = text(source.finalText, 8 * 1024);
+  const errorText =
+    source.errorText === undefined ? undefined : text(source.errorText);
+  const liveAssistant = source.liveAssistant && {
+    text: text(source.liveAssistant.text, 8 * 1024),
+    thinking: text(source.liveAssistant.thinking),
+  };
+  // Pairing identities must survive byte bounds exactly, never as shared tails.
+  const toolIdentity = (id: string) => {
+    const bytes = new TextEncoder().encode(id).byteLength;
+    if (
+      !id ||
+      bytes > 640 ||
+      bytes > remainingBytes ||
+      /[\u0000-\u001f\u007f]/u.test(id)
+    ) {
+      truncated = true;
+      return undefined;
+    }
+    remainingBytes -= bytes;
+    return id;
+  };
+  const liveTools = source.liveTools.slice(-16).flatMap((tool) => {
+    const toolId = toolIdentity(tool.toolId);
+    if (toolId === undefined) return [];
+    return [
+      {
+        toolId,
+        name: text(tool.name, 640),
+        ...(tool.argsPreview !== undefined
+          ? { argsPreview: text(tool.argsPreview) }
+          : {}),
+        ...(tool.outputPreview !== undefined
+          ? { outputPreview: text(tool.outputPreview) }
+          : {}),
+        ...(tool.done !== undefined ? { done: tool.done } : {}),
+        ...(tool.isError !== undefined ? { isError: tool.isError } : {}),
+      },
+    ];
+  });
+  // Spend the remaining budget on recent activity first, then restore chronology.
+  const selected = source.transcript.slice(-64);
+  const transcript: TranscriptItem[] = selected
+    .reverse()
+    .flatMap((item): TranscriptItem[] => {
+      if (item.kind === "user")
+        return [{ kind: "user", text: text(item.text) }];
+      if (item.kind === "toolResult") {
+        const toolId = toolIdentity(item.toolId);
+        if (toolId === undefined) return [];
+        return [
+          {
+            kind: "toolResult",
+            toolId,
+            name: text(item.name, 640),
+            isError: item.isError,
+            ...(item.outputPreview !== undefined
+              ? { outputPreview: text(item.outputPreview) }
+              : {}),
+          },
+        ];
+      }
+      truncated ||= item.parts.length > 32;
+      const parts = item.parts.slice(-32).flatMap((part): TranscriptPart[] => {
+        if (part.type === "toolCall") {
+          const toolId = toolIdentity(part.toolId);
+          if (toolId === undefined) return [];
+          return [
+            {
+              type: "toolCall",
+              toolId,
+              name: text(part.name, 640),
+              ...(part.argsPreview !== undefined
+                ? { argsPreview: text(part.argsPreview) }
+                : {}),
+            },
+          ];
+        }
+        if (part.type === "thinking")
+          return [
+            {
+              type: "thinking",
+              text: part.redacted ? "" : text(part.text),
+              ...(part.redacted !== undefined
+                ? { redacted: part.redacted }
+                : {}),
+            },
+          ];
+        return [{ type: "text", text: text(part.text) }];
+      });
+      return [{ kind: "assistant", parts }];
+    })
+    .reverse();
+  const omittedEntries = source.transcript.length - transcript.length;
+  return {
+    kind: "subagents",
+    id: source.id,
+    title,
+    origin: source.origin,
+    status: source.status,
+    ...(source.outcome !== undefined ? { outcome: source.outcome } : {}),
+    createdAt: source.createdAt,
+    ...(source.settledAt !== undefined ? { settledAt: source.settledAt } : {}),
+    cwd,
+    ...(model !== undefined ? { model } : {}),
+    prompt,
+    transcript,
+    ...(liveAssistant ? { liveAssistant } : {}),
+    liveTools,
+    finalText,
+    ...(errorText !== undefined ? { errorText } : {}),
+    truncated:
+      truncated ||
+      omittedEntries > 0 ||
+      source.liveTools.length > liveTools.length,
+    omittedEntries,
+  };
 }
 
 export function projectWorkflowCapability(
@@ -434,6 +628,10 @@ interface WebObserverRegistry {
     WebCapabilityScope,
     Map<WebCapabilityKind, WebCapabilityProvider>
   >;
+  readonly actions: Map<
+    WebCapabilityScope,
+    Map<WebCapabilityKind, WebCapabilityActionProvider>
+  >;
   readonly listeners: Map<CapabilityListener, ProviderSubscriptions>;
 }
 
@@ -453,11 +651,21 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
     ) {
       throw new Error("Incompatible OpenPI Web observer registry");
     }
-    return existing as WebObserverRegistry;
+    const registry = existing as WebObserverRegistry;
+    if (!(registry.actions instanceof Map)) {
+      Object.defineProperty(registry, "actions", {
+        value: new Map(),
+        configurable: false,
+        enumerable: true,
+        writable: false,
+      });
+    }
+    return registry;
   }
   const registry: WebObserverRegistry = {
     version: 1,
     providers: new Map(),
+    actions: new Map(),
     listeners: new Map(),
   };
   Object.defineProperty(globalThis, WEB_OBSERVER_REGISTRY_KEY, {
@@ -472,7 +680,35 @@ function sharedWebObserverRegistry(): WebObserverRegistry {
 // Pi may load package extensions from a managed install while the standalone
 // CLI runs from a global npm install. Symbol.for keeps those same-process module
 // copies on one versioned registry without adding a second persistence layer.
-const { providers, listeners } = sharedWebObserverRegistry();
+const { providers, actions, listeners } = sharedWebObserverRegistry();
+
+export function registerWebCapabilityActions(
+  scope: WebCapabilityScope,
+  provider: WebCapabilityActionProvider,
+) {
+  let scopedActions = actions.get(scope);
+  if (!scopedActions) {
+    scopedActions = new Map();
+    actions.set(scope, scopedActions);
+  }
+  scopedActions.set(provider.kind, provider);
+  return () => {
+    const current = actions.get(scope);
+    if (current?.get(provider.kind) !== provider) return;
+    current.delete(provider.kind);
+    if (current.size === 0) actions.delete(scope);
+  };
+}
+
+export async function runWebCapabilityAction(
+  scope: WebCapabilityScope,
+  request: WebCapabilityActionRequest,
+  signal?: AbortSignal,
+) {
+  const provider = actions.get(scope)?.get(request.kind);
+  if (!provider) return undefined;
+  return provider.run(request, signal);
+}
 
 function connect(
   scope: WebCapabilityScope,
