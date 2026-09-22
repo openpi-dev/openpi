@@ -2,10 +2,48 @@
 import { afterEach, expect, it, vi } from "vitest";
 import { WebApiError, WebClient } from "../../web/ui/src/protocol/client.ts";
 import { consumeEventStream } from "../../web/ui/src/protocol/event-stream.ts";
+import { questionFixture } from "./question-fixtures.ts";
 
 afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
+});
+
+it("settles an evicted question receipt as unknown while retaining controller rejections", async () => {
+  const fetcher = vi
+    .fn()
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ state: "stale", code: "STALE_QUESTION" }), {
+        status: 409,
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          error: "Only the initiating tab can answer",
+          code: "NOT_CONTROLLER",
+        }),
+        {
+          status: 403,
+        },
+      ),
+    );
+  vi.stubGlobal("fetch", fetcher);
+  const client = new WebClient();
+  const request = {
+    sessionId: "session",
+    requestId: "evicted",
+    toolCallId: "tool",
+    expiresAt: Date.now(),
+    questions: questionFixture,
+  };
+  await expect(client.answerQuestions(request, null)).resolves.toEqual({
+    state: "stale",
+  });
+  await expect(client.answerQuestions(request, null)).rejects.toMatchObject({
+    status: 403,
+    code: "NOT_CONTROLLER",
+  });
 });
 
 it("bounds a stalled event read and cancels the stream", async () => {
@@ -98,6 +136,7 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
     sessionPath: "/tmp/session.jsonl",
     content: "once",
     commandId: "stable-command",
+    controllerId: expect.any(String),
     retry: true,
     images: [],
   });
@@ -364,6 +403,7 @@ it.each(["/tmp/ws/session.jsonl", "/tmp/ws/copy.jsonl"])(
         sessionPath,
         content: "hello",
         commandId: "command",
+        controllerId: expect.any(String),
         retry: false,
         images: [],
       },

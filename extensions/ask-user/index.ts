@@ -39,6 +39,7 @@ import {
   patchOwnedTools,
 } from "../shared/tool-surface.ts";
 import { createHumanHandoffToolDefinition } from "./handoff.ts";
+import { askWebQuestions } from "./web-bridge.ts";
 import {
   answerDraftByteLength,
   answerDraftFits,
@@ -451,6 +452,24 @@ export default function askUser(pi: ExtensionAPI) {
       }
 
       if (!ctx.hasUI) {
+        const pending = askWebQuestions(
+          ctx.sessionManager,
+          _toolCallId,
+          params.questions,
+          signal,
+        );
+        if (pending) {
+          const result = await pending;
+          if (result.kind === "answered") {
+            return reply(buildAskUserResultMessage(result), result.answers);
+          }
+          if (result.kind === "expired")
+            return reply(
+              "The questions expired without an answer. Do not assume any choices.",
+            );
+          if (result.kind !== "unavailable")
+            return reply(buildAskUserResultMessage({ kind: result.kind }));
+        }
         return reply(buildAskUserResultMessage({ kind: "no-ui" }));
       }
       if (signal?.aborted) {

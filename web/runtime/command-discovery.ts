@@ -3,6 +3,7 @@ import type {
   InlineExtension,
   SlashCommandInfo,
 } from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
 import {
   jsonByteLength,
   WEB_MAX_COMMAND_BYTES,
@@ -14,6 +15,25 @@ import {
 } from "../protocol/types.ts";
 
 const WEB_MAX_COMMANDS_SCANNED = 1_024;
+
+const reviewedCommands = new Map([
+  [fileURLToPath(new URL("../../extensions/setup/index.ts", import.meta.url)), new Set(["openpi-setup", "my-pi-setup"])],
+  [fileURLToPath(new URL("../../extensions/plan-mode/index.ts", import.meta.url)), new Set(["plan"])],
+  [fileURLToPath(new URL("../../extensions/usage/index.ts", import.meta.url)), new Set(["usage"])],
+  [fileURLToPath(new URL("../../extensions/cron/index.ts", import.meta.url)), new Set(["cron"])],
+]);
+
+function reviewed(command: SlashCommandInfo) {
+  return reviewedCommands.get(command.sourceInfo?.path)?.has(command.name) ?? false;
+}
+
+/** Match Pi's command lookup only to record its input, never to dispatch it. */
+export function submittedExtensionCommand(services: AgentSessionServices, text: string) {
+  if (!text.startsWith("/")) return undefined;
+  const end = text.indexOf(" ");
+  const name = text.slice(1, end === -1 ? undefined : end);
+  return bridges.get(services)?.read().find((command) => command.source === "extension" && command.name === name);
+}
 
 interface CommandDiscoveryBridge {
   readonly extension: InlineExtension;
@@ -105,7 +125,9 @@ export function projectWebCommands(
       name,
       source: command.source,
       availability:
-        command.source === "extension" ? "unsupported" : "available",
+        command.source === "extension" && !reviewed(command) ? "unsupported" : "available",
+      ...(command.source === "extension" && reviewed(command) && command.name === "plan" ? { support: "plan" as const } : {}),
+      ...(command.source === "extension" && reviewed(command) && ["openpi-setup", "my-pi-setup"].includes(command.name) ? { support: "setup" as const } : {}),
       ...(description ? { description } : {}),
       ...(command.source === "extension"
         ? {}

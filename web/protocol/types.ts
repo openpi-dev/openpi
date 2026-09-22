@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
@@ -96,6 +97,7 @@ export interface WebCommandSummary {
   source: "extension" | "prompt" | "skill";
   availability: "available" | "unsupported";
   argumentHint?: string;
+  support?: "plan" | "setup";
 }
 
 export interface WebCommandDiscoveryResult {
@@ -305,6 +307,8 @@ export interface WebMessageTruncation {
 }
 
 export interface WebLiveMessage {
+  timestamp?: number;
+  commandId?: string;
   terminalReceipt?: ReturnType<typeof bashReceipt>;
   role?: string;
   toolName?: string;
@@ -437,6 +441,9 @@ export interface WebSnapshot {
   /** Optional diagnostic; absent when the runtime cannot report it. */
   thinking?: WebThinkingState;
   runtime: {
+    plan?: "inactive" | "planning" | "ready" | "invalid";
+    planRevision?: string | null;
+    planHasPrompt?: boolean;
     liveTools?: LiveToolEvidence[];
     status: "idle" | "running" | "unknown";
     activeTurn?: WebActiveTurn;
@@ -742,6 +749,7 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
     metadataTruncated || errorMessage?.truncated === true;
   return {
     role: role?.value,
+    ...(typeof value.timestamp === "number" && Number.isFinite(value.timestamp) ? { timestamp: value.timestamp } : {}),
     ...(value.toolName === "bash" && value.isError === true ? { terminalReceipt: bashReceipt(value.content, value.isError) } : {}),
     toolName: toolName?.value,
     content: content.content,
@@ -787,6 +795,16 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
         resolvePath,
       ),
     };
+  }
+  if (entry.type === "custom" && (entry.customType === WEB_COMMAND_INPUT || entry.customType === WEB_COMMAND_FEEDBACK)) {
+    const data: unknown = entry.data;
+    if (data && typeof data === "object" && "text" in data && typeof data.text === "string") {
+      const message: WebLiveMessage = { role: entry.customType === WEB_COMMAND_INPUT ? "user" : "custom", content: data.text.slice(0, WEB_MAX_TEXT), customType: entry.customType,
+        ...("commandId" in data && typeof data.commandId === "string" ? { commandId: data.commandId.slice(0, 200) } : {}),
+        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true } } : {}) };
+      return { type: "message", id: entry.id, timestamp: entry.timestamp,
+        message };
+    }
   }
   if (entry.type !== "message") {
     return { type: entry.type, id: entry.id, timestamp: entry.timestamp };

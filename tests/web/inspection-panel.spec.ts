@@ -130,6 +130,7 @@ it("aborts closed-panel reads and ignores late old-session results on reopening"
     }),
   );
   const first = show({ ...target, terminalId: "bt-1" });
+  await vi.waitFor(() => expect(oldSignal).toBeDefined());
   first.unmount();
   expect(oldSignal?.aborted).toBe(true);
   show({
