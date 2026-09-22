@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
 import type {
   ExecOptions,
   ExecResult,
@@ -8,6 +9,10 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import postEdit from "../../../extensions/post-edit/index.ts";
 import { SETUP_CONFIG_CHANGED_CHANNEL } from "../../../extensions/shared/setup-config.ts";
+import {
+  applySetupConfiguration,
+  onSetupApply,
+} from "../../../extensions/shared/setup-apply.ts";
 
 type Handler = (event: unknown, ctx: ExtensionContext) => unknown;
 
@@ -26,7 +31,7 @@ function harness(
   command = "npm run format",
 ) {
   const handlers = new Map<string, Handler[]>();
-  const listeners = new Map<string, () => void>();
+  const events = createEventBus();
   const executions: Array<{
     command: string;
     args: string[];
@@ -47,11 +52,7 @@ function harness(
     },
   } as unknown as ExtensionContext;
   const pi = {
-    events: {
-      on(name: string, listener: () => void) {
-        listeners.set(name, listener);
-      },
-    },
+    events,
     on(event: string, handler: Handler) {
       handlers.set(event, [...(handlers.get(event) ?? []), handler]);
     },
@@ -70,11 +71,24 @@ function harness(
     }
     return result;
   };
-  const configure = (value: string) => {
+  const applyCommand = async (value: string) => {
     command = value;
-    listeners.get(SETUP_CONFIG_CHANGED_CHANNEL)?.();
+    await applySetupConfiguration(pi);
   };
-  return { ctx, emit, executions, notifications, configure, controller };
+  const configure = async (value: string) => {
+    await applyCommand(value);
+    events.emit(SETUP_CONFIG_CHANGED_CHANNEL, {});
+  };
+  return {
+    ctx,
+    emit,
+    executions,
+    notifications,
+    configure,
+    applyCommand,
+    pi,
+    controller,
+  };
 }
 
 const success: ExecResult = {
@@ -254,10 +268,10 @@ test("post-edit snapshots queued command and cwd rather than reinterpreting conf
   const h = harness("tui", "format-one");
   await h.emit("tool_result", { toolName: "write", isError: false });
   await h.emit("agent_settled");
-  h.configure("format-two");
+  await h.configure("format-two");
   await h.emit("tool_result", { toolName: "edit", isError: false });
   await h.emit("agent_settled");
-  h.configure("format-three");
+  await h.configure("format-three");
   h.executions[0]?.result.resolve(success);
   await new Promise((resolve) => setImmediate(resolve));
   assert.deepEqual(h.executions[1]?.args, ["-c", "format-two"]);
@@ -271,7 +285,7 @@ test("disabling post-edit drops queued work but still joins the active command",
     await h.emit("tool_result", { toolName: "edit", isError: false });
     await h.emit("agent_settled");
   }
-  h.configure("");
+  await h.configure("");
   let continued = false;
   const next = h.emit("agent_start").then(() => {
     continued = true;
@@ -282,6 +296,31 @@ test("disabling post-edit drops queued work but still joins the active command",
   h.executions[0]?.result.resolve(success);
   await next;
   assert.equal(h.executions.length, 1);
+});
+
+test("a failed disable apply preserves queued post-edit work for rollback", async () => {
+  const h = harness("tui", "format-original");
+  for (let i = 0; i < 2; i++) {
+    await h.emit("tool_result", { toolName: "edit", isError: false });
+    await h.emit("agent_settled");
+  }
+  const unsubscribe = onSetupApply(h.pi, () => {
+    throw new Error("Another consumer failed");
+  });
+  await assert.rejects(h.applyCommand(""), /Configuration consumer failed/);
+  unsubscribe();
+  await h.applyCommand("format-original");
+  let continued = false;
+  const next = h.emit("agent_start").then(() => {
+    continued = true;
+  });
+  h.executions[0]?.result.resolve(success);
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal(continued, false);
+  assert.deepEqual(h.executions[1]?.args, ["-c", "format-original"]);
+  h.executions[1]?.result.resolve(success);
+  await next;
+  assert.equal(continued, true);
 });
 
 test("session reset requests cancellation without releasing a still-running command", async () => {

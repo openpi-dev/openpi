@@ -381,8 +381,10 @@ export class InteractiveTerminalManager
     if (this.sessionTerminals.get(record.sessionId) === record.id)
       this.sessionTerminals.delete(record.sessionId);
     if (!record.exited) {
-      record.pty.kill(force ? "SIGKILL" : undefined);
-      if (!force) {
+      // Windows node-pty terminates through ConPTY and rejects POSIX signals.
+      const windows = process.platform === "win32";
+      record.pty.kill(force && !windows ? "SIGKILL" : undefined);
+      if (!force && !windows) {
         const forceKill = setTimeout(() => {
           if (!record.exited) record.pty.kill("SIGKILL");
         }, 2_000);

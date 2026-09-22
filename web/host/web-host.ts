@@ -2315,7 +2315,10 @@ export class WebHost {
       });
       return undefined;
     }
-    if (sessionId !== this.runtime.sessionManager.getSessionId()) {
+    const expectedSessionManager = this.runtime.sessionManager;
+    const expectedSessionPath = expectedSessionManager.getSessionFile();
+    const expectedCwd = this.runtime.cwd;
+    if (sessionId !== expectedSessionManager.getSessionId()) {
       this.json(response, 409, {
         code: "SESSION_CHANGED",
         error: "The active Session changed. Reopen the tool panel.",
@@ -2323,7 +2326,22 @@ export class WebHost {
       return undefined;
     }
     try {
-      return await this.adapter.requireWorkspace(this.runtime.cwd);
+      const workspace = await this.adapter.requireWorkspace(expectedCwd);
+      const activeSessionManager = this.runtime.sessionManager;
+      if (
+        !this.runtime.workspaceSelected ||
+        this.runtime.cwd !== expectedCwd ||
+        activeSessionManager !== expectedSessionManager ||
+        activeSessionManager.getSessionId() !== sessionId ||
+        activeSessionManager.getSessionFile() !== expectedSessionPath
+      ) {
+        this.json(response, 409, {
+          code: "SESSION_CHANGED",
+          error: "The active Session changed. Reopen the tool panel.",
+        });
+        return undefined;
+      }
+      return workspace;
     } catch {
       this.json(response, 403, {
         code: "WORKSPACE_UNAVAILABLE",

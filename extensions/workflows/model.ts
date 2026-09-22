@@ -183,6 +183,11 @@ export interface WorkflowDetails {
   logs?: WorkflowLogEntry[];
   /** Oldest lines discarded once the ring filled, reported rather than hidden. */
   logsDropped?: number;
+  /**
+   * Whole agent transcripts dropped from transcripts.json when the run exceeded
+   * that artifact's byte budget, reported rather than silently truncated.
+   */
+  transcriptsOmitted?: { agents: number; entries: number };
   result?: unknown;
   resultArtifact?: string;
   transcriptArtifact?: string;

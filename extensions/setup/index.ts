@@ -1,4 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import type {
   ExtensionAPI,
   ExtensionCommandContext,
@@ -20,8 +21,8 @@ import {
   type FooterPreset,
   type FooterStyle,
   formatSetupConfig,
-  hasSavedSetupConfig,
-  loadSetupConfig,
+  formatSetupDiagnostics,
+  inspectSetupConfig,
   MAX_WEB_CHAT_FONT_SIZE,
   MAX_WEB_CHAT_WIDTH,
   MAX_WORKFLOW_AGENT_CALLS,
@@ -107,6 +108,11 @@ export function applySubagentRoleModelUpdates(
   return roleModels;
 }
 
+const FOOTER_PRESET_GUIDANCE = `compact is a preset, not a style: it resolves to plain style and the default single row (model context flex git pr cwd). It is identical to the default footer, so applying compact to that configuration does not make it more compact. Preset names are not persisted; report actual style/layout changes, not a plain-to-compact transition. If the user explicitly requests footerStyle="compact" or ui_footer_style="compact", report the invalid style and list the allowed values (${FOOTER_STYLES.join(", ")}). Explain that the compact preset also resets the layout, but do not apply that preset or plain style unless the user chooses that alternative.`;
+
+const EXPLICIT_VALUE_GUIDANCE =
+  "If the user explicitly names a configuration field and supplies an invalid value, explain the error in the user's language and list the allowed values or range. Do not call the writer until the user supplies a valid choice. Do not silently substitute a default, another field, or a preset for that explicit assignment. A general request such as 'use the compact footer preset' may use the matching preset. On a tool validation error, report it and the legal choices instead of retrying with an unrequested substitute.";
+
 const SETUP_REQUEST_VALIDATION = [
   "Validate the requested field and value before writing. For an invalid requested value, explain the problem and the legal values or range in the user's language. Do not clamp, substitute, or reinterpret it as a different field or preset. Preserve the setting unless the user explicitly chooses a legal alternative; keeping the current setting requires no write. A prior assistant explanation is not user consent, and an answer to an unrelated question is not approval for a configuration change.",
   'In particular, ui.footerStyle accepts only plain, powerline, powerline-mono. A request for ui.footerStyle="compact" is invalid; applying the compact preset is a different request that also resets the layout. workflows.concurrency accepts integers 1-64; 0 does not mean 1 or "disabled". workflows.maxAgentCalls accepts integers 1-1024. Ask only for the missing configuration decision when clarification is needed.',
@@ -136,6 +142,8 @@ export function buildInteractiveSetupPrompt(options: {
     `Current Pi model: ${options.currentModel}`,
     `Current Pi thinking level: ${options.currentThinking}`,
     `Saved configuration exists: ${options.savedConfigExists ? "yes" : "no"}`,
+    EXPLICIT_VALUE_GUIDANCE,
+    FOOTER_PRESET_GUIDANCE,
     "",
     ...configurationState,
     "",
@@ -171,10 +179,13 @@ export function buildInteractiveSetupPrompt(options: {
 
 export function buildSetupSuccessText(
   currentConfiguration: string,
+  changed: readonly string[],
   normalizationNote = "",
 ) {
   return [
-    `Updated OpenPI setup. ${currentConfiguration}${normalizationNote}`,
+    `Saved OpenPI setup. ${changed.length ? `Changed effective fields: ${changed.join(", ")}.` : "Effective configuration unchanged; saving may create or migrate the document without changing behavior."}`,
+    `${currentConfiguration}${normalizationNote}`,
+    "Describe changes only from this receipt's changed effective fields and final configuration. A successful save does not imply a visual or behavioral change. Do not infer a before/after transition from the requested preset name.",
     "This setup episode is complete; configure_my_pi_setup is now hidden for this completed episode. Do not call it again within this completed episode. Do not edit configuration files directly. A later /openpi-setup <request> starts a new episode and makes the writer available again.",
   ].join(" ");
 }
@@ -234,8 +245,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
     publishEpisode();
   };
 
-  pi.on("session_start", () => {
+  pi.on("session_start", (_event, ctx) => {
     resetEpisode();
+    if (!ctx.hasUI) return;
+    const inspected = inspectSetupConfig();
+    if (inspected.diagnostics.length === 0) return;
+    ctx.ui.notify(
+      inspected.writable
+        ? "OpenPI configuration loaded with warnings (legacy format or unknown fields). The file is unchanged. Run /openpi-setup for details."
+        : "OpenPI could not load the saved configuration; safe defaults are in use and configuration writes are blocked. The file is unchanged. Run /openpi-setup for diagnostics and recovery guidance.",
+      inspected.writable ? "warning" : "error",
+    );
   });
 
   const dispatchNextRequest = (ctx: ExtensionContext) => {
@@ -420,8 +440,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
       ),
       ui_footer_preset: Type.Optional(
         StringEnum(FOOTER_PRESETS, {
-          description:
-            "Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.",
+          description: `Convenient footer preset applied first: powerline (one-line ANSI256 blocks), powerline-mono (one-line gray powerline), compact (one-line plain text). ${FOOTER_PRESET_GUIDANCE} Style/lines overrides still win after the preset. Omit to preserve the current layout unless other footer fields are set.`,
         }),
       ),
       ui_footer_style: Type.Optional(
@@ -597,16 +616,30 @@ export default function openPiSetup(pi: ExtensionAPI) {
 
       // Patch the document as it is on disk now, not as it was when this call
       // started, and report any stored value that was normalized or migrated.
-      const { config, replaced } = await updateSetupConfig(buildConfig);
+      _signal?.throwIfAborted();
+      const { config, changed, replaced, diagnostics } =
+        await updateSetupConfig(
+          buildConfig,
+          () => applySetupConfiguration(pi),
+          _signal,
+        );
       pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, config);
       const text = formatSetupConfig(config);
       const note =
-        replaced.length > 0
+        diagnostics
+          .map((item) => ` ${JSON.stringify(item.path)}: ${item.message}.`)
+          .join("") +
+        (replaced.length > 0
           ? ` Normalized or migrated stored values: ${replaced.join(", ")}.`
-          : "";
-      if (ctx.hasUI) ctx.ui.notify(`${text}${note}`, "info");
+          : "");
+      const receipt = buildSetupSuccessText(text, changed, note);
+      if (ctx.hasUI)
+        ctx.ui.notify(
+          `${changed.length ? `Changed effective fields: ${changed.join(", ")}.` : "Effective configuration unchanged."} Saved OpenPI setup.\n${text}${note}`,
+          "info",
+        );
       return {
-        content: [{ type: "text", text: buildSetupSuccessText(text, note) }],
+        content: [{ type: "text", text: receipt }],
         details: config,
       };
     },
@@ -618,8 +651,13 @@ export default function openPiSetup(pi: ExtensionAPI) {
     command: "openpi-setup" | "my-pi-setup",
   ) => {
     const request = args.trim();
-    const currentConfiguration = formatSetupConfig(loadSetupConfig());
-    const savedConfigExists = hasSavedSetupConfig();
+    const inspected = inspectSetupConfig();
+    const diagnostics = formatSetupDiagnostics(inspected);
+    if (ctx.hasUI)
+      ctx.ui.notify(diagnostics, inspected.writable ? "info" : "error");
+    if (!inspected.writable) throw new Error(diagnostics);
+    const currentConfiguration = `${formatSetupConfig(inspected.config)}\n\n${diagnostics}`;
+    const savedConfigExists = inspected.source === "disk";
     const currentModel = ctx.model
       ? `${ctx.model.provider}/${ctx.model.id}`
       : "unavailable";
@@ -632,6 +670,8 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "",
           "Current configuration:",
           currentConfiguration,
+          EXPLICIT_VALUE_GUIDANCE,
+          FOOTER_PRESET_GUIDANCE,
           "",
           "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",

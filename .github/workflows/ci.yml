@@ -232,7 +232,7 @@ jobs:
           }
           node --test --experimental-strip-types $testPath
       - name: Test Windows full-suite isolation
-        # Native tests include a serial process-tree group before the UI suite.
-        # Their successful Windows run already takes more than four minutes.
+        # Allow the parallel Node suite, serial process tests, and Vitest to finish.
+        # Windows process identity checks make config-write coverage slower here.
         timeout-minutes: 10
         run: bun run test

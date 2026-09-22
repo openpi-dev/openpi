@@ -233,6 +233,9 @@ function makeProjection(
     agents,
     ...(logs.length > 0 ? { logs } : {}),
     ...(details.logsDropped ? { logsDropped: details.logsDropped } : {}),
+    ...(details.transcriptsOmitted
+      ? { transcriptsOmitted: details.transcriptsOmitted }
+      : {}),
     ...(details.delivery
       ? {
           delivery: {
@@ -349,6 +352,7 @@ export function projectWorkflowDetails(
       "name",
       "sessionId",
       "logsDropped",
+      "transcriptsOmitted",
       "logs",
       "graphOmitted",
       "result",

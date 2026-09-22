@@ -31,6 +31,16 @@ const AGENT_RESULT_ARTIFACT_MAX_BYTES = 2 * 1024 * 1024;
 const WORKFLOW_MANIFEST_MAX_BYTES = 1024 * 1024;
 const WORKFLOW_TRANSCRIPTS_MAX_BYTES = 2 * 1024 * 1024;
 const WORKFLOW_COMMIT_MAX_BYTES = 3 * 1024 * 1024;
+
+// safeStringify's node budget must never bite before the byte budget. Its
+// default (serialization.ts DEFAULT_MAX_NODES = 20_000) is far below what these
+// byte budgets allow, so it silently dropped trailing artifact fields and whole
+// agent transcripts while the file sat well under its byte cap (issue #558). A
+// value dense enough to reach N nodes always serializes to more than N bytes, so
+// pinning maxNodes to the byte budget makes the honest, reported byte cap the
+// only binding limit here.
+const WORKFLOW_MANIFEST_MAX_NODES = WORKFLOW_MANIFEST_MAX_BYTES;
+const WORKFLOW_TRANSCRIPTS_MAX_NODES = WORKFLOW_TRANSCRIPTS_MAX_BYTES;
 export const WORKFLOW_CHECKPOINT_INTERVAL_MS = 500;
 const ENTRY_TRUNCATION_MARKER = "\n[entry truncated]";
 const TRANSCRIPT_TRUNCATION_MARKER =
@@ -417,6 +427,70 @@ export function boundedArtifactTranscript(
   return [initial, marker, ...tail];
 }
 
+export interface BoundedTranscriptsArtifact {
+  /** Ready-to-write `transcripts.json` content: `{ [agentIndex]: entries[] }`. */
+  content: string;
+  /** Whole agents dropped from the tail, and their bounded entry count. */
+  omitted: { agents: number; entries: number };
+}
+
+/**
+ * Assemble `transcripts.json`, keeping whole agents in index order until the
+ * next one would exceed the byte budget. The dropped tail is counted and
+ * reported (`transcriptsOmitted`) rather than silently discarded by the
+ * serializer's node budget, which previously stopped at 20_000 nodes — roughly
+ * 11 full agents — while the file sat at a quarter of its byte cap (issue #558).
+ */
+export function boundedTranscriptsArtifact(
+  agents: readonly { index: number; transcript: TranscriptEntry[] }[],
+  options: { maxBytes?: number; maxNodes?: number } = {},
+): BoundedTranscriptsArtifact {
+  const maxBytes = Math.max(
+    256,
+    options.maxBytes ?? WORKFLOW_TRANSCRIPTS_MAX_BYTES,
+  );
+  const maxNodes = options.maxNodes ?? WORKFLOW_TRANSCRIPTS_MAX_NODES;
+  // Bound each agent first; a single agent is capped well under maxBytes by
+  // boundedArtifactTranscript, so at least one agent always fits.
+  const bounded = agents.map((agent) => ({
+    index: agent.index,
+    entries: boundedArtifactTranscript(agent.transcript),
+  }));
+  const prefixObject = (count: number) =>
+    Object.fromEntries(
+      bounded.slice(0, count).map((b) => [b.index, b.entries]),
+    );
+  // Measure the uncapped pretty-printed size (the shape safeStringify emits for
+  // these plain, pre-bounded entries) so a tail that overflows the byte cap is
+  // detected here instead of turning the whole file into a preview stub.
+  const prefixBytes = (count: number) =>
+    textBytes(JSON.stringify(prefixObject(count), null, 2));
+
+  let kept = bounded.length;
+  if (prefixBytes(bounded.length) > maxBytes) {
+    // Binary-search the largest whole-agent prefix that fits.
+    let lo = 0;
+    let hi = bounded.length;
+    while (lo < hi) {
+      const mid = Math.floor((lo + hi + 1) / 2);
+      if (prefixBytes(mid) <= maxBytes) lo = mid;
+      else hi = mid - 1;
+    }
+    kept = lo;
+  }
+
+  let omittedEntries = 0;
+  for (let i = kept; i < bounded.length; i++) {
+    omittedEntries += bounded[i]!.entries.length;
+  }
+  // The kept prefix already fits maxBytes and holds far fewer than maxNodes
+  // nodes, so safeStringify writes it in full without a second truncation.
+  return {
+    content: safeStringify(prefixObject(kept), { maxBytes, maxNodes }),
+    omitted: { agents: bounded.length - kept, entries: omittedEntries },
+  };
+}
+
 function writeRunFile(runDir: string, name: string, content: string) {
   writeFileAtomic(path.join(runDir, name), content);
 }
@@ -434,6 +508,7 @@ export function persistWorkflowTerminalState(
   delete terminalManifest.transcriptArtifact;
   const content = safeStringify(terminalManifest, {
     maxBytes: WORKFLOW_MANIFEST_MAX_BYTES,
+    maxNodes: WORKFLOW_MANIFEST_MAX_NODES,
   });
   writeRunFile(runDir, "workflow.json", content);
   return sha256(content);
@@ -478,12 +553,17 @@ export function persistWorkflowJson(
   journal?: WorkflowJournalSource,
 ) {
   refreshWorkflowGraph(details);
-  const transcripts = Object.fromEntries(
-    details.agents.map((agent) => [
-      agent.index,
-      boundedArtifactTranscript(agent.transcript),
-    ]),
-  );
+  const boundedTranscripts = boundedTranscriptsArtifact(details.agents, {
+    maxBytes: WORKFLOW_TRANSCRIPTS_MAX_BYTES,
+    maxNodes: WORKFLOW_TRANSCRIPTS_MAX_NODES,
+  });
+  // Recomputed each persist, so set-or-clear rather than accumulate: the field
+  // must describe the transcripts.json actually written this time.
+  if (boundedTranscripts.omitted.agents > 0) {
+    details.transcriptsOmitted = boundedTranscripts.omitted;
+  } else {
+    delete details.transcriptsOmitted;
+  }
 
   // Publish terminal execution facts before dependent side artifacts. If a
   // later artifact write fails, readers still see an explained terminal run
@@ -502,9 +582,7 @@ export function persistWorkflowJson(
   const artifactWrites: WorkflowArtifactWrite[] = [
     {
       name: "transcripts.json",
-      content: safeStringify(transcripts, {
-        maxBytes: WORKFLOW_TRANSCRIPTS_MAX_BYTES,
-      }),
+      content: boundedTranscripts.content,
     },
   ];
   // Written alongside the rest so it inherits atomic write, 500ms coalescing,
@@ -529,6 +607,7 @@ export function persistWorkflowJson(
       name: "result.json",
       content: safeStringify(details.result, {
         maxBytes: WORKFLOW_MANIFEST_MAX_BYTES,
+        maxNodes: WORKFLOW_MANIFEST_MAX_NODES,
       }),
     });
   }
@@ -542,6 +621,7 @@ export function persistWorkflowJson(
   };
   const manifest = safeStringify(compact, {
     maxBytes: WORKFLOW_MANIFEST_MAX_BYTES,
+    maxNodes: WORKFLOW_MANIFEST_MAX_NODES,
   });
 
   if (predecessorSha256 !== undefined) {
