@@ -16,7 +16,83 @@ import { join } from "node:path";
 import test from "node:test";
 import { EmbeddedBrowserManager } from "../../web/host/embedded-browser.ts";
 
+test("waits for a native browser process to close before removing its profile on every platform", {
+  timeout: 10_000,
+}, async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-browser-close-"));
+  const profile = join(directory, "profile");
+  await mkdir(profile);
+  const browser = spawn(
+    process.execPath,
+    [
+      "-e",
+      "process.stderr.write('browser-ready'); setInterval(() => {}, 1_000);",
+    ],
+    {
+      stdio: ["ignore", "ignore", "pipe"],
+    },
+  );
+  let hasClosed = false;
+  const closed = new Promise<void>((resolve) =>
+    browser.once("close", () => {
+      hasClosed = true;
+      resolve();
+    }),
+  );
+  assert.ok(browser.stderr);
+  const ready = once(browser.stderr, "data");
+  browser.stderr.resume();
+  const manager = new EmbeddedBrowserManager();
+  Object.assign(manager, {
+    session: {
+      sessionId: "fixture",
+      process: browser,
+      closed,
+      profile,
+      frameListeners: new Set(),
+      stopListening() {},
+      cdp: { close() {} },
+    },
+  });
+  const remove = fs.promises.rm;
+  const removal = context.mock.method(
+    fs.promises,
+    "rm",
+    async (
+      path: Parameters<typeof remove>[0],
+      options: Parameters<typeof remove>[1],
+    ) => {
+      if (path === profile)
+        assert.equal(
+          hasClosed,
+          true,
+          "native close must precede profile removal",
+        );
+      return remove(path, options);
+    },
+  );
+  syncBuiltinESMExports();
+  try {
+    await ready;
+    await manager.dispose();
+    assert.equal(hasClosed, true);
+    await assert.rejects(access(profile), { code: "ENOENT" });
+  } finally {
+    removal.mock.restore();
+    syncBuiltinESMExports();
+    if (browser.exitCode === null && browser.signalCode === null)
+      browser.kill("SIGKILL");
+    await closed;
+    await manager.dispose();
+    await remove(directory, { recursive: true, force: true });
+  }
+});
+
 test("waits for browser close and its last profile write before removing the profile", {
+  skip:
+    process.platform === "win32"
+      ? "This descendant fixture relies on POSIX inherited-pipe lifetime after parent exit; Windows stdio closes differently."
+      : false,
   timeout: 10_000,
 }, async (context) => {
   const directory = await mkdtemp(join(tmpdir(), "openpi-browser-cleanup-"));

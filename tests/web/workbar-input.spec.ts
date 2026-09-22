@@ -57,9 +57,15 @@ async function browserPanel(restore?: Promise<void>) {
       }),
     ),
   );
+  const viewport = await screen.findByRole("application", {
+    name: "Input fixture",
+  });
+  // A visible DOM commit can precede passive effects such as the native wheel
+  // listener. Settle React before the fixture starts dispatching input.
+  await act(async () => {});
   return {
     state,
-    viewport: await screen.findByRole("application", { name: "Input fixture" }),
+    viewport,
     action,
     unmount: view.unmount,
   };
