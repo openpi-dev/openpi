@@ -1324,8 +1324,9 @@ test("detail view surfaces transcriptsOmitted and the transcript view stops lyin
     // The run-level notice is on the live detail page, not only in report.md.
     assert.match(
       detail.join("\n"),
-      /3 of 1 agent transcript\(s\) omitted from transcripts\.json/,
+      /3 agent transcript\(s\) \(606 entries\) omitted from transcripts\.json/,
     );
+    assert.doesNotMatch(detail.join("\n"), /full data on disk/);
     // Reserving the notice row must not break the exact-height layout.
     assert.equal(detail.length, 29);
 
@@ -1334,7 +1335,11 @@ test("detail view surfaces transcriptsOmitted and the transcript view stops lyin
     const transcript = stripVTControlCharacters(
       dashboard.render(120).join("\n"),
     );
-    assert.match(transcript, /stay within its byte budget/);
+    assert.match(
+      transcript,
+      /this run omitted 3 agent transcript\(s\).*stay within its byte budget/,
+    );
+    assert.doesNotMatch(transcript, /full data on disk/);
     assert.doesNotMatch(transcript, /predates transcript capture/);
   } finally {
     dashboard.dispose();

@@ -1409,7 +1409,7 @@ export class WorkflowDashboard {
             ],
             errorText: agent.error,
             emptyText: details.transcriptsOmitted
-              ? "transcript unavailable (omitted from transcripts.json to stay within its byte budget; full data on disk)"
+              ? `transcript unavailable (this run omitted ${details.transcriptsOmitted.agents} agent transcript(s) from transcripts.json to stay within its byte budget)`
               : "transcript unavailable (this run predates transcript capture)",
           };
         },
@@ -1593,7 +1593,7 @@ export class WorkflowDashboard {
     const omissionNotice = d.transcriptsOmitted
       ? theme.fg(
           "warning",
-          ` ${d.transcriptsOmitted.agents} of ${d.agents.length} agent transcript(s) omitted from transcripts.json (byte budget); full data on disk.`,
+          ` ${d.transcriptsOmitted.agents} agent transcript(s) (${d.transcriptsOmitted.entries} entries) omitted from transcripts.json (byte budget).`,
         )
       : undefined;
     if (omissionNotice) lines.push(omissionNotice);
