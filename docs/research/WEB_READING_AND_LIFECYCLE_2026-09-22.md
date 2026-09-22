@@ -3,7 +3,7 @@
 - Status: validated
 - Created: 2026-09-22
 - Verified: 2026-09-22（完整本地门禁、真实 SDK 与 Chromium；未部署）
-- Source boundary: OpenPI `fbf15d2` + PR #598 后续变更，Pi SDK 0.85.1
+- Source boundary: OpenPI `fbf15d2` → `2f78cf3` → `4e9ba87`，Pi SDK 0.85.1
 - Issue: [#597](https://github.com/openpi-dev/openpi/issues/597)
 - PR: [#598](https://github.com/openpi-dev/openpi/pull/598)
 - Supersedes: none；补充[第五轮](WEB_INTERACTION_ROUND5_2026-09-22.md)
@@ -37,9 +37,13 @@ PR `fbf15d2` 的 Node 22/24/26 与 Windows CI 通过，Web E2E 60/61，失败为
 
 后续 `2f78cf3` 的 [CI 35727178052](https://github.com/openpi-dev/openpi/actions/runs/35727178052) 中，Node 22/24/26 通过，Linux Chromium 成功启动，Web E2E 64/65。唯一失败的 trace 表明越界松开请求按序送达并返回 200，截图显示测试在选中的文字内开始拖动。本地独立 Chromium 诊断证明原生拖放可产生 `dragstart → pointercancel → dragend` 而没有 `mouseup`，与 [HTML 拖放模型](https://html.spec.whatwg.org/multipage/dnd.html#drag-and-drop-processing-model)一致；旧 CI fixture 未记录 drag 事件，故该次准确事件序列仍是推断。修订测试分别要求普通拖动的 `mouseup`，以及文字拖放的松开终态与对应 `dragstart`，没有扩大输入协议。Windows 原生并行与串行组均完成且零失败，UI 组仍在逐项通过时触发整步五分钟上限；保留原生进程测试的隔离，并将完整套件上限改为十分钟，job 仍有十五分钟上限。修订结果另以新提交的 CI 为准。
 
+`4e9ba87` 的 [CI 35730543135](https://github.com/openpi-dev/openpi/actions/runs/35730543135) 已全部通过：Node 22.19.0 / 24 / 26、Linux Web E2E 65/65、Windows 进程生命周期及完整套件。没有跳过失败测试或关闭浏览器 sandbox。
+
 用户“卡住”反馈的只读证据有两层：Git 拉取先在 240 秒后超时，后续两次约 75 秒后报告连接 GitHub 失败；后台仍消费后续消息并写入新工具结果。事件环则在两次会话切换后停止更新该后台任务。常驻 LaunchAgent 未显式配置工具 shell 所使用的代理，这与连接失败相关，但仅凭 plist 不能证明完整进程环境。没有修改该实例的代理、Git 配置或运行进程。
 
 待应用的 LaunchAgent 副本已在私有证据目录准备，复用现有工具 shell 的代理并保留 loopback 绕过。使用该候选环境单独执行只读 `git ls-remote`，约 1.98 秒成功；这是单次连通性验证，不保证后续网络请求时延。原 plist 和常驻进程均未改动。
+
+后续对照使用相同的只读 Git 命令及最小基础环境，仅分别合入原 plist 与候选 plist 的环境变量：原环境约 2.97 秒成功，候选约 1.70 秒成功。这份反证意味着不能认定代理缺失是此前超时的唯一原因，也不能把候选配置称作已验证的永久网络修复。后台进度盲点的确定性复现与修复不依赖该网络推断。
 
 真实 SDK + WebHost + Chromium 的旁观用例已验证：A 工具挂起期间激活 B，A 页面仍保留自身消息、排队数及耗时；B 的同文输入不会混入 A；重新控制 A 后停止仅影响 A，B 继续运行。原始日志、截图及 SDK 调查保存在私有 `openpi-pr561-usage-20260920/round6-20260922`，manifest 记录文件名、大小及 SHA-256；没有发布凭据或用户 Session。用户 57161 常驻版本保持不变。
 
