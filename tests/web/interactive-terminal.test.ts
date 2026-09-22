@@ -61,6 +61,70 @@ class FakePty implements IPty {
   }
 }
 
+for (const action of ["close", "retain", "dispose"] as const) {
+  test(`Windows PTY ${action} uses the native signal-free termination API`, {
+    skip: process.platform !== "win32",
+  }, async () => {
+    const pty = new FakePty();
+    pty.kill = (signal?: string) => {
+      assert.equal(signal, undefined, "node-pty on Windows rejects signals");
+      pty.kills.push(signal);
+      pty.emitExit(0);
+    };
+    const manager = new InteractiveTerminalManager({ spawn: () => pty });
+    const terminal = await manager.create({
+      sessionId: "windows-session",
+      cwd: ".",
+      cols: 80,
+      rows: 24,
+    });
+    const events: WebInteractiveTerminalEvent[] = [];
+    manager.subscribe("windows-session", terminal.id, (event) =>
+      events.push(event),
+    );
+    if (action === "close") manager.close("windows-session", terminal.id, true);
+    else if (action === "retain") manager.retain("next-session", ".");
+    else manager.dispose();
+    assert.deepEqual(pty.kills, [undefined]);
+    assert.equal(manager.get("windows-session", terminal.id), undefined);
+    assert.ok(events.some((event) => event.type === "closed"));
+    manager.dispose();
+  });
+}
+
+test("Windows native PTY exits when its manager is disposed", {
+  skip: process.platform !== "win32",
+  timeout: 10_000,
+}, async () => {
+  const { spawn } = await import("node-pty");
+  const pty = spawn(process.env.ComSpec ?? "cmd.exe", [], {
+    cols: 80,
+    rows: 24,
+    cwd: process.cwd(),
+  });
+  let exited = false;
+  const exit = new Promise<void>((resolve) => {
+    pty.onExit(() => {
+      exited = true;
+      resolve();
+    });
+  });
+  const manager = new InteractiveTerminalManager({ spawn: () => pty });
+  try {
+    await manager.create({
+      sessionId: "native-windows",
+      cwd: ".",
+      cols: 80,
+      rows: 24,
+    });
+    manager.dispose();
+    await exit;
+    assert.equal(exited, true);
+  } finally {
+    if (!exited) pty.kill();
+  }
+});
+
 test("reuses one bounded PTY per Session and replays exact output cursors", async () => {
   const pty = new FakePty();
   const spawn: typeof import("node-pty").spawn = (_file, _args, options) => {
