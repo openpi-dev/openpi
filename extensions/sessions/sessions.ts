@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
@@ -426,22 +426,57 @@ export function buildPreviewError(
   };
 }
 
+const TRASH_TIMEOUT_MS = 2_000;
+
+function runTrashAsync(
+  sessionPath: string,
+  timeoutMs = TRASH_TIMEOUT_MS,
+  signal?: AbortSignal,
+): Promise<boolean> {
+  const trashArgs = sessionPath.startsWith("-")
+    ? ["--", sessionPath]
+    : [sessionPath];
+  return new Promise((resolve) => {
+    try {
+      const child = execFile(
+        "trash",
+        trashArgs,
+        {
+          timeout: timeoutMs,
+          signal,
+          encoding: "utf8",
+        },
+        (error) => {
+          if (!error || !existsSync(sessionPath)) {
+            resolve(true);
+          } else {
+            resolve(false);
+          }
+        },
+      );
+      child.on("error", () => resolve(false));
+    } catch {
+      resolve(false);
+    }
+  });
+}
+
 export async function deleteSessionFile(
   sessionPath: string,
+  options?: { timeoutMs?: number; signal?: AbortSignal },
 ): Promise<{ ok: boolean; method: "trash" | "unlink"; error?: string }> {
   if (!existsSync(sessionPath)) {
     return { ok: false, method: "unlink", error: "File not found" };
   }
 
-  const trashArgs = sessionPath.startsWith("-")
-    ? ["--", sessionPath]
-    : [sessionPath];
-  try {
-    const trashResult = spawnSync("trash", trashArgs, { encoding: "utf-8" });
-    if (trashResult.status === 0 || !existsSync(sessionPath)) {
-      return { ok: true, method: "trash" };
-    }
-  } catch {}
+  const trashed = await runTrashAsync(
+    sessionPath,
+    options?.timeoutMs,
+    options?.signal,
+  );
+  if (trashed || !existsSync(sessionPath)) {
+    return { ok: true, method: "trash" };
+  }
 
   try {
     await unlink(sessionPath);

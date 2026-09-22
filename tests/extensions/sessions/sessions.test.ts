@@ -165,3 +165,20 @@ test("deleteSessionFile returns error on non-existent file", async () => {
   const result = await deleteSessionFile(file);
   assert.equal(result.ok, false);
 });
+
+test("deleteSessionFile is asynchronous and bounds execution timeout", async () => {
+  const file = path.join(tmpdir(), `openpi-del-async-${Date.now()}.jsonl`);
+  await writeFile(file, "{}");
+
+  let timerFired = false;
+  setTimeout(() => {
+    timerFired = true;
+  }, 1);
+
+  const result = await deleteSessionFile(file, { timeoutMs: 100 });
+  assert.equal(result.ok, true);
+  assert.equal(existsSync(file), false);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(timerFired, true);
+});
