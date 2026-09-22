@@ -132,6 +132,7 @@ class CdpConnection {
 interface BrowserSession {
   sessionId: string;
   process: ChildProcess;
+  closed: Promise<void>;
   profile: string;
   cdp: CdpConnection;
   width: number;
@@ -250,6 +251,24 @@ async function waitForDebugPort(profile: string, processHandle: ChildProcess, di
   } finally {
     processHandle.off("error", onError);
   }
+}
+
+async function cleanupBrowser(processHandle: ChildProcess, closed: Promise<void>, profile: string) {
+  if (processHandle.exitCode === null && processHandle.signalCode === null && processHandle.pid !== undefined)
+    processHandle.kill("SIGKILL");
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    await Promise.race([
+      closed,
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error("Embedded browser did not close; its profile was retained")), 2_000);
+      }),
+    ]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+  // Chromium can still have filesystem work draining after process closure.
+  await rm(profile, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 });
 }
 
 function boundedViewport(value: number, fallback: number, minimum = 320) {
@@ -435,14 +454,13 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
 
   private async disposeCurrent() {
     const session = this.session;
-    this.session = undefined;
     if (!session) return;
     for (const listener of session.frameListeners) listener(null);
     session.frameListeners.clear();
     session.stopListening();
     session.cdp.close();
-    if (session.process.exitCode === null) session.process.kill("SIGKILL");
-    await rm(session.profile, { recursive: true, force: true });
+    await cleanupBrowser(session.process, session.closed, session.profile);
+    this.session = undefined;
   }
 
   private forSession(sessionId: string) {
@@ -477,6 +495,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
     });
+    const closed = new Promise<void>((resolve) => processHandle.once("close", () => resolve()));
     const started = performance.now();
     const diagnostics: BrowserStartupDiagnostics = { stage: "debug-port" };
     let stderr: Buffer | null = Buffer.alloc(0);
@@ -507,6 +526,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       const session: BrowserSession = {
         sessionId,
         process: processHandle,
+        closed,
         profile,
         cdp,
         width,
@@ -584,13 +604,17 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         exitCode: processHandle.exitCode,
         signal: processHandle.signalCode,
         stderr: startupStderrText(stderr ?? Buffer.alloc(0)),
+        cleanupError: undefined as string | undefined,
       };
       stderr = null;
+      try {
+        await cleanupBrowser(processHandle, closed, profile);
+      } catch (cleanupError) {
+        cause.cleanupError = (cleanupError instanceof Error ? cleanupError.message : String(cleanupError)).slice(0, 512);
+      }
       // Raw Chromium diagnostics stay in the host log/cause. WebHost only
       // exposes the original safe message to the browser client.
       try { console.error("OpenPI embedded browser startup failed", cause); } catch {}
-      if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
-      await rm(profile, { recursive: true, force: true });
       throw new Error(error instanceof Error ? error.message : "Embedded browser could not start", { cause });
     }
   }
