@@ -5,8 +5,8 @@ import {
   existsSync,
   linkSync,
   mkdtempSync,
-  readFileSync,
   readdirSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -426,6 +426,110 @@ await updateSetupConfig((current) => {
       const exited = once(holder, "exit");
       holder.kill("SIGKILL");
       await exited;
+    }
+    removeLockArtifacts();
+  }
+});
+
+test("a waiting setup writer recovers after the lock owner dies", {
+  timeout: 15_000,
+}, async () => {
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+  const holderSource = `
+const { writeFileSync } = await import("node:fs");
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+await updateSetupConfig((current) => {
+  writeFileSync(1, "holding\\n");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  return current;
+});
+`;
+  const waiterSource = `
+const fs = await import("node:fs");
+const { syncBuiltinESMExports } = await import("node:module");
+const originalWatch = fs.default.watch;
+fs.default.watch = (...args) => {
+  const watcher = originalWatch(...args);
+  process.stdout.write("watching\\n");
+  return watcher;
+};
+syncBuiltinESMExports();
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+const started = Date.now();
+await updateSetupConfig((current) => current);
+process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - started }) + "\\n");
+`;
+  const start = (source: string) => {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "--input-type=module", "--eval", source],
+      {
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          SETUP_CONFIG_MODULE_URL: setupConfigModuleUrl,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const waitFor = (marker: string) =>
+      new Promise<void>((resolve, reject) => {
+        const check = () => {
+          if (!stdout.includes(marker)) return;
+          child.stdout.off("data", check);
+          resolve();
+        };
+        check();
+        child.stdout.on("data", check);
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (!stdout.includes(marker))
+            reject(
+              new Error("child exited " + code + ": " + (stderr || stdout)),
+            );
+        });
+      });
+    return { child, waitFor, output: () => ({ stdout, stderr }) };
+  };
+
+  const holder = start(holderSource);
+  let waiter: ReturnType<typeof start> | undefined;
+  try {
+    await holder.waitFor("holding\n");
+    waiter = start(waiterSource);
+    await waiter.waitFor("watching\n");
+    const exited = once(holder.child, "exit");
+    holder.child.kill("SIGKILL");
+    await exited;
+
+    await once(waiter.child, "exit");
+    const { stdout, stderr } = waiter.output();
+    assert.equal(stderr, "");
+    const result = JSON.parse(stdout.split("\n").at(-2) ?? "");
+    assert.equal(result.result, "success");
+    assert.ok(
+      result.ms < 5_000,
+      "waiter used the full deadline: " + result.ms + "ms",
+    );
+  } finally {
+    for (const process of [holder, waiter]) {
+      if (!process) continue;
+      const { child } = process;
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
     }
     removeLockArtifacts();
   }
