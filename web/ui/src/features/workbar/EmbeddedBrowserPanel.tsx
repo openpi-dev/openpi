@@ -96,6 +96,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
   const stateRef = useRef<WebEmbeddedBrowserState | null>(null);
   const addressEditing = useRef(false);
   const addressDirty = useRef(false);
+  const addressRevision = useRef(0);
   const pointerMovePoint = useRef<{
     x: number;
     y: number;
@@ -158,8 +159,8 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     void client
       .browserState(sessionId, controller.signal)
       .then((next) => {
-        addressDirty.current = false;
-        applyState(next, true);
+        if (controller.signal.aborted || stateRef.current) return;
+        applyState(next);
       })
       .catch((caught) => {
         if (
@@ -323,6 +324,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
     abort.current?.abort();
     const controller = new AbortController();
     abort.current = controller;
+    const submittedRevision = addressRevision.current;
     setBusy(true);
     setDraft(next);
     setError(null);
@@ -337,8 +339,9 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
         controller.signal,
       );
       if (!controller.signal.aborted) {
-        addressDirty.current = false;
-        applyState(opened, true);
+        const syncAddress = submittedRevision === addressRevision.current;
+        if (syncAddress) addressDirty.current = false;
+        applyState(opened, syncAddress);
       }
     } catch (caught) {
       if (!controller.signal.aborted) {
@@ -361,14 +364,17 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
       browserAction: Parameters<WebClient["browserAction"]>[1],
       syncAddress = false,
     ) => {
+      const submittedRevision = addressRevision.current;
       try {
         const next = await client.browserAction(sessionId, browserAction);
         if (["mouse", "key", "text"].includes(browserAction.type)) {
           setError(null);
           return;
         }
-        if (syncAddress) addressDirty.current = false;
-        applyState(next, syncAddress);
+        const syncDraft =
+          syncAddress && submittedRevision === addressRevision.current;
+        if (syncDraft) addressDirty.current = false;
+        applyState(next, syncDraft);
         setError(null);
       } catch (caught) {
         setError(
@@ -543,6 +549,7 @@ export const EmbeddedBrowserPanel = memo(function EmbeddedBrowserPanel({
           value={draft}
           placeholder="https://"
           onChange={(event) => {
+            addressRevision.current++;
             addressDirty.current = true;
             setDraft(event.currentTarget.value);
           }}

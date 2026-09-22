@@ -22,6 +22,7 @@ import { SubagentDetailView } from "../../web/ui/src/features/subagents/Subagent
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 
 afterEach(() => {
@@ -760,6 +761,179 @@ function activeSnapshot(): WebSnapshot {
     },
   };
 }
+
+it("keeps the reader mounted across an external controller change and revokes input until refreshed", async () => {
+  const original = webStore.getState();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.workspaces = [{ path: "/tmp", name: "Workspace", current: true }];
+  snapshot.sessions = [
+    {
+      id: "session",
+      path: "/tmp/session",
+      cwd: "/tmp",
+      name: "Reading A",
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      messageCount: 4,
+      firstMessage: "Earlier question",
+    },
+  ];
+  const entry = (
+    id: string,
+    role: string,
+    content: string,
+    parentId: string | null,
+  ) => ({
+    id,
+    parentId,
+    type: "message" as const,
+    timestamp: snapshot.generatedAt,
+    message: { role, content },
+  });
+  snapshot.selectedSession!.entries = [
+    entry("latest", "assistant", "Recent answer", "older-answer"),
+  ];
+  snapshot.selectedSession!.history = {
+    leafEntryId: "latest",
+    beforeEntryId: "latest",
+  };
+  snapshot.selectedSession!.truncation = {
+    ...truncation,
+    truncated: true,
+    entriesOmitted: 2,
+  };
+  let eventStream!: EventStreamOptions;
+  const client = new WebClient();
+  let completeRefresh!: (next: WebSnapshot) => void;
+  const refresh = vi.spyOn(client, "snapshot").mockReturnValue(
+    new Promise((resolve) => {
+      completeRefresh = resolve;
+    }),
+  );
+  const prompt = vi.spyOn(client, "prompt");
+  const history = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue({
+      ...snapshot.selectedSession!,
+      entries: [
+        entry("older-user", "user", "Earlier question", null),
+        entry("older-answer", "assistant", "Earlier answer", "older-user"),
+      ],
+      anchorEntryId: "latest",
+      requestedBeforeEntryId: "latest",
+      truncation: { ...truncation, entriesOmitted: 0 },
+      history: {
+        leafEntryId: "latest",
+        beforeEntryId: null,
+        anchorEntryId: "latest",
+        anchorOnBranch: true,
+      },
+    });
+  const store = createWebStore(client, {
+    consumeEvents: (options) => {
+      eventStream = options;
+      options.onConnected();
+      return new Promise<void>((resolve) =>
+        options.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        }),
+      );
+    },
+  });
+  store.setState({
+    snapshot,
+    cursor: 1,
+    selectedPath: "/tmp/session",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+  });
+  webStore.setState(store.getState(), true);
+  const unsubscribe = store.subscribe((next) => webStore.setState(next, true));
+  const view = renderWithI18n(createElement(App));
+  try {
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("historyLoadOlder") }),
+      ),
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    const viewport = view.container.querySelector<HTMLElement>(
+      '.conversation[role="log"]',
+    )!;
+    Object.defineProperty(viewport, "scrollHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(viewport, "clientHeight", {
+      configurable: true,
+      value: 200,
+    });
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    const anchor = store.getState().historyAnchor;
+    expect(anchor?.entryId).toBe("latest");
+    act(() =>
+      eventStream.onEvent({
+        protocolVersion: 1,
+        sequence: 2,
+        timestamp: snapshot.generatedAt,
+        type: "session_switched",
+        detail: { sessionId: "controller-b", sessionPath: "/tmp/b" },
+      }),
+    );
+    expect(view.container.querySelector('.conversation[role="log"]')).toBe(
+      viewport,
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    expect(store.getState().historyAnchor).toEqual(anchor);
+    expect(
+      view.container.querySelector<HTMLTextAreaElement>(".composer textarea")
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      await store.getState().actions.sendPrompt("Must not reach old A"),
+    ).toBe(false);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledWith("/tmp/session", anchor);
+    const next = structuredClone(snapshot);
+    next.cursor = 2;
+    next.currentSessionId = "controller-b";
+    next.currentSessionPath = "/tmp/b";
+    next.sessions[0]!.controller = "none";
+    next.sessions.push({
+      ...next.sessions[0]!,
+      id: "controller-b",
+      path: "/tmp/b",
+      controller: "web",
+    });
+    next.selectedSession!.history = {
+      ...next.selectedSession!.history!,
+      anchorEntryId: "latest",
+      anchorOnBranch: true,
+    };
+    await act(async () => completeRefresh(next));
+    expect(view.container.querySelector('.conversation[role="log"]')).toBe(
+      viewport,
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    expect(viewport.scrollTop).toBe(100);
+    expect(store.getState().historyAnchor).toEqual(anchor);
+    expect(history).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    store.getState().actions.stop();
+    unsubscribe();
+    refresh.mockRestore();
+    prompt.mockRestore();
+    history.mockRestore();
+    webStore.setState(original, true);
+  }
+});
 
 it("groups transcript turns with state and confirmed file change receipts", () => {
   const snapshot = activeSnapshot();

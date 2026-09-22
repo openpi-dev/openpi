@@ -1767,7 +1767,7 @@ describe("OpenPI Web store", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(store.getState().sessionSwitching).toBe(false),
+      expect(store.getState().snapshot?.currentSessionId).toBe("session-2"),
     );
 
     expect(store.getState().selectedPath).toBe("/tmp/ws/external.jsonl");

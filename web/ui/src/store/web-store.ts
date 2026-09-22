@@ -810,15 +810,18 @@ export function createWebStore(
                 current.liveMessages,
                 current.snapshot.selectedSession,
               ),
-              sessionSwitching: true,
+              // Control moved, but the reader still owns this exact view.
+              // Revoke input until the snapshot confirms the new controller;
+              // a view-switching placeholder would unmount its history window.
+              snapshot: {
+                ...current.snapshot,
+                currentSessionId: undefined,
+                currentSessionPath: undefined,
+              },
               modelSelectionPending: false,
             });
             const epoch = sessionEpoch;
-            void get()
-              .actions.refreshSnapshot({ epoch })
-              .then(() => {
-                if (epoch === sessionEpoch) set({ sessionSwitching: false });
-              });
+            void get().actions.refreshSnapshot({ epoch });
             return;
           }
           clearCommandDiscovery();

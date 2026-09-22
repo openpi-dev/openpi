@@ -22,7 +22,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function browserPanel() {
+async function browserPanel(restore?: Promise<void>) {
   const state = {
     sessionId: "session-1",
     url: "https://example.com/",
@@ -30,10 +30,13 @@ async function browserPanel() {
     width: 800,
     height: 600,
     loading: false,
-    canGoBack: false,
+    canGoBack: true,
     canGoForward: false,
   };
-  vi.spyOn(WebClient.prototype, "browserState").mockResolvedValue(state);
+  vi.spyOn(WebClient.prototype, "browserState").mockImplementation(async () => {
+    await restore;
+    return state;
+  });
   vi.spyOn(WebClient.prototype, "browserFrame").mockResolvedValue(null);
   vi.spyOn(WebClient.prototype, "streamBrowserFrames").mockImplementation(
     (_id, signal) =>
@@ -72,6 +75,112 @@ it("forwards pasted Unicode text into the embedded page", async () => {
     text: "hello 中文\nworld",
   });
 });
+
+it("keeps a newly entered address when the previous browser state arrives late", async () => {
+  let restore!: () => void;
+  const loading = browserPanel(
+    new Promise<void>((resolve) => {
+      restore = resolve;
+    }),
+  );
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  fireEvent.focus(address);
+  fireEvent.change(address, { target: { value: "127.0.0.1:43210/new" } });
+  fireEvent.blur(address);
+  await act(async () => restore());
+  const { state } = await loading;
+  expect(address.value).toBe("127.0.0.1:43210/new");
+  const open = vi
+    .spyOn(WebClient.prototype, "openBrowser")
+    .mockResolvedValue(state);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+  expect(open).toHaveBeenCalledWith(
+    "session-1",
+    "http://127.0.0.1:43210/new",
+    expect.any(Object),
+    expect.any(AbortSignal),
+  );
+  await act(async () => {});
+});
+
+it("does not restore an older address after the user already opened a new page", async () => {
+  let restore!: () => void;
+  const loading = browserPanel(
+    new Promise<void>((resolve) => {
+      restore = resolve;
+    }),
+  );
+  vi.spyOn(WebClient.prototype, "openBrowser").mockImplementation(
+    async (sessionId, url, viewport) => {
+      const opened = {
+        sessionId,
+        url,
+        ...viewport,
+        title: "Input fixture",
+        loading: false,
+        canGoBack: false,
+        canGoForward: false,
+      };
+      vi.mocked(WebClient.prototype.browserState).mockResolvedValue(opened);
+      return opened;
+    },
+  );
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("browserAddress"),
+  });
+  fireEvent.change(address, { target: { value: "localhost:43210/new" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+  await loading;
+  expect(address.value).toBe("http://localhost:43210/new");
+  await act(async () => restore());
+  expect(address.value).toBe("http://localhost:43210/new");
+});
+
+it.each(["open", "back", "reload"] as const)(
+  "preserves a newer address draft while %s navigation finishes",
+  async (navigation) => {
+    const { state, action } = await browserPanel();
+    let finish!: (value: typeof state) => void;
+    const receipt = new Promise<typeof state>((resolve) => {
+      finish = resolve;
+    });
+    const open = vi.spyOn(WebClient.prototype, "openBrowser");
+    const address = screen.getByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("browserAddress"),
+    });
+    if (navigation === "open") {
+      open.mockReturnValueOnce(receipt);
+      fireEvent.change(address, { target: { value: "localhost:43210/first" } });
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("browserGo") }),
+      );
+    } else {
+      action.mockReturnValueOnce(receipt);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: i18n.t(navigation === "back" ? "browserBack" : "browserReload"),
+        }),
+      );
+    }
+    fireEvent.change(address, { target: { value: "localhost:43210/second" } });
+    fireEvent.blur(address);
+    await act(async () =>
+      finish({ ...state, url: "http://localhost:43210/first" }),
+    );
+    expect(address.value).toBe("localhost:43210/second");
+    open.mockResolvedValue(state);
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("browserGo") }));
+    expect(open).toHaveBeenLastCalledWith(
+      "session-1",
+      "http://localhost:43210/second",
+      expect.any(Object),
+      expect.any(AbortSignal),
+    );
+    await act(async () => {});
+  },
+);
 
 it("coalesces wheel deltas while an input request is in flight", async () => {
   const { viewport, action, state } = await browserPanel();

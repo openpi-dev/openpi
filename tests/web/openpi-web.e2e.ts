@@ -6,8 +6,8 @@ import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, type Page, test } from "@playwright/test";
 import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
-import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -960,7 +960,7 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
     }
     response.setHeader("Content-Type", "text/html; charset=utf-8");
     response.end(
-      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div><script>for(const phase of ['mousedown','mouseup'])document.addEventListener(phase,e=>fetch('/mouse?phase='+phase+'&button='+e.button+'&buttons='+e.buttons));document.addEventListener('contextmenu',e=>e.preventDefault());</script>`,
+      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}#pointer-pad{height:100px;user-select:none}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div><div id="pointer-pad"></div><script>for(const phase of ['mousedown','mouseup','dragstart','dragend'])document.addEventListener(phase,e=>fetch('/mouse?phase='+phase+'&button='+e.button+'&buttons='+e.buttons));document.addEventListener('contextmenu',e=>e.preventDefault());</script>`,
     );
   });
   await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
@@ -987,6 +987,9 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
       .click();
     const started = await startup;
     expect(started.ok(), await started.text()).toBe(true);
+    expect(started.request().postDataJSON()).toMatchObject({
+      url: `http://127.0.0.1:${address.port}/`,
+    });
     const viewport = workbar.locator(".browser-viewport");
     const frame = viewport.locator("img");
     await expect(frame).toBeVisible();
@@ -1031,12 +1034,61 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
     }
     const bounds = await viewport.boundingBox();
     if (!bounds) throw new Error("Browser viewport missing");
+    const textDragStart = mouseEvents.length;
     await page.mouse.move(bounds.x + 40, bounds.y + 30);
     await page.mouse.down();
-    await expect.poll(() => mouseEvents.at(-1)?.phase).toBe("mousedown");
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(textDragStart)
+          .some((event) => event.phase === "mousedown"),
+      )
+      .toBe(true);
     await page.mouse.move(bounds.x - 40, bounds.y + 30, { steps: 3 });
     await page.mouse.up();
-    await expect.poll(() => mouseEvents.at(-1)?.phase).toBe("mouseup");
+    // Undo can leave selected text. Native HTML dragging suppresses mouseup
+    // and ends with dragend instead; both must report the released button.
+    const textRelease = () =>
+      mouseEvents
+        .slice(textDragStart)
+        .find(
+          (event) => event.phase === "mouseup" || event.phase === "dragend",
+        );
+    await expect.poll(textRelease).toMatchObject({
+      phase: expect.stringMatching(/^(mouseup|dragend)$/),
+      button: "0",
+      buttons: "0",
+    });
+    if (textRelease()?.phase === "dragend") {
+      await expect
+        .poll(() =>
+          mouseEvents
+            .slice(textDragStart)
+            .some((event) => event.phase === "dragstart"),
+        )
+        .toBe(true);
+    }
+    // A non-selectable area exercises plain pointer capture independently of
+    // the browser's native drag-and-drop lifecycle.
+    const pointerDragStart = mouseEvents.length;
+    await page.mouse.move(bounds.x + 40, bounds.y + 100);
+    await page.mouse.down();
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(pointerDragStart)
+          .some((event) => event.phase === "mousedown"),
+      )
+      .toBe(true);
+    await page.mouse.move(bounds.x - 40, bounds.y + 100, { steps: 3 });
+    await page.mouse.up();
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(pointerDragStart)
+          .find((event) => event.phase === "mouseup"),
+      )
+      .toEqual({ phase: "mouseup", button: "0", buttons: "0" });
     await viewport.click({ button: "right", position: { x: 40, y: 100 } });
     await expect
       .poll(() => mouseEvents.at(-1))
@@ -1047,6 +1099,7 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
       JSON.stringify(
         {
           samples,
+          mouseEvents,
           limitation:
             "Local smoke including automation and polling overhead; not a benchmark.",
         },
