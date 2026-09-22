@@ -219,6 +219,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
 export const SETUP_CONFIG_PATH = join(getAgentDir(), "my-pi-setup.json");
 const SETUP_CONFIG_LOCK_PATH = `${SETUP_CONFIG_PATH}.lock`;
 const SETUP_CONFIG_LOCK_TIMEOUT_MS = 5_000;
+const SETUP_CONFIG_LOCK_RECHECK_MS = 500;
 const SETUP_CONFIG_LOCK_VERSION = 1;
 const ESTIMATED_PROCESS_STARTED_AT = Math.max(
   1,
@@ -843,6 +844,12 @@ function waitForSetupConfigLock(deadline: number) {
   return new Promise<void>((resolve, reject) => {
     let settled = false;
     let watcher: ReturnType<typeof watch> | undefined;
+    // A dead owner does not change the lock file, so periodically retry the
+    // existing fail-closed recovery path before the shared deadline expires.
+    const recheckTimer = setTimeout(
+      () => finish(),
+      Math.min(remaining, SETUP_CONFIG_LOCK_RECHECK_MS),
+    );
     const timer = setTimeout(() => {
       // fs.watch may coalesce or drop events. Recheck the atomic lock path at
       // the deadline so a released lock cannot become a false timeout.
@@ -853,6 +860,7 @@ function waitForSetupConfigLock(deadline: number) {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
+      clearTimeout(recheckTimer);
       watcher?.close();
       if (error) reject(error);
       else resolve();
