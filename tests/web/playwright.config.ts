@@ -22,7 +22,10 @@ export default defineConfig({
     "tests/web/openpi-web.e2e.ts",
     "tests/web/composer-clipboard.e2e.ts",
     "tests/web/settings-parity.e2e.ts",
+    "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
+    "tests/web/session-history.e2e.ts",
+    "tests/web/session-observer.e2e.ts",
     "tests/web/artifact-images.e2e.ts",
     "tests/web/artifact-evidence.e2e.ts",
     "tests/web/subagent-inspection.e2e.ts",
@@ -48,7 +51,10 @@ export default defineConfig({
     env: {
       ...process.env,
       OPENPI_WEB_TOKEN: token,
-      OPENPI_CHROME_PATH: browserExecutable ?? chromium.executablePath(),
+      OPENPI_CHROME_PATH:
+        process.env.OPENPI_CHROME_PATH ??
+        browserExecutable ??
+        chromium.executablePath(),
     },
     reuseExistingServer: false,
     timeout: 30_000,

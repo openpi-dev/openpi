@@ -14,6 +14,8 @@
 @import "./features/settings/provider-settings.css";
 @import "./features/workbar/workbar.css";
 @import "./features/transcript/turn-timing.css";
+@import "./features/transcript/conversation-reading.css";
+@import "./features/transcript/history-controls.css";
 
 :root {
   color-scheme: light;

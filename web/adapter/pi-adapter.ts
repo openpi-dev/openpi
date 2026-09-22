@@ -31,8 +31,10 @@ import {
   WEB_MAX_SESSIONS,
   WEB_MAX_SESSION_PREVIEW,
   WEB_MAX_SNAPSHOT_BYTES,
+  WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
   WEB_MAX_WORKSPACES,
   type WebSessionProjection,
+  type WebSessionHistoryPage,
   type WebSessionSummary,
   type WebSnapshotTruncation,
   type WebWorkspaceSummary,
@@ -910,7 +912,7 @@ export class PiWebAdapter {
     };
   }
 
-  async getSnapshot(selectedPath?: string) {
+  async getSnapshot(selectedPath?: string, historyAnchor?: { sessionId: string; entryId: string }) {
     await this.ensureWorkspaceStateLoaded();
     const sessionProjection = await this.listSessionProjection(selectedPath);
     const sessions = sessionProjection.sessions;
@@ -945,10 +947,10 @@ export class PiWebAdapter {
         (session) => this.isCurrentSession(session),
       )?.path;
     const selectedSession = path
-      ? await this.getSession(path, sessions)
+      ? await this.getSession(path, sessions, historyAnchor)
       : undefined;
     const usage =
-      selectedSession?.id === this.runtime.sessionManager.getSessionId()
+      selectedSession && this.isCurrentSession(selectedSession)
         ? this.runtime.getSessionUsage?.()
         : undefined;
     const allModels = this.runtime.listModels();
@@ -966,15 +968,20 @@ export class PiWebAdapter {
       label: boundedText(model.label, WEB_MAX_SESSION_PREVIEW),
     }));
     const thinking = this.safeThinking();
+    const selectedExecution = selectedSession
+      ? this.runtime.getSessionExecution?.(selectedSession.id, selectedSession.path)
+      : undefined;
     const snapshot = {
       ...(this.runtime.workspaceSelected === true
-        ? { currentSessionId: this.runtime.sessionManager.getSessionId() }
+        ? { currentSessionId: this.runtime.sessionManager.getSessionId(),
+            currentSessionPath: this.runtime.sessionManager.getSessionFile() ?? `current:${this.runtime.sessionManager.getSessionId()}` }
         : {}),
       workspaces,
       sessions,
       models,
       ...(thinking ? { thinking } : {}),
       ...(selectedSession ? { selectedSession } : {}),
+      ...(selectedExecution ? { selectedExecution } : {}),
       ...(usage ? { usage } : {}),
       runtime: {
         status: this.runtime.isIdle()
@@ -1018,7 +1025,7 @@ export class PiWebAdapter {
     const selected = snapshot.selectedSession;
     if (selected && selected.entries.length > 0) {
       let removed = 0;
-      while (selected.entries.length > 0 && bytes > targetBytes) {
+      while (selected.entries.length > 1 && bytes > targetBytes) {
         const entry = selected.entries.shift();
         if (!entry) break;
         removed++;
@@ -1039,6 +1046,7 @@ export class PiWebAdapter {
         messagePartsOmitted,
         messagesTruncated,
       };
+      if (selected.history) selected.history.beforeEntryId = selected.entries[0]?.id ?? null;
     }
 
     const selectedPath = selected?.path;
@@ -1152,21 +1160,71 @@ export class PiWebAdapter {
   async getSession(
     path: string,
     knownSessions?: WebSessionSummary[],
+    historyAnchor?: { sessionId: string; entryId: string },
   ): Promise<WebSessionProjection | undefined> {
     const sessions = knownSessions ?? (await this.listSessions(path));
     const summary = sessions.find((session) => session.path === path);
     if (!summary) return undefined;
 
     const manager =
-      this.isCurrentSession(summary)
+      this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary)
         ? this.runtime.sessionManager
-        : SessionManager.open(path);
-    const projected = projectEntries(manager.getBranch(), (path) => resolve(summary.cwd, path));
+        : SessionManager.open(path));
+    const branch = manager.getBranch();
+    const projected = projectEntries(branch, (path) => resolve(summary.cwd, path));
     return {
       id: summary.id,
       path: summary.path,
       cwd: summary.cwd,
       ...projected,
+      history: {
+        leafEntryId: manager.getLeafId(),
+        beforeEntryId: projected.truncation.entriesOmitted > 0 ? projected.entries[0]?.id ?? null : null,
+        ...(historyAnchor ? {
+          anchorEntryId: historyAnchor.entryId,
+          anchorOnBranch: historyAnchor.sessionId === summary.id && manager.getSessionId() === historyAnchor.sessionId && branch.some((entry) => entry.id === historyAnchor.entryId),
+        } : {}),
+      },
     };
+  }
+
+  async getSessionHistory(sessionId: string, path: string, anchorEntryId: string, beforeEntryId: string) {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary) return { status: "not_found" as const };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (manager.getSessionId() !== sessionId || summary.id !== sessionId)
+      return { status: "changed" as const };
+    const branch = manager.getBranch();
+    const anchor = branch.findIndex((entry) => entry.id === anchorEntryId);
+    const before = branch.findIndex((entry) => entry.id === beforeEntryId);
+    if (anchor < 0 || before < 0 || before > anchor) return { status: "changed" as const };
+    const prefix = branch.slice(0, before);
+    const projectionBudget = WEB_MAX_SELECTED_TRANSCRIPT_BYTES -
+      jsonByteLength({ id: summary.id, path: summary.path, cwd: summary.cwd, anchorEntryId, requestedBeforeEntryId: beforeEntryId }) - 2048;
+    const projected = projectEntries(prefix, (file) => resolve(summary.cwd, file), projectionBudget);
+    const session: WebSessionHistoryPage = {
+      id: summary.id, path: summary.path, cwd: summary.cwd,
+      anchorEntryId, requestedBeforeEntryId: beforeEntryId,
+      ...projected,
+      history: { leafEntryId: manager.getLeafId(), beforeEntryId: projected.truncation.entriesOmitted > 0 ? projected.entries[0]?.id ?? null : null, anchorEntryId, anchorOnBranch: true },
+    };
+    // The complete response, not only the entry array, shares the transcript budget.
+    while (session.entries.length > 0 && jsonByteLength({ session }) > WEB_MAX_SELECTED_TRANSCRIPT_BYTES) {
+      const removed = session.entries.shift();
+      session.truncation = {
+        ...session.truncation,
+        truncated: true,
+        entriesOmitted: session.truncation.entriesOmitted + 1,
+        messagesTruncated: session.truncation.messagesTruncated - (removed?.message?.truncation ? 1 : 0),
+        messagePartsOmitted: session.truncation.messagePartsOmitted - (removed?.message?.truncation?.partsOmitted ?? 0),
+      };
+      session.history!.beforeEntryId = session.entries[0]?.id ?? null;
+    }
+    session.bytes = jsonByteLength(session.entries);
+    session.history!.beforeEntryId = session.truncation.entriesOmitted > 0
+      ? session.entries[0]?.id ?? null : null;
+    return { status: "ok" as const, session };
   }
 }

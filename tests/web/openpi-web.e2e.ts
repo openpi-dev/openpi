@@ -62,6 +62,7 @@ for (const firstControl of ["settings", "thinking"] as const) {
       snapshot.runtime = { status: "idle", capabilities: {} };
       if (created) {
         snapshot.currentSessionId = sessionId;
+        snapshot.currentSessionPath = path;
         snapshot.sessions = [
           {
             id: sessionId,
@@ -94,6 +95,7 @@ for (const firstControl of ["settings", "thinking"] as const) {
         };
       } else {
         delete snapshot.currentSessionId;
+        delete snapshot.currentSessionPath;
         delete snapshot.selectedSession;
       }
       await route.fulfill({ response, json: snapshot });
@@ -196,6 +198,7 @@ function alignControlledSessionFixture(snapshot: WebSnapshot) {
   if (!session || session.id !== snapshot.currentSessionId) {
     throw new Error("A controlled fixture must select its current Session");
   }
+  snapshot.currentSessionPath = session.path;
   snapshot.sessions = [
     {
       id: session.id,
@@ -300,6 +303,8 @@ for (const width of [1280, 390]) {
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await page.getByRole("button", { name: "编辑消息", exact: true }).click();
     await expect(editor).toHaveValue("Original message ".repeat(30));
+    // Finish active snapshot handlers before Playwright disposes their context.
+    await page.unrouteAll({ behavior: "wait" });
   });
 }
 
@@ -1942,6 +1947,7 @@ test("recovers an unknown prompt admission only after an explicit user decision"
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.currentSessionId = sessionId;
+    snapshot.currentSessionPath = "/unknown-admission/session.jsonl";
     snapshot.workspaces = [
       { path: "/unknown-admission", name: "Recovery", current: true },
     ];

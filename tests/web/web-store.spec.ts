@@ -359,6 +359,260 @@ afterEach(() => {
 });
 
 describe("OpenPI Web store", () => {
+  it("retains a valid requested background view without moving the input controller", async () => {
+    const client = new FakeClient();
+    const current = activeSnapshot("controller", "/tmp/ws/controller.jsonl");
+    const viewed = activeSnapshot("viewed", "/tmp/ws/viewed.jsonl");
+    const background = {
+      ...current,
+      sessions: [
+        ...current.sessions,
+        { ...viewed.sessions[0]!, controller: "none" as const },
+      ],
+      selectedSession: viewed.selectedSession,
+      selectedExecution: {
+        sessionId: "viewed",
+        sessionPath: "/tmp/ws/viewed.jsonl",
+        status: "running" as const,
+        pendingFollowUps: 2,
+        liveTools: [],
+        liveToolsOmitted: 0,
+      },
+    };
+    client.snapshots.push(
+      Promise.resolve(background),
+      Promise.resolve(current),
+    );
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: viewed,
+      selectedPath: "/tmp/ws/viewed.jsonl",
+      liveMessages: [
+        {
+          key: "optimistic-read-view",
+          message: { role: "user", content: "Queued in viewed Session" },
+          optimistic: {
+            sessionId: "viewed",
+            sessionPath: "/tmp/ws/viewed.jsonl",
+            commandId: "read-view",
+            afterEntryId: null,
+            admitted: true,
+          },
+        },
+        {
+          key: "old-controller-live",
+          message: { role: "assistant", content: "Old live fragment" },
+        },
+      ],
+    });
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(client.snapshotPaths).toEqual(["/tmp/ws/viewed.jsonl"]);
+    expect(store.getState().selectedPath).toBe("/tmp/ws/viewed.jsonl");
+    expect(store.getState().snapshot?.currentSessionId).toBe("controller");
+    expect(store.getState().snapshot?.selectedExecution?.pendingFollowUps).toBe(
+      2,
+    );
+    expect(store.getState().liveMessages.map((entry) => entry.key)).toEqual([
+      "optimistic-read-view",
+    ]);
+    expect(
+      await store.getState().actions.sendPrompt("must stay read only"),
+    ).toBe(false);
+    expect(client.prompts).toEqual([]);
+    store.getState().actions.stop();
+  });
+
+  it("keeps both scoped pending submissions when one same-text native message arrives", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      await store.getState().actions.sendPrompt("继续");
+      await store.getState().actions.sendPrompt("继续");
+      stream.emit(
+        runtimeEvent(10, "message_start", {
+          sessionId: "session-1",
+          messageKey: "native-user",
+          message: { role: "user", content: "继续" },
+        }),
+      );
+      const pending = store
+        .getState()
+        .liveMessages.filter((entry) => entry.optimistic);
+      expect(pending).toHaveLength(2);
+      expect(pending[0]?.optimistic).toMatchObject({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      });
+      for (let index = 0; index < 12; index++)
+        stream.emit(
+          runtimeEvent(11 + index, "message_start", {
+            sessionId: "session-1",
+            messageKey: `live-${index}`,
+            message: { role: "assistant", content: `Step ${index}` },
+          }),
+        );
+      expect(
+        store.getState().liveMessages.filter((entry) => entry.optimistic),
+      ).toHaveLength(2);
+      expect(
+        store.getState().liveMessages.filter((entry) => !entry.optimistic)
+          .length,
+      ).toBeLessThanOrEqual(8);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("keeps its requested view and scoped pending message when another client changes the controller", async () => {
+    const client = new FakeClient();
+    const viewed = snapshot();
+    const controller = activeSnapshot(
+      "controller",
+      "/tmp/ws/controller.jsonl",
+      { cursor: 20 },
+    );
+    const background = {
+      ...controller,
+      sessions: [
+        ...controller.sessions,
+        { ...viewed.sessions[0]!, controller: "none" as const },
+      ],
+      selectedSession: viewed.selectedSession,
+    };
+    client.snapshots.push(
+      Promise.resolve(viewed),
+      Promise.resolve(background),
+      Promise.resolve(controller),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      await store.getState().actions.sendPrompt("My pending message");
+      stream.emit(
+        runtimeEvent(10, "session_switched", {
+          sessionId: "controller",
+          sessionPath: "/tmp/ws/controller.jsonl",
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(store.getState().sessionSwitching).toBe(false),
+      );
+      expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
+      expect(store.getState().snapshot?.currentSessionId).toBe("controller");
+      expect(
+        store.getState().liveMessages.filter((entry) => entry.optimistic),
+      ).toHaveLength(1);
+      stream.emit(
+        runtimeEvent(21, "message_update", {
+          sessionId: "controller",
+          messageKey: "foreign",
+          message: { role: "assistant", content: "Foreign controller content" },
+        }),
+      );
+      expect(
+        store
+          .getState()
+          .liveMessages.some(
+            (entry) => entry.message.content === "Foreign controller content",
+          ),
+      ).toBe(false);
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt("Not authorized in this view"),
+      ).toBe(false);
+      expect(client.prompts).toHaveLength(1);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it.each([true, false])(
+    "only clears own pending when selection changes the viewed file (same view: %s)",
+    async (sameView) => {
+      const client = new FakeClient();
+      const viewed = activeSnapshot("A", "/tmp/ws/a.jsonl");
+      const controller = activeSnapshot("B", "/tmp/ws/b.jsonl");
+      const background = {
+        ...controller,
+        sessions: [
+          ...controller.sessions,
+          { ...viewed.sessions[0]!, controller: "none" as const },
+        ],
+        selectedSession: viewed.selectedSession,
+      };
+      const target = sameView ? viewed : controller;
+      client.snapshots.push(Promise.resolve(target));
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      store.setState({
+        snapshot: background,
+        cursor: 4,
+        selectedPath: "/tmp/ws/a.jsonl",
+        selectedWorkspace: "/tmp/ws",
+        liveMessages: [
+          {
+            key: "optimistic-a",
+            message: { role: "user", content: "Queued A" },
+            optimistic: {
+              sessionId: "A",
+              sessionPath: "/tmp/ws/a.jsonl",
+              commandId: "a",
+              afterEntryId: null,
+              admitted: true,
+            },
+          },
+        ],
+      });
+      vi.spyOn(client, "selectSession").mockImplementation(async (path) => {
+        if (sameView)
+          stream.emit(
+            runtimeEvent(5, "session_switched", {
+              sessionId: "A",
+              sessionPath: path,
+            }),
+          );
+        return {};
+      });
+      store.getState().actions.start();
+      try {
+        await vi.waitFor(() =>
+          expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+        );
+        await store
+          .getState()
+          .actions.selectSession(target.selectedSession!.path);
+        expect(store.getState().selectedPath).toBe(
+          target.selectedSession!.path,
+        );
+        expect(store.getState().snapshot?.currentSessionId).toBe(
+          target.currentSessionId,
+        );
+        expect(
+          store.getState().liveMessages.filter((entry) => entry.optimistic),
+        ).toHaveLength(sameView ? 1 : 0);
+      } finally {
+        store.getState().actions.stop();
+      }
+    },
+  );
+
   it("discovers commands once for the active Session and caches the result", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -674,13 +928,14 @@ describe("OpenPI Web store", () => {
     expect(store.getState().modelSearch.models).toEqual([]);
   });
 
-  it("falls back to the canonical active Session when a selected transcript is stale", async () => {
+  it("keeps an available transcript as a read-only view when a different Session controls input", async () => {
     const client = new FakeClient();
     const stale = activeSnapshot("session-2", "/tmp/ws/current.jsonl");
     stale.sessions.unshift({
       ...stale.sessions[0]!,
       id: "session-1",
       path: "/tmp/ws/browsed.jsonl",
+      controller: "none",
     });
     stale.selectedSession = {
       ...stale.selectedSession!,
@@ -698,10 +953,14 @@ describe("OpenPI Web store", () => {
       await store.getState().actions.refreshSnapshot({ resetCursor: true }),
     ).toBe(true);
 
-    expect(client.snapshotPaths).toEqual(["/tmp/ws/browsed.jsonl", null]);
-    expect(store.getState().selectedPath).toBe("/tmp/ws/current.jsonl");
-    expect(store.getState().snapshot?.selectedSession?.id).toBe("session-2");
-    expect(store.getState().cursor).toBe(6);
+    expect(client.snapshotPaths).toEqual(["/tmp/ws/browsed.jsonl"]);
+    expect(store.getState().selectedPath).toBe("/tmp/ws/browsed.jsonl");
+    expect(store.getState().snapshot?.selectedSession?.id).toBe("session-1");
+    expect(store.getState().snapshot?.currentSessionId).toBe("session-2");
+    expect(
+      await store.getState().actions.sendPrompt("do not switch control"),
+    ).toBe(false);
+    expect(client.prompts).toEqual([]);
   });
 
   it("clears a vanished selected path and retries the canonical snapshot once", async () => {
@@ -885,7 +1144,7 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("rejects a same-ID copied transcript after the canonical retry too", async () => {
+  it("allows a same-ID copied transcript to be read without granting the original's input control", async () => {
     const client = new FakeClient();
     const copied = snapshot();
     const copyPath = "/tmp/ws/copy.jsonl";
@@ -899,15 +1158,28 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     store.setState({ selectedPath: copyPath });
 
-    expect(await store.getState().actions.refreshSnapshot()).toBe(false);
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
 
-    expect(client.snapshotPaths).toEqual([copyPath, null]);
-    expect(store.getState().selectedPath).toBeNull();
-    expect(store.getState().snapshot).toBeNull();
+    expect(client.snapshotPaths).toEqual([copyPath]);
+    expect(store.getState().selectedPath).toBe(copyPath);
+    expect(store.getState().snapshot?.selectedSession?.path).toBe(copyPath);
     expect(
       await store.getState().actions.sendPrompt("do not send to the original"),
     ).toBe(false);
     expect(client.prompts).toEqual([]);
+    const cancel = vi
+      .spyOn(client, "cancelActiveTurn")
+      .mockResolvedValue({ state: "accepted" });
+    store.setState({
+      activeTurn: {
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        commandId: "original-turn",
+        epoch: 1,
+      },
+    });
+    await store.getState().actions.cancelActiveTurn();
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it.each(["network failure", "invalid canonical projection"])(
@@ -1092,6 +1364,180 @@ describe("OpenPI Web store", () => {
     ]);
     expect(store.getState().promptAdmissionPending).toBe(false);
     expect(store.getState().livePhase).toBe("preparing");
+    store.getState().actions.stop();
+  });
+
+  it("marks only the exact HTTP-accepted prompt as admitted for display", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    const sending = store.getState().actions.sendPrompt("pending");
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(false);
+    receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    expect(await sending).toBe(true);
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it.each(["unknown", "lost", "wrong-command", "not-accepted"])(
+    "does not mark %s prompt admission as accepted for display",
+    async (result) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      vi.spyOn(client, "prompt").mockImplementation(async (_id, _text, id) => {
+        if (result === "unknown")
+          throw new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN");
+        if (result === "lost") throw new TypeError("lost receipt");
+        return {
+          id: result === "wrong-command" ? "other" : id,
+          accepted: result !== "not-accepted",
+        };
+      });
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      await store.getState().actions.sendPrompt("pending");
+      expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(
+        false,
+      );
+      store.getState().actions.stop();
+    },
+  );
+
+  it("marks only the matching scoped prompt accepted by an event", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const sending = store.getState().actions.sendPrompt("pending");
+    const commandId = prompt.mock.calls[0]![2];
+    const selected = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...selected,
+        currentSessionId: "controller-other",
+        currentSessionPath: "/tmp/ws/other.jsonl",
+      },
+    });
+    stream.emit(
+      runtimeEvent(5, "prompt_accepted", {
+        commandId,
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/copy.jsonl",
+      }),
+    );
+    stream.emit(
+      runtimeEvent(6, "prompt_accepted", {
+        commandId: "another-command",
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      }),
+    );
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(false);
+    stream.emit(
+      runtimeEvent(7, "prompt_accepted", {
+        commandId,
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      }),
+    );
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(true);
+    expect(store.getState().snapshot?.currentSessionId).toBe(
+      "controller-other",
+    );
+    expect(store.getState().liveRunning).toBe(false);
+    receipt.resolve({ id: commandId, accepted: true });
+    await sending;
+    store.getState().actions.stop();
+  });
+
+  it("remembers only valid admitted prompt projections and releases their preview data", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const sending = store
+      .getState()
+      .actions.sendPrompt("image", [
+        { mimeType: "image/png", data: "cHJldmlldw==" },
+      ]);
+    const original = store.getState().liveMessages[0]!;
+    const native = {
+      id: "native-user",
+      parentId: null,
+      type: "message" as const,
+      timestamp: original.timestamp!,
+      message: original.message,
+    };
+    const current = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...current,
+        selectedSession: { ...current.selectedSession!, entries: [native] },
+      },
+    });
+    const remember = store.getState().actions.rememberPromptProjection;
+    const pair = [{ key: original.key, entryId: native.id }];
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toBe(original);
+    receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    await sending;
+    const accepted = store.getState().liveMessages[0]!;
+    expect(accepted.message.parts?.[0]).toHaveProperty("previewUrl");
+    remember("wrong-id", "/tmp/ws/session.jsonl", pair);
+    remember("session-1", "/tmp/ws/copy.jsonl", pair);
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: original.key, entryId: "missing" },
+    ]);
+    expect(store.getState().liveMessages[0]).toBe(accepted);
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toEqual({
+      ...accepted,
+      optimistic: { ...accepted.optimistic, projectedEntryId: native.id },
+      message: { role: "user", content: "" },
+    });
+    const projected = store.getState().liveMessages[0]!;
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toBe(projected);
+    const nextPending = {
+      ...accepted,
+      key: "next-pending",
+      optimistic: { ...accepted.optimistic!, commandId: "next-command" },
+    };
+    store.setState({ liveMessages: [projected, nextPending] });
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: nextPending.key, entryId: native.id },
+    ]);
+    expect(store.getState().liveMessages[1]).toBe(nextPending);
+    const newerSnapshot = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...newerSnapshot,
+        selectedSession: {
+          ...newerSnapshot.selectedSession!,
+          entries: [{ ...native, id: "newer-native-user" }],
+        },
+      },
+    });
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: projected.key, entryId: "newer-native-user" },
+    ]);
+    expect(store.getState().liveMessages[0]).toBe(projected);
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: nextPending.key, entryId: native.id },
+    ]);
+    expect(store.getState().liveMessages[1]).toBe(nextPending);
     store.getState().actions.stop();
   });
 
@@ -1296,10 +1742,13 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("recovers the canonical Session after an external activation", async () => {
+  it("recovers the canonical Session when an external activation no longer lists the previously viewed file", async () => {
     const client = new FakeClient();
     client.snapshots.push(
       Promise.resolve(snapshot()),
+      Promise.resolve(
+        activeSnapshot("session-2", "/tmp/ws/external.jsonl", { cursor: 5 }),
+      ),
       Promise.resolve(
         activeSnapshot("session-2", "/tmp/ws/external.jsonl", { cursor: 5 }),
       ),
@@ -2007,6 +2456,14 @@ describe("OpenPI Web store", () => {
     expect(store.getState().liveMessages).toEqual([
       {
         key: `optimistic-${commandId}`,
+        timestamp: expect.any(String),
+        optimistic: {
+          sessionId: "session-1",
+          sessionPath: "/tmp/ws/session.jsonl",
+          commandId,
+          afterEntryId: null,
+          admitted: true,
+        },
         message: { role: "user", content: "once" },
       },
     ]);
@@ -2833,7 +3290,7 @@ describe("thinking level selection", () => {
 
   for (const resetCursor of [false, true]) {
     for (const outcome of ["success", "rejection"] as const) {
-      it(`canonical same-ID copy recovery clears old thinking and protects a newer POST from late ${outcome} (resetCursor=${resetCursor})`, async () => {
+      it(`same-ID controller changes require explicit selection and protect a newer thinking POST from late ${outcome} (resetCursor=${resetCursor})`, async () => {
         const { client, store } = await harness({ revision: 40 });
         const superseded = deferred<WebThinkingState & { sessionId: string }>();
         client.setThinkingResults.push(superseded.promise);
@@ -2851,8 +3308,8 @@ describe("thinking level selection", () => {
             ...snapshot().sessions[0],
             controller: "none",
           });
-          // The requested old file still exists, but the host now controls its
-          // same-ID copy. Recover through the store's real canonical retry.
+          // Keep the old file readable while the controller moves to its
+          // same-ID copy. Only explicit selection can enable new mutations.
           client.snapshots.push(
             Promise.resolve({
               ...copied,
@@ -2863,16 +3320,17 @@ describe("thinking level selection", () => {
           expect(
             await store.getState().actions.refreshSnapshot({ resetCursor }),
           ).toBe(true);
-          expect(client.snapshotPaths.slice(-2)).toEqual([
-            "/tmp/ws/session.jsonl",
-            null,
-          ]);
-          expect(store.getState().selectedPath).toBe(copiedPath);
+          expect(client.snapshotPaths.at(-1)).toBe("/tmp/ws/session.jsonl");
+          expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
           expect(store.getState().thinkingPendingLevel).toBeNull();
           expect(store.getState().snapshot?.thinking).toMatchObject({
             level: "medium",
             revision: 2,
           });
+          store.getState().actions.selectThinking("low");
+          expect(mutations).toHaveBeenCalledOnce();
+          await store.getState().actions.selectSession(copiedPath);
+          expect(store.getState().selectedPath).toBe(copiedPath);
 
           const newer = deferred<WebThinkingState & { sessionId: string }>();
           client.setThinkingResults.push(newer.promise);

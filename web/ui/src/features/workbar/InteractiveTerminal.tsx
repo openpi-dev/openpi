@@ -79,6 +79,14 @@ export function InteractiveTerminal({
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host);
+    // Opening the tool is the focus intent. A delayed connection must not
+    // steal focus back after the user has moved to another input or panel.
+    if (
+      !host.closest("[hidden], [inert]") &&
+      (generation === 0 ||
+        host.closest(".interactive-terminal")?.contains(document.activeElement))
+    )
+      terminal.focus();
     terminal.attachCustomKeyEventHandler((event) => {
       if (event.type !== "keydown") return true;
       const key = event.key.toLowerCase();
@@ -182,7 +190,6 @@ export function InteractiveTerminal({
       fitTerminal();
       if (!info.exited) {
         resize(terminal.cols, terminal.rows);
-        terminal.focus();
       }
       await client.streamInteractiveTerminal(
         sessionId,

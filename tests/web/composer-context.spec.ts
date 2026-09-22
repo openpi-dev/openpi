@@ -130,6 +130,72 @@ function setup(overrides: Record<string, unknown> = {}) {
   return { ...view, node, props, sendPrompt, discoverCommands };
 }
 
+it("lets a user click Send for a follow-up while Stop remains available", async () => {
+  const value = snapshot();
+  value.runtime.status = "running";
+  value.runtime.activeTurn = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    commandId: "running",
+    epoch: 1,
+  };
+  value.selectedExecution = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    status: "running",
+    pendingFollowUps: 2,
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  const { props, sendPrompt } = setup({
+    snapshot: value,
+    liveRunning: true,
+    pendingFollowUpsReceipt: 1,
+  });
+  const cancel = vi.spyOn(props.actions, "cancelActiveTurn");
+  fireEvent.change(screen.getByRole("textbox"), {
+    target: { value: "Follow-up by button" },
+  });
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("stopTurn") })
+      .disabled,
+  ).toBe(false);
+  expect(
+    screen.getByText(i18n.t("pendingFollowUpsHint", { count: 2 })),
+  ).toBeTruthy();
+  expect(
+    screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 1 })),
+  ).toBeNull();
+  await act(async () =>
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("send") })),
+  );
+  expect(sendPrompt).toHaveBeenCalledWith("Follow-up by button");
+  expect(cancel).not.toHaveBeenCalled();
+});
+
+it("hides another controller's model and stale queue receipt while offering activation", () => {
+  const value = snapshot();
+  value.currentSessionId = "other";
+  value.currentSessionPath = "/tmp/other.jsonl";
+  value.models = [
+    {
+      provider: "p",
+      id: "b",
+      name: "Other model",
+      label: "Other model",
+      current: true,
+    },
+  ];
+  setup({ snapshot: value, pendingFollowUpsReceipt: 1 });
+  expect(screen.queryByRole("button", { name: /Other model/u })).toBeNull();
+  expect(
+    screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 1 })),
+  ).toBeNull();
+  expect(
+    screen.getByRole("button", { name: i18n.t("activateViewedSession") }),
+  ).toBeTruthy();
+});
+
 it("shows the snapshot target and unified context actions", async () => {
   const { discoverCommands, sendPrompt } = setup();
   expect(screen.getByText("First task")).toBeTruthy();
@@ -728,4 +794,23 @@ it("does not transfer a settled submission into a different session", async () =
     await receipt;
   });
   expect(input.value).toBe("new draft");
+});
+
+it("does not expose send or stop for a copied Session with the controller's embedded id", () => {
+  const value = snapshot();
+  value.selectedSession!.path = "/tmp/workspace/copied.jsonl";
+  value.runtime.status = "running";
+  value.runtime.activeTurn = {
+    sessionId: "session-1",
+    sessionPath: "/tmp/workspace/one.jsonl",
+    commandId: "owner-turn",
+    epoch: 1,
+  };
+  setup({
+    snapshot: value,
+    selectedPath: value.selectedSession!.path,
+    liveRunning: true,
+  });
+  expect(screen.queryByRole("button", { name: i18n.t("stopTurn") })).toBeNull();
+  expect(screen.getByRole<HTMLTextAreaElement>("textbox").disabled).toBe(true);
 });

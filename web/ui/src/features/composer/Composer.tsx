@@ -25,6 +25,7 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
+import { isControlledSession } from "../../lib/session-control.ts";
 import {
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
@@ -188,7 +189,7 @@ export function Composer(props: ComposerProps) {
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
-      selected.id === props.snapshot?.currentSessionId &&
+      isControlledSession(props.snapshot, selected) &&
       selectedPath === selected.path,
   );
   const draftSession = Boolean(
@@ -627,6 +628,15 @@ export function Composer(props: ComposerProps) {
         },
       ]
     : [];
+  const execution = props.snapshot?.selectedExecution;
+  const observedQueue =
+    selected &&
+    execution &&
+    execution.sessionId === selected.id &&
+    execution.sessionPath === selected.path
+      ? execution.pendingFollowUps
+      : undefined;
+  const pendingCount = observedQueue ?? props.pendingFollowUpsReceipt;
   const hint = props.modelSelectionPending
     ? t("thinkingModelPendingHint")
     : props.thinkingPendingLevel !== null
@@ -637,10 +647,10 @@ export function Composer(props: ComposerProps) {
           ? t("stoppingTurn")
           : props.turnTerminalStatus === "cancelled"
             ? t("stoppedTurn")
-            : props.pendingFollowUpsReceipt !== null
-              ? props.pendingFollowUpsReceipt > 0
+            : props.pendingFollowUpsReceipt !== null || (pendingCount ?? 0) > 0
+              ? (pendingCount ?? 0) > 0
                 ? t("pendingFollowUpsHint", {
-                    count: props.pendingFollowUpsReceipt,
+                    count: pendingCount ?? 0,
                   })
                 : t("acceptedHint")
               : canCompose
@@ -649,15 +659,33 @@ export function Composer(props: ComposerProps) {
                   : t("enterHint")
                 : t("activeOnlyHint");
   const showHint =
-    props.modelSelectionPending ||
-    props.thinkingPendingLevel !== null ||
-    props.turnCancellationPending ||
-    props.turnTerminalStatus === "cancelled" ||
-    props.pendingFollowUpsReceipt !== null ||
-    (canCompose && running && Boolean(prompt.trim() || images.length));
+    canCompose &&
+    (props.modelSelectionPending ||
+      props.thinkingPendingLevel !== null ||
+      props.turnCancellationPending ||
+      props.turnTerminalStatus === "cancelled" ||
+      props.pendingFollowUpsReceipt !== null ||
+      (pendingCount ?? 0) > 0 ||
+      (running && Boolean(prompt.trim() || images.length)));
 
   return (
     <div className="composer-dock">
+      {!active &&
+        !props.workspaceDraft &&
+        !props.sessionSwitching &&
+        selected &&
+        selectedPath === selected.path && (
+          <div className="composer-session-notice">
+            <span>{t("activateViewedSessionHint")}</span>
+            <button
+              type="button"
+              className="secondary"
+              onClick={() => void props.actions.selectSession(selected.path)}
+            >
+              {t("activateViewedSession")}
+            </button>
+          </div>
+        )}
       {active && (
         <ActivityBar
           snapshot={props.snapshot}
@@ -931,7 +959,10 @@ export function Composer(props: ComposerProps) {
             onSelect={setActiveCommand}
           />
         )}
-        <div className="composer-toolbar">
+        <div
+          className="composer-toolbar"
+          hidden={Boolean(selected && !active && !props.workspaceDraft)}
+        >
           <div className="composer-toolbar-context">
             {contextEntryAvailable ? (
               <DropdownMenu
@@ -1082,7 +1113,7 @@ export function Composer(props: ComposerProps) {
                 />
               </div>
             )}
-            {canStop ? (
+            {canStop && (
               <Tooltip content={t("stopTurn")} placement="above">
                 <button
                   className="send-button"
@@ -1096,7 +1127,8 @@ export function Composer(props: ComposerProps) {
                   <Square />
                 </button>
               </Tooltip>
-            ) : (
+            )}
+            {(!canStop || Boolean(prompt.trim() || images.length)) && (
               <Tooltip content={t("send")} placement="above">
                 <button
                   className="send-button"
@@ -1126,7 +1158,7 @@ export function Composer(props: ComposerProps) {
           data-visible={showHint}
           aria-live="polite"
         >
-          {hint}
+          {canCompose ? hint : null}
         </div>
       </form>
       <FileReferenceDialog

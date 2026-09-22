@@ -3,6 +3,7 @@ import { reduceLiveTools } from "../../../protocol/live-tools.ts";
 import type {
   WebCommandSummary,
   WebEvent,
+  WebHistoryAnchor,
   WebLiveMessage,
   WebModelSummary,
   WebPromptImage,
@@ -10,6 +11,7 @@ import type {
   WebThinkingState,
 } from "../../../protocol/types.ts";
 import { i18n } from "../i18n.ts";
+import { isControlledSession } from "../lib/session-control.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
 
@@ -72,6 +74,54 @@ function persist(key: string, value: unknown) {
 export interface LiveEntry {
   key: string;
   message: WebLiveMessage;
+  timestamp?: string;
+  optimistic?: {
+    sessionId: string;
+    sessionPath: string;
+    commandId: string;
+    afterEntryId: string | null;
+    admitted: boolean;
+    // UI duplicate-display association, not a native delivery acknowledgement.
+    projectedEntryId?: string;
+  };
+}
+
+function trimLiveMessages(entries: LiveEntry[]) {
+  let remaining = 8;
+  const retained: LiveEntry[] = [];
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.optimistic || remaining-- > 0) retained.push(entry);
+  }
+  return retained.reverse();
+}
+
+function ownPendingMessages(
+  entries: LiveEntry[],
+  session: WebSnapshot["selectedSession"],
+) {
+  return entries.filter(
+    (entry) =>
+      entry.optimistic?.sessionId === session?.id &&
+      entry.optimistic?.sessionPath === session?.path &&
+      entry.optimistic !== undefined,
+  );
+}
+
+function admitPromptProjection(
+  entries: LiveEntry[],
+  sessionId: string,
+  sessionPath: string,
+  commandId: string,
+) {
+  return entries.map((entry) =>
+    entry.optimistic?.sessionId === sessionId &&
+    entry.optimistic.sessionPath === sessionPath &&
+    entry.optimistic.commandId === commandId &&
+    !entry.optimistic.admitted
+      ? { ...entry, optimistic: { ...entry.optimistic, admitted: true } }
+      : entry,
+  );
 }
 
 export interface PromptAdmissionRecovery {
@@ -80,6 +130,8 @@ export interface PromptAdmissionRecovery {
   content: string;
   commandId: string;
   optimisticKey: string;
+  afterEntryId?: string | null;
+  timestamp?: string;
   images?: readonly WebPromptImage[];
   phase: "checking" | "verification-failed" | "ready" | "submitting";
 }
@@ -123,6 +175,7 @@ export interface WebStoreState {
   modelSelectionPending: boolean;
   modelSearch: ModelSearchState;
   snapshot: WebSnapshot | null;
+  historyAnchor: WebHistoryAnchor | null;
   cursor: number | null;
   selectedPath: string | null;
   selectedWorkspace: string | null;
@@ -155,6 +208,12 @@ export interface WebStoreState {
 }
 
 export interface WebStoreActions {
+  setHistoryAnchor: (anchor: WebHistoryAnchor | null) => void;
+  rememberPromptProjection: (
+    sessionId: string,
+    sessionPath: string,
+    pairs: { key: string; entryId: string }[],
+  ) => void;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -241,6 +300,8 @@ export function createWebStore(
     images: readonly WebPromptImage[];
     commandId: string;
     optimisticKey: string;
+    afterEntryId: string | null;
+    timestamp: string;
   } | null = null;
   let sessionActivation: SessionActivation | null = null;
   let creationRetry: { workspacePath: string; commandId: string } | null = null;
@@ -335,6 +396,7 @@ export function createWebStore(
         target.epoch === sessionEpoch &&
         get().selectedWorkspace === target.workspacePath &&
         snapshot?.currentSessionId === target.sessionId &&
+        isControlledSession(snapshot) &&
         snapshot.selectedSession?.id === target.sessionId &&
         get().selectedPath === snapshot.selectedSession.path &&
         snapshot.selectedSession.cwd === target.workspacePath &&
@@ -577,7 +639,7 @@ export function createWebStore(
     };
 
     const applyRuntimeEvent = (event: WebEvent) => {
-      const current = get();
+      let current = get();
       const detail = event.detail ?? {};
       const eventSessionId = detail.sessionId;
       const sessionTransition = [
@@ -590,7 +652,16 @@ export function createWebStore(
 
       const recovery = current.promptAdmissionRecovery;
       const recoveryCommandId = recovery?.commandId;
+      const selected = current.snapshot?.selectedSession;
+      const matchesSelected =
+        selected?.id === eventSessionId &&
+        selected?.path === current.selectedPath &&
+        (detail.sessionPath === undefined ||
+          detail.sessionPath === selected?.path);
       if (
+        matchesSelected &&
+        recovery?.sessionId === selected?.id &&
+        recovery?.sessionPath === selected?.path &&
         typeof detail.commandId === "string" &&
         detail.commandId === recoveryCommandId &&
         [
@@ -617,16 +688,40 @@ export function createWebStore(
             !current.liveMessages.some(
               (entry) => entry.key === recovery.optimisticKey,
             )
-              ? [
+              ? trimLiveMessages([
                   ...current.liveMessages,
                   {
                     key: recovery.optimisticKey,
+                    timestamp: recovery.timestamp ?? event.timestamp,
+                    optimistic: {
+                      sessionId: recovery.sessionId,
+                      sessionPath: recovery.sessionPath,
+                      commandId: recovery.commandId,
+                      afterEntryId: recovery.afterEntryId ?? null,
+                      admitted: event.type === "prompt_accepted",
+                    },
                     message: { role: "user", content: recovery.content },
                   },
-                ].slice(-8)
+                ])
               : current.liveMessages,
         });
       }
+      if (
+        event.type === "prompt_accepted" &&
+        matchesSelected &&
+        selected &&
+        typeof detail.commandId === "string"
+      ) {
+        set({
+          liveMessages: admitPromptProjection(
+            get().liveMessages,
+            selected.id,
+            selected.path,
+            detail.commandId,
+          ),
+        });
+      }
+      current = get();
       if (event.type === "runtime_changed") set(resetModelSearch());
       if (event.type === "runtime_changed") clearCommandDiscovery();
 
@@ -640,6 +735,14 @@ export function createWebStore(
         !sessionTransition
       ) {
         scheduleSnapshotRefresh();
+        return;
+      }
+      if (
+        !sessionTransition &&
+        (detail.message || event.type.startsWith("tool_execution_")) &&
+        !isControlledSession(current.snapshot)
+      ) {
+        if (refreshEventTypes.has(event.type)) scheduleSnapshotRefresh();
         return;
       }
 
@@ -694,6 +797,30 @@ export function createWebStore(
         }
         if (belongs && sessionActivation?.epoch !== sessionEpoch) return;
         if (!belongs) {
+          if (
+            !sessionActivation &&
+            current.selectedPath &&
+            current.snapshot?.selectedSession?.path === current.selectedPath
+          ) {
+            clearCommandDiscovery();
+            resetThinking();
+            set({
+              ...resetLivePatch(),
+              liveMessages: ownPendingMessages(
+                current.liveMessages,
+                current.snapshot.selectedSession,
+              ),
+              sessionSwitching: true,
+              modelSelectionPending: false,
+            });
+            const epoch = sessionEpoch;
+            void get()
+              .actions.refreshSnapshot({ epoch })
+              .then(() => {
+                if (epoch === sessionEpoch) set({ sessionSwitching: false });
+              });
+            return;
+          }
           clearCommandDiscovery();
           const epoch = ++sessionEpoch;
           resetThinking();
@@ -724,7 +851,13 @@ export function createWebStore(
               });
             });
         } else {
-          set(resetLivePatch());
+          set({
+            ...resetLivePatch(),
+            liveMessages: ownPendingMessages(
+              current.liveMessages,
+              current.snapshot?.selectedSession,
+            ),
+          });
         }
       } else if (event.type === "prompt_accepted") {
         const settled = terminalPromptIds.has(String(detail.commandId ?? ""));
@@ -791,13 +924,6 @@ export function createWebStore(
       } else if (detail.message && typeof detail.message === "object") {
         const message = detail.message as WebLiveMessage;
         let liveMessages = current.liveMessages;
-        if (message.role === "user") {
-          liveMessages = liveMessages.filter(
-            (entry) =>
-              !entry.key.startsWith("optimistic-") ||
-              entry.message.content !== message.content,
-          );
-        }
         const key =
           typeof detail.messageKey === "string"
             ? detail.messageKey
@@ -809,7 +935,7 @@ export function createWebStore(
             ? liveMessages.map((entry, entryIndex) =>
                 entryIndex === index ? live : entry,
               )
-            : [...liveMessages, live].slice(-8);
+            : trimLiveMessages([...liveMessages, live]);
         const thinkingStarts = { ...current.thinkingStarts };
         const thinkingDurations = { ...current.thinkingDurations };
         if (message.parts?.some((part) => part.type === "thinking")) {
@@ -825,7 +951,9 @@ export function createWebStore(
         rememberBounded(terminalPromptIds, detail.commandId);
         set({
           liveMessages: get().liveMessages.filter(
-            (entry) => !entry.key.startsWith("optimistic-"),
+            (entry) =>
+              !entry.optimistic ||
+              entry.optimistic.commandId !== detail.commandId,
           ),
           liveRunning: false,
           livePhase: "idle",
@@ -898,6 +1026,68 @@ export function createWebStore(
     };
 
     const actions: WebStoreActions = {
+      rememberPromptProjection(sessionId, sessionPath, pairs) {
+        const current = get();
+        const selected = current.snapshot?.selectedSession;
+        if (
+          current.selectedPath !== sessionPath ||
+          selected?.id !== sessionId ||
+          selected.path !== sessionPath
+        )
+          return;
+        const nativeIds = new Set(selected.entries.map((entry) => entry.id));
+        const usedIds = new Set(
+          current.liveMessages.flatMap((entry) =>
+            entry.optimistic?.sessionId === sessionId &&
+            entry.optimistic.sessionPath === sessionPath &&
+            entry.optimistic.projectedEntryId
+              ? [entry.optimistic.projectedEntryId]
+              : [],
+          ),
+        );
+        const projections = new Map(
+          pairs.map((pair) => [pair.key, pair.entryId]),
+        );
+        let changed = false;
+        const liveMessages = current.liveMessages.map((entry) => {
+          const entryId = projections.get(entry.key);
+          if (
+            !entryId ||
+            !nativeIds.has(entryId) ||
+            usedIds.has(entryId) ||
+            entry.optimistic?.sessionId !== sessionId ||
+            entry.optimistic.sessionPath !== sessionPath ||
+            !entry.optimistic.admitted ||
+            entry.optimistic.projectedEntryId
+          )
+            return entry;
+          changed = true;
+          usedIds.add(entryId);
+          return {
+            ...entry,
+            optimistic: { ...entry.optimistic, projectedEntryId: entryId },
+            message: { role: "user", content: "" },
+          };
+        });
+        if (changed) set({ liveMessages });
+      },
+      setHistoryAnchor(anchor) {
+        const selected = get().snapshot?.selectedSession;
+        if (
+          anchor &&
+          (selected?.id !== anchor.sessionId ||
+            selected.path !== anchor.sessionPath)
+        )
+          return;
+        const current = get().historyAnchor;
+        if (
+          current?.entryId === anchor?.entryId &&
+          current?.sessionId === anchor?.sessionId &&
+          current?.sessionPath === anchor?.sessionPath
+        )
+          return;
+        set({ historyAnchor: anchor });
+      },
       start() {
         if (streamController) return;
         streamController = new AbortController();
@@ -916,27 +1106,40 @@ export function createWebStore(
         const generation = ++snapshotGeneration;
         const requestedPath = get().selectedPath;
         try {
-          const snapshot = await client.snapshot(requestedPath);
+          const anchor = get().historyAnchor;
+          const snapshot =
+            anchor && anchor.sessionPath === requestedPath
+              ? await client.snapshot(requestedPath, anchor)
+              : await client.snapshot(requestedPath);
           if (epoch !== sessionEpoch || generation !== snapshotGeneration)
             return false;
           const hasCurrent = typeof snapshot.currentSessionId === "string";
           const currentSession = hasCurrent
-            ? snapshot.sessions.find(
-                (session) =>
-                  session.id === snapshot.currentSessionId &&
-                  session.controller === "web",
+            ? snapshot.sessions.find((session) =>
+                isControlledSession(snapshot, session),
               )
             : undefined;
           const selectedIsCurrent = hasCurrent
-            ? snapshot.selectedSession?.id === snapshot.currentSessionId &&
-              snapshot.selectedSession?.path === currentSession?.path
+            ? isControlledSession(snapshot)
             : snapshot.selectedSession === undefined;
+          const selectedIsKnown = snapshot.selectedSession
+            ? snapshot.sessions.some(
+                (session) =>
+                  session.id === snapshot.selectedSession!.id &&
+                  session.path === snapshot.selectedSession!.path,
+              )
+            : !hasCurrent;
           const requestedExists =
             !requestedPath ||
             snapshot.sessions.some((session) => session.path === requestedPath);
           const requestedMatches =
             !requestedPath || snapshot.selectedSession?.path === requestedPath;
-          if (!requestedExists || !requestedMatches || !selectedIsCurrent) {
+          if (
+            !requestedExists ||
+            !requestedMatches ||
+            !selectedIsKnown ||
+            (!requestedPath && !selectedIsCurrent)
+          ) {
             set({ selectedPath: null });
             if (!options.canonicalRetry) {
               return actions.refreshSnapshot({
@@ -980,11 +1183,32 @@ export function createWebStore(
             clearThinkingGate();
           }
           const previousSessionId = get().snapshot?.currentSessionId;
-          if (previousSessionId !== snapshot.currentSessionId) {
+          const previousController = get().snapshot?.sessions.find((session) =>
+            isControlledSession(get().snapshot, session),
+          );
+          const controllerChanged =
+            previousSessionId !== snapshot.currentSessionId ||
+            previousController?.path !== currentSession?.path;
+          const selectionChanged =
+            get().snapshot?.selectedSession?.id !==
+              snapshot.selectedSession?.id ||
+            get().snapshot?.selectedSession?.path !==
+              snapshot.selectedSession?.path;
+          if (controllerChanged) {
             clearCommandDiscovery();
+            resetThinking();
+            clearThinkingGate();
           }
           set({
-            ...(shouldReset ? resetLivePatch() : {}),
+            ...(shouldReset || controllerChanged || selectionChanged
+              ? {
+                  ...resetLivePatch(),
+                  liveMessages: ownPendingMessages(
+                    get().liveMessages,
+                    snapshot.selectedSession,
+                  ),
+                }
+              : {}),
             connection:
               get().connection === "connecting"
                 ? "connecting"
@@ -1012,8 +1236,7 @@ export function createWebStore(
                 : !get().promptAdmissionPending && !promptAdmission
                   ? false
                   : get().liveRunning,
-            selectedPath:
-              currentSession?.path ?? snapshot.selectedSession?.path ?? null,
+            selectedPath: snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
             snapshot,
             ...resetModelSearch(),
@@ -1102,6 +1325,7 @@ export function createWebStore(
         const session = state.snapshot?.selectedSession;
         if (
           !state.workspaceDraft &&
+          isControlledSession(state.snapshot) &&
           session?.id === state.snapshot?.currentSessionId &&
           session?.cwd === workspace
         ) {
@@ -1112,6 +1336,7 @@ export function createWebStore(
             workspacePath: workspace,
           };
         }
+        if (!state.workspaceDraft && session) return null;
         return actions.createSession(workspace);
       },
       async createSession(workspacePath) {
@@ -1249,29 +1474,45 @@ export function createWebStore(
         if (!path) return;
         creationRetry = null;
         const current = get();
+        const sameView =
+          !current.workspaceDraft &&
+          current.selectedPath === path &&
+          current.snapshot?.selectedSession?.path === path;
         clearCommandDiscovery();
         set({
           ...resetModelSearch(),
           workspaceDraft: false,
-          draftModel: null,
-          createdSession: null,
+          ...(sameView ? {} : { draftModel: null, createdSession: null }),
           modelSelectionPending: false,
         });
-        const epoch = ++sessionEpoch;
+        const epoch = sameView ? sessionEpoch : ++sessionEpoch;
         resetThinking();
-        promptAdmissionToken = null;
-        promptAdmission = null;
+        if (!sameView) {
+          promptAdmissionToken = null;
+          promptAdmission = null;
+        }
         set({
           ...resetLivePatch(),
+          liveMessages: sameView
+            ? ownPendingMessages(
+                current.liveMessages,
+                current.snapshot?.selectedSession,
+              )
+            : [],
           mobileSidebarOpen: false,
-          promptAdmissionPending: false,
-          promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
+          promptAdmissionPending: sameView
+            ? current.promptAdmissionPending
+            : false,
+          promptAdmissionRecovery: sameView
+            ? current.promptAdmissionRecovery
+            : null,
+          promptAdmissionResolution:
+            !sameView && current.promptAdmissionRecovery
+              ? {
+                  commandId: current.promptAdmissionRecovery.commandId,
+                  content: current.promptAdmissionRecovery.content,
+                }
+              : current.promptAdmissionResolution,
           selectedPath: path,
           sessionSwitching: true,
         });
@@ -1281,12 +1522,12 @@ export function createWebStore(
           try {
             await client.selectSession(path);
             if (epoch !== sessionEpoch) return;
-            if (!(await actions.refreshSnapshot({ epoch }))) {
+            if (!(await actions.refreshSnapshot({ epoch })) && !sameView) {
               set({ selectedPath: null });
             }
           } catch (error) {
             if (epoch !== sessionEpoch) return;
-            set({ selectedPath: null });
+            if (!sameView) set({ selectedPath: null });
             showError(error);
             await actions.refreshSnapshot({ epoch });
           } finally {
@@ -1354,6 +1595,7 @@ export function createWebStore(
         if (
           !sessionId ||
           !state.selectedPath ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path
         )
@@ -1449,6 +1691,7 @@ export function createWebStore(
           state.modelSelectionPending ||
           state.workspaceDraft ||
           !sessionId ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.liveRunning ||
@@ -1463,7 +1706,12 @@ export function createWebStore(
       },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
-        if (!turn || get().turnCancellationPending || get().sessionSwitching)
+        if (
+          !turn ||
+          !isControlledSession(get().snapshot) ||
+          get().turnCancellationPending ||
+          get().sessionSwitching
+        )
           return;
         const epoch = sessionEpoch;
         set({ turnCancellationPending: true });
@@ -1569,6 +1817,14 @@ export function createWebStore(
         const optimisticKey = retrying
           ? promptAdmission!.optimisticKey
           : `optimistic-${commandId}`;
+        const timestamp = retrying
+          ? promptAdmission!.timestamp
+          : new Date().toISOString();
+        const afterEntryId = retrying
+          ? promptAdmission!.afterEntryId
+          : (get().snapshot?.selectedSession?.history?.leafEntryId ??
+            get().snapshot?.selectedSession?.entries.at(-1)?.id ??
+            null);
         promptAdmission = {
           sessionId,
           sessionPath,
@@ -1577,15 +1833,25 @@ export function createWebStore(
           images,
           commandId,
           optimisticKey,
+          timestamp,
+          afterEntryId,
         };
         promptAdmissionToken = admission;
         set({
           liveMessages: retrying
             ? get().liveMessages
-            : [
+            : trimLiveMessages([
                 ...get().liveMessages,
                 {
                   key: optimisticKey,
+                  timestamp,
+                  optimistic: {
+                    sessionId,
+                    sessionPath,
+                    commandId,
+                    afterEntryId,
+                    admitted: false,
+                  },
                   message: {
                     role: "user",
                     content,
@@ -1601,7 +1867,7 @@ export function createWebStore(
                       : {}),
                   },
                 },
-              ].slice(-8),
+              ]),
           notice: null,
           pendingFollowUpsReceipt: null,
           turnTerminalStatus: null,
@@ -1620,14 +1886,28 @@ export function createWebStore(
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
+            sessionId !== get().snapshot?.selectedSession?.id ||
             promptAdmissionToken !== admission
           )
             return false;
           const settled = terminalPromptIds.has(receipt.id);
           if (promptAdmission?.commandId === commandId) promptAdmission = null;
           set({
-            ...promptAcceptedLivePatch(settled, get().livePhase),
-            pendingFollowUpsReceipt: receipt.pendingFollowUps ?? null,
+            liveMessages:
+              receipt.accepted && receipt.id === commandId
+                ? admitPromptProjection(
+                    get().liveMessages,
+                    sessionId,
+                    sessionPath,
+                    commandId,
+                  )
+                : get().liveMessages,
+            ...(isControlledSession(get().snapshot)
+              ? promptAcceptedLivePatch(settled, get().livePhase)
+              : {}),
+            pendingFollowUpsReceipt: isControlledSession(get().snapshot)
+              ? (receipt.pendingFollowUps ?? null)
+              : null,
             ...(replacement &&
             get().promptAdmissionRecovery?.commandId === replacement.commandId
               ? { promptAdmissionRecovery: null }
@@ -1639,6 +1919,7 @@ export function createWebStore(
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
+            sessionId !== get().snapshot?.selectedSession?.id ||
             promptAdmissionToken !== admission
           )
             return false;
@@ -1791,6 +2072,7 @@ export function createWebStore(
         if (
           state.workspaceDraft ||
           !sessionId ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.sessionSwitching
@@ -1906,6 +2188,7 @@ export function createWebStore(
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
       snapshot: null,
+      historyAnchor: null,
       cursor: null,
       selectedPath: null,
       selectedWorkspace: null,

@@ -118,6 +118,7 @@ export async function installThinkingFixture(
       }
       const snapshot = structuredClone(baseSnapshot);
       snapshot.currentSessionId = MOCK_SESSION_ID;
+      snapshot.currentSessionPath = MOCK_SESSION_PATH;
       snapshot.sessions = [
         {
           id: MOCK_SESSION_ID,

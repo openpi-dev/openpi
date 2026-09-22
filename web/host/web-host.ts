@@ -1944,9 +1944,17 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/snapshot") {
+      const historyEntry = url.searchParams.get("historyAnchor");
+      const historySession = url.searchParams.get("historySessionId");
+      if ((historyEntry !== null || historySession !== null) &&
+        (!historyEntry || !historySession || historyEntry.length > 128 || historySession.length > 128 ||
+         /[\s\u0000-\u001f]/u.test(historyEntry) || url.searchParams.getAll("historyAnchor").length !== 1 ||
+         url.searchParams.getAll("historySessionId").length !== 1))
+        return this.json(response, 400, { error: "a bounded history Session and entry anchor are required" });
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
         url.searchParams.get("path") ?? undefined,
+        historyEntry && historySession ? { sessionId: historySession, entryId: historyEntry } : undefined,
       );
       const setup = loadSetupConfig();
       const snapshot: WebSnapshot = {
@@ -1971,11 +1979,30 @@ export class WebHost {
         snapshot.truncation.truncated = true;
         finalBytes = jsonByteLength(snapshot);
       }
+      while (finalBytes > WEB_MAX_SNAPSHOT_BYTES && snapshot.selectedExecution?.liveTools.length) {
+        snapshot.selectedExecution.liveTools = snapshot.selectedExecution.liveTools.slice(1);
+        snapshot.selectedExecution.liveToolsOmitted++;
+        snapshot.truncation.truncated = true;
+        finalBytes = jsonByteLength(snapshot);
+      }
       while (snapshot.truncation.bytes !== finalBytes) {
         snapshot.truncation.bytes = finalBytes;
         finalBytes = jsonByteLength(snapshot);
       }
       return this.json(response, 200, snapshot);
+    }
+    if (url.pathname === "/api/session/history") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const keys = ["sessionId", "path", "anchorEntryId", "beforeEntryId"] as const;
+      const values = keys.map((key) => url.searchParams.get(key));
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
+        keys.some((key, index) => url.searchParams.getAll(key).length !== 1 || !values[index] ||
+          values[index]!.length > (key === "path" ? 4096 : 128) || /[\u0000-\u001f]/u.test(values[index]!)))
+        return this.json(response, 400, { code: "INVALID_HISTORY_REQUEST", error: "an exact Session id, path and native entry boundaries are required" });
+      const page = await this.adapter.getSessionHistory(values[0]!, values[1]!, values[2]!, values[3]!);
+      if (page.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
+      if (page.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "The Session branch changed. Refresh the conversation before loading history." });
+      return this.json(response, 200, { session: page.session });
     }
     if (url.pathname === "/api/session") {
       const path = url.searchParams.get("path");

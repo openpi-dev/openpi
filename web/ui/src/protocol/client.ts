@@ -21,6 +21,8 @@ import {
   type WebPromptImage,
   type WebSettingsCatalog,
   type WebSnapshot,
+  type WebHistoryAnchor,
+  type WebSessionHistoryPage,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
@@ -146,9 +148,27 @@ export class WebClient {
     }
   }
 
-  snapshot(path?: string | null) {
-    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+  snapshot(path?: string | null, historyAnchor?: WebHistoryAnchor) {
+    const query = new URLSearchParams();
+    if (path) query.set("path", path);
+    if (historyAnchor && historyAnchor.sessionPath === path) {
+      query.set("historyAnchor", historyAnchor.entryId);
+      query.set("historySessionId", historyAnchor.sessionId);
+    }
+    const suffix = query.size ? `?${query}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
+  }
+
+  async sessionHistory(
+    anchor: WebHistoryAnchor,
+    beforeEntryId: string,
+    signal: AbortSignal,
+  ) {
+    const result = await this.request<{ session: WebSessionHistoryPage }>(
+      `/api/session/history?${new URLSearchParams({ sessionId: anchor.sessionId, path: anchor.sessionPath, anchorEntryId: anchor.entryId, beforeEntryId })}`,
+      { signal, timeoutMessage: "History request timed out. Please retry." },
+    );
+    return result.session;
   }
 
   gitReview(

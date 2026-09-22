@@ -23,6 +23,7 @@ function snapshot(message: ReturnType<typeof projectMessage>): WebSnapshot {
     cursor: 1,
     preferences: { theme: "system" },
     currentSessionId: "session",
+    currentSessionPath: "/tmp/session.jsonl",
     sessions: [],
     workspaces: [],
     models: [],

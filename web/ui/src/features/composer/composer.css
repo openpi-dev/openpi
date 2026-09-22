@@ -3,6 +3,8 @@
   border-radius: 8px;
 }
 
+.composer-toolbar[hidden] { display: none; }
+
 .composer.composer-m02.is-dragging {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent);

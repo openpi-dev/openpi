@@ -127,7 +127,9 @@ function SideConversationPanel({
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draft = drafts[selectedId ?? ""] ?? "";
+  const navigation = useRef(0);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [detailRevision, setDetailRevision] = useState(0);
@@ -139,6 +141,12 @@ function SideConversationPanel({
   const items = (activity?.items ?? []).filter((item) => item.origin === "btw");
   const selected = items.find((item) => item.id === selectedId);
   const status = selected?.status ?? lastStatus;
+  const selectConversation = (id: string | null) => {
+    navigation.current++;
+    setSelectedId(id);
+    setLastStatus(null);
+    setError(null);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
@@ -146,6 +154,8 @@ function SideConversationPanel({
     if (!text || busy) return;
     abort.current?.abort();
     const controller = new AbortController();
+    const generation = navigation.current;
+    const draftKey = selectedId ?? "";
     abort.current = controller;
     setBusy(true);
     setError(null);
@@ -163,14 +173,20 @@ function SideConversationPanel({
         controller.signal,
       );
       if (controller.signal.aborted) return;
-      if (response.sessionId !== sessionId)
+      if (
+        response.sessionId !== sessionId ||
+        (selectedId && response.detail.id !== selectedId)
+      )
         throw new Error(t("inspectionChanged"));
+      setDrafts((current) =>
+        current[draftKey] === draft ? { ...current, [draftKey]: "" } : current,
+      );
+      if (generation !== navigation.current) return;
       setSelectedId(response.detail.id);
       setLastStatus(response.detail.status);
-      setDraft("");
       setDetailRevision((value) => value + 1);
     } catch (caught) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && generation === navigation.current)
         setError(
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
@@ -183,6 +199,7 @@ function SideConversationPanel({
     if (!selectedId || busy) return;
     abort.current?.abort();
     const controller = new AbortController();
+    const generation = navigation.current;
     abort.current = controller;
     setBusy(true);
     setError(null);
@@ -192,10 +209,14 @@ function SideConversationPanel({
         { kind: "subagents", action: "cancel-btw", id: selectedId },
         controller.signal,
       );
+      if (controller.signal.aborted || generation !== navigation.current)
+        return;
+      if (response.sessionId !== sessionId || response.detail.id !== selectedId)
+        throw new Error(t("inspectionChanged"));
       setLastStatus(response.detail.status);
       setDetailRevision((value) => value + 1);
     } catch (caught) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && generation === navigation.current)
         setError(
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
@@ -211,11 +232,7 @@ function SideConversationPanel({
           <button
             type="button"
             className="workbar-back"
-            onClick={() => {
-              setSelectedId(null);
-              setLastStatus(null);
-              setError(null);
-            }}
+            onClick={() => selectConversation(null)}
           >
             <ArrowLeft aria-hidden="true" /> {t("backToSideConversations")}
           </button>
@@ -242,7 +259,10 @@ function SideConversationPanel({
             <ul>
               {items.map((item) => (
                 <li key={item.id}>
-                  <button type="button" onClick={() => setSelectedId(item.id)}>
+                  <button
+                    type="button"
+                    onClick={() => selectConversation(item.id)}
+                  >
                     <span>
                       <strong>{item.title || item.id}</strong>
                       <small>{t(`subagentState_${item.status}`)}</small>
@@ -273,7 +293,10 @@ function SideConversationPanel({
               ? t("continueSideConversation")
               : t("startSideConversation")
           }
-          onChange={(event) => setDraft(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setDrafts((current) => ({ ...current, [selectedId ?? ""]: value }));
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&
@@ -427,6 +450,8 @@ export function WorkbarPanel({
   onBeforeArtifactOpen,
   onClose,
   onActiveToolChange,
+  canControl = true,
+  onActivateSession,
 }: {
   visible: boolean;
   requestedTool: WorkbarTool;
@@ -442,6 +467,8 @@ export function WorkbarPanel({
   onBeforeArtifactOpen: () => void;
   onClose: () => void;
   onActiveToolChange?: (tool: WorkbarTool | null) => void;
+  canControl?: boolean;
+  onActivateSession?: () => void;
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useState(() => initialWorkbarTabs(requestedTool));
@@ -592,7 +619,21 @@ export function WorkbarPanel({
             hidden={tabs.launcherOpen || tabs.active !== tool}
             key={tool}
           >
-            {tool === "side-conversation" ? (
+            {!canControl &&
+            ["side-conversation", "terminal", "browser"].includes(tool) ? (
+              <div className="workbar-empty">
+                <p>{t("toolsRequireCurrentSession")}</p>
+                {onActivateSession && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={onActivateSession}
+                  >
+                    {t("activateViewedSession")}
+                  </button>
+                )}
+              </div>
+            ) : tool === "side-conversation" ? (
               <SideConversationPanel
                 sessionId={sessionId}
                 active={visible && !tabs.launcherOpen && tabs.active === tool}

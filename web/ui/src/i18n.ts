@@ -6,6 +6,18 @@ const resources = {
     translation: {
       conversationView: "Conversation view",
       jumpToLatest: "Jump to latest",
+      historyLoadOlder: "Load earlier messages",
+      historyLoading: "Loading history…",
+      historyStart: "Beginning of conversation",
+      historyOmitted: "{{count}} earlier entries",
+      historyChanged:
+        "The Session branch changed. History has been reset to the current branch.",
+      historyUnavailable: "Could not load history. Please retry.",
+      historyValidationUnavailable:
+        "Could not verify the conversation history. Please retry.",
+      historyVerifying: "Checking conversation history…",
+      historyContentTruncated:
+        "Some message contents exceed the preview limit and are truncated.",
       filePreview: "File preview",
       changeEvidence: "Changes",
       changeEvidenceScope:
@@ -526,6 +538,12 @@ const resources = {
       stoppingTurn: "Stopping current turn…",
       stoppedTurn: "Current turn stopped.",
       pendingFollowUpsHint: "{{count}} messages queued",
+      backgroundSessionRunning: "This session is running in the background…",
+      toolsRequireCurrentSession:
+        "Switch to this session to use interactive tools.",
+      activateViewedSession: "Switch to this session",
+      activateViewedSessionHint:
+        "Switch to this session to continue the conversation.",
       addWorkspace: "Add workspace",
       addWorkspaceMenu: "Add workspace...",
       archiveConversation: "Archive conversation",
@@ -674,6 +692,15 @@ const resources = {
     translation: {
       conversationView: "会话视图",
       jumpToLatest: "跳至最新",
+      historyLoadOlder: "加载更早的消息",
+      historyLoading: "正在加载历史…",
+      historyStart: "已到会话开头",
+      historyOmitted: "还有 {{count}} 条较早记录",
+      historyChanged: "会话分支已更改，已切换到当前分支的历史。",
+      historyUnavailable: "历史记录加载失败，请重试。",
+      historyValidationUnavailable: "无法校验会话历史，请重试。",
+      historyVerifying: "正在校验会话历史…",
+      historyContentTruncated: "部分消息内容超出预览上限，当前显示截断预览。",
       filePreview: "文件预览",
       changeEvidence: "变更",
       changeEvidenceScope: "按所选范围查看当前工作目录的只读 Git 变更。",
@@ -1150,6 +1177,10 @@ const resources = {
       stoppingTurn: "正在停止当前轮次…",
       stoppedTurn: "当前轮次已停止。",
       pendingFollowUpsHint: "{{count}} 条消息正在排队",
+      backgroundSessionRunning: "此会话正在后台运行…",
+      toolsRequireCurrentSession: "切换到此会话后可使用交互工具。",
+      activateViewedSession: "切换到此会话",
+      activateViewedSessionHint: "切换到此会话后可继续对话。",
       acceptedHint: "OpenPI Web 已接收消息。",
       promptAdmissionUnknown: "无法确认上次发送的消息是否已被接收。",
       promptAdmissionUnknownDetail:

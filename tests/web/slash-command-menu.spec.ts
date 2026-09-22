@@ -75,6 +75,7 @@ function snapshot(): WebSnapshot {
     generatedAt: "2026-09-09T00:00:00Z",
     cursor: 1,
     currentSessionId: "session-1",
+    currentSessionPath: "/tmp/workspace/session.jsonl",
     workspaces: [{ path: "/tmp/workspace", name: "Workspace", current: true }],
     sessions: [],
     selectedSession: {

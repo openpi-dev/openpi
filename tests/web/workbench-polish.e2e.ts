@@ -40,6 +40,15 @@ test("long session titles stay compact and elapsed time survives refresh with co
             elapsedMs: 2142000,
           },
     };
+    value.selectedExecution = {
+      sessionId: session.id,
+      sessionPath: session.path,
+      status: value.runtime.status,
+      activeTurn: value.runtime.activeTurn,
+      pendingFollowUps: 0,
+      liveTools: [],
+      liveToolsOmitted: 0,
+    };
     session.entries = [
       {
         id: "question-previous",

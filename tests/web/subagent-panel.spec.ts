@@ -375,6 +375,7 @@ function snapshot(): WebSnapshot {
     generatedAt: "2026-09-18T00:00:00Z",
     cursor: 1,
     currentSessionId: "session-a",
+    currentSessionPath: "/workspace/session.jsonl",
     workspaces: [],
     sessions: [],
     models: [],
@@ -608,6 +609,7 @@ it.each([true, false])(
 it("does not borrow a current Session child's status for the same ID in historical conversation", () => {
   const value = snapshot();
   value.currentSessionId = "different-active-parent";
+  value.currentSessionPath = "/workspace/different-parent.jsonl";
   const inspect = vi.fn();
   const view = render(
     createElement(

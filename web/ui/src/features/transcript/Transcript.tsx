@@ -34,9 +34,11 @@ import type {
   WebLiveMessage,
   WebMessagePart,
   WebSnapshot,
+  WebHistoryAnchor,
 } from "../../../../protocol/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
+import { isControlledSession } from "../../lib/session-control.ts";
 import {
   compactSummary,
   formatElapsedMs,
@@ -47,6 +49,7 @@ import type { LiveEntry } from "../../store/web-store.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
+import { useSessionHistory } from "./use-session-history.ts";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -56,6 +59,7 @@ interface DisplayEntry {
   timestamp?: string;
   message: WebLiveMessage;
   timing?: WebTurnTiming;
+  optimistic?: LiveEntry["optimistic"];
 }
 
 interface TranscriptProps {
@@ -69,6 +73,13 @@ interface TranscriptProps {
   scrollToBottom: number;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
+  onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
+  onRefreshHistory?: () => Promise<boolean>;
+  onPromptProjection?: (
+    sessionId: string,
+    sessionPath: string,
+    pairs: { key: string; entryId: string }[],
+  ) => void;
 }
 
 function UserImageAttachments({ message }: { message: WebLiveMessage }) {
@@ -116,6 +127,8 @@ interface RenderRow {
   processStatus?: Status;
   error?: boolean;
   outcome?: "failed" | "interrupted";
+  pendingPrompt?: boolean;
+  promptCommandId?: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -731,10 +744,7 @@ function setupDisplayMessage(message: WebLiveMessage) {
   };
 }
 
-function buildEntries(
-  snapshot: WebSnapshot,
-  liveMessages: LiveEntry[],
-): DisplayEntry[] {
+function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
   const persisted = snapshot.selectedSession?.entries ?? [];
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] =>
     "turnTiming" in entry &&
@@ -762,16 +772,50 @@ function buildEntries(
     JSON.stringify([
       message.role,
       message.content,
-      message.parts?.map((part) =>
-        part.type === "image"
-          ? [part.type, part.mimeType, part.name]
-          : part.type,
-      ),
+      (message.parts ?? [])
+        .filter((part) => message.role !== "user" || part.type !== "text")
+        .map((part) =>
+          part.type === "image"
+            ? [part.type, part.mimeType, part.name]
+            : part.type,
+        ),
       message.stopReason,
       message.errorMessage,
       message.toolCallId,
     ]);
   const signatures = new Set(entries.map((entry) => signature(entry.message)));
+  const persistedPositions = new Map(
+    persisted.map((entry, index) => [entry.id, index]),
+  );
+  const promptCandidates = entries
+    .filter((entry) => entry.message.role === "user")
+    .map((entry) => ({
+      key: entry.key,
+      position: persistedPositions.get(entry.key),
+      signature: signature(entry.message),
+    }));
+  const acknowledgedPrompts = new Set(
+    liveMessages.flatMap((entry) =>
+      entry.optimistic?.projectedEntryId
+        ? [entry.optimistic.projectedEntryId]
+        : [],
+    ),
+  );
+  const projectedPrompts: { key: string; entryId: string }[] = [];
+  const pendingPrompts: DisplayEntry[] = [];
+  const execution =
+    snapshot.selectedExecution?.sessionId === snapshot.selectedSession?.id &&
+    snapshot.selectedExecution?.sessionPath === snapshot.selectedSession?.path
+      ? snapshot.selectedExecution
+      : undefined;
+  const queued = execution?.pendingFollowUps ?? 0;
+  const mergeLimit = Math.max(
+    0,
+    liveMessages.filter(
+      (entry) =>
+        entry.optimistic?.admitted && !entry.optimistic.projectedEntryId,
+    ).length - queued,
+  );
   const persistedToolIds = new Set(
     entries.flatMap((entry) =>
       entry.message.role === "toolResult" && entry.message.toolCallId
@@ -780,20 +824,50 @@ function buildEntries(
     ),
   );
   for (const live of liveMessages) {
+    if (live.optimistic?.projectedEntryId) continue;
     const message = setupDisplayMessage(live.message);
-    if (
+    const messageSignature = signature(message);
+    if (message.role === "user" && live.optimistic) {
+      // This only merges duplicate presentation; it is not a delivery receipt.
+      const after =
+        live.optimistic.afterEntryId === null
+          ? -1
+          : persistedPositions.get(live.optimistic.afterEntryId);
+      const acknowledgement =
+        !live.optimistic.admitted ||
+        after === undefined ||
+        projectedPrompts.length >= mergeLimit
+          ? undefined
+          : promptCandidates.find((entry) => {
+              const position = entry.position;
+              return (
+                position !== undefined &&
+                position > after &&
+                !acknowledgedPrompts.has(entry.key) &&
+                entry.signature === messageSignature
+              );
+            });
+      if (acknowledgement) {
+        acknowledgedPrompts.add(acknowledgement.key);
+        projectedPrompts.push({ key: live.key, entryId: acknowledgement.key });
+        continue;
+      }
+    } else if (
       message.role === "toolResult" && message.toolCallId
         ? persistedToolIds.has(message.toolCallId)
-        : signatures.has(signature(message))
+        : signatures.has(messageSignature)
     )
       continue;
-    entries.push({
+    const next: DisplayEntry = {
       key: live.key,
-      timestamp: new Date().toISOString(),
+      timestamp: live.timestamp ?? new Date().toISOString(),
       message,
-    });
+      optimistic: live.optimistic,
+    };
+    if (message.role === "user" && live.optimistic) pendingPrompts.push(next);
+    else entries.push(next);
   }
-  return entries;
+  return { entries: [...entries, ...pendingPrompts], projectedPrompts };
 }
 
 function ProcessSequence({
@@ -834,6 +908,7 @@ function ProcessSequence({
       open={open}
       data-status={status}
       data-running={active ? "true" : undefined}
+      data-history-entry={rows[0]?.key}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
       <summary>
@@ -962,6 +1037,7 @@ function renderTurns(
   rows: RenderRow[],
   running: boolean,
   expandProcesses: boolean,
+  activeCommandId?: string,
 ) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -969,14 +1045,29 @@ function renderTurns(
     if (current?.id === row.turn) current.rows.push(row);
     else turns.push({ id: row.turn, rows: [row] });
   }
-  const lastTurn = turns.at(-1)?.id;
+  const confirmedTurn = activeCommandId
+    ? turns.find((turn) =>
+        turn.rows.some((row) => row.promptCommandId === activeCommandId),
+      )
+    : undefined;
+  let nativeTurnIndex = turns.length - 1;
+  while (
+    nativeTurnIndex >= 0 &&
+    turns[nativeTurnIndex]!.id !== 0 &&
+    !turns[nativeTurnIndex]!.rows.some(
+      (row) => row.kind === "prompt" && !row.pendingPrompt,
+    )
+  ) {
+    nativeTurnIndex--;
+  }
+  const activeTurn = confirmedTurn?.id ?? turns[nativeTurnIndex]?.id;
   return turns.map((turn) => (
     <ConversationTurn
       id={turn.id}
       rows={turn.rows}
-      active={running && turn.id === lastTurn}
+      active={running && turn.id === activeTurn}
       expandProcesses={expandProcesses}
-      key={`turn-group-${turn.id}-${turn.rows[0]?.key}`}
+      key={`turn-group-${turn.rows[0]?.key}`}
     />
   ));
 }
@@ -988,12 +1079,67 @@ export function Transcript(props: TranscriptProps) {
   const [readingHistory, setReadingHistory] = useState(false);
   const lastPath = useRef<string | undefined>(undefined);
   const lastScrollRequest = useRef(props.scrollToBottom);
-  const entries = useMemo(
-    () => buildEntries(props.snapshot, props.liveMessages),
-    [props.snapshot, props.liveMessages],
+  const prependAnchor = useRef<{
+    key?: string;
+    offset: number;
+    scrollTop: number;
+    scrollHeight: number;
+  } | null>(null);
+  const history = useSessionHistory(props.snapshot.selectedSession, {
+    onAnchorChange: props.onHistoryAnchorChange,
+    onRefresh: props.onRefreshHistory,
+    beforePrepend: () => {
+      const element = viewport.current;
+      if (!element) return;
+      const top = element.getBoundingClientRect().top;
+      const anchor = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+      ).find((item) => {
+        const bounds = item.getBoundingClientRect();
+        return bounds.height > 0 && bounds.bottom > top;
+      });
+      prependAnchor.current = {
+        key: anchor?.dataset.historyEntry,
+        offset: (anchor?.getBoundingClientRect().top ?? top) - top,
+        scrollTop: element.scrollTop,
+        scrollHeight: element.scrollHeight,
+      };
+      pinned.current = false;
+    },
+  });
+  const selected = history.session;
+  const lastHistoryReset = useRef(history.reset);
+  const historyPaused = history.hasNewer || history.verifying;
+  const active = isControlledSession(props.snapshot, selected);
+  const selectedExecution =
+    props.snapshot.selectedExecution?.sessionId === selected?.id &&
+    props.snapshot.selectedExecution?.sessionPath === selected?.path
+      ? props.snapshot.selectedExecution
+      : undefined;
+  const running =
+    (active && props.liveRunning) ||
+    (selectedExecution
+      ? selectedExecution.status === "running"
+      : active && props.snapshot.runtime.status === "running");
+  const { entries, projectedPrompts } = useMemo(
+    () =>
+      buildEntries(
+        { ...props.snapshot, selectedSession: selected },
+        historyPaused
+          ? []
+          : props.liveMessages.filter((entry) =>
+              entry.optimistic
+                ? entry.optimistic.sessionId === selected?.id &&
+                  entry.optimistic.sessionPath === selected?.path
+                : active,
+            ),
+      ),
+    [props.snapshot, selected, active, historyPaused, props.liveMessages],
   );
-  const selected = props.snapshot.selectedSession;
-  const active = selected?.id === props.snapshot.currentSessionId;
+  useEffect(() => {
+    if (selected && projectedPrompts.length > 0)
+      props.onPromptProjection?.(selected.id, selected.path, projectedPrompts);
+  }, [selected, projectedPrompts, props.onPromptProjection]);
 
   useEffect(() => {
     const element = viewport.current;
@@ -1016,7 +1162,10 @@ export function Transcript(props: TranscriptProps) {
     const results = new Map<string, WebLiveMessage>();
     const familyIds = new Set<string>();
     const specializedIds = new Set<string>();
-    const liveTools = props.snapshot.runtime.liveTools ?? [];
+    const liveTools = historyPaused
+      ? []
+      : (selectedExecution?.liveTools ??
+        (active ? (props.snapshot.runtime.liveTools ?? []) : []));
     entries.forEach(({ message }) => {
       if (message.role === "toolResult" && message.toolCallId)
         results.set(message.toolCallId, message);
@@ -1116,7 +1265,10 @@ export function Transcript(props: TranscriptProps) {
             turn,
             kind: "custom",
             content: (
-              <article className="message-row assistant detail-only">
+              <article
+                className="message-row assistant detail-only"
+                data-history-entry={entry.key}
+              >
                 <div className="message-content">
                   <CustomResult message={message} />
                 </div>
@@ -1139,8 +1291,14 @@ export function Transcript(props: TranscriptProps) {
             key: entry.key,
             turn,
             kind: "prompt",
+            pendingPrompt: Boolean(entry.optimistic),
+            promptCommandId: entry.optimistic?.commandId,
             content: (
-              <article className="message-row user" id={`turn-${turn}`}>
+              <article
+                className="message-row user"
+                id={`turn-${turn}`}
+                data-history-entry={entry.key}
+              >
                 <div className="message-content">
                   <UserImageAttachments message={message} />
                   {message.content && (
@@ -1149,7 +1307,12 @@ export function Transcript(props: TranscriptProps) {
                 </div>
                 <MessageActions
                   content={message.content}
-                  editable={active && index === lastUserIndex && !hasImages}
+                  editable={
+                    active &&
+                    !historyPaused &&
+                    index === lastUserIndex &&
+                    !hasImages
+                  }
                   timestamp={entry.timestamp}
                   onResend={props.onResend}
                 />
@@ -1163,7 +1326,7 @@ export function Transcript(props: TranscriptProps) {
         message.parts?.forEach((part, partIndex) => {
           if (part.type === "thinking") {
             const isLive =
-              active && props.liveRunning && index === entries.length - 1;
+              !historyPaused && running && index === entries.length - 1;
             detailRows.push({
               key: `${entry.key}-thinking-${partIndex}`,
               turn,
@@ -1265,6 +1428,7 @@ export function Transcript(props: TranscriptProps) {
             content: (
               <article
                 className={`message-row assistant response${lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+                data-history-entry={`${entry.key}-answer`}
               >
                 <div className="message-content">
                   <Markdown>{message.content}</Markdown>
@@ -1299,11 +1463,7 @@ export function Transcript(props: TranscriptProps) {
                   failed={failed}
                   error={message.errorMessage}
                   retryPrompt={retryPrompt}
-                  canRetry={
-                    active &&
-                    !props.liveRunning &&
-                    props.snapshot.runtime.status !== "running"
-                  }
+                  canRetry={active && !historyPaused && !running}
                   onRetry={props.onResend}
                 />
               </article>
@@ -1377,13 +1537,14 @@ export function Transcript(props: TranscriptProps) {
     return { rows: rendered, turns: turnItems };
   }, [
     active,
+    running,
+    selectedExecution,
+    historyPaused,
     entries,
-    props.liveRunning,
     props.onResend,
     props.onInspectSubagent,
     props.snapshot.runtime.capabilities.subagents,
     props.snapshot.preferences.expandThinking,
-    props.snapshot.runtime.status,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.snapshot.runtime.liveTools,
@@ -1396,9 +1557,42 @@ export function Transcript(props: TranscriptProps) {
     void entries;
     const element = viewport.current;
     if (!element || !selected) return;
-    const changed = lastPath.current !== selected.path;
+    const identity = JSON.stringify([selected.id, selected.path]);
+    const changed =
+      lastPath.current !== identity ||
+      lastHistoryReset.current !== history.reset;
+    lastHistoryReset.current = history.reset;
     const requested = lastScrollRequest.current !== props.scrollToBottom;
     lastScrollRequest.current = props.scrollToBottom;
+    if (requested && history.engaged) {
+      prependAnchor.current = null;
+      history.resetToLatest();
+      return;
+    }
+    const saved = prependAnchor.current;
+    prependAnchor.current = null;
+    if (saved && !changed && !requested) {
+      const anchor = Array.from(
+        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+      ).find(
+        (item) =>
+          item.dataset.historyEntry === saved.key &&
+          item.getBoundingClientRect().height > 0,
+      );
+      const top = anchor
+        ? element.scrollTop +
+          anchor.getBoundingClientRect().top -
+          element.getBoundingClientRect().top -
+          saved.offset
+        : saved.scrollTop + element.scrollHeight - saved.scrollHeight;
+      if (typeof element.scrollTo === "function")
+        element.scrollTo({ top, behavior: "instant" });
+      else element.scrollTop = top;
+      pinned.current = false;
+      setReadingHistory(true);
+      lastPath.current = identity;
+      return;
+    }
     if (changed || requested || pinned.current) {
       pinned.current = true;
       setReadingHistory(false);
@@ -1408,18 +1602,28 @@ export function Transcript(props: TranscriptProps) {
         element.scrollTop = element.scrollHeight;
       }
     }
-    lastPath.current = selected.path;
-  }, [selected, entries, props.scrollToBottom]);
+    lastPath.current = identity;
+  }, [
+    selected,
+    entries,
+    history.reset,
+    history.engaged,
+    history.resetToLatest,
+    props.scrollToBottom,
+  ]);
 
-  const running =
-    active &&
-    (props.snapshot.runtime.status === "running" || props.liveRunning);
-  const runningLabel = props.liveRetry
-    ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
-    : props.livePhase === "preparing"
-      ? t("modelPreparing")
-      : t("modelRunning");
-  const activeTurn = props.snapshot.runtime.activeTurn;
+  const runningLabel = !active
+    ? t("backgroundSessionRunning")
+    : props.liveRetry
+      ? `${t("modelRetrying")} (${props.liveRetry.attempt}/${props.liveRetry.maxAttempts})`
+      : props.livePhase === "preparing"
+        ? t("modelPreparing")
+        : t("modelRunning");
+  const activeTurn = selectedExecution
+    ? selectedExecution.activeTurn
+    : active
+      ? props.snapshot.runtime.activeTurn
+      : undefined;
   const timedTurn =
     running &&
     activeTurn &&
@@ -1449,10 +1653,57 @@ export function Transcript(props: TranscriptProps) {
           setReadingHistory(!pinned.current);
         }}
       >
+        {(history.hasMore ||
+          history.engaged ||
+          history.error ||
+          (selected?.truncation.messagesTruncated ?? 0) > 0) && (
+          <div className="conversation-history">
+            {(selected?.truncation.messagesTruncated ?? 0) > 0 && (
+              <p>{t("historyContentTruncated")}</p>
+            )}
+            {history.error && <p role="alert">{t(history.error)}</p>}
+            {history.error &&
+              history.error !== "historyChanged" &&
+              !history.hasMore && (
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t("retryAdmissionCheck")}
+                </button>
+              )}
+            {history.verifying && !history.error && (
+              <p role="status">{t("historyVerifying")}</p>
+            )}
+            {history.hasMore ? (
+              <>
+                <span>
+                  {t("historyOmitted", {
+                    count: selected?.truncation.entriesOmitted ?? 0,
+                  })}
+                </span>
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={
+                    history.loading || (history.verifying && !history.error)
+                  }
+                  onClick={() => void history.loadOlder()}
+                >
+                  {t(history.loading ? "historyLoading" : "historyLoadOlder")}
+                </button>
+              </>
+            ) : (
+              history.engaged && <span>{t("historyStart")}</span>
+            )}
+          </div>
+        )}
         {renderTurns(
           rows,
-          running,
+          running && !historyPaused,
           props.snapshot.preferences.expandThinking === true,
+          activeTurn?.commandId,
         )}
         {running && (
           <div
@@ -1462,6 +1713,13 @@ export function Transcript(props: TranscriptProps) {
           >
             <span className="conversation-running-dot" />
             <span>{runningLabel}</span>
+            {(selectedExecution?.pendingFollowUps ?? 0) > 0 && (
+              <span>
+                {t("pendingFollowUpsHint", {
+                  count: selectedExecution!.pendingFollowUps,
+                })}
+              </span>
+            )}
             {timedTurn && (
               <RunningTurnElapsed
                 key={JSON.stringify([
@@ -1477,7 +1735,7 @@ export function Transcript(props: TranscriptProps) {
           </div>
         )}
       </div>
-      {readingHistory && rows.length > 0 && (
+      {(readingHistory || history.hasNewer) && rows.length > 0 && (
         <button
           className="jump-to-latest"
           type="button"
@@ -1486,6 +1744,7 @@ export function Transcript(props: TranscriptProps) {
             if (!element) return;
             pinned.current = true;
             setReadingHistory(false);
+            history.resetToLatest();
             element.scrollTo({ top: element.scrollHeight, behavior: "smooth" });
           }}
         >

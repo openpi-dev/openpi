@@ -32,6 +32,7 @@ import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
 import { sessionTitle, workspaceName } from "../lib/format.ts";
+import { isControlledSession } from "../lib/session-control.ts";
 import { webStore } from "../store/web-store.ts";
 
 const SIDEBAR_DEFAULT_WIDTH = 280;
@@ -166,7 +167,7 @@ export function App() {
       !snapshot ||
       !session ||
       state.sessionSwitching ||
-      session.id !== snapshot.currentSessionId
+      !isControlledSession(snapshot, session)
     )
       return;
     workbarReturnFocus.current = null;
@@ -184,7 +185,10 @@ export function App() {
     inspection &&
     !state.workspaceDraft &&
     !state.sessionSwitching &&
-    inspection.sessionId === state.snapshot?.currentSessionId &&
+    isControlledSession(state.snapshot, {
+      id: inspection.sessionId,
+      path: inspection.sessionPath,
+    }) &&
     inspection.sessionPath === state.snapshot?.selectedSession?.path &&
     inspection.modelKey === modelKey;
   useEffect(() => {
@@ -203,7 +207,10 @@ export function App() {
     providerSettings &&
     !state.workspaceDraft &&
     !state.sessionSwitching &&
-    providerSettings.sessionId === state.snapshot?.currentSessionId &&
+    isControlledSession(state.snapshot, {
+      id: providerSettings.sessionId,
+      path: providerSettings.sessionPath,
+    }) &&
     providerSettings.sessionPath === state.snapshot?.selectedSession?.path;
   useEffect(() => {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
@@ -222,8 +229,9 @@ export function App() {
       current.workspaceDraft ||
       !session ||
       current.sessionSwitching ||
-      session.id !== snapshot.currentSessionId ||
-      session.id !== target.sessionId
+      !isControlledSession(snapshot, session) ||
+      session.id !== target.sessionId ||
+      session.path !== target.sessionPath
     )
       return;
     actions.closeMobileSidebar();
@@ -316,7 +324,7 @@ export function App() {
   const workbarBound = Boolean(
     workbarTarget &&
       selected &&
-      !state.sessionSwitching &&
+      state.selectedPath === selected.path &&
       workbarTarget.sessionId === selected.id &&
       workbarTarget.sessionPath === selected.path,
   );
@@ -434,7 +442,9 @@ export function App() {
   const hasMessages =
     selected?.entries.some(
       (entry) => entry.type === "message" && entry.message,
-    ) || state.liveMessages.length > 0;
+    ) ||
+    Boolean(selected?.history?.beforeEntryId) ||
+    state.liveMessages.length > 0;
   const landing =
     !loading && !state.sessionSwitching && (!selected || !hasMessages);
   const resend = useCallback(
@@ -464,11 +474,11 @@ export function App() {
             setWorkbarOpen(false);
             setInspection(null);
           }}
-          onClose={() => {
+          onClose={(reason) => {
             setArtifactPanelOpen(false);
             const target = artifactReturn.current;
             artifactReturn.current = null;
-            if (target) openWorkbar(target);
+            if (reason === "user" && target) openWorkbar(target);
           }}
         >
           <SessionSidebar
@@ -621,6 +631,9 @@ export function App() {
                 scrollToBottom={state.scrollToBottom}
                 onResend={resend}
                 onInspectSubagent={inspectSubagent}
+                onHistoryAnchorChange={actions.setHistoryAnchor}
+                onRefreshHistory={actions.refreshSnapshot}
+                onPromptProjection={actions.rememberPromptProjection}
               />
             ) : null}
             {state.snapshot && (
@@ -707,7 +720,10 @@ export function App() {
               sessionId={subagentTarget.sessionId}
               initialId={subagentTarget.id}
               activity={
-                subagentTarget.sessionId === state.snapshot?.currentSessionId
+                isControlledSession(state.snapshot, {
+                  id: subagentTarget.sessionId,
+                  path: subagentTarget.sessionPath,
+                })
                   ? state.snapshot?.runtime.capabilities.subagents
                   : undefined
               }
@@ -716,9 +732,10 @@ export function App() {
                   (entry) => (entry.message ? [entry.message] : []),
                 ),
               )}
-              liveAvailable={
-                subagentTarget.sessionId === state.snapshot?.currentSessionId
-              }
+              liveAvailable={isControlledSession(state.snapshot, {
+                id: subagentTarget.sessionId,
+                path: subagentTarget.sessionPath,
+              })}
               onClose={() => setSubagentTarget(null)}
             />
           )}
@@ -729,8 +746,19 @@ export function App() {
               requestedTool={workbarTarget.tool}
               requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
+              canControl={
+                !state.sessionSwitching &&
+                isControlledSession(state.snapshot, selected)
+              }
+              onActivateSession={() =>
+                void actions.selectSession(selected.path)
+              }
               cwd={selected.cwd}
-              capabilities={state.snapshot?.runtime.capabilities ?? {}}
+              capabilities={
+                isControlledSession(state.snapshot, selected)
+                  ? (state.snapshot?.runtime.capabilities ?? {})
+                  : {}
+              }
               messages={workbarMessages}
               onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}

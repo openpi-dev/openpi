@@ -1,6 +1,13 @@
 // @vitest-environment jsdom
 
-import { act, cleanup, render, waitFor } from "@testing-library/react";
+import {
+  act,
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, expect, it, vi } from "vitest";
@@ -14,11 +21,20 @@ vi.mock("@xterm/xterm", () => ({
     cols = 80;
     rows = 24;
     options = { disableStdin: true };
+    textarea?: HTMLTextAreaElement;
     loadAddon() {}
-    open() {}
+    open(host: HTMLElement) {
+      this.textarea = document.createElement("textarea");
+      this.textarea.setAttribute("aria-label", "Terminal input");
+      host.append(this.textarea);
+    }
     attachCustomKeyEventHandler() {}
-    focus() {}
-    dispose() {}
+    focus() {
+      this.textarea?.focus();
+    }
+    dispose() {
+      this.textarea?.remove();
+    }
     reset() {}
     write() {}
     onData(callback: (data: string) => void) {
@@ -39,6 +55,128 @@ afterEach(() => {
   cleanup();
   vi.restoreAllMocks();
 });
+
+it.each([false, true])(
+  "a delayed restart respects the current focus owner (moved: %s)",
+  async (moved) => {
+    const create = vi
+      .spyOn(WebClient.prototype, "createInteractiveTerminal")
+      .mockResolvedValue({
+        id: "terminal-a",
+        sessionId: "a",
+        cwd: "/workspace",
+        exited: false,
+        exitCode: null,
+      });
+    vi.spyOn(
+      WebClient.prototype,
+      "resizeInteractiveTerminal",
+    ).mockResolvedValue({ resized: true });
+    vi.spyOn(
+      WebClient.prototype,
+      "streamInteractiveTerminal",
+    ).mockImplementation(
+      (_session, _id, _offset, signal) =>
+        new Promise((resolve) => {
+          signal.addEventListener("abort", () => resolve(), { once: true });
+        }),
+    );
+    let closed!: (value: { closed: true }) => void;
+    vi.spyOn(
+      WebClient.prototype,
+      "closeInteractiveTerminal",
+    ).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          closed = resolve;
+        }),
+    );
+    render(
+      createElement(
+        "div",
+        null,
+        createElement("input", { "aria-label": "Main prompt" }),
+        createElement(InteractiveTerminal, {
+          sessionId: "a",
+          cwd: "/workspace",
+        }),
+      ),
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const restart = screen.getByRole("button", {
+      name: i18n.t("restartTerminal"),
+    });
+    restart.focus();
+    fireEvent.click(restart);
+    const main = screen.getByRole("textbox", { name: "Main prompt" });
+    if (moved) main.focus();
+    await act(async () => closed({ closed: true }));
+    await waitFor(() => expect(create).toHaveBeenCalledTimes(2));
+    expect(document.activeElement).toBe(
+      moved ? main : screen.getByRole("textbox", { name: "Terminal input" }),
+    );
+  },
+);
+
+it.each([false, true])(
+  "delayed terminal readiness respects a later focus choice (moved: %s)",
+  async (moved) => {
+    let finish!: (value: {
+      id: string;
+      sessionId: string;
+      cwd: string;
+      exited: boolean;
+      exitCode: number | null;
+    }) => void;
+    const create = vi
+      .spyOn(WebClient.prototype, "createInteractiveTerminal")
+      .mockImplementation(
+        () =>
+          new Promise((resolve) => {
+            finish = resolve;
+          }),
+      );
+    vi.spyOn(
+      WebClient.prototype,
+      "resizeInteractiveTerminal",
+    ).mockResolvedValue({ resized: true });
+    const stream = vi
+      .spyOn(WebClient.prototype, "streamInteractiveTerminal")
+      .mockImplementation(
+        (_session, _id, _offset, signal) =>
+          new Promise((resolve) => {
+            signal.addEventListener("abort", () => resolve(), { once: true });
+          }),
+      );
+    render(
+      createElement(
+        "div",
+        null,
+        createElement("input", { "aria-label": "Main prompt" }),
+        createElement(InteractiveTerminal, {
+          sessionId: "a",
+          cwd: "/workspace",
+        }),
+      ),
+    );
+    await waitFor(() => expect(create).toHaveBeenCalledOnce());
+    const expected = screen.getByRole("textbox", {
+      name: moved ? "Main prompt" : "Terminal input",
+    });
+    if (moved) expected.focus();
+    await act(async () =>
+      finish({
+        id: "terminal-a",
+        sessionId: "a",
+        cwd: "/workspace",
+        exited: false,
+        exitCode: null,
+      }),
+    );
+    await waitFor(() => expect(stream).toHaveBeenCalledOnce());
+    expect(document.activeElement).toBe(expected);
+  },
+);
 
 it.each(["failure", "unmount", "disconnect"])(
   "drops unsent terminal input after %s",

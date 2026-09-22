@@ -101,7 +101,7 @@ export const ArtifactProvider = forwardRef<
     children?: ReactNode;
     disabled?: boolean;
     onOpen?: () => void;
-    onClose?: () => void;
+    onClose?: (reason: "user" | "context") => void;
   }
 >(function ArtifactProvider(
   { sessionId, children, disabled = false, onOpen, onClose },
@@ -150,25 +150,20 @@ export const ArtifactProvider = forwardRef<
     setRequest(null);
     setPreview(null);
     setCopyStatus(null);
-    onClose?.();
+    onClose?.("user");
     opener.current?.focus();
   }, [onClose]);
   useImperativeHandle(ref, () => ({ close }), [close]);
   useEffect(() => {
-    if (request && request.sessionId !== sessionId) {
-      copyGeneration.current++;
-      setRequest(null);
-      setPreview(null);
-      setCopyStatus(null);
-    }
-  }, [sessionId, request]);
-  useEffect(() => {
-    if (!disabled || !request) return;
+    if (!request || (!disabled && request.sessionId === sessionId)) return;
     copyGeneration.current++;
     setRequest(null);
     setPreview(null);
     setCopyStatus(null);
-  }, [disabled, request]);
+    opener.current = null;
+    nextParent.current = undefined;
+    onClose?.("context");
+  }, [disabled, sessionId, request, onClose]);
   useEffect(() => {
     if (!request || !sessionId || request.sessionId !== sessionId) return;
     const controller = new AbortController();

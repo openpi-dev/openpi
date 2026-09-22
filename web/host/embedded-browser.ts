@@ -201,19 +201,28 @@ async function findBrowserExecutable() {
 }
 
 async function waitForDebugPort(profile: string, processHandle: ChildProcess) {
-  const started = Date.now();
+  const started = performance.now();
   const target = join(profile, "DevToolsActivePort");
-  while (Date.now() - started < START_TIMEOUT_MS) {
-    if (processHandle.exitCode !== null)
-      throw new Error("Embedded browser exited during startup");
-    try {
-      const [port] = (await readFile(target, "utf8")).trim().split("\n");
-      const value = Number(port);
-      if (Number.isSafeInteger(value) && value > 0) return value;
-    } catch {}
-    await new Promise((resolve) => setTimeout(resolve, 40));
+  let launchError: NodeJS.ErrnoException | undefined;
+  const onError = (error: Error) => { launchError = error; };
+  processHandle.on("error", onError);
+  try {
+    while (performance.now() - started < START_TIMEOUT_MS) {
+      if (launchError)
+        throw new Error(`Embedded browser could not start${launchError.code ? ` (${launchError.code})` : ""}`);
+      if (processHandle.exitCode !== null || processHandle.signalCode !== null)
+        throw new Error(`Embedded browser exited during startup (${processHandle.signalCode ?? `exit ${processHandle.exitCode}`})`);
+      try {
+        const [port] = (await readFile(target, "utf8")).trim().split("\n");
+        const value = Number(port);
+        if (Number.isSafeInteger(value) && value > 0) return value;
+      } catch {}
+      await new Promise((resolve) => setTimeout(resolve, 40));
+    }
+    throw new Error("Embedded browser startup timed out");
+  } finally {
+    processHandle.off("error", onError);
   }
-  throw new Error("Embedded browser startup timed out");
 }
 
 function boundedViewport(value: number, fallback: number, minimum = 320) {

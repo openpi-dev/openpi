@@ -744,6 +744,7 @@ function activeSnapshot(): WebSnapshot {
     generatedAt: "2026-09-01T10:00:00Z",
     cursor: 1,
     currentSessionId: "session",
+    currentSessionPath: "/tmp/session",
     workspaces: [],
     sessions: [],
     models: [],
@@ -1715,16 +1716,16 @@ describe("thinking level picker", () => {
     expect(prepareSession).toHaveBeenCalledOnce();
   });
 
-  it("disables the picker for a non-current session", () => {
+  it("hides the controller's picker while viewing a non-current session", () => {
     const props = thinkingProps(
       idleThinkingSnapshot({ currentSessionId: "another-session" }),
     );
     const { container } = renderWithI18n(createElement(Composer, props));
     expect(
-      screen.getByRole<HTMLButtonElement>("button", {
+      screen.queryByRole("button", {
         name: thinkingPickerName("medium"),
-      }).disabled,
-    ).toBe(true);
+      }),
+    ).toBeNull();
     expect(
       container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
     ).toBe(i18n.t("thinkingInactiveHint"));
@@ -2535,6 +2536,7 @@ it("clears an old session draft without letting its late send clear the new one"
   const nextSnapshot = {
     ...snapshot,
     currentSessionId: "next-session",
+    currentSessionPath: "/tmp/next-session",
     selectedSession: {
       ...snapshot.selectedSession!,
       id: "next-session",

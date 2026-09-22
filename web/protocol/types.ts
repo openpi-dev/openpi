@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
-import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
+import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
@@ -239,6 +239,23 @@ export interface WebSessionProjection {
   entries: ReturnType<typeof projectEntry>[];
   bytes: number;
   truncation: WebProjectionTruncation;
+  history?: {
+    leafEntryId: string | null;
+    beforeEntryId: string | null;
+    anchorEntryId?: string;
+    anchorOnBranch?: boolean;
+  };
+}
+
+export interface WebHistoryAnchor {
+  sessionId: string;
+  sessionPath: string;
+  entryId: string;
+}
+
+export interface WebSessionHistoryPage extends WebSessionProjection {
+  anchorEntryId: string;
+  requestedBeforeEntryId: string;
 }
 
 export interface WebSessionUsage {
@@ -448,9 +465,13 @@ export interface WebSnapshot {
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
+  /** Pi's current file identity; copied files may share an embedded id. */
+  currentSessionPath?: string;
   workspaces: WebWorkspaceSummary[];
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
+  /** Facts for the selected Session; they do not transfer input control. */
+  selectedExecution?: WebSessionExecution;
   /** Current Pi Session only. Historical projections do not invent live context usage. */
   usage?: WebSessionUsage;
   models: WebModelSummary[];
@@ -790,16 +811,23 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   };
 }
 
-export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
+export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined): {
+  type: SessionEntry["type"];
+  id: string;
+  timestamp: string;
+  parentId?: string | null;
+  message?: WebLiveMessage;
+  turnTiming?: ReturnType<typeof readTurnTiming>;
+} {
+  const metadata = { id: entry.id, timestamp: entry.timestamp, ...(entry.parentId === undefined ? {} : { parentId: entry.parentId }) };
   if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
     const turnTiming = readTurnTiming(entry.data);
-    if (turnTiming) return { type: entry.type, id: entry.id, timestamp: entry.timestamp, turnTiming };
+    if (turnTiming) return { type: entry.type, ...metadata, turnTiming };
   }
   if (entry.type === "custom_message") {
     return {
       type: "message" as const,
-      id: entry.id,
-      timestamp: entry.timestamp,
+      ...metadata,
       message: projectMessage(
         {
           role: "custom",
@@ -813,12 +841,11 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     };
   }
   if (entry.type !== "message") {
-    return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
+    return { type: entry.type, ...metadata };
   }
   return {
     type: entry.type,
-    id: entry.id,
-    timestamp: entry.timestamp,
+    ...metadata,
     message: projectMessage(entry.message, resolvePath),
   };
 }
@@ -829,7 +856,8 @@ export function jsonByteLength(value: unknown) {
   return textEncoder.encode(JSON.stringify(value)).byteLength;
 }
 
-export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined) {
+export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined, maxBytes = WEB_MAX_SELECTED_TRANSCRIPT_BYTES) {
+  const budget = Math.min(maxBytes, WEB_MAX_SELECTED_TRANSCRIPT_BYTES);
   const retained = entries.slice(-WEB_MAX_ENTRIES);
   const projected: ReturnType<typeof projectEntry>[] = [];
   let bytes = 2;
@@ -837,8 +865,28 @@ export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (
   let messagesTruncated = 0;
   for (let index = retained.length - 1; index >= 0; index--) {
     const entry = projectEntry(retained[index]!, resolvePath);
-    const entryBytes = jsonByteLength(entry) + (projected.length > 0 ? 1 : 0);
-    if (bytes + entryBytes > WEB_MAX_SELECTED_TRANSCRIPT_BYTES) break;
+    let entryBytes = jsonByteLength(entry);
+    if (entryBytes + 2 > budget && entry.message?.parts?.length) {
+      const originalParts = entry.message.parts;
+      const previousOmitted = entry.message.truncation?.partsOmitted ?? 0;
+      const message = {
+        ...entry.message,
+        parts: [] as WebMessagePart[],
+        truncation: { ...entry.message.truncation, truncated: true as const, partsOmitted: previousOmitted + originalParts.length },
+      };
+      entry.message = message;
+      let retainedBytes = jsonByteLength(entry) + 2;
+      for (const part of originalParts) {
+        const partBytes = jsonByteLength(part) + (message.parts.length > 0 ? 1 : 0);
+        if (retainedBytes + partBytes > budget) break;
+        message.parts.push(part);
+        retainedBytes += partBytes;
+      }
+      message.truncation.partsOmitted = previousOmitted + originalParts.length - message.parts.length;
+      entryBytes = jsonByteLength(entry);
+    }
+    entryBytes += projected.length > 0 ? 1 : 0;
+    if (bytes + entryBytes > budget) break;
     projected.unshift(entry);
     bytes += entryBytes;
     if (entry.type === "message" && entry.message) {

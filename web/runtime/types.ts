@@ -1,4 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { LiveToolEvidence } from "../protocol/evidence.ts";
 import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
@@ -103,6 +104,17 @@ export interface WebActiveTurn {
   sessionPath?: string;
 }
 
+/** Read-only facts for the selected Session, independent of input ownership. */
+export interface WebSessionExecution {
+  sessionId: string;
+  sessionPath: string;
+  status: "running" | "idle" | "unknown";
+  pendingFollowUps?: number;
+  liveTools: LiveToolEvidence[];
+  liveToolsOmitted: number;
+  activeTurn?: WebActiveTurn;
+}
+
 export interface WebTurnCancellationOptions extends WebActiveTurn {}
 
 export type WebTurnCancellationState =
@@ -154,6 +166,9 @@ export interface WebRuntimeController {
   getProjectTrustStatus?(): WebProjectTrustStatus;
   isIdle(): boolean;
   getActiveTurn(): WebActiveTurn | undefined;
+  getSessionExecution?(sessionId: string, sessionPath: string): WebSessionExecution;
+  /** Internal read seam; never activates a Session or grants input authority. */
+  getSessionManagerForRead?(sessionId: string, sessionPath: string): SessionManager | undefined;
   sendPrompt(
     content: string,
     options?: WebPromptOptions,

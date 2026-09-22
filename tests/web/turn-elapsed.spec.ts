@@ -31,6 +31,7 @@ function snapshot(): WebSnapshot {
     generatedAt: new Date().toISOString(),
     cursor: 1,
     currentSessionId: "session",
+    currentSessionPath: "/session.jsonl",
     workspaces: [],
     sessions: [],
     models: [],
@@ -78,6 +79,7 @@ function node(value: WebSnapshot) {
 it("uses one monotonic ticker, reconciles without going backward, and cleans up for another Session", () => {
   vi.useFakeTimers();
   const intervals = vi.spyOn(window, "setInterval");
+  const clearedIntervals = vi.spyOn(window, "clearInterval");
   let clock = 1000;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const value = snapshot();
@@ -126,6 +128,13 @@ it("uses one monotonic ticker, reconciles without going backward, and cleans up 
     }),
   );
   expect(screen.queryByRole("timer")).toBeNull();
+  expect(clearedIntervals).toHaveBeenCalledWith(
+    intervals.mock.results[0]!.value,
+  );
+  // jsdom queues a one-shot toggle event when the old process details close.
+  // It is not the elapsed interval; flush only that immediate DOM task.
+  act(() => vi.advanceTimersByTime(0));
+  expect(intervals).toHaveBeenCalledOnce();
   expect(vi.getTimerCount()).toBe(0);
 });
 
