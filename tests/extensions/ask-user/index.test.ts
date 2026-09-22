@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { registerWebQuestionBridge } from "../../../extensions/ask-user/web-bridge.ts";
 import { stripVTControlCharacters } from "node:util";
 import type {
   ExtensionAPI,
@@ -811,6 +812,59 @@ function toolsExecute<T>(name: string) {
   assert.ok(execute, `${name} must be registered`);
   return execute as T;
 }
+
+test("Web handoff accepts only a reviewed status and maps expiry to cancellation", async () => {
+  const execute = toolsExecute<HumanHandoffExecute>("human_handoff");
+  const scope = {};
+  const ctx = {
+    hasUI: false,
+    sessionManager: scope,
+  } as unknown as ExtensionContext;
+  const params = {
+    title: "Sign in",
+    instructions: "Open the login page",
+    completionSignal: "Account visible",
+  };
+  const signal = new AbortController().signal;
+  const unregister = registerWebQuestionBridge(
+    scope,
+    async (_id, questions, _signal, handoff) => {
+      assert.deepEqual(handoff, params);
+      return {
+        kind: "answered",
+        answers: [
+          {
+            id: "handoff",
+            selected: questions[0]!.options[1]!.label,
+            note: "No access",
+          },
+        ],
+      };
+    },
+  );
+  try {
+    const result = await execute("handoff-web", params, signal, undefined, ctx);
+    assert.deepEqual(result.details, { status: "unable", note: "No access" });
+    assert.match(result.content[0]!.text, /Do not claim it succeeded/);
+  } finally {
+    unregister();
+  }
+  const expire = registerWebQuestionBridge(scope, async () => ({
+    kind: "expired",
+  }));
+  try {
+    assert.equal(
+      (await execute("expired", params, signal, undefined, ctx)).details.status,
+      "cancelled",
+    );
+  } finally {
+    expire();
+  }
+  assert.equal(
+    (await execute("missing", params, signal, undefined, ctx)).details.status,
+    "unavailable",
+  );
+});
 
 test("human handoff reviews status and tells the agent to verify completion", async () => {
   const execute = toolsExecute<HumanHandoffExecute>("human_handoff");

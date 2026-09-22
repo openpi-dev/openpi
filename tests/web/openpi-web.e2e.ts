@@ -4,15 +4,43 @@ import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, type Page, test } from "@playwright/test";
+import type { WebSnapshot } from "../../web/protocol/types.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
+  MOCK_SESSION_PATH,
 } from "./thinking-e2e-support.ts";
 
 const token = process.env.OPENPI_WEB_E2E_TOKEN;
 if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
+
+function alignControlledSessionFixture(snapshot: WebSnapshot) {
+  const session = snapshot.selectedSession;
+  if (!session || session.id !== snapshot.currentSessionId) {
+    throw new Error("A controlled fixture must select its current Session");
+  }
+  snapshot.sessions = [
+    {
+      id: session.id,
+      path: session.path,
+      cwd: session.cwd,
+      name: "Browser fixture",
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      created: "2026-09-07T00:00:00Z",
+      modified: "2026-09-07T00:00:00Z",
+      messageCount: session.entries.length,
+      firstMessage: "",
+    },
+  ];
+  snapshot.workspaces = [
+    { path: session.cwd, name: "Fixture workspace", current: true },
+  ];
+}
 
 for (const width of [1280, 390]) {
   test(`message editing and composer resizing preserve readable layout at ${width}px`, async ({
@@ -1043,7 +1071,7 @@ test("discovers and completes Pi commands without submitting unsupported command
   await input.fill("/extension");
   const extension = page.getByRole("option", { name: /\/extension:setup/u });
   await expect(extension).toBeDisabled();
-  await expect(extension).toContainText("当前 Web 不支持");
+  await expect(extension).toContainText("尚未适配 · 手动命令仍交给 Pi");
 
   await input.fill("/rev");
   await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
@@ -1393,6 +1421,7 @@ test("restores a running turn and canonical dark theme without losing cancellati
       activeTurn: turn,
       capabilities: {},
     };
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -1598,6 +1627,7 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
         current: true,
       },
     ];
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -1863,6 +1893,7 @@ test("restores archived history without switching the active Session", async ({
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.sessions = [
+      ...snapshot.sessions,
       {
         id: "archived-browser",
         path,
@@ -2007,6 +2038,7 @@ test("trajectory inspects bounded prompt and tool evidence on desktop and mobile
         },
       ],
     };
+    alignControlledSessionFixture(snapshot);
     await route.fulfill({ response, json: snapshot });
   });
   await page.route("**/events?**", (route) =>
@@ -2196,6 +2228,7 @@ test("same-named model selection sends the exact identity for an active Session"
   page,
 }) => {
   let selectedIdentity = "provider-alpha/one";
+  let selectedSessionPath = "";
   const writes: Array<{
     provider: string;
     modelId: string;
@@ -2204,6 +2237,7 @@ test("same-named model selection sends the exact identity for an active Session"
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
+    selectedSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
     snapshot.models = [
       {
@@ -2255,6 +2289,7 @@ test("same-named model selection sends the exact identity for an active Session"
       provider: "provider-beta",
       modelId: "two",
       sessionId: expect.any(String),
+      sessionPath: selectedSessionPath,
     },
   ]);
 });
@@ -2281,14 +2316,17 @@ test("finds and selects a model omitted from the bounded snapshot", async ({
     provider: string;
     modelId: string;
     sessionId: string;
+    sessionPath: string;
   }> = [];
   let activeSessionId: string | undefined;
+  let activeSessionPath: string | undefined;
   let selectedIdentity = "fixture/visible-0";
 
   await page.route("**/api/snapshot**", async (route) => {
     const response = await route.fetch();
     const snapshot = await response.json();
     activeSessionId = snapshot.currentSessionId;
+    activeSessionPath = snapshot.selectedSession.path;
     snapshot.runtime.status = "idle";
     snapshot.models =
       selectedIdentity === "provider-hidden/needle-251"
@@ -2363,6 +2401,7 @@ test("finds and selects a model omitted from the bounded snapshot", async ({
       provider: "provider-hidden",
       modelId: "needle-251",
       sessionId: activeSessionId,
+      sessionPath: activeSessionPath,
     },
   ]);
   await expect(
@@ -2471,7 +2510,7 @@ test("a delayed creation receipt never retargets the first prompt to another tab
     expect(importedB.status()).toBe(201);
     const { path: canonicalA } = await importedA.json();
     const { path: canonicalB } = await importedB.json();
-    const workspaceNameA = canonicalA.split("/").at(-1);
+    const workspaceNameA = canonicalA.split(/[\\/]/u).at(-1);
 
     await page.route("**/events?**", (route) =>
       route.fulfill({
@@ -2592,7 +2631,11 @@ test.describe("thinking picker", () => {
       "false",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "high" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "high",
+      },
     ]);
   });
 
@@ -2615,7 +2658,11 @@ test.describe("thinking picker", () => {
       "low",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "low" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "low",
+      },
     ]);
 
     await picker.focus();
@@ -2653,8 +2700,16 @@ test.describe("thinking picker", () => {
       "false",
     );
     expect(fixture.posts).toEqual([
-      { sessionId: MOCK_SESSION_ID, level: "low" },
-      { sessionId: MOCK_SESSION_ID, level: "high" },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "low",
+      },
+      {
+        sessionId: MOCK_SESSION_ID,
+        sessionPath: MOCK_SESSION_PATH,
+        level: "high",
+      },
     ]);
   });
 

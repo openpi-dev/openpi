@@ -1,6 +1,8 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
+import { AsyncLocalStorage } from "node:async_hooks";
+import { controlPlan, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -47,11 +49,14 @@ import {
   commandsForServices,
   createCommandDiscoveryBridge,
   registerCommandDiscoveryBridge,
+  submittedExtensionCommand,
 } from "./command-discovery.ts";
+import { WEB_COMMAND_INPUT, publishWebCommandFeedback } from "../../extensions/shared/web-command-feedback.ts";
 import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { matchesSessionIdentity } from "./session-identity.ts";
 import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
@@ -137,14 +142,16 @@ export class PiWebRuntime implements WebRuntimeController {
   private promptAdmission: Promise<void> = Promise.resolve();
   private thinkingMutationInFlight = false;
   private thinkingMutationPending?: {
-    level: string;
     waiters: Array<{
+      level: string;
       resolve: (projection: WebThinkingProjection) => void;
       reject: (error: unknown) => void;
       expectedSessionId?: string;
+      expectedSessionPath?: string;
     }>;
   };
   private activePromptTrace?: PromptTrace;
+  private promptOrigins?: AsyncLocalStorage<PromptTrace | undefined>;
   private readonly pendingPromptTraces: PromptTrace[] = [];
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
@@ -493,6 +500,34 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
+  setPlanMode(request: PlanControlRequest & { sessionId: string }) {
+    return this.serializeControllerMutation(async () => {
+      this.assertActive();
+      this.assertWorkspaceSelected();
+      const session = this.runtime.session;
+      if (request.sessionId !== session.sessionManager.getSessionId())
+        throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
+      // Include preflight/queued work, not just provider streaming. The owner
+      // callback below is synchronous: no prompt can enter mid-transition.
+      if (!this.isIdle() || this.activePromptTrace || this.promptOperations.size || session.pendingMessageCount)
+        throw new WebRuntimeRequestError("Stop the current turn before changing Plan mode", "PLAN_BUSY", 409);
+      if (!this.listCommands().commands.some((command) => command.support === "plan"))
+        throw new WebRuntimeRequestError("The owned Plan extension is unavailable", "PLAN_CONTROL_UNAVAILABLE", 501);
+      try {
+        const result = controlPlan(session.sessionManager, request);
+        this.emit("plan_mode_changed", { sessionId: request.sessionId });
+        return result;
+      } catch (error) {
+        // Extension-loader module copies need not share constructor identity.
+        if (error && typeof error === "object" && "code" in error &&
+          "statusCode" in error && "message" in error && typeof error.message === "string" &&
+          (error.code === "PLAN_BUSY" || error.code === "PLAN_CONFLICT" || error.code === "PLAN_CONTROL_UNAVAILABLE"))
+          throw new WebRuntimeRequestError(error.message, error.code, error.statusCode === 501 ? 501 : 409);
+        throw error;
+      }
+    });
+  }
+
   private async applyModelSelection(
     provider: string,
     modelId: string,
@@ -501,11 +536,7 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertActive();
     this.assertWorkspaceSelected();
     const agentRuntime = this.runtime;
-    if (
-      options?.expectedSessionId !== undefined &&
-      options.expectedSessionId !==
-        agentRuntime.session.sessionManager.getSessionId()
-    ) {
+    if (!matchesSessionIdentity(agentRuntime.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts model selection",
         "SESSION_CONFLICT",
@@ -566,25 +597,28 @@ export class PiWebRuntime implements WebRuntimeController {
 
   setThinkingLevel(level: string, options?: WebThinkingSelectionOptions) {
     const expectedSessionId = options?.expectedSessionId;
+    const expectedSessionPath = options?.expectedSessionPath;
     // Validate each caller at enqueue so a stale Session cannot influence, or
     // be silently resolved through, another Session's merged write.
-    if (
-      expectedSessionId !== undefined &&
-      expectedSessionId !== this.runtime.session.sessionManager.getSessionId()
-    ) {
+    if (!matchesSessionIdentity(this.runtime.session.sessionManager, options)) {
       return Promise.reject(this.thinkingSessionConflictError());
     }
     return new Promise<WebThinkingProjection>((resolve, reject) => {
-      const waiter = { resolve, reject, expectedSessionId };
+      const waiter = {
+        level,
+        resolve,
+        reject,
+        expectedSessionId,
+        expectedSessionPath,
+      };
       const pending = this.thinkingMutationPending;
       if (pending) {
-        // Merge-to-latest: a newer target overwrites the queued one and all
-        // waiters resolve from the single authoritative write that follows.
-        pending.level = level;
+        // Coalesce to the latest caller that still owns the active Session
+        // when the serialized write executes.
         pending.waiters.push(waiter);
         return;
       }
-      this.thinkingMutationPending = { level, waiters: [waiter] };
+      this.thinkingMutationPending = { waiters: [waiter] };
       void this.drainThinkingMutations();
     });
   }
@@ -611,17 +645,14 @@ export class PiWebRuntime implements WebRuntimeController {
           const outcome = await this.serializeControllerMutation(async () => {
             this.assertActive();
             this.assertWorkspaceSelected();
-            const activeSessionId =
-              this.runtime.session.sessionManager.getSessionId();
-            const accepted = pending.waiters.filter(
-              (waiter) =>
-                waiter.expectedSessionId === undefined ||
-                waiter.expectedSessionId === activeSessionId,
+            const accepted = pending.waiters.filter((waiter) =>
+              matchesSessionIdentity(this.runtime.session.sessionManager, waiter),
             );
-            if (accepted.length === 0) return undefined;
+            const latest = accepted.at(-1);
+            if (!latest) return undefined;
             return {
               accepted,
-              projection: await this.applyThinkingSelection(pending.level),
+              projection: await this.applyThinkingSelection(latest.level),
             };
           });
           if (!outcome) {
@@ -638,7 +669,7 @@ export class PiWebRuntime implements WebRuntimeController {
           }
         } catch (error) {
           traceWeb("thinking_selection_failed", {
-            level: pending.level,
+            level: pending.waiters.at(-1)?.level,
             error: errorText(error),
           });
           for (const waiter of pending.waiters) waiter.reject(error);
@@ -675,10 +706,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const agentRuntime = this.runtime;
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
-    if (
-      options?.expectedSessionId !== undefined &&
-      options.expectedSessionId !== sessionId
-    ) {
+    if (!matchesSessionIdentity(session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts messages",
         "SESSION_CONFLICT",
@@ -719,6 +747,21 @@ export class PiWebRuntime implements WebRuntimeController {
       try {
         await previousAdmission;
         this.assertActive();
+        this.assertWorkspaceSelected();
+        if (
+          agentRuntime !== this.runtime ||
+          session !== this.runtime.session ||
+          !matchesSessionIdentity(session.sessionManager, {
+            expectedSessionId: sessionId,
+            expectedSessionPath: options?.expectedSessionPath,
+          })
+        ) {
+          throw new WebRuntimeRequestError(
+            "Only the active Web session accepts messages",
+            "SESSION_CONFLICT",
+            409,
+          );
+        }
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
@@ -748,7 +791,16 @@ export class PiWebRuntime implements WebRuntimeController {
             followUpMessages = event.followUp.length;
           }
         });
-        await session.prompt(content, {
+        this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
+        const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
+        if (extensionCommand) {
+          session.sessionManager.appendCustomEntry(WEB_COMMAND_INPUT, { text: content, commandId: options?.commandId });
+          this.emit("command_submitted", { sessionId });
+          const projected = commandsForServices(agentRuntime.services).commands.find((command) => command.name === extensionCommand.name);
+          if (projected?.availability !== "available") publishWebCommandFeedback(session.sessionManager,
+            "This extension has not been adapted for Web. Pi will handle the command, but dialogs or results may require the TUI.", "warning");
+        }
+        await this.promptOrigins.run(promptTrace, () => session.prompt(content, {
           ...(options?.images?.length
             ? {
                 images: options.images.map(({ data, mimeType }) => ({
@@ -792,7 +844,7 @@ export class PiWebRuntime implements WebRuntimeController {
               );
             }
           },
-        });
+        }));
         unsubscribePromptLifecycle();
         unsubscribePromptLifecycle = undefined;
         if (!preflightObserved || !admitted) {
@@ -836,11 +888,13 @@ export class PiWebRuntime implements WebRuntimeController {
         releaseAdmission();
         if (!admitted) {
           rejectRequest(
-            new WebRuntimeRequestError(
-              errorText(error),
-              "PROMPT_REJECTED",
-              422,
-            ),
+            error instanceof WebRuntimeRequestError
+              ? error
+              : new WebRuntimeRequestError(
+                  errorText(error),
+                  "PROMPT_REJECTED",
+                  422,
+                ),
           );
         } else if (admitted) {
           this.emit("prompt_failed", {
@@ -967,6 +1021,7 @@ export class PiWebRuntime implements WebRuntimeController {
     this.disposed = true;
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
+    this.promptOrigins?.disable();
     const runtimes = new Set([
       this.runtime,
       ...this.retainedRuntimes,
@@ -1088,6 +1143,14 @@ export class PiWebRuntime implements WebRuntimeController {
         sessionManager: options.sessionManager,
         sessionStartEvent: options.sessionStartEvent,
       });
+      const nativeStream = created.session.agent.streamFunction;
+      created.session.agent.streamFunction = (model, context, streamOptions) => {
+        // A cancelled tool can return before Pi attempts its next model step.
+        // Let Agent's native run lifecycle classify the aborted signal, before
+        // model auth setup can flatten that AbortError into stopReason: error.
+        streamOptions?.signal?.throwIfAborted();
+        return nativeStream(model, context, streamOptions);
+      };
       const model = created.session.model;
       traceWeb("provider_config", {
         provider: model?.provider,
@@ -1145,7 +1208,9 @@ export class PiWebRuntime implements WebRuntimeController {
       sessionId: session.sessionManager.getSessionId(),
       cwd: runtime.cwd,
     });
-    await session.bindExtensions({ mode: "print" });
+    await session.bindExtensions({ mode: "print", onError: (error) => {
+      publishWebCommandFeedback(session.sessionManager, error.error, "error");
+    } });
     traceWeb("extensions_bind_finished", {
       sessionId: session.sessionManager.getSessionId(),
       elapsedMs: elapsed(startedAt),
@@ -1167,6 +1232,15 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private projectEvent(session: AgentSession, event: AgentSessionEvent) {
     if (session !== this.runtime.session) return;
+    // A command can return before its native triggerTurn continuation starts.
+    // Recover only that async invocation's unused origin, never the last HTTP
+    // request or an unrelated run. This also retains its controlling Web tab.
+    if (event.type === "agent_start" && !this.activePromptTrace) {
+      const origin = this.promptOrigins?.getStore();
+      if (origin && !origin.started && origin.sessionId === session.sessionManager.getSessionId()) {
+        this.activePromptTrace = origin;
+      }
+    }
     if (event.type === "agent_start" && this.activePromptTrace) {
       this.startPromptTrace(this.activePromptTrace);
     }

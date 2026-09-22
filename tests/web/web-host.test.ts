@@ -5,9 +5,8 @@ import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import {
   registerWebCapability,
   registerWebCapabilityActions,
@@ -15,7 +14,7 @@ import {
 import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts";
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
-import { WebHost, type WebHostOptions } from "../../web/host/web-host.ts";
+import type { WebHostOptions } from "../../web/host/web-host.ts";
 import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import {
@@ -23,6 +22,26 @@ import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
+
+// Setup paths are resolved when the Host imports the shared config module.
+// Never make snapshot/theme assertions depend on the developer's preferences.
+const hostAgentDirectory = await mkdtemp(join(tmpdir(), "openpi-host-agent-"));
+const previousHostAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = hostAgentDirectory;
+const { WebHost } = await import("../../web/host/web-host.ts");
+const { loadSetupConfig } = await import(
+  "../../extensions/shared/setup-config.ts"
+);
+after(async () => {
+  if (previousHostAgentDirectory === undefined)
+    delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousHostAgentDirectory;
+  await rm(hostAgentDirectory, { recursive: true, force: true });
+});
+
+function mutationSessionPath(manager: WebRuntimeController["sessionManager"]) {
+  return manager.getSessionFile() ?? `current:${manager.getSessionId()}`;
+}
 
 // Use a raw document request: fetch always sets Sec-Fetch-Mode to cors.
 function documentRequest(url: string, headers: Record<string, string> = {}) {
@@ -242,6 +261,53 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
+
+    const planRequest = {
+      sessionId: sessionManager.getSessionId(),
+      enabled: true,
+      expectedRevision: null,
+    };
+    const postPlan = (data: unknown, auth = authorized) =>
+      fetch(`${launched.origin}/api/plan`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify(data),
+      });
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/plan`, {
+          method: "POST",
+          body: JSON.stringify(planRequest),
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (await postPlan({ ...planRequest, enabled: "yes" })).status,
+      400,
+    );
+    assert.equal((await postPlan({ ...planRequest, extra: true })).status, 400);
+    assert.equal((await postPlan(planRequest)).status, 501);
+    let planCalls = 0;
+    runtime.setPlanMode = async (request) => {
+      assert.deepEqual(request, planRequest);
+      planCalls++;
+      return { status: "planning", revision: "plan-1", hasPrompt: false };
+    };
+    const switchedPlan = await postPlan(planRequest);
+    assert.equal(switchedPlan.status, 200);
+    assert.deepEqual(await switchedPlan.json(), {
+      sessionId: planRequest.sessionId,
+      status: "planning",
+      revision: "plan-1",
+      hasPrompt: false,
+    });
+    runtime.setPlanMode = async () => {
+      throw new WebRuntimeRequestError("Plan changed", "PLAN_CONFLICT", 409);
+    };
+    assert.equal((await postPlan(planRequest)).status, 409);
+    assert.equal(planCalls, 1);
+    delete runtime.setPlanMode;
 
     const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
@@ -710,6 +776,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
         provider: "missing",
         modelId: "missing",
         sessionId: sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(sessionManager),
       }),
     });
     assert.equal(unavailableModel.status, 400);
@@ -891,7 +958,11 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
     const wrongSession = await fetch(`${launched.origin}/api/prompt`, {
       method: "POST",
       headers: authorized,
-      body: JSON.stringify({ sessionId: "other", content: "wrong target" }),
+      body: JSON.stringify({
+        sessionId: "other",
+        sessionPath: mutationSessionPath(sessionManager),
+        content: "wrong target",
+      }),
     });
     assert.equal(wrongSession.status, 409);
 
@@ -900,6 +971,7 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       headers: authorized,
       body: JSON.stringify({
         sessionId: sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(sessionManager),
         content: "continue here",
       }),
     });
@@ -1342,6 +1414,7 @@ test("an unbound Host exposes no bootstrap Session and rejects prompt bypasses",
       headers,
       body: JSON.stringify({
         sessionId: sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(sessionManager),
         content: "must not run",
       }),
     });
@@ -1425,6 +1498,7 @@ test("returns accepted only after Pi admits the prompt", async () => {
       },
       body: JSON.stringify({
         sessionId: sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(sessionManager),
         content: "hello",
       }),
     });
@@ -1540,7 +1614,7 @@ test("thinking selection validates its body and returns the applied projection",
     });
     assert.equal(missingSession.status, 400);
     assert.deepEqual(await missingSession.json(), {
-      error: "sessionId and a valid level are required",
+      error: "sessionId, sessionPath, and a valid level are required",
     });
 
     const invalidLevel = await fetch(`${launched.origin}/api/thinking`, {
@@ -1548,6 +1622,7 @@ test("thinking selection validates its body and returns the applied projection",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         level: "ultra",
       }),
     });
@@ -1560,6 +1635,7 @@ test("thinking selection validates its body and returns the applied projection",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         level: "high",
       }),
     });
@@ -1600,6 +1676,7 @@ test("thinking selection requires a workspace and available runtime control", as
           headers: { ...unboundHost.headers, ...headers },
           body: JSON.stringify({
             sessionId: unbound.sessionManager.getSessionId(),
+            sessionPath: mutationSessionPath(unbound.sessionManager),
             level: "high",
           }),
         },
@@ -1620,6 +1697,7 @@ test("thinking selection requires a workspace and available runtime control", as
           headers: { ...unavailableHost.headers, ...headers },
           body: JSON.stringify({
             sessionId: unavailable.sessionManager.getSessionId(),
+            sessionPath: mutationSessionPath(unavailable.sessionManager),
             level: "high",
           }),
         },
@@ -1776,6 +1854,7 @@ test("POST /api/thinking bounds an oversized projection at the host boundary", a
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         level: "high",
       }),
     });
@@ -1812,6 +1891,7 @@ test("POST /api/thinking reports unavailable levels for a non-reasoning model", 
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         level: "high",
       }),
     });
@@ -1853,6 +1933,7 @@ test("stop waits for an in-flight thinking selection before disposal", async () 
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         level: "high",
       }),
     });
@@ -2643,6 +2724,7 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         content: "reject me",
         commandId: "rejected-admission",
         retry: false,
@@ -2658,6 +2740,7 @@ test("rejects prompt admission with the runtime's typed receipt", async () => {
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         content: "reject me",
         commandId: "rejected-admission",
         retry: true,
@@ -2694,6 +2777,7 @@ test("replays one prompt admission after a browser timeout", async () => {
   const commandId = "browser-timeout-retry";
   const prompt = {
     sessionId: runtime.sessionManager.getSessionId(),
+    sessionPath: mutationSessionPath(runtime.sessionManager),
     content: "send this exactly once",
     commandId,
   };
@@ -2800,6 +2884,7 @@ test("fails closed instead of evicting pending prompt admissions", {
         headers: { ...headers, "Content-Type": "application/json" },
         body: JSON.stringify({
           sessionId: runtime.sessionManager.getSessionId(),
+          sessionPath: mutationSessionPath(runtime.sessionManager),
           content: `pending ${index}`,
           commandId: `pending-${index}`,
           retry: false,
@@ -2814,6 +2899,7 @@ test("fails closed instead of evicting pending prompt admissions", {
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         content: "must not replace a pending admission",
         commandId: "overflow",
         retry: false,
@@ -2854,6 +2940,7 @@ test("returns and publishes the observed follow-up queue receipt", async () => {
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         content: "queue me",
       }),
     });
@@ -2947,6 +3034,57 @@ test("replays a bounded burst larger than Node's write high-water mark", async (
       records.map(({ event }) => event.type),
       Array.from({ length: 8 }, () => "burst"),
     );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("delivers a live burst above Node's high-water mark without disconnecting", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-live-burst-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers, signal: AbortSignal.timeout(5_000) },
+    );
+    const received = readEventRecords(response, 8);
+    for (let index = 0; index < 8; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    const records = await received;
+    assert.deepEqual(
+      records.map(({ event }) => event.detail?.index),
+      Array.from({ length: 8 }, (_, index) => index),
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("disconnects a live SSE client when its buffered burst exceeds the budget", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-live-budget-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers, signal: AbortSignal.timeout(5_000) },
+    );
+    const disconnected = assert.rejects(
+      readEventRecords(response, 20),
+      /terminated/,
+    );
+    for (let index = 0; index < 20; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    await disconnected;
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });
@@ -3304,6 +3442,7 @@ test("stop rejects a late keepalive mutation before it enters the drain", async 
     await once(socket, "connect");
     const promptBody = JSON.stringify({
       sessionId: runtime.sessionManager.getSessionId(),
+      sessionPath: mutationSessionPath(runtime.sessionManager),
       content: "hold the first request",
     });
     socket.write(
@@ -3466,6 +3605,7 @@ test("stop disposes the runtime before waiting for an in-flight prompt request",
       headers: { ...headers, "Content-Type": "application/json" },
       body: JSON.stringify({
         sessionId: runtime.sessionManager.getSessionId(),
+        sessionPath: mutationSessionPath(runtime.sessionManager),
         content: "pending during shutdown",
       }),
     });

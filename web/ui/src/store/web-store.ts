@@ -37,6 +37,10 @@ const refreshEventTypes = new Set([
   "session_created",
   "prompt_accepted",
   "runtime_changed",
+  "questions_changed",
+  "command_feedback",
+  "command_submitted",
+  "plan_mode_changed",
 ]);
 
 function readStringSet(key: string) {
@@ -75,6 +79,7 @@ export interface LiveEntry {
 
 export interface PromptAdmissionRecovery {
   sessionId: string;
+  sessionPath: string;
   content: string;
   commandId: string;
   optimisticKey: string;
@@ -112,6 +117,7 @@ export interface CommandDiscoveryState {
 }
 
 export interface WebStoreState {
+  planSelectionPending: boolean;
   activeTurn: WebSnapshot["runtime"]["activeTurn"] | null;
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
@@ -152,6 +158,7 @@ export interface WebStoreState {
 }
 
 export interface WebStoreActions {
+  selectPlanMode: (enabled: boolean) => Promise<void>;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -231,6 +238,7 @@ export function createWebStore(
   let promptAdmissionToken: number | null = null;
   let promptAdmission: {
     sessionId: string;
+    sessionPath: string;
     content: string;
     imageSignature: string;
     images: readonly WebPromptImage[];
@@ -331,6 +339,7 @@ export function createWebStore(
         get().selectedWorkspace === target.workspacePath &&
         snapshot?.currentSessionId === target.sessionId &&
         snapshot.selectedSession?.id === target.sessionId &&
+        get().selectedPath === snapshot.selectedSession.path &&
         snapshot.selectedSession.cwd === target.workspacePath &&
         (!target.sessionPath ||
           snapshot.selectedSession.path === target.sessionPath)
@@ -348,6 +357,7 @@ export function createWebStore(
       model: { provider: string; id: string },
       epoch: number,
       sessionId: string,
+      sessionPath: string,
     ) => {
       if (get().modelSelectionPending) return false;
       set({ modelSelectionPending: true });
@@ -356,9 +366,11 @@ export function createWebStore(
           model.provider,
           model.id,
           sessionId,
+          sessionPath,
         );
         if (
           epoch !== sessionEpoch ||
+          sessionPath !== get().selectedPath ||
           sessionId !== get().snapshot?.selectedSession?.id
         )
           return false;
@@ -374,6 +386,7 @@ export function createWebStore(
         if (
           !(await get().actions.refreshSnapshot({ epoch })) ||
           epoch !== sessionEpoch ||
+          sessionPath !== get().selectedPath ||
           sessionId !== get().snapshot?.selectedSession?.id
         )
           return false;
@@ -388,6 +401,7 @@ export function createWebStore(
       } catch (error) {
         if (
           epoch === sessionEpoch &&
+          sessionPath === get().selectedPath &&
           sessionId === get().snapshot?.selectedSession?.id
         )
           showError(error);
@@ -471,6 +485,7 @@ export function createWebStore(
     const reconcileThinking = async () => {
       const epoch = sessionEpoch;
       const sessionId = get().snapshot?.selectedSession?.id;
+      const sessionPath = get().selectedPath;
       if (!sessionId) return;
       try {
         const result = await client.thinking(
@@ -479,6 +494,7 @@ export function createWebStore(
         );
         if (
           epoch !== sessionEpoch ||
+          sessionPath !== get().selectedPath ||
           sessionId !== get().snapshot?.selectedSession?.id
         )
           return;
@@ -499,7 +515,14 @@ export function createWebStore(
           const seq = thinkingSeq;
           const epoch = sessionEpoch;
           const sessionId = get().snapshot?.selectedSession?.id;
-          if (!sessionId || get().modelSelectionPending) {
+          const sessionPath = get().selectedPath;
+          if (
+            !sessionId ||
+            !sessionPath ||
+            sessionId !== get().snapshot?.currentSessionId ||
+            sessionPath !== get().snapshot?.selectedSession?.path ||
+            get().modelSelectionPending
+          ) {
             resetThinking();
             return;
           }
@@ -512,12 +535,17 @@ export function createWebStore(
           }
           let result: WebThinkingState;
           try {
-            result = await client.setThinkingLevel(sessionId, target);
+            result = await client.setThinkingLevel(
+              sessionId,
+              target,
+              sessionPath,
+            );
           } catch (error) {
             // A superseded session owns its own flush; drop this one instead of
             // re-looping into a duplicate POST. Same-epoch newer intent still
             // re-reads the latest target below.
-            if (epoch !== sessionEpoch) return;
+            if (epoch !== sessionEpoch || sessionPath !== get().selectedPath)
+              return;
             if (seq !== thinkingSeq) continue;
             resetThinking();
             showError(error);
@@ -526,6 +554,7 @@ export function createWebStore(
           }
           if (
             epoch !== sessionEpoch ||
+            sessionPath !== get().selectedPath ||
             sessionId !== get().snapshot?.selectedSession?.id
           ) {
             // The session changed underneath this request; a newer flush (if
@@ -896,11 +925,14 @@ export function createWebStore(
           const hasCurrent = typeof snapshot.currentSessionId === "string";
           const currentSession = hasCurrent
             ? snapshot.sessions.find(
-                (session) => session.id === snapshot.currentSessionId,
+                (session) =>
+                  session.id === snapshot.currentSessionId &&
+                  session.controller === "web",
               )
             : undefined;
           const selectedIsCurrent = hasCurrent
-            ? snapshot.selectedSession?.id === snapshot.currentSessionId
+            ? snapshot.selectedSession?.id === snapshot.currentSessionId &&
+              snapshot.selectedSession?.path === currentSession?.path
             : snapshot.selectedSession === undefined;
           const requestedExists =
             !requestedPath ||
@@ -935,6 +967,15 @@ export function createWebStore(
               ? selectedSessionWorkspace
               : (activeWorkspace ?? retainedWorkspace ?? null);
           const shouldReset = options.resetCursor;
+          if (
+            get().snapshot?.selectedSession?.path !==
+            snapshot.selectedSession?.path
+          ) {
+            // Canonical recovery can change files without a switch event,
+            // including copies with the same embedded Session ID.
+            resetThinking();
+            clearThinkingGate();
+          }
           if (shouldReset) {
             // A cursor reset means a fresh stream (e.g. host restart), whose
             // sequence restarts at 0. The old revision gate would reject every
@@ -1142,9 +1183,15 @@ export function createWebStore(
               );
               return;
             }
+            const sessionPath = get().selectedPath;
+            if (!sessionPath) return;
+            target.sessionPath = sessionPath;
             set({ workspaceDraft: false, notice: null });
             const draft = get().draftModel;
-            if (draft && !(await applyModel(draft, epoch, target.sessionId))) {
+            if (
+              draft &&
+              !(await applyModel(draft, epoch, target.sessionId, sessionPath))
+            ) {
               return;
             }
             if (get().workspaceDraft || !targetMatchesSnapshot(target)) {
@@ -1278,10 +1325,20 @@ export function createWebStore(
           if (model) set({ draftModel: model, notice: null });
           return;
         }
-        if (!sessionId || sessionId !== state.snapshot?.currentSessionId)
+        if (
+          !sessionId ||
+          !state.selectedPath ||
+          sessionId !== state.snapshot?.currentSessionId ||
+          state.selectedPath !== state.snapshot?.selectedSession?.path
+        )
           return;
         resetThinking();
-        await applyModel({ provider, id: modelId }, sessionEpoch, sessionId);
+        await applyModel(
+          { provider, id: modelId },
+          sessionEpoch,
+          sessionId,
+          state.selectedPath,
+        );
       },
       async searchModels(query) {
         const normalized = query.trim();
@@ -1367,6 +1424,7 @@ export function createWebStore(
           state.workspaceDraft ||
           !sessionId ||
           sessionId !== state.snapshot?.currentSessionId ||
+          state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.liveRunning ||
           state.snapshot?.runtime.status === "running"
         )
@@ -1376,6 +1434,45 @@ export function createWebStore(
         thinkingSeq++;
         set({ thinkingPendingLevel: level });
         void flushThinking();
+      },
+      async selectPlanMode(enabled) {
+        const state = get();
+        const snapshot = state.snapshot;
+        const sessionId = snapshot?.selectedSession?.id;
+        if (
+          !sessionId ||
+          sessionId !== snapshot?.currentSessionId ||
+          state.workspaceDraft ||
+          state.sessionSwitching ||
+          state.planSelectionPending ||
+          state.promptAdmissionPending ||
+          state.promptAdmissionRecovery ||
+          state.liveRunning ||
+          snapshot.runtime.status !== "idle" ||
+          snapshot.runtime.planRevision === undefined
+        )
+          return;
+        const epoch = sessionEpoch;
+        set({ planSelectionPending: true });
+        try {
+          await client.setPlanMode(
+            sessionId,
+            enabled,
+            snapshot.runtime.planRevision,
+          );
+          if (
+            epoch === sessionEpoch &&
+            !(await actions.refreshSnapshot({ epoch }))
+          )
+            throw new Error(i18n.t("planModeUnconfirmed"));
+        } catch (error) {
+          if (epoch === sessionEpoch) {
+            await actions.refreshSnapshot({ epoch });
+            if (epoch === sessionEpoch) showError(error);
+          }
+        } finally {
+          set({ planSelectionPending: false });
+        }
       },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
@@ -1394,6 +1491,7 @@ export function createWebStore(
         }
       },
       async sendPrompt(rawContent, promptImages = []) {
+        if (get().planSelectionPending) return false;
         const content = rawContent.trim();
         const images = promptImages.map((image) => ({ ...image }));
         const imageSignature = JSON.stringify(
@@ -1458,9 +1556,11 @@ export function createWebStore(
         ) {
           return false;
         }
-        const { epoch, sessionId } = target;
+        const { epoch, sessionId, sessionPath } = target;
+        if (!sessionPath) return false;
         const draft = get().draftModel;
-        if (draft && !(await applyModel(draft, epoch, sessionId))) return false;
+        if (draft && !(await applyModel(draft, epoch, sessionId, sessionPath)))
+          return false;
         if (
           get().workspaceDraft ||
           !targetMatchesSnapshot(target) ||
@@ -1473,6 +1573,7 @@ export function createWebStore(
         const admission = ++promptAdmissionSequence;
         const retrying =
           promptAdmission?.sessionId === sessionId &&
+          promptAdmission.sessionPath === sessionPath &&
           promptAdmission.content === content &&
           promptAdmission.imageSignature === imageSignature;
         const commandId = retrying
@@ -1484,6 +1585,7 @@ export function createWebStore(
           : `optimistic-${commandId}`;
         promptAdmission = {
           sessionId,
+          sessionPath,
           content,
           imageSignature,
           images,
@@ -1525,10 +1627,15 @@ export function createWebStore(
             sessionId,
             content,
             commandId,
+            sessionPath,
             retrying,
             images,
           );
-          if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
+          if (
+            epoch !== sessionEpoch ||
+            sessionPath !== get().selectedPath ||
+            promptAdmissionToken !== admission
+          )
             return false;
           const settled = terminalPromptIds.has(receipt.id);
           if (promptAdmission?.commandId === commandId) promptAdmission = null;
@@ -1543,7 +1650,11 @@ export function createWebStore(
           scheduleSnapshotRefresh(120);
           return true;
         } catch (error) {
-          if (epoch !== sessionEpoch || promptAdmissionToken !== admission)
+          if (
+            epoch !== sessionEpoch ||
+            sessionPath !== get().selectedPath ||
+            promptAdmissionToken !== admission
+          )
             return false;
           if (
             error instanceof WebApiError &&
@@ -1642,6 +1753,8 @@ export function createWebStore(
         if (
           !recovery ||
           recovery.phase !== "ready" ||
+          recovery.sessionPath !== get().selectedPath ||
+          recovery.sessionPath !== get().snapshot?.selectedSession?.path ||
           recovery.sessionId !== get().snapshot?.selectedSession?.id
         ) {
           return false;
@@ -1693,6 +1806,7 @@ export function createWebStore(
           state.workspaceDraft ||
           !sessionId ||
           sessionId !== state.snapshot?.currentSessionId ||
+          state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.sessionSwitching
         ) {
           clearCommandDiscovery();
@@ -1801,6 +1915,7 @@ export function createWebStore(
     };
 
     return {
+      planSelectionPending: false,
       activeTurn: null,
       turnCancellationPending: false,
       turnTerminalStatus: null,

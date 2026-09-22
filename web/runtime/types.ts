@@ -1,4 +1,5 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
+import type { PlanControlRequest, projectPlanControl } from "../../extensions/plan-mode/control.ts";
 import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
@@ -43,6 +44,9 @@ export interface WebRuntimeEvent {
 }
 
 export type WebRuntimeRequestErrorCode =
+  | "PLAN_BUSY"
+  | "PLAN_CONFLICT"
+  | "PLAN_CONTROL_UNAVAILABLE"
   | "MODEL_NOT_AVAILABLE"
   | "SESSION_CONFLICT"
   | "PROMPT_REJECTED"
@@ -51,12 +55,12 @@ export type WebRuntimeRequestErrorCode =
 
 export class WebRuntimeRequestError extends Error {
   readonly code: WebRuntimeRequestErrorCode;
-  readonly statusCode: 400 | 409 | 422;
+  readonly statusCode: 400 | 409 | 422 | 501;
 
   constructor(
     message: string,
     code: WebRuntimeRequestErrorCode,
-    statusCode: 400 | 409 | 422,
+    statusCode: 400 | 409 | 422 | 501,
   ) {
     super(message);
     this.name = "WebRuntimeRequestError";
@@ -68,6 +72,7 @@ export class WebRuntimeRequestError extends Error {
 export interface WebPromptOptions {
   commandId?: string;
   expectedSessionId?: string;
+  expectedSessionPath?: string;
   images?: readonly WebPromptImage[];
 }
 
@@ -97,10 +102,12 @@ export interface WebTurnCancellationResult extends WebActiveTurn {
 
 export interface WebModelSelectionOptions {
   expectedSessionId?: string;
+  expectedSessionPath?: string;
 }
 
 export interface WebThinkingSelectionOptions {
   expectedSessionId?: string;
+  expectedSessionPath?: string;
 }
 
 export interface WebThinkingProjection {
@@ -149,6 +156,7 @@ export interface WebRuntimeController {
   listProviderAuth?(): WebProviderAuthProjection;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
+  setPlanMode?(request: PlanControlRequest & { sessionId: string }): Promise<ReturnType<typeof projectPlanControl>>;
   setThinkingLevel?(
     level: string,
     options?: WebThinkingSelectionOptions,

@@ -20,7 +20,7 @@ export async function consumeEventStream(options: EventStreamOptions) {
   if (options.signal.aborted) abort();
   const timer = window.setTimeout(abort, 45_000);
   const response = await fetch(`/events?cursor=${options.cursor}`, {
-    headers: options.client.headers(),
+    headers: await options.client.headers(),
     signal: controller.signal,
   }).finally(() => {
     window.clearTimeout(timer);

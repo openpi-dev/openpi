@@ -460,6 +460,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离，升级不会覆盖。
 
+Post-edit 在交互式 TUI 的一轮成功 Write/Edit 后执行一次；下一轮 Agent 启动和本会话的所有工具调用（包括只读及自定义工具）会等待尚未完成的命令，避免前台格式化与后续读写交错。等待不等于触发：仍然只有成功的原生 Write/Edit 会安排后处理。请使用会自行结束的前台命令，不要配置 watch/server 或把写操作放到后台；不会自动超时放行。失败或中断会通知用户，但不会自动修复或阻止后续工作，因此它不是验收门禁。这个边界不覆盖其他 Session、Subagent、外部编辑器或脱离前台命令的子进程。详见 [Post-edit lifecycle](SETUP.md#post-edit-lifecycle)。
+
 Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems` 会在读取时迁移，但迁移后的配置不保证能被旧版 OpenPI 正确解释，因此不承诺配置文件的降级兼容性。
 
 一次 `/openpi-setup` episode 最多成功写入一次；成功后配置工具立即隐藏。若本轮没有成功写入，Runtime 会追加一条可见、持久且进入后续模型上下文的关闭凭据，明确 writer 已隐藏，后续修改必须重新执行 `/openpi-setup <自然语言请求>`。writer 只有在 OpenPI 能验证当前激活的是包自身定义时才可用；重复或来源不匹配会显式 fail closed，不会发布假的 setup-active 状态。不要让模型重调已隐藏工具，也不要绕过入口直接编辑配置文件。
@@ -585,6 +587,12 @@ openpi web /path/to/repo      # 指定初始工作区
 已经在 Pi 中安装 OpenPI 时，也可以直接执行 `/web`。它通过 Pi 官方的交互式终端 seam 暂停当前 TUI，运行当前 package 内完全相同的 `openpi web` 子进程，并在 `Ctrl+C` 停止 Web 后恢复原来的终端 Session。运行期间终端只归 Web 子进程使用；父 Pi 不读取按键，也不会把当前 Session id、消息、上下文或工作目录传给浏览器。Web 会恢复它自己的已有 Session 和工作区；没有可用项时，由用户在浏览器中添加或选择，不会把启动 `/web` 时的终端目录自动注册为 Web 工作区。选择前的内部引导态不暴露 Session、不绑定 extension 生命周期，也不接受 Prompt 或模型变更。选择工作区后发送第一条消息会先创建真实 Web Session，再向它投递。
 
 Web 可以在选择工作区之前预选可用模型。选择仅保留在当前页面，创建会话后确认模型生效再发送第一条消息；模型不可用时会提示并阻止发送，不会自动换成默认模型。打开已有会话时使用该会话的模型。
+
+在 Plan／Setup 原有工具范围内，模型调用 `ask_user` 时，发起任务的 Web 标签页会显示结构化问题卡片：选择选项、添加补充说明或填写自己的答案，复核后才提交给正在等待的工具调用。关闭卡片不会提交草稿；留空的自定义答案表示要求澄清问题。刷新同一标签可恢复尚未过期的提问（未提交草稿不持久化），其他标签不能代答。提问最多等待 15 分钟，停止运行、切换 Session 或关闭 Host 会取消等待；它不替代原生权限审批，也不意味着任意终端自定义界面已支持 Web。
+
+OpenPI 的 `/plan` 调研通过 `plan_ready` 成功提交计划后，Web 会在聊天区展示可收起、可复制的 Markdown 计划卡片，刷新后仍可查看。卡片展示的是工具返回的计划，不代表批准或开始实施；超出 Web 传输上限的结果会标明为预览。输入框上方的开关由现有 Plan 扩展切换当前 Session 的规划状态，不调用模型、不发送命令气泡，也不清空草稿；发送任务后才开始规划。首次发送后，输入框占位提示会说明“本次对话使用 Plan 模式”，刷新后保留，退出后恢复。任务运行期间不能切换模式，退出不代表批准或开始实施。手动 `/plan <目标>` 仍会直接开始规划，`/plan off` 仍可退出；Plan Ready 的实施确认仍需使用 TUI。
+
+本地 #562 后续改动还补充了 `human_handoff` 的人工操作卡片：选择“已完成”或“无法完成”、复核后提交，模型仍需验证完成信号。已适配的 `/openpi-setup`、`/plan`、`/usage`、`/cron` 可从命令菜单选择；Plan 会明确提示实施确认的限制。命令原文和 Plan／Cron 通知、Usage 查询结果显示在聊天区，不额外进入模型上下文。Cron 显示的是执行命令时的任务快照，任务本身仍只保存在原生会话内存中。
 
 Pi 当前只原生分派 `install`、`remove`、`update`、`list`、`config` 和 `auth` 等固定子命令，package 不能注册新的顶层子命令。因此 Web 入口是独立 CLI 的 `openpi web`，不是会被 Pi 当成初始 Prompt 的 `pi open`。Web 进程仍沿用 Pi 的 Provider、模型、凭据、Settings、Trust、Session 格式和 extension 资源加载，不引入第二套 Provider 或 Session 存储。
 

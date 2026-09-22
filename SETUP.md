@@ -75,6 +75,16 @@ Legacy `footerItems` is accepted and migrated at the input boundary, but new set
 
 <!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
+### Post-edit lifecycle
+
+Use a finite, foreground command such as `npm run format`, not a watcher, server, or detached background writer. Post-edit remains off by default and runs only in the interactive TUI, once per settled turn with successful native Write/Edit operations. Bash is not inspected for file changes.
+
+The next Agent start (including a background completion's parent wake-up) waits for outstanding commands to finish, and all tool calls in this Session also join them before executing. This includes read-only and custom tools: a tool-name allowlist cannot reliably identify every workspace reader. Tools that do not access files wait too; only successful native Write/Edit results schedule post-edit. Nonzero exits and interrupted commands produce bounded, sanitized notifications; neither triggers an automatic repair loop or a test-acceptance gate. A command that does not exit can keep the next turn waiting: there is no automatic timeout that silently releases this boundary. Canceling the waiting Agent releases its wait without permitting its tool call or forgetting the still-running command; session teardown can then request command cancellation.
+
+Each queued run captures its command and working directory at settlement. Configuration changes affect future runs; disabling post-edit discards queued runs but lets the active command finish. Session start/shutdown discards queued work and requests cancellation, without treating an abort request as process completion. Results from the old session do not notify the new one.
+
+This coordinates one extension instance's foreground commands with its Agent. It does not lock the workspace against other Sessions, Subagents, external editors, user shell commands, or detached descendants. Pi's command cancellation does not guarantee termination of an entire process tree; keep all command writes in the foreground and inspect interrupted work before relying on its files.
+
 ## Optional cross-session communication
 
 [pi-intercom](https://github.com/nicobailon/pi-intercom) is an independently maintained Pi package for communication between top-level Sessions. OpenPI does not detect, recommend, install, configure, migrate, or remove it. If you need that capability, review its repository and install it through Pi's native package command:

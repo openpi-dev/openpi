@@ -29,6 +29,78 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("Plan controls preserve drafts without sending prompts, and the placeholder follows confirmed planning messages", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.plan = "inactive";
+  snapshot.runtime.status = "idle";
+  snapshot.runtime.planRevision = null;
+  const store = createWebStore();
+  const selectPlanMode = vi.fn(async () => {});
+  const sendPrompt = vi.fn(async () => true);
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: { ...store.getState().actions, selectPlanMode, sendPrompt },
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "Keep my draft" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("planModeEnter") }),
+  );
+  expect(selectPlanMode).toHaveBeenCalledWith(true);
+  expect(sendPrompt).not.toHaveBeenCalled();
+  expect(input.value).toBe("Keep my draft");
+  const rerender = (
+    plan: "planning" | "inactive",
+    hasPrompt: boolean,
+    pending = false,
+  ) =>
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          planSelectionPending: pending,
+          snapshot: {
+            ...snapshot,
+            runtime: { ...snapshot.runtime, plan, planHasPrompt: hasPrompt },
+          },
+        }),
+      ),
+    );
+  rerender("planning", false);
+  expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
+  rerender("planning", true);
+  expect(input.placeholder).toBe(i18n.t("promptPlanMessage"));
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("planModeExit") }));
+  expect(selectPlanMode).toHaveBeenLastCalledWith(false);
+  expect(sendPrompt).not.toHaveBeenCalled();
+  rerender("inactive", false);
+  expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
+  expect(input.value).toBe("Keep my draft");
+  rerender("planning", true, true);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("planModeExit"),
+    }).disabled,
+  ).toBe(true);
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(sendPrompt).not.toHaveBeenCalled();
+});
+
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
   const snapshot = activeSnapshot();
@@ -441,6 +513,17 @@ it("keeps OpenPI setup episodes out of the main conversation", () => {
       timestamp: "2026-09-19T10:00:01Z",
       message: { role: "assistant", content: "Visible task response" },
     },
+    {
+      id: "setup-command",
+      type: "message",
+      timestamp: "2026-09-19T10:00:02Z",
+      message: {
+        role: "user",
+        content: "/openpi-setup Apply a dark theme",
+        customType: "openpi-web-command-input",
+        commandId: "setup-command-id",
+      },
+    },
     projectEntry({
       id: "setup-request",
       parentId: "before-assistant",
@@ -509,6 +592,7 @@ it("keeps OpenPI setup episodes out of the main conversation", () => {
   expect(screen.getByText("Visible continuation")).toBeTruthy();
   expect(screen.queryByText("Hidden configuration response")).toBeNull();
   expect(screen.queryByText("Hidden configuration evidence")).toBeNull();
+  expect(screen.queryByText("/openpi-setup Apply a dark theme")).toBeNull();
 });
 
 it("renders side conversation messages with transcript role styling", async () => {
@@ -1477,6 +1561,39 @@ function thinkingPickerName(level: string) {
   return `${i18n.t("thinkingLevel")}: ${level}`;
 }
 
+it.each([null, "/tmp/copy"])(
+  "disables the stale composer until file selection %s is confirmed",
+  (selectedPath) => {
+    const snapshot = idleThinkingSnapshot();
+    const { rerender } = renderWithI18n(
+      createElement(Composer, {
+        ...thinkingProps(snapshot),
+        selectedPath,
+      }),
+    );
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      }).disabled,
+    ).toBe(true);
+    rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...thinkingProps(snapshot),
+          selectedPath: snapshot.selectedSession!.path,
+        }),
+      ),
+    );
+    expect(
+      screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      }).disabled,
+    ).toBe(false);
+  },
+);
+
 describe("thinking level picker", () => {
   it("renders nothing when the snapshot has no thinking projection", () => {
     const snapshot = idleThinkingSnapshot();
@@ -1578,7 +1695,7 @@ describe("thinking level picker", () => {
     const snapshot = idleThinkingSnapshot();
     const client = new ThinkingClient();
     const store = createWebStore(client);
-    store.setState({ snapshot });
+    store.setState({ snapshot, selectedPath: snapshot.selectedSession!.path });
     const selectThinking = vi.spyOn(store.getState().actions, "selectThinking");
     try {
       renderWithI18n(
@@ -1959,6 +2076,7 @@ it("renders explicit choices for an unknown prompt admission", () => {
       promptAdmissionPending: false,
       promptAdmissionRecovery: {
         sessionId: "session",
+        sessionPath: snapshot.selectedSession!.path,
         content: "keep this draft",
         commandId: "unknown-command",
         optimisticKey: "optimistic-unknown-command",
@@ -2003,6 +2121,7 @@ it("requires another canonical check after admission verification fails", () => 
       promptAdmissionPending: false,
       promptAdmissionRecovery: {
         sessionId: "session",
+        sessionPath: snapshot.selectedSession!.path,
         content: "keep this draft",
         commandId: "unknown-command",
         optimisticKey: "optimistic-unknown-command",
@@ -2049,6 +2168,7 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
       promptAdmissionPending: false,
       promptAdmissionRecovery: {
         sessionId: "session",
+        sessionPath: snapshot.selectedSession!.path,
         content: "keep this draft",
         commandId: "unknown-command",
         optimisticKey: "optimistic-unknown-command",
@@ -2105,6 +2225,7 @@ it("keeps an emptied recovery draft empty across verification and submission pha
     promptAdmissionPending: false,
     promptAdmissionRecovery: {
       sessionId: "session",
+      sessionPath: snapshot.selectedSession!.path,
       content: "original",
       commandId: "unknown-command",
       optimisticKey: "optimistic-unknown-command",
@@ -2186,6 +2307,7 @@ it("preserves an edited recovered draft when late evidence arrives", () => {
     promptAdmissionPending: false,
     promptAdmissionRecovery: {
       sessionId: "session",
+      sessionPath: snapshot.selectedSession!.path,
       content: "original",
       commandId: "unknown-command",
       optimisticKey: "optimistic-unknown-command",
@@ -2586,6 +2708,7 @@ it("keeps a retyped recovery draft when sending as new settles", async () => {
     promptAdmissionPending: false,
     promptAdmissionRecovery: {
       sessionId: "session",
+      sessionPath: snapshot.selectedSession!.path,
       content: "first",
       commandId: "unknown-command",
       optimisticKey: "optimistic-unknown-command",

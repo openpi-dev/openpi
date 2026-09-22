@@ -52,6 +52,7 @@ import {
 } from "./SlashCommandMenu.tsx";
 
 interface ComposerProps {
+  planSelectionPending?: boolean;
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
   modelSelectionPending?: boolean;
@@ -145,7 +146,8 @@ export function Composer(props: ComposerProps) {
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
-      selected.id === props.snapshot?.currentSessionId,
+      selected.id === props.snapshot?.currentSessionId &&
+      selectedPath === selected.path,
   );
   const draftSession = Boolean(
     props.selectedWorkspace &&
@@ -336,7 +338,7 @@ export function Composer(props: ComposerProps) {
       images?: readonly WebPromptImage[],
     ) => Promise<boolean>,
   ) => {
-    if (pendingSubmission.current) return;
+    if (pendingSubmission.current || props.planSelectionPending) return;
     if (!props.selectedWorkspace) {
       await props.actions.chooseWorkspace();
       return;
@@ -471,11 +473,15 @@ export function Composer(props: ComposerProps) {
   const targetSummary = compactSummary(targetLabel, 48);
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
-    : props.landing
-      ? t("promptTask")
-      : active
-        ? t("promptMessage")
-        : t("promptReadonly");
+    : active &&
+        props.snapshot?.runtime.planHasPrompt &&
+        ["planning", "ready"].includes(props.snapshot.runtime.plan ?? "")
+      ? t("promptPlanMessage")
+      : props.landing
+        ? t("promptTask")
+        : active
+          ? t("promptMessage")
+          : t("promptReadonly");
   const thinking = props.snapshot?.thinking;
   const confirmed = thinking?.level ?? null;
   const pending = props.thinkingPendingLevel ?? null;
@@ -524,28 +530,32 @@ export function Composer(props: ComposerProps) {
         },
       ]
     : [];
-  const hint = props.modelSelectionPending
-    ? t("thinkingModelPendingHint")
-    : props.thinkingPendingLevel !== null
-      ? t("thinkingPendingHint")
-      : props.workspaceDraft
-        ? t("enterHint")
-        : props.turnCancellationPending
-          ? t("stoppingTurn")
-          : props.turnTerminalStatus === "cancelled"
-            ? t("stoppedTurn")
-            : props.pendingFollowUpsReceipt !== null
-              ? props.pendingFollowUpsReceipt > 0
-                ? t("pendingFollowUpsHint", {
-                    count: props.pendingFollowUpsReceipt,
-                  })
-                : t("acceptedHint")
-              : canCompose
-                ? running
-                  ? t("queuedHint")
-                  : t("enterHint")
-                : t("activeOnlyHint");
+  const hint =
+    props.promptAdmissionPending && !canStop
+      ? t("promptPending")
+      : props.modelSelectionPending
+        ? t("thinkingModelPendingHint")
+        : props.thinkingPendingLevel !== null
+          ? t("thinkingPendingHint")
+          : props.workspaceDraft
+            ? t("enterHint")
+            : props.turnCancellationPending
+              ? t("stoppingTurn")
+              : props.turnTerminalStatus === "cancelled"
+                ? t("stoppedTurn")
+                : props.pendingFollowUpsReceipt !== null
+                  ? props.pendingFollowUpsReceipt > 0
+                    ? t("pendingFollowUpsHint", {
+                        count: props.pendingFollowUpsReceipt,
+                      })
+                    : t("acceptedHint")
+                  : canCompose
+                    ? running
+                      ? t("queuedHint")
+                      : t("enterHint")
+                    : t("activeOnlyHint");
   const showHint =
+    (props.promptAdmissionPending && !canStop) ||
     props.modelSelectionPending ||
     props.thinkingPendingLevel !== null ||
     props.turnCancellationPending ||
@@ -555,6 +565,35 @@ export function Composer(props: ComposerProps) {
 
   return (
     <div className="composer-dock">
+      {!props.workspaceDraft &&
+        props.snapshot?.selectedSession?.id ===
+          props.snapshot?.currentSessionId &&
+        props.snapshot?.runtime.plan &&
+        !props.sessionSwitching && (
+          <div className="plan-mode-bar">
+            <span>{t(`planMode_${props.snapshot.runtime.plan}`)}</span>
+            <button
+              type="button"
+              disabled={
+                running ||
+                props.planSelectionPending ||
+                props.promptAdmissionPending ||
+                Boolean(props.promptAdmissionRecovery)
+              }
+              onClick={() =>
+                void props.actions.selectPlanMode(
+                  props.snapshot?.runtime.plan === "inactive",
+                )
+              }
+            >
+              {t(
+                props.snapshot.runtime.plan === "inactive"
+                  ? "planModeEnter"
+                  : "planModeExit",
+              )}
+            </button>
+          </div>
+        )}
       {active && (
         <ActivityBar
           snapshot={props.snapshot}
@@ -969,6 +1008,7 @@ export function Composer(props: ComposerProps) {
                     !canCompose ||
                     !props.selectedWorkspace ||
                     props.promptAdmissionPending ||
+                    props.planSelectionPending ||
                     Boolean(props.promptAdmissionRecovery) ||
                     Boolean(props.promptAdmissionResolution) ||
                     (!prompt.trim() && images.length === 0)
