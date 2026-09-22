@@ -39,6 +39,8 @@ PR `fbf15d2` 的 Node 22/24/26 与 Windows CI 通过，Web E2E 60/61，失败为
 
 `4e9ba87` 的 [CI 35730543135](https://github.com/openpi-dev/openpi/actions/runs/35730543135) 已全部通过：Node 22.19.0 / 24 / 26、Linux Web E2E 65/65、Windows 进程生命周期及完整套件。没有跳过失败测试或关闭浏览器 sandbox。
 
+纯文档提交 `6126e38` 的[后续 CI](https://github.com/openpi-dev/openpi/actions/runs/35731747730) 再次出现约 8 秒的 Chromium 调试端口等待超时，其他 64 项 Web 测试通过。这份反例说明一次绿色结果不能证明冷启动稳定，也不支持将先前启动超时直接归因为 AppArmor。旧实现丢弃了 Chromium stderr，因此该次真实原因仍未知。收尾补充启动阶段、耗时、端口文件读取错误及最多 4 KiB stderr 尾部，失败证据只写入宿主日志和 Error cause，HTTP 仍返回原有文案；成功后释放尾部并继续排空管道。Linux CI 增加三次独立新进程、新配置目录的冷启动验证，任一失败都保持失败，不以重试掩盖，也不放宽原八秒启动预算。
+
 用户“卡住”反馈的只读证据有两层：Git 拉取先在 240 秒后超时，后续两次约 75 秒后报告连接 GitHub 失败；后台仍消费后续消息并写入新工具结果。事件环则在两次会话切换后停止更新该后台任务。常驻 LaunchAgent 未显式配置工具 shell 所使用的代理，这与连接失败相关，但仅凭 plist 不能证明完整进程环境。没有修改该实例的代理、Git 配置或运行进程。
 
 待应用的 LaunchAgent 副本已在私有证据目录准备，复用现有工具 shell 的代理并保留 loopback 绕过。使用该候选环境单独执行只读 `git ls-remote`，约 1.98 秒成功；这是单次连通性验证，不保证后续网络请求时延。原 plist 和常驻进程均未改动。

@@ -191,6 +191,11 @@ jobs:
         run: bun install --frozen-lockfile
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
+      - name: Verify isolated Chromium cold starts
+        timeout-minutes: 2
+        run: node --experimental-strip-types tests/web/browser-cold-start-smoke.mjs
+        env:
+          OPENPI_CHROME_PATH: /opt/google/chrome/chrome
       - run: bun run test:web:e2e
         env:
           # The runner's installed Chrome has Ubuntu's native sandbox profile.

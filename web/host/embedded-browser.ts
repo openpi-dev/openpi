@@ -9,6 +9,7 @@ import type {
 } from "../protocol/types.ts";
 
 const START_TIMEOUT_MS = 8_000;
+const START_STDERR_MAX_BYTES = 4 * 1024;
 const DEFAULT_WIDTH = 1_024;
 const DEFAULT_HEIGHT = 768;
 
@@ -200,7 +201,21 @@ async function findBrowserExecutable() {
   );
 }
 
-async function waitForDebugPort(profile: string, processHandle: ChildProcess) {
+interface BrowserStartupDiagnostics {
+  stage: "debug-port" | "page-target" | "cdp";
+  failure?: "spawn" | "exit" | "timeout";
+  spawnErrorCode?: string;
+  portReadErrorCode?: string;
+}
+
+function startupStderrText(tail: Buffer) {
+  const utf8 = Buffer.from(tail.toString("utf8"));
+  let start = Math.max(0, utf8.length - START_STDERR_MAX_BYTES);
+  while (start < utf8.length && (utf8[start]! & 0xc0) === 0x80) start++;
+  return utf8.subarray(start).toString("utf8");
+}
+
+async function waitForDebugPort(profile: string, processHandle: ChildProcess, diagnostics: BrowserStartupDiagnostics) {
   const started = performance.now();
   const target = join(profile, "DevToolsActivePort");
   let launchError: NodeJS.ErrnoException | undefined;
@@ -208,17 +223,29 @@ async function waitForDebugPort(profile: string, processHandle: ChildProcess) {
   processHandle.on("error", onError);
   try {
     while (performance.now() - started < START_TIMEOUT_MS) {
-      if (launchError)
+      if (launchError) {
+        diagnostics.failure = "spawn";
+        diagnostics.spawnErrorCode = launchError.code;
         throw new Error(`Embedded browser could not start${launchError.code ? ` (${launchError.code})` : ""}`);
-      if (processHandle.exitCode !== null || processHandle.signalCode !== null)
+      }
+      if (processHandle.exitCode !== null || processHandle.signalCode !== null) {
+        diagnostics.failure = "exit";
         throw new Error(`Embedded browser exited during startup (${processHandle.signalCode ?? `exit ${processHandle.exitCode}`})`);
+      }
       try {
         const [port] = (await readFile(target, "utf8")).trim().split("\n");
         const value = Number(port);
-        if (Number.isSafeInteger(value) && value > 0) return value;
-      } catch {}
+        if (Number.isSafeInteger(value) && value > 0) {
+          delete diagnostics.portReadErrorCode;
+          return value;
+        }
+        diagnostics.portReadErrorCode = "INVALID_PORT_FILE";
+      } catch (error) {
+        diagnostics.portReadErrorCode = error instanceof Error && "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
+      }
       await new Promise((resolve) => setTimeout(resolve, 40));
     }
+    diagnostics.failure = "timeout";
     throw new Error("Embedded browser startup timed out");
   } finally {
     processHandle.off("error", onError);
@@ -447,11 +474,22 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       "about:blank",
     ];
     const processHandle = spawn(executable, args, {
-      stdio: "ignore",
+      stdio: ["ignore", "ignore", "pipe"],
       windowsHide: true,
     });
+    const started = performance.now();
+    const diagnostics: BrowserStartupDiagnostics = { stage: "debug-port" };
+    let stderr: Buffer | null = Buffer.alloc(0);
+    processHandle.stderr?.on("data", (chunk: Buffer) => {
+      // Keep draining for the lifetime of the browser, but retain only its
+      // bounded startup tail. Successful Sessions must not accumulate logs.
+      if (stderr === null) return;
+      const tail = chunk.length >= START_STDERR_MAX_BYTES ? chunk : Buffer.concat([stderr, chunk]);
+      stderr = Buffer.from(tail.subarray(Math.max(0, tail.length - START_STDERR_MAX_BYTES)));
+    });
     try {
-      const port = await waitForDebugPort(profile, processHandle);
+      const port = await waitForDebugPort(profile, processHandle, diagnostics);
+      diagnostics.stage = "page-target";
       const targets = (await fetch(`http://127.0.0.1:${port}/json/list`).then(
         (response) => response.json(),
       )) as Array<Record<string, unknown>>;
@@ -460,6 +498,7 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
       );
       if (!target || typeof target.webSocketDebuggerUrl !== "string")
         throw new Error("Embedded browser did not expose a page target");
+      diagnostics.stage = "cdp";
       const cdp = new CdpConnection(target.webSocketDebuggerUrl);
       await cdp.send("Page.enable");
       await cdp.send("Runtime.enable");
@@ -536,11 +575,23 @@ export class EmbeddedBrowserManager implements EmbeddedBrowserService {
         for (const stop of stops) stop();
       };
       await this.resize(session, width, height);
+      stderr = null;
       return session;
     } catch (error) {
+      const cause = {
+        ...diagnostics,
+        elapsedMs: Math.round(performance.now() - started),
+        exitCode: processHandle.exitCode,
+        signal: processHandle.signalCode,
+        stderr: startupStderrText(stderr ?? Buffer.alloc(0)),
+      };
+      stderr = null;
+      // Raw Chromium diagnostics stay in the host log/cause. WebHost only
+      // exposes the original safe message to the browser client.
+      try { console.error("OpenPI embedded browser startup failed", cause); } catch {}
       if (processHandle.exitCode === null) processHandle.kill("SIGKILL");
       await rm(profile, { recursive: true, force: true });
-      throw error;
+      throw new Error(error instanceof Error ? error.message : "Embedded browser could not start", { cause });
     }
   }
 
