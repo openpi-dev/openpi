@@ -15,6 +15,7 @@ import {
 import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts";
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
+import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
 import { WebHost, type WebHostOptions } from "../../web/host/web-host.ts";
 import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
@@ -2193,6 +2194,66 @@ test("exposes an embedded browser and an active-Session interactive terminal", a
     await host.stop();
     assert.equal(disposed, true);
     assert.equal(browserDisposed, true);
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("rejects terminal creation when the active Session changes during admission", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-terminal-admission-"));
+  const runtime = testRuntime(cwd);
+  let activeSessionManager = runtime.sessionManager;
+  Object.defineProperty(runtime, "sessionManager", {
+    configurable: true,
+    get: () => activeSessionManager,
+  });
+  const sessionId = activeSessionManager.getSessionId();
+  let createCalls = 0;
+  let entered!: () => void;
+  const enteredPromise = new Promise<void>((resolve) => {
+    entered = resolve;
+  });
+  let release!: () => void;
+  const releasePromise = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const interactiveTerminals: InteractiveTerminalService = {
+    async create() {
+      createCalls += 1;
+      throw new Error("stale terminal creation should be rejected");
+    },
+    get: () => undefined,
+    write: () => false,
+    resize: () => false,
+    subscribe: () => undefined,
+    close: () => false,
+    retain() {},
+    dispose() {},
+  };
+  const originalRequireWorkspace = PiWebAdapter.prototype.requireWorkspace;
+  const { host, launched, headers } = await startTestHost(runtime, {
+    interactiveTerminals,
+  });
+  PiWebAdapter.prototype.requireWorkspace = async function (path) {
+    entered();
+    await releasePromise;
+    return originalRequireWorkspace.call(this, path);
+  };
+  try {
+    const pending = fetch(`${launched.origin}/api/terminal`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body: JSON.stringify({ sessionId, cols: 80, rows: 24 }),
+    });
+    await enteredPromise;
+    activeSessionManager = SessionManager.inMemory(cwd);
+    release();
+    const response = await pending;
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).code, "SESSION_CHANGED");
+    assert.equal(createCalls, 0);
+  } finally {
+    PiWebAdapter.prototype.requireWorkspace = originalRequireWorkspace;
+    await host.stop();
     await rm(cwd, { recursive: true, force: true });
   }
 });
