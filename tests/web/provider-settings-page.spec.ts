@@ -226,6 +226,9 @@ it("preserves an unfinished model configuration when changing settings tabs", as
   const address = await screen.findByRole("textbox", {
     name: i18n.t("modelConfig_baseUrl"),
   });
+  await waitFor(() =>
+    expect((address as HTMLInputElement).disabled).toBe(false),
+  );
   fireEvent.change(address, { target: { value: "http://localhost:12345/v1" } });
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("skillsSettings") }));
   fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
@@ -361,6 +364,54 @@ it("matches the pi-web settings shell and selects models through Pi", async () =
   expect(fetcher).toHaveBeenCalledTimes(3);
 });
 
+it("keeps configured models editable before their credentials make them available", async () => {
+  const fallback = settingsFetcher();
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL) => {
+      if (String(input).includes("/api/models/configuration"))
+        return reply({
+          revision: "configuration-only",
+          models: [
+            {
+              provider: "unconnected",
+              id: "model",
+              name: "Configured before login",
+              baseUrl: "http://localhost:12345/v1",
+              api: "openai-responses",
+              reasoning: true,
+              contextWindow: 128000,
+              maxTokens: 4096,
+            },
+          ],
+        });
+      return fallback(input);
+    }),
+  );
+  renderSettings();
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Configured before login/ }),
+  );
+  await waitFor(() =>
+    expect(
+      screen.getByRole<HTMLInputElement>("textbox", {
+        name: i18n.t("modelConfig_name"),
+      }).value,
+    ).toBe("Configured before login"),
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("unavailable"),
+    }).disabled,
+  ).toBe(true);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("saveModelConfiguration"),
+    }).disabled,
+  ).toBe(false);
+});
+
 it("shows canonical General state and routes real setup/runtime actions", async () => {
   const fetcher = settingsFetcher();
   vi.stubGlobal("fetch", fetcher);
@@ -469,6 +520,105 @@ it("keeps an accepted OpenPI setup request inside the settings dialog", async ()
   );
   expect(screen.getByRole("dialog", { name: i18n.t("settings") })).toBeTruthy();
   expect(screen.getByText(i18n.t("setupRequestAccepted"))).toBeTruthy();
+});
+
+it("explains why appearance changes are unavailable during an active turn", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const configure = vi.fn(async () => true);
+  const view = renderSettings({
+    setupBusy: true,
+    onConfigureOpenPi: configure,
+  });
+  await screen.findByText(i18n.t("agentBehavior"));
+  expect(screen.getByText(i18n.t("settingsSetupBusyHint"))).toBeTruthy();
+  const theme = screen.getByRole<HTMLInputElement>("radio", {
+    name: i18n.t("themeDark"),
+  });
+  expect(theme.disabled).toBe(true);
+  expect(
+    screen.getByRole<HTMLInputElement>("switch", {
+      name: i18n.t("expandThinkingByDefault"),
+    }).disabled,
+  ).toBe(true);
+  fireEvent.click(theme);
+  expect(configure).not.toHaveBeenCalled();
+  view.rerender(
+    settingsElement({ setupBusy: false, onConfigureOpenPi: configure }),
+  );
+  expect(theme.disabled).toBe(false);
+  expect(screen.queryByText(i18n.t("settingsSetupBusyHint"))).toBeNull();
+});
+
+it("restores chat appearance through setup and rolls back a rejected request", async () => {
+  const payload = settingsPayload();
+  payload.setup.ui.webChatWidth = 1200;
+  payload.setup.ui.webChatFontSize = 18;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () => reply(payload)),
+  );
+  const configure = vi.fn(async () => false);
+  renderSettings({ onConfigureOpenPi: configure });
+  await screen.findByText(i18n.t("agentBehavior"));
+  const resetWidth = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("resetChatContentWidth"),
+  });
+  await waitFor(() => expect(resetWidth.disabled).toBe(false));
+  fireEvent.click(resetWidth);
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(
+      i18n.t("setupRequestSetChatWidth", { value: 820 }),
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatContentWidth") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("1200"),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("resetChatFontSize") }),
+  );
+  await waitFor(() =>
+    expect(configure).toHaveBeenCalledWith(
+      i18n.t("setupRequestSetChatFontSize", { value: 14 }),
+    ),
+  );
+  await waitFor(() =>
+    expect(
+      screen
+        .getByRole("slider", { name: i18n.t("chatFontSize") })
+        .getAttribute("aria-valuenow"),
+    ).toBe("18"),
+  );
+});
+
+it("explains unresolved message admission instead of asking the user to keep waiting", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings({ setupBlockedReason: i18n.t("setupResolveAdmission") });
+  await screen.findByText(i18n.t("agentBehavior"));
+  expect(screen.getByText(i18n.t("setupResolveAdmission"))).toBeTruthy();
+  expect(screen.queryByText(i18n.t("settingsSetupBusyHint"))).toBeNull();
+  expect(
+    screen.getByRole<HTMLInputElement>("radio", { name: i18n.t("themeDark") })
+      .disabled,
+  ).toBe(true);
+});
+
+it("switches sections through the compact settings picker", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings();
+  fireEvent.change(
+    screen.getByRole("combobox", { name: i18n.t("settingsNavigation") }),
+    { target: { value: "plugins" } },
+  );
+  expect(screen.getByRole("tabpanel").id).toBe("settings-panel-plugins");
+  expect(
+    screen
+      .getByRole("tab", { name: i18n.t("pluginsSettings") })
+      .getAttribute("aria-selected"),
+  ).toBe("true");
 });
 
 it("waits for a running setup request to settle before refreshing", async () => {

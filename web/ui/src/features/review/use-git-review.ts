@@ -16,9 +16,17 @@ import { WebClient } from "../../protocol/client.ts";
 export function useGitReview(
   session: WebSessionProjection | undefined,
   refreshKey: number | undefined,
+  {
+    active = true,
+    running = false,
+  }: { active?: boolean; running?: boolean } = {},
 ) {
   const client = useMemo(() => new WebClient(), []);
   const request = useRef<AbortController | null>(null);
+  const timer = useRef<number | null>(null);
+  const queued = useRef(false);
+  const visibility = useRef({ active, running });
+  visibility.current = { active, running };
   const [result, setResult] = useState<WebGitReviewResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -37,7 +45,11 @@ export function useGitReview(
 
   const refresh = useCallback(async () => {
     if (!sessionId || !sessionPath) return;
-    request.current?.abort();
+    if (document.visibilityState === "hidden") return;
+    if (request.current) {
+      queued.current = true;
+      return;
+    }
     const controller = new AbortController();
     request.current = controller;
     setLoading(true);
@@ -61,6 +73,19 @@ export function useGitReview(
       if (!controller.signal.aborted) {
         request.current = null;
         setLoading(false);
+        if (queued.current) {
+          queued.current = false;
+          const current = visibility.current;
+          if ((current.active || !current.running) && timer.current === null) {
+            timer.current = window.setTimeout(
+              () => {
+                timer.current = null;
+                void refresh();
+              },
+              current.active ? 200 : 2000,
+            );
+          }
+        }
       }
     }
   }, [client, sessionId, sessionPath, source]);
@@ -79,22 +104,63 @@ export function useGitReview(
   );
 
   useEffect(() => {
-    void refreshKey;
     if (!sessionId) return;
-    const timer = window.setTimeout(() => void refresh(), 200);
+    timer.current = window.setTimeout(() => {
+      timer.current = null;
+      void refresh();
+    }, 200);
     return () => {
-      window.clearTimeout(timer);
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = null;
+      queued.current = false;
       request.current?.abort();
       request.current = null;
     };
-  }, [refresh, refreshKey, sessionId]);
+  }, [refresh, sessionId]);
+
+  useEffect(() => {
+    // Entering the panel promotes an idle background refresh. Cursor updates
+    // must not keep restarting this timer while the panel is already visible.
+    if (active && timer.current !== null) {
+      window.clearTimeout(timer.current);
+      timer.current = null;
+    }
+  }, [active]);
+
+  useEffect(() => {
+    void refreshKey;
+    if (!active && running) {
+      if (timer.current !== null) window.clearTimeout(timer.current);
+      timer.current = null;
+      queued.current = false;
+      return;
+    }
+    if (!sessionId || timer.current !== null) return;
+    timer.current = window.setTimeout(
+      () => {
+        timer.current = null;
+        void refresh();
+      },
+      active ? 200 : 2000,
+    );
+  }, [refresh, refreshKey, active, running, sessionId]);
 
   useEffect(() => {
     if (!sessionId) return;
-    const onFocus = () => void refresh();
+    const onFocus = () => {
+      const current = visibility.current;
+      if (current.active || !current.running) void refresh();
+    };
     window.addEventListener("focus", onFocus);
-    return () => window.removeEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onFocus);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onFocus);
+    };
   }, [refresh, sessionId]);
 
-  return { result, loading, error, refresh, source, setSource, readFile };
+  return useMemo(
+    () => ({ result, loading, error, refresh, source, setSource, readFile }),
+    [result, loading, error, refresh, source, readFile],
+  );
 }

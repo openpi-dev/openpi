@@ -1,3 +1,5 @@
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AgentSessionServices,
   InlineExtension,
@@ -21,6 +23,51 @@ interface CommandDiscoveryBridge {
 }
 
 const bridges = new WeakMap<AgentSessionServices, CommandDiscoveryBridge>();
+const extensionRoot = fileURLToPath(new URL("../../extensions/", import.meta.url));
+const ownedSupport: Record<string, {
+  extension: string;
+  availability: WebCommandSummary["availability"];
+  action?: WebCommandSummary["action"];
+  unavailableReason?: WebCommandSummary["unavailableReason"];
+}> = {
+  "openpi-setup": { extension: "setup", availability: "available" },
+  "my-pi-setup": { extension: "setup", availability: "available" },
+  ps: { extension: "background-terminals", availability: "available", action: "terminal" },
+  lg: { extension: "git-info", availability: "available", action: "review" },
+  subagents: { extension: "subagents", availability: "available", action: "subagents" },
+  usage: { extension: "usage", availability: "available", action: "runtime" },
+  btw: { extension: "subagents", availability: "available", action: "side-conversation" },
+  sessions: { extension: "sessions", availability: "unsupported", unavailableReason: "terminal_only" },
+  web: { extension: "web", availability: "unsupported", unavailableReason: "terminal_only" },
+};
+
+function commandSupport(command: SlashCommandInfo) {
+  if (command.source !== "extension")
+    return { availability: "available" as const, argumentHint: "[arguments]" };
+  const owned = Object.hasOwn(ownedSupport, command.name) ? ownedSupport[command.name] : undefined;
+  if (owned && command.sourceInfo?.path &&
+    resolve(command.sourceInfo.path) === resolve(extensionRoot, owned.extension, "index.ts")) {
+    const { extension: _extension, ...support } = owned;
+    return { ...support, ...(support.action ? {} : support.availability === "available" ? { argumentHint: "[request]" } : {}) };
+  }
+  return { availability: "unsupported" as const, unavailableReason: "not_integrated" as const };
+}
+
+/** Match Pi's exact dispatch name against the untruncated native registry. */
+export function assertWebCommandSupported(services: AgentSessionServices, content: string) {
+  if (!content.startsWith("/")) return;
+  const bridge = bridges.get(services);
+  if (!bridge) throw new Error("Pi command discovery is unavailable for this Web runtime");
+  const space = content.indexOf(" ");
+  const name = content.slice(1, space === -1 ? undefined : space);
+  const command = bridge.read().find((candidate) => candidate.name === name);
+  if (!command || command.source !== "extension") return;
+  const support = commandSupport(command);
+  if ("action" in support && support.action)
+    throw new Error(`/${name} opens a Web panel. Run it from the Web command menu without arguments.`);
+  if (support.availability === "unsupported")
+    throw new Error(`/${name} is not available in the Web runtime. Use this command in the Pi terminal.`);
+}
 
 function commandText(value: string, maxLength: number) {
   return value
@@ -104,12 +151,8 @@ export function projectWebCommands(
     const projected: WebCommandSummary = {
       name,
       source: command.source,
-      availability:
-        command.source === "extension" ? "unsupported" : "available",
+      ...commandSupport(command),
       ...(description ? { description } : {}),
-      ...(command.source === "extension"
-        ? {}
-        : { argumentHint: "[arguments]" }),
     };
     const candidate = resultFor([...commands, projected], totalAvailable);
     if (candidate.truncation.bytes > WEB_MAX_COMMAND_BYTES) break;

@@ -3,6 +3,7 @@
 import {
   act,
   cleanup,
+  createEvent,
   fireEvent,
   render,
   screen,
@@ -109,7 +110,7 @@ function setup(overrides: Record<string, unknown> = {}) {
     workspaceDraft: false,
     createdSession: null as WebStoreState["createdSession"],
     snapshot: snapshot(),
-    selectedPath: "/tmp/workspace/one.jsonl",
+    selectedPath: "/tmp/workspace/one.jsonl" as string | null,
     selectedWorkspace: "/tmp/workspace",
     sessionSwitching: false,
     promptAdmissionPending: false,
@@ -423,9 +424,203 @@ function pendingImage(name = "delayed.png") {
   const reading = new Promise<ArrayBuffer>((resolve) => {
     finish = resolve;
   });
-  Object.defineProperty(file, "arrayBuffer", { value: () => reading });
-  return { file, finish: () => finish(bytes) };
+  const read = vi.fn(() => reading);
+  Object.defineProperty(file, "arrayBuffer", { value: read });
+  return { file, read, finish: () => finish(bytes) };
 }
+
+function pasteImages(input: HTMLElement, files: File[], text = "") {
+  const event = createEvent.paste(input, {
+    clipboardData: { files, getData: () => text },
+  });
+  fireEvent(input, event);
+  return event;
+}
+
+it("accepts a clipboard image exposed through items without swallowing accompanying text", async () => {
+  setup();
+  const image = pendingImage("clipboard.png");
+  const input = screen.getByRole("textbox");
+  const event = createEvent.paste(input, {
+    clipboardData: {
+      files: [],
+      items: [{ kind: "file", getAsFile: () => image.file }],
+      getData: () => "copied caption",
+    },
+  });
+  fireEvent(input, event);
+  expect(event.defaultPrevented).toBe(false);
+  expect(
+    screen.getByText(i18n.t("imageAttachmentsLoading")).getAttribute("role"),
+  ).toBe("status");
+  await act(async () => image.finish());
+  expect(screen.getByText("clipboard.png")).toBeTruthy();
+  expect(screen.queryByText(i18n.t("imageAttachmentsLoading"))).toBeNull();
+});
+
+it("retains rapid image pastes in order while an earlier image is still reading", async () => {
+  const { sendPrompt } = setup();
+  const input = screen.getByRole("textbox");
+  const first = pendingImage("first.png");
+  const second = pendingImage("second.png");
+  expect(pasteImages(input, [first.file]).defaultPrevented).toBe(true);
+  pasteImages(input, [second.file]);
+  expect(second.read).not.toHaveBeenCalled();
+  await act(async () => second.finish());
+  expect(screen.queryByText("second.png")).toBeNull();
+  await act(async () => first.finish());
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(sendPrompt).toHaveBeenCalledWith("", [
+    expect.objectContaining({ name: "first.png" }),
+    expect.objectContaining({ name: "second.png" }),
+  ]);
+});
+
+it("keeps valid images from a paste even when another file is unsupported", async () => {
+  const { sendPrompt } = setup();
+  const first = pendingImage("good.png");
+  const last = pendingImage("last.png");
+  const invalid = new File(["not an image"], "notes.txt", {
+    type: "text/plain",
+  });
+  const input = screen.getByRole("textbox");
+  pasteImages(input, [first.file, invalid, last.file]);
+  await act(async () => {
+    first.finish();
+    last.finish();
+  });
+  expect(screen.getByRole("alert").textContent).toContain("notes.txt");
+  expect(screen.getByText("good.png")).toBeTruthy();
+  expect(screen.getByText("last.png")).toBeTruthy();
+  fireEvent.keyDown(input, { key: "Enter" });
+  expect(sendPrompt).toHaveBeenCalledWith("", [
+    expect.objectContaining({ name: "good.png" }),
+    expect.objectContaining({ name: "last.png" }),
+  ]);
+});
+
+it("counts pending pastes toward the image limit and reports a rejected paste", async () => {
+  setup();
+  const input = screen.getByRole("textbox");
+  const accepted = Array.from({ length: 4 }, (_, index) =>
+    pendingImage(`${index}.png`),
+  );
+  const rejected = pendingImage("fifth.png");
+  for (const image of accepted) pasteImages(input, [image.file]);
+  pasteImages(input, [rejected.file]);
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("imageAttachmentCount", { count: 4 }),
+  );
+  await act(async () => {
+    for (const image of accepted) image.finish();
+  });
+  expect(
+    screen.getAllByRole("button", { name: /^Remove attachment/u }),
+  ).toHaveLength(4);
+  expect(rejected.read).not.toHaveBeenCalled();
+});
+
+it("discards queued clipboard images when their session is changed", async () => {
+  const { node, props, rerender } = setup();
+  const input = screen.getByRole("textbox");
+  const first = pendingImage("first.png");
+  const queued = pendingImage("queued.png");
+  pasteImages(input, [first.file]);
+  pasteImages(input, [queued.file]);
+  rerender(
+    node({
+      ...props,
+      snapshot: snapshot("session-2", "/tmp/workspace/two.jsonl"),
+      selectedPath: "/tmp/workspace/two.jsonl",
+    }),
+  );
+  await act(async () => first.finish());
+  expect(queued.read).not.toHaveBeenCalled();
+  expect(screen.queryByText("first.png")).toBeNull();
+  expect(screen.queryByText("queued.png")).toBeNull();
+  expect(screen.queryByText(i18n.t("imageAttachmentsLoading"))).toBeNull();
+});
+
+it("keeps pending images when the exact creation receipt transfers the draft to its first Session", async () => {
+  const { node, props, rerender, sendPrompt } = setup({ workspaceDraft: true });
+  const input = screen.getByRole("textbox");
+  fireEvent.change(input, { target: { value: "Inspect the pasted image" } });
+  const image = pendingImage("created.png");
+  pasteImages(input, [image.file]);
+  const path = "/tmp/workspace/created.jsonl";
+  rerender(node({ ...props, sessionSwitching: true, selectedPath: null }));
+  rerender(
+    node({
+      ...props,
+      sessionSwitching: true,
+      selectedPath: path,
+      snapshot: snapshot("created-session", path),
+    }),
+  );
+  rerender(
+    node({
+      ...props,
+      workspaceDraft: false,
+      snapshot: snapshot("created-session", path),
+      selectedPath: path,
+      createdSession: {
+        epoch: 1,
+        sessionId: "created-session",
+        sessionPath: path,
+        workspacePath: "/tmp/workspace",
+      },
+    }),
+  );
+  const importStillPending = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("send"),
+  }).disabled;
+  await act(async () => image.finish());
+  expect(screen.queryByText("created.png")).not.toBeNull();
+  expect(importStillPending).toBe(true);
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("send") }));
+  expect(sendPrompt).toHaveBeenCalledWith("Inspect the pasted image", [
+    expect.objectContaining({ name: "created.png" }),
+  ]);
+});
+
+it.each(["missing", "different-id", "different-path", "different-workspace"])(
+  "does not transfer pending images to a same-workspace Session with a %s creation receipt",
+  async (mismatch) => {
+    const { node, props, rerender } = setup({ workspaceDraft: true });
+    const image = pendingImage("unowned.png");
+    pasteImages(screen.getByRole("textbox"), [image.file]);
+    const path = "/tmp/workspace/other.jsonl";
+    rerender(
+      node({
+        ...props,
+        workspaceDraft: false,
+        snapshot: snapshot("other-session", path),
+        selectedPath: path,
+        createdSession:
+          mismatch === "missing"
+            ? null
+            : {
+                epoch: 1,
+                sessionId:
+                  mismatch === "different-id"
+                    ? "unrelated-session"
+                    : "other-session",
+                sessionPath:
+                  mismatch === "different-path"
+                    ? "/tmp/workspace/copied.jsonl"
+                    : path,
+                workspacePath:
+                  mismatch === "different-workspace"
+                    ? "/another/workspace"
+                    : "/tmp/workspace",
+              },
+      }),
+    );
+    await act(async () => image.finish());
+    expect(screen.queryByText("unowned.png")).toBeNull();
+    expect(screen.queryByText(i18n.t("imageAttachmentsLoading"))).toBeNull();
+  },
+);
 
 it("waits for an in-progress attachment before either send gesture", async () => {
   const { container, sendPrompt } = setup();

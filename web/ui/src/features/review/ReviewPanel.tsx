@@ -60,6 +60,7 @@ export function ReviewPanel({
   onClose,
   onOpenTools,
   embedded = false,
+  active = true,
   onOpenFiles,
 }: {
   review: GitReviewViewState;
@@ -67,6 +68,7 @@ export function ReviewPanel({
   onClose: () => void;
   onOpenTools?: () => void;
   embedded?: boolean;
+  active?: boolean;
   onOpenFiles?: () => void;
 }) {
   const { t } = useTranslation();
@@ -114,6 +116,7 @@ export function ReviewPanel({
     void fileRetry;
     const path = fileSummary?.path;
     if (
+      !active ||
       !path ||
       fileSummary?.diffLoaded !== false ||
       !review.readFile ||
@@ -139,6 +142,7 @@ export function ReviewPanel({
     return () => controller.abort();
   }, [
     fileSummary?.path,
+    active,
     fileSummary?.diffLoaded,
     revision,
     review.readFile,
@@ -164,10 +168,11 @@ export function ReviewPanel({
 
   const selectedFilePath = selectedFile?.path;
   useEffect(() => {
+    if (!active) return;
     if (selectedFilePath) preview.current?.focus();
     else if (embedded) listBody.current?.focus();
     else listCloseButton.current?.focus();
-  }, [embedded, selectedFilePath]);
+  }, [active, embedded, selectedFilePath]);
 
   const openFile = (path: string) => {
     setSelectedPath(path);

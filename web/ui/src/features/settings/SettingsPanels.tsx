@@ -17,6 +17,7 @@ import {
   Moon,
   Plug,
   RefreshCw,
+  RotateCcw,
   Sparkles,
   Sun,
   TreePine,
@@ -147,6 +148,8 @@ export function GeneralSettingsPanel({
   theme,
   setupPending,
   preferencePending,
+  setupBusy,
+  setupBlockedReason,
   onConfigure,
   onUpdatePreferences,
   onOpenRuntimeStatus,
@@ -160,6 +163,8 @@ export function GeneralSettingsPanel({
   theme: WebThemePreference;
   setupPending: boolean;
   preferencePending: boolean;
+  setupBusy: boolean;
+  setupBlockedReason?: string;
   onConfigure: (request: string) => Promise<boolean>;
   onUpdatePreferences: (patch: WebSettingsPreferencesPatch) => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
@@ -192,6 +197,12 @@ export function GeneralSettingsPanel({
           label={t("configureOpenPi")}
         />
       </div>
+
+      {setupBusy && (
+        <p className="settings-pending-hint" role="status">
+          {setupBlockedReason || t("settingsSetupBusyHint")}
+        </p>
+      )}
 
       <section className="settings-section-block">
         <h2>{t("appearance")}</h2>
@@ -240,14 +251,36 @@ export function GeneralSettingsPanel({
             }}
           />
           <div className="settings-slider-control">
+            <div className="settings-slider-heading">
+              <span>{t("chatContentWidth")}</span>
+              <output>{chatWidth}px</output>
+              <button
+                type="button"
+                className="settings-reset-button"
+                aria-label={t("resetChatContentWidth")}
+                title={t("resetChatContentWidth")}
+                disabled={preferencePending || chatWidth === 820}
+                onClick={() => {
+                  setChatWidth(820);
+                  void onUpdatePreferences({ chatWidth: 820 }).then(
+                    (accepted) => {
+                      if (!accepted) setChatWidth(setup.ui.webChatWidth);
+                    },
+                  );
+                }}
+              >
+                <RotateCcw aria-hidden="true" />
+              </button>
+            </div>
             <Slider
               label={t("chatContentWidth")}
+              isLabelHidden
               value={chatWidth}
               min={820}
               max={2000}
               step={10}
               width="100%"
-              valueDisplay="text"
+              valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
               isDisabled={preferencePending}
               onChange={(value: number) => setChatWidth(value)}
@@ -263,14 +296,36 @@ export function GeneralSettingsPanel({
             />
           </div>
           <div className="settings-slider-control">
+            <div className="settings-slider-heading">
+              <span>{t("chatFontSize")}</span>
+              <output>{chatFontSize}px</output>
+              <button
+                type="button"
+                className="settings-reset-button"
+                aria-label={t("resetChatFontSize")}
+                title={t("resetChatFontSize")}
+                disabled={preferencePending || chatFontSize === 14}
+                onClick={() => {
+                  setChatFontSize(14);
+                  void onUpdatePreferences({ chatFontSize: 14 }).then(
+                    (accepted) => {
+                      if (!accepted) setChatFontSize(setup.ui.webChatFontSize);
+                    },
+                  );
+                }}
+              >
+                <RotateCcw aria-hidden="true" />
+              </button>
+            </div>
             <Slider
               label={t("chatFontSize")}
+              isLabelHidden
               value={chatFontSize}
               min={12}
               max={24}
               step={1}
               width="100%"
-              valueDisplay="text"
+              valueDisplay="none"
               formatValue={(value: number) => `${value}px`}
               isDisabled={preferencePending}
               onChange={(value: number) => setChatFontSize(value)}

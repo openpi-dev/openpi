@@ -156,6 +156,26 @@ const resources = {
       addImages: "Add images",
       imageAttachmentDescription: "PNG, JPEG, GIF, or WebP",
       imageAttachments: "Image attachments",
+      imageAttachmentsLoading: "Reading images…",
+      commandOpensPanel: "Open panel",
+      commandPanelArguments:
+        "This command opens a panel and cannot include arguments or images. Remove them, or use the panel directly.",
+      commandPanelUnavailable:
+        "The panel could not be opened. Your command is preserved.",
+      commandUnavailable_terminal_only: "Requires Pi's terminal interface.",
+      commandUnavailable_not_integrated:
+        "This extension command is not connected to Web yet. Use it in Pi's terminal.",
+      artifactImagePreviewFailed:
+        "Unable to preview this image. Refresh the file to retry, or download it.",
+      artifactFileDetails: "File details",
+      turnElapsedRunning: "Working for {{duration}}",
+      turnElapsedFinished: "Worked for {{duration}}",
+      settingsSetupBusyHint:
+        "Wait for the current turn to finish before applying settings.",
+      resetChatContentWidth: "Reset chat content width",
+      resetChatFontSize: "Reset chat font size",
+      setupResolveAdmission:
+        "Return to the conversation to resolve the pending message before applying settings.",
       removeAttachment: "Remove attachment",
       dropImagesHere: "Drop images here",
       imageAttachmentCount: "Attach up to {{count}} images.",
@@ -792,6 +812,23 @@ const resources = {
       addImages: "添加图片",
       imageAttachmentDescription: "支持 PNG、JPEG、GIF 或 WebP",
       imageAttachments: "图片附件",
+      imageAttachmentsLoading: "正在读取图片…",
+      commandOpensPanel: "打开面板",
+      commandPanelArguments:
+        "此命令用于打开面板，不能携带参数或图片。请移除后重试，或直接使用对应面板。",
+      commandPanelUnavailable: "未能打开面板，已保留命令。",
+      commandUnavailable_terminal_only: "需要在 Pi 终端界面中使用。",
+      commandUnavailable_not_integrated:
+        "此扩展命令尚未接入 Web，请在 Pi 终端中使用。",
+      artifactImagePreviewFailed:
+        "图片预览失败。请刷新文件重试，或下载后查看。",
+      artifactFileDetails: "文件信息",
+      turnElapsedRunning: "已处理 {{duration}}",
+      turnElapsedFinished: "用时 {{duration}}",
+      settingsSetupBusyHint: "当前轮次结束后即可应用设置。",
+      resetChatContentWidth: "恢复默认聊天宽度",
+      resetChatFontSize: "恢复默认字体大小",
+      setupResolveAdmission: "请先返回对话，处理尚未确认的消息，再应用设置。",
       removeAttachment: "移除附件",
       dropImagesHere: "将图片拖到这里",
       imageAttachmentCount: "最多可添加 {{count}} 张图片。",

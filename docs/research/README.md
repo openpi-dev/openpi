@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_INTERACTION_ROUND5_2026-09-22.md`](WEB_INTERACTION_ROUND5_2026-09-22.md) — 侧栏后台工作、图片粘贴与预览、设置布局、原生命令和完整回合耗时；含真实连续 setup 的正反证据与边界（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
 - [`WEB_INTERACTION_ROUND4_2026-09-21.md`](WEB_INTERACTION_ROUND4_2026-09-21.md) — 表单回执、冲突重载、迟到凭据反馈、设置键盘导航与浏览器拖拽的第四轮验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 - [`WEB_INTERACTION_ROUND3_2026-09-21.md`](WEB_INTERACTION_ROUND3_2026-09-21.md) — 模型表单草稿、重复 diff 读取、本地浏览器地址、编辑组合键与指针请求积压的第三轮复现及修复（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。

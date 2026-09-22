@@ -221,7 +221,10 @@ export class WebClient {
     );
   }
 
-  async downloadArtifact(artifact: ArtifactMetadata, signal: AbortSignal) {
+  async downloadArtifact(
+    artifact: Pick<ArtifactMetadata, "sessionId" | "handle" | "revision">,
+    signal: AbortSignal,
+  ) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -654,7 +657,11 @@ export class WebClient {
       "/api/turns/cancel",
       {
         method: "POST",
-        body: JSON.stringify(turn),
+        body: JSON.stringify({
+          sessionId: turn.sessionId,
+          commandId: turn.commandId,
+          epoch: turn.epoch,
+        }),
       },
     );
   }

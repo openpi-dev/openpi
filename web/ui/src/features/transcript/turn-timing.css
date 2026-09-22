@@ -1,0 +1,21 @@
+.turn-elapsed-running {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-duration {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin: 16px 0;
+  color: var(--muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+.turn-duration::after {
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+  content: "";
+}

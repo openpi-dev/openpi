@@ -4,8 +4,8 @@ import {
   Bot,
   Check,
   Cpu,
-  KeyRound,
   Layers3,
+  Plus,
   Plug,
   SlidersHorizontal,
   X,
@@ -18,6 +18,7 @@ import type {
   WebSettingsPreferencesPatch,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
+import type { WebModelConfiguration } from "../../../../runtime/types.ts";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
 import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
 import {
@@ -55,7 +56,8 @@ export function ProviderSettingsPage({
   thinkingLevel,
   theme,
   capabilities,
-  setupBusy,
+  setupBusy: sessionBusy,
+  setupBlockedReason,
   modelSelectionPending,
   onSelectModel,
   onConfigureOpenPi,
@@ -71,6 +73,7 @@ export function ProviderSettingsPage({
   theme: WebThemePreference;
   capabilities?: WebCapabilitySnapshot;
   setupBusy: boolean;
+  setupBlockedReason?: string;
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
@@ -79,10 +82,14 @@ export function ProviderSettingsPage({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const setupBusy = sessionBusy || Boolean(setupBlockedReason);
   const closeButton = useRef<HTMLButtonElement>(null);
   const tabs = useRef<HTMLDivElement>(null);
   const [section, setSection] = useState<SettingsSection>("general");
   const [modelsVisited, setModelsVisited] = useState(false);
+  const [configuredModels, setConfiguredModels] = useState<
+    WebModelConfiguration[]
+  >([]);
   const [setupPending, setSetupPending] = useState(false);
   const [providerRevision, refreshProviders] = useState(0);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
@@ -104,31 +111,51 @@ export function ProviderSettingsPage({
         : "",
   );
 
+  const modelCatalog = useMemo(() => {
+    const merged = new Map(models.map((model) => [modelKey(model), model]));
+    for (const model of configuredModels) {
+      const key = `${model.provider}/${model.id}`;
+      if (!merged.has(key))
+        merged.set(key, {
+          provider: model.provider,
+          id: model.id,
+          name: model.name,
+          label: model.name || model.id,
+          current: false,
+        });
+    }
+    return [...merged.values()];
+  }, [configuredModels, models]);
   const groupedModels = useMemo(() => {
     const groups = new Map<string, WebModelSummary[]>();
-    for (const model of models) {
+    for (const model of modelCatalog) {
       const group = groups.get(model.provider) ?? [];
       group.push(model);
       groups.set(model.provider, group);
     }
     return [...groups.entries()];
-  }, [models]);
-  const selectedModel =
-    models.find((model) => modelKey(model) === selectedModelKey) ??
-    currentModel ??
-    models[0];
+  }, [modelCatalog]);
+  const selectedModel = selectedModelKey
+    ? (modelCatalog.find((model) => modelKey(model) === selectedModelKey) ??
+      currentModel ??
+      models[0])
+    : undefined;
 
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
   useEffect(() => {
-    if (!models.length) {
+    if (!modelCatalog.length) {
       setSelectedModelKey("");
       return;
     }
-    if (models.some((model) => modelKey(model) === selectedModelKey)) return;
-    setSelectedModelKey(modelKey(currentModel ?? models[0]!));
-  }, [currentModel, models, selectedModelKey]);
+    if (
+      !selectedModelKey ||
+      modelCatalog.some((model) => modelKey(model) === selectedModelKey)
+    )
+      return;
+    setSelectedModelKey(modelKey(currentModel ?? modelCatalog[0]!));
+  }, [currentModel, modelCatalog, selectedModelKey]);
   useEffect(() => {
     if (!setupSubmitted) return;
     if (setupBusy) {
@@ -145,7 +172,7 @@ export function ProviderSettingsPage({
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
-    if (setupPending) return false;
+    if (setupPending || setupBusy) return false;
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
@@ -196,7 +223,7 @@ export function ProviderSettingsPage({
   };
 
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending) return false;
+    if (preferencePending || setupPending || setupBusy) return false;
     setPreferencePending(true);
     setSetupError(null);
     try {
@@ -231,6 +258,23 @@ export function ProviderSettingsPage({
       <section className="provider-settings-surface">
         <header className="provider-settings-header">
           <strong className="provider-settings-title">{t("settings")}</strong>
+          <select
+            className="provider-settings-mobile-picker"
+            aria-label={t("settingsNavigation")}
+            value={section}
+            onChange={(event) => {
+              const next = settingsSections.find(
+                ({ id }) => id === event.target.value,
+              );
+              if (next) selectSection(next.id);
+            }}
+          >
+            {settingsSections.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {t(label)}
+              </option>
+            ))}
+          </select>
           <div
             className="provider-settings-navigation"
             ref={tabs}
@@ -307,7 +351,9 @@ export function ProviderSettingsPage({
               cwd={cwd}
               theme={theme}
               setupPending={setupPending || setupBusy}
-              preferencePending={preferencePending}
+              preferencePending={preferencePending || setupPending || setupBusy}
+              setupBusy={setupBusy}
+              setupBlockedReason={setupBlockedReason}
               onConfigure={configureOpenPi}
               onUpdatePreferences={updateWebPreferences}
               onOpenRuntimeStatus={onOpenRuntimeStatus}
@@ -357,13 +403,17 @@ export function ProviderSettingsPage({
                     })}
                   </section>
                 ))}
-                {!models.length && (
+                {!modelCatalog.length && (
                   <p className="settings-model-empty">{t("noModels")}</p>
                 )}
               </div>
-              <div className="settings-model-provider-link">
-                <KeyRound aria-hidden="true" /> {t("providerReadOnly")}
-              </div>
+              <button
+                type="button"
+                className="settings-model-provider-link"
+                onClick={() => setSelectedModelKey("")}
+              >
+                <Plus aria-hidden="true" /> {t("addModel")}
+              </button>
             </aside>
             <div className="settings-model-detail">
               {selectedModel ? (
@@ -378,7 +428,11 @@ export function ProviderSettingsPage({
                       label={
                         selectedModel.current
                           ? t("currentModel")
-                          : t("useThisModel")
+                          : models.some(
+                                (model) => modelKey(model) === selectedModelKey,
+                              )
+                            ? t("useThisModel")
+                            : t("unavailable")
                       }
                       variant={selectedModel.current ? "secondary" : "primary"}
                       size="sm"
@@ -388,7 +442,11 @@ export function ProviderSettingsPage({
                         ) : undefined
                       }
                       isDisabled={
-                        selectedModel.current || modelSelectionPending
+                        selectedModel.current ||
+                        modelSelectionPending ||
+                        !models.some(
+                          (model) => modelKey(model) === selectedModelKey,
+                        )
                       }
                       isLoading={modelSelectionPending}
                       onClick={() => onSelectModel(modelKey(selectedModel))}
@@ -406,9 +464,24 @@ export function ProviderSettingsPage({
                   </dl>
                 </>
               ) : (
-                <div className="provider-settings-state">
-                  <strong>{t("noModels")}</strong>
-                </div>
+                <header className="settings-model-detail-heading">
+                  <h1>{t("addModel")}</h1>
+                </header>
+              )}
+              {modelsVisited && (
+                <ModelConfigurationEditor
+                  key={sessionId}
+                  sessionId={sessionId}
+                  selectedKey={selectedModelKey}
+                  selectedModel={selectedModel}
+                  onSelect={setSelectedModelKey}
+                  onModelsLoaded={setConfiguredModels}
+                  busy={setupBusy}
+                  onSaved={async () => {
+                    refreshProviders((value) => value + 1);
+                    return onPreferencesChanged();
+                  }}
+                />
               )}
               <ProviderStatusSection
                 key={`${sessionId}:${providerRevision}`}
@@ -418,17 +491,6 @@ export function ProviderSettingsPage({
                 busy={setupBusy}
                 onSaved={onPreferencesChanged}
               />
-              {modelsVisited && (
-                <ModelConfigurationEditor
-                  key={sessionId}
-                  sessionId={sessionId}
-                  busy={setupBusy}
-                  onSaved={async () => {
-                    refreshProviders((value) => value + 1);
-                    return onPreferencesChanged();
-                  }}
-                />
-              )}
             </div>
           </section>
 

@@ -10,7 +10,6 @@ interface SlashCommandMenuProps {
   commands: WebCommandSummary[];
   draft: boolean;
   preferBelow: boolean;
-  showUnavailableSummary: boolean;
   onComplete: (command: WebCommandSummary) => void;
   onSelect: (index: number) => void;
 }
@@ -40,9 +39,6 @@ export function filterWebCommands(
             value?.toLocaleLowerCase().includes(normalized),
           ),
         );
-
-  if (!normalized)
-    return matches.filter((command) => command.availability === "available");
 
   return [
     ...matches.filter((command) => command.availability === "available"),
@@ -165,19 +161,13 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
     props.commandDiscovery.status === "ready" &&
     props.commands.length === 0
   ) {
-    const onlyUnsupported =
-      props.showUnavailableSummary &&
-      props.commandDiscovery.commands.length > 0 &&
-      props.commandDiscovery.commands.every(
-        (command) => command.availability === "unsupported",
-      );
     return (
       <div
         ref={menu}
         className="slash-command-menu slash-command-state"
         role="status"
       >
-        {t(onlyUnsupported ? "commandsNoAvailable" : "commandsNoMatch")}
+        {t("commandsNoMatch")}
       </div>
     );
   }
@@ -211,13 +201,22 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
                   <span>{t(`commandSource_${command.source}`)}</span>
                 </span>
                 {command.description && <span>{command.description}</span>}
+                {unsupported && (
+                  <span>
+                    {t(
+                      `commandUnavailable_${command.unavailableReason ?? "not_integrated"}`,
+                    )}
+                  </span>
+                )}
               </span>
               <span className="slash-command-support">
                 {unsupported
                   ? t("commandUnsupported")
-                  : command.argumentHint
-                    ? t("commandAcceptsArguments")
-                    : null}
+                  : command.action
+                    ? t("commandOpensPanel")
+                    : command.argumentHint
+                      ? t("commandAcceptsArguments")
+                      : null}
               </span>
             </button>
           );

@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -104,6 +105,8 @@ export function App() {
     reviewFilePath?: string;
   } | null>(null);
   const [workbarOpen, setWorkbarOpen] = useState(false);
+  const [workbarActiveTool, setWorkbarActiveTool] =
+    useState<WorkbarTool | null>(null);
   const [subagentTarget, setSubagentTarget] = useState<{
     sessionId: string;
     sessionPath: string;
@@ -254,7 +257,18 @@ export function App() {
     inspect();
   };
   const configureOpenPiFromSettings = async (request: string) => {
-    return actions.sendPrompt(`/openpi-setup ${request}`);
+    if (await actions.sendPrompt(`/openpi-setup ${request}`)) return true;
+    const latest = webStore.getState();
+    throw new Error(
+      latest.notice ||
+        t(
+          latest.promptAdmissionRecovery
+            ? "setupResolveAdmission"
+            : latest.liveRunning || latest.activeTurn
+              ? "settingsSetupBusyHint"
+              : "setupRequestFailed",
+        ),
+    );
   };
 
   useEffect(() => {
@@ -265,7 +279,19 @@ export function App() {
   const selected = state.workspaceDraft
     ? undefined
     : state.snapshot?.selectedSession;
-  const gitReview = useGitReview(selected, state.snapshot?.cursor);
+  const gitReview = useGitReview(selected, state.snapshot?.cursor, {
+    active: workbarOpen && workbarActiveTool === "review",
+    running: state.liveRunning || Boolean(state.activeTurn),
+  });
+  const workbarMessages = useMemo(() => {
+    if (!workbarOpen || workbarActiveTool !== "files") return [];
+    return [
+      ...(selected?.entries.flatMap((entry) =>
+        entry.message ? [entry.message] : [],
+      ) ?? []),
+      ...state.liveMessages.map((entry) => entry.message),
+    ];
+  }, [workbarOpen, workbarActiveTool, selected?.entries, state.liveMessages]);
   const gitSnapshot = gitReview.result?.ok
     ? gitReview.result.snapshot
     : undefined;
@@ -607,6 +633,26 @@ export function App() {
                 thinkingPendingLevel={state.thinkingPendingLevel}
                 onInspect={inspect}
                 onOpenProviders={openProviderSettings}
+                onCommandAction={(action) => {
+                  const current = webStore.getState();
+                  if (
+                    current.sessionSwitching ||
+                    current.workspaceDraft ||
+                    !selected ||
+                    current.snapshot?.selectedSession?.path !== selected.path ||
+                    current.snapshot.selectedSession.id !== selected.id
+                  )
+                    return false;
+                  if (
+                    action === "terminal" ||
+                    action === "review" ||
+                    action === "side-conversation"
+                  )
+                    openWorkbar(action);
+                  else if (action === "subagents") inspectSubagent();
+                  else inspect();
+                  return true;
+                }}
                 onInspectSubagent={inspectSubagent}
                 activeTurn={state.activeTurn}
                 turnCancellationPending={state.turnCancellationPending}
@@ -685,12 +731,8 @@ export function App() {
               sessionId={selected.id}
               cwd={selected.cwd}
               capabilities={state.snapshot?.runtime.capabilities ?? {}}
-              messages={[
-                ...selected.entries.flatMap((entry) =>
-                  entry.message ? [entry.message] : [],
-                ),
-                ...state.liveMessages.map((entry) => entry.message),
-              ]}
+              messages={workbarMessages}
+              onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
               reviewInitialFilePath={workbarTarget.reviewFilePath}
               onBeforeArtifactOpen={() => {
@@ -769,7 +811,15 @@ export function App() {
           setupBusy={
             state.liveRunning ||
             state.promptAdmissionPending ||
-            Boolean(state.activeTurn)
+            Boolean(state.activeTurn) ||
+            state.modelSelectionPending ||
+            state.thinkingPendingLevel !== null ||
+            state.sessionSwitching
+          }
+          setupBlockedReason={
+            state.promptAdmissionRecovery
+              ? t("setupResolveAdmission")
+              : undefined
           }
           modelSelectionPending={state.modelSelectionPending}
           onSelectModel={(value) => void actions.selectModel(value)}

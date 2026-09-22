@@ -47,17 +47,18 @@
 }
 
 .session-sidebar .session {
-  height: auto;
+  height: 38px;
   min-height: 38px;
   padding-top: 6px;
   padding-bottom: 6px;
-  align-items: flex-start;
+  align-items: center;
 }
 
 .session-sidebar .session-title {
-  overflow: visible;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.35;
 }
 

@@ -35,6 +35,7 @@ import {
 } from "./types.ts";
 import { projectMessage, projectAssistantError } from "../protocol/types.ts";
 import { elapsed, traceWeb } from "../trace.ts";
+import { WEB_TURN_TIMING_ENTRY, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
   configureHttpDispatcher,
@@ -45,6 +46,7 @@ import {
   type WebHostLease,
 } from "./web-host-lease.ts";
 import {
+  assertWebCommandSupported,
   commandsForServices,
   createCommandDiscoveryBridge,
   registerCommandDiscoveryBridge,
@@ -79,6 +81,9 @@ type PromptTrace = {
   commandId: string;
   sessionId: string;
   startedAt: number;
+  executionStartedAt?: number;
+  executionClock?: number;
+  sessionPath?: string;
   started: boolean;
   queued: boolean;
   userMessageObserved: boolean;
@@ -792,6 +797,7 @@ export class PiWebRuntime implements WebRuntimeController {
             409,
           );
         }
+        assertWebCommandSupported(agentRuntime.services, content);
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
@@ -883,7 +889,8 @@ export class PiWebRuntime implements WebRuntimeController {
           admitted &&
           options?.commandId &&
           !agentLifecycleStarted &&
-          !queuedForAgent
+          !queuedForAgent &&
+          session.isIdle
         ) {
           this.emit("prompt_settled", {
             commandId: options.commandId,
@@ -901,7 +908,10 @@ export class PiWebRuntime implements WebRuntimeController {
             this.activePromptTrace?.commandId === promptTrace.commandId
               ? this.activePromptTrace.started
               : promptTrace.started;
-          if (!promptTrace.queued && !promptTrace.started) {
+          // Native extension commands may start a triggerTurn asynchronously:
+          // their handler returns before the delayed agent_start is projected.
+          // Pi already reports an active run, so keep its admitted identity.
+          if (!promptTrace.queued && !promptTrace.started && session.isIdle) {
             this.removePromptTrace(promptTrace);
           }
         }
@@ -1389,12 +1399,22 @@ export class PiWebRuntime implements WebRuntimeController {
       sessionId: trace.sessionId,
       commandId: trace.commandId,
       epoch: trace.epoch,
+      ...(trace.executionStartedAt !== undefined && trace.executionClock !== undefined
+        ? {
+            startedAt: trace.executionStartedAt,
+            elapsedMs: Math.max(0, Math.floor(performance.now() - trace.executionClock)),
+            sessionPath: trace.sessionPath,
+          }
+        : {}),
     };
   }
 
   private startPromptTrace(trace: PromptTrace) {
     if (trace.started) return;
     trace.started = true;
+    trace.executionStartedAt = Date.now();
+    trace.executionClock = performance.now();
+    trace.sessionPath = this.sessionManager.getSessionFile?.() ?? `current:${trace.sessionId}`;
     trace.epoch = ++this.nextTurnEpoch;
     const activeTurn = this.activeTurnFromTrace(trace);
     if (activeTurn) this.emit("turn_started", { ...activeTurn });
@@ -1411,6 +1431,24 @@ export class PiWebRuntime implements WebRuntimeController {
     const key = this.turnKey(activeTurn);
     if (this.terminalTurnKeys.has(key)) return;
     this.terminalTurnKeys.add(key);
+    if (activeTurn.startedAt !== undefined && activeTurn.elapsedMs !== undefined) {
+      const timing: WebTurnTiming = {
+        version: 1,
+        sessionId: activeTurn.sessionId,
+        commandId: activeTurn.commandId,
+        epoch: activeTurn.epoch,
+        startedAt: activeTurn.startedAt,
+        finishedAt: Date.now(),
+        elapsedMs: activeTurn.elapsedMs,
+        outcome: settlement.outcome,
+      };
+      try {
+        this.sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
+      } catch {
+        // Optional display evidence must never change Pi's terminal outcome.
+        traceWeb("turn_timing_persistence_failed", { commandId: activeTurn.commandId });
+      }
+    }
     this.turnAbortOperations.delete(key);
     while (this.terminalTurnKeys.size > 64) {
       const oldest = this.terminalTurnKeys.values().next().value;

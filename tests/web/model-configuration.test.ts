@@ -64,7 +64,9 @@ test("native model configuration preserves other fields, rejects stale writes an
       "image",
     ]);
     assert.equal(persisted.providers[model.provider].models[0].name, "Updated");
-    assert.equal((await stat(path)).mode & 0o777, 0o600);
+    // Windows reports a synthetic mode; ACLs are not represented by POSIX bits.
+    if (process.platform !== "win32")
+      assert.equal((await stat(path)).mode & 0o777, 0o600);
     await assert.rejects(
       saveModelConfiguration(directory, before.revision, model),
       /changed/u,

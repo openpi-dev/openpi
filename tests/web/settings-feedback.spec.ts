@@ -42,6 +42,80 @@ function editor() {
     }),
   );
 }
+
+it("edits the sidebar selection and keeps separate drafts when changing models", async () => {
+  const second = { ...model, id: "b", name: "Beta" };
+  const configurations = vi
+    .spyOn(WebClient.prototype, "modelConfigurations")
+    .mockResolvedValue({
+      revision: "r1",
+      models: [model, second],
+    });
+  const node = (selectedKey: string) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(ModelConfigurationEditor, {
+        sessionId: "s",
+        selectedKey,
+        busy: false,
+        onSaved: async () => true,
+      }),
+    );
+  const view = render(node("alpha/a"));
+  const name = await screen.findByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("modelConfig_name"),
+  });
+  await waitFor(() => expect(name.value).toBe("Alpha"));
+  fireEvent.change(name, { target: { value: "Unfinished Alpha" } });
+  view.rerender(node("alpha/b"));
+  await waitFor(() => expect(name.value).toBe("Beta"));
+  fireEvent.change(name, { target: { value: "Unfinished Beta" } });
+  view.rerender(node("alpha/a"));
+  await waitFor(() => expect(name.value).toBe("Unfinished Alpha"));
+  view.rerender(node("alpha/b"));
+  await waitFor(() => expect(name.value).toBe("Unfinished Beta"));
+  expect(configurations).toHaveBeenCalledOnce();
+});
+
+it("keeps the current model selected when an earlier model save settles", async () => {
+  vi.spyOn(WebClient.prototype, "modelConfigurations").mockResolvedValue({
+    revision: "r1",
+    models: [model, { ...model, id: "b", name: "Beta" }],
+  });
+  let finish!: (value: { saved: true }) => void;
+  vi.spyOn(WebClient.prototype, "saveModelConfiguration").mockReturnValue(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const onSelect = vi.fn();
+  const node = (selectedKey: string) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(ModelConfigurationEditor, {
+        sessionId: "s",
+        selectedKey,
+        onSelect,
+        busy: false,
+        onSaved: async () => true,
+      }),
+    );
+  const view = render(node("alpha/a"));
+  const name = await screen.findByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("modelConfig_name"),
+  });
+  await waitFor(() => expect(name.value).toBe("Alpha"));
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("saveModelConfiguration") }),
+  );
+  view.rerender(node("alpha/b"));
+  await act(async () => finish({ saved: true }));
+  await waitFor(() => expect(name.value).toBe("Beta"));
+  expect(onSelect).not.toHaveBeenCalled();
+  expect(screen.queryByText(i18n.t("modelConfigurationSaved"))).toBeNull();
+});
 async function selectModel() {
   const selection = await screen.findByRole("combobox", {
     name: i18n.t("configuredModels"),

@@ -118,9 +118,11 @@ function WorkbarLauncher({
 function SideConversationPanel({
   sessionId,
   activity,
+  active,
 }: {
   sessionId: string;
   activity?: WebCapabilityProjection<WebSubagentActivity>;
+  active: boolean;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -224,6 +226,7 @@ function SideConversationPanel({
             activity={selected}
             client={client}
             liveAvailable
+            active={active}
             fullView={false}
             readOnlyNote={false}
           />
@@ -423,6 +426,7 @@ export function WorkbarPanel({
   onRestoreConversation,
   onBeforeArtifactOpen,
   onClose,
+  onActiveToolChange,
 }: {
   visible: boolean;
   requestedTool: WorkbarTool;
@@ -437,10 +441,17 @@ export function WorkbarPanel({
   onRestoreConversation: () => void;
   onBeforeArtifactOpen: () => void;
   onClose: () => void;
+  onActiveToolChange?: (tool: WorkbarTool | null) => void;
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useState(() => initialWorkbarTabs(requestedTool));
   const handledRequest = useRef(requestRevision);
+  useEffect(() => {
+    onActiveToolChange?.(
+      visible ? (tabs.launcherOpen ? "launcher" : tabs.active) : null,
+    );
+    return () => onActiveToolChange?.(null);
+  }, [visible, tabs.launcherOpen, tabs.active, onActiveToolChange]);
   useEffect(() => {
     if (handledRequest.current === requestRevision) return;
     handledRequest.current = requestRevision;
@@ -584,10 +595,12 @@ export function WorkbarPanel({
             {tool === "side-conversation" ? (
               <SideConversationPanel
                 sessionId={sessionId}
+                active={visible && !tabs.launcherOpen && tabs.active === tool}
                 activity={capabilities.subagents}
               />
             ) : tool === "review" ? (
               <ReviewPanel
+                active={visible && !tabs.launcherOpen && tabs.active === tool}
                 review={review}
                 initialFilePath={reviewInitialFilePath}
                 onOpenFiles={() => select("files")}

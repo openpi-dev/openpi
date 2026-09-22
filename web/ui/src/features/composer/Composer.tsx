@@ -28,6 +28,7 @@ import { useTranslation } from "react-i18next";
 import {
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  type WebCommandSummary,
   type WebPromptImage,
   type WebSnapshot,
 } from "../../../../protocol/types.ts";
@@ -60,6 +61,9 @@ interface ComposerProps {
   thinkingPendingLevel: WebStoreState["thinkingPendingLevel"];
   onInspect?: (terminalId?: string) => void;
   onOpenProviders?: () => void;
+  onCommandAction?: (
+    action: NonNullable<WebCommandSummary["action"]>,
+  ) => boolean;
   onInspectSubagent?: (id?: string) => void;
   snapshot: WebSnapshot | null;
   selectedPath?: string | null;
@@ -99,12 +103,18 @@ export function Composer(props: ComposerProps) {
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
   const [images, setImages] = useState<StagedPromptImage[]>([]);
+  const currentImages = useRef(images);
+  currentImages.current = images;
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
+  const [commandError, setCommandError] = useState<string | null>(null);
   const [dragActive, setDragActive] = useState(false);
   const textarea = useRef<HTMLTextAreaElement>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
-  const attachmentImport = useRef<symbol | null>(null);
+  const attachmentImport = useRef<{
+    files: File[];
+    staged: StagedPromptImage[];
+  } | null>(null);
   const restoreFileReferenceFocus = useRef(false);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
@@ -138,13 +148,36 @@ export function Composer(props: ComposerProps) {
     (props.selectedWorkspace ? `new:${props.selectedWorkspace}` : "none");
   const draftScopeRef = useRef(draftScope);
   useLayoutEffect(() => {
-    // Imports belong to the draft that selected the files, even across A → B → A.
-    void draftScope;
+    if (draftScope === draftScopeRef.current) return;
+    // Only an exact creation receipt transfers an in-flight import. A matching
+    // workspace alone must not retain a previous Session's clipboard contents.
+    if (
+      !props.workspaceDraft &&
+      draftScopeRef.current === `new:${props.selectedWorkspace}` &&
+      sessionPath &&
+      selected?.path === sessionPath &&
+      props.createdSession?.sessionId === selected.id &&
+      props.createdSession.sessionPath === sessionPath &&
+      props.createdSession.workspacePath === props.selectedWorkspace
+    )
+      return;
+    attachmentImport.current = null;
     setAttachmentBusy(false);
-    return () => {
+  }, [
+    draftScope,
+    props.workspaceDraft,
+    props.selectedWorkspace,
+    props.createdSession,
+    selected?.id,
+    selected?.path,
+    sessionPath,
+  ]);
+  useLayoutEffect(
+    () => () => {
       attachmentImport.current = null;
-    };
-  }, [draftScope]);
+    },
+    [],
+  );
   const draftRevision = useRef(0);
   const transferDraftToCreatedSession = useRef(false);
   const pendingSubmission = useRef<{
@@ -205,44 +238,63 @@ export function Composer(props: ComposerProps) {
     canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
 
   const stageFiles = async (files: Iterable<File>) => {
-    if (attachmentImport.current || !contextEntryAvailable) return;
+    if (!contextEntryAvailable) return;
     const selectedFiles = [...files];
     if (selectedFiles.length === 0) return;
-    if (images.length + selectedFiles.length > WEB_PROMPT_IMAGE_MAX_COUNT) {
+    const pending = attachmentImport.current;
+    if (
+      currentImages.current.length +
+        (pending?.files.length ?? 0) +
+        selectedFiles.length >
+      WEB_PROMPT_IMAGE_MAX_COUNT
+    ) {
       setAttachmentError(
         t("imageAttachmentCount", { count: WEB_PROMPT_IMAGE_MAX_COUNT }),
       );
       return;
     }
-    const importId = Symbol();
-    attachmentImport.current = importId;
+    if (pending) {
+      pending.files.push(...selectedFiles);
+      return;
+    }
+    const importing = {
+      files: selectedFiles,
+      staged: [] as StagedPromptImage[],
+    };
+    attachmentImport.current = importing;
     setAttachmentBusy(true);
     setAttachmentError(null);
     try {
-      const staged: StagedPromptImage[] = [];
-      let totalBytes = images.reduce((sum, image) => sum + image.size, 0);
-      for (const file of selectedFiles) {
-        const image = await stagePromptImage(file);
-        if (attachmentImport.current !== importId) return;
-        totalBytes += image.size;
-        if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
-          throw new Error("image-total-size");
-        staged.push(image);
+      // This bounded list also accepts later pastes while its current file reads.
+      for (const file of importing.files) {
+        try {
+          const image = await stagePromptImage(file);
+          if (attachmentImport.current !== importing) return;
+          const totalBytes = [
+            ...currentImages.current,
+            ...importing.staged,
+          ].reduce((sum, item) => sum + item.size, image.size);
+          if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
+            throw new Error("image-total-size");
+          importing.staged.push(image);
+        } catch (error) {
+          if (attachmentImport.current !== importing) return;
+          const code = error instanceof Error ? error.message : "image-type";
+          const reason =
+            code === "image-size"
+              ? t("imageAttachmentTooLarge")
+              : code === "image-total-size"
+                ? t("imageAttachmentTotalTooLarge")
+                : t("imageAttachmentUnsupported");
+          setAttachmentError(`${file.name || t("attachedImage")}: ${reason}`);
+        }
       }
-      draftRevision.current += 1;
-      setImages((current) => [...current, ...staged]);
-    } catch (error) {
-      if (attachmentImport.current !== importId) return;
-      const code = error instanceof Error ? error.message : "image-type";
-      setAttachmentError(
-        code === "image-size"
-          ? t("imageAttachmentTooLarge")
-          : code === "image-total-size"
-            ? t("imageAttachmentTotalTooLarge")
-            : t("imageAttachmentUnsupported"),
-      );
+      if (importing.staged.length > 0) {
+        draftRevision.current += 1;
+        setImages((current) => [...current, ...importing.staged]);
+      }
     } finally {
-      if (attachmentImport.current === importId) {
+      if (attachmentImport.current === importing) {
         attachmentImport.current = null;
         setAttachmentBusy(false);
         if (imagePicker.current) imagePicker.current.value = "";
@@ -275,7 +327,7 @@ export function Composer(props: ComposerProps) {
     const firstAvailable = filteredCommands.findIndex(
       (command) => command.availability === "available",
     );
-    setActiveCommand(firstAvailable >= 0 ? firstAvailable : 0);
+    setActiveCommand(firstAvailable);
   }, [filteredCommands]);
 
   useEffect(() => {
@@ -336,6 +388,7 @@ export function Composer(props: ComposerProps) {
     setPrompt("");
     setImages([]);
     setAttachmentError(null);
+    setCommandError(null);
     setDragActive(false);
     setFileReferenceOpen(false);
     if (submission?.scope === previousScope) {
@@ -406,6 +459,33 @@ export function Composer(props: ComposerProps) {
       (!prompt.trim() && images.length === 0)
     )
       return;
+    if (attachmentImport.current) return;
+    const commandName = /^\/([^\s/]+)/u.exec(prompt.trim())?.[1];
+    const command = commandDiscovery.commands.find(
+      (item) => item.name === commandName,
+    );
+    if (command?.availability === "unsupported") {
+      setCommandError(
+        `/${command.name}: ${t(`commandUnavailable_${command.unavailableReason ?? "not_integrated"}`)}`,
+      );
+      return;
+    }
+    if (command?.action) {
+      if (prompt.trim() !== `/${command.name}` || images.length > 0) {
+        setCommandError(t("commandPanelArguments"));
+        return;
+      }
+      if (props.onCommandAction?.(command.action) !== true) {
+        setCommandError(t("commandPanelUnavailable"));
+        return;
+      }
+      draftRevision.current += 1;
+      setPrompt("");
+      setCursor(0);
+      setCommandError(null);
+      return;
+    }
+    setCommandError(null);
     await sendDraft(props.actions.sendPrompt);
   };
 
@@ -416,6 +496,7 @@ export function Composer(props: ComposerProps) {
     const value = `/${command.name} `;
     draftRevision.current += 1;
     setPrompt(value);
+    setCommandError(null);
     setCursor(value.length);
     setMenuDismissed(true);
     queueMicrotask(() => {
@@ -747,6 +828,12 @@ export function Composer(props: ComposerProps) {
             {attachmentError}
           </p>
         )}
+        {attachmentBusy && <p role="status">{t("imageAttachmentsLoading")}</p>}
+        {commandError && (
+          <p className="composer-attachment-error" role="alert">
+            {commandError}
+          </p>
+        )}
         {dragActive && (
           <div className="composer-drop-overlay" aria-hidden="true">
             <ImagePlus />
@@ -771,6 +858,7 @@ export function Composer(props: ComposerProps) {
           onChange={(event) => {
             draftRevision.current += 1;
             setPrompt(event.target.value);
+            setCommandError(null);
             setCursor(event.target.selectionStart);
             setMenuDismissed(false);
           }}
@@ -782,13 +870,20 @@ export function Composer(props: ComposerProps) {
           }}
           onBlur={() => setComposerFocused(false)}
           onPaste={(event) => {
-            if (
-              !contextEntryAvailable ||
-              event.clipboardData.files.length === 0
-            )
-              return;
-            event.preventDefault();
-            void stageFiles(event.clipboardData.files);
+            if (!contextEntryAvailable) return;
+            const files = Array.from(event.clipboardData.files);
+            if (files.length === 0) {
+              // Some clipboards expose the image only through their items.
+              for (const item of Array.from(event.clipboardData.items ?? [])) {
+                const file = item.kind === "file" ? item.getAsFile() : null;
+                if (file) files.push(file);
+              }
+            }
+            if (files.length === 0) return;
+            // Let native text insertion retain its caret and undo transaction.
+            if (!event.clipboardData.getData("text/plain"))
+              event.preventDefault();
+            void stageFiles(files);
           }}
           onKeyDown={(event) => {
             if (event.nativeEvent.isComposing) return;
@@ -813,6 +908,10 @@ export function Composer(props: ComposerProps) {
                   completeCommand(command);
                   return;
                 }
+                if (filteredCommands.length > 0) {
+                  event.preventDefault();
+                  return;
+                }
               }
             }
             if (event.key === "Enter" && !event.shiftKey) {
@@ -828,7 +927,6 @@ export function Composer(props: ComposerProps) {
             commands={filteredCommands}
             draft={Boolean(props.workspaceDraft)}
             preferBelow={props.landing}
-            showUnavailableSummary={!commandQuery}
             onComplete={completeCommand}
             onSelect={setActiveCommand}
           />

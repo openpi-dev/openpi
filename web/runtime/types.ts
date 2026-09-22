@@ -96,6 +96,11 @@ export interface WebActiveTurn {
   sessionId: string;
   commandId: string;
   epoch: number;
+  /** Actual execution start; admission/queue waiting is excluded. */
+  startedAt?: number;
+  /** Monotonic elapsed time captured with this projection. */
+  elapsedMs?: number;
+  sessionPath?: string;
 }
 
 export interface WebTurnCancellationOptions extends WebActiveTurn {}

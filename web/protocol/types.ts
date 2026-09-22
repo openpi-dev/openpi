@@ -1,4 +1,5 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
@@ -96,6 +97,8 @@ export interface WebCommandSummary {
   source: "extension" | "prompt" | "skill";
   availability: "available" | "unsupported";
   argumentHint?: string;
+  action?: "terminal" | "review" | "subagents" | "runtime" | "side-conversation";
+  unavailableReason?: "terminal_only" | "not_integrated";
 }
 
 export interface WebCommandDiscoveryResult {
@@ -788,6 +791,10 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
 }
 
 export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
+  if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
+    const turnTiming = readTurnTiming(entry.data);
+    if (turnTiming) return { type: entry.type, id: entry.id, timestamp: entry.timestamp, turnTiming };
+  }
   if (entry.type === "custom_message") {
     return {
       type: "message" as const,

@@ -426,7 +426,7 @@ it("marks only live execution evidence for shimmer styling", () => {
   expect(process?.querySelectorAll(".process-step.running")).toHaveLength(2);
 });
 
-it("keeps OpenPI setup episodes out of the main conversation", () => {
+it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {
   const snapshot = activeSnapshot();
   snapshot.selectedSession!.entries = [
     {
@@ -507,8 +507,160 @@ it("keeps OpenPI setup episodes out of the main conversation", () => {
     screen.getAllByText("Continue the actual task").length,
   ).toBeGreaterThan(0);
   expect(screen.getByText("Visible continuation")).toBeTruthy();
-  expect(screen.queryByText("Hidden configuration response")).toBeNull();
-  expect(screen.queryByText("Hidden configuration evidence")).toBeNull();
+  expect(screen.getByText("Hidden configuration response")).toBeTruthy();
+  expect(
+    screen.getAllByText("Hidden configuration evidence").length,
+  ).toBeGreaterThan(0);
+  expect(screen.getByText("Apply a dark theme").closest("details")?.open).toBe(
+    false,
+  );
+});
+
+it.each(["openpi-setup", "my-pi-setup"])(
+  "shows the original /%s request once and retries the command instead of the internal prompt",
+  async (command) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    const request = "set theme to dark";
+    const content = `/${command} ${request}`;
+    snapshot.selectedSession!.entries = [
+      projectEntry({
+        id: "setup",
+        parentId: null,
+        type: "custom_message",
+        customType: "openpi-setup-request",
+        timestamp: "2026-09-22T00:00:00Z",
+        content: "INTERNAL EXPANDED CONFIGURATION PROMPT",
+        display: true,
+        details: { requestId: "setup-1", command, request },
+      }),
+      {
+        id: "result",
+        type: "message",
+        timestamp: "2026-09-22T00:00:01Z",
+        message: {
+          role: "toolResult",
+          toolName: "configure_my_pi_setup",
+          toolCallId: "setup-call",
+          content: "Configuration write failed",
+          isError: true,
+        },
+      },
+      {
+        id: "answer",
+        type: "message",
+        timestamp: "2026-09-22T00:00:02Z",
+        message: {
+          role: "assistant",
+          content: "Configuration could not be completed",
+          stopReason: "error",
+          errorMessage: "Fixture provider error",
+        },
+      },
+      {
+        id: "timing",
+        type: "custom",
+        timestamp: "2026-09-22T00:00:03Z",
+        turnTiming: {
+          version: 1,
+          sessionId: "session",
+          commandId: "web-command",
+          epoch: 1,
+          startedAt: 1000,
+          finishedAt: 4000,
+          elapsedMs: 3000,
+          outcome: "failed",
+        },
+      },
+    ];
+    const resend = vi.fn(async () => true);
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          { key: "optimistic-web-command", message: { role: "user", content } },
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: resend,
+      }),
+    );
+    const users = view.container.querySelectorAll(
+      ".message-row.user .message-body",
+    );
+    expect(users).toHaveLength(1);
+    expect(users[0]?.textContent).toBe(content);
+    expect(
+      screen.queryByText("INTERNAL EXPANDED CONFIGURATION PROMPT"),
+    ).toBeNull();
+    expect(
+      screen.getAllByText("Configuration write failed").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("Fixture provider error")).toBeTruthy();
+    expect(
+      view.container.querySelector(".turn-duration")?.textContent,
+    ).toContain("3s");
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("retryPrompt") }),
+      );
+    });
+    expect(resend).toHaveBeenCalledWith(content);
+  },
+);
+
+it("does not retry an unrelated user task when a legacy setup request has no original-command metadata", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime = { status: "idle", capabilities: {} };
+  snapshot.selectedSession!.entries = [
+    {
+      id: "user",
+      type: "message",
+      timestamp: "2026-09-22T00:00:00Z",
+      message: { role: "user", content: "Unrelated earlier task" },
+    },
+    projectEntry({
+      id: "setup",
+      parentId: "user",
+      type: "custom_message",
+      customType: "openpi-setup-request",
+      timestamp: "2026-09-22T00:00:01Z",
+      content: "Legacy expanded setup prompt",
+      display: true,
+    }),
+    {
+      id: "error",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: {
+        role: "assistant",
+        content: "",
+        stopReason: "error",
+        errorMessage: "Visible setup failure",
+      },
+    },
+  ];
+  renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+  expect(screen.getByText("Visible setup failure")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("retryPrompt") }),
+  ).toBeNull();
 });
 
 it("renders side conversation messages with transcript role styling", async () => {

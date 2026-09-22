@@ -9,7 +9,7 @@ import { promisify } from "node:util";
 
 const execFileAsync = promisify(execFile);
 
-test("real Pi provider snapshots setup writer before the first call and records no-op closure", {
+test("real Pi provider snapshots setup writer across closed and successfully applied episodes", {
   timeout: 20_000,
 }, async () => {
   const cwd = await mkdtemp(path.join(tmpdir(), "openpi-setup-integration-"));
@@ -75,6 +75,17 @@ faux.setResponses([
     snapshots.push(capture(context));
     return fauxAssistantMessage("Setup finished.");
   },
+  (context) => {
+    snapshots.push(capture(context));
+    return fauxAssistantMessage(
+      [fauxToolCall("configure_my_pi_setup", { ui_web_theme: "dark" }, { id: "apply-next" })],
+      { stopReason: "toolUse" },
+    );
+  },
+  (context) => {
+    snapshots.push(capture(context));
+    return fauxAssistantMessage("Next setup finished.");
+  },
 ]);
 const settingsManager = SettingsManager.inMemory(undefined, { projectTrusted: false });
 const modelRuntime = await ModelRuntime.create({
@@ -101,6 +112,8 @@ try {
   await session.prompt("What happened in setup?");
   await session.waitForIdle();
   await session.prompt("/openpi-setup disable suggestions");
+  await session.waitForIdle();
+  await session.prompt("/openpi-setup use dark theme");
   await session.waitForIdle();
   const config = JSON.parse(await readFile(agentDir + "/my-pi-setup.json", "utf8"));
   process.stdout.write(JSON.stringify({ snapshots, active: session.getActiveToolNames(), config }));
@@ -135,9 +148,9 @@ try {
         tools?: Array<{ name: string }>;
       }>;
       active: string[];
-      config: { suggestions: { enabled: boolean } };
+      config: { suggestions: { enabled: boolean }; ui: { webTheme: string } };
     };
-    assert.equal(result.snapshots.length, 4);
+    assert.equal(result.snapshots.length, 6);
     assert.ok(
       result.snapshots[0]?.tools?.some(
         ({ name }) => name === "configure_my_pi_setup",
@@ -178,6 +191,38 @@ try {
       "one parallel call must execute and the other must be blocked",
     );
     assert.equal(result.config.suggestions.enabled, false);
+    assert.equal(result.config.ui.webTheme, "dark");
+    assert.ok(
+      result.snapshots[4]?.tools?.some(
+        ({ name }) => name === "configure_my_pi_setup",
+      ),
+      "the next setup after a successful apply must expose its own writer",
+    );
+    const nextRequest = result.snapshots[4]?.messages
+      .filter(({ role }) => role === "user")
+      .at(-1);
+    assert.match(
+      JSON.stringify(nextRequest?.content),
+      /A new OpenPI setup episode has started/,
+    );
+    assert.match(
+      JSON.stringify(nextRequest?.content),
+      /Earlier success or closure messages apply only to their earlier episodes/,
+    );
+    assert.match(
+      JSON.stringify(result.snapshots[4]?.messages),
+      /Do not call it again within this completed episode/,
+    );
+    assert.equal(
+      result.snapshots[5]?.messages.filter(
+        ({ role, toolName, isError }) =>
+          role === "toolResult" &&
+          toolName === "configure_my_pi_setup" &&
+          !isError,
+      ).length,
+      2,
+      "each setup episode must apply once even with a prior success in context",
+    );
     assert.equal(result.active.includes("configure_my_pi_setup"), false);
   } finally {
     await rm(cwd, { recursive: true, force: true });

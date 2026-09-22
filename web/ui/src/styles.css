@@ -13,6 +13,7 @@
 @import "./features/review/review.css";
 @import "./features/settings/provider-settings.css";
 @import "./features/workbar/workbar.css";
+@import "./features/transcript/turn-timing.css";
 
 :root {
   color-scheme: light;
@@ -833,6 +834,10 @@ button.activity-chip:hover { filter: brightness(1.15); }
 .artifact-panel pre { width:max-content; min-width:100%; margin:0; padding:12px; overflow:auto; white-space:pre; font-size:11.5px; line-height:1.65; }
 .artifact-panel section[aria-label="File preview content"] { min-width:0; overflow:auto; border:1px solid var(--border); border-radius:6px; background:var(--sidebar); }
 .artifact-actions { display:flex; gap:8px; }
+.artifact-image-preview img { max-width:100%; height:auto; }
+.artifact-panel details > summary { cursor:pointer; padding:8px 0; color:var(--muted); font-size:12px; }
+.artifact-panel pre { font-size:13px; }
+.artifact-panel section[aria-label="File preview content"]:focus-visible { outline:2px solid var(--focus); outline-offset:2px; }
 .artifact-revision { color:var(--muted); }
 .artifact-link-path { font-size:11px; color:var(--muted); text-decoration:none; }
 @media(max-width:1100px) {

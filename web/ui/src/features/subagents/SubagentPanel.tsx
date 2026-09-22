@@ -75,6 +75,7 @@ export function SubagentDetailView({
   liveAvailable,
   fullView,
   readOnlyNote = true,
+  active = true,
 }: {
   sessionId: string;
   id: string;
@@ -84,6 +85,7 @@ export function SubagentDetailView({
   liveAvailable: boolean;
   fullView: boolean;
   readOnlyNote?: boolean;
+  active?: boolean;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<WebSubagentDetail | null>(null);
@@ -96,6 +98,7 @@ export function SubagentDetailView({
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly requests a fresh detail projection.
   useEffect(() => {
+    if (!active) return;
     if (!liveAvailable) {
       setLoading(false);
       setError(t("subagentUnavailable"));
@@ -162,7 +165,16 @@ export function SubagentDetailView({
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", resume);
     };
-  }, [client, sessionId, id, activity?.status, revision, liveAvailable, t]);
+  }, [
+    active,
+    client,
+    sessionId,
+    id,
+    activity?.status,
+    revision,
+    liveAvailable,
+    t,
+  ]);
 
   useLayoutEffect(() => {
     void detail;

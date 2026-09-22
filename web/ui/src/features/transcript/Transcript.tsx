@@ -45,6 +45,8 @@ import {
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
+import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
@@ -53,6 +55,7 @@ interface DisplayEntry {
   key: string;
   timestamp?: string;
   message: WebLiveMessage;
+  timing?: WebTurnTiming;
 }
 
 interface TranscriptProps {
@@ -468,34 +471,21 @@ function SubagentCard({
   );
 }
 
-function useElapsed(start: number | undefined, active: boolean) {
-  const [now, setNow] = useState(Date.now());
-  useEffect(() => {
-    if (!active) return;
-    const interval = window.setInterval(() => setNow(Date.now()), 1_000);
-    return () => window.clearInterval(interval);
-  }, [active]);
-  return start ? formatElapsedMs(start, active ? now : Date.now()) : "";
-}
-
 function ThinkingEvidence({
   body,
-  start,
   duration,
   active,
   level,
   defaultOpen,
 }: {
   body: string;
-  start?: number;
   duration?: number;
   active: boolean;
   level?: string;
   defaultOpen: boolean;
 }) {
   const { t } = useTranslation();
-  const elapsed = useElapsed(start, active);
-  const settled = duration ? formatElapsedMs(0, duration) : elapsed;
+  const settled = duration !== undefined ? formatElapsedMs(0, duration) : "";
   const preview = thinkingPreview(body);
   return (
     <EvidenceDetails
@@ -647,7 +637,26 @@ function MessageActions({
 }
 
 function CustomResult({ message }: { message: WebLiveMessage }) {
+  const { t } = useTranslation();
   const details = record(message.details);
+  if (
+    message.customType === "openpi-setup-request" ||
+    message.customType === "openpi-setup-closed"
+  ) {
+    return (
+      <EvidenceDetails
+        body={message.content}
+        icon={<Wrench />}
+        name={t("configureOpenPi")}
+        summary={
+          message.customType === "openpi-setup-closed"
+            ? compactSummary(message.content)
+            : undefined
+        }
+        status="unknown"
+      />
+    );
+  }
   if (message.customType === "subagent-result") {
     return (
       <ActivityCard
@@ -701,15 +710,53 @@ function isEmptyToolOutput(content: string) {
   return ["", "[]", "{}", "null"].includes(content.trim());
 }
 
+function setupDisplayMessage(message: WebLiveMessage) {
+  if (
+    message.role !== "custom" ||
+    message.customType !== "openpi-setup-request" ||
+    message.truncation?.details
+  )
+    return message;
+  const details = record(message.details);
+  if (
+    (details.command !== "openpi-setup" && details.command !== "my-pi-setup") ||
+    typeof details.request !== "string"
+  )
+    return message;
+  return {
+    ...message,
+    role: "user",
+    content: `/${details.command}${details.request ? ` ${details.request}` : ""}`,
+    parts: undefined,
+  };
+}
+
 function buildEntries(
   snapshot: WebSnapshot,
   liveMessages: LiveEntry[],
 ): DisplayEntry[] {
   const persisted = snapshot.selectedSession?.entries ?? [];
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] =>
-    entry.type === "message" && entry.message
-      ? [{ key: entry.id, timestamp: entry.timestamp, message: entry.message }]
-      : [],
+    "turnTiming" in entry &&
+    entry.turnTiming &&
+    entry.turnTiming.sessionId === snapshot.selectedSession?.id
+      ? [
+          {
+            key: entry.id,
+            timestamp: entry.timestamp,
+            timing: entry.turnTiming,
+            message: { role: "custom", content: "" },
+          },
+        ]
+      : entry.type === "message" && entry.message
+        ? [
+            {
+              key: entry.id,
+              timestamp: entry.timestamp,
+              message: setupDisplayMessage(entry.message),
+            },
+          ]
+        : [],
   );
   const signature = (message: WebLiveMessage) =>
     JSON.stringify([
@@ -733,31 +780,20 @@ function buildEntries(
     ),
   );
   for (const live of liveMessages) {
+    const message = setupDisplayMessage(live.message);
     if (
-      live.message.role === "toolResult" && live.message.toolCallId
-        ? persistedToolIds.has(live.message.toolCallId)
-        : signatures.has(signature(live.message))
+      message.role === "toolResult" && message.toolCallId
+        ? persistedToolIds.has(message.toolCallId)
+        : signatures.has(signature(message))
     )
       continue;
     entries.push({
       key: live.key,
       timestamp: new Date().toISOString(),
-      message: live.message,
+      message,
     });
   }
-  let setupEpisode = false;
-  return entries.filter(({ message }) => {
-    if (message.customType === "openpi-setup-request") {
-      setupEpisode = true;
-      return false;
-    }
-    if (!setupEpisode) return true;
-    if (message.role === "user") {
-      setupEpisode = false;
-      return true;
-    }
-    return false;
-  });
+  return entries;
 }
 
 function ProcessSequence({
@@ -1005,11 +1041,20 @@ export function Transcript(props: TranscriptProps) {
         lastUserIndex = index;
         break;
       }
+      if (
+        entries[index]?.message.role === "custom" &&
+        entries[index]?.message.customType === "openpi-setup-request"
+      )
+        break;
     }
     const lastAssistantByTurn = new Set<number>();
     let assistantCandidate = -1;
     entries.forEach(({ message }, index) => {
-      if (message.role === "user") {
+      if (
+        message.role === "user" ||
+        (message.role === "custom" &&
+          message.customType === "openpi-setup-request")
+      ) {
         if (assistantCandidate >= 0)
           lastAssistantByTurn.add(assistantCandidate);
         assistantCandidate = -1;
@@ -1018,9 +1063,53 @@ export function Transcript(props: TranscriptProps) {
     });
     if (assistantCandidate >= 0) lastAssistantByTurn.add(assistantCandidate);
 
+    // Timing is already settled runtime evidence. Place it beside a final
+    // textual response only within its user/timing boundaries.
+    const timingBeforeResponse = new Map<number, DisplayEntry>();
+    const movedTimings = new Set<string>();
+    let timingCandidate = -1;
+    entries.forEach((entry, index) => {
+      if (entry.timing) {
+        if (timingCandidate >= 0) {
+          timingBeforeResponse.set(timingCandidate, entry);
+          movedTimings.add(entry.key);
+        }
+        timingCandidate = -1;
+      } else if (
+        entry.message.role === "user" ||
+        (entry.message.role === "custom" &&
+          entry.message.customType === "openpi-setup-request") ||
+        entry.message.role === "toolResult"
+      ) {
+        timingCandidate = -1;
+      } else if (entry.message.role === "assistant") {
+        timingCandidate =
+          entry.message.content.trim() &&
+          !entry.message.parts?.some((part) => part.type === "toolCall")
+            ? index
+            : -1;
+      }
+    });
+
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
+      if (movedTimings.has(entry.key)) return [];
+      if (entry.timing)
+        return [
+          {
+            key: entry.key,
+            turn,
+            kind: "custom",
+            content: <SettledTurnElapsed timing={entry.timing} />,
+          },
+        ];
       if (message.role === "custom") {
+        if (message.customType === "openpi-setup-request") {
+          latestUserPrompt = undefined;
+          latestUserIndex = -1;
+          turn++;
+          turnItems.push({ id: turn, title: t("configureOpenPi") });
+        }
         return [
           {
             key: entry.key,
@@ -1091,7 +1180,6 @@ export function Transcript(props: TranscriptProps) {
                       level={
                         isLive ? props.snapshot.thinking?.level : undefined
                       }
-                      start={props.thinkingStarts[entry.key]}
                       duration={props.thinkingDurations[entry.key]}
                       defaultOpen={
                         props.snapshot.preferences.expandThinking === true
@@ -1161,6 +1249,14 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
+        const settledTiming = timingBeforeResponse.get(index);
+        if (settledTiming?.timing)
+          detailRows.push({
+            key: settledTiming.key,
+            turn,
+            kind: "custom",
+            content: <SettledTurnElapsed timing={settledTiming.timing} />,
+          });
         if (message.content.trim())
           detailRows.push({
             key: `${entry.key}-answer`,
@@ -1290,7 +1386,6 @@ export function Transcript(props: TranscriptProps) {
     props.snapshot.runtime.status,
     props.snapshot.thinking?.level,
     props.thinkingDurations,
-    props.thinkingStarts,
     props.snapshot.runtime.liveTools,
     selected?.cwd,
     t,
@@ -1324,6 +1419,20 @@ export function Transcript(props: TranscriptProps) {
     : props.livePhase === "preparing"
       ? t("modelPreparing")
       : t("modelRunning");
+  const activeTurn = props.snapshot.runtime.activeTurn;
+  const timedTurn =
+    running &&
+    activeTurn &&
+    selected &&
+    activeTurn.sessionId === selected.id &&
+    activeTurn.sessionPath === selected?.path &&
+    typeof activeTurn.startedAt === "number" &&
+    Number.isFinite(activeTurn.startedAt) &&
+    typeof activeTurn.elapsedMs === "number" &&
+    Number.isFinite(activeTurn.elapsedMs) &&
+    activeTurn.elapsedMs >= 0
+      ? activeTurn
+      : undefined;
 
   return (
     <>
@@ -1353,6 +1462,18 @@ export function Transcript(props: TranscriptProps) {
           >
             <span className="conversation-running-dot" />
             <span>{runningLabel}</span>
+            {timedTurn && (
+              <RunningTurnElapsed
+                key={JSON.stringify([
+                  timedTurn.sessionId,
+                  timedTurn.sessionPath,
+                  timedTurn.commandId,
+                  timedTurn.epoch,
+                  timedTurn.startedAt,
+                ])}
+                elapsedMs={timedTurn.elapsedMs!}
+              />
+            )}
           </div>
         )}
       </div>

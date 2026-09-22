@@ -969,9 +969,19 @@ test("real embedded Chromium opens bare local addresses and paints shortcut edit
     await workbar
       .getByRole("textbox", { name: "浏览器地址" })
       .fill(`127.0.0.1:${address.port}`);
+    // The host allows 8s for cold Chromium startup; await its receipt before
+    // beginning the separate painted-frame assertion.
+    const startup = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/browser/open") &&
+        response.request().method() === "POST",
+      { timeout: 20000 },
+    );
     await workbar
       .getByRole("button", { name: "打开地址", exact: true })
       .click();
+    const started = await startup;
+    expect(started.ok(), await started.text()).toBe(true);
     const viewport = workbar.locator(".browser-viewport");
     const frame = viewport.locator("img");
     await expect(frame).toBeVisible();
@@ -1486,7 +1496,13 @@ test("discovers and completes Pi commands without submitting unsupported command
     /\/deploy/u,
     /\/inspect/u,
     /\/optimize/u,
+    /\/extension:setup/u,
   ]);
+  const unavailableOption = listbox.getByRole("option", {
+    name: /\/extension:setup/u,
+  });
+  await expect(unavailableOption).toBeDisabled();
+  await expect(unavailableOption).toContainText("此扩展命令尚未接入 Web");
   const menu = page.locator(".slash-command-menu");
   const menuBox = await menu.boundingBox();
   const composerBox = await page.locator(".composer").boundingBox();
@@ -2180,18 +2196,27 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect(dialog).not.toBeVisible();
     await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
     const providerSettings = page.getByRole("dialog", { name: "设置" });
+    await expect(providerSettings).toHaveCSS("opacity", "1");
     const settingsNavigation = providerSettings.getByRole("tablist", {
       name: "设置导航",
     });
+    const selectSettings = async (id: "models" | "general", label: string) => {
+      if (width <= 640)
+        await providerSettings
+          .getByRole("combobox", { name: "设置导航" })
+          .selectOption(id);
+      else
+        await settingsNavigation
+          .getByRole("tab", { name: label, exact: true })
+          .click();
+    };
     await expect(
       providerSettings.getByRole("heading", { name: "常规" }),
     ).toBeVisible();
     await expect(
       providerSettings.getByRole("button", { name: "打开运行详情" }),
     ).toBeVisible();
-    await settingsNavigation
-      .getByRole("tab", { name: "模型", exact: true })
-      .click();
+    await selectSettings("models", "模型");
     await expect(
       providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
@@ -2199,18 +2224,14 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect
       .poll(() => reads.filter((x) => x === "providers/auth-status").length)
       .toBe(width === 1280 ? 1 : 2);
-    await settingsNavigation
-      .getByRole("tab", { name: "常规", exact: true })
-      .click();
+    await selectSettings("general", "常规");
     await expect(
       providerSettings.getByRole("heading", { name: "常规" }),
     ).toBeVisible();
     await expect(
       providerSettings.getByRole("button", { name: "打开运行详情" }),
     ).toBeVisible();
-    await settingsNavigation
-      .getByRole("tab", { name: "模型", exact: true })
-      .click();
+    await selectSettings("models", "模型");
     await expect(
       providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();

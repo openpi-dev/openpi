@@ -10,14 +10,88 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import type { ArtifactPreview } from "../../../../protocol/artifacts.ts";
+import type {
+  ArtifactMetadata,
+  ArtifactPreview,
+} from "../../../../protocol/artifacts.ts";
 import { Markdown } from "../../components/Markdown.tsx";
 import { copyText } from "../../lib/clipboard.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
+import { sniffPromptImageMime } from "../composer/image-attachments.ts";
 import { ArtifactContext } from "./context.ts";
 
 export interface ArtifactProviderHandle {
   close: () => void;
+}
+
+function ArtifactImagePreview({
+  artifact,
+  client,
+}: {
+  artifact: ArtifactMetadata;
+  client: WebClient;
+}) {
+  const { t } = useTranslation();
+  const [image, setImage] = useState<{ url: string; loaded: boolean } | null>(
+    null,
+  );
+  const [error, setError] = useState<string | null>(null);
+  const { sessionId, handle, revision } = artifact;
+  useEffect(() => {
+    const controller = new AbortController();
+    let url: string | undefined;
+    setImage(null);
+    setError(null);
+    void client
+      .downloadArtifact({ sessionId, handle, revision }, controller.signal)
+      .then(async (blob) => {
+        const mime = sniffPromptImageMime(
+          new Uint8Array(await blob.slice(0, 12).arrayBuffer()),
+        );
+        if (controller.signal.aborted) return;
+        if (!mime) throw new Error(t("artifactImagePreviewFailed"));
+        url = URL.createObjectURL(new Blob([blob], { type: mime }));
+        setImage({ url, loaded: false });
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted)
+          setError(
+            reason instanceof Error
+              ? reason.message
+              : t("artifactImagePreviewFailed"),
+          );
+      });
+    return () => {
+      controller.abort();
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [sessionId, handle, revision, client, t]);
+
+  if (error)
+    return (
+      <div role="alert" className="evidence-warning">
+        <p>{t("artifactImagePreviewFailed")}</p>
+        {error !== t("artifactImagePreviewFailed") && <small>{error}</small>}
+      </div>
+    );
+  return (
+    <div className="artifact-image-preview">
+      {!image?.loaded && <p role="status">{t("readingFile")}</p>}
+      {image && (
+        <img
+          src={image.url}
+          alt={artifact.name}
+          hidden={!image.loaded}
+          onLoad={() =>
+            setImage((current) =>
+              current ? { ...current, loaded: true } : null,
+            )
+          }
+          onError={() => setError(t("artifactImagePreviewFailed"))}
+        />
+      )}
+    </div>
+  );
 }
 
 export const ArtifactProvider = forwardRef<
@@ -158,6 +232,13 @@ export const ArtifactProvider = forwardRef<
           setError(null);
         }
       } catch (reason) {
+        const revoked =
+          reason instanceof WebApiError &&
+          [401, 403, 410].includes(reason.status);
+        if (!stopped && revoked) {
+          setPreview(null);
+          downloadAbort.current?.abort();
+        }
         if (!stopped)
           setAccessDenied(
             reason instanceof WebApiError && reason.code === "ARTIFACT_DENIED",
@@ -167,6 +248,7 @@ export const ArtifactProvider = forwardRef<
           setError(
             reason instanceof Error ? reason.message : "Unable to read file",
           );
+        if (revoked) stopped = true;
       } finally {
         // One outstanding read per open preview. No server watcher survives it.
         if (!stopped) timer = setTimeout(update, delay);
@@ -276,9 +358,6 @@ export const ArtifactProvider = forwardRef<
                 {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
               </p>
             )}
-            <p className="artifact-session">
-              {t("artifactSession", { sessionId })}
-            </p>
             <div className="artifact-actions">
               <button
                 type="button"
@@ -341,17 +420,23 @@ export const ArtifactProvider = forwardRef<
             {!preview && !error && <p role="status">{t("readingFile")}</p>}
             {preview && (
               <>
-                <p className="artifact-revision">
-                  {t("artifactVersion")}:{" "}
-                  <code>{preview.artifact.revision}</code> ·{" "}
-                  {t("artifactBytes", { count: preview.artifact.bytes })}
-                </p>
                 {preview.truncated && (
                   <p className="evidence-warning">
                     {t("artifactPreviewTruncated")}
                   </p>
                 )}
-                {preview.text === undefined ? (
+                {/\.(?:png|jpe?g|gif|webp)$/iu.test(preview.artifact.name) ? (
+                  <ArtifactImagePreview
+                    key={JSON.stringify([
+                      preview.artifact.sessionId,
+                      preview.artifact.path,
+                      preview.artifact.handle,
+                      preview.artifact.revision,
+                    ])}
+                    artifact={preview.artifact}
+                    client={client}
+                  />
+                ) : preview.text === undefined ? (
                   <p>{t("artifactUnsupported")}</p>
                 ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
                   <ArtifactContext.Provider
@@ -360,10 +445,25 @@ export const ArtifactProvider = forwardRef<
                     <Markdown>{preview.text}</Markdown>
                   </ArtifactContext.Provider>
                 ) : (
-                  <section aria-label="File preview content">
+                  <section
+                    aria-label="File preview content"
+                    // biome-ignore lint/a11y/noNoninteractiveTabindex: Long files need a keyboard-focusable scroll region.
+                    tabIndex={0}
+                  >
                     <pre>{preview.text}</pre>
                   </section>
                 )}
+                <details className="artifact-file-details">
+                  <summary>{t("artifactFileDetails")}</summary>
+                  <p className="artifact-session">
+                    {t("artifactSession", { sessionId })}
+                  </p>
+                  <p className="artifact-revision">
+                    {t("artifactVersion")}:{" "}
+                    <code>{preview.artifact.revision}</code> ·{" "}
+                    {t("artifactBytes", { count: preview.artifact.bytes })}
+                  </p>
+                </details>
               </>
             )}
           </div>

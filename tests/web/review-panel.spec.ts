@@ -251,3 +251,64 @@ it("distinguishes Git read failures from an empty repository state", () => {
   fireEvent.click(screen.getByRole("button", { name: "Retry" }));
   expect(refresh).toHaveBeenCalledTimes(1);
 });
+
+it("keeps hidden diff reads and focus dormant, then cancels a read when hidden again", async () => {
+  let finish!: (file: (typeof snapshot.files)[number]) => void;
+  const readFile = vi.fn(
+    (_path: string, _signal: AbortSignal) =>
+      new Promise<(typeof snapshot.files)[number]>((resolve) => {
+        finish = resolve;
+      }),
+  );
+  const node = (active: boolean, selectedPath: string) =>
+    withI18n(
+      createElement(
+        Fragment,
+        null,
+        createElement("textarea", { "aria-label": "draft" }),
+        createElement(ReviewPanel, {
+          active,
+          embedded: true,
+          initialFilePath: selectedPath,
+          onClose: () => {},
+          review: {
+            result: {
+              ok: true,
+              snapshot: {
+                ...snapshot,
+                files: snapshot.files.map((file) => ({
+                  ...file,
+                  diff: "",
+                  diffLoaded: false,
+                })),
+              },
+            },
+            loading: false,
+            error: null,
+            refresh: async () => {},
+            readFile,
+          },
+        }),
+      ),
+    );
+  const { rerender } = render(node(false, snapshot.files[0]!.path));
+  const input = screen.getByRole("textbox", { name: "draft" });
+  input.focus();
+  rerender(node(false, "new-file.ts"));
+  expect(readFile).not.toHaveBeenCalled();
+  expect(document.activeElement).toBe(input);
+  rerender(node(true, "new-file.ts"));
+  expect(readFile).toHaveBeenCalledTimes(1);
+  expect(document.activeElement).toBe(
+    screen.getByRole("region", { name: /new-file\.ts/u }),
+  );
+  const signal = readFile.mock.calls[0]![1];
+  rerender(node(false, "new-file.ts"));
+  input.focus();
+  expect(signal.aborted).toBe(true);
+  await act(async () => finish(snapshot.files[1]!));
+  expect(document.activeElement).toBe(input);
+  expect(screen.queryByRole("figure", { name: "Change diff" })).toBeNull();
+  rerender(node(true, "new-file.ts"));
+  expect(readFile).toHaveBeenCalledTimes(2);
+});

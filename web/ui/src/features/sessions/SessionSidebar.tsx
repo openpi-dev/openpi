@@ -483,7 +483,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                               void props.actions.selectSession(session.path)
                             }
                           >
-                            <span className="session-title">
+                            <span
+                              className="session-title"
+                              title={sessionTitle(
+                                session,
+                                t("untitledSession"),
+                              )}
+                            >
                               {sessionTitle(session, t("untitledSession"))}
                             </span>
                             <span className="session-time">

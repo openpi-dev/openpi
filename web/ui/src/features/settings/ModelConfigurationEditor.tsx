@@ -19,10 +19,18 @@ const emptyModel: WebModelConfiguration = {
 
 export function ModelConfigurationEditor({
   sessionId,
+  selectedKey,
+  selectedModel,
+  onSelect,
+  onModelsLoaded,
   busy,
   onSaved,
 }: {
   sessionId: string;
+  selectedKey?: string;
+  selectedModel?: { provider: string; id: string; name: string };
+  onSelect?: (key: string) => void;
+  onModelsLoaded?: (models: WebModelConfiguration[]) => void;
   busy: boolean;
   onSaved: () => Promise<boolean>;
 }) {
@@ -31,7 +39,11 @@ export function ModelConfigurationEditor({
   const [configuration, setConfiguration] =
     useState<WebModelConfigurations | null>(null);
   const [model, setModel] = useState(emptyModel);
-  const [selected, setSelected] = useState("");
+  const [localSelection, setLocalSelection] = useState("");
+  const selected = selectedKey ?? localSelection;
+  const selectedRef = useRef(selected);
+  selectedRef.current = selected;
+  const drafts = useRef(new Map<string, WebModelConfiguration>());
   const [load, reload] = useState<{
     selection?: string;
     saved?: boolean;
@@ -41,6 +53,22 @@ export function ModelConfigurationEditor({
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState(false);
+  const provider = selectedModel?.provider;
+  const id = selectedModel?.id;
+  const name = selectedModel?.name;
+  useEffect(() => {
+    if (!configuration) return;
+    setError(false);
+    setModel(
+      drafts.current.get(selected) ??
+        configuration.models.find(
+          (item) => `${item.provider}/${item.id}` === selected,
+        ) ??
+        (provider && id
+          ? { ...emptyModel, provider, id, name: name || id }
+          : emptyModel),
+    );
+  }, [configuration, selected, provider, id, name]);
   useEffect(() => () => saveOperation.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
@@ -51,16 +79,19 @@ export function ModelConfigurationEditor({
       (value) => {
         if (controller.signal.aborted) return;
         setConfiguration(value);
+        onModelsLoaded?.(value.models);
         if (load.selection !== undefined) {
           const latest = value.models.find(
             (item) => `${item.provider}/${item.id}` === load.selection,
           );
           if (latest) {
-            setModel(latest);
-            setSelected(load.selection);
+            drafts.current.delete(load.selection);
+            setLocalSelection(load.selection);
+            onSelect?.(load.selection);
           } else if (load.clearMissing) {
-            setModel(emptyModel);
-            setSelected("");
+            drafts.current.delete(load.selection);
+            setLocalSelection("");
+            onSelect?.("");
           }
           setSaved(Boolean(latest && load.saved));
         }
@@ -70,10 +101,14 @@ export function ModelConfigurationEditor({
       },
     );
     return () => controller.abort();
-  }, [client, sessionId, load]);
+  }, [client, sessionId, load, onSelect, onModelsLoaded]);
 
   const editModel = (patch: Partial<WebModelConfiguration>) => {
-    setModel((current) => ({ ...current, ...patch }));
+    setModel((current) => {
+      const updated = { ...current, ...patch };
+      drafts.current.set(selected, updated);
+      return updated;
+    });
     setSaved(false);
   };
 
@@ -91,6 +126,7 @@ export function ModelConfigurationEditor({
           setSaved(false);
           const controller = new AbortController();
           saveOperation.current = controller;
+          const submittedSelection = selected;
           void client
             .saveModelConfiguration(
               sessionId,
@@ -101,15 +137,24 @@ export function ModelConfigurationEditor({
             .then(
               async () => {
                 if (controller.signal.aborted) return;
-                reload({
-                  selection: `${model.provider}/${model.id}`,
-                  saved: true,
-                  clearMissing: true,
-                });
+                drafts.current.delete(submittedSelection);
+                reload(
+                  selectedRef.current === submittedSelection
+                    ? {
+                        selection: `${model.provider}/${model.id}`,
+                        saved: true,
+                        clearMissing: true,
+                      }
+                    : {},
+                );
                 await onSaved().catch(() => false);
               },
               () => {
-                if (!controller.signal.aborted) setError(true);
+                if (
+                  !controller.signal.aborted &&
+                  selectedRef.current === submittedSelection
+                )
+                  setError(true);
               },
             )
             .finally(() => {
@@ -117,33 +162,31 @@ export function ModelConfigurationEditor({
             });
         }}
       >
-        <label className="settings-form-field">
-          {t("configuredModels")}
-          <select
-            value={selected}
-            disabled={saving || !configuration}
-            onChange={(event) => {
-              const key = event.target.value;
-              setSelected(key);
-              setSaved(false);
-              setModel(
-                configuration?.models.find(
-                  (item) => `${item.provider}/${item.id}` === key,
-                ) ?? emptyModel,
-              );
-            }}
-          >
-            <option value="">{t("addModel")}</option>
-            {configuration?.models.map((item) => (
-              <option
-                key={`${item.provider}/${item.id}`}
-                value={`${item.provider}/${item.id}`}
-              >
-                {item.provider}/{item.id}
-              </option>
-            ))}
-          </select>
-        </label>
+        {selectedKey === undefined && (
+          <label className="settings-form-field">
+            {t("configuredModels")}
+            <select
+              value={selected}
+              disabled={saving || !configuration}
+              onChange={(event) => {
+                const key = event.target.value;
+                setLocalSelection(key);
+                onSelect?.(key);
+                setSaved(false);
+              }}
+            >
+              <option value="">{t("addModel")}</option>
+              {configuration?.models.map((item) => (
+                <option
+                  key={`${item.provider}/${item.id}`}
+                  value={`${item.provider}/${item.id}`}
+                >
+                  {item.provider}/{item.id}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
         {(["provider", "id", "name", "baseUrl"] as const).map((field) => (
           <label key={field} className="settings-form-field">
             {t(`modelConfig_${field}`)}
@@ -159,7 +202,10 @@ export function ModelConfigurationEditor({
                 saving ||
                 busy ||
                 !configuration ||
-                (!!selected && (field === "provider" || field === "id"))
+                (configuration.models.some(
+                  (item) => `${item.provider}/${item.id}` === selected,
+                ) &&
+                  (field === "provider" || field === "id"))
               }
               onChange={(event) => {
                 editModel({ [field]: event.target.value });
@@ -216,19 +262,22 @@ export function ModelConfigurationEditor({
         <button type="submit" disabled={saving || busy || !configuration}>
           {t(saving ? "savingSettings" : "saveModelConfiguration")}
         </button>
-        {saved && <p role="status">{t("modelConfigurationSaved")}</p>}
+        {saved && load.selection === selected && (
+          <p role="status">{t("modelConfigurationSaved")}</p>
+        )}
         {error && (
           <div role="alert">
             <p>{t("modelConfigurationFailed")}</p>
             <button
               type="button"
               disabled={saving}
-              onClick={() =>
+              onClick={() => {
+                drafts.current.delete(selected);
                 reload({
                   selection: selected || `${model.provider}/${model.id}`,
                   clearMissing: Boolean(selected),
-                })
-              }
+                });
+              }}
             >
               {t("reloadModelConfiguration")}
             </button>

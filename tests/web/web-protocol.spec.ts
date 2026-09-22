@@ -8,6 +8,26 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("sends only cancellation identity when an active turn includes timing projections", async () => {
+  const fetcher = vi
+    .fn()
+    .mockResolvedValue(new Response(JSON.stringify({ state: "accepted" })));
+  vi.stubGlobal("fetch", fetcher);
+  await new WebClient().cancelActiveTurn({
+    sessionId: "s",
+    commandId: "c",
+    epoch: 1,
+    sessionPath: "/session.jsonl",
+    startedAt: 1000,
+    elapsedMs: 2000,
+  });
+  expect(JSON.parse(fetcher.mock.calls[0]![1].body)).toEqual({
+    sessionId: "s",
+    commandId: "c",
+    epoch: 1,
+  });
+});
+
 it("bounds a stalled event read and cancels the stream", async () => {
   vi.useFakeTimers();
   const cancel = vi.fn();

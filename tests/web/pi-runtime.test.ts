@@ -4,6 +4,15 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
+import type {
+  AgentSessionServices,
+  ExtensionAPI,
+} from "@earendil-works/pi-coding-agent";
+import { fileURLToPath } from "node:url";
+import {
+  createCommandDiscoveryBridge,
+  registerCommandDiscoveryBridge,
+} from "../../web/runtime/command-discovery.ts";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
 import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
@@ -172,6 +181,9 @@ function promptSession(sessionId: string) {
   let followUpMessages: string[] = [];
   return {
     isStreaming: false,
+    get isIdle() {
+      return !this.isStreaming;
+    },
     pendingMessageCount: 0,
     sessionManager: { getSessionId: () => sessionId },
     abort: async (): Promise<void> => undefined,
@@ -204,6 +216,7 @@ function promptSession(sessionId: string) {
 type PromptSession = ReturnType<typeof promptSession>;
 type FakeAgentRuntime = {
   session: PromptSession;
+  services?: AgentSessionServices;
   dispose: () => Promise<void>;
 };
 type PromptRuntimeHarness = {
@@ -419,6 +432,50 @@ test("prompt admission waits for Pi preflight acceptance", async () => {
   await Promise.resolve();
 });
 
+test("a terminal-only extension command is rejected before Pi dispatch and trace admission", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  const bridge = createCommandDiscoveryBridge();
+  const api = {
+    getCommands: () => [
+      {
+        name: "sessions",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/sessions/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  } as ExtensionAPI;
+  await (typeof bridge.extension === "function"
+    ? bridge.extension(api)
+    : bridge.extension.factory(api));
+  registerCommandDiscoveryBridge(services, bridge);
+  await assert.rejects(
+    runtime.sendPrompt("/sessions hello", {
+      commandId: "blocked-command",
+      expectedSessionId: "session-a",
+    }),
+    (error: unknown) => {
+      assert.ok(error instanceof WebRuntimeRequestError);
+      assert.equal(error.code, "PROMPT_REJECTED");
+      assert.equal(error.statusCode, 422);
+      assert.match(error.message, /not available in the Web runtime/u);
+      return true;
+    },
+  );
+  assert.equal(session.calls.length, 0);
+  assert.equal(runtime.activePromptTrace, undefined);
+  assert.deepEqual(runtime.pendingPromptTraces, []);
+});
+
 test("prompt admission snapshots Pi follow-up messages", async () => {
   const session = promptSession("session-a");
   session.isStreaming = true;
@@ -485,7 +542,26 @@ test("handled input snapshots an externally pending follow-up without claiming o
   const session = promptSession("session-a");
   session.isStreaming = true;
   const runtime = promptHarness(session);
-  const admission = runtime.sendPrompt("/handled", {
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "openpi-setup",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/setup/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const admission = runtime.sendPrompt("/openpi-setup", {
     commandId: "command-handled",
     expectedSessionId: "session-a",
   });
@@ -496,6 +572,84 @@ test("handled input snapshots an externally pending follow-up without claiming o
   assert.deepEqual(await admission, { pendingFollowUps: 1 });
   session.calls[0].run.resolve();
   await Promise.resolve();
+});
+
+test("an extension triggerTurn retains its admitted identity until delayed native agent_start", async (t) => {
+  let clock = 100;
+  t.mock.method(performance, "now", () => clock);
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const services = Object.create(null) as AgentSessionServices;
+  runtime.runtime.services = services;
+  registerCommandDiscoveryBridge(services, {
+    extension: () => undefined,
+    read: () => [
+      {
+        name: "openpi-setup",
+        source: "extension",
+        sourceInfo: {
+          path: fileURLToPath(
+            new URL("../../extensions/setup/index.ts", import.meta.url),
+          ),
+          source: "fixture",
+          scope: "user",
+          origin: "package",
+        },
+      },
+    ],
+  });
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  const admission = runtime.sendPrompt("/openpi-setup change theme", {
+    commandId: "setup-command",
+    expectedSessionId: "session-a",
+  });
+  await Promise.resolve();
+  // sendCustomMessage has entered _runAgentPrompt, but extension listeners
+  // have not yet finished delivering the agent_start event to Web.
+  session.isStreaming = true;
+  session.calls[0].options.preflightResult?.(true);
+  session.calls[0].run.resolve();
+  await admission;
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  assert.equal(
+    events.some((event) => event.type === "prompt_settled"),
+    false,
+  );
+  assert.equal(runtime.activePromptTrace?.commandId, "setup-command");
+  assert.equal(runtime.activePromptTrace?.started, false);
+  const projectEvent = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  clock = 1100;
+  projectEvent.call(runtime, session, { type: "agent_start" });
+  assert.equal(
+    events.find((event) => event.type === "turn_started")?.detail?.commandId,
+    "setup-command",
+  );
+  assert.equal(
+    events.find((event) => event.type === "turn_started")?.detail?.elapsedMs,
+    0,
+  );
+  runtime.activePromptTrace!.outcome = "completed";
+  clock = 3600;
+  session.isStreaming = false;
+  projectEvent.call(runtime, session, { type: "agent_settled" });
+  assert.equal(
+    events.find((event) => event.type === "turn_settled")?.detail?.elapsedMs,
+    2500,
+  );
+  assert.equal(
+    events.find((event) => event.type === "turn_settled")?.detail?.outcome,
+    "completed",
+  );
+  assert.equal(runtime.activePromptTrace, undefined);
 });
 
 test("prompt preflight rejection is a typed non-admission", async () => {
@@ -1539,7 +1693,9 @@ test("runtime creation failure releases the Web Host lease", async () => {
   }
 });
 
-test("message_end and queued prompts do not settle a running turn", () => {
+test("message_end and queued prompts do not settle a running turn", (t) => {
+  t.mock.method(Date, "now", () => 10000);
+  t.mock.method(performance, "now", () => 100);
   const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
@@ -1661,6 +1817,9 @@ test("message_end and queued prompts do not settle a running turn", () => {
     queued: false,
     userMessageObserved: true,
     epoch: 2,
+    executionStartedAt: 10000,
+    executionClock: 100,
+    sessionPath: "current:session",
   });
   assert.deepEqual(
     events
@@ -1669,7 +1828,14 @@ test("message_end and queued prompts do not settle a running turn", () => {
     [
       {
         type: "turn_started",
-        detail: { sessionId: "session", commandId: "first", epoch: 1 },
+        detail: {
+          sessionId: "session",
+          commandId: "first",
+          epoch: 1,
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
+        },
       },
       {
         type: "turn_settled",
@@ -1678,17 +1844,29 @@ test("message_end and queued prompts do not settle a running turn", () => {
           commandId: "first",
           epoch: 1,
           outcome: "cancelled",
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
         },
       },
       {
         type: "turn_started",
-        detail: { sessionId: "session", commandId: "third", epoch: 2 },
+        detail: {
+          sessionId: "session",
+          commandId: "third",
+          epoch: 2,
+          startedAt: 10000,
+          elapsedMs: 0,
+          sessionPath: "current:session",
+        },
       },
     ],
   );
 });
 
-test("toolUse message_end without a terminal result settles as uncertain", () => {
+test("toolUse message_end without a terminal result settles as uncertain", (t) => {
+  t.mock.method(Date, "now", () => 10000);
+  t.mock.method(performance, "now", () => 100);
   const session = { sessionManager: { getSessionId: () => "session" } };
   const harness = Object.create(PiWebRuntime.prototype) as RuntimeHarness;
   harness.runtime = { session };
@@ -1751,6 +1929,9 @@ test("toolUse message_end without a terminal result settles as uncertain", () =>
         commandId: "tool-use",
         epoch: 1,
         outcome: "uncertain",
+        startedAt: 10000,
+        elapsedMs: 0,
+        sessionPath: "current:session",
       },
     ],
   );
