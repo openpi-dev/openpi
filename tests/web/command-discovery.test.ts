@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import type {
   AgentSessionServices,
   ExtensionAPI,
@@ -33,6 +34,18 @@ function command(
     },
   };
 }
+
+test("only reviewed command owners gain Web support; same names from other packages stay unadapted", () => {
+  const plan = command("plan", "extension");
+  const impostor = projectWebCommands([plan]).commands[0]!;
+  assert.equal(impostor.availability, "unsupported");
+  plan.sourceInfo.path = fileURLToPath(
+    new URL("../../extensions/plan-mode/index.ts", import.meta.url),
+  );
+  const owned = projectWebCommands([plan]).commands[0]!;
+  assert.equal(owned.availability, "available");
+  assert.equal(owned.support, "plan");
+});
 
 test("projects Pi command identities without exposing source metadata", () => {
   const result = projectWebCommands([

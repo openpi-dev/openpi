@@ -37,6 +37,10 @@ const refreshEventTypes = new Set([
   "session_created",
   "prompt_accepted",
   "runtime_changed",
+  "questions_changed",
+  "command_feedback",
+  "command_submitted",
+  "plan_mode_changed",
 ]);
 
 function readStringSet(key: string) {
@@ -113,6 +117,7 @@ export interface CommandDiscoveryState {
 }
 
 export interface WebStoreState {
+  planSelectionPending: boolean;
   activeTurn: WebSnapshot["runtime"]["activeTurn"] | null;
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
@@ -153,6 +158,7 @@ export interface WebStoreState {
 }
 
 export interface WebStoreActions {
+  selectPlanMode: (enabled: boolean) => Promise<void>;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -1429,6 +1435,45 @@ export function createWebStore(
         set({ thinkingPendingLevel: level });
         void flushThinking();
       },
+      async selectPlanMode(enabled) {
+        const state = get();
+        const snapshot = state.snapshot;
+        const sessionId = snapshot?.selectedSession?.id;
+        if (
+          !sessionId ||
+          sessionId !== snapshot?.currentSessionId ||
+          state.workspaceDraft ||
+          state.sessionSwitching ||
+          state.planSelectionPending ||
+          state.promptAdmissionPending ||
+          state.promptAdmissionRecovery ||
+          state.liveRunning ||
+          snapshot.runtime.status !== "idle" ||
+          snapshot.runtime.planRevision === undefined
+        )
+          return;
+        const epoch = sessionEpoch;
+        set({ planSelectionPending: true });
+        try {
+          await client.setPlanMode(
+            sessionId,
+            enabled,
+            snapshot.runtime.planRevision,
+          );
+          if (
+            epoch === sessionEpoch &&
+            !(await actions.refreshSnapshot({ epoch }))
+          )
+            throw new Error(i18n.t("planModeUnconfirmed"));
+        } catch (error) {
+          if (epoch === sessionEpoch) {
+            await actions.refreshSnapshot({ epoch });
+            if (epoch === sessionEpoch) showError(error);
+          }
+        } finally {
+          set({ planSelectionPending: false });
+        }
+      },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
         if (!turn || get().turnCancellationPending || get().sessionSwitching)
@@ -1446,6 +1491,7 @@ export function createWebStore(
         }
       },
       async sendPrompt(rawContent, promptImages = []) {
+        if (get().planSelectionPending) return false;
         const content = rawContent.trim();
         const images = promptImages.map((image) => ({ ...image }));
         const imageSignature = JSON.stringify(
@@ -1869,6 +1915,7 @@ export function createWebStore(
     };
 
     return {
+      planSelectionPending: false,
       activeTurn: null,
       turnCancellationPending: false,
       turnTerminalStatus: null,

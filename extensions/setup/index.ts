@@ -107,6 +107,11 @@ export function applySubagentRoleModelUpdates(
   return roleModels;
 }
 
+const SETUP_REQUEST_VALIDATION = [
+  "Validate the requested field and value before writing. For an invalid requested value, explain the problem and the legal values or range in the user's language. Do not clamp, substitute, or reinterpret it as a different field or preset. Preserve the setting unless the user explicitly chooses a legal alternative; keeping the current setting requires no write. A prior assistant explanation is not user consent, and an answer to an unrelated question is not approval for a configuration change.",
+  'In particular, ui.footerStyle accepts only plain, powerline, powerline-mono. A request for ui.footerStyle="compact" is invalid; applying the compact preset is a different request that also resets the layout. workflows.concurrency accepts integers 1-64; 0 does not mean 1 or "disabled". workflows.maxAgentCalls accepts integers 1-1024. Ask only for the missing configuration decision when clarification is needed.',
+].join("\n");
+
 export function buildInteractiveSetupPrompt(options: {
   currentConfiguration: string;
   currentModel: string;
@@ -160,6 +165,7 @@ export function buildInteractiveSetupPrompt(options: {
     '- "make explorer inherit again" → subagent_role_models={explorer:null}',
     "",
     "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use ask_user for the decision instead of merely printing instructions. Put the recommended choice first. Do not change configuration until the choices are clear. Then call configure_my_pi_setup at most once with the final requested changes, preserving everything else. Do not edit configuration files directly.",
+    SETUP_REQUEST_VALIDATION,
   ];
 }
 
@@ -613,6 +619,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
           "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
+          SETUP_REQUEST_VALIDATION,
         ]
       : buildInteractiveSetupPrompt({
           currentConfiguration,

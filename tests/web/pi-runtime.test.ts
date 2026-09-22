@@ -12,6 +12,7 @@ import {
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
 import { acquireWebHostLease } from "../../web/runtime/web-host-lease.ts";
+import { registerPlanControl } from "../../extensions/plan-mode/control.ts";
 
 type Trace = {
   commandId: string;
@@ -207,6 +208,8 @@ type FakeAgentRuntime = {
   dispose: () => Promise<void>;
 };
 type PromptRuntimeHarness = {
+  setPlanMode: PiWebRuntime["setPlanMode"];
+  listCommands: PiWebRuntime["listCommands"];
   runtime: FakeAgentRuntime;
   listeners: Set<(event: WebRuntimeEvent) => void>;
   retainedRuntimes: Set<FakeAgentRuntime>;
@@ -393,6 +396,49 @@ function promptHarness(session: ReturnType<typeof promptSession>) {
   harness.webHostLease = { release: async () => undefined };
   return harness;
 }
+
+test("Plan control targets the active idle owned Session without admitting a prompt", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  runtime.listCommands = () =>
+    ({ commands: [{ name: "plan", support: "plan" }] }) as ReturnType<
+      PiWebRuntime["listCommands"]
+    >;
+  let calls = 0;
+  const unregister = registerPlanControl(session.sessionManager, () => {
+    calls++;
+    return { status: "planning", revision: "revision", hasPrompt: false };
+  });
+  try {
+    const request = {
+      sessionId: "session-a",
+      enabled: true,
+      expectedRevision: null,
+    };
+    assert.equal((await runtime.setPlanMode(request)).status, "planning");
+    assert.equal(calls, 1);
+    assert.equal(session.calls.length, 0);
+    await assert.rejects(
+      runtime.setPlanMode({ ...request, sessionId: "old" }),
+      { code: "SESSION_CONFLICT" },
+    );
+    session.isStreaming = true;
+    await assert.rejects(runtime.setPlanMode(request), { code: "PLAN_BUSY" });
+    session.isStreaming = false;
+    const preparing = Promise.resolve();
+    runtime.promptOperations.add(preparing);
+    await assert.rejects(runtime.setPlanMode(request), { code: "PLAN_BUSY" });
+    runtime.promptOperations.delete(preparing);
+    runtime.listCommands = () =>
+      ({ commands: [] }) as unknown as ReturnType<PiWebRuntime["listCommands"]>;
+    await assert.rejects(runtime.setPlanMode(request), {
+      code: "PLAN_CONTROL_UNAVAILABLE",
+    });
+    assert.equal(calls, 1);
+  } finally {
+    unregister();
+  }
+});
 
 test("prompt admission waits for Pi preflight acceptance", async () => {
   const session = promptSession("session-a");
@@ -956,6 +1002,48 @@ test("handled prompt emits a correlated settlement without agent events", async 
       },
     },
   ]);
+});
+
+test("a command's delayed native turn retains its origin without lending it to another run", async () => {
+  const session = promptSession("session-a");
+  const runtime = promptHarness(session);
+  const events: WebRuntimeEvent[] = [];
+  runtime.subscribe((event) => events.push(event));
+  const project = (
+    PiWebRuntime.prototype as unknown as {
+      projectEvent(
+        this: PromptRuntimeHarness,
+        session: object,
+        event: object,
+      ): void;
+    }
+  ).projectEvent;
+  const delayed = deferred();
+  session.prompt = async (_content, options) => {
+    options.preflightResult?.(true);
+    // Created inside the real sendPrompt invocation, after handler return.
+    setImmediate(() => {
+      project.call(runtime, session, { type: "agent_start" });
+      delayed.resolve();
+    });
+  };
+  await runtime.sendPrompt("/command", {
+    commandId: "owner",
+    expectedSessionId: "session-a",
+  });
+  await delayed.promise;
+  assert.equal(runtime.activePromptTrace?.commandId, "owner");
+  assert.ok(
+    events.some(
+      (event) =>
+        event.type === "agent_start" &&
+        (event.detail?.activeTurn as { commandId?: string })?.commandId ===
+          "owner",
+    ),
+  );
+  project.call(runtime, session, { type: "agent_settled" });
+  project.call(runtime, session, { type: "agent_start" });
+  assert.equal(events.at(-1)?.detail?.activeTurn, undefined);
 });
 
 test("later prompt failures retain their command and Session correlation", async () => {

@@ -58,6 +58,7 @@ export function ProviderSettingsPage({
   modelSelectionPending,
   onSelectModel,
   onConfigureOpenPi,
+  interaction,
   onPreferencesChanged,
   onOpenRuntimeStatus,
   onClose,
@@ -73,6 +74,7 @@ export function ProviderSettingsPage({
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
+  interaction?: import("react").ReactNode;
   onPreferencesChanged: () => Promise<boolean>;
   onOpenRuntimeStatus: () => void;
   onClose: () => void;
@@ -420,6 +422,7 @@ export function ProviderSettingsPage({
             />
           </div>
         </div>
+        {interaction}
         {setupError && (
           <div className="settings-global-error" role="alert">
             {setupError}

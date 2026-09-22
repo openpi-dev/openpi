@@ -1071,7 +1071,7 @@ test("discovers and completes Pi commands without submitting unsupported command
   await input.fill("/extension");
   const extension = page.getByRole("option", { name: /\/extension:setup/u });
   await expect(extension).toBeDisabled();
-  await expect(extension).toContainText("当前 Web 不支持");
+  await expect(extension).toContainText("尚未适配 · 手动命令仍交给 Pi");
 
   await input.fill("/rev");
   await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();

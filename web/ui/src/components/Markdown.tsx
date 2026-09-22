@@ -10,6 +10,38 @@ import remarkGfm from "remark-gfm";
 import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
 import { ArtifactContext } from "../features/artifacts/context.ts";
 import { copyText } from "../lib/clipboard.ts";
+import type { RootContent } from "hast";
+
+function labelTaskCheckboxes() {
+  return (tree: Root) => {
+    const text = (node: RootContent): string =>
+      node.type === "text"
+        ? node.value
+        : node.type === "element" && !["ul", "ol"].includes(node.tagName)
+          ? node.children.map(text).join("")
+          : "";
+    const walk = (node: Root | Element) => {
+      if (
+        node.type === "element" &&
+        (node.tagName === "li" || node.tagName === "p")
+      ) {
+        const label = text(node).trim();
+        for (const child of node.children) {
+          if (
+            child.type === "element" &&
+            child.tagName === "input" &&
+            child.properties.type === "checkbox" &&
+            label
+          )
+            child.properties.ariaLabel = label;
+        }
+      }
+      for (const child of node.children)
+        if (child.type === "element") walk(child);
+    };
+    walk(tree);
+  };
+}
 
 declare module "hast" {
   interface ElementData {
@@ -150,7 +182,11 @@ export const Markdown = memo(function Markdown({
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[preserveWindowsLinks, rehypeSanitize]}
+        rehypePlugins={[
+          preserveWindowsLinks,
+          rehypeSanitize,
+          labelTaskCheckboxes,
+        ]}
         urlTransform={(value) =>
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
