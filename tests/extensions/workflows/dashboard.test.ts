@@ -1253,6 +1253,94 @@ test("direct workflow navigation drills right and returns left through every lev
   }
 });
 
+test("detail view surfaces transcriptsOmitted and the transcript view stops lying about it", () => {
+  // A dropped agent hydrates as an empty transcript. Without a run-level notice
+  // the detail page shows no evidence, and the transcript view's default
+  // "predates transcript capture" text is actively wrong (issue #558).
+  const details: WorkflowDetails = {
+    runId: "wf_0b17ed0123",
+    sessionId: SESSION,
+    name: "byte-budget",
+    description: "Exercise the omission notice",
+    background: true,
+    status: "completed",
+    startedAt: Date.now() - 2_000,
+    finishedAt: Date.now() - 1_000,
+    phases: [{ title: "Review" }],
+    agents: [
+      {
+        index: 12,
+        label: "review:tail",
+        phase: "Review",
+        state: "done",
+        startedAt: Date.now() - 1_900,
+        finishedAt: Date.now() - 1_100,
+        preview: "",
+        usage: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          cost: 0,
+          turns: 1,
+        },
+        transcript: [],
+      },
+    ],
+    transcriptArtifact: "transcripts.json",
+    transcriptsOmitted: { agents: 3, entries: 606 },
+  };
+  const tui = {
+    terminal: { rows: 30 },
+    requestRender() {},
+  } as unknown as TUI;
+  const theme = {
+    fg: (_color: string, text: string) => text,
+    bold: (text: string) => text,
+  } as unknown as Theme;
+  const keys = {
+    matches(data: string, binding: string) {
+      return data === binding.replace("tui.editor.cursor", "").toLowerCase();
+    },
+    getKeys(binding: string) {
+      const key = binding.split(".").at(-1) ?? binding;
+      return [key.toLowerCase()];
+    },
+  } as unknown as KeybindingsManager;
+  const dashboard = new WorkflowDashboard(
+    tui,
+    theme,
+    keys,
+    () => new Map([[details.runId, details]]),
+    SESSION,
+    new Set(),
+    0,
+    () => {},
+    details.runId,
+  );
+
+  try {
+    const detail = dashboard.render(120);
+    // The run-level notice is on the live detail page, not only in report.md.
+    assert.match(
+      detail.join("\n"),
+      /3 of 1 agent transcript\(s\) omitted from transcripts\.json/,
+    );
+    // Reserving the notice row must not break the exact-height layout.
+    assert.equal(detail.length, 29);
+
+    dashboard.handleInput("right");
+    dashboard.handleInput("right");
+    const transcript = stripVTControlCharacters(
+      dashboard.render(120).join("\n"),
+    );
+    assert.match(transcript, /stay within its byte budget/);
+    assert.doesNotMatch(transcript, /predates transcript capture/);
+  } finally {
+    dashboard.dispose();
+  }
+});
+
 test("Workflow transcript follows, pauses on its top row, and resumes", () => {
   const mouseModes: string[] = [];
   const transcript = Array.from({ length: 40 }, (_, index) => ({

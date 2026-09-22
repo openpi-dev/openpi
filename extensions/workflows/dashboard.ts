@@ -1408,8 +1408,9 @@ export class WorkflowDashboard {
               formatElapsed(agent.startedAt, agent.finishedAt),
             ],
             errorText: agent.error,
-            emptyText:
-              "transcript unavailable (this run predates transcript capture)",
+            emptyText: details.transcriptsOmitted
+              ? "transcript unavailable (omitted from transcripts.json to stay within its byte budget; full data on disk)"
+              : "transcript unavailable (this run predates transcript capture)",
           };
         },
         close: () => {
@@ -1586,6 +1587,17 @@ export class WorkflowDashboard {
       ),
     );
 
+    // Run-level notice mirroring the saved report and completion alert: without
+    // it, opening a dropped agent's empty transcript reads as "predates capture"
+    // with no on-screen evidence anything was omitted (issue #558).
+    const omissionNotice = d.transcriptsOmitted
+      ? theme.fg(
+          "warning",
+          ` ${d.transcriptsOmitted.agents} of ${d.agents.length} agent transcript(s) omitted from transcripts.json (byte budget); full data on disk.`,
+        )
+      : undefined;
+    if (omissionNotice) lines.push(omissionNotice);
+
     const groups = this.groups();
     this.phaseIndex = Math.min(this.phaseIndex, Math.max(0, groups.length - 1));
     const selectedGroup = groups[this.phaseIndex];
@@ -1596,7 +1608,8 @@ export class WorkflowDashboard {
     // the agent list is what the view exists for.
     const logBudget = Math.max(0, Math.min(3, height - 12));
     const recentLogs = (d.logs ?? []).slice(-logBudget);
-    const panelHeight = height - 3 - recentLogs.length;
+    const panelHeight =
+      height - 3 - recentLogs.length - (omissionNotice ? 1 : 0);
     const bodyHeight = Math.max(0, panelHeight - 2);
 
     // Left: phases sidebar.
