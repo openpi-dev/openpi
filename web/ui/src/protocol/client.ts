@@ -523,12 +523,12 @@ export class WebClient {
     );
   }
 
-  setThinkingLevel(sessionId: string, level: string) {
+  setThinkingLevel(sessionId: string, level: string, sessionPath: string) {
     return this.request<WebThinkingState & { sessionId: string }>(
       "/api/thinking",
       {
         method: "POST",
-        body: JSON.stringify({ sessionId, level }),
+        body: JSON.stringify({ sessionId, sessionPath, level }),
       },
     );
   }
@@ -626,10 +626,15 @@ export class WebClient {
     );
   }
 
-  selectModel(provider: string, modelId: string, sessionId: string) {
+  selectModel(
+    provider: string,
+    modelId: string,
+    sessionId: string,
+    sessionPath: string,
+  ) {
     return this.request<WebModelSummary>("/api/model", {
       method: "POST",
-      body: JSON.stringify({ provider, modelId, sessionId }),
+      body: JSON.stringify({ provider, modelId, sessionId, sessionPath }),
     });
   }
 
@@ -658,12 +663,20 @@ export class WebClient {
     sessionId: string,
     content: string,
     commandId: string,
+    sessionPath: string,
     retry = false,
     images: readonly WebPromptImage[] = [],
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content, commandId, retry, images }),
+      body: JSON.stringify({
+        sessionId,
+        sessionPath,
+        content,
+        commandId,
+        retry,
+        images,
+      }),
       timeoutMs: 30_000,
       timeoutMessage:
         "Request timed out; admission may still be pending. Retry the same message to recover its receipt.",

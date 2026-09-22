@@ -7,6 +7,7 @@ import {
   readFile,
   realpath,
   rm,
+  utimes,
   writeFile,
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -14,6 +15,7 @@ import { join, resolve } from "node:path";
 import test from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
+import { WebHost } from "../../web/host/web-host.ts";
 import {
   WEB_MAX_SESSIONS,
   WEB_MAX_SNAPSHOT_BYTES,
@@ -82,6 +84,116 @@ function persistSession(
     timestamp,
   });
 }
+
+test("session projection uses the selected file when IDs are duplicated", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-identity-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.create(root, sessionDirectory);
+    persistSession(current, "original conversation", 1);
+    const currentPath = current.getSessionFile()!;
+    const copyPath = join(sessionDirectory, "copied-session.jsonl");
+    await writeFile(copyPath, await readFile(currentPath));
+    const copy = SessionManager.open(copyPath, sessionDirectory);
+    persistSession(copy, "copied conversation only", 2);
+    await utimes(copyPath, new Date(), new Date(Date.now() + 10_000));
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+
+    const snapshot = await adapter.getSnapshot(copyPath);
+    assert.equal(snapshot.selectedSession?.path, copyPath);
+    assert.equal(
+      snapshot.sessions.find((item) => item.path === copyPath)?.controller,
+      "none",
+    );
+    assert.match(
+      JSON.stringify(snapshot.selectedSession?.entries),
+      /copied conversation only/,
+    );
+    assert.doesNotMatch(
+      JSON.stringify((await adapter.getSession(currentPath))?.entries),
+      /copied conversation only/,
+    );
+    assert.equal(
+      (await adapter.getSnapshot()).selectedSession?.path,
+      currentPath,
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("renaming a copied session does not rename the active session with the same ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-session-rename-"));
+  const sessionDirectory = join(root, "sessions");
+  try {
+    const current = SessionManager.create(root, sessionDirectory);
+    persistSession(current, "original conversation", 1);
+    current.appendSessionInfo("active name");
+    const currentPath = current.getSessionFile()!;
+    const originalBytes = await readFile(currentPath);
+    const copyPath = join(sessionDirectory, "copied-session.jsonl");
+    await writeFile(copyPath, originalBytes);
+    const adapter = new PiWebAdapter(
+      runtimeFor(root, sessionDirectory, current),
+    );
+
+    await adapter.renameSession(copyPath, "copy name");
+    assert.equal(
+      SessionManager.open(copyPath, sessionDirectory).getSessionName(),
+      "copy name",
+    );
+    assert.equal(current.getSessionName(), "active name");
+    assert.deepEqual(await readFile(currentPath), originalBytes);
+    await adapter.renameSession(currentPath, "new active name");
+    assert.equal(current.getSessionName(), "new active name");
+    assert.equal(
+      SessionManager.open(copyPath, sessionDirectory).getSessionName(),
+      "copy name",
+    );
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("selecting a copied session calls the runtime despite a shared session ID", async () => {
+  const root = await mkdtemp(join(tmpdir(), "openpi-web-select-identity-"));
+  const sessionDirectory = join(root, "sessions");
+  const current = SessionManager.create(root, sessionDirectory);
+  persistSession(current, "original conversation", 1);
+  const currentPath = current.getSessionFile()!;
+  const copyPath = join(sessionDirectory, "copied-session.jsonl");
+  await writeFile(copyPath, await readFile(currentPath));
+  const runtime = runtimeFor(root, sessionDirectory, current);
+  const switched: string[] = [];
+  runtime.switchSession = async (path) => {
+    switched.push(path);
+    return { cancelled: false };
+  };
+  const host = new WebHost({ runtime });
+  try {
+    await host.start();
+    const url = new URL(host.url);
+    const token = new URLSearchParams(url.hash.slice(1)).get("token");
+    for (const path of [currentPath, copyPath]) {
+      const response = await fetch(`${url.origin}/api/sessions/select`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${token}`,
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ path }),
+      });
+      assert.equal(response.status, 200);
+      await response.json();
+    }
+    assert.deepEqual(switched, [copyPath]);
+  } finally {
+    await host.stop();
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 test("snapshot pins current and selected sessions while bounding the projection", async () => {
   const root = await mkdtemp(join(tmpdir(), "openpi-web-adapter-"));

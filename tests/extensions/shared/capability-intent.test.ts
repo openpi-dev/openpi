@@ -28,6 +28,23 @@ test("classifies explicit capability intent across English, Chinese, and mixed p
   );
 });
 
+test("standalone English capability names select their group", () => {
+  for (const prompt of ["subagent", "subagents", "  SubAgentS\n"]) {
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["delegate"],
+      prompt,
+    );
+  }
+  for (const prompt of ["workflow", "workflows", "\n WORKFLOW \t"]) {
+    assert.deepEqual(
+      capabilitiesRequestedByPrompt(prompt),
+      ["workflow"],
+      prompt,
+    );
+  }
+});
+
 test("English references without an imperative stay inert", () => {
   assert.deepEqual(
     capabilitiesRequestedByPrompt("Compare Subagent and Workflow"),
@@ -37,6 +54,13 @@ test("English references without an imperative stay inert", () => {
     "git checkout -b subagent-matching",
     "Please review the subagent.ts implementation",
     "讨论 workflow 和 subagent 的区别",
+    "subagent.ts",
+    "subagent?",
+    "`subagent`",
+    '"workflow"',
+    "Explain this:\nsubagent",
+    "不要启动\nworkflow",
+    "subagent\nworkflow",
   ])
     assert.deepEqual(capabilitiesRequestedByPrompt(prompt), [], prompt);
   assert.deepEqual(

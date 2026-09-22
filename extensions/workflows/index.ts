@@ -892,22 +892,35 @@ export default function workflows(
         sourceEntries,
         lastContext?.getContextUsage?.(),
       );
+      const delivered = new Set<string>();
+      let deliveryError: string | undefined;
       for (const batch of batches) {
-        pi.sendMessage(
-          {
-            customType: "workflow-result",
-            content: batch.content,
-            display: true,
-            details: buildWorkflowCompletionDisplay(batch.entries),
-          },
-          wake
-            ? { deliverAs: "followUp", triggerTurn: true }
-            : { deliverAs: "nextTurn" },
-        );
+        try {
+          pi.sendMessage(
+            {
+              customType: "workflow-result",
+              content: batch.content,
+              display: true,
+              details: buildWorkflowCompletionDisplay(batch.entries),
+            },
+            wake
+              ? { deliverAs: "followUp", triggerTurn: true }
+              : { deliverAs: "nextTurn" },
+          );
+          for (const entry of batch.entries) delivered.add(entry.deliveryId);
+        } catch (error) {
+          // Earlier batches were accepted. Keep their receipts so retrying
+          // this failed batch cannot duplicate those sibling completions.
+          deliveryError = errorText(error);
+          break;
+        }
       }
       return envelopes.map((envelope) => ({
         deliveryId: envelope.deliveryId,
-        delivered: true,
+        delivered: delivered.has(envelope.deliveryId),
+        ...(!delivered.has(envelope.deliveryId) && deliveryError !== undefined
+          ? { error: deliveryError }
+          : {}),
       }));
     },
   });

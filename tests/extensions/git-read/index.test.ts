@@ -46,6 +46,7 @@ function makeRepo(): string {
   writeFileSync(join(dir, "b.txt"), "new\n");
   git(dir, ["add", "."]);
   git(dir, ["commit", "--quiet", "-m", "second"]);
+  git(dir, ["branch", "a.txt", "HEAD"]);
   writeFileSync(join(dir, "a.txt"), "one\ntwo\nthree\n");
   return dir;
 }
@@ -104,6 +105,35 @@ test("git show with path limits the commit patch to that path", async () => {
     assert.match(exit.value.output.preview, /new/);
   }
 });
+
+for (const [name, args, expected] of [
+  ["show", buildShowArgs({ revision: "a.txt" }), /second/],
+  ["log", buildLogArgs({ revision: "a.txt" }), /first/],
+  ["diff", buildDiffArgs({ from: "a.txt" }), /\+three/],
+] as const) {
+  test(`git ${name} accepts a revision that also names a worktree file`, async () => {
+    const exit = await Effect.runPromiseExit(runGit(args, repo));
+    assert.ok(Exit.isSuccess(exit));
+    if (Exit.isSuccess(exit)) {
+      assert.match(exit.value.output.preview, expected);
+    }
+  });
+}
+
+for (const [name, args] of [
+  ["show", buildShowArgs({ revision: "b.txt" })],
+  ["log", buildLogArgs({ revision: "b.txt" })],
+  ["diff", buildDiffArgs({ from: "b.txt" })],
+] as const) {
+  test(`git ${name} rejects a file-only name in the revision field`, async () => {
+    const exit = await Effect.runPromiseExit(runGit(args, repo));
+    assert.ok(Exit.isFailure(exit));
+    if (Exit.isFailure(exit)) {
+      const error = Cause.squash(exit.cause) as { message?: string };
+      assert.match(error.message ?? "", /bad revision.*b\.txt/i);
+    }
+  });
+}
 
 test("structured git diff and show never invoke diff.external", async () => {
   const { command, helper, marker } = markerCommand(repo, "external-diff");

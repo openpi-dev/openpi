@@ -155,7 +155,8 @@ export function Composer(props: ComposerProps) {
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
-      selected.id === props.snapshot?.currentSessionId,
+      selected.id === props.snapshot?.currentSessionId &&
+      selectedPath === selected.path,
   );
   const draftSession = Boolean(
     props.selectedWorkspace &&

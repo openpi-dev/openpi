@@ -54,6 +54,7 @@ import {
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
 import { readModelConfigurations, saveModelConfiguration } from "./model-configuration.ts";
+import { matchesSessionIdentity } from "./session-identity.ts";
 import {
   projectWebSettingsResources,
 } from "./settings-catalog.ts";
@@ -139,11 +140,12 @@ export class PiWebRuntime implements WebRuntimeController {
   private promptAdmission: Promise<void> = Promise.resolve();
   private thinkingMutationInFlight = false;
   private thinkingMutationPending?: {
-    level: string;
     waiters: Array<{
+      level: string;
       resolve: (projection: WebThinkingProjection) => void;
       reject: (error: unknown) => void;
       expectedSessionId?: string;
+      expectedSessionPath?: string;
     }>;
   };
   private activePromptTrace?: PromptTrace;
@@ -564,11 +566,7 @@ export class PiWebRuntime implements WebRuntimeController {
     this.assertActive();
     this.assertWorkspaceSelected();
     const agentRuntime = this.runtime;
-    if (
-      options?.expectedSessionId !== undefined &&
-      options.expectedSessionId !==
-        agentRuntime.session.sessionManager.getSessionId()
-    ) {
+    if (!matchesSessionIdentity(agentRuntime.session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts model selection",
         "SESSION_CONFLICT",
@@ -629,25 +627,28 @@ export class PiWebRuntime implements WebRuntimeController {
 
   setThinkingLevel(level: string, options?: WebThinkingSelectionOptions) {
     const expectedSessionId = options?.expectedSessionId;
+    const expectedSessionPath = options?.expectedSessionPath;
     // Validate each caller at enqueue so a stale Session cannot influence, or
     // be silently resolved through, another Session's merged write.
-    if (
-      expectedSessionId !== undefined &&
-      expectedSessionId !== this.runtime.session.sessionManager.getSessionId()
-    ) {
+    if (!matchesSessionIdentity(this.runtime.session.sessionManager, options)) {
       return Promise.reject(this.thinkingSessionConflictError());
     }
     return new Promise<WebThinkingProjection>((resolve, reject) => {
-      const waiter = { resolve, reject, expectedSessionId };
+      const waiter = {
+        level,
+        resolve,
+        reject,
+        expectedSessionId,
+        expectedSessionPath,
+      };
       const pending = this.thinkingMutationPending;
       if (pending) {
-        // Merge-to-latest: a newer target overwrites the queued one and all
-        // waiters resolve from the single authoritative write that follows.
-        pending.level = level;
+        // Coalesce to the latest caller that still owns the active Session
+        // when the serialized write executes.
         pending.waiters.push(waiter);
         return;
       }
-      this.thinkingMutationPending = { level, waiters: [waiter] };
+      this.thinkingMutationPending = { waiters: [waiter] };
       void this.drainThinkingMutations();
     });
   }
@@ -674,17 +675,14 @@ export class PiWebRuntime implements WebRuntimeController {
           const outcome = await this.serializeControllerMutation(async () => {
             this.assertActive();
             this.assertWorkspaceSelected();
-            const activeSessionId =
-              this.runtime.session.sessionManager.getSessionId();
-            const accepted = pending.waiters.filter(
-              (waiter) =>
-                waiter.expectedSessionId === undefined ||
-                waiter.expectedSessionId === activeSessionId,
+            const accepted = pending.waiters.filter((waiter) =>
+              matchesSessionIdentity(this.runtime.session.sessionManager, waiter),
             );
-            if (accepted.length === 0) return undefined;
+            const latest = accepted.at(-1);
+            if (!latest) return undefined;
             return {
               accepted,
-              projection: await this.applyThinkingSelection(pending.level),
+              projection: await this.applyThinkingSelection(latest.level),
             };
           });
           if (!outcome) {
@@ -701,7 +699,7 @@ export class PiWebRuntime implements WebRuntimeController {
           }
         } catch (error) {
           traceWeb("thinking_selection_failed", {
-            level: pending.level,
+            level: pending.waiters.at(-1)?.level,
             error: errorText(error),
           });
           for (const waiter of pending.waiters) waiter.reject(error);
@@ -738,10 +736,7 @@ export class PiWebRuntime implements WebRuntimeController {
     const agentRuntime = this.runtime;
     const session = agentRuntime.session;
     const sessionId = session.sessionManager.getSessionId();
-    if (
-      options?.expectedSessionId !== undefined &&
-      options.expectedSessionId !== sessionId
-    ) {
+    if (!matchesSessionIdentity(session.sessionManager, options)) {
       throw new WebRuntimeRequestError(
         "Only the active Web session accepts messages",
         "SESSION_CONFLICT",
@@ -782,6 +777,21 @@ export class PiWebRuntime implements WebRuntimeController {
       try {
         await previousAdmission;
         this.assertActive();
+        this.assertWorkspaceSelected();
+        if (
+          agentRuntime !== this.runtime ||
+          session !== this.runtime.session ||
+          !matchesSessionIdentity(session.sessionManager, {
+            expectedSessionId: sessionId,
+            expectedSessionPath: options?.expectedSessionPath,
+          })
+        ) {
+          throw new WebRuntimeRequestError(
+            "Only the active Web session accepts messages",
+            "SESSION_CONFLICT",
+            409,
+          );
+        }
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
@@ -899,11 +909,13 @@ export class PiWebRuntime implements WebRuntimeController {
         releaseAdmission();
         if (!admitted) {
           rejectRequest(
-            new WebRuntimeRequestError(
-              errorText(error),
-              "PROMPT_REJECTED",
-              422,
-            ),
+            error instanceof WebRuntimeRequestError
+              ? error
+              : new WebRuntimeRequestError(
+                  errorText(error),
+                  "PROMPT_REJECTED",
+                  422,
+                ),
           );
         } else if (admitted) {
           this.emit("prompt_failed", {

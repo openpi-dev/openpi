@@ -97,7 +97,7 @@ interface Entry {
   /** Deadline won the race and initiated termination. */
   timedOut: boolean;
   timeoutTimer?: ReturnType<typeof setTimeout>;
-  /** The child emitted 'error' (spawn failure etc.); settles as "failed".
+  /** The child failed to spawn; settles as "failed".
    * Kept separate from errorText, which also carries non-fatal notes
    * (spill failures) that must not flip a clean exit to "failed". */
   processErrored: boolean;
@@ -1033,12 +1033,16 @@ function* makeManager(maxSpillBytesPerSession: number) {
           notify(id);
           emitChunk(id, chunk, "stderr");
         });
-        // Spawn failures (ENOENT etc.) arrive via 'error', not a throw. Node
-        // still emits 'close' afterwards (with a bogus errno as code), so
-        // record the failure here and let the close path do the one settle.
-        child.once("error", (error) => {
-          entry.processErrored = true;
+        // An error without a PID is a spawn failure. Once spawned, a failed
+        // signal can emit repeated errors without ending the process; keep
+        // observing it and leave settlement/output flushing to exit/close.
+        child.on("error", (error) => {
           snapshot.errorText ??= boundedError(error);
+          if (child.pid !== undefined) {
+            notify(id);
+            return;
+          }
+          entry.processErrored = true;
           entry.exited = true;
           settleAfterFlush(entry);
         });

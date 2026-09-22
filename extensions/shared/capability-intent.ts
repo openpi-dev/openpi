@@ -31,19 +31,27 @@ function isExplicitClause(clause: string) {
 }
 
 /**
- * One fail-closed interpretation of explicit user capability intent. The
+ * One fail-closed interpretation of explicit user capability intent.
+ * A standalone English capability name selects that capability. Otherwise,
  * English capability names require an imperative request context; references
  * in identifiers, discussion, or comparisons stay inert. Negated or
  * conditional clauses remain inert. Runtime activation and
  * pre-submit UI feedback both cross this seam, so they cannot drift.
  */
 export function capabilitiesRequestedByPrompt(prompt: string) {
+  // Match the whole input before splitting clauses: quoted names, filenames,
+  // discussion, and names on a separate line must not become selections.
+  const selection = prompt.trim();
   const promptClauses = clauses(prompt);
-  return OPENPI_CAPABILITY_NAMES.filter((capability) =>
-    promptClauses.some(
-      (clause) =>
-        isExplicitClause(clause) && CAPABILITY_INTENT[capability].test(clause),
-    ),
+  return OPENPI_CAPABILITY_NAMES.filter(
+    (capability) =>
+      (capability === "delegate" && /^subagents?$/iu.test(selection)) ||
+      (capability === "workflow" && /^workflows?$/iu.test(selection)) ||
+      promptClauses.some(
+        (clause) =>
+          isExplicitClause(clause) &&
+          CAPABILITY_INTENT[capability].test(clause),
+      ),
   );
 }
 

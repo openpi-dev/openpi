@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { copyFile, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { type TestContext } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { jsonByteLength } from "../../web/protocol/types.ts";
 import { PiWebRuntime } from "../../web/runtime/pi-runtime.ts";
+import { matchesSessionIdentity } from "../../web/runtime/session-identity.ts";
 import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
@@ -45,6 +46,75 @@ function deferred() {
   });
   return { promise, resolve, reject };
 }
+
+async function copiedSessionManagers(t: TestContext) {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-copied-runtime-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const originalPath = join(directory, "original.jsonl");
+  const copiedPath = join(directory, "copied.jsonl");
+  await writeFile(
+    originalPath,
+    `${JSON.stringify({
+      type: "session",
+      version: 3,
+      id: "copied-session",
+      timestamp: new Date().toISOString(),
+      cwd: directory,
+    })}\n`,
+  );
+  await copyFile(originalPath, copiedPath);
+  const original = SessionManager.open(originalPath);
+  const copied = SessionManager.open(copiedPath);
+  assert.equal(original.getSessionId(), copied.getSessionId());
+  assert.notEqual(original.getSessionFile(), copied.getSessionFile());
+  return { original, copied, originalPath, copiedPath };
+}
+
+function assertSessionConflict(error: unknown) {
+  assert.ok(error instanceof WebRuntimeRequestError);
+  assert.equal(error.code, "SESSION_CONFLICT");
+  assert.equal(error.statusCode, 409);
+  return true;
+}
+
+test("Session identity normalizes file paths and keeps copied files distinct", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const expected = {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath.replace(
+      "original.jsonl",
+      "unused/../original.jsonl",
+    ),
+  };
+  assert.equal(matchesSessionIdentity(original, expected), true);
+  assert.equal(matchesSessionIdentity(copied, expected), false);
+  assert.equal(
+    matchesSessionIdentity(original, {
+      ...expected,
+      expectedSessionId: "different-session",
+    }),
+    false,
+  );
+});
+
+test("an in-memory Session accepts only its own current identity token", () => {
+  const session = SessionManager.inMemory(process.cwd());
+  assert.equal(session.getSessionFile(), undefined);
+  assert.equal(
+    matchesSessionIdentity(session, {
+      expectedSessionId: session.getSessionId(),
+      expectedSessionPath: `current:${session.getSessionId()}`,
+    }),
+    true,
+  );
+  assert.equal(
+    matchesSessionIdentity(session, {
+      expectedSessionPath: "current:another-session",
+    }),
+    false,
+  );
+  assert.equal(matchesSessionIdentity(session), true);
+});
 
 test("projects current Pi token and context statistics without inference", () => {
   const getSessionUsage = PiWebRuntime.prototype.getSessionUsage;
@@ -468,7 +538,7 @@ test("prompt completion without a Pi preflight result fails closed", async () =>
   });
 });
 
-test("queued prompts stay bound to the Session captured at submission", async () => {
+test("unadmitted queued prompts reject after the active Session changes", async () => {
   const sessionA = promptSession("session-a");
   const sessionB = promptSession("session-b");
   const runtime = promptHarness(sessionA);
@@ -485,14 +555,44 @@ test("queued prompts stay bound to the Session captured at submission", async ()
   await Promise.resolve();
   assert.deepEqual(
     sessionA.calls.map((call) => call.content),
-    ["first", "belongs-to-a"],
+    ["first"],
   );
   assert.equal(sessionB.calls.length, 0);
 
-  sessionA.calls[1].options.preflightResult?.(true);
-  await second;
+  await assert.rejects(second, assertSessionConflict);
   for (const call of sessionA.calls) call.run.resolve();
   await Promise.resolve();
+});
+
+test("copied Session rejects a queued prompt before admission", async (t) => {
+  const { original, originalPath, copiedPath } = await copiedSessionManagers(t);
+  const session = {
+    ...promptSession(original.getSessionId()),
+    sessionManager: original,
+  };
+  const harness = promptHarness(session);
+  const gate = deferred();
+  harness.promptAdmission = gate.promise;
+  const admission = harness
+    .sendPrompt("belongs-to-original", {
+      expectedSessionId: original.getSessionId(),
+      expectedSessionPath: originalPath,
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+  // Pi may select another file without replacing the runtime or SessionManager.
+  original.setSessionFile(copiedPath);
+  gate.resolve();
+  await new Promise<void>((resolve) => setImmediate(resolve));
+  for (const call of session.calls) {
+    call.options.preflightResult?.(true);
+    call.run.resolve();
+  }
+  assertSessionConflict(await admission);
+  assert.equal(session.calls.length, 0);
 });
 
 test("stale expected Session fails before prompt dispatch", async () => {
@@ -561,6 +661,7 @@ test("model selection and Session activation are serialized", async () => {
   const model = { provider: "fixture", id: "model-a", name: "Model A" };
   const sessionA = {
     isStreaming: false,
+    sessionManager: { getSessionId: () => "session-a" },
     model: undefined as typeof model | undefined,
     subscribe: () => () => undefined,
     async setModel(selected: typeof model) {
@@ -789,6 +890,44 @@ test("a delayed model selection cannot target a newly activated Session", async 
     return true;
   });
   assert.equal(sessionBModelWrites, 0);
+});
+
+test("copied Session rejects a queued model selection before writing", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const model = { provider: "fixture", id: "model-a", name: "Model A" };
+  let modelWrites = 0;
+  const session = {
+    ...promptSession(original.getSessionId()),
+    sessionManager: original,
+    model: undefined as typeof model | undefined,
+    async setModel(selected: typeof model) {
+      modelWrites += 1;
+      session.model = selected;
+      session.sessionManager.appendModelChange(selected.provider, selected.id);
+    },
+  };
+  const harness = promptHarness(session) as PromptRuntimeHarness & {
+    setModel: PiWebRuntime["setModel"];
+  };
+  Object.assign(harness.runtime, {
+    services: {
+      modelRuntime: {
+        getModel: () => model,
+        getAvailableSnapshot: () => [model],
+      },
+    },
+  });
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const selection = harness.setModel("fixture", "model-a", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  gate.resolve();
+  await assert.rejects(selection, assertSessionConflict);
+  assert.equal(modelWrites, 0);
+  assert.deepEqual(copied.getEntries(), []);
 });
 
 test("handled prompt emits a correlated settlement without agent events", async () => {
@@ -1041,21 +1180,20 @@ test("retained Session cleanup waits for all of its prompt operations", async ()
 
   const first = runtime.sendPrompt("first", { expectedSessionId: "session-a" });
   await Promise.resolve();
+  sessionA.calls[0].options.preflightResult?.(true);
+  await first;
   const second = runtime.sendPrompt("second", {
     expectedSessionId: "session-a",
   });
+  await Promise.resolve();
+  sessionA.calls[1].options.preflightResult?.(true);
+  await second;
   runtime.runtime = {
     session: sessionB,
     dispose: async () => undefined,
   };
   runtime.retainedRuntimes.add(retainedRuntime);
   runtime.retainedSubscriptions.set(retainedRuntime, () => undefined);
-
-  sessionA.calls[0].options.preflightResult?.(true);
-  await first;
-  await Promise.resolve();
-  sessionA.calls[1].options.preflightResult?.(true);
-  await second;
 
   sessionA.calls[0].run.resolve();
   await new Promise<void>((resolve) => setImmediate(resolve));
@@ -1627,9 +1765,10 @@ type ThinkingHarness = {
   hasSelectedWorkspace: boolean;
   thinkingMutationInFlight: boolean;
   thinkingMutationPending?: {
-    level: string;
-    options?: { expectedSessionId?: string };
     waiters: Array<{
+      level: string;
+      expectedSessionId?: string;
+      expectedSessionPath?: string;
       resolve: (projection: {
         level: string;
         available: readonly string[];
@@ -1831,6 +1970,62 @@ test("concurrent thinking selections coalesce to the last target", async () => {
   assert.equal(fixture.state.level, "high");
   assert.equal(results.at(-1)?.level, "high");
   assert.equal(retained(), 0);
+});
+
+test("copied Session rejects a queued thinking selection before writing", async (t) => {
+  const { original, copied, originalPath } = await copiedSessionManagers(t);
+  const fixture = thinkingSession();
+  const session = Object.assign(fixture.session, { sessionManager: original });
+  const { harness } = thinkingHarness(session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const selection = harness.setThinkingLevel("high", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  gate.resolve();
+  await assert.rejects(selection, assertSessionConflict);
+  assert.deepEqual(fixture.state.calls, []);
+});
+
+test("copied Session stale last thinking waiter cannot overwrite a valid level", async (t) => {
+  const { original, copied, originalPath, copiedPath } =
+    await copiedSessionManagers(t);
+  const fixture = thinkingSession();
+  const session = Object.assign(fixture.session, { sessionManager: original });
+  const { harness } = thinkingHarness(session);
+  const gate = deferred();
+  harness.controllerMutation = gate.promise;
+  const first = harness.setThinkingLevel("high", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  const valid = harness.setThinkingLevel("low", {
+    expectedSessionId: original.getSessionId(),
+    expectedSessionPath: originalPath,
+  });
+  session.sessionManager = copied;
+  const staleLast = harness.setThinkingLevel("medium", {
+    expectedSessionId: copied.getSessionId(),
+    expectedSessionPath: copiedPath,
+  });
+  session.sessionManager = original;
+  gate.resolve();
+
+  const [firstResult, validResult, staleResult] = await Promise.allSettled([
+    first,
+    valid,
+    staleLast,
+  ]);
+  assert.equal(firstResult.status, "fulfilled");
+  assert.equal(validResult.status, "fulfilled");
+  assert.equal(staleResult.status, "rejected");
+  if (staleResult.status === "rejected")
+    assertSessionConflict(staleResult.reason);
+  if (validResult.status === "fulfilled")
+    assert.equal(validResult.value.level, "low");
+  assert.deepEqual(fixture.state.calls, ["high", "low"]);
 });
 
 test("a merged thinking selection rejects callers whose expected session changed", async () => {

@@ -481,6 +481,72 @@ test("compact paste content survives Escape and reopening the draft", async () =
   assert.deepEqual(result.details.answers, [{ id: "db", custom: draft }]);
 });
 
+test("a full-size draft can still be submitted", async () => {
+  const draft = "a".repeat(MAX_ANSWER_DRAFT_UTF8_BYTES);
+  let reviewShown = false;
+  let extraTextRejected = false;
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3");
+      component.handleInput(`\u001b[200~${draft}\u001b[201~`);
+      component.handleInput("b");
+      extraTextRejected = component
+        .render(100)
+        .join("\n")
+        .includes("Answer drafts are limited");
+      component.handleInput(input.enter);
+      reviewShown = component.render(100).join("\n").includes("Review answers");
+      if (reviewShown) component.handleInput(input.enter);
+      else {
+        component.handleInput(input.escape);
+        component.handleInput(input.escape);
+      }
+    },
+  );
+  assert.equal(extraTextRejected, true);
+  assert.equal(
+    reviewShown,
+    true,
+    "Enter must open review for a valid 8000-byte draft",
+  );
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: draft }]);
+});
+
+test("a full-size draft permits backspace before new text", async () => {
+  const draft = "a".repeat(MAX_ANSWER_DRAFT_UTF8_BYTES - 1);
+  let reviewShown = false;
+  let backspaceRejected = false;
+  const result = await runQuestionnaire(
+    { questions: [reviewQuestions.questions[0]!] },
+    (component) => {
+      component.handleInput("3");
+      component.handleInput(draft);
+      component.handleInput("z");
+      component.handleInput("\u007f");
+      backspaceRejected = component
+        .render(100)
+        .join("\n")
+        .includes("Answer drafts are limited");
+      component.handleInput("b");
+      component.handleInput(input.enter);
+      reviewShown = component.render(100).join("\n").includes("Review answers");
+      if (reviewShown) component.handleInput(input.enter);
+      else {
+        component.handleInput(input.escape);
+        component.handleInput(input.escape);
+      }
+    },
+  );
+  assert.equal(
+    backspaceRejected,
+    false,
+    "Backspace must not consume draft bytes",
+  );
+  assert.equal(reviewShown, true);
+  assert.deepEqual(result.details.answers, [{ id: "db", custom: `${draft}b` }]);
+});
+
 test("a blank free-form draft explicitly requests a rephrased question", async () => {
   const result = await runQuestionnaire(
     { questions: [reviewQuestions.questions[0]!] },

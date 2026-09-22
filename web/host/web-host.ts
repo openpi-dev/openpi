@@ -316,11 +316,16 @@ type PromptAdmissionResponse = {
 
 type PromptAdmission = {
   readonly sessionId: string;
+  readonly sessionPath: string;
   readonly content: string;
   readonly imageSignature: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
+
+function validSessionPath(value: unknown): value is string {
+  return typeof value === "string" && value.length > 0 && !value.includes("\u0000");
+}
 
 type WebRequestErrorCode =
   | "INVALID_REQUEST_BODY"
@@ -1177,7 +1182,7 @@ export class WebHost {
       }
       const session = await this.adapter.requireSession(body.path);
       const result =
-        session.id === this.runtime.sessionManager.getSessionId()
+        this.adapter.isCurrentSession(session)
           ? { cancelled: false }
           : await this.runtime.switchSession(session.path);
       this.publish("session_selected", { sessionPath: session.path });
@@ -1217,10 +1222,11 @@ export class WebHost {
       if (
         typeof body.provider !== "string" ||
         typeof body.modelId !== "string" ||
-        typeof body.sessionId !== "string"
+        typeof body.sessionId !== "string" ||
+        !validSessionPath(body.sessionPath)
       ) {
         return this.json(response, 400, {
-          error: "provider, modelId, and sessionId are required",
+          error: "provider, modelId, sessionId, and sessionPath are required",
         });
       }
       if (this.runtime.workspaceSelected !== true) {
@@ -1230,8 +1236,12 @@ export class WebHost {
         });
       }
       try {
+        if (!this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath })) {
+          throw new WebRuntimeRequestError("Only the active Web session accepts model changes", "SESSION_CONFLICT", 409);
+        }
         const model = await this.runtime.setModel(body.provider, body.modelId, {
           expectedSessionId: body.sessionId,
+          expectedSessionPath: body.sessionPath,
         });
         this.publish("model_selected", {
           provider: model.provider,
@@ -1282,15 +1292,16 @@ export class WebHost {
           error: "retry must be a boolean when provided",
         });
       }
-      if (typeof body.sessionId !== "string") {
+      if (typeof body.sessionId !== "string" || !validSessionPath(body.sessionPath)) {
         return this.json(response, 400, {
-          error: "sessionId is required",
+          error: "sessionId and sessionPath are required",
         });
       }
       const existing = this.promptAdmissions.get(commandId);
       if (existing) {
         if (
           existing.sessionId !== body.sessionId ||
+          existing.sessionPath !== body.sessionPath ||
           existing.content !== content ||
           existing.imageSignature !== imageSignature
         ) {
@@ -1321,7 +1332,7 @@ export class WebHost {
         });
       }
       if (
-        body.sessionId !== this.runtime.sessionManager.getSessionId()
+        !this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath })
       ) {
         return this.json(response, 409, {
           code: "SESSION_CONFLICT",
@@ -1337,6 +1348,7 @@ export class WebHost {
       const admission = this.beginPromptAdmission(
         commandId,
         body.sessionId,
+        body.sessionPath,
         content,
         parsedImages.images,
         imageSignature,
@@ -1393,11 +1405,12 @@ export class WebHost {
       if (
         typeof body.sessionId !== "string" ||
         body.sessionId.length > 256 ||
+        !validSessionPath(body.sessionPath) ||
         typeof body.level !== "string" ||
         !THINKING_LEVELS.has(body.level)
       ) {
         return this.json(response, 400, {
-          error: "sessionId and a valid level are required",
+          error: "sessionId, sessionPath, and a valid level are required",
         });
       }
       if (this.runtime.workspaceSelected !== true) {
@@ -1413,8 +1426,12 @@ export class WebHost {
         });
       }
       try {
+        if (!this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath })) {
+          throw new WebRuntimeRequestError("Only the active Web session accepts thinking changes", "SESSION_CONFLICT", 409);
+        }
         const projection = await this.runtime.setThinkingLevel(body.level, {
           expectedSessionId: body.sessionId,
+          expectedSessionPath: body.sessionPath,
         });
         return this.json(response, 200, {
           sessionId: body.sessionId,
@@ -2026,6 +2043,7 @@ export class WebHost {
   private beginPromptAdmission(
     commandId: string,
     sessionId: string,
+    sessionPath: string,
     content: string,
     images: readonly WebPromptImage[],
     imageSignature: string,
@@ -2033,6 +2051,7 @@ export class WebHost {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
       sessionId,
+      sessionPath,
       content,
       imageSignature,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
@@ -2054,6 +2073,7 @@ export class WebHost {
         this.runtime.sendPrompt(content, {
           commandId,
           expectedSessionId: sessionId,
+          expectedSessionPath: sessionPath,
           ...(images.length > 0 ? { images } : {}),
         }),
       )

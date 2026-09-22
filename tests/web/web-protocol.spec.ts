@@ -83,6 +83,7 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
     "session",
     "once",
     "stable-command",
+    "/tmp/session.jsonl",
     true,
   );
   const failure = expect(request).rejects.toThrow(
@@ -94,6 +95,7 @@ it("times out HTTP admission at thirty seconds while preserving its request iden
   await failure;
   expect(JSON.parse(String(fetcher.mock.calls[0]?.[1].body))).toEqual({
     sessionId: "session",
+    sessionPath: "/tmp/session.jsonl",
     content: "once",
     commandId: "stable-command",
     retry: true,
@@ -115,7 +117,7 @@ it("retains backend rejection codes for admission certainty", async () => {
       ),
   );
   const error = await new WebClient()
-    .prompt("s", "once", "id")
+    .prompt("s", "once", "id", "/tmp/session.jsonl")
     .catch((error: unknown) => error);
   expect(error).toBeInstanceOf(WebApiError);
   expect(error).toMatchObject({
@@ -158,7 +160,7 @@ it.each(["{", "{}", '{"id":"x","accepted":false}'])(
       vi.fn().mockResolvedValue(new Response(body, { status: 202 })),
     );
     await expect(
-      new WebClient().prompt("s", "once", "stable"),
+      new WebClient().prompt("s", "once", "stable", "/tmp/session.jsonl"),
     ).rejects.toBeInstanceOf(Error);
   },
 );
@@ -306,7 +308,11 @@ it("posts a thinking level and reads the thinking projection", async () => {
   const client = new WebClient();
 
   const read = await client.thinking("s", new AbortController().signal);
-  const written = await client.setThinkingLevel("s", "high");
+  const written = await client.setThinkingLevel(
+    "s",
+    "high",
+    "/tmp/session.jsonl",
+  );
 
   expect(read).toMatchObject({
     sessionId: "s",
@@ -324,6 +330,43 @@ it("posts a thinking level and reads the thinking projection", async () => {
   expect(post?.[0]).toBe("/api/thinking");
   expect(JSON.parse(String(post?.[1]?.body))).toEqual({
     sessionId: "s",
+    sessionPath: "/tmp/session.jsonl",
     level: "high",
   });
 });
+
+it.each(["/tmp/ws/session.jsonl", "/tmp/ws/copy.jsonl"])(
+  "binds all Session mutation bodies to the exact file %s",
+  async (sessionPath) => {
+    const fetcher = vi.fn(
+      async (_url: string, _options: RequestInit) =>
+        new Response(JSON.stringify({ id: "command", accepted: true })),
+    );
+    vi.stubGlobal("fetch", fetcher);
+    const client = new WebClient();
+
+    await client.selectModel("test", "model", "same-id", sessionPath);
+    await client.setThinkingLevel("same-id", "high", sessionPath);
+    await client.prompt("same-id", "hello", "command", sessionPath);
+
+    expect(fetcher.mock.calls.map(([url]) => url)).toEqual([
+      "/api/model",
+      "/api/thinking",
+      "/api/prompt",
+    ]);
+    expect(
+      fetcher.mock.calls.map(([, options]) => JSON.parse(String(options.body))),
+    ).toEqual([
+      { provider: "test", modelId: "model", sessionId: "same-id", sessionPath },
+      { sessionId: "same-id", sessionPath, level: "high" },
+      {
+        sessionId: "same-id",
+        sessionPath,
+        content: "hello",
+        commandId: "command",
+        retry: false,
+        images: [],
+      },
+    ]);
+  },
+);

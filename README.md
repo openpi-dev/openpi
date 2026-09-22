@@ -85,7 +85,7 @@ pi install npm:@tt-a1i/openpi
 <summary>能力如何按需开启，以及原生 Skill 的使用方式</summary>
 
 > [!TIP]
-> Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。英文 `subagent` 与 `workflow` 是保留授权词，单独输入也会加载对应能力。
+> Capability discovery 默认 `explicit`：明确说出能力意图才会加载对应组。整条输入只有英文 `subagent` / `subagents` 或 `workflow` / `workflows` 时，视为主动选择对应能力（忽略大小写与首尾空白），名称会高亮，提交后加载工具组。加载不等于立即启动任务，模型仍根据任务上下文决定是否调用。普通句子中仅提及名称不会因此加载；也可以明确要求「用 subagent 帮我查」。
 > 例如 `subagent, workflow` → 同时加载两组；「在后台运行 dev server」→ 后台终端；「用/使用子代理检查」或句首「子代理了解下项目」→ Subagent；「用工作流编排」→ Workflow；「用 fd/rg 搜索」或「用 git diff 比较分支」→ 搜索与只读 Git 工具。
 > 关键是把意图说清楚（说「用子代理」「子代理检查项目」「后台运行」这类带执行动作的短语），不需要记住任何工具名。仅讨论能力的「子代理是什么」不会加载；否定或条件表达也继续 fail closed。
 > `/plan` 是一个运行时安全例外：进入或恢复 Plan Mode 时会为当前 Session 自动加载 `search` 组，让只读调研直接使用结构化 Git 工具。
@@ -459,6 +459,8 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 ```
 
 配置保存在 `~/.pi/agent/my-pi-setup.json`，与包代码分离，升级不会覆盖。
+
+Post-edit 在交互式 TUI 的一轮成功 Write/Edit 后执行一次；下一轮 Agent 启动和本会话的所有工具调用（包括只读及自定义工具）会等待尚未完成的命令，避免前台格式化与后续读写交错。等待不等于触发：仍然只有成功的原生 Write/Edit 会安排后处理。请使用会自行结束的前台命令，不要配置 watch/server 或把写操作放到后台；不会自动超时放行。失败或中断会通知用户，但不会自动修复或阻止后续工作，因此它不是验收门禁。这个边界不覆盖其他 Session、Subagent、外部编辑器或脱离前台命令的子进程。详见 [Post-edit lifecycle](SETUP.md#post-edit-lifecycle)。
 
 Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems` 会在读取时迁移，但迁移后的配置不保证能被旧版 OpenPI 正确解释，因此不承诺配置文件的降级兼容性。
 
