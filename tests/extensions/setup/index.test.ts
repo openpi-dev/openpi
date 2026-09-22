@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { createEventBus } from "@earendil-works/pi-coding-agent";
+import { onSetupApply } from "../../../extensions/shared/setup-apply.ts";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test, { after } from "node:test";
@@ -74,15 +83,13 @@ function visibilityHarness(
     [];
   let idle = options.idle ?? true;
   let setupSourcePath = options.setupSourcePath;
+  const events = createEventBus();
+  events.on(OPENPI_SETUP_EPISODE_CHANNEL, (state) => {
+    setupEpisodeStates.push(state as OpenPiSetupEpisodeState);
+  });
 
   const pi = {
-    events: {
-      emit(channel: string, state: OpenPiSetupEpisodeState) {
-        if (channel === OPENPI_SETUP_EPISODE_CHANNEL) {
-          setupEpisodeStates.push(state);
-        }
-      },
-    },
+    events,
     registerCommand(
       name: string,
       command: {
@@ -150,6 +157,7 @@ function visibilityHarness(
   } as unknown as ExtensionCommandContext & ExtensionContext;
 
   return {
+    events,
     tools,
     commands,
     userMessages,
@@ -397,13 +405,131 @@ test("successful configure_my_pi_setup hides the tool", async () => {
   assert.deepEqual(h.closures(), []);
 });
 
+test("invalid explicit footer styles and presets list allowed values without writing or applying", async () => {
+  const original =
+    '{"configVersion":1,"ui":{"footerStyle":"powerline","footerLines":[["cwd"]]}}\n';
+  writeFileSync(SETUP_CONFIG_PATH, original);
+  const h = visibilityHarness();
+  let applies = 0;
+  onSetupApply({ events: h.events }, () => {
+    applies += 1;
+  });
+  for (const [params, error] of [
+    [
+      { ui_footer_style: "compact" },
+      /ui_footer_style.*plain, powerline, powerline-mono/,
+    ],
+    [
+      { ui_footer_preset: "plain" },
+      /ui_footer_preset.*compact, powerline, powerline-mono/,
+    ],
+    [
+      { ui_footer_preset: "compact", ui_footer_style: "compact" },
+      /ui_footer_style.*plain, powerline, powerline-mono/,
+    ],
+  ] as const) {
+    await assert.rejects(
+      h.tools
+        .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+        .execute(
+          "invalid-footer",
+          params,
+          new AbortController().signal,
+          () => {},
+          h.ctx,
+        ),
+      error,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), original);
+    assert.equal(applies, 0);
+  }
+});
+
+test("both setup entry paths prohibit silently replacing an explicit invalid field value", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  for (const request of ["", 'set footerStyle to "compact"']) {
+    const h = visibilityHarness();
+    await h.runCommand("openpi-setup", request);
+    const prompt = JSON.stringify(h.customMessages);
+    assert.match(prompt, /explicitly names a configuration field/);
+    assert.match(prompt, /list the allowed values/);
+    assert.match(prompt, /Do not call the writer/);
+    assert.match(prompt, /Do not silently substitute/);
+  }
+});
+
+test("compact saves report unchanged effective configuration, including first save and legacy migration", async () => {
+  for (const existing of [undefined, "{}", '{"configVersion":1}']) {
+    rmSync(SETUP_CONFIG_PATH, { force: true });
+    if (existing !== undefined) writeFileSync(SETUP_CONFIG_PATH, existing);
+    const h = visibilityHarness();
+    h.ctx.hasUI = true;
+    const result = (await h.tools
+      .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+      .execute(
+        "compact-save",
+        { ui_footer_preset: "compact" },
+        new AbortController().signal,
+        () => {},
+        h.ctx,
+      )) as { content: Array<{ type: string; text: string }> };
+    const text = result.content[0].text;
+    assert.match(text, /Saved OpenPI setup/);
+    assert.match(text, /Effective configuration unchanged/);
+    assert.doesNotMatch(text, /Updated OpenPI setup|Changed effective fields:/);
+    assert.match(
+      h.notifications.at(-1)!.message,
+      /Effective configuration unchanged/,
+    );
+    const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+    assert.equal(saved.configVersion, 1);
+    assert.equal(saved.ui.footerStyle, "plain");
+    assert.deepEqual(saved.ui.footerLines, [
+      ["model", "context", "flex", "git", "pr", "cwd"],
+    ]);
+  }
+});
+
+test("setup receipts distinguish real changes from equivalent presets without exposing private commands", async () => {
+  writeFileSync(SETUP_CONFIG_PATH, '{"configVersion":1}');
+  const h = visibilityHarness();
+  const apply = async (params: Record<string, unknown>) => {
+    const result = (await h.tools
+      .get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!
+      .execute(
+        "receipt-save",
+        params,
+        new AbortController().signal,
+        () => {},
+        h.ctx,
+      )) as { content: Array<{ type: string; text: string }> };
+    return result.content[0].text;
+  };
+  const changed = await apply({ ui_footer_preset: "powerline" });
+  assert.match(changed, /Changed effective fields: ui.footerStyle\./);
+  assert.doesNotMatch(changed, /Effective configuration unchanged/);
+  assert.equal(loadSetupConfig().ui.footerStyle, "powerline");
+
+  const restored = await apply({ ui_footer_preset: "compact" });
+  assert.match(restored, /Changed effective fields: ui.footerStyle\./);
+  assert.equal(loadSetupConfig().ui.footerStyle, "plain");
+
+  const mixed = await apply({
+    ui_footer_preset: "compact",
+    post_edit_command: "echo PRIVATE_COMMAND",
+  });
+  assert.match(mixed, /Changed effective fields: postEdit.command\./);
+  assert.doesNotMatch(mixed, /PRIVATE_COMMAND|Changed effective fields:.*ui\./);
+});
+
 test("successful setup result closes the episode and names the only re-entry", () => {
   const result = buildSetupSuccessText(
     "Capability discovery: explicit.",
+    ["capabilities.discovery"],
     " Normalized or migrated stored values: ui.footerStyle.",
   );
 
-  assert.match(result, /Updated OpenPI setup/);
+  assert.match(result, /Saved OpenPI setup/);
   assert.match(result, /Capability discovery: explicit/);
   assert.match(result, /Normalized or migrated.*ui\.footerStyle/);
   assert.match(result, /setup episode is complete/i);
@@ -799,4 +925,131 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /available only for this setup run/i);
   assert.match(message, /\/openpi-setup <request>/);
   assert.doesNotMatch(message, /This is the first setup/);
+});
+
+test("session start reports configuration load errors without changing the file or starting setup", async () => {
+  for (const raw of [
+    '{"PRIVATE_VALUE":',
+    '{"configVersion":999}',
+    '{"configVersion":1,"ui":{"footerStyle":"PRIVATE_VALUE"}}',
+  ]) {
+    writeFileSync(SETUP_CONFIG_PATH, raw);
+    const h = visibilityHarness();
+    h.ctx.hasUI = true;
+    await h.emit("session_start");
+    assert.equal(h.notifications.length, 1);
+    const notice = h.notifications[0];
+    assert.equal(notice.level, "error");
+    assert.match(notice.message, /safe defaults/i);
+    assert.match(notice.message, /writes are blocked/i);
+    assert.match(notice.message, /\/openpi-setup/);
+    assert.doesNotMatch(notice.message, /PRIVATE_VALUE/);
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+    assert.equal(h.isActive(), false);
+    assert.deepEqual(h.customMessages, []);
+    assert.deepEqual(h.userMessages, []);
+  }
+  rmSync(SETUP_CONFIG_PATH);
+});
+
+test("session start warns about unknown fields and legacy documents without migrating them", async () => {
+  for (const raw of [
+    "{}",
+    '{"configVersion":1,"future":{"token":"PRIVATE_VALUE"}}',
+  ]) {
+    writeFileSync(SETUP_CONFIG_PATH, raw);
+    const h = visibilityHarness();
+    h.ctx.hasUI = true;
+    await h.emit("session_start");
+    assert.equal(h.notifications.length, 1);
+    const notice = h.notifications[0];
+    assert.equal(notice.level, "warning");
+    assert.match(notice.message, /configuration.*warning/i);
+    assert.match(notice.message, /\/openpi-setup/);
+    assert.doesNotMatch(
+      notice.message,
+      /PRIVATE_VALUE|token|safe defaults|writes are blocked/,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+    assert.equal(h.isActive(), false);
+    assert.deepEqual(h.customMessages, []);
+  }
+  rmSync(SETUP_CONFIG_PATH);
+});
+
+test("session start is quiet for missing or valid configuration and clears errors after repair", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  const h = visibilityHarness();
+  h.ctx.hasUI = true;
+  await h.emit("session_start");
+  assert.equal(existsSync(SETUP_CONFIG_PATH), false);
+  assert.deepEqual(h.notifications, []);
+  writeFileSync(SETUP_CONFIG_PATH, '{"configVersion":1}');
+  await h.emit("session_start");
+  assert.deepEqual(h.notifications, []);
+  writeFileSync(SETUP_CONFIG_PATH, "{broken");
+  await h.emit("session_start");
+  assert.equal(h.notifications.length, 1);
+  writeFileSync(SETUP_CONFIG_PATH, '{"configVersion":1}');
+  await h.emit("session_start");
+  assert.equal(h.notifications.length, 1);
+  assert.equal(h.isActive(), false);
+  assert.deepEqual(h.customMessages, []);
+  rmSync(SETUP_CONFIG_PATH);
+});
+
+test("session start reports read errors without turning them into a missing config", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  mkdirSync(SETUP_CONFIG_PATH);
+  try {
+    const h = visibilityHarness();
+    h.ctx.hasUI = true;
+    await h.emit("session_start");
+    assert.equal(h.notifications.length, 1);
+    assert.equal(h.notifications[0].level, "error");
+    assert.match(h.notifications[0].message, /writes are blocked/i);
+    assert.equal(existsSync(SETUP_CONFIG_PATH), true);
+    assert.deepEqual(h.customMessages, []);
+  } finally {
+    rmSync(SETUP_CONFIG_PATH, { recursive: true });
+  }
+});
+
+test("doctor exposes load errors without arming a writer or triggering a model turn", async () => {
+  const raw = '{"postEdit":{"command":42}}';
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  await assert.rejects(
+    h.runCommand("openpi-setup"),
+    /Configuration writes: blocked/,
+  );
+  assert.equal(h.isActive(), false);
+  assert.deepEqual(h.setupRequests(), []);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  rmSync(SETUP_CONFIG_PATH);
+});
+
+test("setup tool propagates real consumer failure and preserves disk and runtime state", async () => {
+  writeFileSync(SETUP_CONFIG_PATH, "{}");
+  const h = visibilityHarness();
+  let header = false;
+  onSetupApply(h, () => {
+    header = loadSetupConfig().ui.showHeader;
+    if (header) throw new Error("failed header install");
+  });
+  const tool = h.tools.get(CONFIGURE_MY_PI_SETUP_TOOL_NAME)!;
+  await assert.rejects(
+    tool.execute(
+      "apply",
+      { ui_show_header: true },
+      new AbortController().signal,
+      () => {},
+      h.ctx,
+    ),
+    /previous file and configuration restored/,
+  );
+  assert.equal(header, false);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
+  rmSync(SETUP_CONFIG_PATH);
 });

@@ -4,7 +4,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { SETUP_CONFIG_CHANGED_CHANNEL } from "../../../extensions/shared/setup-config.ts";
+import { SETUP_APPLY_CHANNEL } from "../../../extensions/shared/setup-apply.ts";
 import {
   OPENPI_TOOL_SURFACE,
   patchOwnedTools,
@@ -132,7 +132,7 @@ function harness(options: { discovery?: "explicit" | "adaptive" } = {}) {
     },
     setDiscovery(mode: "explicit" | "adaptive") {
       discovery = mode;
-      pi.events.emit(SETUP_CONFIG_CHANGED_CHANNEL, {});
+      pi.events.emit(SETUP_APPLY_CHANNEL, { tasks: [] });
     },
     tool: () => tools.get("openpi_load_tools")!,
   };

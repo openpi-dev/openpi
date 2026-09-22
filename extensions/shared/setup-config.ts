@@ -12,6 +12,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { basename, join } from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { getAgentDir } from "@earendil-works/pi-coding-agent";
 import {
   SUBAGENT_ROLE_NAMES,
@@ -348,6 +349,16 @@ export function applyFooterConfig(
   current: Pick<MyPiSetupConfig["ui"], "footerStyle" | "footerLines">,
   updates: FooterConfigUpdates,
 ) {
+  if (updates.preset !== undefined && !isFooterPreset(updates.preset)) {
+    throw new Error(
+      `Invalid ui_footer_preset. Allowed values: ${FOOTER_PRESETS.join(", ")}. No changes saved.`,
+    );
+  }
+  if (updates.style !== undefined && !isFooterStyle(updates.style)) {
+    throw new Error(
+      `Invalid ui_footer_style (ui.footerStyle). Allowed values: ${FOOTER_STYLES.join(", ")}. No changes saved.`,
+    );
+  }
   if (updates.items !== undefined && updates.lines !== undefined) {
     throw new Error(
       "ui_footer_items and ui_footer_lines cannot be provided together; use ui_footer_lines for multi-line layouts, or ui_footer_items for the legacy flat selection.",
@@ -583,13 +594,232 @@ export function hasSavedSetupConfig() {
 }
 
 export function loadSetupConfig() {
-  try {
-    return parseSetupConfig(
-      JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")),
-    );
-  } catch {
-    return DEFAULT_SETUP_CONFIG;
+  return inspectSetupConfig().config;
+}
+
+export const SETUP_CONFIG_VERSION = 1;
+
+type ConfigShape = {
+  readonly [key: string]: ConfigShape | ((value: unknown) => boolean);
+};
+const booleanValue = (value: unknown) => typeof value === "boolean";
+const nonemptyString = (value: unknown) =>
+  typeof value === "string" && value.trim().length > 0;
+const oneOf = (values: readonly unknown[]) => (value: unknown) =>
+  values.includes(value);
+const integerBetween = (minimum: number, maximum: number) => (value: unknown) =>
+  typeof value === "number" &&
+  Number.isInteger(value) &&
+  value >= minimum &&
+  value <= maximum;
+const modelShape = {
+  provider: nonemptyString,
+  model: nonemptyString,
+  reasoning: isReasoningLevel,
+};
+const suggestionShape = { enabled: booleanValue, model: modelShape };
+const setupShape: ConfigShape = {
+  configVersion: (value) => value === SETUP_CONFIG_VERSION,
+  capabilities: { discovery: isCapabilityDiscoveryMode },
+  suggestions: suggestionShape,
+  summaries: suggestionShape,
+  workflows: {
+    concurrency: integerBetween(1, MAX_WORKFLOW_CONCURRENCY),
+    maxAgentCalls: integerBetween(1, MAX_WORKFLOW_AGENT_CALLS),
+  },
+  ui: {
+    webTheme: isWebTheme,
+    webChatWidth: integerBetween(MIN_WEB_CHAT_WIDTH, MAX_WEB_CHAT_WIDTH),
+    webChatFontSize: integerBetween(
+      MIN_WEB_CHAT_FONT_SIZE,
+      MAX_WEB_CHAT_FONT_SIZE,
+    ),
+    webExpandThinking: booleanValue,
+    showHeader: booleanValue,
+    customFooter: booleanValue,
+    footerStyle: isFooterStyle,
+    footerLines: (value) =>
+      Array.isArray(value) &&
+      value.every(
+        (line) => Array.isArray(line) && line.every(isFooterLayoutItem),
+      ),
+    footerItems: (value) => Array.isArray(value) && value.every(isFooterItem),
+    subagentResultDisplay: oneOf(DETAIL_DISPLAYS),
+    bashToolDisplay: oneOf(DETAIL_DISPLAYS),
+    fileMutationDisplay: oneOf(DETAIL_DISPLAYS),
+  },
+  postEdit: {
+    command: (value) =>
+      typeof value === "string" &&
+      value.trim().length <= POST_EDIT_COMMAND_MAX_CHARS,
+  },
+  subagents: {
+    roleModels: Object.fromEntries(
+      SUBAGENT_ROLE_NAMES.map((role) => [
+        role,
+        { provider: nonemptyString, model: nonemptyString },
+      ]),
+    ),
+  },
+};
+
+export interface SetupDiagnostic {
+  readonly severity: "warning" | "error";
+  readonly path: string;
+  readonly message: string;
+}
+
+function inspectDocument(raw: unknown) {
+  const diagnostics: SetupDiagnostic[] = [];
+  const visit = (value: unknown, shape: ConfigShape, path: string) => {
+    if (!isRecord(value)) {
+      diagnostics.push({
+        severity: "error",
+        path,
+        message: "Expected an object",
+      });
+      return;
+    }
+    for (const [key, child] of Object.entries(value)) {
+      const childPath = path ? `${path}.${key}` : key;
+      const rule = Object.hasOwn(shape, key) ? shape[key] : undefined;
+      if (!rule)
+        diagnostics.push({
+          severity: "warning",
+          path: childPath,
+          message: "Unknown field preserved",
+        });
+      else if (typeof rule === "function") {
+        if (!rule(child))
+          diagnostics.push({
+            severity: "error",
+            path: childPath,
+            message:
+              rule === isFooterStyle
+                ? `Invalid or unsupported value. Allowed values: ${FOOTER_STYLES.join(", ")}`
+                : "Invalid or unsupported value",
+          });
+      } else visit(child, rule, childPath);
+    }
+  };
+  visit(raw, setupShape, "");
+  if (isRecord(raw)) {
+    for (const key of ["suggestions", "summaries"]) {
+      const section = raw[key];
+      if (!isRecord(section)) continue;
+      if (isRecord(section.model)) {
+        for (const field of Object.keys(modelShape)) {
+          if (!Object.hasOwn(section.model, field))
+            diagnostics.push({
+              severity: "error",
+              path: `${key}.model.${field}`,
+              message: "Required model field missing",
+            });
+        }
+      }
+      if (
+        key === "suggestions" &&
+        section.enabled === true &&
+        !isRecord(section.model)
+      )
+        diagnostics.push({
+          severity: "error",
+          path: "suggestions.model",
+          message: "Enabled suggestions require a model",
+        });
+    }
+    const roles =
+      isRecord(raw.subagents) && isRecord(raw.subagents.roleModels)
+        ? raw.subagents.roleModels
+        : {};
+    for (const role of SUBAGENT_ROLE_NAMES) {
+      const model = roles[role];
+      if (!isRecord(model)) continue;
+      for (const field of ["provider", "model"]) {
+        if (!Object.hasOwn(model, field))
+          diagnostics.push({
+            severity: "error",
+            path: `subagents.roleModels.${role}.${field}`,
+            message: "Required model field missing",
+          });
+      }
+    }
+    if (!Object.hasOwn(raw, "configVersion"))
+      diagnostics.push({
+        severity: "warning",
+        path: "configVersion",
+        message:
+          "Legacy unversioned document; migration occurs on explicit save",
+      });
   }
+  return diagnostics;
+}
+
+export function inspectSetupConfig() {
+  let bytes: string | undefined;
+  let raw: unknown;
+  let diagnostics: SetupDiagnostic[] = [];
+  let source: "missing" | "disk" = "disk";
+  try {
+    bytes = readFileSync(SETUP_CONFIG_PATH, "utf8");
+    try {
+      raw = JSON.parse(bytes);
+      diagnostics = inspectDocument(raw);
+    } catch {
+      diagnostics = [
+        { severity: "error", path: "", message: "Malformed JSON" },
+      ];
+    }
+  } catch (error) {
+    if (isErrno(error, "ENOENT")) source = "missing";
+    else
+      diagnostics = [
+        {
+          severity: "error",
+          path: "",
+          message: "Unable to read configuration",
+        },
+      ];
+  }
+  const writable = !diagnostics.some(
+    (diagnostic) => diagnostic.severity === "error",
+  );
+  return {
+    path: SETUP_CONFIG_PATH,
+    source,
+    bytes,
+    raw,
+    diagnostics,
+    writable,
+    config: writable ? parseSetupConfig(raw) : DEFAULT_SETUP_CONFIG,
+  };
+}
+
+export function formatSetupDiagnostics(result = inspectSetupConfig()) {
+  let version: string | number = "unreadable";
+  if (result.source === "missing") version = "none";
+  else if (isRecord(result.raw)) {
+    version = !Object.hasOwn(result.raw, "configVersion")
+      ? "legacy (unversioned)"
+      : typeof result.raw.configVersion === "number"
+        ? result.raw.configVersion
+        : "invalid";
+  }
+  return [
+    `Configuration path: ${result.path}`,
+    `Configuration source: ${result.source}`,
+    `Configuration version: ${version}; supported: ${SETUP_CONFIG_VERSION}`,
+    `Configuration writes: ${result.writable ? "allowed" : "blocked; safe defaults are in use"}`,
+    ...result.diagnostics.map(
+      (diagnostic) =>
+        `${diagnostic.severity}: ${JSON.stringify(diagnostic.path)} — ${diagnostic.message}`,
+    ),
+    ...(!result.writable
+      ? [
+          "Original file preserved. Repair the file, or explicitly remove it to reset; ordinary setup changes cannot overwrite it.",
+        ]
+      : []),
+  ].join("\n");
 }
 
 /**
@@ -599,14 +829,13 @@ export function loadSetupConfig() {
  * paths keep degrading; only the writer fails closed.
  */
 function readDocumentForWrite() {
-  if (!existsSync(SETUP_CONFIG_PATH)) return undefined;
-  try {
-    return JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8")) as unknown;
-  } catch (error) {
+  const result = inspectSetupConfig();
+  if (!result.writable) {
     throw new Error(
-      `Refusing to overwrite unreadable config at ${SETUP_CONFIG_PATH} (${error instanceof Error ? error.message : String(error)}). Fix the file, or delete it to start from defaults, then retry.`,
+      `Refusing to overwrite unreadable config at ${SETUP_CONFIG_PATH}. ${formatSetupDiagnostics(result)} Fix the file, or explicitly delete it to start from defaults, then retry.`,
     );
   }
+  return result;
 }
 
 /**
@@ -639,6 +868,16 @@ function replacedFields(
     paths.push(...replacedFields(raw[key], value, here));
   }
   return paths;
+}
+
+/** Compare effective settings, independently of document creation/migration. */
+function changedFields(before: unknown, after: unknown, path = ""): string[] {
+  if (isDeepStrictEqual(before, after)) return [];
+  if (!isRecord(before) || !isRecord(after)) return [path];
+  return [...new Set([...Object.keys(before), ...Object.keys(after)])].flatMap(
+    (key) =>
+      changedFields(before[key], after[key], path ? `${path}.${key}` : key),
+  );
 }
 
 const isErrno = (error: unknown, code: string) =>
@@ -1047,16 +1286,52 @@ async function withSetupConfigLock<A>(action: () => Promise<A>) {
   }
 }
 
-async function writeSetupConfig(config: MyPiSetupConfig) {
-  const canonical = parseSetupConfig(config);
+function preserveUnknown(
+  raw: unknown,
+  canonical: unknown,
+  shape: ConfigShape,
+): Record<string, unknown> {
+  const result: Record<string, unknown> = isRecord(canonical)
+    ? { ...canonical }
+    : {};
+  if (!isRecord(raw)) return result;
+  for (const [key, value] of Object.entries(raw)) {
+    const rule = Object.hasOwn(shape, key) ? shape[key] : undefined;
+    if (!rule)
+      Object.defineProperty(result, key, {
+        value,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    else if (typeof rule !== "function" && Object.hasOwn(result, key)) {
+      result[key] = preserveUnknown(value, result[key], rule);
+    }
+  }
+  // Retired keys may contain future fields: keep only those unknown remnants.
+  for (const key of ["summaries"]) {
+    if (
+      shape === setupShape &&
+      !Object.hasOwn(result, key) &&
+      isRecord(raw[key])
+    ) {
+      const unknown = preserveUnknown(raw[key], {}, suggestionShape);
+      if (Object.keys(unknown).length) result[key] = unknown;
+    }
+  }
+  return result;
+}
+
+async function writeSetupBytes(bytes: string) {
   const tempPath = `${SETUP_CONFIG_PATH}.${process.pid}.${randomUUID()}.tmp`;
   try {
-    await writeFile(tempPath, `${JSON.stringify(canonical, null, 2)}\n`, {
+    await writeFile(tempPath, bytes, {
       encoding: "utf8",
       mode: 0o600,
     });
+    const identity = await stat(tempPath);
     await rename(tempPath, SETUP_CONFIG_PATH);
-    return canonical;
+    return identity;
   } catch (error) {
     await unlink(tempPath).catch(() => undefined);
     throw error;
@@ -1064,10 +1339,7 @@ async function writeSetupConfig(config: MyPiSetupConfig) {
 }
 
 export async function saveSetupConfig(config: MyPiSetupConfig) {
-  await withSetupConfigLock(async () => {
-    readDocumentForWrite();
-    await writeSetupConfig(config);
-  });
+  await updateSetupConfig(() => config);
 }
 
 export function formatSetupConfig(config = loadSetupConfig()) {
@@ -1102,11 +1374,76 @@ export { isFooterItem, isFooterLayoutItem, isFooterPreset, isFooterStyle };
  */
 export async function updateSetupConfig(
   mutate: (current: MyPiSetupConfig) => MyPiSetupConfig,
+  apply?: (config: MyPiSetupConfig) => Promise<void>,
+  signal?: AbortSignal,
 ) {
   return withSetupConfigLock(async () => {
-    const raw = readDocumentForWrite();
-    const current = parseSetupConfig(raw);
-    const config = await writeSetupConfig(mutate(current));
-    return { config, replaced: replacedFields(raw, current) };
+    const previous = readDocumentForWrite();
+    signal?.throwIfAborted();
+    const current = previous.config;
+    const candidate = mutate(current);
+    const invalid = inspectDocument(candidate).filter(
+      (item) => item.severity === "error",
+    );
+    if (invalid.length)
+      throw new Error(
+        `Invalid configuration fields: ${invalid.map((item) => item.path).join(", ")}`,
+      );
+    const config = parseSetupConfig(candidate);
+    const document = preserveUnknown(previous.raw, config, setupShape);
+    document.configVersion = SETUP_CONFIG_VERSION;
+    const remainingUnknown = new Set(
+      inspectDocument(document)
+        .filter((item) => item.message === "Unknown field preserved")
+        .map((item) => item.path),
+    );
+    const removedUnknown = previous.diagnostics.filter(
+      (item) =>
+        item.message === "Unknown field preserved" &&
+        !remainingUnknown.has(item.path),
+    );
+    if (removedUnknown.length)
+      throw new Error(
+        `Change would remove unknown fields; repair them explicitly before retrying: ${removedUnknown.map((item) => JSON.stringify(item.path)).join(", ")}`,
+      );
+    const bytes = `${JSON.stringify(document, null, 2)}\n`;
+    const candidateIdentity = await writeSetupBytes(bytes);
+    try {
+      signal?.throwIfAborted();
+      await apply?.(config);
+      signal?.throwIfAborted();
+    } catch (error) {
+      try {
+        if (
+          !sameFile(candidateIdentity, await stat(SETUP_CONFIG_PATH)) ||
+          (await readFile(SETUP_CONFIG_PATH, "utf8")) !== bytes
+        ) {
+          throw new Error(
+            "Configuration changed externally; refusing to overwrite it during rollback",
+          );
+        }
+        if (previous.bytes === undefined) await unlink(SETUP_CONFIG_PATH);
+        else await writeSetupBytes(previous.bytes);
+        await apply?.(current);
+      } catch (rollbackError) {
+        throw new AggregateError(
+          [error, rollbackError],
+          "Configuration apply failed; recovery incomplete. Inspect /openpi-setup before retrying.",
+        );
+      }
+      throw new Error(
+        "Configuration apply failed; previous file and configuration restored.",
+        { cause: error },
+      );
+    }
+    return {
+      config,
+      changed: changedFields(current, config),
+      replaced:
+        previous.source === "missing"
+          ? []
+          : replacedFields(previous.raw, current),
+      diagnostics: previous.diagnostics,
+    };
   });
 }

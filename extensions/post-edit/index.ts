@@ -19,6 +19,7 @@ import {
   loadSetupConfig,
   SETUP_CONFIG_CHANGED_CHANNEL,
 } from "../shared/setup-config.ts";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
 
 /** Tools whose success means a file on disk changed. */
@@ -48,8 +49,12 @@ export default function postEdit(
   let active: { controller: AbortController; done: Promise<void> } | undefined;
 
   // Re-read on change, matching the sibling extensions' pattern.
-  pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
+  onSetupApply(pi, () => {
     command = loadCommand();
+  });
+  pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
+    // Discard queued work only after all consumers accepted the config.
+    // The apply phase may still roll back and must preserve that work.
     if (!command) pendingRuns.length = 0;
   });
 
