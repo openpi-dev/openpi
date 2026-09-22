@@ -1,5 +1,6 @@
 import type { SessionManager } from "@earendil-works/pi-coding-agent";
 import type { LiveToolEvidence } from "../protocol/evidence.ts";
+import type { PlanControlRequest, projectPlanControl } from "../../extensions/plan-mode/control.ts";
 import type {
   WebModelSearchResult,
   WebCommandDiscoveryResult,
@@ -60,6 +61,9 @@ export interface WebRuntimeEvent {
 }
 
 export type WebRuntimeRequestErrorCode =
+  | "PLAN_BUSY"
+  | "PLAN_CONFLICT"
+  | "PLAN_CONTROL_UNAVAILABLE"
   | "MODEL_NOT_AVAILABLE"
   | "SESSION_CONFLICT"
   | "PROMPT_REJECTED"
@@ -68,12 +72,12 @@ export type WebRuntimeRequestErrorCode =
 
 export class WebRuntimeRequestError extends Error {
   readonly code: WebRuntimeRequestErrorCode;
-  readonly statusCode: 400 | 409 | 422;
+  readonly statusCode: 400 | 409 | 422 | 501;
 
   constructor(
     message: string,
     code: WebRuntimeRequestErrorCode,
-    statusCode: 400 | 409 | 422,
+    statusCode: 400 | 409 | 422 | 501,
   ) {
     super(message);
     this.name = "WebRuntimeRequestError";
@@ -191,6 +195,7 @@ export interface WebRuntimeController {
   saveModelConfiguration?(sessionId: string, revision: string, model: WebModelConfiguration): Promise<void>;
   getSessionUsage?(): WebSessionUsage;
   getThinkingState?(): WebThinkingProjection;
+  setPlanMode?(request: PlanControlRequest & { sessionId: string; sessionPath: string }): Promise<ReturnType<typeof projectPlanControl>>;
   setThinkingLevel?(
     level: string,
     options?: WebThinkingSelectionOptions,

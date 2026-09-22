@@ -17,6 +17,26 @@ import {
 
 const WEB_MAX_COMMANDS_SCANNED = 1_024;
 
+const reviewedCommands = new Map([
+  [fileURLToPath(new URL("../../extensions/setup/index.ts", import.meta.url)), new Set(["openpi-setup", "my-pi-setup"])],
+  [fileURLToPath(new URL("../../extensions/plan-mode/index.ts", import.meta.url)), new Set(["plan"])],
+  [fileURLToPath(new URL("../../extensions/usage/index.ts", import.meta.url)), new Set(["usage"])],
+  [fileURLToPath(new URL("../../extensions/cron/index.ts", import.meta.url)), new Set(["cron"])],
+]);
+
+function reviewed(command: SlashCommandInfo) {
+  return command.source === "extension" && Boolean(command.sourceInfo?.path) &&
+    (reviewedCommands.get(resolve(command.sourceInfo.path))?.has(command.name) ?? false);
+}
+
+/** Match Pi's command lookup only to record its input, never to dispatch it. */
+export function submittedExtensionCommand(services: AgentSessionServices, text: string) {
+  if (!text.startsWith("/")) return undefined;
+  const end = text.indexOf(" ");
+  const name = text.slice(1, end === -1 ? undefined : end);
+  return bridges.get(services)?.read().find((command) => command.source === "extension" && command.name === name);
+}
+
 interface CommandDiscoveryBridge {
   readonly extension: InlineExtension;
   read(): readonly SlashCommandInfo[];
@@ -35,7 +55,6 @@ const ownedSupport: Record<string, {
   ps: { extension: "background-terminals", availability: "available", action: "terminal" },
   lg: { extension: "git-info", availability: "available", action: "review" },
   subagents: { extension: "subagents", availability: "available", action: "subagents" },
-  usage: { extension: "usage", availability: "available", action: "runtime" },
   btw: { extension: "subagents", availability: "available", action: "side-conversation" },
   sessions: { extension: "sessions", availability: "unsupported", unavailableReason: "terminal_only" },
   web: { extension: "web", availability: "unsupported", unavailableReason: "terminal_only" },
@@ -44,6 +63,12 @@ const ownedSupport: Record<string, {
 function commandSupport(command: SlashCommandInfo) {
   if (command.source !== "extension")
     return { availability: "available" as const, argumentHint: "[arguments]" };
+  if (reviewed(command)) return {
+    availability: "available" as const,
+    argumentHint: "[request]",
+    ...(command.name === "plan" ? { support: "plan" as const } : {}),
+    ...(["openpi-setup", "my-pi-setup"].includes(command.name) ? { support: "setup" as const } : {}),
+  };
   const owned = Object.hasOwn(ownedSupport, command.name) ? ownedSupport[command.name] : undefined;
   if (owned && command.sourceInfo?.path &&
     resolve(command.sourceInfo.path) === resolve(extensionRoot, owned.extension, "index.ts")) {

@@ -2,8 +2,8 @@
 
 - Status: validated
 - Created: 2026-09-22
-- Verified: 2026-09-22（完整本地门禁、真实 SDK 与 Chromium；未部署）
-- Source boundary: OpenPI `fbf15d2` → `2f78cf3` → `4e9ba87`，Pi SDK 0.85.1
+- Verified: 2026-09-23（完整本地门禁、真实 SDK 与 Chromium；未部署）
+- Source boundary: OpenPI `fbf15d2` → `4480b8d`，合并 main `35ebf01` 与 PR #598 后续变更；Pi SDK 0.85.1
 - Issue: [#597](https://github.com/openpi-dev/openpi/issues/597)
 - PR: [#598](https://github.com/openpi-dev/openpi/pull/598)
 - Supersedes: none；补充[第五轮](WEB_INTERACTION_ROUND5_2026-09-22.md)
@@ -54,6 +54,10 @@ PR `fbf15d2` 的 Node 22/24/26 与 Windows CI 通过，Web E2E 60/61，失败为
 真实 SDK + WebHost + Chromium 的旁观用例已验证：A 工具挂起期间激活 B，A 页面仍保留自身消息、排队数及耗时；B 的同文输入不会混入 A；重新控制 A 后停止仅影响 A，B 继续运行。原始日志、截图及 SDK 调查保存在私有 `openpi-pr561-usage-20260920/round6-20260922`，manifest 记录文件名、大小及 SHA-256；没有发布凭据或用户 Session。用户 57161 常驻版本保持不变。
 
 ## 展示关联与原生事实
+
+本轮同步 main `35ebf01`（#595）的结构化问答、计划卡片和原生命令反馈。原 setup 请求继续可见，只有带明确原生父节点关系的内部展开记录被折叠；`/usage` 改用主线原生命令反馈。计划修改和问答归属沿用 Session ID 加文件路径，旧计划回执不能清除重新取得控制后的新请求。浏览器帧流等待主线新增的异步认证头，低高度输入区给计划栏预留空间，命令菜单按实际可用空间选择上下位置。
+
+合并时将 React 渲染身份与原生 entryId 明确分开，后者继续负责历史锚点和准入展示关联。没有消息身份的旧事件只做一次性的完整内容匹配；已经提供原生身份的消息不按正文去重，避免吞掉独立的同文输入。新增的两个重复气泡回归保留原失败证据，执行详情滚动区也补齐键盘可达性。
 
 Pi SDK 0.85.1 的 UserMessage 没有请求 ID，message_end 先通知监听器，再追加到 Session。真实 SDK 反例中，外部原生同文 follow-up 先于 Web B/C 入队，按 Web trace FIFO 推断送达会把外部记录错误关联给 B。因此本轮没有发布伪 `prompt_delivered`，也没有包装 SDK 公共方法或加入新的调用上下文框架。
 

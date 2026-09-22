@@ -208,6 +208,9 @@ export function SlashCommandMenu(props: SlashCommandMenuProps) {
                     )}
                   </span>
                 )}
+                {command.support && (
+                  <span>{t(`commandSupport_${command.support}`)}</span>
+                )}
               </span>
               <span className="slash-command-support">
                 {unsupported

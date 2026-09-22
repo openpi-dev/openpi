@@ -25,7 +25,6 @@ import {
   useState,
 } from "react";
 import { useTranslation } from "react-i18next";
-import { isControlledSession } from "../../lib/session-control.ts";
 import {
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
@@ -38,6 +37,7 @@ import {
   sessionTitle,
   workspaceName,
 } from "../../lib/format.ts";
+import { isControlledSession } from "../../lib/session-control.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
@@ -54,6 +54,7 @@ import {
 } from "./SlashCommandMenu.tsx";
 
 interface ComposerProps {
+  planSelectionPending?: boolean;
   workspaceDraft?: boolean;
   draftModel?: WebStoreState["draftModel"];
   createdSession?: WebStoreState["createdSession"];
@@ -412,7 +413,12 @@ export function Composer(props: ComposerProps) {
       images?: readonly WebPromptImage[],
     ) => Promise<boolean>,
   ) => {
-    if (pendingSubmission.current || attachmentImport.current) return;
+    if (
+      pendingSubmission.current ||
+      attachmentImport.current ||
+      props.planSelectionPending
+    )
+      return;
     if (!props.selectedWorkspace) {
       await props.actions.chooseWorkspace();
       return;
@@ -453,6 +459,7 @@ export function Composer(props: ComposerProps) {
       !canCompose ||
       props.sessionSwitching ||
       props.modelSelectionPending ||
+      props.planSelectionPending ||
       props.thinkingPendingLevel !== null ||
       props.promptAdmissionPending ||
       props.promptAdmissionRecovery ||
@@ -575,11 +582,15 @@ export function Composer(props: ComposerProps) {
   const targetSummary = compactSummary(targetLabel, 48);
   const placeholder = !props.selectedWorkspace
     ? t("promptStart")
-    : props.landing
-      ? t("promptTask")
-      : active
-        ? t("promptMessage")
-        : t("promptReadonly");
+    : active &&
+        props.snapshot?.runtime.planHasPrompt &&
+        ["planning", "ready"].includes(props.snapshot.runtime.plan ?? "")
+      ? t("promptPlanMessage")
+      : props.landing
+        ? t("promptTask")
+        : active
+          ? t("promptMessage")
+          : t("promptReadonly");
   const thinking = props.snapshot?.thinking;
   const confirmed = thinking?.level ?? null;
   const pending = props.thinkingPendingLevel ?? null;
@@ -637,30 +648,35 @@ export function Composer(props: ComposerProps) {
       ? execution.pendingFollowUps
       : undefined;
   const pendingCount = observedQueue ?? props.pendingFollowUpsReceipt;
-  const hint = props.modelSelectionPending
-    ? t("thinkingModelPendingHint")
-    : props.thinkingPendingLevel !== null
-      ? t("thinkingPendingHint")
-      : props.workspaceDraft
-        ? t("enterHint")
-        : props.turnCancellationPending
-          ? t("stoppingTurn")
-          : props.turnTerminalStatus === "cancelled"
-            ? t("stoppedTurn")
-            : props.pendingFollowUpsReceipt !== null || (pendingCount ?? 0) > 0
-              ? (pendingCount ?? 0) > 0
-                ? t("pendingFollowUpsHint", {
-                    count: pendingCount ?? 0,
-                  })
-                : t("acceptedHint")
-              : canCompose
-                ? running
-                  ? t("queuedHint")
-                  : t("enterHint")
-                : t("activeOnlyHint");
+  const hint =
+    props.promptAdmissionPending && !canStop
+      ? t("promptPending")
+      : props.modelSelectionPending
+        ? t("thinkingModelPendingHint")
+        : props.thinkingPendingLevel !== null
+          ? t("thinkingPendingHint")
+          : props.workspaceDraft
+            ? t("enterHint")
+            : props.turnCancellationPending
+              ? t("stoppingTurn")
+              : props.turnTerminalStatus === "cancelled"
+                ? t("stoppedTurn")
+                : props.pendingFollowUpsReceipt !== null ||
+                    (pendingCount ?? 0) > 0
+                  ? (pendingCount ?? 0) > 0
+                    ? t("pendingFollowUpsHint", {
+                        count: pendingCount ?? 0,
+                      })
+                    : t("acceptedHint")
+                  : canCompose
+                    ? running
+                      ? t("queuedHint")
+                      : t("enterHint")
+                    : t("activeOnlyHint");
   const showHint =
     canCompose &&
-    (props.modelSelectionPending ||
+    ((props.promptAdmissionPending && !canStop) ||
+      props.modelSelectionPending ||
       props.thinkingPendingLevel !== null ||
       props.turnCancellationPending ||
       props.turnTerminalStatus === "cancelled" ||
@@ -686,6 +702,31 @@ export function Composer(props: ComposerProps) {
             </button>
           </div>
         )}
+      {active && props.snapshot?.runtime.plan && !props.sessionSwitching && (
+        <div className="plan-mode-bar">
+          <span>{t(`planMode_${props.snapshot.runtime.plan}`)}</span>
+          <button
+            type="button"
+            disabled={
+              running ||
+              props.planSelectionPending ||
+              props.promptAdmissionPending ||
+              Boolean(props.promptAdmissionRecovery)
+            }
+            onClick={() =>
+              void props.actions.selectPlanMode(
+                props.snapshot?.runtime.plan === "inactive",
+              )
+            }
+          >
+            {t(
+              props.snapshot.runtime.plan === "inactive"
+                ? "planModeEnter"
+                : "planModeExit",
+            )}
+          </button>
+        </div>
+      )}
       {active && (
         <ActivityBar
           snapshot={props.snapshot}
@@ -1142,6 +1183,7 @@ export function Composer(props: ComposerProps) {
                     !canCompose ||
                     !props.selectedWorkspace ||
                     props.promptAdmissionPending ||
+                    props.planSelectionPending ||
                     Boolean(props.promptAdmissionRecovery) ||
                     Boolean(props.promptAdmissionResolution) ||
                     (!prompt.trim() && images.length === 0)

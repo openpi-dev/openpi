@@ -20,6 +20,7 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
+import { QuestionPanel } from "../features/questions/QuestionPanel.tsx";
 import { SessionChangesPopover } from "../features/review/SessionChangesPopover.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
@@ -636,8 +637,21 @@ export function App() {
                 onPromptProjection={actions.rememberPromptProjection}
               />
             ) : null}
+            {!providerSettingsVisible &&
+              selected &&
+              state.snapshot &&
+              !state.sessionSwitching &&
+              isControlledSession(state.snapshot, selected) && (
+                <QuestionPanel
+                  key={JSON.stringify([selected.id, selected.path])}
+                  sessionId={selected.id}
+                  revision={state.snapshot.cursor}
+                  connected={state.connection === "connected"}
+                />
+              )}
             {state.snapshot && (
               <Composer
+                planSelectionPending={state.planSelectionPending}
                 workspaceDraft={state.workspaceDraft}
                 draftModel={state.draftModel}
                 createdSession={state.createdSession}
@@ -852,6 +866,29 @@ export function App() {
           modelSelectionPending={state.modelSelectionPending}
           onSelectModel={(value) => void actions.selectModel(value)}
           onConfigureOpenPi={configureOpenPiFromSettings}
+          interaction={
+            state.snapshot &&
+            !state.sessionSwitching &&
+            providerSettings.sessionId === state.snapshot.currentSessionId ? (
+              <div className="settings-interaction">
+                <QuestionPanel
+                  key={providerSettings.sessionId}
+                  sessionId={providerSettings.sessionId}
+                  revision={state.snapshot.cursor}
+                  connected={state.connection === "connected"}
+                />
+                {(state.activeTurn || state.liveRunning) && (
+                  <button
+                    type="button"
+                    disabled={state.turnCancellationPending}
+                    onClick={() => void actions.cancelActiveTurn()}
+                  >
+                    {t("stopTurn")}
+                  </button>
+                )}
+              </div>
+            ) : undefined
+          }
           onPreferencesChanged={() => actions.refreshSnapshot()}
           onOpenRuntimeStatus={openRuntimeStatusFromSettings}
           onClose={closeProviderSettings}

@@ -168,7 +168,10 @@ test("native command discovery offers real Web panels without sending a model pr
   ).toMatchObject({ availability: "available", source: "extension" });
   expect(
     commands.commands.find((command) => command.name === "usage"),
-  ).toMatchObject({ availability: "available", action: "runtime" });
+  ).toMatchObject({ availability: "available", source: "extension" });
+  expect(
+    commands.commands.find((command) => command.name === "usage")?.action,
+  ).toBeUndefined();
   await expect(
     page.getByRole("option", { name: /openpi-setup/ }).first(),
   ).toBeVisible();
@@ -180,10 +183,12 @@ test("native command discovery offers real Web panels without sending a model pr
   await expect(input).toHaveValue("/btw keep this question");
   await expect(page.getByRole("alert")).toContainText("不能携带参数或图片");
   expect(prompts).toEqual([]);
-  await input.fill("/usage");
+  await input.fill("/subagents");
   await input.press("Escape");
   await page.getByRole("button", { name: "发送", exact: true }).click();
-  await expect(page.getByRole("dialog")).toBeVisible();
+  await expect(
+    page.getByRole("complementary", { name: "子代理", exact: true }),
+  ).toBeVisible();
   await expect(input).toHaveValue("");
   expect(prompts).toEqual([]);
 });

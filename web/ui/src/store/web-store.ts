@@ -40,6 +40,10 @@ const refreshEventTypes = new Set([
   "session_created",
   "prompt_accepted",
   "runtime_changed",
+  "questions_changed",
+  "command_feedback",
+  "command_submitted",
+  "plan_mode_changed",
 ]);
 
 function readStringSet(key: string) {
@@ -166,6 +170,7 @@ export interface CommandDiscoveryState {
 }
 
 export interface WebStoreState {
+  planSelectionPending: boolean;
   activeTurn: WebSnapshot["runtime"]["activeTurn"] | null;
   turnCancellationPending: boolean;
   turnTerminalStatus: string | null;
@@ -214,6 +219,7 @@ export interface WebStoreActions {
     sessionPath: string,
     pairs: { key: string; entryId: string }[],
   ) => void;
+  selectPlanMode: (enabled: boolean) => Promise<void>;
   start: () => void;
   stop: () => void;
   refreshSnapshot: (options?: {
@@ -321,6 +327,7 @@ export function createWebStore(
   let acceptedThinkingEpoch = -1;
   let commandDiscoveryController: AbortController | null = null;
   let commandDiscoveryGeneration = 0;
+  let planSelectionGeneration = 0;
   const terminalPromptIds = new Set<string>();
   const completedActivationIds = new Set<string>();
 
@@ -333,18 +340,22 @@ export function createWebStore(
     }
   };
 
-  const resetLivePatch = () => ({
-    activeTurn: null,
-    turnCancellationPending: false,
-    turnTerminalStatus: null,
-    pendingFollowUpsReceipt: null,
-    liveMessages: [] as LiveEntry[],
-    liveRunning: false,
-    livePhase: "idle" as const,
-    liveRetry: null,
-    thinkingStarts: {},
-    thinkingDurations: {},
-  });
+  const resetLivePatch = () => {
+    planSelectionGeneration++;
+    return {
+      planSelectionPending: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      liveMessages: [] as LiveEntry[],
+      liveRunning: false,
+      livePhase: "idle" as const,
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+    };
+  };
 
   const resetModelSearch = (): { modelSearch: ModelSearchState } => {
     modelSearchGeneration++;
@@ -1707,6 +1718,57 @@ export function createWebStore(
         set({ thinkingPendingLevel: level });
         void flushThinking();
       },
+      async selectPlanMode(enabled) {
+        const state = get();
+        const snapshot = state.snapshot;
+        const session = snapshot?.selectedSession;
+        if (
+          !snapshot ||
+          !session ||
+          !isControlledSession(snapshot, session) ||
+          state.workspaceDraft ||
+          state.sessionSwitching ||
+          state.planSelectionPending ||
+          state.promptAdmissionPending ||
+          state.promptAdmissionRecovery ||
+          state.liveRunning ||
+          snapshot.runtime.status !== "idle" ||
+          snapshot.runtime.planRevision === undefined
+        )
+          return;
+        const epoch = sessionEpoch;
+        const generation = ++planSelectionGeneration;
+        set({ planSelectionPending: true });
+        try {
+          await client.setPlanMode(
+            session.id,
+            session.path,
+            enabled,
+            snapshot.runtime.planRevision,
+          );
+          if (
+            epoch === sessionEpoch &&
+            generation === planSelectionGeneration &&
+            !(await actions.refreshSnapshot({ epoch }))
+          )
+            throw new Error(i18n.t("planModeUnconfirmed"));
+        } catch (error) {
+          if (
+            epoch === sessionEpoch &&
+            generation === planSelectionGeneration
+          ) {
+            await actions.refreshSnapshot({ epoch });
+            if (
+              epoch === sessionEpoch &&
+              generation === planSelectionGeneration
+            )
+              showError(error);
+          }
+        } finally {
+          if (epoch === sessionEpoch && generation === planSelectionGeneration)
+            set({ planSelectionPending: false });
+        }
+      },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
         if (
@@ -1729,6 +1791,7 @@ export function createWebStore(
         }
       },
       async sendPrompt(rawContent, promptImages = []) {
+        if (get().planSelectionPending) return false;
         const content = rawContent.trim();
         const images = promptImages.map((image) => ({ ...image }));
         const imageSignature = JSON.stringify(
@@ -2186,6 +2249,7 @@ export function createWebStore(
     };
 
     return {
+      planSelectionPending: false,
       activeTurn: null,
       turnCancellationPending: false,
       turnTerminalStatus: null,

@@ -30,6 +30,78 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it("Plan controls preserve drafts without sending prompts, and the placeholder follows confirmed planning messages", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.plan = "inactive";
+  snapshot.runtime.status = "idle";
+  snapshot.runtime.planRevision = null;
+  const store = createWebStore();
+  const selectPlanMode = vi.fn(async () => {});
+  const sendPrompt = vi.fn(async () => true);
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: { ...store.getState().actions, selectPlanMode, sendPrompt },
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "Keep my draft" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("planModeEnter") }),
+  );
+  expect(selectPlanMode).toHaveBeenCalledWith(true);
+  expect(sendPrompt).not.toHaveBeenCalled();
+  expect(input.value).toBe("Keep my draft");
+  const rerender = (
+    plan: "planning" | "inactive",
+    hasPrompt: boolean,
+    pending = false,
+  ) =>
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          planSelectionPending: pending,
+          snapshot: {
+            ...snapshot,
+            runtime: { ...snapshot.runtime, plan, planHasPrompt: hasPrompt },
+          },
+        }),
+      ),
+    );
+  rerender("planning", false);
+  expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
+  rerender("planning", true);
+  expect(input.placeholder).toBe(i18n.t("promptPlanMessage"));
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("planModeExit") }));
+  expect(selectPlanMode).toHaveBeenLastCalledWith(false);
+  expect(sendPrompt).not.toHaveBeenCalled();
+  rerender("inactive", false);
+  expect(input.placeholder).not.toBe(i18n.t("promptPlanMessage"));
+  expect(input.value).toBe("Keep my draft");
+  rerender("planning", true, true);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", {
+      name: i18n.t("planModeExit"),
+    }).disabled,
+  ).toBe(true);
+  await act(async () => fireEvent.submit(input.closest("form")!));
+  expect(sendPrompt).not.toHaveBeenCalled();
+});
+
 it("keeps a workspace draft separate from the old Session UI and retains text after failed sending", async () => {
   const initial = webStore.getState();
   const snapshot = activeSnapshot();
@@ -442,6 +514,17 @@ it("folds legacy setup instructions while keeping results and subsequent task me
       timestamp: "2026-09-19T10:00:01Z",
       message: { role: "assistant", content: "Visible task response" },
     },
+    {
+      id: "setup-command",
+      type: "message",
+      timestamp: "2026-09-19T10:00:02Z",
+      message: {
+        role: "user",
+        content: "/openpi-setup Apply a dark theme",
+        customType: "openpi-web-command-input",
+        commandId: "setup-command-id",
+      },
+    },
     projectEntry({
       id: "setup-request",
       parentId: "before-assistant",
@@ -512,10 +595,210 @@ it("folds legacy setup instructions while keeping results and subsequent task me
   expect(
     screen.getAllByText("Hidden configuration evidence").length,
   ).toBeGreaterThan(0);
-  expect(screen.getByText("Apply a dark theme").closest("details")?.open).toBe(
-    false,
-  );
+  expect(
+    screen.getByText("/openpi-setup Apply a dark theme", {
+      selector: ".message-body",
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByText("Apply a dark theme")).toBeNull();
 });
+
+it.each([true, false])(
+  "only folds a setup echo linked to its exact native command parent (%s)",
+  (linked) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const content = "/openpi-setup set theme to dark";
+    snapshot.selectedSession!.entries = [
+      projectEntry({
+        id: "command-entry",
+        parentId: null,
+        timestamp: "2026-09-22T00:00:00Z",
+        type: "custom",
+        customType: "openpi-web-command-input",
+        data: { text: content, commandId: "command-one" },
+      }),
+      projectEntry({
+        id: "setup-entry",
+        parentId: linked ? "command-entry" : "other-entry",
+        timestamp: "2026-09-22T00:00:01Z",
+        type: "custom_message",
+        customType: "openpi-setup-request",
+        display: true,
+        content: "Expanded internal configuration instructions",
+        details: {
+          requestId: "setup-one",
+          command: "openpi-setup",
+          request: "set theme to dark",
+        },
+      }),
+      {
+        id: "result-entry",
+        timestamp: "2026-09-22T00:00:02Z",
+        type: "message",
+        message: { role: "assistant", content: "The theme is now dark." },
+      },
+    ];
+    const projected = vi.fn();
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          {
+            key: "optimistic-command-one",
+            message: { role: "user", content },
+            optimistic: {
+              sessionId: "session",
+              sessionPath: "/tmp/session",
+              commandId: "command-one",
+              afterEntryId: null,
+              admitted: true,
+            },
+          },
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onPromptProjection: projected,
+      }),
+    );
+    expect(
+      view.container.querySelectorAll(".message-row.user .message-body"),
+    ).toHaveLength(linked ? 1 : 2);
+    expect(
+      screen.queryByText("Expanded internal configuration instructions"),
+    ).toBeNull();
+    expect(screen.getByText("The theme is now dark.")).toBeTruthy();
+    expect(projected).toHaveBeenCalledWith("session", "/tmp/session", [
+      { key: "optimistic-command-one", entryId: "command-entry" },
+    ]);
+  },
+);
+
+it("does not consume a later identical command draft using an older native command id", () => {
+  const snapshot = activeSnapshot();
+  const content = "/usage";
+  snapshot.selectedSession!.entries = [
+    projectEntry({
+      id: "older-command",
+      parentId: null,
+      timestamp: "2026-09-22T00:00:00Z",
+      type: "custom",
+      customType: "openpi-web-command-input",
+      data: { text: content, commandId: "old-command-id" },
+    }),
+  ];
+  const projected = vi.fn();
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [
+        {
+          key: "optimistic-new-command-id",
+          message: { role: "user", content },
+          optimistic: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: "new-command-id",
+            afterEntryId: "older-command",
+            admitted: true,
+          },
+        },
+      ],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+      onPromptProjection: projected,
+    }),
+  );
+  expect(
+    view.container.querySelectorAll(".message-row.user .message-body"),
+  ).toHaveLength(2);
+  expect(projected).not.toHaveBeenCalled();
+});
+
+it.each([1, 2])(
+  "reconciles timestamp-free live users once while keeping native history ids (%s copies)",
+  (copies) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const content = "New user request while reading old history";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "before-request",
+        type: "message",
+        timestamp: "2026-09-22T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: "Previous answer",
+          timestamp: 100,
+        },
+      },
+      {
+        id: "native-request",
+        parentId: "before-request",
+        type: "message",
+        timestamp: "2026-09-22T00:00:01Z",
+        message: {
+          role: "user",
+          content,
+          timestamp: 200,
+          parts: [{ type: "text", text: content }],
+        },
+      },
+    ];
+    const projected = vi.fn();
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          {
+            key: "optimistic-new-command",
+            message: { role: "user", content },
+            optimistic: {
+              sessionId: "session",
+              sessionPath: "/tmp/session",
+              commandId: "new-command",
+              afterEntryId: "before-request",
+              admitted: true,
+            },
+          },
+          ...Array.from({ length: copies }, (_, index) => ({
+            key: `legacy-user-${index}`,
+            message: { role: "user", content },
+          })),
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onPromptProjection: projected,
+      }),
+    );
+    expect(
+      view.container.querySelectorAll(".message-row.user .message-body"),
+    ).toHaveLength(copies);
+    expect(
+      view.container
+        .querySelector(".message-row.user")
+        ?.getAttribute("data-history-entry"),
+    ).toBe("native-request");
+    expect(projected).toHaveBeenCalledWith("session", "/tmp/session", [
+      { key: "optimistic-new-command", entryId: "native-request" },
+    ]);
+  },
+);
 
 it.each(["openpi-setup", "my-pi-setup"])(
   "shows the original /%s request once and retries the command instead of the internal prompt",

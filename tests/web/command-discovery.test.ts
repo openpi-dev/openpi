@@ -36,6 +36,18 @@ function command(
   };
 }
 
+test("only reviewed command owners gain Web support; same names from other packages stay unadapted", () => {
+  const plan = command("plan", "extension");
+  const impostor = projectWebCommands([plan]).commands[0]!;
+  assert.equal(impostor.availability, "unsupported");
+  plan.sourceInfo.path = fileURLToPath(
+    new URL("../../extensions/plan-mode/index.ts", import.meta.url),
+  );
+  const owned = projectWebCommands([plan]).commands[0]!;
+  assert.equal(owned.availability, "available");
+  assert.equal(owned.support, "plan");
+});
+
 test("projects Pi command identities without exposing source metadata", () => {
   const result = projectWebCommands([
     command("extension:run", "extension", "Run\u0000 an extension"),
@@ -134,7 +146,7 @@ test("offers native setup and existing Web panels only for the actual package co
   );
   assert.deepEqual(
     result.commands.slice(2, 6).map(({ action }) => action),
-    ["terminal", "review", "subagents", "runtime"],
+    ["terminal", "review", "subagents", undefined],
   );
   assert.equal(result.commands[6]?.action, "side-conversation");
   assert.equal(result.commands[7]?.unavailableReason, "terminal_only");

@@ -143,6 +143,114 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+it("Plan changes wait for canonical confirmation, prevent duplicate clicks and do not submit a prompt", async () => {
+  const client = new FakeClient();
+  const before = snapshot();
+  before.runtime.plan = "inactive";
+  before.runtime.planRevision = null;
+  client.snapshots.push(Promise.resolve(before));
+  const request = deferred<{ sessionId: string }>();
+  const change = vi
+    .spyOn(client, "setPlanMode")
+    .mockReturnValue(request.promise);
+  const prompt = vi.spyOn(client, "prompt");
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const pending = store.getState().actions.selectPlanMode(true);
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
+  expect(store.getState().planSelectionPending).toBe(true);
+  await store.getState().actions.selectPlanMode(true);
+  expect(await store.getState().actions.sendPrompt("wait")).toBe(false);
+  expect(change).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "/tmp/ws/session.jsonl",
+    true,
+    null,
+  );
+  const after = snapshot();
+  after.cursor++;
+  after.runtime.plan = "planning";
+  after.runtime.planRevision = "plan-1";
+  client.snapshots.push(Promise.resolve(after));
+  request.resolve({ sessionId: "session-1" });
+  await pending;
+  expect(store.getState().snapshot?.runtime.plan).toBe("planning");
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(store.getState().liveMessages).toEqual([]);
+  expect(prompt).not.toHaveBeenCalled();
+});
+
+it("does not change Plan mode from a copied Session observer", async () => {
+  const client = new FakeClient();
+  const change = vi.spyOn(client, "setPlanMode");
+  const current = snapshot();
+  current.currentSessionPath = current.selectedSession!.path;
+  current.runtime.planRevision = null;
+  current.selectedSession!.path = "/tmp/ws/copied-session.jsonl";
+  current.sessions.push({
+    ...current.sessions[0]!,
+    path: current.selectedSession!.path,
+    controller: "none",
+  });
+  const store = createWebStore(client);
+  store.setState({
+    snapshot: current,
+    selectedPath: current.selectedSession!.path,
+    workspaceDraft: false,
+  });
+  await store.getState().actions.selectPlanMode(true);
+  expect(change).not.toHaveBeenCalled();
+  expect(store.getState().planSelectionPending).toBe(false);
+});
+
+it("keeps a newer Plan write pending when an older receipt arrives after retaking the same view", async () => {
+  const client = new FakeClient();
+  const initial = snapshot();
+  initial.currentSessionPath = initial.selectedSession!.path;
+  initial.runtime.plan = "inactive";
+  initial.runtime.planRevision = null;
+  client.snapshots.push(Promise.resolve(initial));
+  const first = deferred<{ sessionId: string }>();
+  const second = deferred<{ sessionId: string }>();
+  const change = vi
+    .spyOn(client, "setPlanMode")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const oldWrite = store.getState().actions.selectPlanMode(true);
+  const observer = structuredClone(initial);
+  observer.currentSessionId = "other";
+  observer.currentSessionPath = "/tmp/ws/other.jsonl";
+  observer.sessions[0]!.controller = "none";
+  observer.sessions.push({
+    ...initial.sessions[0]!,
+    id: "other",
+    path: observer.currentSessionPath,
+  });
+  client.snapshots.push(Promise.resolve(observer));
+  await store.getState().actions.refreshSnapshot();
+  expect(store.getState().planSelectionPending).toBe(false);
+  const activated = structuredClone(initial);
+  activated.runtime.plan = "planning";
+  activated.runtime.planRevision = "first-plan";
+  client.snapshots.push(Promise.resolve(activated));
+  await store.getState().actions.selectSession(initial.selectedSession!.path);
+  const newWrite = store.getState().actions.selectPlanMode(false);
+  expect(change).toHaveBeenCalledTimes(2);
+  expect(store.getState().planSelectionPending).toBe(true);
+  first.resolve({ sessionId: "session-1" });
+  await oldWrite;
+  expect(store.getState().planSelectionPending).toBe(true);
+  const confirmed = structuredClone(initial);
+  confirmed.runtime.planRevision = "second-plan";
+  client.snapshots.push(Promise.resolve(confirmed));
+  second.resolve({ sessionId: "session-1" });
+  await newWrite;
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
+});
+
 class FakeClient extends WebClient {
   snapshots: Array<Promise<WebSnapshot>> = [];
   snapshotPaths: Array<string | null | undefined> = [];
@@ -1096,6 +1204,7 @@ describe("OpenPI Web store", () => {
             sessionPath,
             content: "hello",
             commandId: expect.any(String),
+            controllerId: expect.any(String),
             retry: false,
             images: [],
           },

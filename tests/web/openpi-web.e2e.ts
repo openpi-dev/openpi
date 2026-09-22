@@ -1567,8 +1567,18 @@ test("discovers and completes Pi commands without submitting unsupported command
   expect(menuBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
   expect(menuBox!.height).toBeLessThanOrEqual(225);
-  expect(menuBox!.y).toBeGreaterThanOrEqual(
-    composerBox!.y + composerBox!.height + 7,
+  if ((await menu.getAttribute("data-placement")) === "above") {
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(
+      composerBox!.y - 7,
+    );
+  } else {
+    expect(menuBox!.y).toBeGreaterThanOrEqual(
+      composerBox!.y + composerBox!.height + 7,
+    );
+  }
+  expect(menuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(
+    page.viewportSize()!.height,
   );
 
   for (let index = 0; index < 5; index++) await input.press("ArrowDown");
@@ -1601,7 +1611,7 @@ test("discovers and completes Pi commands without submitting unsupported command
   await input.fill("/extension");
   const extension = page.getByRole("option", { name: /\/extension:setup/u });
   await expect(extension).toBeDisabled();
-  await expect(extension).toContainText("当前 Web 不支持");
+  await expect(extension).toContainText("尚未适配 · 手动命令仍交给 Pi");
 
   await input.fill("/rev");
   await expect(page.getByRole("option", { name: /\/review/u })).toBeVisible();
