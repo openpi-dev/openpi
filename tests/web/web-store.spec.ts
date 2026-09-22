@@ -143,6 +143,38 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+it("Plan changes wait for canonical confirmation, prevent duplicate clicks and do not submit a prompt", async () => {
+  const client = new FakeClient();
+  const before = snapshot();
+  before.runtime.plan = "inactive";
+  before.runtime.planRevision = null;
+  client.snapshots.push(Promise.resolve(before));
+  const request = deferred<{ sessionId: string }>();
+  const change = vi
+    .spyOn(client, "setPlanMode")
+    .mockReturnValue(request.promise);
+  const prompt = vi.spyOn(client, "prompt");
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const pending = store.getState().actions.selectPlanMode(true);
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
+  expect(store.getState().planSelectionPending).toBe(true);
+  await store.getState().actions.selectPlanMode(true);
+  expect(await store.getState().actions.sendPrompt("wait")).toBe(false);
+  expect(change).toHaveBeenCalledExactlyOnceWith("session-1", true, null);
+  const after = snapshot();
+  after.cursor++;
+  after.runtime.plan = "planning";
+  after.runtime.planRevision = "plan-1";
+  client.snapshots.push(Promise.resolve(after));
+  request.resolve({ sessionId: "session-1" });
+  await pending;
+  expect(store.getState().snapshot?.runtime.plan).toBe("planning");
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(store.getState().liveMessages).toEqual([]);
+  expect(prompt).not.toHaveBeenCalled();
+});
+
 class FakeClient extends WebClient {
   snapshots: Array<Promise<WebSnapshot>> = [];
   snapshotPaths: Array<string | null | undefined> = [];
@@ -837,6 +869,7 @@ describe("OpenPI Web store", () => {
             sessionPath,
             content: "hello",
             commandId: expect.any(String),
+            controllerId: expect.any(String),
             retry: false,
             images: [],
           },

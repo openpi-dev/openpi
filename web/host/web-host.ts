@@ -23,6 +23,8 @@ import {
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
+import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
+import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import {
   PiWebAdapter,
   WebReadOnlySessionError,
@@ -67,6 +69,9 @@ import {
   INTERACTIVE_TERMINAL_MAX_INPUT,
   type InteractiveTerminalService,
 } from "./interactive-terminal.ts";
+import { registerWebQuestionBridge } from "../../extensions/ask-user/web-bridge.ts";
+import { isWebControllerId, WEB_QUESTION_BODY_BYTES } from "../protocol/questions.ts";
+import { WebQuestionBroker } from "./questions.ts";
 
 const HOST = "127.0.0.1";
 const UI_ROOT = new URL("../dist/", import.meta.url);
@@ -305,6 +310,7 @@ type PromptAdmission = {
   readonly sessionPath: string;
   readonly content: string;
   readonly imageSignature: string;
+  readonly controllerId?: string;
   readonly completion: Promise<PromptAdmissionResponse>;
   result?: PromptAdmissionResponse;
 };
@@ -388,9 +394,20 @@ export class WebHost {
   >();
   private stopping = false;
   private stopPromise?: Promise<void>;
+  private readonly questions: WebQuestionBroker;
+  private questionSession?: object;
+  private unregisterQuestions?: () => void;
 
   constructor(options: WebHostOptions) {
     this.runtime = options.runtime;
+    this.questions = new WebQuestionBroker(() => {
+      if (this.stopping || !this.runtime.workspaceSelected) return undefined;
+      const turn = this.runtime.getActiveTurn();
+      const admission = turn && this.promptAdmissions.get(turn.commandId);
+      if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
+          turn.sessionId !== this.runtime.sessionManager.getSessionId()) return undefined;
+      return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
+    }, () => this.publish("questions_changed"));
     this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), cwd: this.runtime.cwd } : undefined);
     this.requestedPort = options.port ?? 0;
     this.token = options.token
@@ -460,6 +477,7 @@ export class WebHost {
       }
       void operation;
     });
+    this.syncQuestionBridge();
   }
 
   async start() {
@@ -490,6 +508,8 @@ export class WebHost {
   }
 
   publish(type: string, detail?: Record<string, unknown>) {
+    this.syncQuestionBridge();
+    this.questions.reconcile();
     if (["session_start", "session_switched", "session_created", "session_archived", "workspace_removed"].includes(type)) {
       this.artifacts.revoke();
       if (this.runtime.workspaceSelected) {
@@ -528,14 +548,7 @@ export class WebHost {
     if (this.events.length > WEB_MAX_EVENTS) this.events.shift();
     const record = `id: ${event.sequence}\ndata: ${serialized}\n\n`;
     for (const client of this.clients) {
-      if (
-        client.destroyed ||
-        client.writableEnded ||
-        client.writableLength > MAX_SSE_BUFFER_BYTES ||
-        !client.write(record)
-      ) {
-        this.removeSseClient(client, "destroy");
-      }
+      this.writeSseRecord(client, record);
     }
     this.onEvent?.(event.type, event.detail);
     traceWeb("sse_event", {
@@ -545,10 +558,31 @@ export class WebHost {
     });
   }
 
+  private syncQuestionBridge() {
+    const scope = this.stopping ? undefined : this.runtime.sessionManager;
+    if (scope === this.questionSession) return;
+    this.unregisterQuestions?.();
+    this.unregisterCommandFeedback?.();
+    this.unregisterCommandFeedback = undefined;
+    this.unregisterQuestions = undefined;
+    this.questionSession = scope;
+    this.questions.cancel();
+    if (scope) this.unregisterQuestions = registerWebQuestionBridge(scope,
+      (toolCallId, questions, signal, handoff) => this.questions.request(toolCallId, questions, signal, handoff));
+    if (scope) this.unregisterCommandFeedback = registerWebCommandFeedback(scope, (text, level) => {
+      if (this.stopping || scope !== this.runtime.sessionManager) return;
+      scope.appendCustomEntry(WEB_COMMAND_FEEDBACK, { text: text.slice(0, 12_000), level, truncated: text.length > 12_000 });
+      this.publish("command_feedback");
+    });
+  }
+
+  private unregisterCommandFeedback?: () => void;
+
   stop() {
     if (this.stopPromise) return this.stopPromise;
     this.stopping = true;
     this.stopPromise = (async () => {
+      this.syncQuestionBridge();
       this.unsubscribeCapabilities();
       this.artifacts.dispose();
       this.interactiveTerminals.dispose();
@@ -644,6 +678,8 @@ export class WebHost {
     const pathname = new URL(request.url ?? "/", `http://${HOST}`).pathname;
     if (pathname === "/api/prompt") return false;
     if (pathname === "/api/turns/cancel") return true;
+    if (pathname === "/api/questions/answer") return true;
+    if (pathname === "/api/plan") return true;
     return pathname.startsWith("/api/workspaces") ||
       pathname.startsWith("/api/sessions") ||
       pathname.startsWith("/api/terminal") ||
@@ -1191,13 +1227,17 @@ export class WebHost {
           error: "sessionId and sessionPath are required",
         });
       }
+      if (body.controllerId !== undefined && !isWebControllerId(body.controllerId)) {
+        return this.json(response, 400, { code: "INVALID_CONTROLLER", error: "a valid browser controller id is required" });
+      }
       const existing = this.promptAdmissions.get(commandId);
       if (existing) {
         if (
           existing.sessionId !== body.sessionId ||
           existing.sessionPath !== body.sessionPath ||
           existing.content !== content ||
-          existing.imageSignature !== imageSignature
+          existing.imageSignature !== imageSignature ||
+          existing.controllerId !== body.controllerId
         ) {
           return this.json(response, 409, {
             code: "COMMAND_CONFLICT",
@@ -1246,8 +1286,27 @@ export class WebHost {
         content,
         parsedImages.images,
         imageSignature,
+        body.controllerId,
       );
       const result = await admission.completion;
+      return this.json(response, result.status, result.body);
+    }
+    if (url.pathname === "/api/questions/pending" && request.method === "GET") {
+      const sessionId = url.searchParams.get("sessionId");
+      const controller = request.headers["x-openpi-web-controller"];
+      if (!sessionId || sessionId.length > 128 || !isWebControllerId(controller)) {
+        return this.json(response, 400, { code: "INVALID_QUESTION_TARGET", error: "Session and browser controller are required" });
+      }
+      return this.json(response, 200, { pending: this.questions.read(sessionId, controller) });
+    }
+    if (url.pathname === "/api/questions/answer" && request.method === "POST") {
+      const body = await this.readJson(request, WEB_QUESTION_BODY_BYTES);
+      const controller = request.headers["x-openpi-web-controller"];
+      if (!isWebControllerId(controller) || !isWebControllerId(body.requestId) ||
+          typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 128) {
+        return this.json(response, 400, { code: "INVALID_QUESTION_TARGET", error: "An exact question request and browser controller are required" });
+      }
+      const result = this.questions.answer(body.sessionId, body.requestId, controller, body.action, body.answers);
       return this.json(response, result.status, result.body);
     }
     if (url.pathname === "/api/turns/cancel" && request.method === "POST") {
@@ -1293,6 +1352,23 @@ export class WebHost {
         accepted: result.state === "accepted",
         cursor: this.sequence,
       });
+    }
+    if (url.pathname === "/api/plan" && request.method === "POST") {
+      const body = await this.readJson(request, 1024);
+      if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 ||
+        typeof body.enabled !== "boolean" ||
+        !(body.expectedRevision === null || (typeof body.expectedRevision === "string" && body.expectedRevision.length <= 256)) ||
+        Object.keys(body).some((key) => !["sessionId", "enabled", "expectedRevision"].includes(key)))
+        return this.json(response, 400, { code: "INVALID_PLAN_REQUEST", error: "A Session, enabled flag and expected Plan revision are required" });
+      if (!this.runtime.setPlanMode)
+        return this.json(response, 501, { code: "PLAN_CONTROL_UNAVAILABLE", error: "Plan control is unavailable" });
+      try {
+        const plan = await this.runtime.setPlanMode({ sessionId: body.sessionId, enabled: body.enabled, expectedRevision: body.expectedRevision });
+        return this.json(response, 200, { sessionId: body.sessionId, ...plan });
+      } catch (error) {
+        const failure = this.runtimeRequestFailure(error, "PLAN_SELECTION_FAILED", "Plan mode could not be changed");
+        return this.json(response, failure.status, { code: failure.code, error: failure.error });
+      }
     }
     if (url.pathname === "/api/thinking" && request.method === "POST") {
       const body = await this.readJson(request);
@@ -1836,7 +1912,7 @@ export class WebHost {
           expandThinking: setup.ui.webExpandThinking,
         },
         ...projection,
-        runtime: { ...projection.runtime, liveTools: this.liveTools },
+        runtime: { ...projection.runtime, liveTools: this.liveTools, ...this.webPlanState() },
         thinking: projection.thinking
           ? { ...projection.thinking, revision: this.sequence }
           : undefined,
@@ -1908,7 +1984,8 @@ export class WebHost {
   private makePromptAdmissionSpace() {
     while (this.promptAdmissions.size >= MAX_PROMPT_ADMISSIONS) {
       const settled = [...this.promptAdmissions.entries()].find(
-        ([, admission]) => admission.result !== undefined,
+        ([commandId, admission]) => admission.result !== undefined &&
+          commandId !== this.runtime.getActiveTurn()?.commandId,
       );
       if (!settled) return false;
       this.promptAdmissions.delete(settled[0]);
@@ -1923,6 +2000,7 @@ export class WebHost {
     content: string,
     images: readonly WebPromptImage[],
     imageSignature: string,
+    controllerId?: string,
   ) {
     let settle!: (result: PromptAdmissionResponse) => void;
     const admission: PromptAdmission = {
@@ -1930,6 +2008,7 @@ export class WebHost {
       sessionPath,
       content,
       imageSignature,
+      controllerId,
       completion: new Promise<PromptAdmissionResponse>((resolve) => {
         settle = resolve;
       }),
@@ -2015,10 +2094,16 @@ export class WebHost {
     return admission;
   }
 
-  private async readJson(
-    request: IncomingMessage,
-    maxBytes = MAX_COMMAND_BYTES,
-  ) {
+  private webPlanState() {
+    if (!this.runtime.workspaceSelected) return undefined;
+    try {
+      if (!this.runtime.listCommands?.().commands.some((command) => command.support === "plan")) return undefined;
+      const state = projectPlanControl(this.runtime.sessionManager.getBranch());
+      return { plan: state.status, planRevision: state.revision, planHasPrompt: state.hasPrompt };
+    } catch { return undefined; }
+  }
+
+  private async readJson(request: IncomingMessage, maxBytes = MAX_COMMAND_BYTES) {
     const chunks: Buffer[] = [];
     let bytes = 0;
     for await (const chunk of request) {
@@ -2321,18 +2406,25 @@ export class WebHost {
     for (const record of replay) response.write(record);
     this.clients.add(response);
     const heartbeat = setInterval(() => {
-      if (
-        response.destroyed ||
-        response.writableEnded ||
-        response.writableLength > MAX_SSE_BUFFER_BYTES ||
-        !response.write(": heartbeat\n\n")
-      ) {
-        this.removeSseClient(response, "destroy");
-      }
+      this.writeSseRecord(response, ": heartbeat\n\n");
     }, this.sseHeartbeatMs);
     heartbeat.unref();
     this.clientHeartbeats.set(response, heartbeat);
     response.on("close", () => this.removeSseClient(response));
+  }
+
+  private writeSseRecord(response: ServerResponse, record: string) {
+    if (
+      response.destroyed ||
+      response.writableEnded ||
+      response.writableLength + Buffer.byteLength(record) > MAX_SSE_BUFFER_BYTES
+    ) {
+      this.removeSseClient(response, "destroy");
+      return;
+    }
+    // false means Node buffered this write, not that the connection failed.
+    // Keep native ordering while bounding each client's outstanding bytes.
+    response.write(record);
   }
 
   private removeSseClient(

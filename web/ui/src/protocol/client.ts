@@ -4,6 +4,11 @@ import type {
   WebSubagentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
+  type WebQuestionRequest,
+  type WebQuestionAnswers,
+  type WebQuestionReceipt,
+} from "../../../protocol/questions.ts";
+import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
@@ -27,6 +32,7 @@ import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+import { controllerIdentity } from "./controller.ts";
 
 export class WebApiError extends Error {
   constructor(
@@ -89,10 +95,10 @@ export interface WorkspaceSelectionResult {
 
 export class WebClient {
   readonly token = readToken();
-
-  headers(json = false) {
+  async headers(json = false) {
     return {
       Authorization: `Bearer ${this.token ?? ""}`,
+      "X-OpenPI-Web-Controller": await controllerIdentity(),
       ...(json ? { "Content-Type": "application/json" } : {}),
     };
   }
@@ -119,7 +125,10 @@ export class WebClient {
       const response = await fetch(path, {
         ...requestOptions,
         signal: controller.signal,
-        headers: { ...this.headers(Boolean(options.body)), ...options.headers },
+        headers: {
+          ...(await this.headers(Boolean(options.body))),
+          ...options.headers,
+        },
       });
       const body = (await response.json()) as {
         error?: string;
@@ -202,7 +211,7 @@ export class WebClient {
     try {
       const response = await fetch(
         `/api/artifacts/content?${new URLSearchParams({ sessionId: artifact.sessionId, handle: artifact.handle, revision: artifact.revision, download: "1" })}`,
-        { headers: this.headers(), signal: controller.signal },
+        { headers: await this.headers(), signal: controller.signal },
       );
       if (!response.ok) {
         const body = (await response.json()) as {
@@ -280,7 +289,7 @@ export class WebClient {
   async browserFrame(sessionId: string, signal?: AbortSignal) {
     const response = await fetch(
       `/api/browser/frame?${new URLSearchParams({ sessionId })}`,
-      { headers: this.headers(), signal },
+      { headers: await this.headers(), signal },
     );
     if (response.status === 404) return null;
     if (!response.ok) {
@@ -350,7 +359,7 @@ export class WebClient {
     const query = new URLSearchParams({ sessionId, id });
     if (after !== undefined) query.set("after", String(after));
     const response = await fetch(`/api/terminal/events?${query}`, {
-      headers: this.headers(),
+      headers: await this.headers(),
       signal,
     });
     if (!response.ok) {
@@ -459,6 +468,17 @@ export class WebClient {
     );
   }
 
+  setPlanMode(
+    sessionId: string,
+    enabled: boolean,
+    expectedRevision: string | null,
+  ) {
+    return this.request<{ sessionId: string }>("/api/plan", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, enabled, expectedRevision }),
+    });
+  }
+
   trust(sessionId: string, signal: AbortSignal) {
     return this.request<WebProjectTrustStatus>(
       `/api/trust?sessionId=${encodeURIComponent(sessionId)}`,
@@ -552,6 +572,36 @@ export class WebClient {
     );
   }
 
+  pendingQuestions(sessionId: string, signal?: AbortSignal) {
+    return this.request<{ pending: WebQuestionRequest | null }>(
+      `/api/questions/pending?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  async answerQuestions(
+    request: WebQuestionRequest,
+    answers: WebQuestionAnswers | null,
+    signal?: AbortSignal,
+  ) {
+    try {
+      return await this.request<WebQuestionReceipt>("/api/questions/answer", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: request.sessionId,
+          requestId: request.requestId,
+          action: answers === null ? "dismiss" : "answer",
+          ...(answers === null ? {} : { answers }),
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof WebApiError && error.code === "STALE_QUESTION")
+        return { state: "stale" } as const;
+      throw error;
+    }
+  }
+
   async prompt(
     sessionId: string,
     content: string,
@@ -569,6 +619,7 @@ export class WebClient {
         commandId,
         retry,
         images,
+        controllerId: await controllerIdentity(),
       }),
       timeoutMs: 30_000,
       timeoutMessage:

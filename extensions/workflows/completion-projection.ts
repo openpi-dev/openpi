@@ -98,6 +98,11 @@ function completionAlerts(details: WorkflowDetails) {
   if (details.logsDropped) {
     alerts.push(`${details.logsDropped} earlier log line(s) dropped`);
   }
+  if (details.transcriptsOmitted) {
+    alerts.push(
+      `${details.transcriptsOmitted.agents} agent transcript(s) omitted from transcripts.json (byte budget)`,
+    );
+  }
 
   for (const entry of details.logs ?? []) {
     if (!isDroppedWorkLog(entry)) continue;
@@ -171,6 +176,11 @@ function buildOperatorReport(
       : undefined,
   ].filter((entry): entry is string => entry !== undefined);
   if (artifacts.length > 0) lines.push("", "Artifacts:", ...artifacts);
+  if (details.transcriptsOmitted) {
+    lines.push(
+      `  (${details.transcriptsOmitted.agents} agent transcript(s), ${details.transcriptsOmitted.entries} entr${details.transcriptsOmitted.entries === 1 ? "y" : "ies"} omitted from transcripts.json to stay within its byte budget)`,
+    );
+  }
 
   const replayed = details.agents.filter((agent) => agent.replayed).length;
   if (details.resumedFrom) {

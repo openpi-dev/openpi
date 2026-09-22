@@ -5,9 +5,8 @@ import { request as httpRequest } from "node:http";
 import { createConnection } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import test from "node:test";
+import test, { after } from "node:test";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
-import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import {
   registerWebCapability,
   registerWebCapabilityActions,
@@ -16,7 +15,7 @@ import type { EmbeddedBrowserService } from "../../web/host/embedded-browser.ts"
 import type { GitReviewService } from "../../web/host/git-review.ts";
 import type { InteractiveTerminalService } from "../../web/host/interactive-terminal.ts";
 import { PiWebAdapter } from "../../web/adapter/pi-adapter.ts";
-import { WebHost, type WebHostOptions } from "../../web/host/web-host.ts";
+import type { WebHostOptions } from "../../web/host/web-host.ts";
 import type { WebInteractiveTerminalEvent } from "../../web/protocol/types.ts";
 import { projectWebModelSearch } from "../../web/runtime/model-discovery.ts";
 import {
@@ -24,6 +23,22 @@ import {
   type WebRuntimeEvent,
   WebRuntimeRequestError,
 } from "../../web/runtime/types.ts";
+
+// Setup paths are resolved when the Host imports the shared config module.
+// Never make snapshot/theme assertions depend on the developer's preferences.
+const hostAgentDirectory = await mkdtemp(join(tmpdir(), "openpi-host-agent-"));
+const previousHostAgentDirectory = process.env.PI_CODING_AGENT_DIR;
+process.env.PI_CODING_AGENT_DIR = hostAgentDirectory;
+const { WebHost } = await import("../../web/host/web-host.ts");
+const { loadSetupConfig } = await import(
+  "../../extensions/shared/setup-config.ts"
+);
+after(async () => {
+  if (previousHostAgentDirectory === undefined)
+    delete process.env.PI_CODING_AGENT_DIR;
+  else process.env.PI_CODING_AGENT_DIR = previousHostAgentDirectory;
+  await rm(hostAgentDirectory, { recursive: true, force: true });
+});
 
 function mutationSessionPath(manager: WebRuntimeController["sessionManager"]) {
   return manager.getSessionFile() ?? `current:${manager.getSessionId()}`;
@@ -247,6 +262,53 @@ test("serves workspaces through a runtime isolated from terminal sessions", asyn
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json",
     };
+
+    const planRequest = {
+      sessionId: sessionManager.getSessionId(),
+      enabled: true,
+      expectedRevision: null,
+    };
+    const postPlan = (data: unknown, auth = authorized) =>
+      fetch(`${launched.origin}/api/plan`, {
+        method: "POST",
+        headers: auth,
+        body: JSON.stringify(data),
+      });
+    assert.equal(
+      (
+        await fetch(`${launched.origin}/api/plan`, {
+          method: "POST",
+          body: JSON.stringify(planRequest),
+        })
+      ).status,
+      401,
+    );
+    assert.equal(
+      (await postPlan({ ...planRequest, enabled: "yes" })).status,
+      400,
+    );
+    assert.equal((await postPlan({ ...planRequest, extra: true })).status, 400);
+    assert.equal((await postPlan(planRequest)).status, 501);
+    let planCalls = 0;
+    runtime.setPlanMode = async (request) => {
+      assert.deepEqual(request, planRequest);
+      planCalls++;
+      return { status: "planning", revision: "plan-1", hasPrompt: false };
+    };
+    const switchedPlan = await postPlan(planRequest);
+    assert.equal(switchedPlan.status, 200);
+    assert.deepEqual(await switchedPlan.json(), {
+      sessionId: planRequest.sessionId,
+      status: "planning",
+      revision: "plan-1",
+      hasPrompt: false,
+    });
+    runtime.setPlanMode = async () => {
+      throw new WebRuntimeRequestError("Plan changed", "PLAN_CONFLICT", 409);
+    };
+    assert.equal((await postPlan(planRequest)).status, 409);
+    assert.equal(planCalls, 1);
+    delete runtime.setPlanMode;
 
     const page = await documentRequest(`${launched.origin}/`);
     assert.equal(page.status, 200);
@@ -3033,6 +3095,57 @@ test("replays a bounded burst larger than Node's write high-water mark", async (
       records.map(({ event }) => event.type),
       Array.from({ length: 8 }, () => "burst"),
     );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("delivers a live burst above Node's high-water mark without disconnecting", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-live-burst-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers, signal: AbortSignal.timeout(5_000) },
+    );
+    const received = readEventRecords(response, 8);
+    for (let index = 0; index < 8; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    const records = await received;
+    assert.deepEqual(
+      records.map(({ event }) => event.detail?.index),
+      Array.from({ length: 8 }, (_, index) => index),
+    );
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
+test("disconnects a live SSE client when its buffered burst exceeds the budget", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-sse-live-budget-"));
+  const { host, launched, headers } = await startTestHost(testRuntime(cwd));
+  try {
+    const snapshot = (await (
+      await fetch(`${launched.origin}/api/snapshot`, { headers })
+    ).json()) as { cursor: number };
+    const response = await fetch(
+      `${launched.origin}/events?cursor=${snapshot.cursor}`,
+      { headers, signal: AbortSignal.timeout(5_000) },
+    );
+    const disconnected = assert.rejects(
+      readEventRecords(response, 20),
+      /terminated/,
+    );
+    for (let index = 0; index < 20; index++) {
+      host.publish("burst", { index, value: "x".repeat(20 * 1024) });
+    }
+    await disconnected;
   } finally {
     await host.stop();
     await rm(cwd, { recursive: true, force: true });

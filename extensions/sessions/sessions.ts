@@ -74,19 +74,37 @@ export function formatTimestamp(date: Date): string {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-export function formatRelativeTime(date: Date): string {
-  const now = new Date();
+export function formatRelativeTime(date: Date, now: Date = new Date()): string {
   const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
+  const diffSec = Math.max(0, Math.floor(diffMs / 1000));
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHour / 24);
 
-  if (diffSec < 60) return "Just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay === 1) return "Yesterday";
-  return `${diffDay}d ago`;
+  // Within 24 hours: display clock time and relative duration (m/h ago)
+  // This avoids midnight flips showing "0d ago" or cross-year jumps in early January
+  if (diffHour < 24) {
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    if (diffSec < 60) return `${time} (just now)`;
+    if (diffMin < 60) return `${time} (${diffMin}m ago)`;
+    return `${time} (${diffHour}h ago)`;
+  }
+
+  // Older than 24 hours: display calendar date and day/month/year distance
+  // If under a year, show MM-DD so year transitions in January stay readable
+  if (diffDay < 365) {
+    const dateStr = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    if (diffDay < 60) {
+      return `${dateStr} (${diffDay}d ago)`;
+    }
+    const months = Math.max(1, Math.floor(diffDay / 30));
+    return `${dateStr} (${months}mo ago)`;
+  }
+
+  // Cross-year older than 365 days
+  const years = Math.max(1, Math.floor(diffDay / 365));
+  const dateStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  return `${dateStr} (${years}y ago)`;
 }
 
 const cleanDisplayLine = (text: string) =>
@@ -127,6 +145,8 @@ export const buildSearchText = (session: SessionInfoLike): string =>
     session.id,
     session.cwd,
     session.firstMessage ?? "",
+    formatTimestamp(session.modified),
+    formatRelativeTime(session.modified),
   ]
     .join(" ")
     .toLowerCase();

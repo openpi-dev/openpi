@@ -305,6 +305,22 @@ function normalizeDelivery(value: unknown): WorkflowDetails["delivery"] {
   };
 }
 
+function normalizeTranscriptsOmitted(
+  value: unknown,
+): WorkflowDetails["transcriptsOmitted"] {
+  if (!value || typeof value !== "object") return undefined;
+  const record = value as Record<string, unknown>;
+  const positiveInt = (candidate: unknown) =>
+    typeof candidate === "number" &&
+    Number.isSafeInteger(candidate) &&
+    candidate > 0
+      ? candidate
+      : 0;
+  const agents = positiveInt(record.agents);
+  if (agents <= 0) return undefined;
+  return { agents, entries: positiveInt(record.entries) };
+}
+
 function normalizeTranscript(value: unknown): TranscriptEntry[] {
   if (!Array.isArray(value)) return [];
   const transcript: TranscriptEntry[] = [];
@@ -518,6 +534,10 @@ export function normalizePersistedWorkflowDetails(
     }
   }
 
+  const transcriptsOmitted = normalizeTranscriptsOmitted(
+    record.transcriptsOmitted,
+  );
+
   return {
     runId,
     sessionId:
@@ -550,6 +570,7 @@ export function normalizePersistedWorkflowDetails(
     ...(typeof record.logsDropped === "number" && record.logsDropped > 0
       ? { logsDropped: record.logsDropped }
       : {}),
+    ...(transcriptsOmitted ? { transcriptsOmitted } : {}),
     ...(agents.some((agent) => agent.callId)
       ? {
           graph: projectWorkflowGraph(workflowGraphRecords(agents)),
@@ -819,6 +840,13 @@ export function buildWorkflowReport(details: WorkflowDetails): string {
   if (totals) lines.push(`- Usage: ${totals}`);
   if (details.description) lines.push("", details.description);
   if (details.error) lines.push("", `**Error:** ${details.error}`);
+  if (details.transcriptsOmitted) {
+    const { agents, entries } = details.transcriptsOmitted;
+    lines.push(
+      "",
+      `_${agents} of ${details.agents.length} agent transcript(s) (${entries} entries) omitted from transcripts.json to stay within its byte budget; execution facts above are complete._`,
+    );
+  }
 
   for (const group of phaseGroups(details, true)) {
     lines.push("", `## ${group.title}`, "");
@@ -1380,8 +1408,9 @@ export class WorkflowDashboard {
               formatElapsed(agent.startedAt, agent.finishedAt),
             ],
             errorText: agent.error,
-            emptyText:
-              "transcript unavailable (this run predates transcript capture)",
+            emptyText: details.transcriptsOmitted
+              ? `transcript unavailable (this run omitted ${details.transcriptsOmitted.agents} agent transcript(s) from transcripts.json to stay within its byte budget)`
+              : "transcript unavailable (this run predates transcript capture)",
           };
         },
         close: () => {
@@ -1558,6 +1587,17 @@ export class WorkflowDashboard {
       ),
     );
 
+    // Run-level notice mirroring the saved report and completion alert: without
+    // it, opening a dropped agent's empty transcript reads as "predates capture"
+    // with no on-screen evidence anything was omitted (issue #558).
+    const omissionNotice = d.transcriptsOmitted
+      ? theme.fg(
+          "warning",
+          ` ${d.transcriptsOmitted.agents} agent transcript(s) (${d.transcriptsOmitted.entries} entries) omitted from transcripts.json (byte budget).`,
+        )
+      : undefined;
+    if (omissionNotice) lines.push(omissionNotice);
+
     const groups = this.groups();
     this.phaseIndex = Math.min(this.phaseIndex, Math.max(0, groups.length - 1));
     const selectedGroup = groups[this.phaseIndex];
@@ -1568,7 +1608,8 @@ export class WorkflowDashboard {
     // the agent list is what the view exists for.
     const logBudget = Math.max(0, Math.min(3, height - 12));
     const recentLogs = (d.logs ?? []).slice(-logBudget);
-    const panelHeight = height - 3 - recentLogs.length;
+    const panelHeight =
+      height - 3 - recentLogs.length - (omissionNotice ? 1 : 0);
     const bodyHeight = Math.max(0, panelHeight - 2);
 
     // Left: phases sidebar.

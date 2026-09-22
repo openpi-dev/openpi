@@ -28,6 +28,7 @@ import {
 
 /** How often the scheduler looks for due jobs. */
 const POLL_MS = 30_000;
+import { notifyWebCommand } from "../shared/web-command-feedback.ts";
 
 interface CronRuntime {
   now(): number;
@@ -153,7 +154,8 @@ export default function cron(
       const parsed = parseCronCommand(rawArgs);
 
       if (parsed.action === "help") {
-        ctx.ui.notify(
+        notifyWebCommand(
+          ctx,
           parsed.error ??
             "Usage: /cron every <5m> <prompt> · /cron in <30s> <prompt> · /cron list · /cron remove <id>\nJobs live in this session only and fire when the session is idle.",
           parsed.error ? "warning" : "info",
@@ -163,7 +165,11 @@ export default function cron(
 
       if (parsed.action === "list") {
         if (jobs.length === 0) {
-          ctx.ui.notify("No scheduled prompts in this session.", "info");
+          notifyWebCommand(
+            ctx,
+            "No scheduled prompts in this session.",
+            "info",
+          );
           return;
         }
         const now = runtime.now();
@@ -177,7 +183,7 @@ export default function cron(
             : "once";
           return `${job.id}. ${when} · next in ${inSeconds}s · ${job.prompt}`;
         });
-        ctx.ui.notify(lines.join("\n"), "info");
+        notifyWebCommand(ctx, lines.join("\n"), "info");
         return;
       }
 
@@ -185,7 +191,8 @@ export default function cron(
         const before = jobs.length;
         jobs = jobs.filter((job) => job.id !== parsed.id);
         if (jobs.length === 0) stopTicker();
-        ctx.ui.notify(
+        notifyWebCommand(
+          ctx,
           jobs.length === before
             ? `No scheduled prompt with id ${parsed.id}.`
             : `Removed scheduled prompt ${parsed.id}.`,
@@ -195,7 +202,8 @@ export default function cron(
       }
 
       if (jobs.length >= CRON_MAX_JOBS) {
-        ctx.ui.notify(
+        notifyWebCommand(
+          ctx,
           `A session can have at most ${CRON_MAX_JOBS} scheduled prompts. Remove one before adding another.`,
           "warning",
         );
@@ -206,7 +214,8 @@ export default function cron(
       const now = runtime.now();
       const nextRunAt = now + intervalMs;
       if (!Number.isSafeInteger(now) || !Number.isSafeInteger(nextRunAt)) {
-        ctx.ui.notify(
+        notifyWebCommand(
+          ctx,
           "Scheduled time is too far in the future. Use a shorter duration.",
           "warning",
         );
@@ -220,7 +229,8 @@ export default function cron(
       };
       jobs.push(job);
       startTicker();
-      ctx.ui.notify(
+      notifyWebCommand(
+        ctx,
         parsed.oneShot
           ? `Scheduled prompt ${job.id} once in ${formatInterval(intervalMs)}.`
           : `Scheduled prompt ${job.id} every ${formatInterval(intervalMs)}.`,

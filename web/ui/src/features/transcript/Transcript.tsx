@@ -45,12 +45,14 @@ import {
 } from "../../lib/format.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import { PlanCard, planPresentation } from "./PlanCard.tsx";
 
 type PersistedEntry = NonNullable<
   WebSnapshot["selectedSession"]
 >["entries"][number];
 interface DisplayEntry {
   key: string;
+  timingKey?: string;
   timestamp?: string;
   message: WebLiveMessage;
 }
@@ -647,6 +649,16 @@ function MessageActions({
 }
 
 function CustomResult({ message }: { message: WebLiveMessage }) {
+  const { t } = useTranslation();
+  if (message.customType === "openpi-web-command-feedback")
+    return (
+      <div className="command-feedback" role="status">
+        {message.content}
+        {message.truncation?.truncated && (
+          <p>{t("commandFeedbackTruncated")}</p>
+        )}
+      </div>
+    );
   const details = record(message.details);
   if (message.customType === "subagent-result") {
     return (
@@ -701,63 +713,82 @@ function isEmptyToolOutput(content: string) {
   return ["", "[]", "{}", "null"].includes(content.trim());
 }
 
+function messageIdentity(message: WebLiveMessage) {
+  if (message.role === "toolResult" && message.toolCallId)
+    return `tool-result-${message.toolCallId}`;
+  if (message.timestamp !== undefined)
+    return `message-${message.role}-${message.timestamp}`;
+  return undefined;
+}
+
 function buildEntries(
   snapshot: WebSnapshot,
   liveMessages: LiveEntry[],
 ): DisplayEntry[] {
   const persisted = snapshot.selectedSession?.entries ?? [];
+  const liveKeys = new Map(
+    liveMessages.map((live) => [
+      messageIdentity(live.message) ?? live.key,
+      live.key,
+    ]),
+  );
   const entries = persisted.flatMap((entry: PersistedEntry): DisplayEntry[] =>
     entry.type === "message" && entry.message
-      ? [{ key: entry.id, timestamp: entry.timestamp, message: entry.message }]
+      ? [
+          {
+            key: messageIdentity(entry.message) ?? entry.id,
+            timingKey: liveKeys.get(messageIdentity(entry.message) ?? entry.id),
+            timestamp: entry.timestamp,
+            message: entry.message,
+          },
+        ]
       : [],
   );
-  const signature = (message: WebLiveMessage) =>
-    JSON.stringify([
-      message.role,
-      message.content,
-      message.parts?.map((part) =>
-        part.type === "image"
-          ? [part.type, part.mimeType, part.name]
-          : part.type,
-      ),
-      message.stopReason,
-      message.errorMessage,
-      message.toolCallId,
-    ]);
-  const signatures = new Set(entries.map((entry) => signature(entry.message)));
-  const persistedToolIds = new Set(
+  // Empty body text is common for thinking/tool-only messages. Reconcile by
+  // native identity; legacy projections must match all parts, once per entry.
+  const signatures = new Map<string, number>();
+  for (const entry of entries) {
+    const signature =
+      messageIdentity(entry.message) ?? JSON.stringify(entry.message);
+    signatures.set(signature, (signatures.get(signature) ?? 0) + 1);
+  }
+  const submittedCommands = new Set(
     entries.flatMap((entry) =>
-      entry.message.role === "toolResult" && entry.message.toolCallId
-        ? [entry.message.toolCallId]
-        : [],
+      entry.message.commandId ? [`optimistic-${entry.message.commandId}`] : [],
     ),
   );
   for (const live of liveMessages) {
-    if (
-      live.message.role === "toolResult" && live.message.toolCallId
-        ? persistedToolIds.has(live.message.toolCallId)
-        : signatures.has(signature(live.message))
-    )
+    if (submittedCommands.has(live.key)) continue;
+    const identity = messageIdentity(live.message);
+    const signature = identity ?? JSON.stringify(live.message);
+    const matches = signatures.get(signature) ?? 0;
+    if (matches > 0) {
+      signatures.set(signature, matches - 1);
       continue;
+    }
     entries.push({
-      key: live.key,
+      key: identity ?? live.key,
+      timingKey: live.key,
       timestamp: new Date().toISOString(),
       message: live.message,
     });
   }
   let setupEpisode = false;
-  return entries.filter(({ message }) => {
+  const visible: DisplayEntry[] = [];
+  for (const entry of entries) {
+    const { message } = entry;
     if (message.customType === "openpi-setup-request") {
+      // The native marker identifies the episode. Hide its Web command echo
+      // too, otherwise the hidden replies leave a permanently waiting turn.
+      if (visible.at(-1)?.message.customType === "openpi-web-command-input")
+        visible.pop();
       setupEpisode = true;
-      return false;
+      continue;
     }
-    if (!setupEpisode) return true;
-    if (message.role === "user") {
-      setupEpisode = false;
-      return true;
-    }
-    return false;
-  });
+    if (message.role === "user") setupEpisode = false;
+    if (!setupEpisode) visible.push(entry);
+  }
+  return visible;
 }
 
 function ProcessSequence({
@@ -837,16 +868,12 @@ function groupRows(rows: RenderRow[], active: boolean, defaultOpen: boolean) {
   blocks.forEach((block, index) => {
     if (block.process) lastProcess = index;
   });
-  return blocks.map((block, index) => {
+  return blocks.flatMap((block, index) => {
     const blockKey = `${block.process ? "process" : "rows"}-${block.rows[0]?.key}`;
     if (!block.process) {
-      return (
-        <Fragment key={blockKey}>
-          {block.rows.map((row) => (
-            <Fragment key={row.key}>{row.content}</Fragment>
-          ))}
-        </Fragment>
-      );
+      return block.rows.map((row) => (
+        <Fragment key={row.key}>{row.content}</Fragment>
+      ));
     }
     return (
       <ProcessSequence
@@ -995,6 +1022,21 @@ export function Transcript(props: TranscriptProps) {
           familyIds.add(part.id);
       });
     });
+    const planIds = new Set(
+      entries.flatMap(({ message }) =>
+        (message.parts ?? []).flatMap((part) =>
+          part.type === "toolCall" &&
+          part.name === "plan_ready" &&
+          part.id &&
+          planPresentation(
+            results.get(part.id) ??
+              liveTools.find((item) => item.call.id === part.id)?.result,
+          )
+            ? [part.id]
+            : [],
+        ),
+      ),
+    );
     const turnItems: Array<{ id: number; title: string }> = [];
     let turn = 0;
     let latestUserPrompt: string | undefined;
@@ -1021,6 +1063,17 @@ export function Transcript(props: TranscriptProps) {
     const rendered = entries.flatMap((entry, index): RenderRow[] => {
       const message = entry.message;
       if (message.role === "custom") {
+        // CustomResult has no presentation for other extension messages.
+        // Empty articles still occupy space and disrupt adjacent tool groups.
+        if (
+          message.display === false ||
+          ![
+            "openpi-web-command-feedback",
+            "subagent-result",
+            "workflow-result",
+          ].includes(message.customType ?? "")
+        )
+          return [];
         return [
           {
             key: entry.key,
@@ -1071,7 +1124,51 @@ export function Transcript(props: TranscriptProps) {
       }
       if (message.role === "assistant") {
         const detailRows: RenderRow[] = [];
+        const parts = message.parts ?? [];
+        const lastTextIndex = parts.reduce(
+          (last, part, partIndex) => (part.type === "text" ? partIndex : last),
+          -1,
+        );
+        const appendText = (text: string, key: string, actions: boolean) => {
+          if (!text.trim()) return;
+          detailRows.push({
+            key,
+            turn,
+            kind: "response",
+            content: (
+              <article
+                className={`message-row assistant response${actions && lastAssistantByTurn.has(index) ? " final-response" : ""}`}
+              >
+                <div className="message-content">
+                  <Markdown>{text}</Markdown>
+                </div>
+                {actions && lastAssistantByTurn.has(index) && (
+                  <MessageActions
+                    content={message.content}
+                    editable={false}
+                    timestamp={entry.timestamp}
+                    onResend={props.onResend}
+                  />
+                )}
+              </article>
+            ),
+          });
+        };
         message.parts?.forEach((part, partIndex) => {
+          if (part.type === "text" && parts[partIndex - 1]?.type !== "text") {
+            let text = part.text;
+            let end = partIndex + 1;
+            while (parts[end]?.type === "text") {
+              const next = parts[end];
+              if (next?.type === "text") text += next.text;
+              end++;
+            }
+            appendText(
+              text,
+              `${entry.key}-text-${partIndex}`,
+              end > lastTextIndex,
+            );
+          }
           if (part.type === "thinking") {
             const isLive =
               active && props.liveRunning && index === entries.length - 1;
@@ -1091,8 +1188,10 @@ export function Transcript(props: TranscriptProps) {
                       level={
                         isLive ? props.snapshot.thinking?.level : undefined
                       }
-                      start={props.thinkingStarts[entry.key]}
-                      duration={props.thinkingDurations[entry.key]}
+                      start={props.thinkingStarts[entry.timingKey ?? entry.key]}
+                      duration={
+                        props.thinkingDurations[entry.timingKey ?? entry.key]
+                      }
                       defaultOpen={
                         props.snapshot.preferences.expandThinking === true
                       }
@@ -1108,31 +1207,42 @@ export function Transcript(props: TranscriptProps) {
               : undefined;
             const persistedResult = part.id ? results.get(part.id) : undefined;
             const result = persistedResult ?? live?.result;
-            const card = isEvidenceTool(part.name) ? (
-              <ToolEvidence
-                key={`${entry.key}-${part.id || partIndex}-evidence`}
-                call={part}
-                result={result}
-                liveState={persistedResult ? undefined : live?.state}
-                cwd={selected?.cwd}
-              />
-            ) : (
-              familyCard(
-                part,
-                result,
-                active
-                  ? props.snapshot.runtime.capabilities.subagents?.items
-                  : undefined,
-                props.onInspectSubagent,
-              )
-            );
+            const card =
+              part.name === "plan_ready" &&
+              result &&
+              planPresentation(result) ? (
+                <PlanCard
+                  key={`${entry.key}-${part.id || partIndex}-plan`}
+                  result={result}
+                />
+              ) : isEvidenceTool(part.name) ? (
+                <ToolEvidence
+                  key={`${entry.key}-${part.id || partIndex}-evidence`}
+                  call={part}
+                  result={result}
+                  liveState={persistedResult ? undefined : live?.state}
+                  cwd={selected?.cwd}
+                />
+              ) : (
+                familyCard(
+                  part,
+                  result,
+                  active
+                    ? props.snapshot.runtime.capabilities.subagents?.items
+                    : undefined,
+                  props.onInspectSubagent,
+                )
+              );
             const args = parseArguments(part.arguments);
             const toolIcon = iconForTool(part.name);
             const status = resultStatus(result);
             detailRows.push({
               key: `${entry.key}-tool-${part.id || partIndex}`,
               turn,
-              kind: "process",
+              kind:
+                part.name === "plan_ready" && result && planPresentation(result)
+                  ? "response"
+                  : "process",
               processType: /^(subagent|workflow)/u.test(part.name)
                 ? "activity"
                 : "tool",
@@ -1161,29 +1271,8 @@ export function Transcript(props: TranscriptProps) {
             });
           }
         });
-        if (message.content.trim())
-          detailRows.push({
-            key: `${entry.key}-answer`,
-            turn,
-            kind: "response",
-            content: (
-              <article
-                className={`message-row assistant response${lastAssistantByTurn.has(index) ? " final-response" : ""}`}
-              >
-                <div className="message-content">
-                  <Markdown>{message.content}</Markdown>
-                </div>
-                {lastAssistantByTurn.has(index) && (
-                  <MessageActions
-                    content={message.content}
-                    editable={false}
-                    timestamp={entry.timestamp}
-                    onResend={props.onResend}
-                  />
-                )}
-              </article>
-            ),
-          });
+        if (lastTextIndex < 0)
+          appendText(message.content, `${entry.key}-answer`, true);
         if (
           message.stopReason === "error" ||
           message.stopReason === "aborted"
@@ -1217,6 +1306,22 @@ export function Transcript(props: TranscriptProps) {
         return detailRows;
       }
       if (message.role === "toolResult") {
+        if (message.toolCallId && planIds.has(message.toolCallId)) return [];
+        if (planPresentation(message))
+          return [
+            {
+              key: entry.key,
+              turn,
+              kind: "response",
+              content: (
+                <article className="message-row assistant detail-only">
+                  <div className="message-content">
+                    <PlanCard result={message} />
+                  </div>
+                </article>
+              ),
+            },
+          ];
         if (message.toolCallId && specializedIds.has(message.toolCallId))
           return [];
         if (message.toolCallId && familyIds.has(message.toolCallId)) return [];
@@ -1264,7 +1369,11 @@ export function Transcript(props: TranscriptProps) {
           {
             key: entry.key,
             turn,
-            kind: "process",
+            // Human answers are settled evidence, outside moving process groups.
+            kind:
+              toolName === "ask_user" || toolName === "human_handoff"
+                ? "response"
+                : "process",
             processType: family ? "activity" : "tool",
             processStatus: status,
             error: status === "error",

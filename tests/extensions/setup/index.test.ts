@@ -213,6 +213,23 @@ test("setup broadcasts its episode demand for interaction tools", async () => {
   assert.deepEqual(h.setupEpisodeStates.at(-1), { active: false });
 });
 
+test("both setup entry flows require an explicit user choice before replacing invalid requested values", async () => {
+  for (const request of [
+    "",
+    'Set ui.footerStyle to "compact" and workflows.concurrency to 0.',
+  ]) {
+    const h = visibilityHarness();
+    await h.emit("session_start");
+    await h.runCommand("openpi-setup", request);
+    const prompt = JSON.stringify(h.setupRequests());
+    assert.match(prompt, /invalid requested value/);
+    assert.match(prompt, /legal values or range/);
+    assert.match(prompt, /Do not clamp, substitute, or reinterpret/);
+    assert.match(prompt, /explicitly chooses a legal alternative/);
+    assert.match(prompt, /prior assistant explanation is not user consent/);
+  }
+});
+
 test("registers the canonical setup command, legacy alias, and one constrained tool", () => {
   const h = visibilityHarness();
   assert.deepEqual([...h.commands.keys()].sort(), [
