@@ -147,22 +147,39 @@ test("bounded preview reports omitted messages and content bytes", () => {
   assert.match(preview.subtitle, /100 messages/);
 });
 
-test("formatRelativeTime formats today as time and past dates as calendar date with relative duration", () => {
-  const now = new Date();
+test("formatRelativeTime deterministically formats relative hours and calendar dates with frozen clocks", () => {
+  const baseNow = new Date("2026-09-21T12:00:00");
+  const tenMins = new Date("2026-09-21T11:50:00");
+  const twoHours = new Date("2026-09-21T10:00:00");
+  const threeDays = new Date("2026-09-18T12:00:00");
+  const twelveDays = new Date("2026-09-09T12:00:00");
 
-  // Today
-  const tenMinsAgo = new Date(now.getTime() - 10 * 60 * 1000);
-  assert.match(formatRelativeTime(tenMinsAgo), /^\d{2}:\d{2} \(10m ago\)$/);
+  assert.equal(formatRelativeTime(tenMins, baseNow), "11:50 (10m ago)");
+  assert.equal(formatRelativeTime(twoHours, baseNow), "10:00 (2h ago)");
+  assert.equal(formatRelativeTime(threeDays, baseNow), "09-18 (3d ago)");
+  assert.equal(formatRelativeTime(twelveDays, baseNow), "09-09 (12d ago)");
 
-  const twoHoursAgo = new Date(now.getTime() - 2 * 3600 * 1000);
-  assert.match(formatRelativeTime(twoHoursAgo), /^\d{2}:\d{2} \(2h ago\)$/);
+  // Midnight boundary test case: 10 minutes ago across midnight (23:55 viewed at 00:05)
+  const midnightNow = new Date("2026-09-21T00:05:00");
+  const midnightTenMinsAgo = new Date("2026-09-20T23:55:00");
+  assert.equal(
+    formatRelativeTime(midnightTenMinsAgo, midnightNow),
+    "23:55 (10m ago)",
+  );
 
-  // Past days (same year)
-  const threeDaysAgo = new Date(now.getTime() - 3 * 86400 * 1000);
-  assert.match(formatRelativeTime(threeDaysAgo), /^\d{2}-\d{2} \(3d ago\)$/);
+  // Cross-year boundary test case: New Year 00:05 viewing New Year's Eve 23:55
+  const janNow = new Date("2027-01-01T00:05:00");
+  const decEve = new Date("2026-12-31T23:55:00");
+  assert.equal(formatRelativeTime(decEve, janNow), "23:55 (10m ago)");
 
-  const twelveDaysAgo = new Date(now.getTime() - 12 * 86400 * 1000);
-  assert.match(formatRelativeTime(twelveDaysAgo), /^\d{2}-\d{2} \(12d ago\)$/);
+  // Cross-year within 60 days
+  const jan3rd = new Date("2027-01-03T12:00:00");
+  const dec30 = new Date("2026-12-30T12:00:00");
+  assert.equal(formatRelativeTime(dec30, jan3rd), "12-30 (4d ago)");
+
+  // Over 1 year ago
+  const twoYearsLater = new Date("2028-09-21T12:00:00");
+  assert.equal(formatRelativeTime(baseNow, twoYearsLater), "2026-09 (2y ago)");
 });
 
 test("session search matches formatted dates and years", () => {
