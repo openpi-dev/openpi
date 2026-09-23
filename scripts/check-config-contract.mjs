@@ -52,6 +52,27 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["Web theme"],
   },
   {
+    path: "ui.webChatWidth",
+    writerTokens: ["params.ui_web_chat_width"],
+    statusTokens: ["config.ui.webChatWidth"],
+    readmeTerms: ["聊天宽度"],
+    setupTerms: ["chat width"],
+  },
+  {
+    path: "ui.webChatFontSize",
+    writerTokens: ["params.ui_web_chat_font_size"],
+    statusTokens: ["config.ui.webChatFontSize"],
+    readmeTerms: ["聊天字号"],
+    setupTerms: ["font size"],
+  },
+  {
+    path: "ui.webExpandThinking",
+    writerTokens: ["params.ui_web_expand_thinking"],
+    statusTokens: ["config.ui.webExpandThinking"],
+    readmeTerms: ["思考块"],
+    setupTerms: ["thinking blocks"],
+  },
+  {
     path: "ui.showHeader",
     writerTokens: ["params.ui_show_header"],
     statusTokens: ["config.ui.showHeader"],

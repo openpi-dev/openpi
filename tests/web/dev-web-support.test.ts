@@ -1,12 +1,31 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  createDevelopmentTokenPlugin,
   createBackendStartupMonitor,
   parseDevelopmentPort,
   resolveDevelopmentPorts,
   selectDevelopmentPort,
   waitForBackend,
 } from "../../scripts/dev-web-support.ts";
+
+test("development HTML receives the current token for direct browser navigation", () => {
+  const token = "a".repeat(64);
+  const plugin = createDevelopmentTokenPlugin(token);
+
+  assert.equal(plugin.name, "openpi-development-token");
+  assert.deepEqual(plugin.transformIndexHtml.handler(), [
+    {
+      tag: "meta",
+      attrs: { name: "openpi-web-token", content: token },
+      injectTo: "head-prepend",
+    },
+  ]);
+  assert.throws(
+    () => createDevelopmentTokenPlugin("not-a-token"),
+    /64 hexadecimal characters/u,
+  );
+});
 
 test("development ports keep an available default", async () => {
   const probes: number[] = [];

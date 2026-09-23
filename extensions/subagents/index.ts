@@ -83,7 +83,9 @@ import {
 } from "../shared/tool-surface.ts";
 import {
   projectSubagentCapability,
+  projectSubagentDetail,
   registerWebCapability,
+  registerWebCapabilityActions,
 } from "../shared/web-observer-registry.ts";
 import {
   createWorktree,
@@ -527,6 +529,7 @@ export default function (
   const widgetKey = "subagent-navigation";
   let navigationManager: SubagentManagerShape | undefined;
   let unregisterWebCapability: (() => void) | undefined;
+  let unregisterWebCapabilityActions: (() => void) | undefined;
   let widgetVisible = false;
   let widgetEntryKey: string | undefined;
   let requestWidgetRender: (() => void) | undefined;
@@ -575,6 +578,10 @@ export default function (
             ? registerWebCapability(scope, {
                 kind: "subagents",
                 snapshot: () => projectSubagentCapability(manager.view.list()),
+                detail: (id) => {
+                  const snapshot = manager.view.get(id);
+                  return snapshot ? projectSubagentDetail(snapshot) : undefined;
+                },
                 subscribe: (listener) => manager.view.subscribe(listener),
               })
             : undefined;
@@ -585,6 +592,38 @@ export default function (
         return manager;
       });
     return managerPromise;
+  };
+
+  const spawnBtw = async (
+    prompt: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ) => {
+    const manager = await getManager();
+    const snap = await runTool(
+      getRuntime(),
+      manager.spawn("pi", {
+        origin: "btw",
+        prompt,
+        title: normalizeSubagentTitle(deriveBtwTitle(prompt), "by the way"),
+        cwd: ctx.cwd,
+        parent: {
+          parentCwd: ctx.cwd,
+          projectTrusted: ctx.isProjectTrusted(),
+          inheritedModel: ctx.model
+            ? { provider: ctx.model.provider, id: ctx.model.id }
+            : undefined,
+          inheritedThinkingLevel: pi.getThinkingLevel(),
+          modelRegistry: ctx.modelRegistry,
+        },
+      }),
+      {
+        signal,
+        interruptMessage: "Side conversation start aborted.",
+      },
+    );
+    persistId(snap.id);
+    return { manager, snap };
   };
 
   const stripEntry = () =>
@@ -753,6 +792,44 @@ export default function (
     refreshAgentTypes(ctx.cwd, ctx.isProjectTrusted());
     registerStableToolFamily();
     sessionContext = ctx;
+    const scope = ctx.sessionManager;
+    unregisterWebCapabilityActions?.();
+    unregisterWebCapabilityActions = registerWebCapabilityActions(scope, {
+      kind: "subagents",
+      run: async (request, signal) => {
+        if (sessionContext?.sessionManager !== scope) {
+          throw new Error(
+            "The active Session changed. Reopen side conversation.",
+          );
+        }
+        if (request.action === "spawn-btw") {
+          const { snap } = await spawnBtw(request.prompt, ctx, signal);
+          return projectSubagentDetail(snap);
+        }
+
+        const manager = await getManager();
+        const existing = manager.view.get(request.id);
+        if (!existing || existing.origin !== "btw") {
+          throw new Error(`Unknown side conversation id "${request.id}".`);
+        }
+        if (request.action === "send-btw") {
+          await runTool(getRuntime(), manager.send(request.id, request.text), {
+            signal,
+            interruptMessage: "Side conversation send aborted.",
+          });
+          resultDelivery.consume([request.id]);
+        } else {
+          await runTool(getRuntime(), manager.cancel([request.id]), {
+            signal,
+            interruptMessage: "Side conversation cancellation aborted.",
+          });
+        }
+        const current = manager.view.get(request.id);
+        if (!current)
+          throw new Error("Side conversation is no longer available.");
+        return projectSubagentDetail(current);
+      },
+    });
     settledAcknowledgedAt = 0;
     if (ctx.hasUI) ui = ctx.ui;
     installSubagentNavigation(ctx);
@@ -783,6 +860,8 @@ export default function (
     unsubStatus = undefined;
     unregisterWebCapability?.();
     unregisterWebCapability = undefined;
+    unregisterWebCapabilityActions?.();
+    unregisterWebCapabilityActions = undefined;
     try {
       ui?.setStatus("subagents", undefined);
       sessionContext?.ui.setWidget(widgetKey, undefined);
@@ -1569,27 +1648,10 @@ export default function (
       if (!prompt) return;
     }
 
-    const manager = await getManager();
+    let manager: SubagentManagerShape;
     let snap: SubagentSnapshot;
     try {
-      snap = await runTool(
-        getRuntime(),
-        manager.spawn("pi", {
-          origin: "btw",
-          prompt,
-          title: normalizeSubagentTitle(deriveBtwTitle(prompt), "by the way"),
-          cwd: ctx.cwd,
-          parent: {
-            parentCwd: ctx.cwd,
-            projectTrusted: ctx.isProjectTrusted(),
-            inheritedModel: ctx.model
-              ? { provider: ctx.model.provider, id: ctx.model.id }
-              : undefined,
-            inheritedThinkingLevel: pi.getThinkingLevel(),
-            modelRegistry: ctx.modelRegistry,
-          },
-        }),
-      );
+      ({ manager, snap } = await spawnBtw(prompt, ctx));
     } catch (error) {
       ctx.ui.notify(
         error instanceof Error ? error.message : String(error),
@@ -1597,8 +1659,6 @@ export default function (
       );
       return;
     }
-    persistId(snap.id);
-
     await openSubagentTakeover(ctx, manager.view, snap.id, {
       badge: "by the way",
     });

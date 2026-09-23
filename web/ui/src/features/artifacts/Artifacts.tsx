@@ -1,23 +1,39 @@
+import { Check, Clipboard, Download, RefreshCw, X } from "lucide-react";
 import {
+  forwardRef,
+  type ReactNode,
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
-  type ReactNode,
 } from "react";
+import { useTranslation } from "react-i18next";
 import type { ArtifactPreview } from "../../../../protocol/artifacts.ts";
-import { WebClient } from "../../protocol/client.ts";
 import { Markdown } from "../../components/Markdown.tsx";
+import { copyText } from "../../lib/clipboard.ts";
+import { WebClient } from "../../protocol/client.ts";
 import { ArtifactContext } from "./context.ts";
 
-export function ArtifactProvider({
-  sessionId,
-  children,
-}: {
-  sessionId?: string;
-  children?: ReactNode;
-}) {
+export interface ArtifactProviderHandle {
+  close: () => void;
+}
+
+export const ArtifactProvider = forwardRef<
+  ArtifactProviderHandle,
+  {
+    sessionId?: string;
+    children?: ReactNode;
+    disabled?: boolean;
+    onOpen?: () => void;
+    onClose?: () => void;
+  }
+>(function ArtifactProvider(
+  { sessionId, children, disabled = false, onOpen, onClose },
+  ref,
+) {
+  const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [request, setRequest] = useState<{
     sessionId?: string;
@@ -27,35 +43,55 @@ export function ArtifactProvider({
   const [preview, setPreview] = useState<ArtifactPreview | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [copyStatus, setCopyStatus] = useState<"copied" | "failed" | null>(
+    null,
+  );
   const opener = useRef<HTMLElement | null>(null);
+  const copyGeneration = useRef(0);
   const closeButton = useRef<HTMLButtonElement>(null);
   const downloadAbort = useRef<AbortController | null>(null);
   const blobUrls = useRef(new Set<string>());
   const nextParent = useRef<string | undefined>(undefined);
   const open = useCallback(
     (reference: string, parent?: string) => {
-      opener.current =
-        document.activeElement instanceof HTMLElement
-          ? document.activeElement
-          : null;
+      if (disabled) return;
+      onOpen?.();
+      const active = document.activeElement;
+      if (!(active instanceof HTMLElement && active.closest(".artifact-panel")))
+        opener.current = active instanceof HTMLElement ? active : null;
+      copyGeneration.current++;
       setPreview(null);
       setError(null);
+      setCopyStatus(null);
       nextParent.current = parent;
       setRequest({ reference, parent, sessionId });
     },
-    [sessionId],
+    [disabled, onOpen, sessionId],
   );
   const close = useCallback(() => {
+    copyGeneration.current++;
     setRequest(null);
     setPreview(null);
+    setCopyStatus(null);
+    onClose?.();
     opener.current?.focus();
-  }, []);
+  }, [onClose]);
+  useImperativeHandle(ref, () => ({ close }), [close]);
   useEffect(() => {
     if (request && request.sessionId !== sessionId) {
+      copyGeneration.current++;
       setRequest(null);
       setPreview(null);
+      setCopyStatus(null);
     }
   }, [sessionId, request]);
+  useEffect(() => {
+    if (!disabled || !request) return;
+    copyGeneration.current++;
+    setRequest(null);
+    setPreview(null);
+    setCopyStatus(null);
+  }, [disabled, request]);
   useEffect(() => {
     if (!request || !sessionId || request.sessionId !== sessionId) return;
     const controller = new AbortController();
@@ -139,6 +175,8 @@ export function ArtifactProvider({
     };
   }, [client, request, sessionId]);
   const context = useMemo(() => ({ open }), [open]);
+  const path = preview?.artifact.path ?? request?.reference ?? "";
+  const name = preview?.artifact.name ?? path.split(/[\\/]/u).at(-1) ?? path;
   const download = async () => {
     if (!preview || busy) return;
     const controller = new AbortController();
@@ -171,10 +209,9 @@ export function ArtifactProvider({
     <ArtifactContext.Provider value={context}>
       {children}
       {request && (
-        <dialog
-          open
+        <aside
           className="artifact-panel"
-          aria-label="File preview"
+          aria-label={t("filePreview")}
           onKeyDown={(event) => {
             if (event.key === "Escape") {
               event.stopPropagation();
@@ -183,76 +220,118 @@ export function ArtifactProvider({
           }}
         >
           <header>
-            <h2>File preview</h2>
-            <button ref={closeButton} type="button" onClick={close}>
-              Close preview
+            <div>
+              <small>
+                {t("filePreview")} · {t("artifactReadOnly")}
+              </small>
+              <h2 title={name}>{name}</h2>
+            </div>
+            <button
+              ref={closeButton}
+              type="button"
+              aria-label={t("closePreview")}
+              title={t("closePreview")}
+              onClick={close}
+            >
+              <X aria-hidden="true" />
             </button>
           </header>
-          <p className="artifact-source">
-            {preview?.artifact.path ?? request.reference}
-          </p>
-          <p>Read-only access · Session {sessionId}</p>
-          <div className="artifact-actions">
-            <button
-              type="button"
-              onClick={() => {
-                nextParent.current = undefined;
-                setRequest((value) =>
-                  value
-                    ? {
-                        sessionId,
-                        reference: preview?.artifact.path ?? value.reference,
-                        ...(preview ? {} : { parent: value.parent }),
-                      }
-                    : null,
-                );
-              }}
-            >
-              Refresh
-            </button>
-            <button
-              type="button"
-              disabled={!preview || busy}
-              onClick={() => void download()}
-            >
-              {busy ? "Downloading…" : "Download"}
-            </button>
-          </div>
-          {error && (
-            <p role="status" className="evidence-warning">
-              {preview ? "Showing an older preview. " : ""}
-              {error}
-            </p>
-          )}
-          {!preview && !error && <p role="status">Reading file…</p>}
-          {preview && (
-            <>
-              <p className="artifact-revision">
-                Version: <code>{preview.artifact.revision}</code> ·{" "}
-                {preview.artifact.bytes} bytes
+          <div className="artifact-panel-body">
+            <div className="artifact-source">
+              <code title={path}>{path}</code>
+              <button
+                type="button"
+                aria-label={t("copyFilePath")}
+                title={t("copyFilePath")}
+                onClick={() => {
+                  const generation = ++copyGeneration.current;
+                  void copyText(path).then((success) => {
+                    if (generation === copyGeneration.current)
+                      setCopyStatus(success ? "copied" : "failed");
+                  });
+                }}
+              >
+                {copyStatus === "copied" ? (
+                  <Check aria-hidden="true" />
+                ) : (
+                  <Clipboard aria-hidden="true" />
+                )}
+              </button>
+            </div>
+            {copyStatus && (
+              <p role="status">
+                {t(copyStatus === "copied" ? "filePathCopied" : "copyFailed")}
               </p>
-              {preview.truncated && (
-                <p className="evidence-warning">
-                  Preview truncated. Download the file for the complete content.
+            )}
+            <p className="artifact-session">
+              {t("artifactSession", { sessionId })}
+            </p>
+            <div className="artifact-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  copyGeneration.current++;
+                  setCopyStatus(null);
+                  nextParent.current = undefined;
+                  setRequest((value) =>
+                    value
+                      ? {
+                          sessionId,
+                          reference: preview?.artifact.path ?? value.reference,
+                          ...(preview ? {} : { parent: value.parent }),
+                        }
+                      : null,
+                  );
+                }}
+              >
+                <RefreshCw aria-hidden="true" /> {t("refreshFile")}
+              </button>
+              <button
+                type="button"
+                disabled={!preview || busy}
+                onClick={() => void download()}
+              >
+                <Download aria-hidden="true" />{" "}
+                {busy ? t("downloadingFile") : t("downloadFile")}
+              </button>
+            </div>
+            {error && (
+              <p role="status" className="evidence-warning">
+                {preview ? t("artifactOlderPreview") : ""}
+                {error}
+              </p>
+            )}
+            {!preview && !error && <p role="status">{t("readingFile")}</p>}
+            {preview && (
+              <>
+                <p className="artifact-revision">
+                  {t("artifactVersion")}:{" "}
+                  <code>{preview.artifact.revision}</code> ·{" "}
+                  {t("artifactBytes", { count: preview.artifact.bytes })}
                 </p>
-              )}
-              {preview.text === undefined ? (
-                <p>This file type cannot be previewed. Use Download.</p>
-              ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
-                <ArtifactContext.Provider
-                  value={{ open, parent: preview.artifact.handle }}
-                >
-                  <Markdown>{preview.text}</Markdown>
-                </ArtifactContext.Provider>
-              ) : (
-                <section aria-label="File preview content">
-                  <pre>{preview.text}</pre>
-                </section>
-              )}
-            </>
-          )}
-        </dialog>
+                {preview.truncated && (
+                  <p className="evidence-warning">
+                    {t("artifactPreviewTruncated")}
+                  </p>
+                )}
+                {preview.text === undefined ? (
+                  <p>{t("artifactUnsupported")}</p>
+                ) : /\.(?:md|markdown)$/iu.test(preview.artifact.name) ? (
+                  <ArtifactContext.Provider
+                    value={{ open, parent: preview.artifact.handle }}
+                  >
+                    <Markdown>{preview.text}</Markdown>
+                  </ArtifactContext.Provider>
+                ) : (
+                  <section aria-label="File preview content">
+                    <pre>{preview.text}</pre>
+                  </section>
+                )}
+              </>
+            )}
+          </div>
+        </aside>
       )}
     </ArtifactContext.Provider>
   );
-}
+});

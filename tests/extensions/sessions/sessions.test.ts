@@ -8,8 +8,10 @@ import {
   buildSessionDescription,
   buildSessionLabel,
   buildSessionPreview,
+  buildSessionSearchEntries,
   deleteSessionFile,
   filterSessionEntries,
+  formatRelativeTime,
   parseLimit,
   type SessionInfoLike,
   selectSessionStatsWindow,
@@ -256,4 +258,49 @@ setInterval(() => {}, 1000);
   assert.equal(existsSync(file), false);
   // Once fallback has run, the trash helper cannot later touch the path.
   assert.throws(() => process.kill(pid!, 0), { code: "ESRCH" });
+});
+
+test("formatRelativeTime deterministically formats relative hours and calendar dates with frozen clocks", () => {
+  const baseNow = new Date("2026-09-21T12:00:00");
+  const tenMins = new Date("2026-09-21T11:50:00");
+  const twoHours = new Date("2026-09-21T10:00:00");
+  const threeDays = new Date("2026-09-18T12:00:00");
+  const twelveDays = new Date("2026-09-09T12:00:00");
+
+  assert.equal(formatRelativeTime(tenMins, baseNow), "11:50 (10m ago)");
+  assert.equal(formatRelativeTime(twoHours, baseNow), "10:00 (2h ago)");
+  assert.equal(formatRelativeTime(threeDays, baseNow), "09-18 (3d ago)");
+  assert.equal(formatRelativeTime(twelveDays, baseNow), "09-09 (12d ago)");
+
+  // Midnight boundary test case: 10 minutes ago across midnight (23:55 viewed at 00:05)
+  const midnightNow = new Date("2026-09-21T00:05:00");
+  const midnightTenMinsAgo = new Date("2026-09-20T23:55:00");
+  assert.equal(
+    formatRelativeTime(midnightTenMinsAgo, midnightNow),
+    "23:55 (10m ago)",
+  );
+
+  // Cross-year boundary test case: New Year 00:05 viewing New Year's Eve 23:55
+  const janNow = new Date("2027-01-01T00:05:00");
+  const decEve = new Date("2026-12-31T23:55:00");
+  assert.equal(formatRelativeTime(decEve, janNow), "23:55 (10m ago)");
+
+  // Cross-year within 60 days
+  const jan3rd = new Date("2027-01-03T12:00:00");
+  const dec30 = new Date("2026-12-30T12:00:00");
+  assert.equal(formatRelativeTime(dec30, jan3rd), "12-30 (4d ago)");
+
+  // Over 1 year ago
+  const twoYearsLater = new Date("2028-09-21T12:00:00");
+  assert.equal(formatRelativeTime(baseNow, twoYearsLater), "2026-09 (2y ago)");
+});
+
+test("session search matches formatted dates and years", () => {
+  const sample = {
+    ...session,
+    modified: new Date("2026-09-06T10:00:00Z"),
+  };
+  const entries = buildSessionSearchEntries([sample]);
+  assert.equal(filterSessionEntries(entries, "2026").length, 1);
+  assert.equal(filterSessionEntries(entries, "09-06").length, 1);
 });

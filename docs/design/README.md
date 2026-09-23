@@ -18,5 +18,7 @@ These records predate [`Decision 0001`](../decisions/0001-documentation-and-evid
 - [`WEB_SESSION_CREATION_TARGET.md`](WEB_SESSION_CREATION_TARGET.md) — stable receipt identity and fail-closed target binding for a newly created Web Session's model selection and first prompt
 - [`WEB_SLASH_COMMAND_DISCOVERY.md`](WEB_SLASH_COMMAND_DISCOVERY.md) — Pi-owned command discovery, bounded Web projection, availability policy, and Composer completion interaction
 - [`COMPLETION_INBOX.md`](COMPLETION_INBOX.md) — shared owner, epoch, consumption, retry, and receipt contract for background completions
+- [`WEB_STRUCTURED_QUESTIONS.md`](WEB_STRUCTURED_QUESTIONS.md) — Web `ask_user` ownership, reviewed answers, bounded waits and browser validation
+- [`WEB_INTERACTION_UI.md`](WEB_INTERACTION_UI.md) — #562 native command feedback, Plan controls, human handoff and streaming/cancellation corrections
 
 开发与热更新流程见 [`docs/development/OPENPI_WEB_DEVELOPMENT.md`](../development/OPENPI_WEB_DEVELOPMENT.md)。

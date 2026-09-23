@@ -3,16 +3,14 @@ import type {
   ExtensionContext,
   ReadonlyFooterDataProvider,
 } from "@earendil-works/pi-coding-agent";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import {
   getCapabilities,
   hyperlink,
   truncateToWidth,
   visibleWidth,
 } from "@earendil-works/pi-tui";
-import {
-  loadSetupConfig,
-  SETUP_CONFIG_CHANGED_CHANNEL,
-} from "../shared/setup-config.ts";
+import { loadSetupConfig } from "../shared/setup-config.ts";
 import {
   emptyGitInfoState,
   emptyModelInfoState,
@@ -119,7 +117,7 @@ export default function uiCustomization(pi: ExtensionAPI) {
   };
 
   // Kept for process lifetime so configure_my_pi_setup still refreshes later sessions.
-  pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, () => {
+  onSetupApply(pi, () => {
     if (!activeSession || activeSession.mode !== "tui") return;
     install(activeSession);
     requestRender?.();

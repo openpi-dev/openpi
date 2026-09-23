@@ -22,6 +22,7 @@ export default defineConfig({
   testMatch: [
     "tests/web/openpi-web.e2e.ts",
     "tests/web/artifact-evidence.e2e.ts",
+    "tests/web/subagent-inspection.e2e.ts",
   ],
   outputDir: outputDirectory,
   fullyParallel: false,

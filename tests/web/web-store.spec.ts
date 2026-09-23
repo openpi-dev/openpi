@@ -143,6 +143,38 @@ function deferred<T>() {
   return { promise, reject, resolve };
 }
 
+it("Plan changes wait for canonical confirmation, prevent duplicate clicks and do not submit a prompt", async () => {
+  const client = new FakeClient();
+  const before = snapshot();
+  before.runtime.plan = "inactive";
+  before.runtime.planRevision = null;
+  client.snapshots.push(Promise.resolve(before));
+  const request = deferred<{ sessionId: string }>();
+  const change = vi
+    .spyOn(client, "setPlanMode")
+    .mockReturnValue(request.promise);
+  const prompt = vi.spyOn(client, "prompt");
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const pending = store.getState().actions.selectPlanMode(true);
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
+  expect(store.getState().planSelectionPending).toBe(true);
+  await store.getState().actions.selectPlanMode(true);
+  expect(await store.getState().actions.sendPrompt("wait")).toBe(false);
+  expect(change).toHaveBeenCalledExactlyOnceWith("session-1", true, null);
+  const after = snapshot();
+  after.cursor++;
+  after.runtime.plan = "planning";
+  after.runtime.planRevision = "plan-1";
+  client.snapshots.push(Promise.resolve(after));
+  request.resolve({ sessionId: "session-1" });
+  await pending;
+  expect(store.getState().snapshot?.runtime.plan).toBe("planning");
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(store.getState().liveMessages).toEqual([]);
+  expect(prompt).not.toHaveBeenCalled();
+});
+
 class FakeClient extends WebClient {
   snapshots: Array<Promise<WebSnapshot>> = [];
   snapshotPaths: Array<string | null | undefined> = [];
@@ -220,7 +252,12 @@ class FakeClient extends WebClient {
     return this.selectionResults.shift() ?? Promise.resolve({});
   }
 
-  override selectModel(provider: string, modelId: string, sessionId: string) {
+  override selectModel(
+    provider: string,
+    modelId: string,
+    sessionId: string,
+    _sessionPath: string,
+  ) {
     this.modelSelections.push({ provider, modelId, sessionId });
     return this.modelResult;
   }
@@ -252,6 +289,7 @@ class FakeClient extends WebClient {
     sessionId: string,
     content: string,
     _commandId: string,
+    _sessionPath: string,
     _retry = false,
   ) {
     this.prompts.push({ sessionId, content });
@@ -263,7 +301,11 @@ class FakeClient extends WebClient {
     return this.thinkingResult;
   }
 
-  override setThinkingLevel(sessionId: string, level: string) {
+  override setThinkingLevel(
+    sessionId: string,
+    level: string,
+    _sessionPath: string,
+  ) {
     this.thinkings.push({ sessionId, level });
     const queued = this.setThinkingResults.shift();
     if (queued) return queued;
@@ -712,6 +754,267 @@ describe("OpenPI Web store", () => {
     expect(client.snapshotPaths).toEqual(["/tmp/ws/vanished.jsonl", null]);
     expect(store.getState().selectedPath).toBe("/tmp/ws/current.jsonl");
   });
+
+  it("keeps the controlled file selected across refreshes with a newer same-ID copy", async () => {
+    const client = new FakeClient();
+    const canonical = snapshot();
+    const copyPath = "/tmp/ws/copy.jsonl";
+    canonical.sessions.unshift({
+      ...canonical.sessions[0]!,
+      path: copyPath,
+      modified: "2026-09-04T00:00:00Z",
+      controller: "none",
+    });
+    const copied = {
+      ...canonical,
+      selectedSession: { ...canonical.selectedSession!, path: copyPath },
+    };
+    const readSnapshot = vi
+      .spyOn(client, "snapshot")
+      .mockImplementation(async (path) =>
+        path === copyPath ? copied : canonical,
+      );
+    const store = createWebStore(client);
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+
+    expect(readSnapshot.mock.calls).toEqual([
+      [null],
+      [canonical.selectedSession!.path],
+    ]);
+    expect(store.getState().selectedPath).toBe(canonical.selectedSession!.path);
+    expect(store.getState().snapshot?.selectedSession?.path).toBe(
+      canonical.selectedSession!.path,
+    );
+    expect(
+      await store.getState().actions.sendPrompt("stay on the active file"),
+    ).toBe(true);
+    expect(client.prompts).toEqual([
+      { sessionId: "session-1", content: "stay on the active file" },
+    ]);
+    store.getState().actions.stop();
+  });
+
+  it("sends all three mutation bodies with each confirmed same-ID file path", async () => {
+    const client = new FakeClient();
+    const paths = ["/tmp/ws/session.jsonl", "/tmp/ws/copy.jsonl"];
+    let current = withThinking(activeSnapshot("same-id", paths[0]!));
+    vi.spyOn(client, "snapshot").mockImplementation(async () => current);
+    vi.spyOn(client, "selectModel").mockImplementation((...args) =>
+      WebClient.prototype.selectModel.call(client, ...args),
+    );
+    vi.spyOn(client, "setThinkingLevel").mockImplementation((...args) =>
+      WebClient.prototype.setThinkingLevel.call(client, ...args),
+    );
+    vi.spyOn(client, "prompt").mockImplementation((...args) =>
+      WebClient.prototype.prompt.call(client, ...args),
+    );
+    const fetcher = vi.fn(async (url: string, options: RequestInit) => {
+      const body = JSON.parse(String(options.body));
+      const result =
+        url === "/api/model"
+          ? current.models[0]
+          : url === "/api/thinking"
+            ? {
+                ...current.thinking,
+                sessionId: "same-id",
+                level: body.level,
+                revision: 2,
+              }
+            : { id: body.commandId, accepted: true };
+      return new Response(JSON.stringify(result));
+    });
+    vi.stubGlobal("fetch", fetcher);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    for (const path of paths) {
+      if (path !== paths[0]) {
+        current = withThinking(activeSnapshot("same-id", path));
+        await store.getState().actions.selectSession(path);
+      }
+      await store.getState().actions.selectModel("test/model");
+      store.getState().actions.selectThinking("high");
+      await vi.waitFor(() =>
+        expect(store.getState().thinkingPendingLevel).toBeNull(),
+      );
+      expect(await store.getState().actions.sendPrompt("hello")).toBe(true);
+    }
+
+    expect(
+      fetcher.mock.calls.map(([url, options]) => ({
+        url,
+        body: JSON.parse(String(options.body)),
+      })),
+    ).toEqual(
+      paths.flatMap((sessionPath) => [
+        {
+          url: "/api/model",
+          body: {
+            provider: "test",
+            modelId: "model",
+            sessionId: "same-id",
+            sessionPath,
+          },
+        },
+        {
+          url: "/api/thinking",
+          body: { sessionId: "same-id", sessionPath, level: "high" },
+        },
+        {
+          url: "/api/prompt",
+          body: {
+            sessionId: "same-id",
+            sessionPath,
+            content: "hello",
+            commandId: expect.any(String),
+            controllerId: expect.any(String),
+            retry: false,
+            images: [],
+          },
+        },
+      ]),
+    );
+    store.getState().actions.stop();
+  });
+
+  it("does not lend an uncertain prompt command to a same-ID copy after refresh", async () => {
+    const client = new FakeClient();
+    let current = snapshot();
+    vi.spyOn(client, "snapshot").mockImplementation(async () => current);
+    vi.spyOn(client, "prompt").mockImplementation((...args) =>
+      WebClient.prototype.prompt.call(client, ...args),
+    );
+    const fetcher = vi
+      .fn<(url: string, options: RequestInit) => Promise<Response>>()
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({ id: "new", accepted: true })),
+      );
+    vi.stubGlobal("fetch", fetcher);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+
+    current = activeSnapshot("session-1", "/tmp/ws/copy.jsonl");
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+
+    const [first, second] = fetcher.mock.calls.map(([, options]) =>
+      JSON.parse(String(options.body)),
+    );
+    expect(first).toMatchObject({
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      retry: false,
+    });
+    expect(second).toMatchObject({
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/copy.jsonl",
+      retry: false,
+    });
+    expect(second.commandId).not.toBe(first.commandId);
+    store.getState().actions.stop();
+  });
+
+  it("rejects a same-ID copied transcript after the canonical retry too", async () => {
+    const client = new FakeClient();
+    const copied = snapshot();
+    const copyPath = "/tmp/ws/copy.jsonl";
+    copied.sessions.unshift({
+      ...copied.sessions[0]!,
+      path: copyPath,
+      controller: "none",
+    });
+    copied.selectedSession = { ...copied.selectedSession!, path: copyPath };
+    client.snapshots.push(Promise.resolve(copied), Promise.resolve(copied));
+    const store = createWebStore(client);
+    store.setState({ selectedPath: copyPath });
+
+    expect(await store.getState().actions.refreshSnapshot()).toBe(false);
+
+    expect(client.snapshotPaths).toEqual([copyPath, null]);
+    expect(store.getState().selectedPath).toBeNull();
+    expect(store.getState().snapshot).toBeNull();
+    expect(
+      await store.getState().actions.sendPrompt("do not send to the original"),
+    ).toBe(false);
+    expect(client.prompts).toEqual([]);
+  });
+
+  it.each(["network failure", "invalid canonical projection"])(
+    "blocks stale Session operations after a same-ID switch with %s",
+    async (failure) => {
+      vi.useFakeTimers();
+      const client = new FakeClient();
+      const original = snapshot();
+      original.thinking = {
+        level: "medium",
+        available: ["medium", "high"],
+        supported: true,
+        revision: 1,
+      };
+      client.snapshots.push(Promise.resolve(original));
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      const copyPath = "/tmp/ws/copy.jsonl";
+      const copied = activeSnapshot("session-1", copyPath);
+      copied.thinking = original.thinking;
+      if (failure === "network failure") {
+        client.snapshots.push(
+          Promise.reject(new Error("snapshot unavailable")),
+        );
+      } else {
+        const invalid = {
+          ...copied,
+          selectedSession: original.selectedSession,
+        };
+        client.snapshots.push(
+          Promise.resolve(invalid),
+          Promise.resolve(invalid),
+        );
+      }
+
+      await store.getState().actions.selectSession(copyPath);
+
+      expect(client.selections).toEqual([copyPath]);
+      expect(store.getState().sessionSwitching).toBe(false);
+      expect(store.getState().selectedPath).toBeNull();
+      expect(store.getState().snapshot?.selectedSession?.path).toBe(
+        original.selectedSession!.path,
+      );
+      await store.getState().actions.selectModel("test/model");
+      store.getState().actions.selectThinking("high");
+      await Promise.resolve();
+      await store.getState().actions.discoverCommands();
+      const sent = await store.getState().actions.sendPrompt("/review");
+      expect({
+        sent,
+        prompts: client.prompts,
+        modelSelections: client.modelSelections,
+        thinkings: client.thinkings,
+        commandRequests: client.commandRequests,
+      }).toEqual({
+        sent: false,
+        prompts: [],
+        modelSelections: [],
+        thinkings: [],
+        commandRequests: [],
+      });
+
+      client.snapshots.push(Promise.resolve(copied));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(store.getState().selectedPath).toBe(copyPath);
+      expect(await store.getState().actions.sendPrompt("confirmed copy")).toBe(
+        true,
+      );
+      expect(client.prompts).toEqual([
+        { sessionId: "session-1", content: "confirmed copy" },
+      ]);
+      store.getState().actions.stop();
+    },
+  );
 
   it.each([
     [
@@ -1542,7 +1845,8 @@ describe("OpenPI Web store", () => {
     expect(await store.getState().actions.sendPrompt("once")).toBe(true);
     expect(prompt.mock.calls[0]?.[2]).toEqual(expect.any(String));
     expect(prompt.mock.calls[1]?.[2]).toBe(prompt.mock.calls[0]?.[2]);
-    expect(prompt.mock.calls[1]?.[3]).toBe(true);
+    expect(prompt.mock.calls[1]?.[3]).toBe("/tmp/ws/session.jsonl");
+    expect(prompt.mock.calls[1]?.[4]).toBe(true);
     store.getState().actions.stop();
   });
 
@@ -1576,8 +1880,34 @@ describe("OpenPI Web store", () => {
     expect(await store.getState().actions.sendPromptAsNew("edited")).toBe(true);
     expect(prompt.mock.calls[2]?.[1]).toBe("edited");
     expect(prompt.mock.calls[2]?.[2]).not.toBe(prompt.mock.calls[0]?.[2]);
-    expect(prompt.mock.calls[2]?.[3]).toBe(false);
+    expect(prompt.mock.calls[2]?.[4]).toBe(false);
     expect(store.getState().promptAdmissionRecovery).toBeNull();
+  });
+
+  it("keeps unknown admission recovery bound to its original same-ID file", async () => {
+    const client = new FakeClient();
+    let current = snapshot();
+    vi.spyOn(client, "snapshot").mockImplementation(async () => current);
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(
+        new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN"),
+      );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toMatchObject({
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
+      phase: "ready",
+    });
+
+    current = activeSnapshot("session-1", "/tmp/ws/copy.jsonl");
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(await store.getState().actions.sendPromptAsNew("once")).toBe(false);
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(store.getState().promptAdmissionRecovery?.phase).toBe("ready");
+    store.getState().actions.stop();
   });
 
   it("keeps unknown admission recovery fail-closed when verification fails", async () => {
@@ -1878,7 +2208,7 @@ describe("OpenPI Web store", () => {
     expect(store.getState().liveMessages).toHaveLength(0);
     expect(await store.getState().actions.sendPrompt("once")).toBe(true);
     expect(prompt.mock.calls[1]?.[2]).not.toBe(prompt.mock.calls[0]?.[2]);
-    expect(prompt.mock.calls[1]?.[3]).toBe(false);
+    expect(prompt.mock.calls[1]?.[4]).toBe(false);
     expect(store.getState().pendingFollowUpsReceipt).toBe(2);
     store.getState().actions.stop();
   });
@@ -2510,6 +2840,149 @@ describe("thinking level selection", () => {
       { sessionId: "session-1", level: "low" },
     ]);
     store.getState().actions.stop();
+  });
+
+  for (const resetCursor of [false, true]) {
+    for (const outcome of ["success", "rejection"] as const) {
+      it(`canonical same-ID copy recovery clears old thinking and protects a newer POST from late ${outcome} (resetCursor=${resetCursor})`, async () => {
+        const { client, store } = await harness({ revision: 40 });
+        const superseded = deferred<WebThinkingState & { sessionId: string }>();
+        client.setThinkingResults.push(superseded.promise);
+        const mutations = vi.spyOn(client, "setThinkingLevel");
+        try {
+          store.getState().actions.selectThinking("high");
+          expect(store.getState().thinkingPendingLevel).toBe("high");
+
+          const copiedPath = "/tmp/ws/copied.jsonl";
+          const copied: WebSnapshot = withThinking(
+            activeSnapshot("session-1", copiedPath, { cursor: 41 }),
+            { level: "medium", revision: 2 },
+          );
+          copied.sessions.push({
+            ...snapshot().sessions[0],
+            controller: "none",
+          });
+          // The requested old file still exists, but the host now controls its
+          // same-ID copy. Recover through the store's real canonical retry.
+          client.snapshots.push(
+            Promise.resolve({
+              ...copied,
+              selectedSession: snapshot().selectedSession,
+            }),
+            Promise.resolve(copied),
+          );
+          expect(
+            await store.getState().actions.refreshSnapshot({ resetCursor }),
+          ).toBe(true);
+          expect(client.snapshotPaths.slice(-2)).toEqual([
+            "/tmp/ws/session.jsonl",
+            null,
+          ]);
+          expect(store.getState().selectedPath).toBe(copiedPath);
+          expect(store.getState().thinkingPendingLevel).toBeNull();
+          expect(store.getState().snapshot?.thinking).toMatchObject({
+            level: "medium",
+            revision: 2,
+          });
+
+          const newer = deferred<WebThinkingState & { sessionId: string }>();
+          client.setThinkingResults.push(newer.promise);
+          store.getState().actions.selectThinking("low");
+          expect(mutations).toHaveBeenLastCalledWith(
+            "session-1",
+            "low",
+            copiedPath,
+          );
+          expect(mutations).toHaveBeenCalledTimes(2);
+          expect(store.getState().thinkingPendingLevel).toBe("low");
+
+          if (outcome === "success") {
+            superseded.resolve({
+              ...copied.thinking!,
+              sessionId: "session-1",
+              level: "high",
+              revision: 999,
+            });
+          } else {
+            superseded.reject(
+              new WebApiError("old file is inactive", 409, "SESSION_CONFLICT"),
+            );
+          }
+          await new Promise((resolve) => window.setTimeout(resolve, 0));
+          expect(store.getState().thinkingPendingLevel).toBe("low");
+          expect(store.getState().snapshot?.thinking).toMatchObject({
+            level: "medium",
+            revision: 2,
+          });
+          expect(store.getState().notice).toBeNull();
+          expect(mutations).toHaveBeenCalledTimes(2);
+
+          newer.resolve({
+            ...copied.thinking!,
+            sessionId: "session-1",
+            level: "low",
+            revision: 3,
+          });
+          await vi.waitFor(() =>
+            expect(store.getState().thinkingPendingLevel).toBeNull(),
+          );
+          expect(store.getState().snapshot?.thinking).toMatchObject({
+            level: "low",
+            revision: 3,
+          });
+          expect(
+            await store.getState().actions.sendPrompt("after recovery"),
+          ).toBe(true);
+          expect(client.prompts).toEqual([
+            { sessionId: "session-1", content: "after recovery" },
+          ]);
+        } finally {
+          store.getState().actions.stop();
+        }
+      });
+    }
+  }
+
+  it("canonical same-ID copy recovery ignores the old file's thinking reconciliation GET", async () => {
+    const { client, store } = await harness({ revision: 40 });
+    const reconciliation = deferred<WebThinkingState & { sessionId: string }>();
+    client.thinkingResult = reconciliation.promise;
+    client.setThinkingResults.push(
+      Promise.reject(new Error("old POST failed")),
+    );
+    try {
+      store.getState().actions.selectThinking("high");
+      await vi.waitFor(() =>
+        expect(client.thinkingRequests).toEqual(["session-1"]),
+      );
+      expect(store.getState().thinkingPendingLevel).toBeNull();
+
+      const copied = withThinking(
+        activeSnapshot("session-1", "/tmp/ws/copied.jsonl", { cursor: 41 }),
+        { level: "medium", revision: 2 },
+      );
+      client.snapshots.push(Promise.resolve(copied), Promise.resolve(copied));
+      expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+      expect(store.getState().selectedPath).toBe("/tmp/ws/copied.jsonl");
+      expect(store.getState().snapshot?.thinking).toMatchObject({
+        level: "medium",
+        revision: 2,
+      });
+
+      reconciliation.resolve({
+        ...copied.thinking!,
+        sessionId: "session-1",
+        level: "high",
+        revision: 999,
+      });
+      await new Promise((resolve) => window.setTimeout(resolve, 0));
+      expect(store.getState().snapshot?.thinking).toMatchObject({
+        level: "medium",
+        revision: 2,
+      });
+    } finally {
+      store.getState().actions.stop();
+    }
   });
 
   it("resets pending when the operator selects a different model", async () => {

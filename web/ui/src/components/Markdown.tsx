@@ -1,11 +1,47 @@
-import { memo, useContext } from "react";
-import { ArtifactContext } from "../features/artifacts/context.ts";
-import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
+import type { Element, Root } from "hast";
+import { Check, Clipboard } from "lucide-react";
+import type { ComponentPropsWithoutRef } from "react";
+import { memo, useContext, useEffect, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
 import ReactMarkdown from "react-markdown";
 import rehypeSanitize from "rehype-sanitize";
 import remarkBreaks from "remark-breaks";
 import remarkGfm from "remark-gfm";
-import type { Root, Element } from "hast";
+import { isLocalArtifactLink } from "../../../protocol/artifacts.ts";
+import { ArtifactContext } from "../features/artifacts/context.ts";
+import { copyText } from "../lib/clipboard.ts";
+import type { RootContent } from "hast";
+
+function labelTaskCheckboxes() {
+  return (tree: Root) => {
+    const text = (node: RootContent): string =>
+      node.type === "text"
+        ? node.value
+        : node.type === "element" && !["ul", "ol"].includes(node.tagName)
+          ? node.children.map(text).join("")
+          : "";
+    const walk = (node: Root | Element) => {
+      if (
+        node.type === "element" &&
+        (node.tagName === "li" || node.tagName === "p")
+      ) {
+        const label = text(node).trim();
+        for (const child of node.children) {
+          if (
+            child.type === "element" &&
+            child.tagName === "input" &&
+            child.properties.type === "checkbox" &&
+            label
+          )
+            child.properties.ariaLabel = label;
+        }
+      }
+      for (const child of node.children)
+        if (child.type === "element") walk(child);
+    };
+    walk(tree);
+  };
+}
 
 declare module "hast" {
   interface ElementData {
@@ -62,6 +98,80 @@ function safeUrl(value: string) {
   }
 }
 
+function CodeBlock({
+  children,
+  node: _node,
+  ...props
+}: ComponentPropsWithoutRef<"pre"> & { node?: Element }) {
+  const { t } = useTranslation();
+  const [copyStatus, setCopyStatus] = useState<
+    "idle" | "copying" | "copied" | "failed"
+  >("idle");
+  const copyGeneration = useRef(0);
+  const copyTimer = useRef<number | undefined>(undefined);
+  const code = useRef<HTMLPreElement>(null);
+  useEffect(
+    () => () => {
+      copyGeneration.current += 1;
+      window.clearTimeout(copyTimer.current);
+    },
+    [],
+  );
+  const copied = copyStatus === "copied";
+  return (
+    <div className="markdown-code-block">
+      <div className="markdown-code-toolbar">
+        {copyStatus === "failed" && (
+          <span role="status">{t("copyCodeFailed")}</span>
+        )}
+        <button
+          type="button"
+          aria-label={copied ? t("copiedCode") : t("copyCode")}
+          title={copied ? t("copiedCode") : t("copyCode")}
+          disabled={copyStatus === "copying"}
+          onClick={() => {
+            const generation = ++copyGeneration.current;
+            window.clearTimeout(copyTimer.current);
+            setCopyStatus("copying");
+            void copyText(code.current?.textContent ?? "").then((success) => {
+              if (generation !== copyGeneration.current) return;
+              setCopyStatus(success ? "copied" : "failed");
+              if (success)
+                copyTimer.current = window.setTimeout(
+                  () => setCopyStatus("idle"),
+                  1_200,
+                );
+            });
+          }}
+        >
+          {copied ? (
+            <Check aria-hidden="true" />
+          ) : (
+            <Clipboard aria-hidden="true" />
+          )}
+        </button>
+      </div>
+      <section
+        className="markdown-code-scroll"
+        aria-label={t("codeBlock")}
+        // biome-ignore lint/a11y/noNoninteractiveTabindex: Long code needs a keyboard-focusable horizontal scroll region.
+        tabIndex={0}
+        onKeyDown={(event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          const target = event.currentTarget;
+          if (target.scrollWidth <= target.clientWidth) return;
+          event.preventDefault();
+          target.scrollLeft += event.key === "ArrowRight" ? 40 : -40;
+        }}
+      >
+        <pre ref={code} {...props}>
+          {children}
+        </pre>
+      </section>
+    </div>
+  );
+}
+
 export const Markdown = memo(function Markdown({
   children,
 }: {
@@ -72,11 +182,28 @@ export const Markdown = memo(function Markdown({
     <div className="markdown">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
-        rehypePlugins={[preserveWindowsLinks, rehypeSanitize]}
+        rehypePlugins={[
+          preserveWindowsLinks,
+          rehypeSanitize,
+          labelTaskCheckboxes,
+        ]}
         urlTransform={(value) =>
           isLocalArtifactLink(value) ? value : safeUrl(value)
         }
         components={{
+          pre: CodeBlock,
+          table({ children, ...props }) {
+            return (
+              <section
+                className="markdown-table-scroll"
+                aria-label="Table"
+                // biome-ignore lint/a11y/noNoninteractiveTabindex: Wide tables need a keyboard-focusable horizontal scroll region.
+                tabIndex={0}
+              >
+                <table {...props}>{children}</table>
+              </section>
+            );
+          },
           a({ href, node, children: label, ...props }) {
             href = windowsLink(node) ?? href;
             if (isLocalArtifactLink(href ?? ""))

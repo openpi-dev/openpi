@@ -210,14 +210,19 @@ interface CallbackServer {
   close(): void;
 }
 
-function parseCallbackInput(input: string): CallbackResult | undefined {
+function parseCallbackInput(
+  input: string,
+): CallbackResult | { error: string; state: string } | undefined {
   const value = input.trim();
   if (!value) return undefined;
   try {
     const url = new URL(value);
+    const state = url.searchParams.get("state") ?? "";
+    const error = url.searchParams.get("error");
+    if (error) return { error, state };
     const code = url.searchParams.get("code");
     if (!code) return undefined;
-    return { code, state: url.searchParams.get("state") ?? "" };
+    return { code, state };
   } catch {
     return { code: value, state: "" };
   }
@@ -586,8 +591,14 @@ export async function loginAntigravity(
             const parsed = parseCallbackInput(
               await withCancellation(onManualCodeInput(raceSignal), raceSignal),
             );
-            if (parsed && (!parsed.state || parsed.state === state))
-              return parsed;
+            if (!parsed) continue;
+            if ("error" in parsed) {
+              if (parsed.state === state) {
+                throw new Error(`Authorization failed: ${parsed.error}`);
+              }
+              continue;
+            }
+            if (!parsed.state || parsed.state === state) return parsed;
           }
         })();
         callback = await Promise.race([callbackPromise, manualPromise]);
@@ -601,7 +612,7 @@ export async function loginAntigravity(
       throw error;
     } finally {
       // The callback and manual prompt are alternatives. Cancel the loser as
-      // soon as either one supplies a valid authorization code.
+      // soon as either one completes or rejects authorization.
       raceController.abort();
     }
 

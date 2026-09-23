@@ -26,7 +26,10 @@ export type RecordedProviderRequest = {
 };
 
 /** Write the deterministic agent-dir configuration for the fake provider. */
-export function seedAgentDirectory(agentDirectory: string) {
+export function seedAgentDirectory(
+  agentDirectory: string,
+  packageSource?: string,
+) {
   mkdirSync(agentDirectory, { recursive: true });
   writeFileSync(
     join(agentDirectory, "models.json"),
@@ -61,7 +64,7 @@ export function seedAgentDirectory(agentDirectory: string) {
   // reach the provider, rather than a no-op against the initial clamped level.
   writeFileSync(
     join(agentDirectory, "settings.json"),
-    `${JSON.stringify({ defaultThinkingLevel: "off" }, null, 2)}\n`,
+    `${JSON.stringify({ defaultThinkingLevel: "off", ...(packageSource ? { packages: [packageSource] } : {}) }, null, 2)}\n`,
   );
 }
 
@@ -110,7 +113,12 @@ function chatCompletionStreamResponse(modelId: string) {
  * Start a loopback OpenAI-compatible chat-completions server that records every
  * request and answers with a minimal valid streamed completion.
  */
-export async function startFakeProvider(): Promise<FakeProvider> {
+export async function startFakeProvider(
+  streamResponse?: (
+    body: unknown,
+    requestIndex: number,
+  ) => string | AsyncIterable<string>,
+): Promise<FakeProvider> {
   const requests: RecordedProviderRequest[] = [];
   let pendingRelease: (() => void) | undefined;
   let holdRequested = false;
@@ -150,7 +158,17 @@ export async function startFakeProvider(): Promise<FakeProvider> {
       "Cache-Control": "no-cache",
       Connection: "keep-alive",
     });
-    response.end(chatCompletionStreamResponse(modelId));
+    const stream = streamResponse
+      ? streamResponse(body, requests.length - 1)
+      : chatCompletionStreamResponse(modelId);
+    if (typeof stream === "string") response.end(stream);
+    else {
+      for await (const chunk of stream) {
+        if (response.destroyed) break;
+        response.write(chunk);
+      }
+      response.end();
+    }
   });
 
   await new Promise<void>((resolve, reject) => {
