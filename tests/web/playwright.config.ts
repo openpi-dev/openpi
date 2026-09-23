@@ -26,6 +26,7 @@ export default defineConfig({
     "tests/web/workbench-polish.e2e.ts",
     "tests/web/session-history.e2e.ts",
     "tests/web/session-observer.e2e.ts",
+    "tests/web/git-review.e2e.ts",
     "tests/web/artifact-images.e2e.ts",
     "tests/web/artifact-evidence.e2e.ts",
     "tests/web/subagent-inspection.e2e.ts",

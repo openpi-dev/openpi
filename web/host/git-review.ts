@@ -197,14 +197,14 @@ function fileStatus(code: string): WebGitReviewFileStatus {
   return "unknown";
 }
 
-function parseNameStatus(output: string) {
+function parseRawStatus(output: string) {
   const fields = output.split("\0");
   if (fields.at(-1) === "") fields.pop();
   const files: Array<
     Pick<WebGitReviewFile, "path" | "previousPath" | "status">
   > = [];
   for (let index = 0; index < fields.length; ) {
-    const code = fields[index++]?.charAt(0) ?? "";
+    const code = fields[index++]?.split(" ").at(-1)?.charAt(0) ?? "";
     if (code === "R" || code === "C") {
       const previousPath = fields[index++];
       const path = fields[index++];
@@ -279,30 +279,42 @@ async function trackedChanges(
   const files: WebGitReviewFile[] = [];
   let diffBytes = 0;
   let truncated = false;
+  const identity = createHash("sha256");
   for (const comparison of comparisons) {
-    const target = [...comparison, "--", ...(options.filePath ? [options.filePath] : [])];
-    const [status, diff] = await Promise.all([
-      git(root, [
-        "diff",
-        "--name-status",
-        "-z",
-        "--find-renames",
-        "--no-ext-diff",
-        "--no-textconv",
-        ...target,
-      ], environment),
-      git(root, [
-        "diff",
-        "--no-color",
-        "--no-ext-diff",
-        "--no-textconv",
-        ...(options.summary ? ["--numstat", "-z"] : []),
-        "--find-renames",
-        "--full-index",
-        ...target,
-      ], environment),
-    ]);
-    const entries = parseNameStatus(status);
+    const flags = [
+      "--no-color", "--no-ext-diff", "--no-textconv",
+      "--find-renames", "--full-index", "--no-abbrev", "-z",
+    ];
+    const raw = () => git(root, ["diff", ...flags, "--raw", ...comparison, "--"], environment);
+    let status: string;
+    let diff: string;
+    if (options.summary) {
+      [status, diff] = await Promise.all([
+        raw(),
+        git(root, ["diff", ...flags, "--numstat", ...comparison, "--"], environment),
+      ]);
+    } else {
+      let paths: string[] = [];
+      if (options.filePath) {
+        // Discover renames before applying a pathspec: filtering to the new
+        // path first removes the source from Git's rename detection.
+        const selected = parseRawStatus(await raw()).filter(file => file.path === options.filePath);
+        paths = [...new Set(selected.flatMap(file => file.previousPath ? [file.previousPath, file.path] : [file.path]))];
+        if (paths.length === 0) continue;
+      }
+      const output = await git(root, [
+        "diff", ...flags, "--raw", "--patch", ...comparison, "--",
+        ...paths.map(path => `:(literal)${path}`),
+      ], environment);
+      // Git separates NUL-delimited raw records from the patch with an extra
+      // NUL. Both projections now describe the same native diff invocation.
+      const separator = output.indexOf("\0\0");
+      if (output && separator < 0) throw new Error("Missing Git raw/patch boundary");
+      status = separator < 0 ? "" : output.slice(0, separator + 1);
+      diff = separator < 0 ? "" : output.slice(separator + 2);
+    }
+    identity.update(JSON.stringify(comparison)).update("\0").update(status).update("\0");
+    const entries = parseRawStatus(status);
     const chunks = options.summary ? [] : splitDiff(diff);
     const stats = new Map<string, { additions: number; deletions: number }>();
     if (options.summary) {
@@ -318,6 +330,7 @@ async function trackedChanges(
       }
     }
     for (const [index, entry] of entries.entries()) {
+      if (options.filePath && entry.path !== options.filePath) continue;
       const body = chunks[index] ?? "";
       if (files.length >= WEB_MAX_GIT_REVIEW_FILES) {
         truncated = true;
@@ -337,7 +350,7 @@ async function trackedChanges(
       else truncated = true;
     }
   }
-  return { files: dedupe(files), diffBytes, truncated };
+  return { files: dedupe(files), diffBytes, truncated, identity: identity.digest("hex") };
 }
 
 function untrackedDiff(path: string, bytes: Buffer) {
@@ -484,7 +497,7 @@ export async function readGitReview(
     const currentBranch = cleanLine(
       await git(root, ["branch", "--show-current"]),
     );
-    const hasHead = await refExists(root, "HEAD");
+    const head = cleanLine(await git(root, ["rev-parse", "--verify", "--quiet", "HEAD"]).catch(() => ""));
     const environment = options?.baseline
       ? {
           GIT_INDEX_FILE: options.baseline.index,
@@ -498,7 +511,7 @@ export async function readGitReview(
         }
       : undefined;
     const base =
-      source === "branch" && hasHead
+      source === "branch" && head
         ? await baseBranch(root, currentBranch)
         : null;
     const mergeBase =
@@ -512,10 +525,10 @@ export async function readGitReview(
         : source === "unstaged"
           ? [[]]
           : source === "staged"
-            ? [hasHead ? ["--cached"] : ["--cached", "--root"]]
+            ? [head ? ["--cached", head] : ["--cached", "--root"]]
         : mergeBase
           ? [[mergeBase]]
-          : [hasHead ? ["--cached"] : ["--cached", "--root"], []],
+          : [head ? ["--cached", head] : ["--cached", "--root"], []],
       environment,
       options,
     );
@@ -537,7 +550,7 @@ export async function readGitReview(
       deletions: 0,
       truncated: tracked.truncated || untracked.truncated,
     });
-    const fileIdentities = options?.summary ? await Promise.all(snapshot.files.map(async file => {
+    const fileIdentities = options?.summary && source !== "staged" ? await Promise.all(snapshot.files.map(async file => {
       try {
         const info = await lstat(resolve(root, file.path), { bigint: true });
         return [file.path, String(info.size), String(info.mtimeNs), String(info.ctimeNs)];
@@ -548,6 +561,7 @@ export async function readGitReview(
         JSON.stringify({
           root,
           source,
+          trackedIdentity: tracked.identity,
           fileIdentities,
           currentBranch,
           base,
