@@ -614,3 +614,20 @@ test("detail lookup is Session-scoped, exact, and fail-closed", () => {
     unregister();
   }
 });
+
+test("projects bounded activity text on code points instead of splitting a surrogate pair", () => {
+  const emoji = "\u{1F680}";
+  const subagents = projectSubagentCapability([
+    {
+      id: "sa-emoji",
+      title: `${"x".repeat(158)}${emoji}tail`,
+      status: "running",
+      createdAt: 1,
+    },
+  ]);
+
+  // The complete emoji survives the bound; a UTF-16 unit cut would have left a
+  // lone high surrogate in the bounded capability snapshot.
+  assert.equal(subagents.items[0]?.title, `${"x".repeat(158)}${emoji}…`);
+  assert.equal(subagents.truncated, true);
+});

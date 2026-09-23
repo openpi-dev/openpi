@@ -121,9 +121,12 @@ const normalizeSnippet = (text: string, maxLength: number): string => {
   const cleaned = cleanDisplayLine(text);
   const fallback = cleaned.length > 0 ? cleaned : "No messages";
   if (maxLength < 1) return "";
-  if (fallback.length <= maxLength) return fallback;
+  // Bound on code points so a truncation boundary cannot split a surrogate pair
+  // into a lone surrogate in the session list.
+  const characters = [...fallback];
+  if (characters.length <= maxLength) return fallback;
   if (maxLength === 1) return "…";
-  return `${fallback.slice(0, maxLength - 1)}…`;
+  return `${characters.slice(0, maxLength - 1).join("")}…`;
 };
 
 export function buildSessionDescription(

@@ -166,11 +166,14 @@ interface BoundedActivityText {
 }
 
 function boundedActivityText(value: string): BoundedActivityText {
-  if (value.length <= WEB_MAX_ACTIVITY_TEXT) {
+  // Cut on code points: a UTF-16 unit cut can split a surrogate pair and emit a
+  // lone surrogate, which the JSON capability snapshot cannot represent.
+  const characters = [...value];
+  if (characters.length <= WEB_MAX_ACTIVITY_TEXT) {
     return { value, truncated: false };
   }
   return {
-    value: `${value.slice(0, WEB_MAX_ACTIVITY_TEXT - 1)}…`,
+    value: `${characters.slice(0, WEB_MAX_ACTIVITY_TEXT - 1).join("")}…`,
     truncated: true,
   };
 }
