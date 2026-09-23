@@ -21,7 +21,6 @@ import {
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
 import { QuestionPanel } from "../features/questions/QuestionPanel.tsx";
-import { SessionChangesPopover } from "../features/review/SessionChangesPopover.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
@@ -104,7 +103,6 @@ export function App() {
     sessionPath: string;
     tool: WorkbarTool;
     requestRevision: number;
-    reviewFilePath?: string;
   } | null>(null);
   const [workbarOpen, setWorkbarOpen] = useState(false);
   const [workbarActiveTool, setWorkbarActiveTool] =
@@ -301,27 +299,6 @@ export function App() {
       ...state.liveMessages.map((entry) => entry.message),
     ];
   }, [workbarOpen, workbarActiveTool, selected?.entries, state.liveMessages]);
-  const gitSnapshot = gitReview.result?.ok
-    ? gitReview.result.snapshot
-    : undefined;
-  const openReview = (filePath?: string, returnFocus?: HTMLElement) => {
-    if (!selected || state.sessionSwitching) return;
-    workbarReturnFocus.current =
-      returnFocus ??
-      (document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null);
-    setSubagentTarget(null);
-    setInspection(null);
-    setWorkbarOpen(true);
-    setWorkbarTarget((current) => ({
-      sessionId: selected.id,
-      sessionPath: selected.path,
-      tool: "review",
-      requestRevision: (current?.requestRevision ?? 0) + 1,
-      ...(filePath ? { reviewFilePath: filePath } : {}),
-    }));
-  };
   const workbarBound = Boolean(
     workbarTarget &&
       selected &&
@@ -351,9 +328,6 @@ export function App() {
       sessionPath: selected.path,
       tool,
       requestRevision: (current?.requestRevision ?? 0) + 1,
-      ...(tool === "review" && current?.reviewFilePath
-        ? { reviewFilePath: current.reviewFilePath }
-        : {}),
     }));
   };
   const closeWorkbar = () => {
@@ -686,15 +660,6 @@ export function App() {
                 turnTerminalStatus={state.turnTerminalStatus}
                 pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
                 commandDiscovery={state.commandDiscovery}
-                accessory={
-                  gitSnapshot && gitSnapshot.files.length > 0 ? (
-                    <SessionChangesPopover
-                      key={gitSnapshot.repositoryRoot}
-                      snapshot={gitSnapshot}
-                      onOpenReview={openReview}
-                    />
-                  ) : undefined
-                }
                 snapshot={state.snapshot}
                 selectedPath={state.selectedPath}
                 selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
@@ -776,7 +741,6 @@ export function App() {
               messages={workbarMessages}
               onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
-              reviewInitialFilePath={workbarTarget.reviewFilePath}
               onBeforeArtifactOpen={() => {
                 artifactOpenFromFiles.current = true;
               }}

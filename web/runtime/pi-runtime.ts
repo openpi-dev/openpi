@@ -1,6 +1,7 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
+import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { controlPlan, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
@@ -1267,7 +1268,7 @@ export class PiWebRuntime implements WebRuntimeController {
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
         resourceLoaderOptions: {
-          extensionFactories: [commandDiscovery.extension],
+          extensionFactories: [commandDiscovery.extension, createTurnChangeRecorder(options.sessionManager, options.cwd)],
         },
       });
       registerCommandDiscoveryBridge(services, commandDiscovery);

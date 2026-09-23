@@ -2422,6 +2422,7 @@ test("adds validated file references without hiding the prompt contract", async 
     await dialog.getByRole("button", { name: "插入引用" }).click();
     await expect(dialog).toContainText("请选择当前会话工作区内的文件。");
     await expect(draft).toHaveValue("`README.md`");
+    await expect(dialog).toHaveCSS("opacity", "1");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
       path: testInfo.outputPath(`file-reference-${width}.png`),

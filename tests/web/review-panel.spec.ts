@@ -13,7 +13,6 @@ import { afterEach, expect, it, vi } from "vitest";
 import type { WebGitReviewSnapshot } from "../../web/protocol/types.ts";
 import { parseDiffRows } from "../../web/ui/src/features/review/DiffCodePreview.tsx";
 import { ReviewPanel } from "../../web/ui/src/features/review/ReviewPanel.tsx";
-import { SessionChangesPopover } from "../../web/ui/src/features/review/SessionChangesPopover.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 
 afterEach(cleanup);
@@ -102,38 +101,6 @@ it("does not invent a numbered context row from a trailing diff newline", () => 
     { id: 1, kind: "removed", oldLine: 1, marker: "-", code: "old" },
     { id: 2, kind: "added", newLine: 1, marker: "+", code: "new" },
   ]);
-});
-
-it("shows a Codex-style session change trigger backed by Git files", () => {
-  const onOpenReview = vi.fn();
-  const { container } = render(
-    withI18n(createElement(SessionChangesPopover, { snapshot, onOpenReview })),
-  );
-  const trigger = screen.getByRole("button", {
-    name: /2 files changed/u,
-  });
-  expect(trigger.textContent).toContain("+8");
-  expect(trigger.textContent).toContain("-3");
-  vi.spyOn(trigger, "getBoundingClientRect").mockReturnValue({
-    top: 280,
-  } as DOMRect);
-  fireEvent.click(trigger);
-  const popover = screen.getByRole("dialog", { name: "Changes" });
-  expect(popover.style.maxHeight).toBe("260px");
-  const file = screen.getByRole("button", {
-    name: /very-long-file-name\.tsx/u,
-  });
-  fireEvent.click(file);
-  expect(onOpenReview).toHaveBeenCalledTimes(1);
-  expect(onOpenReview).toHaveBeenCalledWith(
-    "src/features/review/very-long-file-name.tsx",
-    trigger,
-  );
-  expect(container.querySelector(".session-changes-popover")).toBeNull();
-  fireEvent.click(trigger);
-  fireEvent.keyDown(document, { key: "Escape" });
-  expect(container.querySelector(".session-changes-popover")).toBeNull();
-  expect(document.activeElement).toBe(trigger);
 });
 
 it("switches from the changed-file list to a separate full-height diff view", () => {

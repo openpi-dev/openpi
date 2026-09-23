@@ -284,6 +284,78 @@ it("keeps a pending message and its sent time when its original anchor is outsid
   );
 });
 
+it("acknowledges an admitted prompt whose clipped anchor is its native parent", () => {
+  const value = snapshot();
+  value.selectedSession!.entries = [
+    {
+      id: "new-question",
+      parentId: "outside-window",
+      timestamp: "2026-09-22T09:02:00Z",
+      type: "message",
+      message: { role: "user", content: "New request" },
+    },
+  ];
+  const pending: LiveEntry = {
+    key: "optimistic-new",
+    message: { role: "user", content: "New request" },
+    optimistic: {
+      sessionId: "s",
+      sessionPath: "/session.jsonl",
+      commandId: "new",
+      afterEntryId: "outside-window",
+      admitted: true,
+    },
+  };
+  const remember = vi.fn();
+  const view = render(node(value, [pending], remember));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(1);
+  expect(remember).toHaveBeenCalledWith("s", "/session.jsonl", [
+    { key: "optimistic-new", entryId: "new-question" },
+  ]);
+
+  value.selectedSession!.entries[0]!.parentId = "different-branch";
+  view.rerender(node(structuredClone(value), [pending], remember));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(2);
+});
+
+it("keeps the local admission visible while a live user event awaits native projection", () => {
+  const value = snapshot();
+  const pending: LiveEntry = {
+    key: "optimistic-new",
+    message: { role: "user", content: "New request" },
+    optimistic: {
+      sessionId: "s",
+      sessionPath: "/session.jsonl",
+      commandId: "new",
+      afterEntryId: "old-answer",
+      admitted: true,
+    },
+  };
+  const event: LiveEntry = {
+    key: "native-event",
+    message: { role: "user", content: "New request" },
+  };
+  const view = render(node(value, [pending, event]));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(2);
+  expect(view.container.textContent).toContain("New request");
+
+  view.rerender(
+    node(structuredClone(value), [
+      pending,
+      event,
+      { ...event, key: "another-user-event" },
+    ]),
+  );
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(3);
+
+  const unadmitted: LiveEntry = {
+    ...pending,
+    optimistic: { ...pending.optimistic!, admitted: false },
+  };
+  view.rerender(node(structuredClone(value), [unadmitted, event]));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(3);
+});
+
 it("keeps the running marker on the native turn while follow-up messages are still pending", () => {
   const value = snapshot();
   value.selectedSession!.entries[1]!.message = {

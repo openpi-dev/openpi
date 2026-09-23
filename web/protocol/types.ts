@@ -1,5 +1,6 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
+import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
@@ -335,6 +336,7 @@ export type WebInteractiveTerminalEvent =
 export interface WebMessageTruncation {
   readonly truncated: true;
   readonly text?: true;
+  readonly visibleText?: true;
   readonly partsOmitted?: number;
   readonly details?: true;
 }
@@ -640,6 +642,7 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
       textTruncated: text.truncated,
+      visibleTextTruncated: text.truncated,
     };
   }
   if (!Array.isArray(content)) {
@@ -658,12 +661,14 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
       textTruncated: text.truncated,
+      visibleTextTruncated: text.truncated,
     };
   }
 
   const parts: WebMessagePart[] = [];
   let visibleText = "";
   let textTruncated = false;
+  let visibleTextTruncated = false;
   const retainedParts = Math.min(content.length, WEB_MAX_MESSAGE_PARTS);
   for (let index = 0; index < retainedParts; index++) {
     const part = content[index];
@@ -674,13 +679,18 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       const text = boundedTextProjection(typed.text, WEB_MAX_TEXT);
       projected = { type: "text", text: text.value };
       textTruncated ||= text.truncated;
+      visibleTextTruncated ||= text.truncated;
       if (visibleText.length < WEB_MAX_TEXT) {
         const separator = visibleText.length > 0 ? "\n" : "";
         const remaining = WEB_MAX_TEXT - visibleText.length - separator.length;
         if (remaining > 0) visibleText += `${separator}${text.value.slice(0, remaining)}`;
-        if (text.value.length > remaining) textTruncated = true;
+        if (text.value.length > remaining) {
+          textTruncated = true;
+          visibleTextTruncated = true;
+        }
       } else {
         textTruncated = true;
+        visibleTextTruncated = true;
       }
     } else if (
       typed.type === "image" &&
@@ -741,11 +751,25 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     parts.push(projected);
   }
   const contentText = boundedTextProjection(visibleText, WEB_MAX_TEXT);
+  visibleTextTruncated ||= contentText.truncated;
+  // Inspect only a bounded number of omitted data properties; never invoke
+  // arbitrary getters while projecting an untrusted Session message.
+  const inspectionEnd = Math.min(content.length, retainedParts + WEB_MAX_MESSAGE_PARTS);
+  for (let index = retainedParts; !visibleTextTruncated && index < inspectionEnd; index++) {
+    const part = Object.getOwnPropertyDescriptor(content, index)?.value;
+    if (part && typeof part === "object" && Object.getOwnPropertyDescriptor(part, "type")?.value === "text" &&
+      typeof Object.getOwnPropertyDescriptor(part, "text")?.value === "string" && Object.getOwnPropertyDescriptor(part, "text")!.value.length > 0)
+      visibleTextTruncated = true;
+  }
+  // Beyond the inspection budget, offer full-text recovery rather than silently
+  // hiding a later text part. The role gate below excludes tool results.
+  if (content.length > inspectionEnd) visibleTextTruncated = true;
   return {
     content: contentText.value,
     parts,
     partsOmitted: Math.max(0, content.length - retainedParts),
     textTruncated: textTruncated || contentText.truncated,
+    visibleTextTruncated,
   };
 }
 
@@ -809,6 +833,9 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
             ...(content.textTruncated || metadataTruncated || errorMessage?.truncated
               ? { text: true as const }
               : {}),
+            ...((role?.value === "user" || role?.value === "assistant") && content.visibleTextTruncated
+              ? { visibleText: true as const }
+              : {}),
             ...(content.partsOmitted > 0
               ? { partsOmitted: content.partsOmitted }
               : {}),
@@ -826,11 +853,16 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
   parentId?: string | null;
   message?: WebLiveMessage;
   turnTiming?: ReturnType<typeof readTurnTiming>;
+  turnChanges?: WebTurnChanges;
 } {
   const metadata = { id: entry.id, timestamp: entry.timestamp, ...(entry.parentId === undefined ? {} : { parentId: entry.parentId }) };
   if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
     const turnTiming = readTurnTiming(entry.data);
     if (turnTiming) return { type: entry.type, ...metadata, turnTiming };
+  }
+  if (entry.type === "custom" && entry.customType === WEB_TURN_CHANGES_ENTRY) {
+    const detail = readTurnChangesDetail(entry.data);
+    if (detail) return { type: entry.type, ...metadata, turnChanges: summarizeTurnChanges(detail) };
   }
   if (entry.type === "custom_message") {
     return {
@@ -853,7 +885,8 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     if (data && typeof data === "object" && "text" in data && typeof data.text === "string") {
       const message: WebLiveMessage = { role: entry.customType === WEB_COMMAND_INPUT ? "user" : "custom", content: data.text.slice(0, WEB_MAX_TEXT), customType: entry.customType,
         ...("commandId" in data && typeof data.commandId === "string" ? { commandId: data.commandId.slice(0, 200) } : {}),
-        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true } } : {}) };
+        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true,
+          ...(entry.customType === WEB_COMMAND_INPUT && data.text.length > WEB_MAX_TEXT ? { visibleText: true as const } : {}) } } : {}) };
       return { type: "message", ...metadata,
         message };
     }

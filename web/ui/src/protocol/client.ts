@@ -4,40 +4,42 @@ import type {
   WebSubagentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
-  type WebQuestionRequest,
-  type WebQuestionAnswers,
-  type WebQuestionReceipt,
-} from "../../../protocol/questions.ts";
-import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
 } from "../../../protocol/artifacts.ts";
+import {
+  type WebQuestionAnswers,
+  type WebQuestionReceipt,
+  type WebQuestionRequest,
+} from "../../../protocol/questions.ts";
+import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
   type WebEmbeddedBrowserAction,
   type WebEmbeddedBrowserState,
   type WebGitReviewResult,
+  type WebHistoryAnchor,
   type WebInteractiveTerminal,
   type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
   type WebPromptImage,
+  type WebSessionHistoryPage,
   type WebSettingsCatalog,
   type WebSnapshot,
-  type WebHistoryAnchor,
-  type WebSessionHistoryPage,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
 import type {
-  WebProviderAuthProjection,
   WebModelConfiguration,
   WebModelConfigurations,
+  WebProviderAuthProjection,
 } from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+
 import { controllerIdentity } from "./controller.ts";
 
 export class WebApiError extends Error {
@@ -178,6 +180,40 @@ export class WebClient {
       { signal, timeoutMessage: "History request timed out. Please retry." },
     );
     return result.session;
+  }
+
+  sessionItem(
+    sessionId: string,
+    sessionPath: string,
+    entryId: string,
+    cursor: number,
+    signal: AbortSignal,
+  ) {
+    return this.request<{
+      entryId: string;
+      text: string;
+      nextCursor: number | null;
+      totalChars: number;
+    }>(
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor) })}`,
+      { signal, timeoutMessage: "Message request timed out. Please retry." },
+    );
+  }
+
+  turnChanges(
+    sessionId: string,
+    sessionPath: string,
+    promptEntryId: string,
+    signal: AbortSignal,
+    filePath?: string,
+  ) {
+    return this.request<WebTurnChangesResult>(
+      `/api/turn-changes?${new URLSearchParams({ sessionId, sessionPath, promptEntryId, ...(filePath ? { filePath } : {}) })}`,
+      {
+        signal,
+        timeoutMessage: "Turn changes request timed out. Please retry.",
+      },
+    );
   }
 
   gitReview(

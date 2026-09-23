@@ -199,7 +199,9 @@ test("older native history restores the user's question without moving the visib
     await conversation.evaluate((element) =>
       element.scrollTo({ top: 0, behavior: "instant" }),
     );
-    await expect(page.getByText("已到会话开头", { exact: true })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: "加载更早的消息" }),
+    ).toHaveCount(0);
     await expect(
       conversation.getByText("Original question unique to the old branch", {
         exact: true,
@@ -217,9 +219,6 @@ test("older native history restores the user's question without moving the visib
         exact: true,
       }),
     ).toBeInViewport();
-    await expect(page.getByText("已到会话开头", { exact: true })).toHaveCount(
-      0,
-    );
   } finally {
     await context.close();
     await fixture.close();

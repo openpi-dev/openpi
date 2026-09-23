@@ -30,11 +30,13 @@ import {
 import { useTranslation } from "react-i18next";
 import type { WebSubagentActivity } from "../../../../../extensions/shared/web-observer-registry.ts";
 import { evidenceText, isEvidenceTool } from "../../../../protocol/evidence.ts";
+import type { WebTurnChanges } from "../../../../protocol/turn-changes.ts";
 import type { WebTurnTiming } from "../../../../protocol/turn-timing.ts";
 import type {
   WebHistoryAnchor,
   WebLiveMessage,
   WebMessagePart,
+  WebSessionProjection,
   WebSnapshot,
 } from "../../../../protocol/types.ts";
 import { Markdown } from "../../components/Markdown.tsx";
@@ -47,8 +49,10 @@ import {
 } from "../../lib/format.ts";
 import { isControlledSession } from "../../lib/session-control.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
+import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
 import { ToolEvidence } from "./ToolEvidence.tsx";
+import { TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
 import { useSessionHistory } from "./use-session-history.ts";
 
@@ -132,6 +136,7 @@ interface RenderRow {
   outcome?: "failed" | "interrupted";
   pendingPrompt?: boolean;
   promptCommandId?: string;
+  promptEntryId?: string;
 }
 
 function record(value: unknown): Record<string, unknown> {
@@ -525,11 +530,13 @@ function ThinkingEvidence({
 function MessageActions({
   content,
   editable,
+  copyRequiresFull = false,
   timestamp,
   onResend,
 }: {
   content: string;
   editable: boolean;
+  copyRequiresFull?: boolean;
   timestamp?: string;
   onResend: (value: string) => Promise<boolean>;
 }) {
@@ -620,8 +627,14 @@ function MessageActions({
       <button
         type="button"
         aria-label={copied ? t("copiedMessage") : t("copyMessage")}
-        title={copied ? t("copiedMessage") : t("copyMessage")}
-        disabled={copying}
+        title={
+          copyRequiresFull
+            ? t("messageCopyRequiresFull")
+            : copied
+              ? t("copiedMessage")
+              : t("copyMessage")
+        }
+        disabled={copying || copyRequiresFull}
         onClick={() => {
           const generation = ++copyGeneration.current;
           window.clearTimeout(copyTimer.current);
@@ -846,6 +859,7 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     .map((entry) => ({
       key: entry.entryId ?? entry.key,
       position: persistedPositions.get(entry.entryId ?? entry.key),
+      parentId: nativeById.get(entry.entryId ?? entry.key)?.parentId,
       signature: signature(entry.message),
     }));
   const commandInputs = new Map(
@@ -882,6 +896,7 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     ).length - queued,
   );
   let mergedRegularPrompts = 0;
+  const suppressedLiveUsers = new Set<string>();
   for (const live of liveMessages) {
     if (live.optimistic?.projectedEntryId) continue;
     const commandId =
@@ -903,14 +918,14 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
           ? -1
           : persistedPositions.get(live.optimistic.afterEntryId);
       const acknowledgement =
-        !live.optimistic.admitted ||
-        after === undefined ||
-        mergedRegularPrompts >= mergeLimit
+        !live.optimistic.admitted || mergedRegularPrompts >= mergeLimit
           ? undefined
           : promptCandidates.find(
               (entry) =>
                 entry.position !== undefined &&
-                entry.position > after &&
+                (after !== undefined
+                  ? entry.position > after
+                  : entry.parentId === live.optimistic?.afterEntryId) &&
                 !acknowledgedPrompts.has(entry.key) &&
                 entry.signature === signature(message),
             );
@@ -921,6 +936,25 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
         continue;
       }
     } else {
+      const admission =
+        message.role === "user"
+          ? liveMessages.find(
+              (pending) =>
+                pending.optimistic?.admitted &&
+                !pending.optimistic.projectedEntryId &&
+                !suppressedLiveUsers.has(pending.key) &&
+                !projectedPrompts.some((pair) => pair.key === pending.key) &&
+                pending.optimistic.sessionId === snapshot.selectedSession?.id &&
+                pending.optimistic.sessionPath ===
+                  snapshot.selectedSession?.path &&
+                signature(setupDisplayMessage(pending.message)) ===
+                  signature(message),
+            )
+          : undefined;
+      if (admission) {
+        suppressedLiveUsers.add(admission.key);
+        continue;
+      }
       const identity = messageIdentity(message);
       const legacy =
         identity === undefined ? legacySignature(message) : undefined;
@@ -1050,11 +1084,15 @@ function ConversationTurn({
   rows,
   active,
   expandProcesses,
+  changes,
+  session,
 }: {
   id: number;
   rows: RenderRow[];
   active: boolean;
   expandProcesses: boolean;
+  changes?: WebTurnChanges;
+  session?: WebSessionProjection;
 }) {
   const { t } = useTranslation();
   const failed = rows.some((row) => row.outcome === "failed");
@@ -1104,6 +1142,14 @@ function ConversationTurn({
         </header>
       )}
       {groupRows(rows, active, expandProcesses)}
+      {changes && session && (
+        <TurnChangesCard
+          key={`${session.id}:${session.path}:${changes.promptEntryId}`}
+          changes={changes}
+          sessionId={session.id}
+          sessionPath={session.path}
+        />
+      )}
     </section>
   );
 }
@@ -1113,6 +1159,8 @@ function renderTurns(
   running: boolean,
   expandProcesses: boolean,
   activeCommandId?: string,
+  changesByPrompt?: Map<string, WebTurnChanges>,
+  session?: WebSessionProjection,
 ) {
   const turns: Array<{ id: number; rows: RenderRow[] }> = [];
   for (const row of rows) {
@@ -1142,6 +1190,11 @@ function renderTurns(
       rows={turn.rows}
       active={running && turn.id === activeTurn}
       expandProcesses={expandProcesses}
+      changes={changesByPrompt?.get(
+        turn.rows.find((row) => row.kind === "prompt" && !row.pendingPrompt)
+          ?.promptEntryId ?? "",
+      )}
+      session={session}
       key={`turn-group-${turn.rows[0]?.key}`}
     />
   ));
@@ -1183,6 +1236,30 @@ export function Transcript(props: TranscriptProps) {
     },
   });
   const selected = history.session;
+  const selectedId = selected?.id;
+  const selectedPath = selected?.path;
+  const selectedCwd = selected?.cwd;
+  const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  const previousHydrationScope = useRef(hydrationScope);
+  const [hydratedMessages, setHydratedMessages] = useState<
+    Record<string, string>
+  >({});
+  useLayoutEffect(() => {
+    if (previousHydrationScope.current === hydrationScope) return;
+    previousHydrationScope.current = hydrationScope;
+    setHydratedMessages({});
+  }, [hydrationScope]);
+  const changesByPrompt = useMemo(
+    () =>
+      new Map(
+        (selected?.entries ?? []).flatMap((entry) =>
+          entry.turnChanges && entry.turnChanges.sessionId === selected?.id
+            ? [[entry.turnChanges.promptEntryId, entry.turnChanges] as const]
+            : [],
+        ),
+      ),
+    [selected?.entries, selected?.id],
+  );
   const lastHistoryReset = useRef(history.reset);
   const historyPaused = history.hasNewer || history.verifying;
   const active = isControlledSession(props.snapshot, selected);
@@ -1387,6 +1464,13 @@ export function Transcript(props: TranscriptProps) {
           id: turn,
           title: turnTitle(message.content || t("attachedImage")),
         });
+        const hydrationKey = entry.entryId
+          ? JSON.stringify([selectedId, selectedPath, entry.entryId])
+          : "";
+        const hydrated = hydratedMessages[hydrationKey];
+        const awaitingFull = Boolean(
+          message.truncation?.visibleText && hydrated === undefined,
+        );
         return [
           {
             key: entry.key,
@@ -1394,6 +1478,7 @@ export function Transcript(props: TranscriptProps) {
             kind: "prompt",
             pendingPrompt: Boolean(entry.optimistic),
             promptCommandId: entry.optimistic?.commandId ?? message.commandId,
+            promptEntryId: entry.entryId,
             content: (
               <article
                 className="message-row user"
@@ -1402,18 +1487,40 @@ export function Transcript(props: TranscriptProps) {
               >
                 <div className="message-content">
                   <UserImageAttachments message={message} />
-                  {message.content && (
-                    <div className="message-body">{message.content}</div>
-                  )}
+                  {(message.content || message.truncation?.visibleText) &&
+                    (entry.entryId &&
+                    selectedId &&
+                    selectedPath &&
+                    message.truncation?.visibleText ? (
+                      <FullMessageText
+                        key={`${selectedId}:${selectedPath}:${entry.entryId}`}
+                        preview={message.content}
+                        sessionId={selectedId}
+                        sessionPath={selectedPath}
+                        entryId={entry.entryId}
+                        markdown={false}
+                        fullText={hydrated}
+                        onComplete={(text) =>
+                          setHydratedMessages((current) => ({
+                            ...current,
+                            [hydrationKey]: text,
+                          }))
+                        }
+                      />
+                    ) : (
+                      <div className="message-body">{message.content}</div>
+                    ))}
                 </div>
                 <MessageActions
-                  content={message.content}
+                  content={hydrated ?? message.content}
                   editable={
                     active &&
                     !historyPaused &&
                     index === lastUserIndex &&
-                    !hasImages
+                    !hasImages &&
+                    !awaitingFull
                   }
+                  copyRequiresFull={awaitingFull}
                   timestamp={entry.timestamp}
                   onResend={props.onResend}
                 />
@@ -1429,8 +1536,23 @@ export function Transcript(props: TranscriptProps) {
           (last, part, partIndex) => (part.type === "text" ? partIndex : last),
           -1,
         );
+        const recoverable = Boolean(
+          entry.entryId &&
+            selectedId &&
+            selectedPath &&
+            message.truncation?.visibleText,
+        );
+        const fullPreview = message.content;
+        const hydrationKey = entry.entryId
+          ? JSON.stringify([selectedId, selectedPath, entry.entryId])
+          : "";
+        const hydrated = hydratedMessages[hydrationKey];
+        const awaitingFull = Boolean(
+          message.truncation?.visibleText && hydrated === undefined,
+        );
         const appendText = (text: string, key: string, actions: boolean) => {
-          if (!text.trim()) return;
+          if (recoverable && !actions) return;
+          if (!recoverable && !text.trim()) return;
           const settledTiming = actions
             ? timingBeforeResponse.get(index)
             : undefined;
@@ -1455,12 +1577,34 @@ export function Transcript(props: TranscriptProps) {
                 }
               >
                 <div className="message-content">
-                  <Markdown>{text}</Markdown>
+                  {recoverable &&
+                  selectedId &&
+                  selectedPath &&
+                  entry.entryId ? (
+                    <FullMessageText
+                      key={`${selectedId}:${selectedPath}:${entry.entryId}`}
+                      preview={fullPreview}
+                      sessionId={selectedId}
+                      sessionPath={selectedPath}
+                      entryId={entry.entryId}
+                      markdown
+                      fullText={hydrated}
+                      onComplete={(text) =>
+                        setHydratedMessages((current) => ({
+                          ...current,
+                          [hydrationKey]: text,
+                        }))
+                      }
+                    />
+                  ) : (
+                    <Markdown>{text}</Markdown>
+                  )}
                 </div>
                 {actions && lastAssistantByTurn.has(index) && (
                   <MessageActions
-                    content={message.content}
+                    content={hydrated ?? message.content}
                     editable={false}
+                    copyRequiresFull={awaitingFull}
                     timestamp={entry.timestamp}
                     onResend={props.onResend}
                   />
@@ -1535,7 +1679,7 @@ export function Transcript(props: TranscriptProps) {
                   call={part}
                   result={result}
                   liveState={persistedResult ? undefined : live?.state}
-                  cwd={selected?.cwd}
+                  cwd={selectedCwd}
                 />
               ) : (
                 familyCard(
@@ -1711,7 +1855,10 @@ export function Transcript(props: TranscriptProps) {
     props.snapshot.thinking?.level,
     props.thinkingDurations,
     props.snapshot.runtime.liveTools,
-    selected?.cwd,
+    selectedId,
+    selectedPath,
+    selectedCwd,
+    hydratedMessages,
     t,
   ]);
 
@@ -1816,14 +1963,8 @@ export function Transcript(props: TranscriptProps) {
           setReadingHistory(!pinned.current);
         }}
       >
-        {(history.hasMore ||
-          history.engaged ||
-          history.error ||
-          (selected?.truncation.messagesTruncated ?? 0) > 0) && (
+        {(history.hasMore || history.error || history.verifying) && (
           <div className="conversation-history">
-            {(selected?.truncation.messagesTruncated ?? 0) > 0 && (
-              <p>{t("historyContentTruncated")}</p>
-            )}
             {history.error && <p role="alert">{t(history.error)}</p>}
             {history.error &&
               history.error !== "historyChanged" &&
@@ -1839,7 +1980,7 @@ export function Transcript(props: TranscriptProps) {
             {history.verifying && !history.error && (
               <p role="status">{t("historyVerifying")}</p>
             )}
-            {history.hasMore ? (
+            {history.hasMore && (
               <>
                 <span>
                   {t("historyOmitted", {
@@ -1857,8 +1998,6 @@ export function Transcript(props: TranscriptProps) {
                   {t(history.loading ? "historyLoading" : "historyLoadOlder")}
                 </button>
               </>
-            ) : (
-              history.engaged && <span>{t("historyStart")}</span>
             )}
           </div>
         )}
@@ -1867,6 +2006,8 @@ export function Transcript(props: TranscriptProps) {
           running && !historyPaused,
           props.snapshot.preferences.expandThinking === true,
           activeTurn?.commandId,
+          changesByPrompt,
+          selected,
         )}
         {running && (
           <div
@@ -1902,6 +2043,8 @@ export function Transcript(props: TranscriptProps) {
         <button
           className="jump-to-latest"
           type="button"
+          aria-label={t("jumpToLatest")}
+          title={t("jumpToLatest")}
           onClick={() => {
             const element = viewport.current;
             if (!element) return;

@@ -7,6 +7,7 @@ import {
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
 } from "../../web/protocol/types.ts";
+import { WEB_TURN_CHANGES_ENTRY } from "../../web/protocol/turn-changes.ts";
 
 test("message projection does not create phantom text for detail-only messages", () => {
   const projected = projectMessage({
@@ -62,6 +63,7 @@ test("assistant errors are bounded and redact credentials before they reach the 
   assert.ok(!projected.errorMessage?.includes("\u0000"));
   assert.ok((projected.errorMessage?.length ?? 0) < 600);
   assert.equal(projected.truncation?.text, true);
+  assert.equal(projected.truncation?.visibleText, undefined);
 });
 
 test("message projection keeps text parts separated without phantom blank lines", () => {
@@ -170,6 +172,96 @@ test("message projection bounds parts and reports exact omissions", () => {
   assert.equal(projected.parts?.length, WEB_MAX_MESSAGE_PARTS);
   assert.equal(projected.truncation?.partsOmitted, 7);
   assert.equal(projected.truncation?.truncated, true);
+  assert.equal(projected.truncation?.visibleText, true);
+});
+
+test("visible text recovery is limited to clipped user and assistant bodies", () => {
+  const longText = "x".repeat(13_000);
+  assert.equal(
+    projectMessage({ role: "user", content: longText }).truncation?.visibleText,
+    true,
+  );
+  assert.equal(
+    projectMessage({
+      role: "assistant",
+      content: [{ type: "text", text: longText }],
+    }).truncation?.visibleText,
+    true,
+  );
+  assert.equal(
+    projectMessage({ role: "toolResult", content: longText }).truncation
+      ?.visibleText,
+    undefined,
+  );
+  const thinking = projectMessage({
+    role: "assistant",
+    content: [{ type: "thinking", thinking: longText }],
+  });
+  assert.equal(thinking.truncation?.text, true);
+  assert.equal(thinking.truncation?.visibleText, undefined);
+  const argumentsOnly = projectMessage({
+    role: "assistant",
+    content: [
+      { type: "toolCall", name: "bash", arguments: { command: longText } },
+    ],
+  });
+  assert.equal(argumentsOnly.truncation?.visibleText, undefined);
+  const omittedText = projectMessage({
+    role: "assistant",
+    content: [
+      ...Array.from({ length: WEB_MAX_MESSAGE_PARTS }, () => ({
+        type: "thinking",
+        thinking: "short",
+      })),
+      { type: "text", text: "later body" },
+    ],
+  });
+  assert.equal(omittedText.truncation?.visibleText, true);
+  const farOmittedText = projectMessage({
+    role: "assistant",
+    content: [
+      ...Array.from({ length: WEB_MAX_MESSAGE_PARTS * 2 }, () => ({
+        type: "thinking",
+        thinking: "short",
+      })),
+      { type: "text", text: "later body" },
+    ],
+  });
+  assert.equal(farOmittedText.truncation?.visibleText, true);
+});
+
+test("turn changes project bounded summary without persisted diff contents", () => {
+  const projected = projectEntry({
+    type: "custom",
+    id: "changes",
+    parentId: "answer",
+    timestamp: "2026-09-23T01:00:00.000Z",
+    customType: WEB_TURN_CHANGES_ENTRY,
+    data: {
+      version: 1,
+      sessionId: "session",
+      promptEntryId: "prompt",
+      state: "complete",
+      fileCount: 1,
+      additions: 1,
+      deletions: 1,
+      files: [
+        {
+          path: "src/a.ts",
+          status: "modified",
+          diff: "sensitive patch",
+          diffTruncated: false,
+          additions: 1,
+          deletions: 1,
+        },
+      ],
+    },
+  });
+  assert.equal(projected.turnChanges?.promptEntryId, "prompt");
+  assert.deepEqual(projected.turnChanges?.files, [
+    { path: "src/a.ts", status: "modified", additions: 1, deletions: 1 },
+  ]);
+  assert.ok(!JSON.stringify(projected).includes("sensitive patch"));
 });
 
 test("projection does not inspect parts or getters beyond its work budget", () => {

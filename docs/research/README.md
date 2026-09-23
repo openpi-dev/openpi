@@ -8,6 +8,8 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md`](WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md) — Codex-style paged Pi history/item recovery and per-user-turn Git evidence; local gates passed, CI pending ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
 - [`WEB_GIT_REVIEW_IDENTITY_2026-09-23.md`](WEB_GIT_REVIEW_IDENTITY_2026-09-23.md) — 逐文件重命名两端、暂存/工作树比较对象身份及真实 Chromium 刷新验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
 
 - [`WEB_READING_AND_LIFECYCLE_2026-09-22.md`](WEB_READING_AND_LIFECYCLE_2026-09-22.md) — 长会话历史、正文阅读、后台执行投影、待处理消息及输入控制文件身份；含真实 SDK 与 Chromium 验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。

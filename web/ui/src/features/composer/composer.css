@@ -167,7 +167,7 @@
   color: var(--muted);
 }
 
-.file-reference-heading p { margin-top: 3px; }
+.file-reference-heading p { margin-top: 3px; color: var(--text); }
 .file-reference-error { color: var(--error) !important; }
 
 @media (max-width: 520px) {

@@ -5,6 +5,7 @@ import {
   access,
   chmod,
   lstat,
+  mkdtemp,
   mkdir,
   readdir,
   readFile,
@@ -20,6 +21,7 @@ import {
   relative,
   resolve,
 } from "node:path";
+import { tmpdir } from "node:os";
 import { promisify } from "node:util";
 import {
   WEB_MAX_GIT_REVIEW_DIFF_BYTES,
@@ -60,6 +62,39 @@ export interface GitReviewService {
   capture(sessionPath: string, cwd: string): Promise<void>;
   read(sessionPath: string, cwd: string, options?: GitReviewReadOptions): Promise<WebGitReviewResult>;
   dispose?(): Promise<void>;
+}
+
+/** An isolated, pre-turn worktree state. Never falls back to a later capture. */
+export interface GitTurnChangeCapture {
+  read(): Promise<WebGitReviewResult>;
+  dispose(): Promise<void>;
+}
+
+export async function captureGitTurnChanges(sessionPath: string, cwd: string, maxBaselineBytes = GIT_REVIEW_MAX_TOTAL_BYTES): Promise<GitTurnChangeCapture> {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-turn-changes-"));
+  const store = new GitReviewBaselineStore(directory, join(directory, "baseline"), {
+    maxBaselines: 1,
+    maxBaselineBytes,
+  });
+  try {
+    await store.capture(sessionPath, cwd);
+    const captured = await store.readCaptured(sessionPath, cwd, { summary: true });
+    if (!captured.ok) throw new Error(`Turn baseline unavailable: ${captured.reason}`);
+  } catch (error) {
+    await rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+  let disposed = false;
+  return {
+    read: () => disposed
+      ? Promise.resolve({ ok: false, reason: "baseline_unavailable" })
+      : store.readCaptured(sessionPath, cwd),
+    async dispose() {
+      if (disposed) return;
+      disposed = true;
+      await rm(directory, { recursive: true, force: true });
+    },
+  };
 }
 
 export interface GitReviewReadOptions {
@@ -825,6 +860,10 @@ export class GitReviewBaselineStore implements GitReviewService {
   async read(sessionPath: string, cwd: string, options: GitReviewReadOptions = {}): Promise<WebGitReviewResult> {
     if (options.source && options.source !== "session") return readGitReview(cwd, options);
     await this.capture(sessionPath, cwd);
+    return this.readCaptured(sessionPath, cwd, options);
+  }
+
+  async readCaptured(sessionPath: string, cwd: string, options: GitReviewReadOptions = {}): Promise<WebGitReviewResult> {
     const paths = this.paths(sessionPath, cwd);
     const metadata = await this.metadata(paths.metadata);
     if (!metadata || metadata.status !== "ready") {

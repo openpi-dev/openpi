@@ -16,6 +16,7 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { loadSessionPreviewData } from "../../extensions/sessions/preview-loader.ts";
+import { WEB_COMMAND_INPUT } from "../../extensions/shared/web-command-feedback.ts";
 import { webCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
 import {
   boundedText,
@@ -44,6 +45,11 @@ import type {
   WebThinkingProjection,
 } from "../runtime/types.ts";
 import { matchesSessionIdentity } from "../runtime/session-identity.ts";
+import {
+  WEB_TURN_CHANGES_ENTRY,
+  readTurnChangesDetail,
+  type WebTurnChangesResult,
+} from "../protocol/turn-changes.ts";
 
 export class WebReadOnlySessionError extends Error {
   readonly code = "SESSION_NOT_FOUND" as const;
@@ -65,6 +71,69 @@ type WorkspaceStateSnapshot = {
 
 const TERMINAL_DISCOVERY_MAX_BYTES = 256 * 1024;
 const TERMINAL_DISCOVERY_MAX_FILES = WEB_MAX_SESSIONS;
+const HISTORY_PAGE_TURNS = 20;
+const ITEM_PAGE_TEXT_CHARS = 32_000;
+
+function visibleTextSegments(content: unknown) {
+  if (typeof content === "string") return [content];
+  if (!Array.isArray(content)) return [];
+  const texts = content.flatMap((part): string[] =>
+    part && typeof part === "object" && part.type === "text" && typeof part.text === "string"
+      ? [part.text] : [],
+  );
+  return texts.flatMap((value, index) => index ? ["\n", value] : [value]);
+}
+
+function visibleTextPage(content: unknown, cursor: number) {
+  const segments = visibleTextSegments(content);
+  const totalChars = segments.reduce((total, part) => total + part.length, 0);
+  if (cursor > totalChars) return null;
+  let position = 0;
+  let text = "";
+  for (const part of segments) {
+    const endOfPart = position + part.length;
+    if (cursor < endOfPart && text.length < ITEM_PAGE_TEXT_CHARS) {
+      const start = Math.max(0, cursor - position);
+      let end = Math.min(part.length, start + ITEM_PAGE_TEXT_CHARS - text.length);
+      if (end < part.length && end > start && /[\uD800-\uDBFF]/u.test(part[end - 1]!)) end--;
+      text += part.slice(start, end);
+      if (end < part.length) break;
+    }
+    position = endOfPart;
+    if (text.length >= ITEM_PAGE_TEXT_CHARS) break;
+  }
+  const next = cursor + text.length;
+  return { text, nextCursor: next < totalChars ? next : null, totalChars };
+}
+
+function alignHistoryPage(
+  projected: ReturnType<typeof projectEntries>,
+  totalEntries: number,
+) {
+  const prompts = projected.entries.flatMap((entry, index) =>
+    entry.message?.role === "user" ? [index] : [],
+  );
+  const start = prompts.length > HISTORY_PAGE_TURNS
+    ? prompts[prompts.length - HISTORY_PAGE_TURNS]!
+    : 0;
+  if (start === 0) return projected;
+  projected.entries.splice(0, start);
+  projected.bytes = jsonByteLength(projected.entries);
+  const messagesTruncated = projected.entries.filter((entry) => entry.message?.truncation).length;
+  const messagePartsOmitted = projected.entries.reduce(
+    (total, entry) => total + (entry.message?.truncation?.partsOmitted ?? 0),
+    0,
+  );
+  const entriesOmitted = totalEntries - projected.entries.length;
+  projected.truncation = {
+    ...projected.truncation,
+    entriesOmitted,
+    messagesTruncated,
+    messagePartsOmitted,
+    truncated: entriesOmitted > 0 || messagesTruncated > 0 || messagePartsOmitted > 0,
+  };
+  return projected;
+}
 
 type ReadOnlyTerminalSessionInfo = {
   id: string;
@@ -1031,6 +1100,8 @@ export class PiWebAdapter {
         removed++;
         bytes -= jsonByteLength(entry) + 1;
       }
+      const totalEntries = selected.truncation.entriesOmitted + removed + selected.entries.length;
+      if (removed > 0) alignHistoryPage(selected, totalEntries);
       let messagePartsOmitted = 0;
       let messagesTruncated = 0;
       for (const entry of selected.entries) {
@@ -1042,7 +1113,7 @@ export class PiWebAdapter {
       selected.truncation = {
         ...selected.truncation,
         truncated: true,
-        entriesOmitted: selected.truncation.entriesOmitted + removed,
+        entriesOmitted: totalEntries - selected.entries.length,
         messagePartsOmitted,
         messagesTruncated,
       };
@@ -1172,7 +1243,10 @@ export class PiWebAdapter {
         ? this.runtime.sessionManager
         : SessionManager.open(path));
     const branch = manager.getBranch();
-    const projected = projectEntries(branch, (path) => resolve(summary.cwd, path));
+    const projected = alignHistoryPage(
+      projectEntries(branch, (path) => resolve(summary.cwd, path)),
+      branch.length,
+    );
     return {
       id: summary.id,
       path: summary.path,
@@ -1203,7 +1277,10 @@ export class PiWebAdapter {
     const prefix = branch.slice(0, before);
     const projectionBudget = WEB_MAX_SELECTED_TRANSCRIPT_BYTES -
       jsonByteLength({ id: summary.id, path: summary.path, cwd: summary.cwd, anchorEntryId, requestedBeforeEntryId: beforeEntryId }) - 2048;
-    const projected = projectEntries(prefix, (file) => resolve(summary.cwd, file), projectionBudget);
+    const projected = alignHistoryPage(
+      projectEntries(prefix, (file) => resolve(summary.cwd, file), projectionBudget),
+      prefix.length,
+    );
     const session: WebSessionHistoryPage = {
       id: summary.id, path: summary.path, cwd: summary.cwd,
       anchorEntryId, requestedBeforeEntryId: beforeEntryId,
@@ -1222,9 +1299,67 @@ export class PiWebAdapter {
       };
       session.history!.beforeEntryId = session.entries[0]?.id ?? null;
     }
+    alignHistoryPage(session, prefix.length);
     session.bytes = jsonByteLength(session.entries);
     session.history!.beforeEntryId = session.truncation.entriesOmitted > 0
       ? session.entries[0]?.id ?? null : null;
     return { status: "ok" as const, session };
+  }
+
+  async getTurnChanges(
+    sessionId: string,
+    path: string,
+    promptEntryId: string,
+    filePath?: string,
+  ): Promise<WebTurnChangesResult> {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary) return { ok: false, reason: "not_found" };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (summary.id !== sessionId || manager.getSessionId() !== sessionId)
+      return { ok: false, reason: "identity_changed" };
+    const branch = manager.getBranch();
+    const prompt = branch.findIndex((entry) =>
+      entry.id === promptEntryId && entry.type === "message" && entry.message.role === "user"
+    );
+    if (prompt < 0) return { ok: false, reason: "identity_changed" };
+    const following = branch.slice(prompt + 1);
+    const nextPrompt = following.findIndex((entry) => entry.type === "message" && entry.message.role === "user");
+    const turn = nextPrompt < 0 ? following : following.slice(0, nextPrompt);
+    const changes = turn.find((entry) => {
+      if (entry.type !== "custom" || entry.customType !== WEB_TURN_CHANGES_ENTRY) return false;
+      const detail = readTurnChangesDetail(entry.data);
+      return detail?.promptEntryId === promptEntryId && detail.sessionId === sessionId;
+    });
+    const detail = changes?.type === "custom" ? readTurnChangesDetail(changes.data) : undefined;
+    if (!detail) return { ok: false, reason: "not_found" };
+    if (detail.state === "unavailable") return { ok: false, reason: "unavailable" };
+    if (filePath) {
+      const file = detail.files.find((item) => item.path === filePath);
+      if (!file) return { ok: false, reason: "not_found" };
+      return { ok: true, changes: { ...detail, files: [file] } };
+    }
+    return { ok: true, changes: detail };
+  }
+
+  async getSessionItem(sessionId: string, path: string, entryId: string, cursor: number) {
+    const summary = (await this.listSessions(path)).find((session) => session.path === path);
+    if (!summary) return { status: "not_found" as const };
+    const manager = this.runtime.getSessionManagerForRead?.(summary.id, summary.path) ??
+      (this.isCurrentSession(summary) ? this.runtime.sessionManager : SessionManager.open(path));
+    if (summary.id !== sessionId || manager.getSessionId() !== sessionId)
+      return { status: "changed" as const };
+    const entry = manager.getBranch().find((item) => item.id === entryId);
+    if (!entry) return { status: "changed" as const };
+    let content: unknown;
+    if (entry.type === "message" && (entry.message.role === "user" || entry.message.role === "assistant"))
+      content = entry.message.content;
+    else if (entry.type === "custom" && entry.customType === WEB_COMMAND_INPUT &&
+      entry.data && typeof entry.data === "object" && "text" in entry.data)
+      content = entry.data.text;
+    else return { status: "changed" as const };
+    const page = visibleTextPage(content, cursor);
+    return page ? { status: "ok" as const, page: { entryId, ...page } }
+      : { status: "invalid_cursor" as const };
   }
 }

@@ -3,6 +3,7 @@ import { execFile, execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import {
   lstat,
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -16,6 +17,7 @@ import { after, test } from "node:test";
 import { promisify } from "node:util";
 import {
   countGitDiffLines,
+  captureGitTurnChanges,
   GitReviewBaselineStore,
   readGitReview,
 } from "../../web/host/git-review.ts";
@@ -119,6 +121,73 @@ test("Git review baseline reports only changes made after a Session starts", asy
     changed.snapshot.files.find((file) => file.path === "preexisting.txt")
       ?.status,
     "modified",
+  );
+});
+
+test("turn capture excludes preexisting dirty work, records edits, and distinguishes no changes", async () => {
+  const root = await repository();
+  await writeFile(join(root, "base.txt"), "base\npreexisting\n", "utf8");
+  await writeFile(join(root, "already-untracked.txt"), "before\n", "utf8");
+  await Promise.all(
+    Array.from({ length: 205 }, (_, index) =>
+      writeFile(join(root, `preexisting-${index}.txt`), "before\n", "utf8"),
+    ),
+  );
+  const first = await captureGitTurnChanges("current:test-turn-1", root);
+  try {
+    const initial = await first.read();
+    assert.equal(initial.ok, true);
+    if (initial.ok) assert.deepEqual(initial.snapshot.files, []);
+    await writeFile(join(root, "base.txt"), "base\nchanged\n", "utf8");
+    await writeFile(join(root, "already-untracked.txt"), "after\n", "utf8");
+    await writeFile(join(root, "new.txt"), "new\n", "utf8");
+    const changed = await first.read();
+    assert.equal(changed.ok, true);
+    if (changed.ok) {
+      assert.deepEqual(changed.snapshot.files.map((file) => file.path).sort(), [
+        "already-untracked.txt",
+        "base.txt",
+        "new.txt",
+      ]);
+      assert.equal(changed.snapshot.additions, 3);
+      assert.equal(changed.snapshot.deletions, 2);
+    }
+  } finally {
+    await first.dispose();
+  }
+  const second = await captureGitTurnChanges("current:test-turn-2", root);
+  try {
+    const unchanged = await second.read();
+    assert.equal(unchanged.ok, true);
+    if (unchanged.ok) assert.deepEqual(unchanged.snapshot.files, []);
+  } finally {
+    await second.dispose();
+  }
+});
+
+test("turn capture fails closed if the workspace switches Git repositories", async () => {
+  const root = await repository();
+  const nested = join(root, "nested");
+  await mkdir(nested);
+  const capture = await captureGitTurnChanges("current:nested-turn", nested);
+  try {
+    await git(nested, "init", "-b", "main");
+    const result = await capture.read();
+    assert.deepEqual(result, { ok: false, reason: "git_failed" });
+  } finally {
+    await capture.dispose();
+  }
+});
+
+test("turn capture does not recapture after its dirty-worktree budget is exceeded", async () => {
+  const root = await repository();
+  await writeFile(
+    join(root, "oversized.bin"),
+    Buffer.alloc(5 * 1024 * 1024, 7),
+  );
+  await assert.rejects(
+    captureGitTurnChanges("current:oversized-turn", root, 4 * 1024 * 1024),
+    /baseline unavailable/iu,
   );
 });
 

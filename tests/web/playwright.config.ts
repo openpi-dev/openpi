@@ -25,6 +25,7 @@ export default defineConfig({
     "tests/web/conversation-reading.e2e.ts",
     "tests/web/workbench-polish.e2e.ts",
     "tests/web/session-history.e2e.ts",
+    "tests/web/turn-changes-history.e2e.ts",
     "tests/web/session-observer.e2e.ts",
     "tests/web/git-review.e2e.ts",
     "tests/web/artifact-images.e2e.ts",
