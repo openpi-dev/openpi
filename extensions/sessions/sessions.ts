@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { sanitizeTerminalText } from "../shared/terminal-text.ts";
@@ -427,37 +427,69 @@ export function buildPreviewError(
 }
 
 const TRASH_TIMEOUT_MS = 2_000;
+const TRASH_KILL_GRACE_MS = 500;
 
+type TrashOutcome = "closed" | "aborted" | "uncertain";
+
+/** Do not fall back to unlink until the helper is confirmed closed. */
 function runTrashAsync(
   sessionPath: string,
   timeoutMs = TRASH_TIMEOUT_MS,
   signal?: AbortSignal,
-): Promise<boolean> {
+): Promise<TrashOutcome> {
+  if (signal?.aborted) return Promise.resolve("aborted");
   const trashArgs = sessionPath.startsWith("-")
     ? ["--", sessionPath]
     : [sessionPath];
   return new Promise((resolve) => {
+    let child: ReturnType<typeof spawn>;
     try {
-      const child = execFile(
-        "trash",
-        trashArgs,
-        {
-          timeout: timeoutMs,
-          signal,
-          encoding: "utf8",
-        },
-        (error) => {
-          if (!error || !existsSync(sessionPath)) {
-            resolve(true);
-          } else {
-            resolve(false);
-          }
-        },
-      );
-      child.on("error", () => resolve(false));
+      child = spawn("trash", trashArgs, { stdio: "ignore" });
     } catch {
-      resolve(false);
+      // Spawn failed before a helper process could be started.
+      resolve("closed");
+      return;
     }
+
+    let finished = false;
+    let stopped = false;
+    let aborted = false;
+    let killTimer: ReturnType<typeof setTimeout> | undefined;
+    const finish = (result: TrashOutcome) => {
+      if (finished) return;
+      finished = true;
+      clearTimeout(deadline);
+      if (killTimer) clearTimeout(killTimer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(result);
+    };
+    const stop = (wasAborted: boolean) => {
+      if (stopped || finished) return;
+      stopped = true;
+      aborted = wasAborted;
+      // SIGKILL is required: a helper may ignore SIGTERM, including the
+      // SIGTERM sent by execFile's built-in timeout.
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        // A failed kill is not proof the helper has exited.
+      }
+      killTimer = setTimeout(() => {
+        child.unref();
+        finish("uncertain");
+      }, TRASH_KILL_GRACE_MS);
+      killTimer.unref?.();
+    };
+    const onAbort = () => stop(true);
+    const deadline = setTimeout(() => stop(false), timeoutMs);
+    deadline.unref?.();
+    child.on("error", () => {
+      // A failed spawn is followed by close; wait for it rather than racing
+      // an error against a helper that may have already started.
+    });
+    child.on("close", () => finish(aborted ? "aborted" : "closed"));
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) stop(true);
   });
 }
 
@@ -469,14 +501,24 @@ export async function deleteSessionFile(
     return { ok: false, method: "unlink", error: "File not found" };
   }
 
-  const trashed = await runTrashAsync(
-    sessionPath,
-    options?.timeoutMs,
-    options?.signal,
-  );
-  if (trashed || !existsSync(sessionPath)) {
-    return { ok: true, method: "trash" };
+  const timeoutMs =
+    options?.timeoutMs !== undefined &&
+    Number.isFinite(options.timeoutMs) &&
+    options.timeoutMs > 0
+      ? Math.min(options.timeoutMs, TRASH_TIMEOUT_MS)
+      : TRASH_TIMEOUT_MS;
+  const outcome = await runTrashAsync(sessionPath, timeoutMs, options?.signal);
+  if (outcome === "uncertain") {
+    return {
+      ok: false,
+      method: "trash",
+      error: "Trash helper termination unconfirmed; fallback deletion skipped",
+    };
   }
+  if (outcome === "aborted") {
+    return { ok: false, method: "trash", error: "Session deletion cancelled" };
+  }
+  if (!existsSync(sessionPath)) return { ok: true, method: "trash" };
 
   try {
     await unlink(sessionPath);
