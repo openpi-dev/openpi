@@ -630,6 +630,8 @@ const resources = {
       stoppingTurn: "Stopping current turn…",
       stoppedTurn: "Current turn stopped.",
       pendingFollowUpsHint: "{{count}} messages queued",
+      queuedMore: "{{count}} more queued",
+      queuedImage: "Image attachment",
       backgroundSessionRunning: "This session is running in the background…",
       toolsRequireCurrentSession:
         "Switch to this session to use interactive tools.",
@@ -1348,6 +1350,8 @@ const resources = {
       stoppingTurn: "正在停止当前轮次…",
       stoppedTurn: "当前轮次已停止。",
       pendingFollowUpsHint: "{{count}} 条消息正在排队",
+      queuedMore: "还有 {{count}} 条排队消息",
+      queuedImage: "图片附件",
       backgroundSessionRunning: "此会话正在后台运行…",
       toolsRequireCurrentSession: "切换到此会话后可使用交互工具。",
       activateViewedSession: "切换到此会话",

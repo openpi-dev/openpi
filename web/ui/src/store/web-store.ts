@@ -28,6 +28,7 @@ const refreshEventTypes = new Set([
   "session_start",
   "session_switched",
   "session_progress",
+  "queue_update",
   "prompt_failed",
   "model_select",
   "settings_changed",

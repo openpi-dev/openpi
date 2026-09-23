@@ -1541,6 +1541,68 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
   ).toBe(true);
 });
 
+it("shows Pi's queued messages beside the composer after reload and in a background session", () => {
+  const snapshot = activeSnapshot();
+  const selected = snapshot.selectedSession!;
+  snapshot.currentSessionId = "another-session";
+  snapshot.selectedExecution = {
+    sessionId: selected.id,
+    sessionPath: selected.path,
+    status: "running",
+    pendingFollowUps: 2,
+    queuedMessages: ["First follow-up", "Second follow-up"],
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  const store = createWebStore();
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: store.getState().actions,
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const queued = screen.getByRole("region", {
+    name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+  });
+  expect(queued.textContent).toContain("First follow-up");
+  expect(queued.textContent).toContain("Second follow-up");
+  expect(
+    screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 2 }), {
+      selector: ".composer-hint",
+    }),
+  ).toBeNull();
+
+  snapshot.selectedExecution = {
+    ...snapshot.selectedExecution!,
+    pendingFollowUps: 0,
+    queuedMessages: [],
+  };
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: structuredClone(snapshot),
+      }),
+    ),
+  );
+  expect(
+    screen.queryByRole("region", {
+      name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+    }),
+  ).toBeNull();
+});
+
 it("keeps background terminal activity and omission receipts visible", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.capabilities = {

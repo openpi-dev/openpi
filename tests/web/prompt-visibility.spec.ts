@@ -81,7 +81,7 @@ it("does not resurrect an already projected prompt after its native entry leaves
   expect(view.container.textContent).not.toContain("继续");
 });
 
-it("does not hide queued local prompts when a separate native follow-up has the same text", () => {
+it("shows the native queue separately from a persisted identical prompt", () => {
   const value = snapshot();
   value.selectedSession!.entries.push({
     id: "external-followup",
@@ -94,6 +94,7 @@ it("does not hide queued local prompts when a separate native follow-up has the 
     sessionPath: "/session.jsonl",
     status: "running",
     pendingFollowUps: 2,
+    queuedMessages: ["继续", "继续"],
     liveTools: [],
     liveToolsOmitted: 0,
   };
@@ -109,10 +110,40 @@ it("does not hide queued local prompts when a separate native follow-up has the 
     },
   }));
   const view = render(node(value, pending));
-  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(4);
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(2);
   expect(view.container.textContent).toContain(
     i18n.t("pendingFollowUpsHint", { count: 2 }),
   );
+});
+
+it("consumes only one local preview per native queued message", () => {
+  const value = snapshot();
+  value.selectedExecution = {
+    sessionId: "s",
+    sessionPath: "/session.jsonl",
+    status: "running",
+    pendingFollowUps: 1,
+    queuedMessages: ["继续"],
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  const pending: LiveEntry[] = ["first", "second"].map((commandId) => ({
+    key: `optimistic-${commandId}`,
+    message: { role: "user", content: "继续" },
+    optimistic: {
+      sessionId: "s",
+      sessionPath: "/session.jsonl",
+      commandId,
+      admitted: true,
+      afterEntryId: "old-answer",
+    },
+  }));
+  const view = render(node(value, pending));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(2);
+  value.selectedExecution.queuedMessages = [];
+  value.selectedExecution.pendingFollowUps = 0;
+  view.rerender(node(structuredClone(value), pending));
+  expect(view.container.querySelectorAll(".message-row.user")).toHaveLength(3);
 });
 
 function snapshot(): WebSnapshot {

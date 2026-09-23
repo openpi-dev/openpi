@@ -251,16 +251,40 @@ test("a readonly observer keeps its pending messages and native progress, then r
       await expect(input).toHaveValue("");
     }
     const conversation = page.locator(".conversation");
-    const ownPending = conversation
-      .locator(".message-row.user .message-body")
+    const queue = page.getByRole("region", { name: "2 条消息正在排队" });
+    const ownPending = queue
+      .getByRole("listitem")
       .filter({ hasText: pendingText });
     await expect(ownPending).toHaveCount(2);
+    await expect(
+      conversation.getByText(pendingText, { exact: true }),
+    ).toHaveCount(0);
     await expect(
       conversation.getByText("2 条消息正在排队", { exact: true }),
     ).toBeVisible();
     const toolbar = page.locator(".composer-toolbar");
     const hint = page.locator(".composer-hint");
-    await expect(hint).toHaveText("2 条消息正在排队");
+    await expect(hint).toHaveAttribute("data-visible", "false");
+    await page.reload();
+    await expect(ownPending).toHaveCount(2);
+    await page.setViewportSize({ width: 390, height: 740 });
+    await expect(queue).toBeInViewport();
+    const queueBounds = await queue.boundingBox();
+    const composerBounds = await page.locator(".composer").boundingBox();
+    expect(
+      queueBounds &&
+        composerBounds &&
+        queueBounds.y + queueBounds.height <= composerBounds.y,
+    ).toBe(true);
+    expect(
+      await page.evaluate(
+        () => document.documentElement.scrollWidth <= window.innerWidth,
+      ),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath("queued-messages-mobile.png"),
+    });
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const timer = conversation.getByRole("timer");
     await expect(timer).toBeVisible();
     const beforeTimer = await timer.innerText();
@@ -277,7 +301,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await expect(activate).toBeVisible();
     await expect(input).toBeDisabled();
     await expect(toolbar).toBeHidden();
-    await expect(hint).toBeEmpty();
+    await expect(hint).toHaveAttribute("data-visible", "false");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
       "Observer A",
     );
@@ -310,7 +334,7 @@ test("a readonly observer keeps its pending messages and native progress, then r
     ).toBeVisible();
     await expect(timer).not.toHaveText(beforeTimer);
     await expect(toolbar).toBeHidden();
-    await expect(hint).toBeEmpty();
+    await expect(hint).toHaveAttribute("data-visible", "false");
     expect(
       fixture.web
         .getSessionExecution(aId, aPath)
@@ -326,8 +350,8 @@ test("a readonly observer keeps its pending messages and native progress, then r
     await expect(activate).toHaveCount(0);
     await expect(input).toBeEnabled();
     await expect(toolbar).toBeVisible();
-    await expect(hint).toHaveText("2 条消息正在排队");
-    await expect(ownPending).toHaveCount(2);
+    await expect(hint).toHaveAttribute("data-visible", "false");
+    await expect(queue).toBeVisible();
     expect(fixture.web.getActiveTurn()).toMatchObject({
       sessionId: aId,
       commandId: original.commandId,
@@ -354,7 +378,12 @@ test("a readonly observer keeps its pending messages and native progress, then r
       page.getByRole("button", { name: "停止当前轮次", exact: true }),
     ).toHaveCount(0);
     await expect(timer).toHaveCount(0);
-    await expect(ownPending).toHaveCount(2);
+    await expect(queue).toHaveCount(0);
+    await expect(
+      conversation
+        .locator(".message-row.user .message-body")
+        .filter({ hasText: pendingText }),
+    ).toHaveCount(2);
     await page.screenshot({
       path: testInfo.outputPath("observer-A-stopped-B-still-running.png"),
     });

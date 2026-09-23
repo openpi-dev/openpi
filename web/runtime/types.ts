@@ -114,6 +114,8 @@ export interface WebSessionExecution {
   sessionPath: string;
   status: "running" | "idle" | "unknown";
   pendingFollowUps?: number;
+  /** Bounded FIFO preview of Pi's native follow-up queue. */
+  queuedMessages?: readonly string[];
   liveTools: LiveToolEvidence[];
   liveToolsOmitted: number;
   activeTurn?: WebActiveTurn;

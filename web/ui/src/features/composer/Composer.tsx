@@ -648,6 +648,19 @@ export function Composer(props: ComposerProps) {
       ? execution.pendingFollowUps
       : undefined;
   const pendingCount = observedQueue ?? props.pendingFollowUpsReceipt;
+  const queuedMessages =
+    observedQueue !== undefined ? (execution?.queuedMessages ?? []) : [];
+  const queueOccurrences = new Map<string, number>();
+  const queuedRows = queuedMessages.map((message) => {
+    const occurrence = queueOccurrences.get(message) ?? 0;
+    queueOccurrences.set(message, occurrence + 1);
+    return { message, key: `${message}:${occurrence}` };
+  });
+  const showingQueue =
+    !props.workspaceDraft &&
+    !props.sessionSwitching &&
+    observedQueue !== undefined &&
+    queuedMessages.length > 0;
   const hint =
     props.promptAdmissionPending && !canStop
       ? t("promptPending")
@@ -661,8 +674,9 @@ export function Composer(props: ComposerProps) {
               ? t("stoppingTurn")
               : props.turnTerminalStatus === "cancelled"
                 ? t("stoppedTurn")
-                : props.pendingFollowUpsReceipt !== null ||
-                    (pendingCount ?? 0) > 0
+                : !showingQueue &&
+                    (props.pendingFollowUpsReceipt !== null ||
+                      (pendingCount ?? 0) > 0)
                   ? (pendingCount ?? 0) > 0
                     ? t("pendingFollowUpsHint", {
                         count: pendingCount ?? 0,
@@ -680,8 +694,8 @@ export function Composer(props: ComposerProps) {
       props.thinkingPendingLevel !== null ||
       props.turnCancellationPending ||
       props.turnTerminalStatus === "cancelled" ||
-      props.pendingFollowUpsReceipt !== null ||
-      (pendingCount ?? 0) > 0 ||
+      (!showingQueue && props.pendingFollowUpsReceipt !== null) ||
+      (!showingQueue && (pendingCount ?? 0) > 0) ||
       (running && Boolean(prompt.trim() || images.length)));
 
   return (
@@ -735,6 +749,29 @@ export function Composer(props: ComposerProps) {
         />
       )}
       {props.accessory}
+      {showingQueue && (
+        <section
+          className="composer-queue"
+          aria-label={t("pendingFollowUpsHint", { count: observedQueue })}
+        >
+          <strong>{t("pendingFollowUpsHint", { count: observedQueue })}</strong>
+          <ol>
+            {queuedRows.map(({ message, key }, index) => (
+              <li key={key}>
+                <span aria-hidden="true">{index + 1}</span>
+                <span>{message || t("queuedImage")}</span>
+              </li>
+            ))}
+          </ol>
+          {observedQueue > queuedMessages.length && (
+            <small>
+              {t("queuedMore", {
+                count: observedQueue - queuedMessages.length,
+              })}
+            </small>
+          )}
+        </section>
+      )}
       {props.landing && (
         <div className="workspace-picker-row">
           <DropdownMenu

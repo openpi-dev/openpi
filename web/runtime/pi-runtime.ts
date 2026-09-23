@@ -37,7 +37,7 @@ import {
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import { projectMessage, projectAssistantError, jsonByteLength } from "../protocol/types.ts";
+import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT } from "../protocol/types.ts";
 import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
 import { WEB_TURN_TIMING_ENTRY, type WebTurnTiming } from "../protocol/turn-timing.ts";
@@ -75,6 +75,7 @@ const WEB_MAX_PROVIDER_AUTH_ITEMS = 250;
 const WEB_MAX_PROVIDER_AUTH_SCANNED = 1_024;
 const WEB_MAX_PROVIDER_ID_LENGTH = 160;
 const WEB_MAX_PROVIDER_NAME_LENGTH = 160;
+const WEB_MAX_QUEUED_MESSAGES = 20;
 const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
   "stored",
   "runtime",
@@ -333,12 +334,14 @@ export class PiWebRuntime implements WebRuntimeController {
     const owner = this.sessionRuntimeForRead(sessionId, sessionPath);
     if (!owner) return unknown;
     const session = owner.session;
+    const followUps = session.getFollowUpMessages();
     const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
     const activeTurn = this.activeTurnFromTrace(trace);
     return {
       sessionId, sessionPath,
       status: session.isIdle ? "idle" : "running",
-      pendingFollowUps: session.getFollowUpMessages().length,
+      pendingFollowUps: followUps.length,
+      queuedMessages: followUps.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
       ...executingTools(session),
       ...(activeTurn ? { activeTurn } : {}),
     };
@@ -1461,6 +1464,9 @@ export class PiWebRuntime implements WebRuntimeController {
           sessionId: session.sessionManager.getSessionId(),
           level: event.level,
         });
+        break;
+      case "queue_update":
+        this.emit(event.type, { sessionId: session.sessionManager.getSessionId() });
         break;
       case "auto_retry_start":
         this.emit(event.type, {

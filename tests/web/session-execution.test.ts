@@ -208,6 +208,10 @@ test("a real Pi Session continues tool progress and queued follow-ups after anot
     expectedSessionId: sid,
   });
   assert.equal(web.getSessionExecution(sid, path).pendingFollowUps, 2);
+  assert.deepEqual(web.getSessionExecution(sid, path).queuedMessages, [
+    "Follow up one",
+    "Follow up two",
+  ]);
   await switchToB();
   const since = events.length;
   gates[0]!.release();
@@ -247,6 +251,10 @@ test("a real Pi Session continues tool progress and queued follow-ups after anot
     execution.pendingFollowUps,
     a.session.getFollowUpMessages().length,
   );
+  assert.deepEqual(execution.queuedMessages, [
+    "Follow up one",
+    "Follow up two",
+  ]);
   assert.deepEqual(
     execution.liveTools.map((item) => item.call.id),
     ["hold-a-1"],
@@ -265,6 +273,10 @@ test("a real Pi Session continues tool progress and queued follow-ups after anot
     snapshot.selectedExecution?.pendingFollowUps,
     a.session.getFollowUpMessages().length,
   );
+  assert.deepEqual(snapshot.selectedExecution?.queuedMessages, [
+    "Follow up one",
+    "Follow up two",
+  ]);
   assert.equal(
     web.getSessionExecution(sid, b.session.sessionManager.getSessionFile()!)
       .status,
@@ -288,6 +300,7 @@ test("a real Pi Session continues tool progress and queued follow-ups after anot
   );
   assert.equal(current.status, "idle");
   assert.equal(current.pendingFollowUps, 0);
+  assert.deepEqual(current.queuedMessages, []);
   assert.deepEqual(current.liveTools, []);
   assert.equal(
     events.slice(since).some((event) => event.type === "tool_execution_start"),

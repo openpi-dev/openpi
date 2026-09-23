@@ -980,7 +980,21 @@ function buildEntries(snapshot: WebSnapshot, liveMessages: LiveEntry[]) {
     if (message.role === "user" && live.optimistic) pendingPrompts.push(next);
     else entries.push(next);
   }
-  return { entries: [...entries, ...pendingPrompts], projectedPrompts };
+  const queueCounts = new Map<string, number>();
+  for (const message of execution?.queuedMessages ?? [])
+    queueCounts.set(message, (queueCounts.get(message) ?? 0) + 1);
+  const visiblePending = pendingPrompts.filter((entry) => {
+    if (
+      !entry.optimistic?.admitted ||
+      entry.optimistic.commandId === execution?.activeTurn?.commandId
+    )
+      return true;
+    const count = queueCounts.get(entry.message.content) ?? 0;
+    if (!count) return true;
+    queueCounts.set(entry.message.content, count - 1);
+    return false;
+  });
+  return { entries: [...entries, ...visiblePending], projectedPrompts };
 }
 
 function ProcessSequence({
