@@ -195,6 +195,29 @@ test("transcript preserves unlabelled quoted prose and unquoted redaction", () =
   );
 });
 
+test("transcript redacts every value in a standalone Cookie header", () => {
+  const transcript = serializeRunTranscript([
+    entry("cookie-header", {
+      role: "toolResult",
+      toolCallId: "call-cookie",
+      toolName: "read",
+      content: [
+        {
+          type: "text",
+          text: "Cookie: session=syntheticAlpha; sid=syntheticBeta\nordinary: visible",
+        },
+      ],
+      isError: false,
+      timestamp: 0,
+    }),
+  ]);
+
+  assert.equal(
+    transcript,
+    "TOOL RESULT read\nCookie: [REDACTED]\nordinary: visible",
+  );
+});
+
 for (const fixture of [
   ...[")", "]", ".", ").]"].flatMap((closer) =>
     ['"', "'"].map((quote) => ({
