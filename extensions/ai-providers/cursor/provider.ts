@@ -13,6 +13,7 @@ import type {
   ToolCall,
 } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
+import { applyTranscript } from "../transcript.ts";
 import { emptyUsage } from "../usage.ts";
 import { ConnectFrameReader } from "./connect-frame-reader.ts";
 import {
@@ -548,9 +549,10 @@ function resolveWireModel(model: Model<Api>): {
 /** Build the protobuf Run request and retain blobs for the same Connect stream. */
 export async function buildCursorRequest(
   model: Model<Api>,
-  context: Context,
+  rawContext: Context,
   options?: SimpleStreamOptions,
 ): Promise<CursorRequestBuild> {
+  const context = applyTranscript(rawContext);
   const store: CursorBlobStore = new Map();
   const activeIndex =
     context.messages.at(-1)?.role === "user"
@@ -687,9 +689,13 @@ function errorFromEndStream(data: Uint8Array): Error | undefined {
 /** Cursor AgentService/Run with Pi-owned tool execution across provider turns. */
 export function streamCursor(
   model: Model<Api>,
-  context: Context,
+  rawContext: Context,
   options?: SimpleStreamOptions,
 ): AssistantMessageEventStream {
+  // Pi 0.86+ folds the system prompt and tools into transcript system messages;
+  // resolving here keeps every downstream read of `context.systemPrompt` /
+  // `context.tools` / `context.messages` correct on both Pi input shapes.
+  const context = applyTranscript(rawContext);
   const stream = createAssistantMessageEventStream();
   (async () => {
     const output: AssistantMessage = {

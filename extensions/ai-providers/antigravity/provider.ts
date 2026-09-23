@@ -23,9 +23,11 @@ import type {
   Context,
   Model,
   SimpleStreamOptions,
+  Tool,
   ToolCall,
 } from "@earendil-works/pi-ai/compat";
 import { createAssistantMessageEventStream } from "@earendil-works/pi-ai/compat";
+import { resolveTranscript } from "../transcript.ts";
 import { emptyUsage } from "../usage.ts";
 import { decodeApiKey } from "./credentials.ts";
 import {
@@ -186,13 +188,6 @@ function isClaudeRoute(modelId: string): boolean {
   return modelId.toLowerCase().includes("claude");
 }
 
-function normalizeSystemPrompts(
-  systemPrompt: Context["systemPrompt"],
-): string[] {
-  if (!systemPrompt) return [];
-  return Array.isArray(systemPrompt) ? systemPrompt : [systemPrompt];
-}
-
 /** Deterministic conversation id: hash of the first user text, like the client. */
 function deriveSessionId(context: Context): string {
   for (const message of context.messages) {
@@ -271,11 +266,10 @@ function buildToolConfig(
 
 /** Convert pi tools to CCA functionDeclarations with sanitized schemas. */
 function buildTools(
-  context: Context,
+  tools: Tool[] | undefined,
   toolChoice: AntigravityStreamOptions["toolChoice"],
 ): Record<string, unknown>[] | undefined {
   if (toolChoice === "none") return undefined;
-  const tools = context.tools;
   if (!tools || tools.length === 0) return undefined;
   const converted = convertTools([...tools], true) as
     | { functionDeclarations: Record<string, unknown>[] }[]
@@ -297,10 +291,18 @@ export function buildRequestBody(
   projectId: string,
   state?: AntigravitySessionState,
 ): Record<string, unknown> {
-  const contents = convertMessages(model, context);
+  // Pi 0.86+ folds the system prompt and tool declarations into transcript system
+  // messages; Pi <= 0.85.1 still passes them as Context fields. Resolve both shapes
+  // before converting, so the conversation never carries a system message and the
+  // prompt/tools are never silently dropped.
+  const transcript = resolveTranscript(context);
+  const contents = convertMessages(model, {
+    ...context,
+    messages: transcript.messages,
+  });
 
   const request: Record<string, unknown> = { contents };
-  const systemPrompts = normalizeSystemPrompts(context.systemPrompt);
+  const systemPrompts = transcript.systemPrompts;
   if (systemPrompts.length > 0) {
     request.systemInstruction = {
       role: "user",
@@ -308,7 +310,7 @@ export function buildRequestBody(
     };
   }
 
-  const tools = buildTools(context, options?.toolChoice);
+  const tools = buildTools(transcript.tools, options?.toolChoice);
   if (tools) request.tools = tools;
   const toolConfig = buildToolConfig(
     model,
