@@ -149,6 +149,8 @@ export const DEFAULT_WORKFLOW_CONCURRENCY = 8;
 export const DEFAULT_WORKFLOW_MAX_AGENT_CALLS = 128;
 export const MAX_WORKFLOW_CONCURRENCY = 64;
 export const MAX_WORKFLOW_AGENT_CALLS = 1_024;
+/** Opt-in session-wide limit; it deliberately does not inherit Workflow's 8. */
+export const MAX_SESSION_CHILD_EXECUTION_LIMIT = 64;
 /** Bound on the single post-edit command string. */
 export const POST_EDIT_COMMAND_MAX_CHARS = 500;
 
@@ -165,6 +167,10 @@ export interface MyPiSetupConfig {
   readonly workflows: {
     readonly concurrency: number;
     readonly maxAgentCalls: number;
+  };
+  /** Cross-entry runtime admission; omitted means preserve historical behaviour. */
+  readonly childExecutions: {
+    readonly maxActive?: number;
   };
   readonly ui: {
     readonly webTheme: WebTheme;
@@ -200,6 +206,7 @@ export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
     concurrency: DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls: DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
   },
+  childExecutions: {},
   ui: {
     webTheme: "system",
     webChatWidth: DEFAULT_WEB_CHAT_WIDTH,
@@ -513,6 +520,9 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
       : undefined;
 
   const workflows = isRecord(value.workflows) ? value.workflows : {};
+  const childExecutions = isRecord(value.childExecutions)
+    ? value.childExecutions
+    : {};
   const ui = isRecord(value.ui) ? value.ui : {};
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
@@ -537,6 +547,14 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
         DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
         MAX_WORKFLOW_AGENT_CALLS,
       ),
+    },
+    childExecutions: {
+      ...(typeof childExecutions.maxActive === "number" &&
+      Number.isInteger(childExecutions.maxActive) &&
+      childExecutions.maxActive >= 1 &&
+      childExecutions.maxActive <= MAX_SESSION_CHILD_EXECUTION_LIMIT
+        ? { maxActive: childExecutions.maxActive }
+        : {}),
     },
     ui: {
       webTheme: isWebTheme(ui.webTheme) ? ui.webTheme : "system",
@@ -626,6 +644,9 @@ const setupShape: ConfigShape = {
   workflows: {
     concurrency: integerBetween(1, MAX_WORKFLOW_CONCURRENCY),
     maxAgentCalls: integerBetween(1, MAX_WORKFLOW_AGENT_CALLS),
+  },
+  childExecutions: {
+    maxActive: integerBetween(1, MAX_SESSION_CHILD_EXECUTION_LIMIT),
   },
   ui: {
     webTheme: isWebTheme,
@@ -1355,6 +1376,9 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,
+    config.childExecutions.maxActive === undefined
+      ? "Session child executions: unbounded (disabled)"
+      : `Session child executions: ${config.childExecutions.maxActive} active slots shared by Workflow, Direct Subagent, and BTW`,
     `UI: Web theme ${config.ui.webTheme} · chat ${config.ui.webChatWidth}px / ${config.ui.webChatFontSize}px / thinking ${config.ui.webExpandThinking ? "expanded" : "collapsed"} · large header ${config.ui.showHeader ? "on" : "off"} · custom footer ${footer}`,
     `Subagent results: ${config.ui.subagentResultDisplay === "full" ? "full by default" : "compact status summary (Ctrl+O expands full output)"}`,
     `Bash operations: ${config.ui.bashToolDisplay === "full" ? "expanded by default" : "one-line activity summary (Ctrl+O restores native evidence)"}`,

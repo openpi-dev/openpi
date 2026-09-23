@@ -4,6 +4,10 @@ import {
   MAX_WORKFLOW_AGENT_CALLS,
   MAX_WORKFLOW_CONCURRENCY,
 } from "../shared/setup-config.ts";
+import type {
+  ChildExecutionAdmission,
+  ChildExecutionLease,
+} from "../shared/child-execution-admission.ts";
 export const RUN_SHUTDOWN_TIMEOUT_MS = 8_000;
 
 function abortError(signal: AbortSignal) {
@@ -84,6 +88,7 @@ export class RunController {
   private readonly semaphore: Semaphore;
   private readonly maxAgentCalls: number;
   private readonly concurrency: number;
+  private readonly admission: ChildExecutionAdmission | undefined;
   private readonly tasks = new Set<Promise<unknown>>();
   private callCount = 0;
   private sealed = false;
@@ -95,6 +100,7 @@ export class RunController {
     parentSignal?: AbortSignal,
     concurrency = DEFAULT_WORKFLOW_CONCURRENCY,
     maxAgentCalls = DEFAULT_WORKFLOW_MAX_AGENT_CALLS,
+    admission?: ChildExecutionAdmission,
   ) {
     this.concurrency = Math.max(
       1,
@@ -105,6 +111,7 @@ export class RunController {
       1,
       Math.min(MAX_WORKFLOW_AGENT_CALLS, Math.floor(maxAgentCalls)),
     );
+    this.admission = admission;
     if (parentSignal) {
       this.parentSignal = parentSignal;
       this.parentAbort = () => this.abort("Parent operation was aborted");
@@ -160,9 +167,17 @@ export class RunController {
       else if (invocationSignal?.aborted) onInvocationAbort();
 
       let acquired = false;
+      let admissionLease: ChildExecutionLease | undefined;
       try {
         await this.semaphore.acquire(taskAbort.signal);
         acquired = true;
+        if (taskAbort.signal.aborted) throw abortError(taskAbort.signal);
+        // Every child path takes its existing local capacity first, then this
+        // shared Session limit. No path takes the inverse order, so no cycle.
+        admissionLease = await this.admission?.acquire(
+          "workflow",
+          taskAbort.signal,
+        );
         if (taskAbort.signal.aborted) throw abortError(taskAbort.signal);
         const result = await task(taskAbort.signal);
         if (invocationSignal?.aborted) throw abortError(invocationSignal);
@@ -170,6 +185,7 @@ export class RunController {
       } finally {
         this.signal.removeEventListener("abort", onRunAbort);
         invocationSignal?.removeEventListener("abort", onInvocationAbort);
+        admissionLease?.release();
         if (acquired) this.semaphore.release();
       }
     })();

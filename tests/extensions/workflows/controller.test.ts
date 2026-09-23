@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { RunController } from "../../../extensions/workflows/controller.ts";
 import { shutdownActiveWorkflowRuns } from "../../../extensions/workflows/index.ts";
+import { ChildExecutionAdmission } from "../../../extensions/shared/child-execution-admission.ts";
 
 const delay = (milliseconds: number) =>
   new Promise<void>((resolve) => setTimeout(resolve, milliseconds));
@@ -25,6 +26,29 @@ test("RunController reserves calls synchronously and caps global fanout", async 
   );
   assert.equal(peak, 4);
   assert.equal(await controller.settle(), true);
+});
+
+test("FAIL: workflow waits for the shared Session slot before creating its child", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const direct = await admission.acquire("direct");
+  const controller = new RunController(undefined, 2, 8, admission);
+  let factoryCalls = 0;
+  const workflow = controller.schedule(async () => {
+    factoryCalls++;
+    return "workflow started";
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(factoryCalls, 0);
+  assert.deepEqual(admission.snapshot().queuedByOrigin, {
+    workflow: 1,
+    direct: 0,
+    btw: 0,
+  });
+  direct.release();
+  assert.equal(await workflow, "workflow started");
+  assert.equal(factoryCalls, 1);
+  assert.equal(admission.snapshot().held, 0);
 });
 
 test("RunController propagates invocation cancellation without aborting the run", async () => {

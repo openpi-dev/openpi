@@ -54,10 +54,15 @@ import {
 } from "../shared/activity-status.ts";
 import { fitNavigationSides } from "../shared/below-editor-navigation.ts";
 import {
+  sessionChildExecutionAdmission,
+  type ChildExecutionAdmission,
+} from "../shared/child-execution-admission.ts";
+import {
   inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
   waitBounded,
 } from "../shared/child-session.ts";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import { contextPercent } from "../shared/context-utilization.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import {
@@ -819,10 +824,18 @@ export default function workflows(
   const activeRuns = new Map<string, ActiveWorkflowRunLifecycle>();
   let unregisterWebCapability: (() => void) | undefined;
   let webCapabilityScope: WebCapabilityScope | undefined;
+  let admission: ChildExecutionAdmission | undefined;
   const activeDetails = () =>
     new Map(
       [...activeRuns].map(([runId, run]) => [runId, run.details] as const),
     );
+  if (pi.events) {
+    onSetupApply(pi, () => {
+      admission?.configure({
+        maxActive: loadSetupConfig().childExecutions.maxActive,
+      });
+    });
+  }
   const settledRuns = createWorkflowSettledRunRetention(
     options.settledRetention,
   );
@@ -1084,6 +1097,9 @@ export default function workflows(
   };
 
   pi.on("session_start", (_event, ctx) => {
+    admission = sessionChildExecutionAdmission(ctx.sessionManager, {
+      maxActive: loadSetupConfig().childExecutions.maxActive,
+    });
     unregisterWebCapability?.();
     const scope = ctx.sessionManager;
     webCapabilityScope = scope;
@@ -1155,6 +1171,8 @@ export default function workflows(
       navigationLayerRegistered = false;
     }
     await shutdownActiveWorkflowRuns([...activeRuns.values()]);
+    admission?.shutdown();
+    admission = undefined;
     // Give deferred completions one final delivery attempt. Failed sends stay
     // durably pending; clearing first would discard an envelope whose initial
     // persistence may have failed.
@@ -1345,6 +1363,7 @@ export default function workflows(
         undefined,
         workflowConfig.concurrency,
         workflowConfig.maxAgentCalls,
+        admission,
       );
       const handoffs = createWorkflowHandoffRegistry();
       const operators = new WorkflowOperatorRegistry();
