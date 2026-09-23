@@ -573,6 +573,13 @@ test("spawning is allowed while planning, resuming an existing child is not", ()
 });
 
 test("planning children get investigation tools and never gain any", () => {
+  // Git inspection is read-only and already part of both the parent Plan Mode
+  // surface and the child-safe package-tool allowlist.
+  for (const tool of ["git_show", "git_diff", "git_log"]) {
+    assert.ok(PLAN_MODE_CHILD_TOOLS.includes(tool));
+    assert.deepEqual(planModeChildTools(undefined), PLAN_MODE_CHILD_TOOLS);
+  }
+
   // The allowlist can only ever remove: a type that restricted itself further
   // keeps its own limit, and one that named a writing tool does not get it.
   assert.deepEqual(
