@@ -764,7 +764,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         if (entry.admissionUncertain) {
           return new SendError({
             message:
-              "Cannot restart this child because its previous termination is uncertain. End the parent Session before starting more child executions.",
+              "Cannot restart this child because its session is closed and its previous termination is uncertain. End the parent Session before starting more child executions.",
           });
         }
         // Restarting a settled subagent occupies a running slot again, so it
