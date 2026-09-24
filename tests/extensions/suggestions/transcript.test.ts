@@ -218,6 +218,31 @@ test("transcript redacts every value in a standalone Cookie header", () => {
   );
 });
 
+for (const lineBreak of ["\n", "\r\n"]) {
+  test(`transcript preserves the next line after an empty Cookie header (${JSON.stringify(lineBreak)})`, () => {
+    const transcript = serializeRunTranscript([
+      entry("empty-cookie-header", {
+        role: "toolResult",
+        toolCallId: "call-empty-cookie",
+        toolName: "read",
+        content: [
+          {
+            type: "text",
+            text: `Cookie:${lineBreak}ordinary: visible`,
+          },
+        ],
+        isError: false,
+        timestamp: 0,
+      }),
+    ]);
+
+    assert.equal(
+      transcript,
+      `TOOL RESULT read\nCookie: [REDACTED]${lineBreak}ordinary: visible`,
+    );
+  });
+}
+
 for (const fixture of [
   ...[")", "]", ".", ").]"].flatMap((closer) =>
     ['"', "'"].map((quote) => ({
