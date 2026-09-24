@@ -51,6 +51,22 @@ test("FAIL: workflow waits for the shared Session slot before creating its child
   assert.equal(admission.snapshot().held, 0);
 });
 
+test("retains the shared Session slot when child cleanup is uncertain", async () => {
+  const admission = new ChildExecutionAdmission({ maxActive: 1 });
+  const controller = new RunController(undefined, 1, 8, admission);
+
+  await controller.schedule(async () => ({
+    retainAdmissionLease: true as const,
+  }));
+  assert.equal(admission.snapshot().held, 1);
+
+  const queued = controller.schedule(async () => "must remain queued");
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(admission.snapshot().queued, 1);
+  admission.shutdown();
+  await assert.rejects(queued, /parent Session is shutting down/);
+});
+
 test("RunController propagates invocation cancellation without aborting the run", async () => {
   const controller = new RunController(undefined, 1);
   const invocation = new AbortController();

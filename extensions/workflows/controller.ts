@@ -16,6 +16,17 @@ function abortError(signal: AbortSignal) {
     : new Error("Workflow was aborted");
 }
 
+function retainsAdmissionLease(
+  value: unknown,
+): value is { retainAdmissionLease: true } {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "retainAdmissionLease" in value &&
+    value.retainAdmissionLease === true
+  );
+}
+
 class Semaphore {
   private active = 0;
   private readonly limit: number;
@@ -168,6 +179,7 @@ export class RunController {
 
       let acquired = false;
       let admissionLease: ChildExecutionLease | undefined;
+      let releaseAdmissionLease = true;
       try {
         await this.semaphore.acquire(taskAbort.signal);
         acquired = true;
@@ -180,12 +192,13 @@ export class RunController {
         );
         if (taskAbort.signal.aborted) throw abortError(taskAbort.signal);
         const result = await task(taskAbort.signal);
+        if (retainsAdmissionLease(result)) releaseAdmissionLease = false;
         if (invocationSignal?.aborted) throw abortError(invocationSignal);
         return result;
       } finally {
         this.signal.removeEventListener("abort", onRunAbort);
         invocationSignal?.removeEventListener("abort", onInvocationAbort);
-        admissionLease?.release();
+        if (releaseAdmissionLease) admissionLease?.release();
         if (acquired) this.semaphore.release();
       }
     })();

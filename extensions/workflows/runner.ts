@@ -77,6 +77,8 @@ export interface AgentOutcome {
   model?: string;
   contextWindow?: number;
   transcript: TranscriptEntry[];
+  /** Set when child shutdown did not provide trustworthy terminal evidence. */
+  retainAdmissionLease?: true;
 }
 
 export interface AgentProgress {
@@ -352,6 +354,8 @@ export async function runAgent(
         })
       : undefined;
     const cleanupError = cleanup?.errors.join("; ");
+    const retainAdmissionLease =
+      cleanup !== undefined && (!cleanup.ok || cleanup.timedOut);
     if (aborted) {
       return {
         ok: false,
@@ -364,6 +368,7 @@ export async function runAgent(
         model: options.model?.id,
         contextWindow: options.model?.contextWindow,
         transcript: [],
+        ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
       };
     }
     return {
@@ -375,6 +380,7 @@ export async function runAgent(
       model: options.model?.id,
       contextWindow: options.model?.contextWindow,
       transcript: [],
+      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
@@ -551,6 +557,7 @@ export async function runAgent(
   let output = "";
   let transcript: TranscriptEntry[] = [];
   let cleanupErrors: string[] = [];
+  let retainAdmissionLease = false;
   try {
     // Operator reuse may restore messages before this activation subscribes.
     // Hydrate both bounded projections once; ordinary progress never rescans it.
@@ -600,6 +607,7 @@ export async function runAgent(
       timeoutMs: options.shutdownTimeoutMs,
     });
     cleanupErrors = cleanup.errors;
+    retainAdmissionLease = !cleanup.ok || cleanup.timedOut;
   }
 
   const cleanupError =
@@ -620,6 +628,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
@@ -637,6 +646,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
@@ -651,6 +661,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
@@ -665,6 +676,7 @@ export async function runAgent(
       model: modelId,
       contextWindow,
       transcript,
+      ...(retainAdmissionLease ? { retainAdmissionLease: true } : {}),
     };
   }
 
