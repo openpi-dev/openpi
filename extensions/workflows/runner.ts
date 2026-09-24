@@ -561,7 +561,16 @@ export async function runAgent(
       // Pi owns transport liveness and retries. Quiet model output is not
       // evidence of a stalled request (thinking and retry backoff can be silent).
       await Promise.race([
-        childSession.prompt(buildWorkflowAgentPrompt(options.prompt)),
+        childSession.prompt(buildWorkflowAgentPrompt(options.prompt), {
+          preflightResult: (accepted) => {
+            if (accepted && aborted) {
+              // Pi invokes this immediately before entering the provider loop.
+              // Throwing here prevents a prompt whose preflight raced with
+              // cancellation from reviving after the abort race has settled.
+              throw abortError();
+            }
+          },
+        }),
         abortRace,
         projectionFailureRace,
       ]);
