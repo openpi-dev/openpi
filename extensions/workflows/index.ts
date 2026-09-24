@@ -215,6 +215,7 @@ import {
 import {
   createWorkflowResources,
   runAgent,
+  type AgentOutcome,
   type ThinkingLevel,
   type WorkflowAgentSessionFactory,
   type WorkflowModel,
@@ -550,6 +551,16 @@ interface ScriptAgentResult {
   /** Present only for the deprecated model self-attestation compatibility path. */
   acceptanceWarning?: string;
   error?: string;
+  /** Internal runtime receipt; never persisted or shown to the model. */
+  retainAdmissionLease?: true;
+}
+
+function admissionLeaseReceipt(
+  outcome: Pick<AgentOutcome, "retainAdmissionLease">,
+) {
+  return outcome.retainAdmissionLease === true
+    ? ({ retainAdmissionLease: true } as const)
+    : {};
 }
 
 interface AgentCallOptions {
@@ -2117,6 +2128,7 @@ export default function workflows(
                   ok: false,
                   output: "",
                   error: "Agent completed after workflow settlement",
+                  ...admissionLeaseReceipt(outcome),
                 };
               }
               record.usage = outcome.usage;
@@ -2223,6 +2235,7 @@ export default function workflows(
                   ? { acceptanceWarning: judged.acceptanceWarning }
                   : {}),
                 ...(record.error !== undefined ? { error: record.error } : {}),
+                ...admissionLeaseReceipt(outcome),
               };
             } finally {
               // Reclaim as this agent settles, not at run end: a pipeline can
