@@ -522,47 +522,48 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const spawn = (backendName: BackendName, task: SpawnTask) =>
       Effect.gen(function* () {
         const origin: SubagentOrigin = task.origin ?? "model";
-        // Reserve synchronously (before the first yield inside doSpawn) so
-        // parallel tool calls cannot race past the pool cap.
-        yield* Effect.suspend(
-          (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
-            if (disposed) {
-              return new SpawnError({
-                message: "Subagent manager is shutting down.",
-              });
-            }
-            if (atPoolCapacity(origin)) {
-              return new ConcurrencyLimitError({
-                message: `Max ${poolLimit(origin)} ${
-                  origin === "btw" ? "by-the-way" : "subagent"
-                } sessions can run concurrently. Wait for one to finish before spawning another.`,
-              });
-            }
-            if (origin === "btw") reservedBtw++;
-            else reservedModel++;
-            return Effect.void;
-          },
-        );
-
         let admissionLease: ChildExecutionLease | undefined;
-        if (config.admission) {
-          admissionLease = yield* Effect.tryPromise({
-            try: (signal) =>
-              config.admission!.acquire(
-                origin === "btw" ? "btw" : "direct",
-                signal,
-              ),
-            catch: (error) =>
-              new SpawnError({
-                message:
-                  error instanceof Error
-                    ? error.message
-                    : "Could not acquire a shared child execution slot.",
-              }),
-          });
-        }
+        let poolReservationHeld = false;
         let leaseTransferred = false;
         const doSpawn = Effect.gen(function* () {
+          // Reserve synchronously before the first asynchronous operation so
+          // parallel tool calls cannot race past the pool cap.
+          yield* Effect.suspend(
+            (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
+              if (disposed) {
+                return new SpawnError({
+                  message: "Subagent manager is shutting down.",
+                });
+              }
+              if (atPoolCapacity(origin)) {
+                return new ConcurrencyLimitError({
+                  message: `Max ${poolLimit(origin)} ${
+                    origin === "btw" ? "by-the-way" : "subagent"
+                  } sessions can run concurrently. Wait for one to finish before spawning another.`,
+                });
+              }
+              if (origin === "btw") reservedBtw++;
+              else reservedModel++;
+              poolReservationHeld = true;
+              return Effect.void;
+            },
+          );
+          if (config.admission) {
+            admissionLease = yield* Effect.tryPromise({
+              try: (signal) =>
+                config.admission!.acquire(
+                  origin === "btw" ? "btw" : "direct",
+                  signal,
+                ),
+              catch: (error) =>
+                new SpawnError({
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "Could not acquire a shared child execution slot.",
+                }),
+            });
+          }
           const backend: SubagentBackend | undefined =
             registry.get(backendName);
           if (!backend) {
@@ -640,8 +641,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         return yield* doSpawn.pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              if (origin === "btw") reservedBtw--;
-              else reservedModel--;
+              if (poolReservationHeld) {
+                if (origin === "btw") reservedBtw--;
+                else reservedModel--;
+              }
               if (!leaseTransferred) admissionLease?.release();
               notify();
             }),
