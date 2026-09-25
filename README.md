@@ -444,7 +444,9 @@ macOS/Linux arm64 与 x64 缺少二进制时，OpenPI 会从官方 Release 下�
 
 无参数时，OpenPI 展示当前状态并引导修改；带自然语言时只改指定项：
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+工作区清理保护默认使用 `enforce`；可用 `/openpi-setup 不透明清理命令走确认` 切换为 `ask`，或选择 `off` 关闭。
+
+<!-- config-contract: workspaceCleanupGuard capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ```text
 /openpi-setup 开启下一步预测，选择 Registry 里的轻量模型，minimal 推理
@@ -473,6 +475,7 @@ Footer 布局以 `footerLines` 作为唯一持久化格式。旧版 `footerItems
 
 | 配置                         | 默认值                                         |
 | ---------------------------- | ---------------------------------------------- |
+| Workspace cleanup guard     | `enforce`；另有 `ask` / `off`                  |
 | Capability discovery         | `explicit`；`adaptive` 必须显式开启            |
 | Next-action Suggestion       | 关闭；启用时显式选择 Registry 模型与 reasoning |
 | Workflow 并发 / 总调用       | 8 / 128；硬上限 64 / 1024                      |

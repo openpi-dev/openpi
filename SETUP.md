@@ -36,6 +36,8 @@ The terminal theme above remains Pi-owned. OpenPI Web has separate package-owned
 
 ## Configure this package
 
+The workspace cleanup guard defaults to `enforce`: it blocks deletion commands whose targets OpenPI cannot verify. Set `workspace_cleanup_guard=ask` to confirm those opaque commands through Pi's existing confirmation UI, or `off` to disable this guard. Known pre-existing literal paths continue to use the existing deletion confirmation in both `enforce` and `ask` modes; change the mode with `/openpi-setup`.
+
 The `compact` footer preset resolves to `plain` style with the default single-row layout; it is not a separate stored style. Applying it to the default footer does not change its appearance. Successful setup receipts distinguish saving the document from changing effective settings and list only fields that actually changed. Keeping defaults without invoking the writer does not create a file.
 
 Explicit field assignments retain their meaning: `footerStyle="compact"` is invalid; the allowed styles are `plain`, `powerline`, and `powerline-mono`. Setup should explain the legal choices and wait for a valid choice instead of silently applying a preset or default. Requesting the `compact` preset is valid and resets both style and layout. Tool writes reject invalid footer styles and presets; stored invalid styles block writes rather than being repaired automatically.
@@ -50,6 +52,7 @@ Use the single canonical package-owned command. `/my-pi-setup` remains a compati
 
 ```text
 /openpi-setup
+/openpi-setup 不透明清理命令走确认
 /openpi-setup 让模型在合适时自主发现并采用 OpenPI 能力
 /openpi-setup 只在我明确要求时加载 OpenPI 能力
 /openpi-setup 开启下一步预测，使用 seal/deepseek-v4-flash，关闭推理
@@ -83,7 +86,7 @@ native `PI_CLEAR_ON_SHRINK=0` setting remains an explicit opt-out.
 
 Legacy `footerItems` is accepted and migrated at the input boundary, but new setup writes persist only canonical `footerLines`. Configurations written by this version are not guaranteed to retain their Footer layout when read by an older OpenPI version.
 
-<!-- config-contract: capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
+<!-- config-contract: workspaceCleanupGuard capabilities.discovery suggestions.enabled suggestions.model workflows.concurrency workflows.maxAgentCalls ui.webTheme ui.webChatWidth ui.webChatFontSize ui.webExpandThinking ui.showHeader ui.customFooter ui.footerStyle ui.footerLines ui.subagentResultDisplay ui.bashToolDisplay ui.fileMutationDisplay postEdit.command subagents.roleModels -->
 
 ### Post-edit lifecycle
 

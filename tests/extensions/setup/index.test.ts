@@ -909,7 +909,7 @@ test("partially assigns and clears validated subagent role models", () => {
 test("builds a focused review prompt when configuration already exists", () => {
   const message = buildInteractiveSetupPrompt({
     currentConfiguration:
-      "Next-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls",
+      "Workspace cleanup guard: enforce\nNext-action suggestions: seal/deepseek-v4-flash · off · Right accepts\nWorkflows: 8 concurrent agents · 128 total calls",
     currentModel: "seal/gpt-5.6-sol",
     currentThinking: "high",
     savedConfigExists: true,
@@ -919,7 +919,7 @@ test("builds a focused review prompt when configuration already exists", () => {
   assert.match(message, /Explain the current settings/);
   assert.match(
     message,
-    /keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
+    /keep them or change Workspace cleanup guard, Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI\/Footer, result detail display, Post-edit, Agent role models/,
   );
   assert.match(message, /keeps the current settings, do not call/);
   assert.match(message, /available only for this setup run/i);

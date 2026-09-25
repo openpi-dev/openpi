@@ -452,7 +452,10 @@ async function exists(candidate: string) {
   }
 }
 
-export function createWorkspaceCleanupGuard() {
+export function createWorkspaceCleanupGuard(
+  initialMode: "enforce" | "ask" | "off" = "enforce",
+) {
+  let mode = initialMode;
   const origins = new Map<string, Origin>();
   const pending = new Map<string, PendingEffects>();
 
@@ -470,15 +473,21 @@ export function createWorkspaceCleanupGuard() {
     return { path: contained.absolute, existed, observeOnCommandError };
   };
 
-  const unverifiedCleanup = () => ({
-    kind: "block" as const,
-    protectedPaths: [],
-    reason:
-      "Blocked cleanup: OpenPI recognized a source-visible deletion outside its supported direct rm command grammar. Use a direct rm command with literal workspace-relative paths so OpenPI can determine whether each target is session-created scratch or a pre-existing path requiring confirmation.",
-  });
+  const unverifiedCleanup = async (attempt: BashAttempt) => {
+    if (mode === "ask" && (await attempt.confirmDelete([]))) {
+      return { kind: "allow" as const };
+    }
+    return {
+      kind: "block" as const,
+      protectedPaths: [],
+      reason:
+        "Blocked cleanup: OpenPI could not verify which workspace files this command may delete. Use a direct rm command with literal workspace-relative paths, or explicitly confirm the unverified cleanup in ask mode.",
+    };
+  };
 
   return {
     async beforeWrite(attempt: WriteAttempt) {
+      if (mode === "off") return;
       const creation = await prepareCreation(attempt.cwd, attempt.path, false);
       pending.set(attempt.id, {
         creations: creation ? [creation] : [],
@@ -487,14 +496,15 @@ export function createWorkspaceCleanupGuard() {
     },
 
     async before(attempt: BashAttempt) {
+      if (mode === "off") return { kind: "allow" as const };
       const inspected = inspectShell(attempt.command);
-      if (inspected.opaqueDestructiveCommand) return unverifiedCleanup();
+      if (inspected.opaqueDestructiveCommand) return unverifiedCleanup(attempt);
 
       const containedRemovals = inspected.removals.map((candidate) =>
         containedPath(attempt.cwd, candidate),
       );
       if (containedRemovals.some((candidate) => !candidate)) {
-        return unverifiedCleanup();
+        return unverifiedCleanup(attempt);
       }
 
       const creations: PendingEffects["creations"] = [];
@@ -556,6 +566,15 @@ export function createWorkspaceCleanupGuard() {
     },
 
     reset() {
+      origins.clear();
+      pending.clear();
+    },
+
+    setMode(next: "enforce" | "ask" | "off") {
+      if (mode === next) return;
+      mode = next;
+      // ponytail: discard uncertain ownership on policy changes;
+      // re-confirm if needed.
       origins.clear();
       pending.clear();
     },

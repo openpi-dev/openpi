@@ -7,8 +7,9 @@ import { createWorkspaceCleanupGuard } from "../../../extensions/workspace-clean
 
 function guardFor(
   confirmDelete: (paths: readonly string[]) => Promise<boolean>,
+  mode: "enforce" | "ask" | "off" = "enforce",
 ) {
-  const guard = createWorkspaceCleanupGuard();
+  const guard = createWorkspaceCleanupGuard(mode);
   return {
     ...guard,
     before(attempt: { id: string; command: string; cwd: string }) {
@@ -16,6 +17,119 @@ function guardFor(
     },
   };
 }
+
+test("cleanup guard modes keep enforce default, ask on opaque commands, and bypass in off", async () => {
+  await withWorkspace(async (workspace) => {
+    await writeFile(path.join(workspace, "baseline.txt"), "keep");
+    const confirmations: string[][] = [];
+    const noConfirmations: string[][] = [];
+    const noPaths: string[] = [];
+    const baselinePath = ["baseline.txt"];
+    const enforce = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    });
+    assert.equal(
+      (
+        await enforce.before({
+          id: "enforce-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "block",
+    );
+    assert.deepEqual(confirmations, noConfirmations);
+
+    const ask = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    }, "ask");
+    assert.equal(
+      (
+        await ask.before({
+          id: "ask-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths]);
+
+    assert.equal(
+      (
+        await ask.before({
+          id: "ask-known-path",
+          command: "rm baseline.txt",
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath]);
+
+    const denyAsk = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    }, "ask");
+    assert.equal(
+      (
+        await denyAsk.before({
+          id: "deny-ask-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "block",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+
+    const off = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return false;
+    }, "off");
+    assert.equal(
+      (
+        await off.before({
+          id: "off-opaque",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+    assert.equal(
+      (
+        await off.before({
+          id: "off-known-path",
+          command: "rm baseline.txt",
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths]);
+
+    const changeable = guardFor(async (paths) => {
+      confirmations.push([...paths]);
+      return true;
+    });
+    changeable.setMode("ask");
+    assert.equal(
+      (
+        await changeable.before({
+          id: "changed-to-ask",
+          command: 'rm "$(cat target)"',
+          cwd: workspace,
+        })
+      ).kind,
+      "allow",
+    );
+    assert.deepEqual(confirmations, [noPaths, baselinePath, noPaths, noPaths]);
+  });
+});
 
 async function withWorkspace(run: (workspace: string) => Promise<void>) {
   const workspace = await mkdtemp(

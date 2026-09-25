@@ -33,6 +33,8 @@ import {
   POST_EDIT_COMMAND_MAX_CHARS,
   REASONING_LEVELS,
   SETUP_CONFIG_CHANGED_CHANNEL,
+  type WorkspaceCleanupGuardMode,
+  WORKSPACE_CLEANUP_GUARD_MODES,
   updateSetupConfig,
   WEB_THEMES,
   type WebTheme,
@@ -126,12 +128,12 @@ export function buildInteractiveSetupPrompt(options: {
 }) {
   const configurationState = options.savedConfigExists
     ? [
-        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
+        "This package has already been configured. Explain the current settings in the user's language, then ask whether they want to keep them or change Workspace cleanup guard, Capability discovery, Next-action suggestions, Workflow limits, OpenPI Web appearance, UI/Footer, result detail display, Post-edit, Agent role models, or review everything.",
         "If the user keeps the current settings, do not call configure_my_pi_setup. If they choose a category, ask only the follow-up needed for that category.",
       ]
     : [
         "This is the first setup. Explain the available choices and their impact in the user's language, then collect the initial preferences.",
-        "Prefer one ask_user call with up to three independent questions covering Capability discovery plus Workflow limits, Next-action suggestions, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
+        "Prefer one ask_user call with up to three independent questions covering Workspace cleanup guard plus Capability discovery, Workflow limits, Next-action suggestions, and UI/Footer/result display. Explain that Post-edit defaults off; keep it off unless the user opts in, then ask only for the command. Explain that built-in Agent roles used by subagent_spawn and workflow agent_type inherit the parent model unless the user assigns an available model to a role.",
       ];
 
   return [
@@ -148,6 +150,7 @@ export function buildInteractiveSetupPrompt(options: {
     ...configurationState,
     "",
     "Before asking, briefly explain what can be configured and the practical impact:",
+    "- Workspace cleanup guard: enforce (default) blocks deletion commands whose targets OpenPI cannot verify; ask uses the existing confirmation for those opaque commands; off disables this guard. Known pre-existing literal paths still use the normal confirmation in enforce and ask modes.",
     "- Capability discovery: explicit is the safe default and keeps OpenPI model tools absent until the user asks for a capability. adaptive is opt-in and keeps only the small openpi_load_tools gateway visible, allowing the model to load Subagents, Workflows, background terminals, structured search, or Session tracking when it judges them useful. Loaded groups remain session-stable, and normal permission, concurrency, and workflow limits still apply.",
     "- Next-action suggestions: disabled, or model-generated after a fully settled main-agent run. A suggestion appears as dim inline text on the first row of an empty editor; reserved cells at the row end keep CJK IME preedit from overwriting it. Right accepts it without submitting, and any other editor input dismisses it. Enabling requires an available provider/model and reasoning level and adds one small model call per settled run.",
     "- Workflow fan-out: concurrency controls simultaneous agents and resource pressure; max agent calls controls the total capacity of one workflow. Valid ranges are 1-64 and 1-1024.",
@@ -160,6 +163,7 @@ export function buildInteractiveSetupPrompt(options: {
     "Natural-language configuration examples the user might ask for:",
     '- "let the model discover OpenPI capabilities when useful" → capability_discovery=adaptive',
     '- "only use OpenPI capabilities when I ask" → capability_discovery=explicit',
+    '- "ask before allowing opaque workspace cleanup" → workspace_cleanup_guard=ask',
     '- "use dark theme in OpenPI Web" → ui_web_theme=dark',
     '- "set OpenPI Web chat width to 960px" → ui_web_chat_width=960',
     '- "use 16px chat text and expand thinking by default" → ui_web_chat_font_size=16, ui_web_expand_thinking=true',
@@ -346,8 +350,14 @@ export default function openPiSetup(pi: ExtensionAPI) {
     name: "configure_my_pi_setup",
     label: "Configure OpenPI",
     description:
-      "Apply a user-requested configuration change for this Pi setup. Configures capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the capability gateway and active TUI footer; Web observes appearance changes through canonical snapshots.",
+      "Apply a user-requested configuration change for this Pi setup. Configures the workspace cleanup guard, capability discovery (explicit or opt-in adaptive), next-action suggestions, workflow fan-out, canonical OpenPI Web appearance (theme, chat width, font size, thinking expansion), UI/Footer (presets, style, multi-line layout), result detail display, optional Post-edit, and built-in Agent-role model assignments shared by subagent_spawn and workflow agent_type. Role models must be available in the Pi registry; null clears a role back to parent-model inheritance. Footer examples: powerline preset, powerline-mono, compact, or custom ui_footer_lines with flex. Preserve current values for settings the user did not ask to change. Changes apply immediately to the active session.",
     parameters: Type.Object({
+      workspace_cleanup_guard: Type.Optional(
+        StringEnum(WORKSPACE_CLEANUP_GUARD_MODES, {
+          description:
+            "Workspace cleanup guard mode: enforce (default) blocks opaque deletion commands, ask opens confirmation for opaque commands, and off skips the guard. Known pre-existing literal paths still use the normal confirmation in enforce and ask. Omit to preserve the current value.",
+        }),
+      ),
       capability_discovery: Type.Optional(
         StringEnum(CAPABILITY_DISCOVERY_MODES, {
           description:
@@ -547,6 +557,10 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
 
         const config: MyPiSetupConfig = {
+          workspaceCleanupGuard:
+            (params.workspace_cleanup_guard as
+              | WorkspaceCleanupGuardMode
+              | undefined) ?? current.workspaceCleanupGuard,
           capabilities: {
             discovery:
               (params.capability_discovery as
@@ -656,7 +670,7 @@ export default function openPiSetup(pi: ExtensionAPI) {
           EXPLICIT_VALUE_GUIDANCE,
           FOOTER_PRESET_GUIDANCE,
           "",
-          "Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
+          "Workspace cleanup guard defaults to enforce; ask confirms opaque cleanup commands, and off disables the guard. Capability discovery is explicit by default; adaptive is an opt-in that keeps only openpi_load_tools visible so the model may load useful groups. Footer tips: presets are powerline, powerline-mono, compact; style is plain/powerline/powerline-mono; custom layouts use ui_footer_lines (2D enum arrays with optional flex). Do not use ui_footer_items together with ui_footer_lines. Built-in Agent role models (explorer, implementer, reviewer, advisor) are shared by subagent_spawn and workflow agent_type; they inherit the parent unless assigned an available registry model, and clearing an assignment restores inheritance. Custom agent-type files still override built-in role definitions. A Nerd Font renders Footer Codicons and powerline seams as designed; text stays readable without it. Changes apply immediately in the active TUI session.",
           "",
           "configure_my_pi_setup is available only for this setup run. If the run settles without a successful apply, the writer is hidden and a later change requires /openpi-setup <request>. Use configure_my_pi_setup to apply only the requested OpenPI-owned changes and preserve everything else. Interpret model names from the available Pi registry. Do not edit configuration files directly.",
           SETUP_REQUEST_VALIDATION,

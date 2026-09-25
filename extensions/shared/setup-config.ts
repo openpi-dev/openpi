@@ -85,6 +85,10 @@ export const CAPABILITY_DISCOVERY_MODES = ["explicit", "adaptive"] as const;
 export type CapabilityDiscoveryMode =
   (typeof CAPABILITY_DISCOVERY_MODES)[number];
 
+export const WORKSPACE_CLEANUP_GUARD_MODES = ["enforce", "ask", "off"] as const;
+export type WorkspaceCleanupGuardMode =
+  (typeof WORKSPACE_CLEANUP_GUARD_MODES)[number];
+
 /** Canonical default layout: one-line plain footer with flex alignment. */
 export const DEFAULT_FOOTER_LINES: FooterLines = [
   ["model", "context", "flex", "git", "pr", "cwd"],
@@ -155,6 +159,7 @@ export const POST_EDIT_COMMAND_MAX_CHARS = 500;
 export const SETUP_CONFIG_CHANGED_CHANNEL = "my-pi-setup:config-changed";
 
 export interface MyPiSetupConfig {
+  readonly workspaceCleanupGuard: WorkspaceCleanupGuardMode;
   readonly capabilities: {
     readonly discovery: CapabilityDiscoveryMode;
   };
@@ -194,6 +199,7 @@ export interface MyPiSetupConfig {
 }
 
 export const DEFAULT_SETUP_CONFIG: MyPiSetupConfig = {
+  workspaceCleanupGuard: "enforce",
   capabilities: { discovery: "explicit" },
   suggestions: { enabled: false },
   workflows: {
@@ -517,6 +523,11 @@ export function parseSetupConfig(value: unknown): MyPiSetupConfig {
   const subagents = isRecord(value.subagents) ? value.subagents : {};
   const footer = parseUiFooter(ui);
   return {
+    workspaceCleanupGuard: WORKSPACE_CLEANUP_GUARD_MODES.includes(
+      value.workspaceCleanupGuard as WorkspaceCleanupGuardMode,
+    )
+      ? (value.workspaceCleanupGuard as WorkspaceCleanupGuardMode)
+      : "enforce",
     capabilities: {
       discovery: isCapabilityDiscoveryMode(capabilities.discovery)
         ? capabilities.discovery
@@ -620,6 +631,7 @@ const modelShape = {
 const suggestionShape = { enabled: booleanValue, model: modelShape };
 const setupShape: ConfigShape = {
   configVersion: (value) => value === SETUP_CONFIG_VERSION,
+  workspaceCleanupGuard: oneOf(WORKSPACE_CLEANUP_GUARD_MODES),
   capabilities: { discovery: isCapabilityDiscoveryMode },
   suggestions: suggestionShape,
   summaries: suggestionShape,
@@ -1352,6 +1364,7 @@ export function formatSetupConfig(config = loadSetupConfig()) {
     ? `on · ${config.ui.footerStyle} · ${formatFooterLines(config.ui.footerLines)}`
     : "off";
   return [
+    `Workspace cleanup guard: ${config.workspaceCleanupGuard}`,
     `Capability discovery: ${config.capabilities.discovery}`,
     suggestions,
     `Workflows: ${config.workflows.concurrency} concurrent agents · ${config.workflows.maxAgentCalls} total calls`,

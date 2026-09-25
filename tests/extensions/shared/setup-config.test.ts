@@ -128,6 +128,25 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
   );
 });
 
+test("workspace cleanup guard modes are configurable and default to enforce", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.workspaceCleanupGuard, "enforce");
+  for (const mode of ["enforce", "ask", "off"] as const) {
+    assert.equal(
+      parseSetupConfig({ workspaceCleanupGuard: mode }).workspaceCleanupGuard,
+      mode,
+    );
+  }
+  assert.equal(
+    parseSetupConfig({ workspaceCleanupGuard: "invalid" })
+      .workspaceCleanupGuard,
+    "enforce",
+  );
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG),
+    /Workspace cleanup guard: enforce/,
+  );
+});
+
 test("process start-time queries are platform-specific and conservative", () => {
   const windowsQuery = processStartedAtQuery(123, "win32");
   assert.equal(windowsQuery.command, "powershell.exe");
