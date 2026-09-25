@@ -395,7 +395,7 @@ Next-action Suggestion 是可选的：完整主 Agent Run 结束后，在空编�
  model   context                ⎇ git  PR   cwd
 ```
 
-Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 目录；`⎇` 表示分支。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。未安装包含 Codicons 的 Nerd Font 时，图标可能显示为空框，但后面的文字指标仍然完整可读。
+Footer 使用一套 Codicon 线性图标：`` 模型、`` context、`` 目录；`⎇` 表示分支。`thinking`、`cache`、`cost`、`throughput` 也是可选指标，可通过 `/openpi-setup` 加入自定义布局。目录指标有两种：`cwd` 显示完整路径（家目录缩写为 `~`），`cwd-base` 只显示最后一级目录名，避免深层仓库的长路径挤掉同行其它指标。未安装包含 Codicons 的 Nerd Font 时，图标可能显示为空框，但后面的文字指标仍然完整可读。
 
 - 默认把高频的模型与 context 放在最左侧，把项目定位信息归到右侧，并以当前目录作为最右锚点；支持 `powerline`、`powerline-mono`、`compact`，也支持自定义多行布局；
 - 终端变窄时按优先级隐藏次要指标，不机械截断尾部；
