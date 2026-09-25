@@ -11,6 +11,7 @@ import {
   buildSegmentCatalog,
   fitSegmentsToWidth,
   formatDirectory,
+  formatDirectoryBase,
   renderFooter,
   resolveLineSegments,
   type FooterSegment,
@@ -76,6 +77,50 @@ test("formatDirectory compares Windows paths case-insensitively", () => {
     formatDirectory("c:\\users\\adam\\project", "C:\\Users\\Adam", win32),
     "~/project",
   );
+});
+
+test("formatDirectoryBase keeps only the last path segment", () => {
+  assert.equal(
+    formatDirectoryBase("/Users/adam/develop/work/project"),
+    "project",
+  );
+  assert.equal(formatDirectoryBase("/Users/adam"), "adam");
+  assert.equal(
+    formatDirectoryBase("C:\\Users\\Adam\\project", win32),
+    "project",
+  );
+  // Root paths have no basename, so the sanitized original is the fallback.
+  assert.equal(formatDirectoryBase("/"), "/");
+});
+
+test("cwd-base segment stays short while cwd keeps the full path", () => {
+  const catalog = buildSegmentCatalog(
+    "/Users/me/develop/work/bar_smyze_opserver",
+    modelInfo,
+    gitInfo,
+  );
+
+  assert.ok(catalog["cwd-base"].text.endsWith("bar_smyze_opserver"));
+  assert.ok(!catalog["cwd-base"].text.includes("/work/"));
+  assert.ok(catalog.cwd.text.includes("/work/"));
+});
+
+test("renderFooter renders a cwd-base layout within its width", () => {
+  const lines = normalizeFooterLines([
+    ["model", "context", "flex", "git", "cwd-base"],
+  ]);
+  const [line] = renderFooter({
+    cwd: "/Users/me/develop/work/bar_smyze_opserver",
+    modelInfo,
+    gitInfo,
+    style: "plain",
+    lines,
+    width: 100,
+    theme,
+  });
+
+  assert.ok(line.includes("bar_smyze_opserver"));
+  assert.ok(visibleWidth(line) <= 100);
 });
 
 test("default one-line layout leads with model context and ends with cwd", () => {
