@@ -2,7 +2,7 @@ import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { controlPlan, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
+import { controlPlan, projectPlanControl, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
   type AgentSession,
   type AgentSessionEvent,
@@ -794,9 +794,14 @@ export class PiWebRuntime implements WebRuntimeController {
         this.promptOrigins ??= new AsyncLocalStorage<PromptTrace | undefined>();
         const extensionCommand = submittedExtensionCommand(agentRuntime.services, content);
         if (extensionCommand) {
+          const projected = commandsForServices(agentRuntime.services).commands.find((command) => command.name === extensionCommand.name);
+          // Check the owned command before Pi's admission callback: command
+          // handlers may reject after the HTTP request has already been accepted.
+          if (projected?.support === "setup" && projectPlanControl(session.sessionManager.getBranch()).status !== "inactive") {
+            throw new WebRuntimeRequestError("Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.", "PLAN_CONFLICT", 409);
+          }
           session.sessionManager.appendCustomEntry(WEB_COMMAND_INPUT, { text: content, commandId: options?.commandId });
           this.emit("command_submitted", { sessionId });
-          const projected = commandsForServices(agentRuntime.services).commands.find((command) => command.name === extensionCommand.name);
           if (projected?.availability !== "available") publishWebCommandFeedback(session.sessionManager,
             "This extension has not been adapted for Web. Pi will handle the command, but dialogs or results may require the TUI.", "warning");
         }

@@ -441,6 +441,7 @@ export interface WebSnapshot {
   /** Optional diagnostic; absent when the runtime cannot report it. */
   thinking?: WebThinkingState;
   runtime: {
+    setup?: import("./setup-outcome.ts").WebSetupOutcome;
     plan?: "inactive" | "planning" | "ready" | "invalid";
     planRevision?: string | null;
     planHasPrompt?: boolean;

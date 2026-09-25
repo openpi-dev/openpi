@@ -38,14 +38,29 @@ test("Plan switch changes only owner state; first message gets planning context 
               },
             ],
           }
-        : { role: "assistant", content: "继续讨论方案，不实施。" };
+        : index === 2
+          ? {
+              role: "assistant",
+              tool_calls: [
+                {
+                  index: 0,
+                  id: "setup-theme",
+                  type: "function",
+                  function: {
+                    name: "configure_my_pi_setup",
+                    arguments: JSON.stringify({ ui_web_theme: "dark" }),
+                  },
+                },
+              ],
+            }
+          : { role: "assistant", content: "继续讨论方案，不实施。" };
     return (
       [
         { index: 0, delta, finish_reason: null },
         {
           index: 0,
           delta: {},
-          finish_reason: index === 0 ? "tool_calls" : "stop",
+          finish_reason: index === 0 || index === 2 ? "tool_calls" : "stop",
         },
       ]
         .map(
@@ -93,6 +108,29 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     expect(provider.requests).toHaveLength(0);
     await expect(page.locator(".message-row.user")).toHaveCount(0);
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    const settings = page.getByRole("dialog", { name: "设置" });
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeDisabled();
+    await expect(
+      settings.getByText(
+        "请先退出 Plan 模式，再修改 OpenPI 设置。退出不会开始实施计划。",
+      ),
+    ).toBeVisible();
+    const blocked = await page.request.post("/api/prompt", {
+      headers,
+      data: {
+        sessionId,
+        sessionPath,
+        commandId: "plan-setup-blocked",
+        content: "/openpi-setup use dark theme",
+      },
+    });
+    expect(blocked.status()).toBeGreaterThanOrEqual(400);
+    expect(JSON.stringify(await blocked.json())).toContain("Exit Plan mode");
+    expect(provider.requests).toHaveLength(0);
+    await settings.getByRole("button", { name: "关闭", exact: true }).click();
     const stale = await page.request.post("/api/plan", {
       headers,
       data: {
@@ -134,7 +172,33 @@ test("Plan switch changes only owner state; first message gets planning context 
     await expect(input).not.toHaveAttribute("placeholder", placeholder);
     await expect(input).toHaveValue("下一条草稿");
     expect(provider.requests).toHaveLength(2);
-    await expect(page.locator(".message-row.user")).toHaveCount(1);
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeEnabled();
+    await settings
+      .locator(".settings-theme-option")
+      .filter({ hasText: "深色" })
+      .click();
+    await expect(
+      settings.getByText(
+        /OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/,
+      ),
+    ).toBeVisible();
+    await expect(
+      settings.getByRole("radio", { name: "深色", exact: true }),
+    ).toBeChecked();
+    expect(provider.requests).toHaveLength(4);
+    expect(JSON.stringify(provider.requests[2]?.body)).toContain(
+      "Plan mode is inactive",
+    );
+    await page.reload();
+    await page.getByRole("button", { name: "设置", exact: true }).click();
+    await expect(
+      page
+        .getByRole("dialog", { name: "设置" })
+        .getByText(/OpenPI 配置已保存并应用。|配置已保存，实际设置没有变化。/),
+    ).toBeVisible();
   } finally {
     await provider.close();
     await rm(workspace, { recursive: true, force: true });

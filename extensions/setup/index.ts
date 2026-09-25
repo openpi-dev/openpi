@@ -1,4 +1,5 @@
 import { StringEnum } from "@earendil-works/pi-ai";
+import { restorePlanModeState } from "../plan-mode/persisted-state.ts";
 import { applySetupConfiguration } from "../shared/setup-apply.ts";
 import type {
   ExtensionAPI,
@@ -256,6 +257,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
   const dispatchNextRequest = (ctx: ExtensionContext) => {
     const request = pendingRequests.shift();
     if (!request) return;
+    if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
+      resetEpisode();
+      pi.sendMessage({
+        customType: "openpi-setup-closed",
+        content:
+          "Setup was not started. Exit Plan mode before changing OpenPI settings, then retry /openpi-setup.",
+        display: true,
+        details: { reason: "plan_mode_active" },
+      });
+      return;
+    }
     if (!showConfigureTool(pi)) {
       resetEpisode();
       if (ctx.hasUI) {
@@ -627,12 +639,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
         );
       return {
         content: [{ type: "text", text: receipt }],
-        details: config,
+        details: { ...config, setupReceipt: { changed } },
       };
     },
   });
 
   const setupHandler = async (args: string, ctx: ExtensionCommandContext) => {
+    if (restorePlanModeState(ctx.sessionManager.getBranch()).planning) {
+      throw new Error(
+        "Exit Plan mode before changing OpenPI settings, then retry /openpi-setup. No setup turn was started.",
+      );
+    }
     const request = args.trim();
     const inspected = inspectSetupConfig();
     const diagnostics = formatSetupDiagnostics(inspected);

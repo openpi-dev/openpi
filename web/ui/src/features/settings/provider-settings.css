@@ -738,6 +738,19 @@
   font-size: 11px;
 }
 
+.settings-plan-notice {
+  display: flex;
+  flex: none;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .settings-summary-list {
   max-width: 560px;
   margin: 0;
