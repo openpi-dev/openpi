@@ -144,7 +144,9 @@ export function createChunkMatcher(pattern: RegExp): ChunkMatcher {
   };
 }
 
-/** Cap on the reported match line, so a newline-free stream cannot smear. */
+/** Cap in code points on the reported match line, so a newline-free stream
+ * cannot smear. Counted per code point so a bound can never split a surrogate
+ * pair into a lone surrogate. */
 export const WATCH_LINE_MAX_CHARS = 500;
 
 /**
@@ -154,8 +156,11 @@ export const WATCH_LINE_MAX_CHARS = 500;
  */
 function sanitizeLine(raw: string) {
   const stripped = sanitizeTerminalText(raw).trim();
-  return stripped.length > WATCH_LINE_MAX_CHARS
-    ? `${stripped.slice(0, WATCH_LINE_MAX_CHARS)}\u2026`
+  // Count and cut on code points so a surrogate pair is never split into a lone
+  // surrogate in the transcript.
+  const characters = [...stripped];
+  return characters.length > WATCH_LINE_MAX_CHARS
+    ? `${characters.slice(0, WATCH_LINE_MAX_CHARS).join("")}\u2026`
     : stripped;
 }
 

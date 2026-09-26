@@ -207,3 +207,18 @@ test("session search matches formatted dates and years", () => {
   assert.equal(filterSessionEntries(entries, "2026").length, 1);
   assert.equal(filterSessionEntries(entries, "09-06").length, 1);
 });
+
+test("session snippets bound on code points instead of splitting a surrogate pair", () => {
+  const emoji = "\u{1F680}";
+  const bounded = buildSessionDescription(
+    { ...session, firstMessage: `${"a".repeat(18)}${emoji}tail` },
+    20,
+  );
+
+  // The full surrogate pair survives the bound; a UTF-16 unit cut would have
+  // left a lone high surrogate followed by the ellipsis.
+  assert.equal(
+    bounded.endsWith(`${"a".repeat(18)}${emoji}… — /tmp/project`),
+    true,
+  );
+});
