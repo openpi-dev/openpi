@@ -268,6 +268,41 @@ test("Cursor request encodes image content in the selected image protobuf", asyn
   assert.equal(selectedImage.mimeType, "image/png");
 });
 
+test("Cursor reads the system prompt and tools from a Pi 0.86+ transcript", async () => {
+  // Pi 0.86+ folds Context.systemPrompt / Context.tools into transcript system
+  // messages. The same conversation must encode to the same root prompt either way;
+  // before the fix the folded shape silently fell back to the generic prompt and
+  // advertised no tools.
+  const lookup = {
+    name: "lookup",
+    description: "Look up a public page",
+    parameters: { type: "object", properties: {} },
+  };
+  const user = { role: "user", content: "hello", timestamp: 1 };
+  const fromTranscript = await buildCursorRequest(MODEL, {
+    messages: [
+      {
+        role: "system",
+        content: "",
+        sections: { preamble: "Follow the system rule." },
+        toolsAdded: [lookup],
+        timestamp: 0,
+      },
+      user,
+    ],
+  } as unknown as Context);
+  const fromContext = await buildCursorRequest(MODEL, {
+    systemPrompt: "Follow the system rule.",
+    tools: [lookup],
+    messages: [user],
+  } as unknown as Context);
+  assert.ok(fromTranscript.conversationState.rootPromptMessagesJson.length > 0);
+  assert.deepEqual(
+    [...fromTranscript.conversationState.rootPromptMessagesJson],
+    [...fromContext.conversationState.rootPromptMessagesJson],
+  );
+});
+
 test("Cursor pins bare Composer 2.5 to the Standard lane", async () => {
   const standard = await buildCursorRequest(
     { ...MODEL, id: "composer-2.5" },
