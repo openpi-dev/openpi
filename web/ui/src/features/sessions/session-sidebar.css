@@ -105,6 +105,24 @@
   top: 5px;
 }
 
+.sidebar-archive-actions {
+  display: flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-archive-more {
+  margin: 8px 0;
+}
+
+.sidebar-scope-note p {
+  margin: 0 0 4px;
+}
+
 .sidebar-footer {
   flex: 0 0 auto;
   padding: 7px 2px 1px;

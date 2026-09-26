@@ -7,6 +7,11 @@ import {
   type WebSessionProjection,
 } from "../../web/protocol/types.ts";
 import { useSessionHistory } from "../../web/ui/src/features/transcript/use-session-history.ts";
+import {
+  rememberSessionReading,
+  sessionReadingScope,
+  type SessionReadingCache,
+} from "../../web/ui/src/features/transcript/session-reading-state.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 
 afterEach(() => {
@@ -69,19 +74,27 @@ function page(
     },
   };
 }
-function setup(selected = session(), callbacks = {}) {
+function setup(
+  selected = session(),
+  callbacks = {},
+  readingCache?: SessionReadingCache,
+) {
   const onAnchorChange = vi.fn();
   const beforePrepend = vi.fn();
   const onRefresh = vi.fn(async () => true);
   return {
     ...renderHook(
       ({ selected }) =>
-        useSessionHistory(selected, {
-          onAnchorChange,
-          beforePrepend,
-          onRefresh,
-          ...callbacks,
-        }),
+        useSessionHistory(
+          selected,
+          {
+            onAnchorChange,
+            beforePrepend,
+            onRefresh,
+            ...callbacks,
+          },
+          readingCache,
+        ),
       { initialProps: { selected } },
     ),
     onAnchorChange,
@@ -89,6 +102,140 @@ function setup(selected = session(), callbacks = {}) {
     onRefresh,
   };
 }
+
+it("restores a verified reading window after leaving and returning to its exact Session", async () => {
+  vi.spyOn(WebClient.prototype, "sessionHistory").mockResolvedValue(page());
+  const cache: SessionReadingCache = new Map();
+  const first = setup(session(), {}, cache);
+  await act(() => first.result.current.loadOlder());
+  first.unmount();
+  const reader = setup(session(), {}, cache);
+  expect(reader.result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e0",
+    "e1",
+    "e2",
+    "e3",
+  ]);
+  expect(reader.result.current.engaged).toBe(true);
+  expect(reader.onRefresh).not.toHaveBeenCalled();
+  expect(reader.onAnchorChange).toHaveBeenLastCalledWith({
+    sessionId: "s",
+    sessionPath: "/sessions/s.jsonl",
+    entryId: "e3",
+  });
+  reader.rerender({
+    selected: session(2, 3, { path: "/sessions/copy.jsonl" }),
+  });
+  expect(reader.result.current.engaged).toBe(false);
+  reader.rerender({ selected: session() });
+  expect(reader.result.current.engaged).toBe(true);
+  expect(reader.result.current.session?.entries[0]?.id).toBe("e0");
+});
+
+it("retains the bounded snapshot only when the reader leaves bottom following", () => {
+  const read = vi.spyOn(WebClient.prototype, "sessionHistory");
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    reader.result.current.retainReading();
+  });
+  reader.unmount();
+  const returned = setup(session(7, 8), {}, cache);
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e2");
+  expect(returned.result.current.verifying).toBe(true);
+  expect(returned.onRefresh).toHaveBeenCalledOnce();
+  expect(read).not.toHaveBeenCalled();
+  returned.rerender({
+    selected: session(7, 8, {
+      history: {
+        leafEntryId: "e8",
+        beforeEntryId: "e7",
+        anchorEntryId: "e3",
+        anchorOnBranch: true,
+      },
+    }),
+  });
+  expect(returned.result.current.verifying).toBe(false);
+  expect(returned.result.current.hasNewer).toBe(true);
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e2");
+});
+
+it("discards a restored window and bookmark when native branch validation rejects its anchor", () => {
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    reader.result.current.retainReading();
+  });
+  rememberSessionReading(cache, sessionReadingScope(session()), {
+    position: { key: "e2", offset: -5, scrollTop: 200, pinned: false },
+  });
+  reader.unmount();
+  const returned = setup(
+    session(7, 8, {
+      history: {
+        leafEntryId: "e8",
+        beforeEntryId: "e7",
+        anchorEntryId: "e3",
+        anchorOnBranch: false,
+      },
+    }),
+    {},
+    cache,
+  );
+  expect(returned.result.current.engaged).toBe(false);
+  expect(returned.result.current.error).toBe("historyChanged");
+  expect(returned.result.current.session?.entries[0]?.id).toBe("e7");
+  expect(cache.has(sessionReadingScope(session()))).toBe(false);
+});
+
+it("aborts a pending older page on departure without writing its late result to the saved reader", async () => {
+  let finish!: (value: WebSessionHistoryPage) => void;
+  const read = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+  const cache: SessionReadingCache = new Map();
+  const reader = setup(session(), {}, cache);
+  act(() => {
+    void reader.result.current.loadOlder();
+  });
+  reader.unmount();
+  expect(read.mock.calls[0]![2].aborted).toBe(true);
+  await act(async () => {
+    finish(page());
+  });
+  const returned = setup(session(), {}, cache);
+  expect(returned.result.current.session?.entries.map(({ id }) => id)).toEqual([
+    "e2",
+    "e3",
+  ]);
+});
+
+it("bounds saved readers and evicts the window and its matching bookmark together", () => {
+  const cache: SessionReadingCache = new Map();
+  for (let index = 0; index < 5; index++) {
+    const selected = session(2, 3, { id: `s${index}` });
+    const scope = sessionReadingScope(selected);
+    rememberSessionReading(cache, scope, {
+      window: { session: selected, anchor: "e3", validatedLeaf: "e3" },
+    });
+    rememberSessionReading(cache, scope, {
+      position: { key: "e2", offset: 0, scrollTop: 0, pinned: false },
+    });
+  }
+  expect(cache.size).toBe(4);
+  expect(cache.has(sessionReadingScope(session(2, 3, { id: "s0" })))).toBe(
+    false,
+  );
+  for (const saved of cache.values()) {
+    expect(saved.window).toBeTruthy();
+    expect(saved.position?.key).toBe("e2");
+  }
+});
 
 it("does not fetch or retain sliding snapshots until the reader asks for history", () => {
   const read = vi.spyOn(WebClient.prototype, "sessionHistory");

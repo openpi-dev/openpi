@@ -28,6 +28,7 @@ import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import type { SessionReadingCache } from "../features/transcript/session-reading-state.ts";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
@@ -63,6 +64,7 @@ export function App() {
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
   const artifactOpenFromFiles = useRef(false);
   const artifactReturn = useRef<"files" | null>(null);
+  const readingCache = useMemo<SessionReadingCache>(() => new Map(), []);
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
@@ -654,6 +656,8 @@ export function App() {
               </section>
             ) : state.snapshot ? (
               <Transcript
+                key={`transcript:${JSON.stringify([selected?.id, selected?.path])}`}
+                readingCache={readingCache}
                 snapshot={state.snapshot}
                 liveMessages={state.liveMessages}
                 liveRunning={state.liveRunning}

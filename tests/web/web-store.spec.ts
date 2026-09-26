@@ -466,6 +466,399 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("sidebar Session navigation", () => {
+  it("keeps a successful restore receipt when selection changes during its canonical refresh", async () => {
+    const client = new FakeClient();
+    const current = snapshot();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    const refresh = deferred<WebSnapshot>();
+    client.snapshots.push(refresh.promise, Promise.resolve(target));
+    vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+      path: "/tmp/ws/archived.jsonl",
+      archived: false,
+    });
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: current,
+      selectedPath: current.selectedSession!.path,
+    });
+    const restoring = store
+      .getState()
+      .actions.unarchiveSession("/tmp/ws/archived.jsonl");
+    await vi.waitFor(() =>
+      expect(client.snapshotPaths).toEqual([current.selectedSession!.path]),
+    );
+    await store.getState().actions.selectSession(target.selectedSession!.path);
+    refresh.resolve(current);
+    expect(await restoring).toBe(true);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    expect(store.getState().snapshot).toBe(target);
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("does not reset live state or issue a selection for the confirmed current file", async () => {
+    const client = new FakeClient();
+    const current = snapshot();
+    current.currentSessionPath = current.selectedSession!.path;
+    client.snapshots.push(Promise.resolve(current));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    store.setState({
+      liveMessages: [
+        {
+          key: "stream",
+          message: { role: "assistant", content: "Partial reply" },
+        },
+      ],
+      activeTurn: {
+        sessionId: "session-1",
+        sessionPath: current.currentSessionPath,
+        commandId: "active",
+        epoch: 1,
+      },
+      liveRunning: true,
+      livePhase: "running",
+      planSelectionPending: true,
+      modelSelectionPending: true,
+      turnCancellationPending: true,
+      mobileSidebarOpen: true,
+    });
+    const before = store.getState();
+    await store.getState().actions.selectSession(current.selectedSession!.path);
+    expect(client.selections).toEqual([]);
+    expect(client.snapshotPaths).toHaveLength(1);
+    expect(store.getState().liveMessages).toBe(before.liveMessages);
+    expect(store.getState().activeTurn).toBe(before.activeTurn);
+    expect(store.getState()).toMatchObject({
+      liveRunning: true,
+      livePhase: "running",
+      planSelectionPending: true,
+      modelSelectionPending: true,
+      turnCancellationPending: true,
+      sessionSwitching: false,
+      mobileSidebarOpen: false,
+    });
+  });
+
+  it("deduplicates an in-flight selection of the same target", async () => {
+    const client = new FakeClient();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    client.snapshots.push(Promise.resolve(snapshot()), Promise.resolve(target));
+    const receipt = deferred<SessionMutationResult>();
+    client.selectionResults.push(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const first = store
+      .getState()
+      .actions.selectSession(target.selectedSession!.path);
+    await vi.waitFor(() => expect(client.selections).toHaveLength(1));
+    const second = store
+      .getState()
+      .actions.selectSession(target.selectedSession!.path);
+    expect(store.getState().sessionSwitching).toBe(true);
+    receipt.resolve({});
+    await Promise.all([first, second]);
+    expect(client.selections).toEqual([target.selectedSession!.path]);
+    expect(client.snapshotPaths).toHaveLength(2);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    expect(store.getState().sessionSwitching).toBe(false);
+  });
+
+  it.each([false, true])(
+    "still activates the same viewed observer path (copied id: %s)",
+    async (copiedId) => {
+      const client = new FakeClient();
+      const controller = activeSnapshot(
+        "controller",
+        "/tmp/ws/controller.jsonl",
+      );
+      const viewed = activeSnapshot(
+        copiedId ? "controller" : "reader",
+        "/tmp/ws/reader.jsonl",
+      );
+      const background = {
+        ...controller,
+        currentSessionPath: controller.selectedSession!.path,
+        selectedSession: viewed.selectedSession,
+        sessions: [
+          ...controller.sessions,
+          { ...viewed.sessions[0]!, controller: "none" as const },
+        ],
+      };
+      client.snapshots.push(
+        Promise.resolve(background),
+        Promise.resolve(viewed),
+      );
+      const store = createWebStore(client);
+      store.setState({ selectedPath: viewed.selectedSession!.path });
+      await store.getState().actions.refreshSnapshot();
+      await store
+        .getState()
+        .actions.selectSession(viewed.selectedSession!.path);
+      expect(client.selections).toEqual([viewed.selectedSession!.path]);
+      expect(store.getState().snapshot?.currentSessionId).toBe(
+        viewed.currentSessionId,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "keeps a valid reader when removing a workspace (reader workspace: %s)",
+    async (readerWorkspace) => {
+      const client = new FakeClient();
+      const controller = activeSnapshot("controller", "/tmp/control/c.jsonl", {
+        workspace: "/tmp/control",
+      });
+      const reader = activeSnapshot("reader", "/tmp/read/r.jsonl", {
+        workspace: "/tmp/read",
+      });
+      const removed = readerWorkspace ? "/tmp/read" : "/tmp/unrelated";
+      const background = {
+        ...controller,
+        currentSessionPath: controller.selectedSession!.path,
+        selectedSession: reader.selectedSession,
+        sessions: [
+          ...controller.sessions,
+          { ...reader.sessions[0]!, controller: "none" as const },
+        ],
+        workspaces: [
+          ...controller.workspaces,
+          ...reader.workspaces,
+          { path: "/tmp/unrelated", name: "Unrelated", current: false },
+        ],
+      };
+      vi.spyOn(client, "removeWorkspace").mockResolvedValue({
+        path: removed,
+        removed: true,
+      });
+      client.snapshots.push(
+        Promise.resolve({
+          ...background,
+          workspaces: background.workspaces.filter(
+            (item) => item.path !== removed,
+          ),
+          sessions: background.sessions.map((item) =>
+            item.cwd === removed ? { ...item, ungrouped: true } : item,
+          ),
+        }),
+      );
+      const store = createWebStore(client);
+      store.setState({
+        snapshot: background,
+        selectedPath: reader.selectedSession!.path,
+        selectedWorkspace: "/tmp/read",
+      });
+      await store.getState().actions.removeWorkspace(removed);
+      expect(client.snapshotPaths).toEqual([reader.selectedSession!.path]);
+      expect(store.getState().selectedPath).toBe(reader.selectedSession!.path);
+    },
+  );
+
+  it("does not overwrite a newer selection when workspace removal settles late", async () => {
+    const client = new FakeClient();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    const removal = deferred<{ path: string; removed: true }>();
+    vi.spyOn(client, "removeWorkspace").mockReturnValue(removal.promise);
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot(),
+      selectedPath: snapshot().selectedSession!.path,
+      selectedWorkspace: "/tmp/ws",
+    });
+    const removing = store.getState().actions.removeWorkspace("/tmp/unrelated");
+    client.snapshots.push(Promise.resolve(target), Promise.resolve(target));
+    await store.getState().actions.selectSession(target.selectedSession!.path);
+    removal.resolve({ path: "/tmp/unrelated", removed: true });
+    await removing;
+    expect(client.snapshotPaths).toEqual([
+      target.selectedSession!.path,
+      target.selectedSession!.path,
+    ]);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+  });
+
+  it.each([false, true])(
+    "keeps the exact controlled Session sendable after hiding its workspace (other workspace: %s)",
+    async (hasOtherWorkspace) => {
+      const client = new FakeClient();
+      const before = snapshot();
+      const after = {
+        ...before,
+        workspaces: hasOtherWorkspace
+          ? [{ path: "/tmp/other", name: "Other", current: true }]
+          : [],
+        sessions: before.sessions.map((session) => ({
+          ...session,
+          ungrouped: true,
+        })),
+      };
+      client.snapshots.push(Promise.resolve(before), Promise.resolve(after));
+      vi.spyOn(client, "removeWorkspace").mockResolvedValue({
+        path: "/tmp/ws",
+        removed: true,
+      });
+      const prompt = vi.spyOn(client, "prompt");
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+
+      await store.getState().actions.removeWorkspace("/tmp/ws");
+
+      expect(store.getState().selectedWorkspace).toBe("/tmp/ws");
+      expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
+      expect(store.getState().workspaceDraft).toBe(false);
+      expect(await store.getState().actions.sendPrompt("continue here")).toBe(
+        true,
+      );
+      expect(prompt).toHaveBeenCalledExactlyOnceWith(
+        "session-1",
+        "continue here",
+        expect.any(String),
+        "/tmp/ws/session.jsonl",
+        false,
+        [],
+      );
+      expect(client.creations).toEqual([]);
+      expect(client.selections).toEqual([]);
+      store.getState().actions.stop();
+    },
+  );
+});
+
+describe("native prompt resolution provenance", () => {
+  it.each(["workspace", "create", "select", "foreign"] as const)(
+    "does not treat %s navigation as acceptance and preserves prior native evidence",
+    async (navigation) => {
+      const client = new FakeClient();
+      const initial = snapshot();
+      const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+      initial.sessions.push({ ...target.sessions[0]!, controller: "none" });
+      client.snapshots.push(Promise.resolve(target));
+      client.creationResult = async (commandId) => ({
+        cancelled: false,
+        commandId,
+        sessionId: "B",
+        sessionPath: target.selectedSession!.path,
+      });
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      const images = [
+        { data: "AA==", mimeType: "image/png" as const, name: "draft.png" },
+      ];
+      const evidence = {
+        sessionId: "session-1",
+        sessionPath: initial.selectedSession!.path,
+        commandId: "previous-native",
+        content: "Accepted earlier",
+        images,
+      };
+      store.setState({
+        snapshot: initial,
+        selectedPath:
+          navigation === "foreign" ? null : initial.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+        cursor: 4,
+        promptAdmissionResolution: evidence,
+        promptAdmissionRecovery: {
+          sessionId: "session-1",
+          sessionPath: initial.selectedSession!.path,
+          commandId: "unknown",
+          content: "Still uncertain",
+          optimisticKey: "optimistic-unknown",
+          images,
+          phase: "verification-failed",
+        },
+      });
+      try {
+        if (navigation === "workspace")
+          store.getState().actions.setWorkspace("/tmp/new");
+        if (navigation === "create")
+          await store.getState().actions.createSession("/tmp/ws");
+        if (navigation === "select")
+          await store
+            .getState()
+            .actions.selectSession(target.selectedSession!.path);
+        if (navigation === "foreign") {
+          store.getState().actions.start();
+          await vi.waitFor(() =>
+            expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+          );
+          stream.emit(
+            runtimeEvent(5, "session_switched", {
+              sessionId: "B",
+              sessionPath: target.selectedSession!.path,
+            }),
+          );
+          await vi.waitFor(() =>
+            expect(store.getState().sessionSwitching).toBe(false),
+          );
+        }
+        expect(store.getState().promptAdmissionRecovery).toBeNull();
+        expect(store.getState().promptAdmissionResolution).toBe(evidence);
+        expect(store.getState().promptAdmissionResolution?.images).toBe(images);
+      } finally {
+        store.getState().actions.stop();
+      }
+    },
+  );
+
+  it("projects exact identity and the original images only after matching native evidence", async () => {
+    const stream = eventStreamHarness();
+    const store = createWebStore(new FakeClient(), {
+      consumeEvents: stream.consumeEvents,
+    });
+    const initial = snapshot();
+    const images = [{ data: "AA==", mimeType: "image/png" as const }];
+    const recovery = {
+      sessionId: "session-1",
+      sessionPath: initial.selectedSession!.path,
+      commandId: "unknown",
+      content: "Original draft",
+      optimisticKey: "optimistic-unknown",
+      images,
+      phase: "verification-failed" as const,
+    };
+    store.setState({
+      snapshot: initial,
+      selectedPath: initial.selectedSession!.path,
+      cursor: 4,
+      promptAdmissionRecovery: recovery,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      stream.emit(
+        runtimeEvent(5, "prompt_accepted", {
+          sessionId: recovery.sessionId,
+          sessionPath: "/tmp/copied.jsonl",
+          commandId: recovery.commandId,
+        }),
+      );
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      stream.emit(
+        runtimeEvent(6, "prompt_accepted", {
+          sessionId: recovery.sessionId,
+          sessionPath: recovery.sessionPath,
+          commandId: recovery.commandId,
+        }),
+      );
+      expect(store.getState().promptAdmissionResolution).toEqual({
+        sessionId: recovery.sessionId,
+        sessionPath: recovery.sessionPath,
+        commandId: recovery.commandId,
+        content: recovery.content,
+        images,
+      });
+      expect(store.getState().promptAdmissionResolution?.images).toBe(images);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+});
+
 describe("OpenPI Web store", () => {
   it("retains a valid requested background view without moving the input controller", async () => {
     const client = new FakeClient();
@@ -2559,8 +2952,11 @@ describe("OpenPI Web store", () => {
 
     expect(store.getState().promptAdmissionRecovery).toBeNull();
     expect(store.getState().promptAdmissionResolution).toEqual({
+      sessionId: "session-1",
+      sessionPath: "/tmp/ws/session.jsonl",
       commandId,
       content: "once",
+      images: [],
     });
     expect(store.getState().liveMessages).toEqual([
       {
@@ -2582,7 +2978,7 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("clears recovery when changing workspace and preserves its draft resolution", async () => {
+  it("clears recovery when changing workspace without treating navigation as admission evidence", async () => {
     const client = new FakeClient();
     client.snapshots.push(
       Promise.resolve(snapshot()),
@@ -2597,15 +2993,10 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
     await store.getState().actions.sendPrompt("once");
-    const commandId = store.getState().promptAdmissionRecovery?.commandId;
-
     store.getState().actions.setWorkspace("/tmp/repo-b");
 
     expect(store.getState().promptAdmissionRecovery).toBeNull();
-    expect(store.getState().promptAdmissionResolution).toEqual({
-      commandId,
-      content: "once",
-    });
+    expect(store.getState().promptAdmissionResolution).toBeNull();
   });
 
   it("abandons unknown admission recovery without clearing its draft content", async () => {

@@ -10,17 +10,33 @@ import {
   MoreHorizontal,
   PanelLeftClose,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   SquarePen,
   Trash2,
   X,
 } from "lucide-react";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSnapshot } from "../../../../protocol/types.ts";
+import {
+  WEB_MAX_ARCHIVED_SESSION_QUERY,
+  type WebSnapshot,
+} from "../../../../protocol/types.ts";
 import { OpenPiLogo } from "../../components/OpenPiLogo.tsx";
 import { compactPath, relativeTime, sessionTitle } from "../../lib/format.ts";
+import {
+  type ArchivedSessionPage,
+  WebApiError,
+  WebClient,
+} from "../../protocol/client.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
 
 interface SessionSidebarProps {
@@ -79,7 +95,78 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const sidebar = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const snapshot = props.snapshot;
+  const client = useMemo(() => new WebClient(), []);
   const [archived, setArchived] = useState(false);
+  const archiveQuery = props.query.trim();
+  const archiveScope = JSON.stringify([archived, archiveQuery]);
+  const currentArchiveScope = useRef(archiveScope);
+  currentArchiveScope.current = archiveScope;
+  const mounted = useRef(false);
+  const [archivePage, setArchivePage] = useState<
+    (ArchivedSessionPage & { query: string }) | null
+  >(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<{
+    query: string;
+    kind: "failed" | "stale";
+    cursor?: string;
+  } | null>(null);
+  const archiveRequest = useRef<AbortController | null>(null);
+  const scopedArchivePage =
+    archivePage?.query === archiveQuery ? archivePage : null;
+  const scopedArchiveError =
+    archiveError?.query === archiveQuery ? archiveError : null;
+  const loadArchives = useCallback(
+    async (cursor?: string) => {
+      if (!archived) return;
+      archiveRequest.current?.abort();
+      const controller = new AbortController();
+      archiveRequest.current = controller;
+      setArchiveLoading(true);
+      setArchiveError(null);
+      try {
+        const page = await client.listArchivedSessions(
+          { query: archiveQuery, ...(cursor ? { cursor } : {}), limit: 25 },
+          controller.signal,
+        );
+        if (controller.signal.aborted || archiveRequest.current !== controller)
+          return;
+        setArchivePage((previous) => ({
+          ...page,
+          query: archiveQuery,
+          sessions:
+            cursor && previous?.query === archiveQuery
+              ? [
+                  ...previous.sessions,
+                  ...page.sessions.filter(
+                    (session) =>
+                      !previous.sessions.some(
+                        (existing) => existing.path === session.path,
+                      ),
+                  ),
+                ]
+              : page.sessions,
+        }));
+      } catch (error) {
+        if (!controller.signal.aborted && archiveRequest.current === controller)
+          setArchiveError({
+            query: archiveQuery,
+            kind:
+              error instanceof WebApiError &&
+              error.code === "ARCHIVED_SESSION_CURSOR_STALE"
+                ? "stale"
+                : "failed",
+            ...(cursor ? { cursor } : {}),
+          });
+      } finally {
+        if (archiveRequest.current === controller) {
+          archiveRequest.current = null;
+          setArchiveLoading(false);
+        }
+      }
+    },
+    [archiveQuery, archived, client],
+  );
   const [archiveCollapsed, setArchiveCollapsed] = useState<Set<string>>(
     new Set(),
   );
@@ -92,13 +179,46 @@ export function SessionSidebar(props: SessionSidebarProps) {
     restoreInFlight.current.add(path);
     setRestoring(new Set(restoreInFlight.current));
     setRestoreError(false);
+    const scope = archiveScope;
     try {
-      if (!(await props.actions.unarchiveSession(path))) setRestoreError(true);
+      const restored = await props.actions.unarchiveSession(path);
+      if (!mounted.current || currentArchiveScope.current !== scope) return;
+      if (!restored) setRestoreError(true);
+      else {
+        setArchivePage((page) =>
+          page
+            ? {
+                ...page,
+                sessions: page.sessions.filter((item) => item.path !== path),
+              }
+            : null,
+        );
+        await loadArchives();
+      }
     } finally {
       restoreInFlight.current.delete(path);
-      setRestoring(new Set(restoreInFlight.current));
+      if (mounted.current) setRestoring(new Set(restoreInFlight.current));
     }
   };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setRestoreError(false);
+    setArchiveError(null);
+    if (archived) {
+      setArchivePage((page) => (page?.query === archiveQuery ? page : null));
+      void loadArchives();
+    }
+    return () => {
+      archiveRequest.current?.abort();
+      archiveRequest.current = null;
+    };
+  }, [archiveQuery, archived, loadArchives]);
 
   useEffect(() => {
     if (!props.searchOpen) return;
@@ -130,21 +250,25 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const grouped = useMemo(() => {
     const query = props.query.trim().toLowerCase();
+    const sessions = archived
+      ? (scopedArchivePage?.sessions ?? [])
+      : (snapshot?.sessions ?? []);
     const visible = (workspacePath: string, workspaceMatches: boolean) =>
-      (snapshot?.sessions ?? []).filter(
+      sessions.filter(
         (session) =>
           Boolean(session.archived) === archived &&
           (workspacePath === "__ungrouped__"
             ? session.ungrouped
             : session.cwd === workspacePath && !session.ungrouped) &&
           (!query ||
+            archived ||
             workspaceMatches ||
             `${sessionTitle(session, t("untitledSession"))} ${session.cwd}`
               .toLowerCase()
               .includes(query)),
       );
     const workspaces = [...(snapshot?.workspaces ?? [])];
-    for (const session of snapshot?.sessions ?? []) {
+    for (const session of sessions) {
       if (
         !session.ungrouped &&
         !workspaces.some((workspace) => workspace.path === session.cwd)
@@ -181,15 +305,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
         group.sessions.length > 0 ||
         (!archived && !group.ungrouped && (!query || group.matches)),
     );
-  }, [archived, props.query, snapshot, t]);
+  }, [archived, props.query, scopedArchivePage, snapshot, t]);
 
   const confirmedPath =
-    snapshot?.selectedSession?.id === snapshot?.currentSessionId &&
     snapshot?.selectedSession?.path === props.selectedPath
       ? props.selectedPath
       : null;
   const activeWorkspace = confirmedPath
-    ? snapshot?.sessions.find((session) => session.path === confirmedPath)?.cwd
+    ? (snapshot?.selectedSession?.cwd ??
+      snapshot?.sessions.find(
+        (session) =>
+          session.path === confirmedPath &&
+          session.id === snapshot?.selectedSession?.id,
+      )?.cwd)
     : props.selectedPath
       ? null
       : props.selectedWorkspace;
@@ -309,6 +437,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             type="search"
             value={props.query}
             placeholder={t("searchPlaceholder")}
+            maxLength={archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : undefined}
             aria-label={t("searchConversations")}
             onChange={(event) => props.actions.setQuery(event.target.value)}
           />
@@ -364,8 +493,57 @@ export function SessionSidebar(props: SessionSidebarProps) {
           {t("archivedConversations")}
         </button>
       </fieldset>
-      {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
-      {loadedHistoryBounded && (
+      {archived && (
+        <div className="sidebar-archive-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("refreshArchives")}
+            title={t("refreshArchives")}
+            disabled={archiveLoading}
+            onClick={() => void loadArchives()}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+          {archiveLoading && <span role="status">{t("loadingArchives")}</span>}
+        </div>
+      )}
+      {archived && scopedArchiveError && (
+        <div className="sidebar-scope-note" role="alert">
+          <p>
+            {t(
+              scopedArchiveError.kind === "stale"
+                ? "archiveCursorStale"
+                : "archiveLoadFailed",
+            )}
+          </p>
+          <button
+            type="button"
+            disabled={archiveLoading}
+            onClick={() =>
+              void loadArchives(
+                scopedArchiveError.kind === "stale"
+                  ? undefined
+                  : scopedArchiveError.cursor,
+              )
+            }
+          >
+            {t(
+              scopedArchiveError.kind === "stale"
+                ? "refreshArchives"
+                : "retryArchives",
+            )}
+          </button>
+        </div>
+      )}
+      {archived && Boolean(scopedArchivePage?.truncation.recordsUnscanned) && (
+        <p className="sidebar-scope-note">
+          {t("archiveScanBounded", {
+            count: scopedArchivePage?.truncation.recordsUnscanned,
+          })}
+        </p>
+      )}
+      {!archived && loadedHistoryBounded && (
         <p className="sidebar-scope-note">
           {t("loadedHistoryBounded", {
             sessions: snapshot?.truncation.sessionsOmitted,
@@ -373,7 +551,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           })}
         </p>
       )}
-      {restoreError && (
+      {archived && restoreError && (
         <p className="sidebar-scope-note" role="alert">
           {t("restoreFailed")}
         </p>
@@ -384,8 +562,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const collapsed =
               (archived ? archiveCollapsed : props.collapsed).has(group.path) &&
               !props.query.trim();
-            const active =
-              !archived && !group.ungrouped && activeWorkspace === group.path;
+            const active = !group.ungrouped && activeWorkspace === group.path;
             return (
               <section
                 className={`workspace-group ${collapsed ? "collapsed" : ""} ${active ? "is-active-workspace" : ""}`}
@@ -473,6 +650,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
                       group.sessions.map((session) => {
                         const running = session.execution?.status === "running";
                         const queued = session.execution?.pendingFollowUps ?? 0;
+                        const selected =
+                          session.path === confirmedPath &&
+                          session.id === snapshot?.selectedSession?.id;
                         const statusLabel = [
                           ...(running ? [t("execution_running")] : []),
                           ...(queued > 0
@@ -482,13 +662,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
                         return (
                           <div className="session-row" key={session.path}>
                             <button
-                              className={`session ${session.path === confirmedPath ? "active" : ""}`}
+                              className={`session ${selected ? "active" : ""}`}
                               type="button"
-                              aria-current={
-                                session.path === confirmedPath
-                                  ? "page"
-                                  : undefined
-                              }
+                              aria-current={selected ? "page" : undefined}
                               aria-label={[
                                 sessionTitle(session, t("untitledSession")),
                                 session.path,
@@ -586,12 +762,39 @@ export function SessionSidebar(props: SessionSidebarProps) {
             );
           })
         ) : (
-          <div className="empty">
+          <div
+            className="empty"
+            hidden={archived && (archiveLoading || Boolean(scopedArchiveError))}
+          >
             {props.query.trim()
-              ? t(loadedHistoryBounded ? "noMatchingLoaded" : "noMatching")
-              : t(archived ? "noLoadedArchives" : "noSessions")}
+              ? t(
+                  archived && scopedArchivePage?.truncation.recordsUnscanned
+                    ? "noMatchingScannedArchives"
+                    : !archived && loadedHistoryBounded
+                      ? "noMatchingLoaded"
+                      : "noMatching",
+                )
+              : t(
+                  archived
+                    ? scopedArchivePage?.truncation.recordsUnscanned
+                      ? "noScannedArchives"
+                      : "noArchivedSessions"
+                    : "noSessions",
+                )}
           </div>
         )}
+        {archived &&
+          scopedArchivePage?.nextCursor &&
+          scopedArchiveError?.kind !== "stale" && (
+            <button
+              type="button"
+              className="sidebar-archive-more"
+              disabled={archiveLoading}
+              onClick={() => void loadArchives(scopedArchivePage.nextCursor)}
+            >
+              {t("moreArchives")}
+            </button>
+          )}
       </div>
 
       <div className="sidebar-footer">

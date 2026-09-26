@@ -41,6 +41,10 @@ import {
 import { isControlledSession } from "../../lib/session-control.ts";
 import type { WebStoreActions, WebStoreState } from "../../store/web-store.ts";
 import { ActivityBar } from "../activity/ActivityBar.tsx";
+import {
+  type ComposerDraft,
+  createComposerDraftMemory,
+} from "./composer-drafts.ts";
 import { FileReferenceDialog } from "./FileReferenceDialog.tsx";
 import {
   type StagedPromptImage,
@@ -86,9 +90,69 @@ interface ComposerProps {
   accessory?: ReactNode;
 }
 
+function workspaceDraftOwner(workspacePath: string | null) {
+  return {
+    key: JSON.stringify(["workspace", workspacePath]),
+    kind: "workspace" as const,
+    workspacePath,
+  };
+}
+
+function sessionDraftOwner(
+  session: NonNullable<WebSnapshot["selectedSession"]>,
+) {
+  return {
+    key: JSON.stringify(["session", session.id, session.path]),
+    kind: "session" as const,
+    workspacePath: session.cwd,
+    sessionId: session.id,
+    sessionPath: session.path,
+  };
+}
+
+type DraftOwner =
+  | ReturnType<typeof workspaceDraftOwner>
+  | ReturnType<typeof sessionDraftOwner>;
+
 export function Composer(props: ComposerProps) {
   const { t } = useTranslation();
-  const [prompt, setPrompt] = useState("");
+  const selected = props.snapshot?.selectedSession;
+  const selectedPath =
+    props.selectedPath === undefined
+      ? (selected?.path ?? null)
+      : props.selectedPath;
+  const sessionPath = selected?.path === selectedPath ? selected.path : null;
+  const canonicalOwner =
+    !props.workspaceDraft && !props.sessionSwitching && selected && sessionPath
+      ? sessionDraftOwner(selected)
+      : null;
+  const [draftMemory] = useState(createComposerDraftMemory);
+  const draftOwner = useRef<DraftOwner>(
+    canonicalOwner ?? workspaceDraftOwner(props.selectedWorkspace),
+  );
+  const nextOwner =
+    props.workspaceDraft || (!selected && !props.snapshot?.currentSessionId)
+      ? workspaceDraftOwner(props.selectedWorkspace)
+      : (canonicalOwner ?? draftOwner.current);
+  const [draft, setDraft] = useState<ComposerDraft>(() =>
+    draftMemory.read(draftOwner.current.key),
+  );
+  const currentDraft = useRef(draft);
+  currentDraft.current = draft;
+  const { prompt, images, caret: cursor } = draft;
+  const renderedOwnerKey = nextOwner.key;
+  const submissions = useRef(
+    new Map<
+      string,
+      { owner: DraftOwner; revision: number; pending: boolean }
+    >(),
+  );
+  const recoveryRevision = useRef<{
+    commandId: string;
+    key: string;
+    revision: number;
+  } | null>(null);
+  const restoreCaret = useRef(false);
   const modelSearch =
     props.modelSearch ??
     ({
@@ -99,15 +163,11 @@ export function Composer(props: ComposerProps) {
       matchesOmitted: 0,
       error: null,
     } satisfies WebStoreState["modelSearch"]);
-  const [cursor, setCursor] = useState(0);
   const [composerFocused, setComposerFocused] = useState(false);
   const [menuDismissed, setMenuDismissed] = useState(false);
   const [activeCommand, setActiveCommand] = useState(0);
   const [fileReferenceOpen, setFileReferenceOpen] = useState(false);
   const [thinkingMenuOpen, setThinkingMenuOpen] = useState(false);
-  const [images, setImages] = useState<StagedPromptImage[]>([]);
-  const currentImages = useRef(images);
-  currentImages.current = images;
   const [attachmentBusy, setAttachmentBusy] = useState(false);
   const [attachmentError, setAttachmentError] = useState<string | null>(null);
   const [commandError, setCommandError] = useState<string | null>(null);
@@ -118,6 +178,7 @@ export function Composer(props: ComposerProps) {
   const textarea = useRef<HTMLTextAreaElement>(null);
   const imagePicker = useRef<HTMLInputElement>(null);
   const attachmentImport = useRef<{
+    ownerKey: string;
     files: File[];
     staged: StagedPromptImage[];
   } | null>(null);
@@ -130,7 +191,11 @@ export function Composer(props: ComposerProps) {
     element.style.height = "auto";
     element.style.height = `${Math.min(element.scrollHeight, 220)}px`;
     element.style.overflowY = element.scrollHeight > 220 ? "auto" : "hidden";
-  }, [prompt]);
+    if (restoreCaret.current) {
+      restoreCaret.current = false;
+      element.setSelectionRange(cursor, cursor);
+    }
+  }, [prompt, cursor]);
   useEffect(() => {
     if (fileReferenceOpen || !restoreFileReferenceFocus.current) return;
     restoreFileReferenceFocus.current = false;
@@ -142,41 +207,71 @@ export function Composer(props: ComposerProps) {
   }, [cursor, fileReferenceOpen]);
   const restoredRecoveryCommandId = useRef<string | null>(null);
   const commandMenuWasOpen = useRef(false);
-  const selected = props.snapshot?.selectedSession;
-  const selectedPath =
-    props.selectedPath === undefined
-      ? (selected?.path ?? null)
-      : props.selectedPath;
-  const sessionPath =
-    selected?.cwd === props.selectedWorkspace ? selectedPath : null;
-  const draftScope =
-    (props.workspaceDraft ? null : sessionPath) ??
-    (props.selectedWorkspace ? `new:${props.selectedWorkspace}` : "none");
-  const draftScopeRef = useRef(draftScope);
   useLayoutEffect(() => {
-    if (draftScope === draftScopeRef.current) return;
-    // Only an exact creation receipt transfers an in-flight import. A matching
-    // workspace alone must not retain a previous Session's clipboard contents.
-    if (
-      !props.workspaceDraft &&
-      draftScopeRef.current === `new:${props.selectedWorkspace}` &&
-      sessionPath &&
-      selected?.path === sessionPath &&
-      props.createdSession?.sessionId === selected.id &&
-      props.createdSession.sessionPath === sessionPath &&
-      props.createdSession.workspacePath === props.selectedWorkspace
-    )
-      return;
-    attachmentImport.current = null;
-    setAttachmentBusy(false);
+    const previous = draftOwner.current;
+    if (previous.key === nextOwner.key) return;
+    let nextDraft = draftMemory.read(nextOwner.key);
+    let limit = false;
+    const handoff =
+      previous.kind === "workspace" &&
+      nextOwner.kind === "session" &&
+      previous.workspacePath === nextOwner.workspacePath &&
+      props.createdSession?.sessionId === nextOwner.sessionId &&
+      props.createdSession.sessionPath === nextOwner.sessionPath &&
+      props.createdSession.workspacePath === nextOwner.workspacePath &&
+      draftMemory.move(previous.key, nextOwner.key);
+    if (handoff) {
+      nextDraft = currentDraft.current;
+      const importing = attachmentImport.current;
+      if (importing?.ownerKey === previous.key)
+        importing.ownerKey = nextOwner.key;
+      const submission = submissions.current.get(previous.key);
+      if (submission) {
+        submissions.current.delete(previous.key);
+        submission.owner = nextOwner;
+        submissions.current.set(nextOwner.key, submission);
+      }
+    } else {
+      // An explicit same-workspace creation may copy operator intent, not move
+      // it out of the original Session or replace an existing workspace draft.
+      if (
+        previous.kind === "session" &&
+        nextOwner.kind === "workspace" &&
+        previous.workspacePath === nextOwner.workspacePath &&
+        props.workspaceDraft &&
+        props.sessionSwitching &&
+        !nextDraft.prompt &&
+        nextDraft.images.length === 0
+      ) {
+        const { prompt, images, caret } = currentDraft.current;
+        const copied = draftMemory.edit(nextOwner.key, nextDraft, {
+          prompt,
+          images,
+          caret,
+        });
+        if (copied) nextDraft = copied;
+        else limit = true;
+      }
+      attachmentImport.current = null;
+      setAttachmentBusy(false);
+    }
+    draftOwner.current = nextOwner;
+    currentDraft.current = nextDraft;
+    restoreCaret.current = true;
+    restoreFileReferenceFocus.current = false;
+    setDraft(nextDraft);
+    setAttachmentError(limit ? t("draftLimit") : null);
+    setCommandError(null);
+    setDragActive(false);
+    setFileReferenceOpen(false);
+    setMenuDismissed(true);
   }, [
-    draftScope,
+    draftMemory,
+    nextOwner,
     props.workspaceDraft,
-    props.selectedWorkspace,
+    props.sessionSwitching,
     props.createdSession,
-    selected?.id,
-    selected?.path,
-    sessionPath,
+    t,
   ]);
   useLayoutEffect(
     () => () => {
@@ -184,13 +279,26 @@ export function Composer(props: ComposerProps) {
     },
     [],
   );
-  const draftRevision = useRef(0);
-  const transferDraftToCreatedSession = useRef(false);
-  const pendingSubmission = useRef<{
-    revision: number;
-    scope: string;
-    canTransferToCreatedSession: boolean;
-  } | null>(null);
+  const updateDraft = (
+    patch: Partial<Pick<ComposerDraft, "prompt" | "images" | "caret">>,
+    ownerKey = renderedOwnerKey,
+  ) => {
+    if (draftOwner.current.key !== ownerKey) return false;
+    const current = currentDraft.current;
+    const next = draftMemory.edit(ownerKey, current, patch);
+    if (!next) {
+      setAttachmentError(t("draftLimit"));
+      return false;
+    }
+    if (next.revision !== current.revision) {
+      if (!submissions.current.get(ownerKey)?.pending)
+        submissions.current.delete(ownerKey);
+      setAttachmentError((error) => (error === t("draftLimit") ? null : error));
+    }
+    currentDraft.current = next;
+    setDraft(next);
+    return true;
+  };
   const active = Boolean(
     !props.workspaceDraft &&
       selected?.id &&
@@ -243,13 +351,20 @@ export function Composer(props: ComposerProps) {
   const contextEntryAvailable =
     canCompose && Boolean(props.selectedWorkspace) && !props.sessionSwitching;
 
+  useEffect(() => {
+    if (contextEntryAvailable) return;
+    restoreFileReferenceFocus.current = false;
+    setFileReferenceOpen(false);
+  }, [contextEntryAvailable]);
+
   const stageFiles = async (files: Iterable<File>) => {
-    if (!contextEntryAvailable) return;
+    if (!contextEntryAvailable || draftOwner.current.key !== renderedOwnerKey)
+      return;
     const selectedFiles = [...files];
     if (selectedFiles.length === 0) return;
     const pending = attachmentImport.current;
     if (
-      currentImages.current.length +
+      currentDraft.current.images.length +
         (pending?.files.length ?? 0) +
         selectedFiles.length >
       WEB_PROMPT_IMAGE_MAX_COUNT
@@ -264,6 +379,7 @@ export function Composer(props: ComposerProps) {
       return;
     }
     const importing = {
+      ownerKey: draftOwner.current.key,
       files: selectedFiles,
       staged: [] as StagedPromptImage[],
     };
@@ -275,9 +391,13 @@ export function Composer(props: ComposerProps) {
       for (const file of importing.files) {
         try {
           const image = await stagePromptImage(file);
-          if (attachmentImport.current !== importing) return;
+          if (
+            attachmentImport.current !== importing ||
+            draftOwner.current.key !== importing.ownerKey
+          )
+            return;
           const totalBytes = [
-            ...currentImages.current,
+            ...currentDraft.current.images,
             ...importing.staged,
           ].reduce((sum, item) => sum + item.size, image.size);
           if (totalBytes > WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES)
@@ -296,8 +416,10 @@ export function Composer(props: ComposerProps) {
         }
       }
       if (importing.staged.length > 0) {
-        draftRevision.current += 1;
-        setImages((current) => [...current, ...importing.staged]);
+        updateDraft(
+          { images: [...currentDraft.current.images, ...importing.staged] },
+          importing.ownerKey,
+        );
       }
     } finally {
       if (attachmentImport.current === importing) {
@@ -338,87 +460,88 @@ export function Composer(props: ComposerProps) {
 
   useEffect(() => {
     const recovery = props.promptAdmissionRecovery;
-    const commandId = recovery?.commandId ?? null;
-    if (restoredRecoveryCommandId.current === commandId) return;
-    restoredRecoveryCommandId.current = commandId;
-    if (!recovery) return;
-    setPrompt((current) => current || recovery.content);
-  }, [props.promptAdmissionRecovery]);
+    if (!recovery || restoredRecoveryCommandId.current === recovery.commandId)
+      return;
+    restoredRecoveryCommandId.current = recovery.commandId;
+    recoveryRevision.current = null;
+    const key = JSON.stringify([
+      "session",
+      recovery.sessionId,
+      recovery.sessionPath,
+    ]);
+    const submission = submissions.current.get(key);
+    if (submission) {
+      recoveryRevision.current = {
+        commandId: recovery.commandId,
+        key,
+        revision: submission.revision,
+      };
+      return;
+    }
+    const current =
+      draftOwner.current.key === key
+        ? currentDraft.current
+        : draftMemory.read(key);
+    if (current.prompt || current.images.length > 0) return;
+    const restoredImages = (recovery.images ?? []).map((image) => ({
+      ...image,
+      id:
+        globalThis.crypto?.randomUUID?.() ??
+        `${recovery.commandId}-${image.name}`,
+      name: image.name ?? t("attachedImage"),
+      size: atob(image.data).length,
+      previewUrl: `data:${image.mimeType};base64,${image.data}`,
+    }));
+    const restored = draftMemory.edit(key, current, {
+      prompt: recovery.content,
+      images: restoredImages,
+      caret: recovery.content.length,
+    });
+    if (!restored) {
+      if (draftOwner.current.key === key) setAttachmentError(t("draftLimit"));
+      return;
+    }
+    recoveryRevision.current = {
+      commandId: recovery.commandId,
+      key,
+      revision: restored.revision,
+    };
+    if (draftOwner.current.key === key) {
+      currentDraft.current = restored;
+      setDraft(restored);
+    }
+  }, [draftMemory, props.promptAdmissionRecovery, t]);
 
   useEffect(() => {
     const resolution = props.promptAdmissionResolution;
     if (!resolution) return;
-    if (prompt.trim() === resolution.content) {
-      setPrompt("");
-      setImages([]);
+    const captured = recoveryRevision.current;
+    const key = JSON.stringify([
+      "session",
+      resolution.sessionId,
+      resolution.sessionPath,
+    ]);
+    if (captured?.key === key && captured.commandId === resolution.commandId) {
+      const cleared = draftMemory.clear(key, captured.revision);
+      if (cleared && draftOwner.current.key === key) {
+        currentDraft.current = cleared;
+        setDraft(cleared);
+      }
     }
+    if (captured?.commandId === resolution.commandId)
+      recoveryRevision.current = null;
     props.actions.acknowledgePromptAdmissionResolution(resolution.commandId);
-  }, [prompt, props.actions, props.promptAdmissionResolution]);
-
-  useEffect(() => {
-    const previousScope = draftScopeRef.current;
-    if (previousScope === draftScope) return;
-    draftScopeRef.current = draftScope;
-
-    const submission = pendingSubmission.current;
-    const createdSession =
-      !props.workspaceDraft &&
-      ((props.createdSession?.sessionId === selected?.id &&
-        props.createdSession?.workspacePath === props.selectedWorkspace &&
-        previousScope === `new:${props.selectedWorkspace}`) ||
-        (transferDraftToCreatedSession.current &&
-          previousScope === `new:${props.selectedWorkspace}`) ||
-        (submission?.canTransferToCreatedSession &&
-          submission.scope === previousScope)) &&
-      Boolean(sessionPath) &&
-      props.snapshot?.selectedSession?.path === sessionPath &&
-      props.snapshot?.selectedSession?.cwd === props.selectedWorkspace;
-    if (createdSession) {
-      if (submission?.canTransferToCreatedSession)
-        submission.scope = draftScope;
-      transferDraftToCreatedSession.current = false;
-      return;
-    }
-
-    const startingNewSession =
-      props.workspaceDraft &&
-      props.selectedWorkspace &&
-      draftScope === `new:${props.selectedWorkspace}` &&
-      props.snapshot?.selectedSession?.cwd === props.selectedWorkspace;
-    if (startingNewSession) {
-      transferDraftToCreatedSession.current = true;
-      return;
-    }
-
-    draftRevision.current += 1;
-    setPrompt("");
-    setImages([]);
-    setAttachmentError(null);
-    setCommandError(null);
-    setDragActive(false);
-    setFileReferenceOpen(false);
-    if (submission?.scope === previousScope) {
-      submission.canTransferToCreatedSession = false;
-    }
-  }, [
-    draftScope,
-    props.snapshot?.selectedSession?.path,
-    props.snapshot?.selectedSession?.cwd,
-    props.selectedWorkspace,
-    props.workspaceDraft,
-    sessionPath,
-    selected?.id,
-    props.createdSession,
-  ]);
+  }, [draftMemory, props.actions, props.promptAdmissionResolution]);
 
   const sendDraft = async (
     sendPrompt: (
       content: string,
       images?: readonly WebPromptImage[],
     ) => Promise<boolean>,
+    explicitImages = false,
   ) => {
     if (
-      pendingSubmission.current ||
+      submissions.current.get(draftOwner.current.key)?.pending ||
       attachmentImport.current ||
       props.planSelectionPending
     )
@@ -427,32 +550,39 @@ export function Composer(props: ComposerProps) {
       await props.actions.chooseWorkspace();
       return;
     }
+    if (renderedOwnerKey !== draftOwner.current.key) return;
+    const captured = currentDraft.current;
     const submission = {
-      revision: draftRevision.current,
-      scope: draftScopeRef.current,
-      canTransferToCreatedSession: draftSession,
+      revision: captured.revision,
+      owner: draftOwner.current,
+      pending: true,
     };
-    pendingSubmission.current = submission;
+    submissions.current.set(submission.owner.key, submission);
+    let accepted = false;
     try {
-      const accepted =
-        images.length > 0
-          ? await sendPrompt(prompt, images)
-          : await sendPrompt(prompt);
+      accepted =
+        explicitImages || captured.images.length > 0
+          ? await sendPrompt(captured.prompt, captured.images)
+          : await sendPrompt(captured.prompt);
       if (accepted) {
-        if (
-          pendingSubmission.current === submission &&
-          draftScopeRef.current === submission.scope &&
-          draftRevision.current === submission.revision
-        ) {
-          draftRevision.current += 1;
-          setPrompt("");
-          setImages([]);
+        const cleared = draftMemory.clear(
+          submission.owner.key,
+          submission.revision,
+        );
+        if (cleared && draftOwner.current.key === submission.owner.key) {
+          currentDraft.current = cleared;
+          setDraft(cleared);
           setAttachmentError(null);
         }
       }
     } finally {
-      if (pendingSubmission.current === submission) {
-        pendingSubmission.current = null;
+      submission.pending = false;
+      const retained = draftMemory.read(submission.owner.key);
+      if (
+        (accepted || (!retained.prompt && retained.images.length === 0)) &&
+        submissions.current.get(submission.owner.key) === submission
+      ) {
+        submissions.current.delete(submission.owner.key);
       }
     }
   };
@@ -491,9 +621,7 @@ export function Composer(props: ComposerProps) {
         setCommandError(t("commandPanelUnavailable"));
         return;
       }
-      draftRevision.current += 1;
-      setPrompt("");
-      setCursor(0);
+      updateDraft({ prompt: "", caret: 0 });
       setCommandError(null);
       return;
     }
@@ -501,17 +629,25 @@ export function Composer(props: ComposerProps) {
     await sendDraft(props.actions.sendPrompt);
   };
 
-  const sendAsNew = () => sendDraft(props.actions.sendPromptAsNew);
+  const sendAsNew = () => {
+    if (
+      !active ||
+      props.sessionSwitching ||
+      props.modelSelectionPending ||
+      props.thinkingPendingLevel !== null
+    )
+      return;
+    return sendDraft(props.actions.sendPromptAsNew, true);
+  };
 
   const completeCommand = (command: (typeof filteredCommands)[number]) => {
     if (command.availability !== "available") return;
     const value = `/${command.name} `;
-    draftRevision.current += 1;
-    setPrompt(value);
+    if (!updateDraft({ prompt: value, caret: value.length })) return;
     setCommandError(null);
-    setCursor(value.length);
     setMenuDismissed(true);
     queueMicrotask(() => {
+      if (draftOwner.current.key !== renderedOwnerKey) return;
       textarea.current?.focus();
       textarea.current?.setSelectionRange(value.length, value.length);
     });
@@ -539,9 +675,7 @@ export function Composer(props: ComposerProps) {
     const trailing = after && !/^\s/u.test(after) ? " " : "";
     const value = `${before}${leading}${formatted}${trailing}${after}`;
     const nextCursor = before.length + leading.length + formatted.length;
-    draftRevision.current += 1;
-    setPrompt(value);
-    setCursor(nextCursor);
+    if (!updateDraft({ prompt: value, caret: nextCursor })) return;
     restoreFileReferenceFocus.current = true;
   };
 
@@ -809,6 +943,10 @@ export function Composer(props: ComposerProps) {
               className="primary"
               disabled={
                 attachmentBusy ||
+                !active ||
+                props.sessionSwitching ||
+                props.modelSelectionPending ||
+                props.thinkingPendingLevel !== null ||
                 props.promptAdmissionRecovery.phase !== "ready" ||
                 (!prompt.trim() && images.length === 0)
               }
@@ -938,11 +1076,14 @@ export function Composer(props: ComposerProps) {
                   aria-label={`${t("removeAttachment")} ${image.name}`}
                   title={t("removeAttachment")}
                   onClick={() => {
-                    draftRevision.current += 1;
-                    setImages((current) =>
-                      current.filter((item) => item.id !== image.id),
-                    );
-                    setAttachmentError(null);
+                    if (
+                      updateDraft({
+                        images: currentDraft.current.images.filter(
+                          (item) => item.id !== image.id,
+                        ),
+                      })
+                    )
+                      setAttachmentError(null);
                   }}
                 >
                   <X aria-hidden="true" />
@@ -984,14 +1125,22 @@ export function Composer(props: ComposerProps) {
           }
           placeholder={placeholder}
           onChange={(event) => {
-            draftRevision.current += 1;
-            setPrompt(event.target.value);
+            if (
+              !updateDraft({
+                prompt: event.target.value,
+                caret: event.target.selectionStart,
+              })
+            )
+              return;
             setCommandError(null);
-            setCursor(event.target.selectionStart);
             setMenuDismissed(false);
           }}
-          onClick={(event) => setCursor(event.currentTarget.selectionStart)}
-          onSelect={(event) => setCursor(event.currentTarget.selectionStart)}
+          onClick={(event) =>
+            updateDraft({ caret: event.currentTarget.selectionStart })
+          }
+          onSelect={(event) =>
+            updateDraft({ caret: event.currentTarget.selectionStart })
+          }
           onFocus={() => {
             setComposerFocused(true);
             setMenuDismissed(false);
@@ -1103,11 +1252,10 @@ export function Composer(props: ComposerProps) {
                     icon: <Command />,
                     isDisabled: !commandEntryAvailable,
                     onClick: () => {
-                      draftRevision.current += 1;
-                      setPrompt("/");
-                      setCursor(1);
+                      if (!updateDraft({ prompt: "/", caret: 1 })) return;
                       setMenuDismissed(false);
                       requestAnimationFrame(() => {
+                        if (draftOwner.current.key !== renderedOwnerKey) return;
                         textarea.current?.focus();
                         textarea.current?.setSelectionRange(1, 1);
                       });

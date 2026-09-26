@@ -51,6 +51,11 @@ import { isControlledSession } from "../../lib/session-control.ts";
 import type { LiveEntry } from "../../store/web-store.ts";
 import { FullMessageText } from "./FullMessageText.tsx";
 import { PlanCard, planPresentation } from "./PlanCard.tsx";
+import {
+  rememberSessionReading,
+  sessionReadingScope,
+  type SessionReadingCache,
+} from "./session-reading-state.ts";
 import { ToolEvidence } from "./ToolEvidence.tsx";
 import { TurnChangesCard } from "./TurnChangesCard.tsx";
 import { RunningTurnElapsed, SettledTurnElapsed } from "./TurnElapsed.tsx";
@@ -78,6 +83,7 @@ interface TranscriptProps {
   thinkingStarts: Record<string, number>;
   thinkingDurations: Record<string, number>;
   scrollToBottom: number;
+  readingCache?: SessionReadingCache;
   onResend: (content: string) => Promise<boolean>;
   onInspectSubagent?: (id: string) => void;
   onHistoryAnchorChange?: (anchor: WebHistoryAnchor | null) => void;
@@ -1214,6 +1220,22 @@ function renderTurns(
   ));
 }
 
+function captureReadingPosition(element: HTMLElement, pinned: boolean) {
+  const top = element.getBoundingClientRect().top;
+  const anchor = Array.from(
+    element.querySelectorAll<HTMLElement>("[data-history-entry]"),
+  ).find((item) => {
+    const bounds = item.getBoundingClientRect();
+    return bounds.height > 0 && bounds.bottom > top;
+  });
+  return {
+    key: anchor?.dataset.historyEntry,
+    offset: (anchor?.getBoundingClientRect().top ?? top) - top,
+    scrollTop: element.scrollTop,
+    pinned,
+  };
+}
+
 export function Transcript(props: TranscriptProps) {
   const { t } = useTranslation();
   const viewport = useRef<HTMLDivElement>(null);
@@ -1227,33 +1249,40 @@ export function Transcript(props: TranscriptProps) {
     scrollTop: number;
     scrollHeight: number;
   } | null>(null);
-  const history = useSessionHistory(props.snapshot.selectedSession, {
-    onAnchorChange: props.onHistoryAnchorChange,
-    onRefresh: props.onRefreshHistory,
-    beforePrepend: () => {
-      const element = viewport.current;
-      if (!element) return;
-      const top = element.getBoundingClientRect().top;
-      const anchor = Array.from(
-        element.querySelectorAll<HTMLElement>("[data-history-entry]"),
-      ).find((item) => {
-        const bounds = item.getBoundingClientRect();
-        return bounds.height > 0 && bounds.bottom > top;
-      });
-      prependAnchor.current = {
-        key: anchor?.dataset.historyEntry,
-        offset: (anchor?.getBoundingClientRect().top ?? top) - top,
-        scrollTop: element.scrollTop,
-        scrollHeight: element.scrollHeight,
-      };
-      pinned.current = false;
+  const readingCache = useMemo<SessionReadingCache>(
+    () => props.readingCache ?? new Map(),
+    [props.readingCache],
+  );
+  const history = useSessionHistory(
+    props.snapshot.selectedSession,
+    {
+      onAnchorChange: props.onHistoryAnchorChange,
+      onRefresh: props.onRefreshHistory,
+      beforePrepend: () => {
+        const element = viewport.current;
+        if (!element) return;
+        prependAnchor.current = {
+          ...captureReadingPosition(element, false),
+          scrollHeight: element.scrollHeight,
+        };
+        pinned.current = false;
+      },
     },
-  });
+    readingCache,
+  );
   const selected = history.session;
   const selectedId = selected?.id;
   const selectedPath = selected?.path;
   const selectedCwd = selected?.cwd;
   const hydrationScope = JSON.stringify([selectedId, selectedPath]);
+  useLayoutEffect(() => {
+    const element = viewport.current;
+    if (!element || !selectedId || !selectedPath) return;
+    return () =>
+      rememberSessionReading(readingCache, hydrationScope, {
+        position: captureReadingPosition(element, pinned.current),
+      });
+  }, [hydrationScope, readingCache, selectedId, selectedPath]);
   const previousHydrationScope = useRef(hydrationScope);
   const [hydratedMessages, setHydratedMessages] = useState<
     Record<string, string>
@@ -1881,10 +1910,10 @@ export function Transcript(props: TranscriptProps) {
     void entries;
     const element = viewport.current;
     if (!element || !selected) return;
-    const identity = JSON.stringify([selected.id, selected.path]);
-    const changed =
-      lastPath.current !== identity ||
-      lastHistoryReset.current !== history.reset;
+    const identity = sessionReadingScope(selected);
+    const identityChanged = lastPath.current !== identity;
+    const historyChanged = lastHistoryReset.current !== history.reset;
+    const changed = identityChanged || historyChanged;
     lastHistoryReset.current = history.reset;
     const requested = lastScrollRequest.current !== props.scrollToBottom;
     lastScrollRequest.current = props.scrollToBottom;
@@ -1893,9 +1922,17 @@ export function Transcript(props: TranscriptProps) {
       history.resetToLatest();
       return;
     }
-    const saved = prependAnchor.current;
+    const restored =
+      identityChanged && !historyChanged && !requested
+        ? readingCache.get(identity)?.position
+        : undefined;
+    const saved =
+      prependAnchor.current ??
+      (restored && !restored.pinned
+        ? { ...restored, scrollHeight: element.scrollHeight }
+        : null);
     prependAnchor.current = null;
-    if (saved && !changed && !requested) {
+    if (saved && (!changed || restored) && !requested) {
       const anchor = Array.from(
         element.querySelectorAll<HTMLElement>("[data-history-entry]"),
       ).find(
@@ -1934,6 +1971,7 @@ export function Transcript(props: TranscriptProps) {
     history.engaged,
     history.resetToLatest,
     props.scrollToBottom,
+    readingCache,
   ]);
 
   const runningLabel = !active
@@ -1978,6 +2016,7 @@ export function Transcript(props: TranscriptProps) {
           pinned.current =
             element.scrollTop + element.clientHeight >=
             element.scrollHeight - 48;
+          if (!pinned.current) history.retainReading();
           setReadingHistory(!pinned.current);
         }}
       >

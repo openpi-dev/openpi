@@ -22,6 +22,10 @@ import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { SubagentDetailView } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
+import {
+  sessionReadingScope,
+  type SessionReadingCache,
+} from "../../web/ui/src/features/transcript/session-reading-state.ts";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
@@ -2187,6 +2191,246 @@ it("follows same-key streamed growth, preserves reading position, and honors exp
   expect(scroll).toHaveBeenCalledOnce();
 });
 
+it("restores the same native entry offset after leaving a Session, without sharing it with a copied path", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.history = {
+    leafEntryId: "e3",
+    beforeEntryId: "e2",
+  };
+  snapshot.selectedSession!.entries = [
+    {
+      id: "e2",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Read this prompt" },
+    },
+    {
+      id: "e3",
+      parentId: "e2",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "assistant", content: "Read this answer" },
+    },
+  ];
+  const cache: SessionReadingCache = new Map();
+  let returned = false;
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("conversation"))
+        return new DOMRect(0, 10, 300, 100);
+      if (this.dataset.historyEntry === "e2")
+        return new DOMRect(0, returned ? 200 : 5, 300, 50);
+      return new DOMRect();
+    });
+  const scrollHeight = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockReturnValue(1000);
+  const clientHeight = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockReturnValue(100);
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  const scroll = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+    this.scrollTop = options.top ?? 0;
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scroll,
+  });
+  const node = (path = snapshot.selectedSession!.path, scrollToBottom = 0) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        key: path,
+        snapshot: {
+          ...snapshot,
+          selectedSession: { ...snapshot.selectedSession!, path },
+        },
+        readingCache: cache,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom,
+        onResend: async () => true,
+      }),
+    );
+  try {
+    const view = render(node());
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    viewport.scrollTop = 150;
+    fireEvent.scroll(viewport);
+    view.rerender(node("/tmp/copied-session"));
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(1000);
+    const saved = cache.get(sessionReadingScope(snapshot.selectedSession))!;
+    expect(saved.window?.anchor).toBe("e3");
+    expect(saved.position).toMatchObject({
+      key: "e2",
+      offset: -5,
+      scrollTop: 150,
+      pinned: false,
+    });
+    returned = true;
+    view.rerender(node());
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(195);
+    expect(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeTruthy();
+    view.rerender(node(snapshot.selectedSession!.path, 1));
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(1000);
+    expect(cache.has(sessionReadingScope(snapshot.selectedSession))).toBe(
+      false,
+    );
+    view.unmount();
+  } finally {
+    bounds.mockRestore();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
+it("keeps the App reader through switching and trajectory without transferring it to another Session", () => {
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.entries = [
+    {
+      id: "e1",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Reader A" },
+    },
+  ];
+  snapshot.selectedSession!.history = {
+    leafEntryId: "e1",
+    beforeEntryId: null,
+  };
+  snapshot.sessions = [
+    {
+      id: "session",
+      path: "/tmp/session",
+      cwd: "/tmp",
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      messageCount: 1,
+      firstMessage: "Reader A",
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+    },
+  ];
+  const scrollHeight = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockReturnValue(1000);
+  const clientHeight = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockReturnValue(100);
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value(this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+    },
+  });
+  try {
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      connection: "connected",
+      liveRunning: false,
+      liveMessages: [],
+    });
+    const view = render(createElement(Providers, null, createElement(App)));
+    const scroller = () =>
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    scroller().scrollTop = 180;
+    fireEvent.scroll(scroller());
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("trajectory") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
+    expect(scroller().scrollTop).toBe(180);
+    act(() =>
+      webStore.setState({ sessionSwitching: true, selectedPath: "/tmp/other" }),
+    );
+    act(() =>
+      webStore.setState({
+        sessionSwitching: false,
+        snapshot: {
+          ...snapshot,
+          selectedSession: {
+            ...snapshot.selectedSession!,
+            id: "other",
+            path: "/tmp/other",
+          },
+        },
+      }),
+    );
+    expect(scroller().scrollTop).toBe(1000);
+    act(() =>
+      webStore.setState({
+        sessionSwitching: true,
+        selectedPath: "/tmp/session",
+      }),
+    );
+    act(() => webStore.setState({ sessionSwitching: false, snapshot }));
+    expect(scroller().scrollTop).toBe(180);
+    for (const id of ["C", "D", "E", "F"]) {
+      act(() =>
+        webStore.setState({
+          selectedPath: `/tmp/${id}`,
+          snapshot: {
+            ...snapshot,
+            selectedSession: {
+              ...snapshot.selectedSession!,
+              id,
+              path: `/tmp/${id}`,
+            },
+          },
+        }),
+      );
+    }
+    act(() => webStore.setState({ selectedPath: "/tmp/session", snapshot }));
+    expect(scroller().scrollTop).toBe(180);
+    view.unmount();
+  } finally {
+    webStore.setState(original, true);
+    start.mockRestore();
+    stop.mockRestore();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
 it("shows cancellation and queued follow-up receipts on the active session", () => {
   const snapshot = activeSnapshot();
   const store = createWebStore();
@@ -2627,7 +2871,7 @@ it("reports failed copy honestly, supports retry, and cleans up feedback on unmo
   }
 });
 
-it("shows bounded archive history even when its workspace summary was omitted", async () => {
+it("loads archived history even when its workspace summary was omitted", async () => {
   const store = createWebStore();
   const restore = vi
     .spyOn(store.getState().actions, "unarchiveSession")
@@ -2664,6 +2908,18 @@ it("shows bounded archive history even when its workspace summary was omitted", 
       truncated: true,
     },
   };
+  const read = vi
+    .spyOn(WebClient.prototype, "listArchivedSessions")
+    .mockResolvedValue({
+      sessions: snapshot.sessions,
+      truncation: {
+        truncated: false,
+        matchesOmitted: 0,
+        recordsUnscanned: 0,
+        maxPageSize: 100,
+        maxScanned: 2000,
+      },
+    });
   renderWithI18n(
     createElement(SessionSidebar, {
       snapshot,
@@ -2679,13 +2935,12 @@ it("shows bounded archive history even when its workspace summary was omitted", 
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(screen.getByText("Archived work")).toBeTruthy();
+  expect(await screen.findByText("Archived work")).toBeTruthy();
   expect(screen.getAllByText("/omitted").length).toBeGreaterThan(0);
-  expect(
-    screen.getByText(
-      "20 more sessions and 1 workspace summaries are not loaded. Search covers the loaded list only.",
-    ),
-  ).toBeTruthy();
+  expect(read).toHaveBeenCalledWith(
+    { query: "", limit: 25 },
+    expect.any(AbortSignal),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
     await screen.findByRole("menuitem", { name: "Restore conversation" }),
@@ -2697,6 +2952,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   ).toBeTruthy();
   expect(restore).toHaveBeenCalledWith("/omitted/a.jsonl");
   expect(screen.getByText("Archived work")).toBeTruthy();
+  read.mockRestore();
 });
 
 it("shows complete model identities before workspace selection", () => {
@@ -3468,7 +3724,7 @@ it("requires another canonical check after admission verification fails", () => 
 });
 
 it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
-  "clears a recovered draft matching admitted content %j when late evidence arrives",
+  "clears only an unchanged recovered draft when late evidence arrives (%j)",
   (draft) => {
     const snapshot = activeSnapshot();
     snapshot.runtime.status = "idle";
@@ -3514,6 +3770,8 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
           ...baseProps,
           promptAdmissionRecovery: null,
           promptAdmissionResolution: {
+            sessionId: "session",
+            sessionPath: snapshot.selectedSession!.path,
             commandId: "unknown-command",
             content: "keep this draft",
           },
@@ -3521,7 +3779,7 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
       ),
     );
 
-    expect(input.value).toBe("");
+    expect(input.value).toBe(draft === "keep this draft" ? "" : draft);
     expect(acknowledge).toHaveBeenCalledWith("unknown-command");
   },
 );
@@ -3652,6 +3910,8 @@ it("preserves an edited recovered draft when late evidence arrives", () => {
         ...baseProps,
         promptAdmissionRecovery: null,
         promptAdmissionResolution: {
+          sessionId: "session",
+          sessionPath: snapshot.selectedSession!.path,
           commandId: "unknown-command",
           content: "original",
         },
@@ -3882,6 +4142,7 @@ it("transfers an unsent draft through manual new-session creation", () => {
   const createdSnapshot = {
     ...snapshot,
     currentSessionId: "created-session",
+    currentSessionPath: "/tmp/created-session",
     selectedSession: {
       ...snapshot.selectedSession!,
       id: "created-session",
@@ -3897,6 +4158,12 @@ it("transfers an unsent draft through manual new-session creation", () => {
         snapshot: createdSnapshot,
         selectedPath: "/tmp/created-session",
         sessionSwitching: false,
+        createdSession: {
+          epoch: 1,
+          sessionId: "created-session",
+          sessionPath: "/tmp/created-session",
+          workspacePath: "/tmp",
+        },
       }),
     ),
   );

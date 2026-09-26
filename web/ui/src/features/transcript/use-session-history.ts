@@ -8,14 +8,15 @@ import {
   type WebSessionProjection,
 } from "../../../../protocol/types.ts";
 import { WebApiError, WebClient } from "../../protocol/client.ts";
+import {
+  rememberSessionReading,
+  sessionReadingScope as scopeFor,
+  type ReadingWindow,
+  type SessionReadingCache,
+} from "./session-reading-state.ts";
 
 const MAX_READING_ENTRIES = WEB_MAX_ENTRIES * 4;
 const MAX_READING_BYTES = WEB_MAX_SELECTED_TRANSCRIPT_BYTES * 4;
-type ReadingWindow = {
-  session: WebSessionProjection;
-  anchor: string;
-  validatedLeaf: string | null;
-};
 type PageRequest = {
   controller: AbortController;
   scope: string;
@@ -23,10 +24,6 @@ type PageRequest = {
   before: string;
   page?: WebSessionHistoryPage;
 };
-
-function scopeFor(session: WebSessionProjection | undefined) {
-  return JSON.stringify([session?.id, session?.path]);
-}
 
 function compatible(window: ReadingWindow, session: WebSessionProjection) {
   return (
@@ -65,40 +62,63 @@ export function useSessionHistory(
     onRefresh?: () => Promise<boolean>;
     beforePrepend: () => void;
   },
+  readingCache?: SessionReadingCache,
 ) {
   const client = useMemo(() => new WebClient(), []);
+  const savedReaders = useMemo<SessionReadingCache>(
+    () => readingCache ?? new Map(),
+    [readingCache],
+  );
+  const scope = scopeFor(selected);
+  const savedOnEntry = useRef({ scope, state: savedReaders.get(scope) });
+  if (savedOnEntry.current.scope !== scope) {
+    savedOnEntry.current = { scope, state: savedReaders.get(scope) };
+  }
   const latest = useRef({ selected, callbacks });
   latest.current = { selected, callbacks };
-  const cache = useRef<ReadingWindow | null>(null);
+  const cache = useRef<ReadingWindow | null>(
+    savedOnEntry.current.state?.window ?? null,
+  );
   const request = useRef<PageRequest | null>(null);
   const refreshAttempt = useRef<string | null>(null);
-  const [window, setWindow] = useState<ReadingWindow | null>(null);
+  const [window, setWindow] = useState(cache.current);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [reset, setReset] = useState(0);
-  const scope = scopeFor(selected);
   const previousScope = useRef(scope);
 
-  const publish = useCallback((next: ReadingWindow) => {
-    cache.current = next;
-    setWindow(next);
-    latest.current.callbacks.onAnchorChange?.({
-      sessionId: next.session.id,
-      sessionPath: next.session.path,
-      entryId: next.anchor,
-    });
-  }, []);
-  const clear = useCallback((changed = false) => {
-    request.current?.controller.abort();
-    request.current = null;
-    cache.current = null;
-    setWindow(null);
-    setLoading(false);
-    setError(changed ? "historyChanged" : null);
-    refreshAttempt.current = null;
-    latest.current.callbacks.onAnchorChange?.(null);
-    setReset((value) => value + 1);
-  }, []);
+  const publish = useCallback(
+    (next: ReadingWindow) => {
+      cache.current = next;
+      rememberSessionReading(savedReaders, scopeFor(next.session), {
+        window: next,
+      });
+      setWindow(next);
+      latest.current.callbacks.onAnchorChange?.({
+        sessionId: next.session.id,
+        sessionPath: next.session.path,
+        entryId: next.anchor,
+      });
+    },
+    [savedReaders],
+  );
+  const clear = useCallback(
+    (changed = false) => {
+      request.current?.controller.abort();
+      request.current = null;
+      savedReaders.delete(
+        scopeFor(cache.current?.session ?? latest.current.selected),
+      );
+      cache.current = null;
+      setWindow(null);
+      setLoading(false);
+      setError(changed ? "historyChanged" : null);
+      refreshAttempt.current = null;
+      latest.current.callbacks.onAnchorChange?.(null);
+      setReset((value) => value + 1);
+    },
+    [savedReaders],
+  );
   const refresh = useCallback((force = false) => {
     const current = cache.current;
     const session = latest.current.selected;
@@ -193,8 +213,15 @@ export function useSessionHistory(
   useLayoutEffect(() => {
     if (previousScope.current !== scope) {
       previousScope.current = scope;
-      clear();
-      return;
+      request.current?.controller.abort();
+      request.current = null;
+      cache.current = savedOnEntry.current.state?.window ?? null;
+      setWindow(cache.current);
+      setLoading(false);
+      setError(null);
+      refreshAttempt.current = null;
+      setReset((value) => value + 1);
+      if (!cache.current) latest.current.callbacks.onAnchorChange?.(null);
     }
     let current = cache.current;
     if (!current || !selected) return;
@@ -257,14 +284,37 @@ export function useSessionHistory(
     if (request.current?.page) applyPage(request.current);
   }, [scope, selected, clear, refresh, publish, applyPage]);
 
-  useLayoutEffect(
-    () => () => {
+  useLayoutEffect(() => {
+    const current = cache.current;
+    if (current) {
+      rememberSessionReading(savedReaders, scope, {
+        ...savedOnEntry.current.state,
+        window: current,
+      });
+      latest.current.callbacks.onAnchorChange?.({
+        sessionId: current.session.id,
+        sessionPath: current.session.path,
+        entryId: current.anchor,
+      });
+    }
+    return () => {
       request.current?.controller.abort();
       request.current = null;
       latest.current.callbacks.onAnchorChange?.(null);
-    },
-    [],
-  );
+    };
+  }, [scope, savedReaders]);
+
+  const retainReading = useCallback(() => {
+    const session = latest.current.selected;
+    if (!cache.current && session?.history?.leafEntryId) {
+      publish({
+        session,
+        anchor: session.history.leafEntryId,
+        validatedLeaf: session.history.leafEntryId,
+      });
+    }
+    return cache.current;
+  }, [publish]);
 
   const loadOlder = async () => {
     if (request.current) return;
@@ -276,13 +326,9 @@ export function useSessionHistory(
       return;
     }
     if (!current) {
-      current = {
-        session,
-        anchor: session.history.leafEntryId,
-        validatedLeaf: session.history.leafEntryId,
-      };
-      publish(current);
+      current = retainReading();
     }
+    if (!current) return;
     const before = current.session.history?.beforeEntryId;
     if (!before) return;
     const pending: PageRequest = {
@@ -356,6 +402,7 @@ export function useSessionHistory(
     loading,
     error,
     reset,
+    retainReading,
     loadOlder,
     resetToLatest,
   };

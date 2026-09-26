@@ -142,8 +142,11 @@ export interface PromptAdmissionRecovery {
 }
 
 export interface PromptAdmissionResolution {
+  sessionId: string;
+  sessionPath: string;
   commandId: string;
   content: string;
+  images?: readonly WebPromptImage[];
 }
 
 interface SessionActivation {
@@ -313,6 +316,11 @@ export function createWebStore(
   let sessionActivation: SessionActivation | null = null;
   let creationRetry: { workspacePath: string; commandId: string } | null = null;
   let sessionSelectionTail = Promise.resolve();
+  let pendingSessionSelection: {
+    path: string;
+    epoch: number;
+    promise: Promise<void>;
+  } | null = null;
   let refreshTimer: number | null = null;
   let refreshInFlight = false;
   let refreshPending = false;
@@ -690,8 +698,11 @@ export function createWebStore(
           promptAdmissionResolution:
             handled && recovery
               ? {
+                  sessionId: recovery.sessionId,
+                  sessionPath: recovery.sessionPath,
                   commandId: recovery.commandId,
                   content: recovery.content,
+                  images: recovery.images,
                 }
               : current.promptAdmissionResolution,
           liveMessages:
@@ -845,12 +856,6 @@ export function createWebStore(
             ...resetLivePatch(),
             promptAdmissionPending: false,
             promptAdmissionRecovery: null,
-            promptAdmissionResolution: recovery
-              ? {
-                  commandId: recovery.commandId,
-                  content: recovery.content,
-                }
-              : current.promptAdmissionResolution,
             selectedPath: typeof eventPath === "string" ? eventPath : null,
             draftModel: current.workspaceDraft ? current.draftModel : null,
             modelSelectionPending: false,
@@ -1176,11 +1181,10 @@ export function createWebStore(
             : undefined;
           const selectedWorkspace = get().workspaceDraft
             ? get().selectedWorkspace
-            : snapshot.workspaces.some(
-                  (workspace) => workspace.path === selectedSessionWorkspace,
-                )
-              ? selectedSessionWorkspace
-              : (activeWorkspace ?? retainedWorkspace ?? null);
+            : (selectedSessionWorkspace ??
+              activeWorkspace ??
+              retainedWorkspace ??
+              null);
           const shouldReset = options.resetCursor;
           if (
             get().snapshot?.selectedSession?.path !==
@@ -1298,12 +1302,6 @@ export function createWebStore(
           modelSelectionPending: false,
           promptAdmissionPending: false,
           promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
           notice: null,
         });
       },
@@ -1320,11 +1318,8 @@ export function createWebStore(
         try {
           await client.removeWorkspace(path);
           if (get().selectedWorkspace === path) clearCommandDiscovery();
-          set({
-            selectedPath: null,
-            selectedWorkspace:
-              get().selectedWorkspace === path ? null : get().selectedWorkspace,
-          });
+          if (get().workspaceDraft && get().selectedWorkspace === path)
+            set({ selectedWorkspace: null });
           await actions.refreshSnapshot();
         } catch (error) {
           showError(error);
@@ -1356,7 +1351,6 @@ export function createWebStore(
       },
       async createSession(workspacePath) {
         if (!workspacePath || get().modelSelectionPending) return null;
-        const current = get();
         const epoch = ++sessionEpoch;
         resetThinking();
         clearCommandDiscovery();
@@ -1375,12 +1369,6 @@ export function createWebStore(
           mobileSidebarOpen: false,
           promptAdmissionPending: false,
           promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
           selectedPath: null,
           selectedWorkspace: workspacePath,
           createdSession: null,
@@ -1487,8 +1475,26 @@ export function createWebStore(
       },
       async selectSession(path) {
         if (!path) return;
-        creationRetry = null;
         const current = get();
+        if (
+          pendingSessionSelection?.path === path &&
+          pendingSessionSelection.epoch === sessionEpoch
+        ) {
+          set({ mobileSidebarOpen: false });
+          await pendingSessionSelection.promise;
+          return;
+        }
+        if (
+          !current.workspaceDraft &&
+          !current.sessionSwitching &&
+          current.selectedPath === path &&
+          current.snapshot?.selectedSession?.path === path &&
+          isControlledSession(current.snapshot)
+        ) {
+          set({ mobileSidebarOpen: false });
+          return;
+        }
+        creationRetry = null;
         const sameView =
           !current.workspaceDraft &&
           current.selectedPath === path &&
@@ -1521,13 +1527,6 @@ export function createWebStore(
           promptAdmissionRecovery: sameView
             ? current.promptAdmissionRecovery
             : null,
-          promptAdmissionResolution:
-            !sameView && current.promptAdmissionRecovery
-              ? {
-                  commandId: current.promptAdmissionRecovery.commandId,
-                  content: current.promptAdmissionRecovery.content,
-                }
-              : current.promptAdmissionResolution,
           selectedPath: path,
           sessionSwitching: true,
         });
@@ -1551,7 +1550,13 @@ export function createWebStore(
           }
         });
         sessionSelectionTail = selection.catch(() => undefined);
-        await selection;
+        pendingSessionSelection = { path, epoch, promise: selection };
+        try {
+          await selection;
+        } finally {
+          if (pendingSessionSelection?.promise === selection)
+            pendingSessionSelection = null;
+        }
       },
       async renameSession(path, name) {
         try {
@@ -1575,7 +1580,8 @@ export function createWebStore(
         try {
           await client.unarchiveSession(path);
           if (epoch !== sessionEpoch) return true;
-          return await actions.refreshSnapshot({ epoch });
+          const refreshed = await actions.refreshSnapshot({ epoch });
+          return epoch !== sessionEpoch || refreshed;
         } catch (error) {
           if (epoch === sessionEpoch) showError(error);
           return false;

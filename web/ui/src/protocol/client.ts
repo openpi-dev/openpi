@@ -27,6 +27,7 @@ import {
   type WebModelSummary,
   type WebPromptImage,
   type WebSessionHistoryPage,
+  type WebSessionSummary,
   type WebSettingsCatalog,
   type WebSnapshot,
   type WebThinkingState,
@@ -87,6 +88,21 @@ export interface SessionMutationResult {
   cancelled?: boolean;
   path?: string;
   sessionPath?: string;
+}
+
+export interface ArchivedSessionPage {
+  sessions: Omit<
+    WebSessionSummary,
+    "source" | "origin" | "controller" | "readOnly"
+  >[];
+  nextCursor?: string;
+  truncation: {
+    truncated: boolean;
+    matchesOmitted: number;
+    recordsUnscanned: number;
+    maxPageSize: number;
+    maxScanned: number;
+  };
 }
 
 export interface SessionCreationResult {
@@ -581,6 +597,20 @@ export class WebClient {
     return this.request<{ path: string; archived: false }>(
       `/api/sessions/unarchive?path=${encodeURIComponent(path)}`,
       { method: "POST" },
+    );
+  }
+
+  listArchivedSessions(
+    options: { query?: string; cursor?: string; limit?: number } = {},
+    signal?: AbortSignal,
+  ) {
+    const query = new URLSearchParams();
+    if (options.query !== undefined) query.set("q", options.query);
+    if (options.cursor !== undefined) query.set("cursor", options.cursor);
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request<ArchivedSessionPage>(
+      `/api/sessions/archived?${query}`,
+      { signal },
     );
   }
 
