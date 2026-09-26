@@ -27,6 +27,21 @@ const MUTATING_TOOLS = new Set(["write", "edit"]);
 const NOTICE_COMMAND_MAX_CHARS = 160;
 const NOTICE_DETAIL_MAX_CHARS = 320;
 
+function commandInvocation(command: string) {
+  if (process.platform === "win32") {
+    return {
+      command: "powershell.exe",
+      args: [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `${command}; exit $LASTEXITCODE`,
+      ],
+    };
+  }
+  return { command: "sh", args: ["-c", command] };
+}
+
 function boundedNoticeText(value: string, maxChars: number) {
   const chars = [...sanitizeTerminalText(value).trim()];
   if (chars.length <= maxChars) return chars.join("");
@@ -84,7 +99,11 @@ export default function postEdit(
     const done = Promise.resolve()
       .then(() => {
         if (controller.signal.aborted) return;
-        return pi.exec("sh", ["-c", ran], { cwd, signal: controller.signal });
+        const invocation = commandInvocation(ran);
+        return pi.exec(invocation.command, invocation.args, {
+          cwd,
+          signal: controller.signal,
+        });
       })
       .then((result) => {
         if (!result) return;

@@ -98,6 +98,19 @@ const success: ExecResult = {
   killed: false,
 };
 
+const expectedShellArgs = (command: string) =>
+  process.platform === "win32"
+    ? [
+        "-NoProfile",
+        "-NonInteractive",
+        "-Command",
+        `${command}; exit $LASTEXITCODE`,
+      ]
+    : ["-c", command];
+
+const expectedShellCommand = () =>
+  process.platform === "win32" ? "powershell.exe" : "sh";
+
 test("post-edit runs only in interactive TUI mode", async () => {
   for (const mode of ["rpc", "json", "print"] as const) {
     const h = harness(mode);
@@ -112,6 +125,11 @@ test("post-edit runs only in interactive TUI mode", async () => {
   await tui.emit("tool_result", { toolName: "edit", isError: false });
   await tui.emit("agent_settled");
   assert.equal(tui.executions.length, 1);
+  assert.equal(tui.executions[0]?.command, expectedShellCommand());
+  assert.deepEqual(
+    tui.executions[0]?.args,
+    expectedShellArgs("npm run format"),
+  );
   assert.equal(tui.executions[0]?.options?.cwd, tui.ctx.cwd);
   tui.executions[0]?.result.resolve(success);
 });
@@ -274,7 +292,7 @@ test("post-edit snapshots queued command and cwd rather than reinterpreting conf
   await h.configure("format-three");
   h.executions[0]?.result.resolve(success);
   await new Promise((resolve) => setImmediate(resolve));
-  assert.deepEqual(h.executions[1]?.args, ["-c", "format-two"]);
+  assert.deepEqual(h.executions[1]?.args, expectedShellArgs("format-two"));
   assert.equal(h.executions[1]?.options?.cwd, h.ctx.cwd);
   h.executions[1]?.result.resolve(success);
 });
@@ -317,7 +335,7 @@ test("a failed disable apply preserves queued post-edit work for rollback", asyn
   h.executions[0]?.result.resolve(success);
   await new Promise((resolve) => setImmediate(resolve));
   assert.equal(continued, false);
-  assert.deepEqual(h.executions[1]?.args, ["-c", "format-original"]);
+  assert.deepEqual(h.executions[1]?.args, expectedShellArgs("format-original"));
   h.executions[1]?.result.resolve(success);
   await next;
   assert.equal(continued, true);
