@@ -183,6 +183,12 @@ export function Composer(props: ComposerProps) {
     staged: StagedPromptImage[];
   } | null>(null);
   const restoreFileReferenceFocus = useRef(false);
+  const fileReferenceTarget = useRef<{
+    ownerKey: string;
+    revision: number;
+    start: number;
+    end: number;
+  } | null>(null);
   useLayoutEffect(() => {
     // Programmatic clears and recovered drafts need the same sizing as typing.
     void prompt;
@@ -667,16 +673,44 @@ export function Composer(props: ComposerProps) {
   };
 
   const insertFileReference = (reference: string) => {
-    const position = Math.min(cursor, prompt.length);
-    const before = prompt.slice(0, position);
-    const after = prompt.slice(position);
+    const target = fileReferenceTarget.current;
+    const current = currentDraft.current;
+    if (
+      !target ||
+      target.ownerKey !== renderedOwnerKey ||
+      target.ownerKey !== draftOwner.current.key ||
+      target.revision !== current.revision
+    )
+      return t("fileReferenceDraftChanged");
+    const before = current.prompt.slice(0, target.start);
+    const after = current.prompt.slice(target.end);
     const formatted = `\`${reference.replaceAll("`", "\\`")}\``;
     const leading = before && !/\s$/u.test(before) ? " " : "";
     const trailing = after && !/^\s/u.test(after) ? " " : "";
     const value = `${before}${leading}${formatted}${trailing}${after}`;
     const nextCursor = before.length + leading.length + formatted.length;
-    if (!updateDraft({ prompt: value, caret: nextCursor })) return;
+    if (!updateDraft({ prompt: value, caret: nextCursor }))
+      return t("draftLimit");
     restoreFileReferenceFocus.current = true;
+  };
+
+  const openFileReference = () => {
+    const current = currentDraft.current;
+    const input = textarea.current;
+    const start = Math.min(
+      Math.max(input?.selectionStart ?? current.caret, 0),
+      current.prompt.length,
+    );
+    fileReferenceTarget.current = {
+      ownerKey: renderedOwnerKey,
+      revision: current.revision,
+      start,
+      end: Math.min(
+        Math.max(input?.selectionEnd ?? start, start),
+        current.prompt.length,
+      ),
+    };
+    setFileReferenceOpen(true);
   };
 
   const workspaceItems = [
@@ -1175,10 +1209,21 @@ export function Composer(props: ComposerProps) {
                 setMenuDismissed(true);
                 return;
               }
-              if (
-                event.key === "Tab" ||
-                (event.key === "Enter" && !event.shiftKey)
-              ) {
+              if (event.key === "Tab") {
+                const command = filteredCommands[activeCommand];
+                if (
+                  !event.shiftKey &&
+                  !event.ctrlKey &&
+                  !event.altKey &&
+                  !event.metaKey &&
+                  command?.availability === "available"
+                ) {
+                  event.preventDefault();
+                  completeCommand(command);
+                }
+                return;
+              }
+              if (event.key === "Enter" && !event.shiftKey) {
                 const command = filteredCommands[activeCommand];
                 if (command) {
                   event.preventDefault();
@@ -1239,7 +1284,7 @@ export function Composer(props: ComposerProps) {
                     id: "file-reference",
                     label: t("fileReference"),
                     icon: <FileText />,
-                    onClick: () => setFileReferenceOpen(true),
+                    onClick: openFileReference,
                   },
                   {
                     id: "slash-commands",

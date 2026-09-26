@@ -10,6 +10,7 @@ import {
 import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import {
+  answerDraftByteLength,
   answerDraftFits,
   MAX_ANSWER_DRAFT_UTF8_BYTES,
 } from "../../../../../extensions/ask-user/limits.ts";
@@ -27,12 +28,91 @@ type Draft = {
   notesExpanded?: boolean;
 };
 
+type QuestionWorkingPosition = {
+  sessionId: string;
+  sessionPath: string;
+  requestId: string;
+  drafts: Draft[];
+  index: number;
+  review: boolean;
+  submission: { answers: WebQuestionAnswers | null } | null;
+};
+
+export type QuestionWorkingCache = Map<string, QuestionWorkingPosition>;
+
+const MAX_QUESTION_DRAFTS = 32;
+const MAX_QUESTION_DRAFT_BYTES = 1024 * 1024;
+
+function workingBytes(position: QuestionWorkingPosition) {
+  return position.drafts.reduce(
+    (total, draft) =>
+      total +
+      answerDraftByteLength(draft.custom) +
+      Object.values(draft.notes).reduce(
+        (bytes, note) => bytes + answerDraftByteLength(note),
+        0,
+      ),
+    0,
+  );
+}
+
+function rememberWorking(
+  cache: QuestionWorkingCache,
+  key: string,
+  next: QuestionWorkingPosition,
+) {
+  const hasDraft =
+    next.submission ||
+    next.drafts.some(
+      (draft) =>
+        draft.choice !== null ||
+        draft.custom ||
+        Object.values(draft.notes).some(Boolean),
+    );
+  if (!hasDraft) {
+    cache.delete(key);
+    return true;
+  }
+  const previous = cache.get(key);
+  if (!previous && cache.size >= MAX_QUESTION_DRAFTS) return false;
+  const previousBytes = previous ? workingBytes(previous) : 0;
+  const nextBytes = workingBytes(next);
+  const retainedBytes = Array.from(cache.values()).reduce(
+    (bytes, position) => bytes + workingBytes(position),
+    0,
+  );
+  if (
+    nextBytes > previousBytes &&
+    retainedBytes - previousBytes + nextBytes > MAX_QUESTION_DRAFT_BYTES
+  )
+    return false;
+  cache.set(key, next);
+  return true;
+}
+
+function retireWorking(
+  cache: QuestionWorkingCache,
+  sessionId: string,
+  sessionPath: string,
+  pendingRequestId?: string,
+) {
+  for (const [key, position] of cache) {
+    if (
+      position.sessionId === sessionId &&
+      position.sessionPath === sessionPath &&
+      position.requestId !== pendingRequestId
+    )
+      cache.delete(key);
+  }
+}
+
 export function QuestionCard({
   request,
   answer,
   onSettled,
   connected = true,
-  onSubmitting,
+  sessionPath = "",
+  workingCache,
 }: {
   request: WebQuestionRequest;
   answer: (
@@ -42,46 +122,81 @@ export function QuestionCard({
   ) => Promise<WebQuestionReceipt>;
   onSettled: (receipt: WebQuestionReceipt) => void;
   connected?: boolean;
-  onSubmitting?: () => void;
+  sessionPath?: string;
+  workingCache?: QuestionWorkingCache;
 }) {
   const { t } = useTranslation();
   const id = useId();
-  const [drafts, setDrafts] = useState<Draft[]>(() =>
-    request.questions.map(() => ({ choice: null, custom: "", notes: {} })),
+  const localCache = useMemo<QuestionWorkingCache>(() => new Map(), []);
+  const cache = workingCache ?? localCache;
+  const key = JSON.stringify([
+    request.sessionId,
+    sessionPath,
+    request.requestId,
+  ]);
+  const [working, setWorking] = useState<QuestionWorkingPosition>(
+    () =>
+      cache.get(key) ?? {
+        sessionId: request.sessionId,
+        sessionPath,
+        requestId: request.requestId,
+        drafts: request.questions.map(() => ({
+          choice: null,
+          custom: "",
+          notes: {},
+        })),
+        index: 0,
+        review: false,
+        submission: null,
+      },
   );
-  const [index, setIndex] = useState(0);
-  const [review, setReview] = useState(false);
-  const [error, setError] = useState(false);
+  const workingRef = useRef(working);
+  const { drafts, index, review, submission } = working;
+  const [error, setError] = useState(Boolean(working.submission));
+  const [draftLimit, setDraftLimit] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [submitted, setSubmitted] = useState(false);
-  const submission = useRef<{ answers: WebQuestionAnswers | null } | null>(
-    null,
-  );
+  const busyRef = useRef(false);
+  const submitted = Boolean(submission);
   const controller = useRef<AbortController | null>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const question = request.questions[index]!;
   const draft = drafts[index]!;
   const locked = busy || submitted || !connected;
-  const overflow = drafts.some(
-    (d) =>
-      !answerDraftFits(d.custom) ||
-      Object.values(d.notes).some((note) => !answerDraftFits(note)),
+  const overflow = drafts.some((d) =>
+    d.choice === "custom"
+      ? !answerDraftFits(d.custom)
+      : typeof d.choice === "number" &&
+        !answerDraftFits(d.notes[d.choice] ?? ""),
   );
   const complete = drafts.every((d) => d.choice !== null) && !overflow;
   const choiceLabel = (label: string | undefined, index: number) =>
     request.handoff ? t(index === 0 ? "handoffDone" : "handoffUnable") : label;
 
   useEffect(() => () => controller.current?.abort(), []);
+  const commitWorking = (next: QuestionWorkingPosition) => {
+    if (!rememberWorking(cache, key, next)) {
+      setDraftLimit(true);
+      return false;
+    }
+    workingRef.current = next;
+    setWorking(next);
+    setDraftLimit(false);
+    return true;
+  };
   // Focus moves only after deliberate navigation, never on a background refresh.
   const navigate = (next: number, toReview = false) => {
-    setIndex(next);
-    setReview(toReview);
+    commitWorking({ ...workingRef.current, index: next, review: toReview });
     requestAnimationFrame(() => heading.current?.focus());
   };
-  const update = (patch: Partial<Draft>) =>
-    setDrafts((current) =>
-      current.map((d, i) => (i === index ? { ...d, ...patch } : d)),
-    );
+  const update = (patch: Partial<Draft>) => {
+    const current = workingRef.current;
+    commitWorking({
+      ...current,
+      drafts: current.drafts.map((d, i) =>
+        i === current.index ? { ...d, ...patch } : d,
+      ),
+    });
+  };
   const answers = () =>
     request.questions.map((q, i) => {
       const d = drafts[i]!;
@@ -100,24 +215,30 @@ export function QuestionCard({
       };
     });
   const send = async (dismiss = false) => {
-    if (busy || !connected || (!dismiss && !submitted && !complete)) return;
-    submission.current ??= { answers: dismiss ? null : answers() };
+    if (busyRef.current || !connected || (!dismiss && !submitted && !complete))
+      return;
+    const original = workingRef.current.submission ?? {
+      answers: dismiss ? null : answers(),
+    };
+    if (!commitWorking({ ...workingRef.current, submission: original })) return;
+    busyRef.current = true;
     setBusy(true);
-    setSubmitted(true);
     setError(false);
-    onSubmitting?.();
-    controller.current = new AbortController();
+    const owner = new AbortController();
+    controller.current = owner;
     try {
-      const receipt = await answer(
-        request,
-        submission.current.answers,
-        controller.current.signal,
-      );
-      if (!controller.current.signal.aborted) onSettled(receipt);
+      const receipt = await answer(request, original.answers, owner.signal);
+      if (!owner.signal.aborted) {
+        cache.delete(key);
+        onSettled(receipt);
+      }
     } catch {
-      if (!controller.current.signal.aborted) setError(true);
+      if (!owner.signal.aborted) setError(true);
     } finally {
-      if (!controller.current.signal.aborted) setBusy(false);
+      if (!owner.signal.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -316,6 +437,11 @@ export function QuestionCard({
             {t("questionLimit", { count: MAX_ANSWER_DRAFT_UTF8_BYTES })}
           </p>
         )}
+        {draftLimit && (
+          <p className="question-error" role="alert">
+            {t("questionDraftLimit")}
+          </p>
+        )}
         {!connected && (
           <p className="question-help" role="status">
             {t("questionDisconnected")}
@@ -420,35 +546,45 @@ export function QuestionPanel({
   sessionId,
   revision,
   connected,
+  sessionPath = "",
+  workingCache,
 }: {
   sessionId: string;
   revision: number;
   connected: boolean;
+  sessionPath?: string;
+  workingCache?: QuestionWorkingCache;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
+  const localCache = useMemo<QuestionWorkingCache>(() => new Map(), []);
+  const cache = workingCache ?? localCache;
   const [pending, setPending] = useState<WebQuestionRequest | null>(null);
   const [receipt, setReceipt] = useState<WebQuestionReceipt | null>(null);
   const [failed, setFailed] = useState(false);
   const [retry, setRetry] = useState(0);
-  const submitted = useRef(false);
   const settled = useRef<string | null>(null);
+  const currentRequest = useRef<string | null>(null);
   // biome-ignore lint/correctness/useExhaustiveDependencies: canonical snapshot revisions and explicit retries refresh pending questions.
   useEffect(() => {
     const controller = new AbortController();
     void client.pendingQuestions(sessionId, controller.signal).then(
       ({ pending: next }) => {
-        if (controller.signal.aborted || submitted.current) return;
+        if (controller.signal.aborted) return;
+        const visible = next?.requestId === settled.current ? null : next;
+        // Read ownership must change before React unmounts the old form.
+        currentRequest.current = visible?.requestId ?? null;
         setFailed(false);
-        setPending(next?.requestId === settled.current ? null : next);
+        retireWorking(cache, sessionId, sessionPath, next?.requestId);
+        setPending(visible);
         if (next && next.requestId !== settled.current) setReceipt(null);
       },
       () => {
-        if (!controller.signal.aborted && !submitted.current) setFailed(true);
+        if (!controller.signal.aborted) setFailed(true);
       },
     );
     return () => controller.abort();
-  }, [client, sessionId, revision, retry]);
+  }, [client, sessionId, sessionPath, cache, revision, retry]);
   if (!pending && !receipt && !failed) return null;
   return (
     <div className="question-panel">
@@ -457,15 +593,15 @@ export function QuestionPanel({
           key={pending.requestId}
           request={pending}
           connected={connected}
+          sessionPath={sessionPath}
+          workingCache={cache}
           answer={(request, answers, signal) =>
             client.answerQuestions(request, answers, signal)
           }
-          onSubmitting={() => {
-            submitted.current = true;
-          }}
           onSettled={(result) => {
+            if (currentRequest.current !== pending.requestId) return;
+            currentRequest.current = null;
             settled.current = pending.requestId;
-            submitted.current = false;
             setPending(null);
             setReceipt(result.state === "answered" ? null : result);
             setRetry((n) => n + 1);

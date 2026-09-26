@@ -1339,10 +1339,11 @@ describe("OpenPI Web store", () => {
     });
   });
 
-  it("clears model search results when a new snapshot is accepted for the same Session", async () => {
+  it("clears model search results when the model catalog changes in the same Session", async () => {
     const client = new FakeClient();
     const refreshed = snapshot();
     refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    refreshed.models = [{ ...refreshed.models[0]!, label: "Changed model" }];
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(refreshed),
@@ -1387,10 +1388,11 @@ describe("OpenPI Web store", () => {
     });
   });
 
-  it("rejects a model search result from an older same-Session snapshot generation", async () => {
+  it("rejects a model search result from an older same-Session model catalog", async () => {
     const client = new FakeClient();
     const refreshed = snapshot();
     refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    refreshed.models = [{ ...refreshed.models[0]!, label: "Changed model" }];
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(refreshed),
@@ -1428,6 +1430,85 @@ describe("OpenPI Web store", () => {
     expect(store.getState().modelSearch.status).toBe("idle");
     expect(store.getState().modelSearch.models).toEqual([]);
   });
+
+  it.each(["loading", "ready"] as const)(
+    "invalidates a %s model search on settings changes outside the bounded catalog",
+    async (status) => {
+      const client = new FakeClient();
+      const current = snapshot();
+      current.truncation = {
+        ...current.truncation,
+        modelsOmitted: 1,
+        truncated: true,
+      };
+      client.snapshots.push(Promise.resolve(current));
+      const result = deferred<WebModelSearchResult>();
+      const found: WebModelSearchResult = {
+        models: [
+          {
+            provider: "test",
+            id: "hidden-model",
+            name: "Old hidden name",
+            label: "Old hidden name",
+            current: false,
+          },
+        ],
+        totalAvailable: 2,
+        totalMatches: 1,
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          maxResults: 50,
+          maxBytes: 64 * 1024,
+          bytes: 200,
+        },
+      };
+      client.modelSearchResults.push(result.promise);
+      const search = vi.spyOn(client, "searchModels");
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      store.getState().actions.start();
+      try {
+        await vi.waitFor(() =>
+          expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+        );
+        const searching = store.getState().actions.searchModels("hidden");
+        await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+        if (status === "ready") {
+          result.resolve(found);
+          await searching;
+        }
+        expect(store.getState().modelSearch.status).toBe(status);
+
+        stream.emit(runtimeEvent(5, "settings_changed"));
+        expect(store.getState().modelSearch.status).toBe("idle");
+        if (status === "loading")
+          expect(search.mock.calls[0]?.[2]?.aborted).toBe(true);
+
+        const refreshed = {
+          ...current,
+          cursor: 5,
+          generatedAt: "2026-09-03T00:00:01Z",
+        };
+        client.snapshots.push(Promise.resolve(refreshed));
+        expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+        expect(store.getState().snapshot?.models).toEqual(current.models);
+        expect(store.getState().snapshot?.truncation.modelsOmitted).toBe(1);
+        if (status === "loading") {
+          result.resolve(found);
+          await searching;
+        }
+        expect(store.getState().modelSearch.query).toBe("");
+        expect(store.getState().modelSearch.status).toBe("idle");
+        expect(store.getState().modelSearch.models).toEqual([]);
+      } finally {
+        result.resolve(found);
+        store.getState().actions.stop();
+      }
+    },
+  );
 
   it("keeps an available transcript as a read-only view when a different Session controls input", async () => {
     const client = new FakeClient();

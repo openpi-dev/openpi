@@ -31,6 +31,7 @@ import { WebClient } from "../../web/ui/src/protocol/client.ts";
 import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
 import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+import { questionFixture } from "./question-fixtures.ts";
 
 installCheckVisibilityFixture();
 
@@ -175,7 +176,7 @@ it.each([
   { trigger: "providerAvailability", selected: "modelSettings" },
   { trigger: "settings", selected: "generalSettings" },
 ])(
-  "routes the App $trigger entry to $selected",
+  "routes the App $trigger entry to $selected and retains question drafts through settings",
   async ({ trigger, selected }) => {
     const original = webStore.getState();
     const isolated = createWebStore().getState();
@@ -223,7 +224,15 @@ it.each([
       .mockImplementation(async (input) => {
         const url = new URL(String(input), "http://localhost");
         const responses: Record<string, unknown> = {
-          "/api/questions/pending": { pending: null },
+          "/api/questions/pending": {
+            pending: {
+              sessionId: "session",
+              requestId: "app-question",
+              toolCallId: "app-question-tool",
+              expiresAt: Date.now() + 600_000,
+              questions: questionFixture,
+            },
+          },
           "/api/git-review": { ok: false, reason: "not_git_repository" },
           "/api/models/configuration": {
             revision: "entry-fixture",
@@ -315,6 +324,16 @@ it.each([
     let view: ReturnType<typeof render> | undefined;
     try {
       view = renderWithI18n(createElement(App));
+      fireEvent.click(await screen.findByRole("radio", { name: /完整交互/ }));
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("questionNotes") }),
+      );
+      fireEvent.change(
+        screen.getByRole("textbox", { name: i18n.t("questionNotes") }),
+        {
+          target: { value: "Keep this question draft across settings" },
+        },
+      );
       await act(async () =>
         fireEvent.click(screen.getByRole("button", { name: i18n.t(trigger) })),
       );
@@ -345,6 +364,30 @@ it.each([
       expect(webStore.getState().snapshot?.selectedSession?.path).toBe(
         "/tmp/session",
       );
+      expect(
+        (
+          await within(dialog).findByRole<HTMLTextAreaElement>("textbox", {
+            name: i18n.t("questionNotes"),
+          })
+        ).value,
+      ).toBe("Keep this question draft across settings");
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: i18n.t("close"),
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("dialog", { name: i18n.t("settings") }),
+        ).toBeNull(),
+      );
+      expect(
+        (
+          await screen.findByRole<HTMLTextAreaElement>("textbox", {
+            name: i18n.t("questionNotes"),
+          })
+        ).value,
+      ).toBe("Keep this question draft across settings");
     } finally {
       view?.unmount();
       start.mockRestore();
@@ -3458,7 +3501,7 @@ it("debounces bounded model search when the snapshot omitted models", async () =
     ),
   );
   await act(() => vi.advanceTimersByTimeAsync(250));
-  expect(searchModels).toHaveBeenCalledTimes(2);
+  expect(searchModels).toHaveBeenCalledTimes(1);
   expect(searchModels).toHaveBeenLastCalledWith("hidden");
 
   rerender(

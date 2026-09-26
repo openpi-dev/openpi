@@ -20,7 +20,10 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { QuestionPanel } from "../features/questions/QuestionPanel.tsx";
+import {
+  QuestionPanel,
+  type QuestionWorkingCache,
+} from "../features/questions/QuestionPanel.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
@@ -65,6 +68,10 @@ export function App() {
   const artifactOpenFromFiles = useRef(false);
   const artifactReturn = useRef<"files" | null>(null);
   const readingCache = useMemo<SessionReadingCache>(() => new Map(), []);
+  const questionWorkingCache = useMemo<QuestionWorkingCache>(
+    () => new Map(),
+    [],
+  );
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
@@ -681,6 +688,8 @@ export function App() {
                 <QuestionPanel
                   key={JSON.stringify([selected.id, selected.path])}
                   sessionId={selected.id}
+                  sessionPath={selected.path}
+                  workingCache={questionWorkingCache}
                   revision={state.snapshot.cursor}
                   connected={state.connection === "connected"}
                 />
@@ -899,8 +908,13 @@ export function App() {
             providerSettings.sessionId === state.snapshot.currentSessionId ? (
               <div className="settings-interaction">
                 <QuestionPanel
-                  key={providerSettings.sessionId}
+                  key={JSON.stringify([
+                    providerSettings.sessionId,
+                    providerSettings.sessionPath,
+                  ])}
                   sessionId={providerSettings.sessionId}
+                  sessionPath={providerSettings.sessionPath}
+                  workingCache={questionWorkingCache}
                   revision={state.snapshot.cursor}
                   connected={state.connection === "connected"}
                 />

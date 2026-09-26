@@ -89,6 +89,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [draft, setDraft] = useState("");
+  const [editError, setEditError] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
   const searchButton = useRef<HTMLButtonElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
@@ -99,8 +100,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [archived, setArchived] = useState(false);
   const archiveQuery = props.query.trim();
   const archiveScope = JSON.stringify([archived, archiveQuery]);
-  const currentArchiveScope = useRef(archiveScope);
-  currentArchiveScope.current = archiveScope;
+  const currentArchiveScope = useRef({ key: archiveScope });
+  if (currentArchiveScope.current.key !== archiveScope)
+    currentArchiveScope.current = { key: archiveScope };
   const mounted = useRef(false);
   const [archivePage, setArchivePage] = useState<
     (ArchivedSessionPage & { query: string }) | null
@@ -110,6 +112,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
     query: string;
     kind: "failed" | "stale";
     cursor?: string;
+    retainedCount?: number;
   } | null>(null);
   const archiveRequest = useRef<AbortController | null>(null);
   const scopedArchivePage =
@@ -117,7 +120,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const scopedArchiveError =
     archiveError?.query === archiveQuery ? archiveError : null;
   const loadArchives = useCallback(
-    async (cursor?: string) => {
+    async (cursor?: string, retainedCount?: number) => {
       if (!archived) return;
       archiveRequest.current?.abort();
       const controller = new AbortController();
@@ -125,12 +128,36 @@ export function SessionSidebar(props: SessionSidebarProps) {
       setArchiveLoading(true);
       setArchiveError(null);
       try {
-        const page = await client.listArchivedSessions(
+        let page = await client.listArchivedSessions(
           { query: archiveQuery, ...(cursor ? { cursor } : {}), limit: 25 },
           controller.signal,
         );
         if (controller.signal.aborted || archiveRequest.current !== controller)
           return;
+        const sessions = [...page.sessions];
+        // A metadata refresh should keep the range the reader already opened.
+        while (
+          !cursor &&
+          retainedCount !== undefined &&
+          sessions.length < retainedCount &&
+          page.nextCursor
+        ) {
+          page = await client.listArchivedSessions(
+            { query: archiveQuery, cursor: page.nextCursor, limit: 25 },
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted ||
+            archiveRequest.current !== controller
+          )
+            return;
+          const additional = page.sessions.filter(
+            (session) =>
+              !sessions.some((existing) => existing.path === session.path),
+          );
+          sessions.push(...additional);
+          if (!additional.length) break;
+        }
         setArchivePage((previous) => ({
           ...page,
           query: archiveQuery,
@@ -138,14 +165,14 @@ export function SessionSidebar(props: SessionSidebarProps) {
             cursor && previous?.query === archiveQuery
               ? [
                   ...previous.sessions,
-                  ...page.sessions.filter(
+                  ...sessions.filter(
                     (session) =>
                       !previous.sessions.some(
                         (existing) => existing.path === session.path,
                       ),
                   ),
                 ]
-              : page.sessions,
+              : sessions,
         }));
       } catch (error) {
         if (!controller.signal.aborted && archiveRequest.current === controller)
@@ -157,6 +184,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 ? "stale"
                 : "failed",
             ...(cursor ? { cursor } : {}),
+            ...(retainedCount !== undefined ? { retainedCount } : {}),
           });
       } finally {
         if (archiveRequest.current === controller) {
@@ -174,12 +202,18 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const restoreInFlight = useRef(new Set<string>());
   const [restoreError, setRestoreError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const saveInFlight = useRef(false);
+  const [removing, setRemoving] = useState(false);
+  const removeInFlight = useRef(false);
+  const [removeError, setRemoveError] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const createInFlight = useRef(false);
   const restore = async (path: string) => {
     if (restoreInFlight.current.has(path)) return;
     restoreInFlight.current.add(path);
     setRestoring(new Set(restoreInFlight.current));
     setRestoreError(false);
-    const scope = archiveScope;
+    const scope = currentArchiveScope.current;
     try {
       const restored = await props.actions.unarchiveSession(path);
       if (!mounted.current || currentArchiveScope.current !== scope) return;
@@ -327,22 +361,89 @@ export function SessionSidebar(props: SessionSidebarProps) {
   );
 
   const openEdit = (target: EditTarget) => {
+    if (saveInFlight.current) return;
     setDraft(target.name);
+    setEditError(false);
     setEditTarget(target);
   };
   const saveEdit = async () => {
     const name = draft.trim();
-    if (!editTarget || !name || saving) return;
+    if (
+      !editTarget ||
+      !name ||
+      name === editTarget.name ||
+      saveInFlight.current
+    )
+      return;
+    const target = editTarget;
+    const scope = currentArchiveScope.current;
+    const retainedCount = scopedArchivePage?.sessions.length ?? 25;
+    saveInFlight.current = true;
     setSaving(true);
+    setEditError(false);
     try {
-      if (editTarget.kind === "workspace")
-        await props.actions.renameWorkspace(editTarget.path, name);
-      else await props.actions.renameSession(editTarget.path, name);
+      if (target.kind === "workspace")
+        await props.actions.renameWorkspace(target.path, name);
+      else await props.actions.renameSession(target.path, name);
+      if (!mounted.current) return;
       setEditTarget(null);
+      if (
+        target.kind === "session" &&
+        archived &&
+        currentArchiveScope.current === scope
+      )
+        void loadArchives(undefined, retainedCount);
     } catch {
-      // The store reports the error; keep the user's draft in the dialog.
+      if (mounted.current) setEditError(true);
     } finally {
-      setSaving(false);
+      saveInFlight.current = false;
+      if (mounted.current) setSaving(false);
+    }
+  };
+  const removeWorkspace = async () => {
+    if (!deleteTarget || removeInFlight.current) return;
+    const target = deleteTarget;
+    removeInFlight.current = true;
+    setRemoving(true);
+    setRemoveError(false);
+    try {
+      const removed = await props.actions.removeWorkspace(target.path);
+      if (!mounted.current) return;
+      if (removed) setDeleteTarget(null);
+      else setRemoveError(true);
+    } catch {
+      if (mounted.current) setRemoveError(true);
+    } finally {
+      removeInFlight.current = false;
+      if (mounted.current) setRemoving(false);
+    }
+  };
+  const startSession = async (workspacePath: string | null) => {
+    if (createInFlight.current) return;
+    const scope = currentArchiveScope.current;
+    createInFlight.current = true;
+    setCreating(true);
+    try {
+      if (!workspacePath) {
+        await props.actions.chooseWorkspace();
+        return;
+      }
+      const target = await props.actions.createSession(workspacePath);
+      if (
+        !mounted.current ||
+        currentArchiveScope.current !== scope ||
+        !target?.sessionId ||
+        !target.sessionPath ||
+        target.workspacePath !== workspacePath
+      )
+        return;
+      setArchived(false);
+      props.actions.setQuery("");
+    } catch {
+      // Native creation owns error feedback; preserve the reader's list scope.
+    } finally {
+      createInFlight.current = false;
+      if (mounted.current) setCreating(false);
     }
   };
 
@@ -416,11 +517,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
         type="button"
         aria-label={t("newSession")}
         title={t("newSession")}
-        onClick={() =>
-          props.selectedWorkspace
-            ? void props.actions.createSession(props.selectedWorkspace)
-            : void props.actions.chooseWorkspace()
-        }
+        disabled={creating}
+        aria-busy={creating || undefined}
+        onClick={() => void startSession(props.selectedWorkspace)}
       >
         <SquarePen />
         <span>{t("newSession")}</span>
@@ -525,6 +624,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 scopedArchiveError.kind === "stale"
                   ? undefined
                   : scopedArchiveError.cursor,
+                scopedArchiveError.retainedCount,
               )
             }
           >
@@ -602,7 +702,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   {!group.ungrouped && (
                     <span className="workspace-row-actions">
                       <ActionMenu
-                        label="Workspace options"
+                        label={t("workspaceOptions")}
                         items={[
                           {
                             id: "rename",
@@ -620,11 +720,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                             label: t("removeWorkspace"),
                             icon: <Trash2 />,
                             variant: "destructive",
-                            onClick: () =>
+                            onClick: () => {
+                              setRemoveError(false);
                               setDeleteTarget({
                                 path: group.path,
                                 name: group.name,
-                              }),
+                              });
+                            },
                           },
                         ]}
                       />
@@ -633,9 +735,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
                           className="workspace-action"
                           type="button"
                           aria-label={`${t("newSession")} ${group.name}`}
+                          disabled={creating}
+                          aria-busy={creating || undefined}
                           onClick={(event) => {
                             event.stopPropagation();
-                            void props.actions.createSession(group.path);
+                            void startSession(group.path);
                           }}
                         >
                           <Plus />
@@ -815,7 +919,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       <Dialog
         isOpen={Boolean(editTarget)}
         onOpenChange={(open: boolean) =>
-          !open && !saving && setEditTarget(null)
+          !open && !saveInFlight.current && setEditTarget(null)
         }
         purpose="form"
         width={400}
@@ -841,6 +945,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             ref={editInput}
             value={draft}
             maxLength={80}
+            disabled={saving}
             aria-label={
               editTarget?.kind === "workspace"
                 ? t("workspaceName")
@@ -848,12 +953,29 @@ export function SessionSidebar(props: SessionSidebarProps) {
             }
             onChange={(event) => setDraft(event.target.value)}
           />
+          {editError && (
+            <p className="sidebar-dialog-error" role="alert">
+              {t("renameFailed")}
+            </p>
+          )}
           <div className="dialog-actions">
-            <button type="button" onClick={() => setEditTarget(null)}>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                if (!saveInFlight.current) setEditTarget(null);
+              }}
+            >
               {t("cancel")}
             </button>
-            <button type="submit" className="primary" disabled={saving}>
-              {t("save")}
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                saving || !draft.trim() || draft.trim() === editTarget?.name
+              }
+            >
+              {t(saving ? "savingName" : "save")}
             </button>
           </div>
         </form>
@@ -861,30 +983,41 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
       <Dialog
         isOpen={Boolean(deleteTarget)}
-        onOpenChange={(open: boolean) => !open && setDeleteTarget(null)}
+        onOpenChange={(open: boolean) =>
+          !open && !removeInFlight.current && setDeleteTarget(null)
+        }
         purpose="form"
         width={440}
-        aria-label={t("deleteWorkspace")}
+        aria-label={t("removeWorkspace")}
       >
         <div className="openpi-dialog">
-          <strong>{t("deleteWorkspace")}</strong>
+          <strong>{t("removeWorkspace")}</strong>
+          <p className="sidebar-dialog-path">{deleteTarget?.path}</p>
           <p>
             {deleteTarget?.name}：{t("workspaceDeleteConfirm")}
           </p>
+          {removeError && (
+            <p className="sidebar-dialog-error" role="alert">
+              {t("workspaceRemoveFailed")}
+            </p>
+          )}
           <div className="dialog-actions">
-            <button type="button" onClick={() => setDeleteTarget(null)}>
+            <button
+              type="button"
+              disabled={removing}
+              onClick={() => {
+                if (!removeInFlight.current) setDeleteTarget(null);
+              }}
+            >
               {t("cancel")}
             </button>
             <button
               type="button"
               className="danger"
-              onClick={() => {
-                if (!deleteTarget) return;
-                void props.actions.removeWorkspace(deleteTarget.path);
-                setDeleteTarget(null);
-              }}
+              disabled={removing}
+              onClick={() => void removeWorkspace()}
             >
-              {t("deleteWorkspace")}
+              {t(removing ? "removingWorkspace" : "removeWorkspace")}
             </button>
           </div>
         </div>

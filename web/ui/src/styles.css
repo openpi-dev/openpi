@@ -606,6 +606,9 @@ svg { display: block; width: 1em; height: 1em; fill: none; stroke: currentColor;
 .model-search-panel.searchable { min-height: 156px; }
 .model-search-truncation, .model-search-status { margin: 3px 4px 8px; color: var(--muted); font-size: 12px; line-height: 1.45; }
 .model-search-error { color: var(--error); }
+.model-search-retry { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; margin-left: 8px; vertical-align: middle; border: 0; border-radius: 4px; background: transparent; color: inherit; cursor: pointer; }
+.model-search-retry:hover, .model-search-retry:focus-visible { background: var(--sidebar-hover); }
+.model-search-retry svg { width: 14px; height: 14px; }
 .model-search-input { @apply flex items-center gap-2; min-height: 34px; padding: 0 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--sidebar); }
 .model-search-input svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--muted); }
 .model-search-input input { width: 100%; min-width: 0; border: 0; outline: 0; background: transparent; color: var(--text); font: inherit; font-size: 12px; }

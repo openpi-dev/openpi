@@ -23,7 +23,7 @@ export function FileReferenceDialog({
   open: boolean;
   sessionId?: string;
   onClose: () => void;
-  onInsert: (reference: string) => void;
+  onInsert: (reference: string) => string | void;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -55,7 +55,11 @@ export function FileReferenceDialog({
     if (!value || request.current) return;
     setError(null);
     if (!sessionId) {
-      onInsert(value);
+      const error = onInsert(value);
+      if (error) {
+        setError(error);
+        return;
+      }
       onClose();
       return;
     }
@@ -68,7 +72,7 @@ export function FileReferenceDialog({
       handle = (
         await client.resolveArtifact(
           sessionId,
-          value,
+          encodeURI(value),
           undefined,
           controller.signal,
         )
@@ -76,7 +80,11 @@ export function FileReferenceDialog({
       if (controller.signal.aborted) return;
       await client.artifactMetadata(sessionId, handle, controller.signal);
       if (controller.signal.aborted) return;
-      onInsert(value);
+      const error = onInsert(value);
+      if (error) {
+        setError(error);
+        return;
+      }
       onClose();
     } catch (reason) {
       if (!controller.signal.aborted) {

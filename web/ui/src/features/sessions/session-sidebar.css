@@ -123,6 +123,16 @@
   margin: 0 0 4px;
 }
 
+.sidebar-dialog-path {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebar-dialog-error {
+  color: var(--error);
+}
+
 .sidebar-footer {
   flex: 0 0 auto;
   padding: 7px 2px 1px;

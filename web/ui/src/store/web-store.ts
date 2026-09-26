@@ -234,7 +234,7 @@ export interface WebStoreActions {
   chooseWorkspace: () => Promise<void>;
   setWorkspace: (path: string | null) => void;
   renameWorkspace: (path: string, name: string) => Promise<void>;
-  removeWorkspace: (path: string) => Promise<void>;
+  removeWorkspace: (path: string) => Promise<boolean>;
   createSession: (workspacePath: string) => Promise<SessionTarget | null>;
   prepareSession: () => Promise<SessionTarget | null>;
   selectSession: (path: string) => Promise<void>;
@@ -745,7 +745,8 @@ export function createWebStore(
         });
       }
       current = get();
-      if (event.type === "runtime_changed") set(resetModelSearch());
+      if (event.type === "runtime_changed" || event.type === "settings_changed")
+        set(resetModelSearch());
       if (event.type === "runtime_changed") clearCommandDiscovery();
 
       if (current.sessionSwitching && !sessionTransition) {
@@ -1213,6 +1214,16 @@ export function createWebStore(
               snapshot.selectedSession?.id ||
             get().snapshot?.selectedSession?.path !==
               snapshot.selectedSession?.path;
+          const previous = get().snapshot;
+          const modelSearchChanged =
+            shouldReset ||
+            controllerChanged ||
+            selectionChanged ||
+            previous?.currentSessionPath !== snapshot.currentSessionPath ||
+            JSON.stringify(previous?.models) !==
+              JSON.stringify(snapshot.models) ||
+            previous?.truncation.modelsOmitted !==
+              snapshot.truncation.modelsOmitted;
           if (controllerChanged) {
             clearCommandDiscovery();
             resetThinking();
@@ -1258,7 +1269,7 @@ export function createWebStore(
             selectedPath: snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
             snapshot,
-            ...resetModelSearch(),
+            ...(modelSearchChanged ? resetModelSearch() : {}),
           });
           acceptThinking();
           return true;
@@ -1321,8 +1332,10 @@ export function createWebStore(
           if (get().workspaceDraft && get().selectedWorkspace === path)
             set({ selectedWorkspace: null });
           await actions.refreshSnapshot();
+          return true;
         } catch (error) {
           showError(error);
+          return false;
         }
       },
       async prepareSession() {
@@ -1640,7 +1653,6 @@ export function createWebStore(
         modelSearchController = controller;
         const generation = ++modelSearchGeneration;
         const epoch = sessionEpoch;
-        const catalogGeneration = snapshotGeneration;
         const sessionId = get().snapshot?.currentSessionId;
         set({
           modelSearch: {
@@ -1661,7 +1673,6 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
-            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;
@@ -1679,7 +1690,6 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
-            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;
