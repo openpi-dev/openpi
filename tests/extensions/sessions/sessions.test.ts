@@ -151,11 +151,15 @@ test("formatRelativeTime deterministically formats relative hours and calendar d
   const baseNow = new Date("2026-09-21T12:00:00");
   const tenMins = new Date("2026-09-21T11:50:00");
   const twoHours = new Date("2026-09-21T10:00:00");
+  const almostOneDay = new Date("2026-09-20T12:01:00");
+  const oneDay = new Date("2026-09-20T12:00:00");
   const threeDays = new Date("2026-09-18T12:00:00");
   const twelveDays = new Date("2026-09-09T12:00:00");
 
   assert.equal(formatRelativeTime(tenMins, baseNow), "11:50 (10m ago)");
   assert.equal(formatRelativeTime(twoHours, baseNow), "10:00 (2h ago)");
+  assert.equal(formatRelativeTime(almostOneDay, baseNow), "12:01 (23h ago)");
+  assert.equal(formatRelativeTime(oneDay, baseNow), "09-20 (1d ago)");
   assert.equal(formatRelativeTime(threeDays, baseNow), "09-18 (3d ago)");
   assert.equal(formatRelativeTime(twelveDays, baseNow), "09-09 (12d ago)");
 
@@ -180,6 +184,18 @@ test("formatRelativeTime deterministically formats relative hours and calendar d
   // Over 1 year ago
   const twoYearsLater = new Date("2028-09-21T12:00:00");
   assert.equal(formatRelativeTime(baseNow, twoYearsLater), "2026-09 (2y ago)");
+});
+
+test("formatRelativeTime keeps a date and relative age within narrow list rows", () => {
+  const now = new Date("2026-09-21T12:00:00");
+  const tenMins = new Date("2026-09-21T11:50:00");
+  const threeDays = new Date("2026-09-18T12:00:00");
+  const twoYears = new Date("2024-09-21T12:00:00");
+
+  assert.equal(formatRelativeTime(tenMins, now, 9), "09-21 10m");
+  assert.equal(formatRelativeTime(threeDays, now, 12), "09-18 3d ago");
+  assert.equal(formatRelativeTime(threeDays, now, 9), "09-18 3d");
+  assert.equal(formatRelativeTime(twoYears, now, 10), "2024-09 2y");
 });
 
 test("session search matches formatted dates and years", () => {
