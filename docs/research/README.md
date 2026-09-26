@@ -8,6 +8,14 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`SESSIONS_VISIBLE_FOCUS_2026-09-23.md`](SESSIONS_VISIBLE_FOCUS_2026-09-23.md) — hidden preview focus in narrow Session pickers, resize ordering, and native selection-component regressions ([#608](https://github.com/openpi-dev/openpi/issues/608)).
+
+- [`WEB_MODULE_IMPLEMENTATION_2026-09-19.md`](WEB_MODULE_IMPLEMENTATION_2026-09-19.md) — Web 工作区十二模块的实现边界、现有/第三方组件复用判断、测试与非 Benchmark 的性能限制（[#559](https://github.com/openpi-dev/openpi/issues/559)、[#560](https://github.com/openpi-dev/openpi/issues/560)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
+
+- [`WEB_SUBAGENT_INSPECTION_2026-09-18.md`](WEB_SUBAGENT_INSPECTION_2026-09-18.md) — 子代理任务总览、真实状态和只读子对话；含 Pi Web / Maka 组件参考及验证边界（[#560](https://github.com/openpi-dev/openpi/issues/560)）。
+
+- [`WEB_EXPERIENCE_FIVE_FIXES_2026-09-18.md`](WEB_EXPERIENCE_FIVE_FIXES_2026-09-18.md) — 真实 Web 体验发现的编辑、输入高度和贴底滚动修复，以及组件 / 浏览器回归边界（[#559](https://github.com/openpi-dev/openpi/issues/559)）。
+
 - [`OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md`](OPENPI_HARNESS_STRENGTH_PROTOCOL_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #306](https://github.com/openpi-dev/openpi/pull/306)).
 - [`OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md`](OPENPI_ZERO_RESIDENT_SURFACE_DIAGNOSTIC_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #307](https://github.com/openpi-dev/openpi/pull/307)).
 - [`CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md`](CAPABILITY_GATEWAY_BOUNDARY_2026-08-30.md) — source-scoped research and explicitly labelled future proposals ([PR #308](https://github.com/openpi-dev/openpi/pull/308)).

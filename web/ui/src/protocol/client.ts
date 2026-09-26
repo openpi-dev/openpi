@@ -1,6 +1,13 @@
-import type { WebBackgroundTerminalDetail } from "../../../../extensions/shared/web-observer-registry.ts";
-import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type {
+  WebBackgroundTerminalDetail,
+  WebCapabilityActionRequest,
+  WebSubagentDetail,
+} from "../../../../extensions/shared/web-observer-registry.ts";
+import {
+  type WebQuestionRequest,
+  type WebQuestionAnswers,
+  type WebQuestionReceipt,
+} from "../../../protocol/questions.ts";
 import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
@@ -8,14 +15,24 @@ import {
 } from "../../../protocol/artifacts.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
+  type WebCommandDiscoveryResult,
+  type WebEmbeddedBrowserAction,
+  type WebEmbeddedBrowserState,
+  type WebGitReviewResult,
+  type WebInteractiveTerminal,
+  type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
+  type WebPromptImage,
+  type WebSettingsCatalog,
   type WebSnapshot,
   type WebThinkingState,
-  type WebCommandDiscoveryResult,
 } from "../../../protocol/types.ts";
+import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
+import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+import { controllerIdentity } from "./controller.ts";
 
 export class WebApiError extends Error {
   constructor(
@@ -78,10 +95,10 @@ export interface WorkspaceSelectionResult {
 
 export class WebClient {
   readonly token = readToken();
-
-  headers(json = false) {
+  async headers(json = false) {
     return {
       Authorization: `Bearer ${this.token ?? ""}`,
+      "X-OpenPI-Web-Controller": await controllerIdentity(),
       ...(json ? { "Content-Type": "application/json" } : {}),
     };
   }
@@ -108,7 +125,10 @@ export class WebClient {
       const response = await fetch(path, {
         ...requestOptions,
         signal: controller.signal,
-        headers: { ...this.headers(Boolean(options.body)), ...options.headers },
+        headers: {
+          ...(await this.headers(Boolean(options.body))),
+          ...options.headers,
+        },
       });
       const body = (await response.json()) as {
         error?: string;
@@ -134,6 +154,13 @@ export class WebClient {
   snapshot(path?: string | null) {
     const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
+  }
+
+  gitReview(sessionId: string, path: string, signal?: AbortSignal) {
+    return this.request<WebGitReviewResult>(
+      `/api/git-review?${new URLSearchParams({ sessionId, path })}`,
+      { signal, timeoutMessage: "Git review timed out. Please retry." },
+    );
   }
 
   resolveArtifact(
@@ -184,7 +211,7 @@ export class WebClient {
     try {
       const response = await fetch(
         `/api/artifacts/content?${new URLSearchParams({ sessionId: artifact.sessionId, handle: artifact.handle, revision: artifact.revision, download: "1" })}`,
-        { headers: this.headers(), signal: controller.signal },
+        { headers: await this.headers(), signal: controller.signal },
       );
       if (!response.ok) {
         const body = (await response.json()) as {
@@ -224,6 +251,155 @@ export class WebClient {
     return this.request<WorkspaceSelectionResult>("/api/workspaces/select", {
       method: "POST",
     });
+  }
+
+  openBrowser(
+    sessionId: string,
+    url: string,
+    viewport: { width: number; height: number },
+    signal?: AbortSignal,
+  ) {
+    return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, url, ...viewport }),
+      signal,
+    });
+  }
+
+  browserState(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebEmbeddedBrowserState>(
+      `/api/browser/state?${new URLSearchParams({ sessionId })}`,
+      { signal },
+    );
+  }
+
+  browserAction(
+    sessionId: string,
+    action: WebEmbeddedBrowserAction,
+    signal?: AbortSignal,
+  ) {
+    const { type, ...detail } = action;
+    return this.request<WebEmbeddedBrowserState>("/api/browser/action", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, action: type, ...detail }),
+      signal,
+    });
+  }
+
+  async browserFrame(sessionId: string, signal?: AbortSignal) {
+    const response = await fetch(
+      `/api/browser/frame?${new URLSearchParams({ sessionId })}`,
+      { headers: await this.headers(), signal },
+    );
+    if (response.status === 404) return null;
+    if (!response.ok) {
+      const body = (await response.json()) as { error?: string; code?: string };
+      throw new WebApiError(
+        body.error || `Request failed (${response.status})`,
+        response.status,
+        body.code,
+      );
+    }
+    return response.blob();
+  }
+
+  createInteractiveTerminal(
+    sessionId: string,
+    cols: number,
+    rows: number,
+    signal?: AbortSignal,
+  ) {
+    return this.request<WebInteractiveTerminal>("/api/terminal", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, cols, rows }),
+      signal,
+    });
+  }
+
+  interactiveTerminal(sessionId: string, id: string, signal?: AbortSignal) {
+    return this.request<WebInteractiveTerminal>(
+      `/api/terminal?${new URLSearchParams({ sessionId, id })}`,
+      { signal },
+    );
+  }
+
+  closeInteractiveTerminal(sessionId: string, id: string) {
+    return this.request<{ closed: true }>(
+      `/api/terminal?${new URLSearchParams({ sessionId, id })}`,
+      { method: "DELETE" },
+    );
+  }
+
+  writeInteractiveTerminal(sessionId: string, id: string, data: string) {
+    return this.request<{ written: true }>("/api/terminal/input", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id, data }),
+    });
+  }
+
+  resizeInteractiveTerminal(
+    sessionId: string,
+    id: string,
+    cols: number,
+    rows: number,
+  ) {
+    return this.request<{ resized: true }>("/api/terminal/resize", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, id, cols, rows }),
+    });
+  }
+
+  async streamInteractiveTerminal(
+    sessionId: string,
+    id: string,
+    after: number | undefined,
+    signal: AbortSignal,
+    onEvent: (event: WebInteractiveTerminalEvent) => void,
+  ) {
+    const query = new URLSearchParams({ sessionId, id });
+    if (after !== undefined) query.set("after", String(after));
+    const response = await fetch(`/api/terminal/events?${query}`, {
+      headers: await this.headers(),
+      signal,
+    });
+    if (!response.ok) {
+      const body = (await response.json().catch(() => ({}))) as {
+        error?: string;
+        code?: string;
+      };
+      throw new WebApiError(
+        body.error || `Terminal stream failed (${response.status})`,
+        response.status,
+        body.code,
+      );
+    }
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Terminal stream is unavailable");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        while (true) {
+          const boundary = buffer.search(/\r?\n\r?\n/u);
+          if (boundary < 0) break;
+          const frame = buffer.slice(0, boundary);
+          const separatorLength = buffer.startsWith("\r\n", boundary) ? 4 : 2;
+          buffer = buffer.slice(boundary + separatorLength);
+          const data = frame
+            .split(/\r?\n/u)
+            .filter((line) => line.startsWith("data:"))
+            .map((line) => line.slice(5).trimStart())
+            .join("\n");
+          if (!data) continue;
+          onEvent(JSON.parse(data) as WebInteractiveTerminalEvent);
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
   }
 
   renameWorkspace(path: string, name: string) {
@@ -282,14 +458,25 @@ export class WebClient {
     );
   }
 
-  setThinkingLevel(sessionId: string, level: string) {
+  setThinkingLevel(sessionId: string, level: string, sessionPath: string) {
     return this.request<WebThinkingState & { sessionId: string }>(
       "/api/thinking",
       {
         method: "POST",
-        body: JSON.stringify({ sessionId, level }),
+        body: JSON.stringify({ sessionId, sessionPath, level }),
       },
     );
+  }
+
+  setPlanMode(
+    sessionId: string,
+    enabled: boolean,
+    expectedRevision: string | null,
+  ) {
+    return this.request<{ sessionId: string }>("/api/plan", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, enabled, expectedRevision }),
+    });
   }
 
   trust(sessionId: string, signal: AbortSignal) {
@@ -313,6 +500,13 @@ export class WebClient {
     );
   }
 
+  settingsCatalog(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebSettingsCatalog>(
+      `/api/settings/catalog?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
   terminalDetail(sessionId: string, id: string, signal: AbortSignal) {
     return this.request<{
       sessionId: string;
@@ -323,10 +517,37 @@ export class WebClient {
     );
   }
 
-  selectModel(provider: string, modelId: string, sessionId: string) {
+  subagentDetail(sessionId: string, id: string, signal: AbortSignal) {
+    return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
+      `/api/capabilities/detail?kind=subagents&id=${encodeURIComponent(id)}&sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  subagentAction(
+    sessionId: string,
+    action: WebCapabilityActionRequest,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ sessionId: string; detail: WebSubagentDetail }>(
+      "/api/capabilities/action",
+      {
+        method: "POST",
+        body: JSON.stringify({ sessionId, ...action }),
+        signal,
+      },
+    );
+  }
+
+  selectModel(
+    provider: string,
+    modelId: string,
+    sessionId: string,
+    sessionPath: string,
+  ) {
     return this.request<WebModelSummary>("/api/model", {
       method: "POST",
-      body: JSON.stringify({ provider, modelId, sessionId }),
+      body: JSON.stringify({ provider, modelId, sessionId, sessionPath }),
     });
   }
 
@@ -351,15 +572,55 @@ export class WebClient {
     );
   }
 
+  pendingQuestions(sessionId: string, signal?: AbortSignal) {
+    return this.request<{ pending: WebQuestionRequest | null }>(
+      `/api/questions/pending?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  async answerQuestions(
+    request: WebQuestionRequest,
+    answers: WebQuestionAnswers | null,
+    signal?: AbortSignal,
+  ) {
+    try {
+      return await this.request<WebQuestionReceipt>("/api/questions/answer", {
+        method: "POST",
+        body: JSON.stringify({
+          sessionId: request.sessionId,
+          requestId: request.requestId,
+          action: answers === null ? "dismiss" : "answer",
+          ...(answers === null ? {} : { answers }),
+        }),
+        signal,
+      });
+    } catch (error) {
+      if (error instanceof WebApiError && error.code === "STALE_QUESTION")
+        return { state: "stale" } as const;
+      throw error;
+    }
+  }
+
   async prompt(
     sessionId: string,
     content: string,
     commandId: string,
+    sessionPath: string,
     retry = false,
+    images: readonly WebPromptImage[] = [],
   ) {
     const receipt = await this.request<CommandReceipt>("/api/prompt", {
       method: "POST",
-      body: JSON.stringify({ sessionId, content, commandId, retry }),
+      body: JSON.stringify({
+        sessionId,
+        sessionPath,
+        content,
+        commandId,
+        retry,
+        images,
+        controllerId: await controllerIdentity(),
+      }),
       timeoutMs: 30_000,
       timeoutMessage:
         "Request timed out; admission may still be pending. Retry the same message to recover its receipt.",

@@ -4,6 +4,29 @@ export const DEVELOPMENT_PORT_SEARCH_LIMIT = 100;
 export const DEVELOPMENT_STARTUP_ERROR_MAX_BYTES = 8 * 1024;
 export const DEVELOPMENT_BACKEND_READY_TIMEOUT_MS = 15_000;
 
+export function createDevelopmentTokenPlugin(token: string) {
+  if (!/^[a-f0-9]{64}$/u.test(token)) {
+    throw new Error(
+      "OpenPI Web development token must be 64 hexadecimal characters",
+    );
+  }
+  return {
+    name: "openpi-development-token",
+    transformIndexHtml: {
+      order: "pre" as const,
+      handler() {
+        return [
+          {
+            tag: "meta",
+            attrs: { name: "openpi-web-token", content: token },
+            injectTo: "head-prepend" as const,
+          },
+        ];
+      },
+    },
+  };
+}
+
 type PortProbe = (port: number) => Promise<boolean>;
 
 interface SelectDevelopmentPortOptions {

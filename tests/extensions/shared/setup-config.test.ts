@@ -5,9 +5,12 @@ import {
   existsSync,
   linkSync,
   mkdtempSync,
-  readFileSync,
+  mkdirSync,
   readdirSync,
+  readFileSync,
   rmSync,
+  rmdirSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -24,6 +27,8 @@ const {
   FOOTER_PRESET_DEFINITIONS,
   formatSetupConfig,
   loadSetupConfig,
+  inspectSetupConfig,
+  formatSetupDiagnostics,
   parseSetupConfig,
   POST_EDIT_COMMAND_MAX_CHARS,
   processStartedAtQuery,
@@ -120,6 +125,33 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
   assert.match(
     formatSetupConfig(DEFAULT_SETUP_CONFIG),
     /Capability discovery: explicit/,
+  );
+});
+
+test("FAIL: session child execution admission is opt-in and bounded", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.childExecutions.maxActive, undefined);
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 3 } }).childExecutions
+      .maxActive,
+    3,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 0 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 65 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.match(
+    formatSetupConfig(parseSetupConfig({ childExecutions: { maxActive: 3 } })),
+    /Session child executions: 3 active slots/,
+  );
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG),
+    /Session child executions: unbounded \(disabled\)/,
   );
 });
 
@@ -431,6 +463,110 @@ await updateSetupConfig((current) => {
   }
 });
 
+test("a waiting setup writer recovers after the lock owner dies", {
+  timeout: 15_000,
+}, async () => {
+  await saveSetupConfig(DEFAULT_SETUP_CONFIG);
+  const holderSource = `
+const { writeFileSync } = await import("node:fs");
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+await updateSetupConfig((current) => {
+  writeFileSync(1, "holding\\n");
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0);
+  return current;
+});
+`;
+  const waiterSource = `
+const fs = await import("node:fs");
+const { syncBuiltinESMExports } = await import("node:module");
+const originalWatch = fs.default.watch;
+fs.default.watch = (...args) => {
+  const watcher = originalWatch(...args);
+  process.stdout.write("watching\\n");
+  return watcher;
+};
+syncBuiltinESMExports();
+const { updateSetupConfig } = await import(process.env.SETUP_CONFIG_MODULE_URL);
+const started = Date.now();
+await updateSetupConfig((current) => current);
+process.stdout.write(JSON.stringify({ result: "success", ms: Date.now() - started }) + "\\n");
+`;
+  const start = (source: string) => {
+    const child = spawn(
+      process.execPath,
+      ["--experimental-strip-types", "--input-type=module", "--eval", source],
+      {
+        env: {
+          ...process.env,
+          PI_CODING_AGENT_DIR: agentDir,
+          SETUP_CONFIG_MODULE_URL: setupConfigModuleUrl,
+        },
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+    child.stdout.setEncoding("utf8");
+    child.stderr.setEncoding("utf8");
+    let stdout = "";
+    let stderr = "";
+    child.stdout.on("data", (chunk: string) => {
+      stdout += chunk;
+    });
+    child.stderr.on("data", (chunk: string) => {
+      stderr += chunk;
+    });
+    const waitFor = (marker: string) =>
+      new Promise<void>((resolve, reject) => {
+        const check = () => {
+          if (!stdout.includes(marker)) return;
+          child.stdout.off("data", check);
+          resolve();
+        };
+        check();
+        child.stdout.on("data", check);
+        child.once("error", reject);
+        child.once("exit", (code) => {
+          if (!stdout.includes(marker))
+            reject(
+              new Error("child exited " + code + ": " + (stderr || stdout)),
+            );
+        });
+      });
+    return { child, waitFor, output: () => ({ stdout, stderr }) };
+  };
+
+  const holder = start(holderSource);
+  let waiter: ReturnType<typeof start> | undefined;
+  try {
+    await holder.waitFor("holding\n");
+    waiter = start(waiterSource);
+    await waiter.waitFor("watching\n");
+    const exited = once(holder.child, "exit");
+    holder.child.kill("SIGKILL");
+    await exited;
+
+    await once(waiter.child, "exit");
+    const { stdout, stderr } = waiter.output();
+    assert.equal(stderr, "");
+    const result = JSON.parse(stdout.split("\n").at(-2) ?? "");
+    assert.equal(result.result, "success");
+    assert.ok(
+      result.ms < 5_000,
+      "waiter used the full deadline: " + result.ms + "ms",
+    );
+  } finally {
+    for (const process of [holder, waiter]) {
+      if (!process) continue;
+      const { child } = process;
+      if (child.exitCode === null && child.signalCode === null) {
+        const exited = once(child, "exit");
+        child.kill("SIGKILL");
+        await exited;
+      }
+    }
+    removeLockArtifacts();
+  }
+});
+
 test("a reused PID does not impersonate the dead lock owner", async () => {
   removeLockArtifacts();
   await saveSetupConfig(DEFAULT_SETUP_CONFIG);
@@ -596,12 +732,12 @@ test("a stored value that had to be normalized is reported, not hidden", async (
     JSON.stringify({ workflows: { concurrency: "12" }, ui: { showHeader: 3 } }),
   );
 
-  const { config, replaced } = await updateSetupConfig((current) => current);
-  assert.equal(
-    config.workflows.concurrency,
-    DEFAULT_SETUP_CONFIG.workflows.concurrency,
+  const before = readFileSync(SETUP_CONFIG_PATH, "utf8");
+  await assert.rejects(
+    updateSetupConfig((current) => current),
+    /workflows.concurrency/,
   );
-  assert.deepEqual(replaced.sort(), ["ui.showHeader", "workflows.concurrency"]);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), before);
 });
 
 test("legacy footerItems migration remains visible in update reports", async () => {
@@ -672,10 +808,12 @@ test("an oversized stored post-edit command is rejected and reported", async () 
     JSON.stringify({ postEdit: { command: "x".repeat(900) } }),
   );
 
-  const { config, replaced } = await updateSetupConfig((current) => current);
-
-  assert.equal(config.postEdit.command, "");
-  assert.deepEqual(replaced, ["postEdit.command"]);
+  const before = readFileSync(SETUP_CONFIG_PATH, "utf8");
+  await assert.rejects(
+    updateSetupConfig((current) => current),
+    /postEdit.command/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), before);
 });
 
 test("setup status reports post-edit configuration without exposing the command", () => {
@@ -684,4 +822,298 @@ test("setup status reports post-edit configuration without exposing the command"
 
   assert.match(status, /Post-edit command: configured/);
   assert.doesNotMatch(status, new RegExp(command));
+});
+
+test("missing config is side-effect-free while unsupported and invalid documents block writes", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  assert.deepEqual(inspectSetupConfig().diagnostics, []);
+  assert.equal(inspectSetupConfig().source, "missing");
+  assert.equal(existsSync(SETUP_CONFIG_PATH), false);
+  for (const raw of [
+    "{broken",
+    "null",
+    "[]",
+    '{"configVersion":99}',
+    '{"ui":{"showHeader":3}}',
+    '{"suggestions":{"model":{}}}',
+  ]) {
+    writeFileSync(SETUP_CONFIG_PATH, raw);
+    assert.equal(inspectSetupConfig().writable, false);
+    await assert.rejects(
+      updateSetupConfig((config) => config),
+      /Refusing to overwrite/,
+    );
+    assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  }
+});
+
+test("explicit saves version legacy documents and preserve nested unknown fields without exposing values", async () => {
+  const raw = JSON.stringify({
+    future: { token: "PRIVATE_VALUE" },
+    ui: { future: [1, 2] },
+    subagents: { roleModels: { futureRole: { model: "secret" } } },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  assert.equal(inspectSetupConfig().writable, true);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  assert.doesNotMatch(formatSetupDiagnostics(), /PRIVATE_VALUE|secret/);
+  await updateSetupConfig((config) => ({
+    ...config,
+    ui: { ...config.ui, showHeader: true },
+  }));
+  const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal(saved.configVersion, 1);
+  assert.deepEqual(saved.future, { token: "PRIVATE_VALUE" });
+  assert.deepEqual(saved.ui.future, [1, 2]);
+  assert.deepEqual(saved.subagents.roleModels.futureRole, { model: "secret" });
+  assert.equal(saved.ui.showHeader, true);
+});
+
+test("an invalid stored footer style is diagnosed with its legal range and never normalized on save", async () => {
+  const raw = '{"configVersion":1,"ui":{"footerStyle":"compact"}}';
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  const status = formatSetupDiagnostics();
+  assert.match(status, /ui.footerStyle/);
+  assert.match(status, /Allowed values: plain, powerline, powerline-mono/);
+  assert.equal(inspectSetupConfig().writable, false);
+  await assert.rejects(
+    updateSetupConfig((config) => config),
+    /Refusing to overwrite/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+});
+
+test("Web appearance fields accept canonical bounds and remain known on explicit saves", async () => {
+  for (const configVersion of [undefined, 1]) {
+    for (const ui of [
+      { webChatWidth: 820, webChatFontSize: 12, webExpandThinking: false },
+      { webChatWidth: 960, webChatFontSize: 16, webExpandThinking: true },
+      { webChatWidth: 2000, webChatFontSize: 24, webExpandThinking: true },
+    ]) {
+      const raw = JSON.stringify({ configVersion, ui });
+      writeFileSync(SETUP_CONFIG_PATH, raw);
+      const inspected = inspectSetupConfig();
+      assert.equal(inspected.writable, true);
+      assert.deepEqual(
+        inspected.diagnostics.filter((item) => item.path.startsWith("ui.")),
+        [],
+      );
+      for (const [key, value] of Object.entries(ui))
+        assert.equal(Reflect.get(inspected.config.ui, key), value);
+      assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+      await updateSetupConfig((config) => ({
+        ...config,
+        ui: { ...config.ui, showHeader: true },
+      }));
+      const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+      assert.equal(saved.configVersion, 1);
+      for (const [key, value] of Object.entries(ui))
+        assert.equal(saved.ui[key], value);
+    }
+  }
+});
+
+test("invalid Web appearance values are diagnosed and block both stored and candidate writes", async () => {
+  const invalidValues = {
+    webChatWidth: [819, 2001, 960.5, "960", null, true, {}, []],
+    webChatFontSize: [11, 25, 16.5, "16", null, false, {}, []],
+    webExpandThinking: [0, 1, "true", null, {}, []],
+  };
+  for (const [key, values] of Object.entries(invalidValues)) {
+    for (const value of values) {
+      const ui = { [key]: value };
+      for (const configVersion of [undefined, 1]) {
+        const raw = JSON.stringify({ configVersion, ui });
+        writeFileSync(SETUP_CONFIG_PATH, raw);
+        const inspected = inspectSetupConfig();
+        assert.equal(
+          inspected.writable,
+          false,
+          `${key}=${JSON.stringify(value)}`,
+        );
+        assert.ok(
+          inspected.diagnostics.some(
+            (item) => item.path === `ui.${key}` && item.severity === "error",
+          ),
+        );
+        await assert.rejects(
+          updateSetupConfig((config) => config),
+          /Refusing to overwrite/,
+        );
+        assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+      }
+      const raw = JSON.stringify({
+        configVersion: 1,
+        ui: { webChatWidth: 960 },
+      });
+      writeFileSync(SETUP_CONFIG_PATH, raw);
+      let applied = false;
+      await assert.rejects(
+        updateSetupConfig(
+          (config) => ({ ...config, ui: { ...config.ui, ...ui } }),
+          async () => {
+            applied = true;
+          },
+        ),
+        new RegExp(`Invalid configuration fields: ui\\.${key}`),
+      );
+      assert.equal(applied, false);
+      assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+    }
+  }
+});
+
+test("Web appearance changes persist instead of restoring old unknown values and survive rollback", async () => {
+  const raw = JSON.stringify({
+    configVersion: 1,
+    future: { retained: true },
+    ui: {
+      webTheme: "pine",
+      webChatWidth: 960,
+      webChatFontSize: 16,
+      webExpandThinking: true,
+      future: ["preserve"],
+    },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  const patch = (config: typeof DEFAULT_SETUP_CONFIG) => ({
+    ...config,
+    ui: {
+      ...config.ui,
+      webChatWidth: 1200,
+      webChatFontSize: 18,
+      webExpandThinking: false,
+    },
+  });
+  const receipt = await updateSetupConfig(patch);
+  const saved = JSON.parse(readFileSync(SETUP_CONFIG_PATH, "utf8"));
+  assert.equal(saved.ui.webChatWidth, 1200);
+  assert.equal(saved.ui.webChatFontSize, 18);
+  assert.equal(saved.ui.webExpandThinking, false);
+  assert.equal(saved.ui.webTheme, "pine");
+  assert.deepEqual(saved.future, { retained: true });
+  assert.deepEqual(saved.ui.future, ["preserve"]);
+  assert.equal(receipt.config.ui.webChatWidth, saved.ui.webChatWidth);
+  assert.deepEqual(receipt.changed.sort(), [
+    "ui.webChatFontSize",
+    "ui.webChatWidth",
+    "ui.webExpandThinking",
+  ]);
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  const applied: number[] = [];
+  await assert.rejects(
+    updateSetupConfig(patch, async (config) => {
+      applied.push(config.ui.webChatWidth);
+      if (config.ui.webChatWidth === 1200) throw new Error("Consumer failed");
+    }),
+    /previous file and configuration restored/,
+  );
+  assert.deepEqual(applied, [1200, 960]);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+});
+
+test("apply failure restores exact file bytes and runtime configuration", async () => {
+  const raw = '{ "ui": { "showHeader": false }, "future": true }\n';
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  let runtimeHeader = false;
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => ({ ...config, ui: { ...config.ui, showHeader: true } }),
+      async (config) => {
+        runtimeHeader = config.ui.showHeader;
+        if (runtimeHeader) throw new Error("UI failed after partial apply");
+      },
+    ),
+    /previous file and configuration restored/,
+  );
+  assert.equal(runtimeHeader, false);
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+});
+
+test("first-save failure restores absence and rollback never overwrites an external replacement", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  let calls = 0;
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => config,
+      async () => {
+        if (++calls === 1) throw new Error("apply failure");
+      },
+    ),
+    /restored/,
+  );
+  assert.equal(existsSync(SETUP_CONFIG_PATH), false);
+  writeFileSync(SETUP_CONFIG_PATH, "{}");
+  const external = '{"ui":{"showHeader":true}}';
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => config,
+      async () => {
+        writeFileSync(SETUP_CONFIG_PATH, external);
+        throw new Error("apply failure");
+      },
+    ),
+    /recovery incomplete/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), external);
+});
+
+test("cancellation after apply restores configuration and rollback failure is explicit", async () => {
+  writeFileSync(SETUP_CONFIG_PATH, "{}");
+  const controller = new AbortController();
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => config,
+      async () => {
+        controller.abort();
+      },
+      controller.signal,
+    ),
+    /restored/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
+  await assert.rejects(
+    updateSetupConfig(
+      (config) => config,
+      async () => {
+        throw new Error("consumer permanently unavailable");
+      },
+    ),
+    /recovery incomplete/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), "{}");
+});
+
+test("IO errors remain visible and unknown model fields cannot disappear on role removal", async () => {
+  rmSync(SETUP_CONFIG_PATH, { force: true });
+  mkdirSync(SETUP_CONFIG_PATH);
+  try {
+    assert.match(formatSetupDiagnostics(), /Unable to read configuration/);
+    await assert.rejects(
+      saveSetupConfig(DEFAULT_SETUP_CONFIG),
+      /Refusing to overwrite/,
+    );
+    assert.equal(statSync(SETUP_CONFIG_PATH).isDirectory(), true);
+  } finally {
+    rmdirSync(SETUP_CONFIG_PATH);
+  }
+  const raw = JSON.stringify({
+    subagents: {
+      roleModels: {
+        explorer: { provider: "test", model: "test", future: true },
+      },
+    },
+  });
+  writeFileSync(SETUP_CONFIG_PATH, raw);
+  await assert.rejects(
+    updateSetupConfig((config) => ({
+      ...config,
+      subagents: { roleModels: {} },
+    })),
+    /would remove unknown fields/,
+  );
+  assert.equal(readFileSync(SETUP_CONFIG_PATH, "utf8"), raw);
+  await updateSetupConfig((config) => config);
+  if (process.platform !== "win32")
+    assert.equal(statSync(SETUP_CONFIG_PATH).mode & 0o777, 0o600);
 });

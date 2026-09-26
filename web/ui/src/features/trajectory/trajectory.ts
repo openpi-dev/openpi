@@ -16,6 +16,19 @@ export interface TrajectoryNode {
   outcome?: "returned" | "error" | "unknown";
 }
 
+export function defaultTrajectoryNode(nodes: readonly TrajectoryNode[]) {
+  for (let index = nodes.length - 1; index >= 0; index--) {
+    const node = nodes[index];
+    if (
+      node &&
+      (node.kind !== "event" ||
+        Boolean(node.message || node.input !== undefined || node.result))
+    )
+      return node;
+  }
+  return nodes.at(-1);
+}
+
 // This is record order, not a dependency graph or execution timing model.
 export function buildTrajectory(entries: readonly Entry[]) {
   const order = new Map(entries.map((entry, index) => [entry.id, index]));

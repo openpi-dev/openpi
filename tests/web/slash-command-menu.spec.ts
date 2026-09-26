@@ -39,6 +39,18 @@ const commands: WebCommandSummary[] = [
     availability: "available",
     argumentHint: "[arguments]",
   },
+  {
+    name: "ps",
+    description: "List background terminals",
+    source: "extension",
+    availability: "unsupported",
+  },
+  {
+    name: "btw",
+    description: "Keeps working while asking a side question",
+    source: "extension",
+    availability: "unsupported",
+  },
 ];
 
 function snapshot(): WebSnapshot {
@@ -133,11 +145,10 @@ function enterCommand(value: string) {
 }
 
 describe("Web slash command discovery", () => {
-  it("filters locally and keeps unsupported commands after available commands", () => {
+  it("shows only runnable commands until a query asks for an unsupported one", () => {
     expect(filterWebCommands(commands, "").map((item) => item.name)).toEqual([
       "review",
       "release",
-      "extension:setup",
     ]);
     expect(
       filterWebCommands(commands, "review").map((item) => item.name),
@@ -148,6 +159,9 @@ describe("Web slash command discovery", () => {
     expect(
       filterWebCommands(commands, "skill").map((item) => item.name),
     ).toEqual(["release"]);
+    expect(filterWebCommands(commands, "ps").map((item) => item.name)).toEqual([
+      "ps",
+    ]);
   });
 
   it("shows a loading state while commands are being discovered", () => {
@@ -164,6 +178,26 @@ describe("Web slash command discovery", () => {
 
     expect(screen.getByText(i18n.t("commandsNoMatch"))).toBeTruthy();
     expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("summarizes a discovery result with no runnable Web commands", () => {
+    renderComposer({
+      commandDiscovery: { commands: [commands[0]!], totalAvailable: 1 },
+    });
+    enterCommand("/");
+
+    expect(screen.getByText(i18n.t("commandsNoAvailable"))).toBeTruthy();
+    expect(screen.queryByRole("listbox")).toBeNull();
+  });
+
+  it("keeps no-match distinct when all discovered commands are unsupported", () => {
+    renderComposer({
+      commandDiscovery: { commands: [commands[0]!], totalAvailable: 1 },
+    });
+    enterCommand("/missing-command");
+
+    expect(screen.getByText(i18n.t("commandsNoMatch"))).toBeTruthy();
+    expect(screen.queryByText(i18n.t("commandsNoAvailable"))).toBeNull();
   });
 
   it("shows command discovery errors separately from an empty result", () => {

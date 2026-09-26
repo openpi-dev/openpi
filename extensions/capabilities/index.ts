@@ -1,6 +1,7 @@
 import { fileURLToPath } from "node:url";
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
 import { type Static, Type } from "typebox";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import {
   capabilitiesRequestedByPrompt,
   requestsCapabilityGateway,
@@ -12,7 +13,6 @@ import {
 import {
   loadSetupConfig,
   type MyPiSetupConfig,
-  SETUP_CONFIG_CHANGED_CHANNEL,
 } from "../shared/setup-config.ts";
 import {
   getLoadedOpenPiCapabilities,
@@ -118,7 +118,7 @@ export function createCapabilitiesExtension(
       });
     };
 
-    pi.events.on(SETUP_CONFIG_CHANGED_CHANNEL, reconcileDiscoveryGateway);
+    onSetupApply(pi, reconcileDiscoveryGateway);
 
     pi.on("session_start", (_event, ctx) => {
       stopShimmer();

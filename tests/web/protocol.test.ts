@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   projectEntries,
+  projectEntry,
   projectMessage,
   WEB_MAX_MESSAGE_PARTS,
   WEB_MAX_SELECTED_TRANSCRIPT_BYTES,
@@ -17,6 +18,50 @@ test("message projection does not create phantom text for detail-only messages",
   });
   assert.equal(projected.content, "");
   assert.equal(projected.parts?.length, 2);
+});
+
+test("assistant failure projection retains terminal evidence without inventing body text", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: "gateway_concurrency_limit (429)",
+    content: [],
+  });
+  assert.equal(projected.content, "");
+  assert.equal(projected.stopReason, "error");
+  assert.equal(projected.errorMessage, "gateway_concurrency_limit (429)");
+  assert.equal(
+    projectMessage({
+      role: "assistant",
+      stopReason: "aborted",
+      content: [{ type: "text", text: "partial" }],
+    }).content,
+    "partial",
+  );
+  assert.equal(
+    projectMessage({ role: "assistant", stopReason: "aborted", content: [] })
+      .stopReason,
+    "aborted",
+  );
+});
+
+test("assistant errors are bounded and redact credentials before they reach the wire", () => {
+  const projected = projectMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: `Request https://name:password@example.test/path?api_key=secret failed; Authorization: Bearer example-long-secret-1234567890; token=short-secret; ${"unexpected failure ".repeat(200)}\u0000`,
+    content: [{ type: "text", text: "partial answer" }],
+  });
+  assert.equal(projected.content, "partial answer");
+  assert.equal(projected.stopReason, "error");
+  assert.ok(projected.errorMessage?.includes("Request"));
+  assert.ok(projected.errorMessage?.includes("[redacted]"));
+  assert.ok(!projected.errorMessage?.includes("password"));
+  assert.ok(!projected.errorMessage?.includes("short-secret"));
+  assert.ok(!projected.errorMessage?.includes("example-long-secret"));
+  assert.ok(!projected.errorMessage?.includes("\u0000"));
+  assert.ok((projected.errorMessage?.length ?? 0) < 600);
+  assert.equal(projected.truncation?.text, true);
 });
 
 test("message projection keeps text parts separated without phantom blank lines", () => {
@@ -92,6 +137,25 @@ test("message projection keeps custom delivery messages", () => {
   assert.equal(projected.customType, "subagent-result");
   assert.equal(projected.display, true);
   assert.deepEqual(projected.details, { id: "sa-1", status: "done" });
+});
+
+test("entry projection preserves custom messages as transcript messages", () => {
+  const projected = projectEntry({
+    type: "custom_message",
+    id: "setup-request",
+    parentId: null,
+    timestamp: "2026-09-19T10:00:00.000Z",
+    customType: "openpi-setup-request",
+    content: "Apply a dark theme",
+    display: false,
+    details: { source: "settings" },
+  });
+  assert.equal(projected.type, "message");
+  assert.equal(projected.message?.role, "custom");
+  assert.equal(projected.message?.customType, "openpi-setup-request");
+  assert.equal(projected.message?.content, "Apply a dark theme");
+  assert.equal(projected.message?.display, false);
+  assert.deepEqual(projected.message?.details, { source: "settings" });
 });
 
 test("message projection bounds parts and reports exact omissions", () => {

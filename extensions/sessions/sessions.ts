@@ -27,6 +27,8 @@ export interface PreviewMessageLike {
   isError?: boolean;
   command?: string;
   output?: string;
+  exitCode?: number;
+  cancelled?: boolean;
   summary?: string;
 }
 
@@ -72,19 +74,55 @@ export function formatTimestamp(date: Date): string {
   return `${year}-${month}-${day} ${hours}:${minutes}`;
 }
 
-export function formatRelativeTime(date: Date): string {
-  const now = new Date();
+export function formatRelativeTime(
+  date: Date,
+  now: Date = new Date(),
+  maxWidth?: number,
+): string {
   const diffMs = now.getTime() - date.getTime();
-  const diffSec = Math.floor(diffMs / 1000);
+  const diffSec = Math.max(0, Math.floor(diffMs / 1000));
   const diffMin = Math.floor(diffSec / 60);
   const diffHour = Math.floor(diffMin / 60);
   const diffDay = Math.floor(diffHour / 24);
+  const fitWidth = (formatted: string) => {
+    if (maxWidth === undefined || formatted.length <= maxWidth)
+      return formatted;
+    const relative = formatted.slice(formatted.indexOf("(") + 1, -1);
+    const dateStr =
+      diffDay < 365
+        ? `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+        : `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+    const compact = `${dateStr} ${relative}`;
+    if (compact.length <= maxWidth) return compact;
+    const shorter = `${dateStr} ${relative.replace(/ ago$/u, "").replace("just now", "now")}`;
+    if (shorter.length <= maxWidth) return shorter;
+    return dateStr.length <= maxWidth ? dateStr : "";
+  };
 
-  if (diffSec < 60) return "Just now";
-  if (diffMin < 60) return `${diffMin}m ago`;
-  if (diffHour < 24) return `${diffHour}h ago`;
-  if (diffDay === 1) return "Yesterday";
-  return `${diffDay}d ago`;
+  // Within 24 hours: display clock time and relative duration (m/h ago)
+  // This avoids midnight flips showing "0d ago" or cross-year jumps in early January
+  if (diffHour < 24) {
+    const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+    if (diffSec < 60) return fitWidth(`${time} (just now)`);
+    if (diffMin < 60) return fitWidth(`${time} (${diffMin}m ago)`);
+    return fitWidth(`${time} (${diffHour}h ago)`);
+  }
+
+  // Older than 24 hours: display calendar date and day/month/year distance
+  // If under a year, show MM-DD so year transitions in January stay readable
+  if (diffDay < 365) {
+    const dateStr = `${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+    if (diffDay < 60) {
+      return fitWidth(`${dateStr} (${diffDay}d ago)`);
+    }
+    const months = Math.max(1, Math.floor(diffDay / 30));
+    return fitWidth(`${dateStr} (${months}mo ago)`);
+  }
+
+  // Cross-year older than 365 days
+  const years = Math.max(1, Math.floor(diffDay / 365));
+  const dateStr = `${date.getFullYear()}-${pad(date.getMonth() + 1)}`;
+  return fitWidth(`${dateStr} (${years}y ago)`);
 }
 
 const cleanDisplayLine = (text: string) =>
@@ -101,9 +139,12 @@ const normalizeSnippet = (text: string, maxLength: number): string => {
   const cleaned = cleanDisplayLine(text);
   const fallback = cleaned.length > 0 ? cleaned : "No messages";
   if (maxLength < 1) return "";
-  if (fallback.length <= maxLength) return fallback;
+  // Bound on code points so a truncation boundary cannot split a surrogate pair
+  // into a lone surrogate in the session list.
+  const characters = [...fallback];
+  if (characters.length <= maxLength) return fallback;
   if (maxLength === 1) return "…";
-  return `${fallback.slice(0, maxLength - 1)}…`;
+  return `${characters.slice(0, maxLength - 1).join("")}…`;
 };
 
 export function buildSessionDescription(
@@ -125,6 +166,8 @@ export const buildSearchText = (session: SessionInfoLike): string =>
     session.id,
     session.cwd,
     session.firstMessage ?? "",
+    formatTimestamp(session.modified),
+    formatRelativeTime(session.modified),
   ]
     .join(" ")
     .toLowerCase();
@@ -322,7 +365,10 @@ function messageToBlocks(message: PreviewMessageLike): PreviewBlock[] {
             kind: "bash",
             command: cleanPreviewText(command),
             output: cleanPreviewText(message.output ?? ""),
-            isError: message.isError,
+            isError:
+              message.cancelled ||
+              (message.exitCode !== undefined && message.exitCode !== 0) ||
+              message.isError,
           },
         ]
       : [];

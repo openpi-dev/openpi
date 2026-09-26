@@ -4,9 +4,9 @@
  * Everything here is synchronous and side-effect free so the exact argv
  * passed to the child process can be asserted in tests. Revision and path
  * inputs are validated against strict shapes before they are ever placed
- * in an argument list, and every user-controlled value goes after a `--`
- * separator so it can never be parsed as a flag. Only argv subcommands that
- * cannot write are reachable at all.
+ * in an argument list. Validated revisions go before an explicit `--`
+ * separator and paths go after it, so Git never guesses a revision is a
+ * path. Only argv subcommands that cannot write are reachable at all.
  */
 
 export const GIT_TIMEOUT_MS = 10_000;
@@ -31,7 +31,8 @@ export function isSafeRevision(revision: string): boolean {
 const REPO_PATH_PATTERN = /^[^:/\\?#*[\]'"\s][^:/\\?#*[\]'"\s]*$/;
 
 export function isSafeRepoPath(value: string): boolean {
-  if (value.length === 0 || value.length > 512) return false;
+  if (value.length === 0 || value.length > 512 || value.includes("\0"))
+    return false;
   const segments = value.split("/");
   for (const segment of segments) {
     if (segment === "" || segment === "." || segment === "..") return false;
@@ -84,10 +85,11 @@ export function buildShowArgs(params: GitShowParams): string[] {
     "--no-textconv",
     "--format=fuller",
     params.revision.trim(),
+    "--",
   ];
   if (params.path !== undefined) {
     if (!isSafeRepoPath(params.path)) throw new InvalidPathError(params.path);
-    args.push("--", params.path);
+    args.push(params.path);
   }
   return args;
 }
@@ -126,17 +128,16 @@ export function buildDiffArgs(params: GitDiffParams): string[] {
   if (params.stat) args.push("--stat");
 
   if (from !== undefined && to !== undefined) {
-    // An explicit `--` separator is unnecessary for the range form; a
-    // validated revision can never start with `-` anyway.
     args.push(`${from}...${to}`);
   } else if (from !== undefined) {
     args.push(from);
   }
   // No revisions: worktree vs index (or HEAD with --cached).
 
+  args.push("--");
   if (params.path !== undefined) {
     if (!isSafeRepoPath(params.path)) throw new InvalidPathError(params.path);
-    args.push("--", params.path);
+    args.push(params.path);
   }
   return args;
 }
@@ -163,9 +164,10 @@ export function buildLogArgs(params: GitLogParams): string[] {
     }
     args.push(params.revision.trim());
   }
+  args.push("--");
   if (params.file !== undefined) {
     if (!isSafeRepoPath(params.file)) throw new InvalidPathError(params.file);
-    args.push("--", params.file);
+    args.push(params.file);
   }
   return args;
 }

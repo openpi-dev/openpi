@@ -1,12 +1,13 @@
-import type { ReactNode } from "react";
+import { type ReactNode, useContext } from "react";
+import {
+  type EvidenceState,
+  projectToolEvidence,
+} from "../../../../protocol/evidence.ts";
 import type {
   WebLiveMessage,
   WebMessagePart,
 } from "../../../../protocol/types.ts";
-import {
-  projectToolEvidence,
-  type EvidenceState,
-} from "../../../../protocol/evidence.ts";
+import { ArtifactContext } from "../artifacts/context.ts";
 
 function EvidenceBlock({
   children,
@@ -28,13 +29,17 @@ export function ToolEvidence({
   result,
   liveState,
   cwd,
+  summaryMeta,
 }: {
   call: Extract<WebMessagePart, { type: "toolCall" }>;
   result?: WebLiveMessage;
   liveState?: EvidenceState;
   cwd?: string;
+  summaryMeta?: ReactNode;
 }) {
+  const artifacts = useContext(ArtifactContext);
   const view = projectToolEvidence(call, result, liveState);
+  const fileReference = view.resolvedPath ?? view.path;
   const lines = (view.diff ?? view.output)
     .split("\n")
     .map((text, index) => ({ text, number: view.offset + index }));
@@ -42,17 +47,31 @@ export function ToolEvidence({
     view.tests?.failures.map((text, index) => ({ text, number: index + 1 })) ??
     [];
   return (
-    <details className={`tool-evidence-card evidence-${view.kind}`}>
+    <details
+      className={`tool-evidence-card evidence-${view.kind}`}
+      data-state={view.state}
+    >
       <summary>
-        <strong>{call.name}</strong>
+        <strong className="tool-name">{call.name}</strong>
         <span>{view.path || view.command || view.kind}</span>
+        {summaryMeta}
         <span className="evidence-status">{view.state}</span>
       </summary>
       <div className="evidence-content">
         {view.path && (
           <p>
             <strong>Requested file:</strong>{" "}
-            <code>{view.resolvedPath ?? view.path}</code>
+            {artifacts && fileReference ? (
+              <button
+                className="artifact-link"
+                type="button"
+                onClick={() => artifacts.open(fileReference)}
+              >
+                <code>{fileReference}</code>
+              </button>
+            ) : (
+              <code>{fileReference}</code>
+            )}
             {cwd && (
               <>
                 <br />
