@@ -128,6 +128,33 @@ test("capability discovery defaults to explicit and accepts adaptive opt-in", ()
   );
 });
 
+test("FAIL: session child execution admission is opt-in and bounded", () => {
+  assert.equal(DEFAULT_SETUP_CONFIG.childExecutions.maxActive, undefined);
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 3 } }).childExecutions
+      .maxActive,
+    3,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 0 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.equal(
+    parseSetupConfig({ childExecutions: { maxActive: 65 } }).childExecutions
+      .maxActive,
+    undefined,
+  );
+  assert.match(
+    formatSetupConfig(parseSetupConfig({ childExecutions: { maxActive: 3 } })),
+    /Session child executions: 3 active slots/,
+  );
+  assert.match(
+    formatSetupConfig(DEFAULT_SETUP_CONFIG),
+    /Session child executions: unbounded \(disabled\)/,
+  );
+});
+
 test("process start-time queries are platform-specific and conservative", () => {
   const windowsQuery = processStartedAtQuery(123, "win32");
   assert.equal(windowsQuery.command, "powershell.exe");

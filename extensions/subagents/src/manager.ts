@@ -26,6 +26,11 @@ import {
 } from "effect";
 import type { SubagentBackend, SubagentSession } from "./backend.ts";
 import type { AgentToolRenderer } from "../../shared/agent-tool-renderer.ts";
+import type {
+  ChildExecutionAdmission,
+  ChildExecutionLease,
+  ChildExecutionAdmissionSnapshot,
+} from "../../shared/child-execution-admission.ts";
 import { BackendRegistry } from "./backend.ts";
 import type {
   BackendName,
@@ -123,6 +128,10 @@ interface Entry {
   /** Idle restart dispatched but RunStarted not folded yet; counts as running
    * so concurrent restarts cannot race past the cap. */
   restarting?: boolean;
+  admissionLease?: ChildExecutionLease;
+  admissionAbort?: AbortController;
+  /** A timed-out stop has no trustworthy terminal evidence: retain its lease. */
+  admissionUncertain?: boolean;
 }
 
 // --- Read model ----------------------------------------------------------------
@@ -134,6 +143,8 @@ export interface SubagentReadModel {
   /** Native tool projection retained by the live child session, when present. */
   getToolRenderer?(id: string): AgentToolRenderer | undefined;
   size(): number;
+  /** Shared Session admission state; no task prompts are exposed here. */
+  childExecutionAdmission?(): ChildExecutionAdmissionSnapshot | undefined;
   /** Any-change notification (footer status, dashboard). */
   subscribe(listener: () => void): () => void;
   /** Per-subagent notification (takeover view). */
@@ -244,6 +255,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         }
       }
     };
+    // Workflow and Direct/BTW all mutate this one Session-owned fact. Forward
+    // its changes through the existing view subscription so an already-open
+    // operator dashboard repaints without a separate counter projection.
+    const unsubscribeAdmission = config.admission?.subscribe(() => notify());
 
     /** Resolves on the next state change. Interruption unregisters the waiter. */
     const nextChange = Effect.callback<void>((resume) => {
@@ -326,7 +341,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       }
     };
 
-    const settle = (entry: Entry, outcome: RunOutcome) => {
+    const settle = (
+      entry: Entry,
+      outcome: RunOutcome,
+      releaseAdmission = true,
+    ) => {
       const s = entry.snapshot;
       const wasRestarting = entry.restarting === true;
       entry.restarting = false;
@@ -374,6 +393,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       entry.liveToolMap.clear();
       s.liveTools = [];
       s.queued = [];
+      entry.admissionAbort = undefined;
+      if (releaseAdmission) {
+        entry.admissionLease?.release();
+        entry.admissionLease = undefined;
+      }
       const consumed = (waitInterest.get(s.id) ?? 0) > 0;
       notify(s.id);
       try {
@@ -498,29 +522,48 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const spawn = (backendName: BackendName, task: SpawnTask) =>
       Effect.gen(function* () {
         const origin: SubagentOrigin = task.origin ?? "model";
-        // Reserve synchronously (before the first yield inside doSpawn) so
-        // parallel tool calls cannot race past the pool cap.
-        yield* Effect.suspend(
-          (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
-            if (disposed) {
-              return new SpawnError({
-                message: "Subagent manager is shutting down.",
-              });
-            }
-            if (atPoolCapacity(origin)) {
-              return new ConcurrencyLimitError({
-                message: `Max ${poolLimit(origin)} ${
-                  origin === "btw" ? "by-the-way" : "subagent"
-                } sessions can run concurrently. Wait for one to finish before spawning another.`,
-              });
-            }
-            if (origin === "btw") reservedBtw++;
-            else reservedModel++;
-            return Effect.void;
-          },
-        );
-
+        let admissionLease: ChildExecutionLease | undefined;
+        let poolReservationHeld = false;
+        let leaseTransferred = false;
         const doSpawn = Effect.gen(function* () {
+          // Reserve synchronously before the first asynchronous operation so
+          // parallel tool calls cannot race past the pool cap.
+          yield* Effect.suspend(
+            (): Effect.Effect<void, SpawnError | ConcurrencyLimitError> => {
+              if (disposed) {
+                return new SpawnError({
+                  message: "Subagent manager is shutting down.",
+                });
+              }
+              if (atPoolCapacity(origin)) {
+                return new ConcurrencyLimitError({
+                  message: `Max ${poolLimit(origin)} ${
+                    origin === "btw" ? "by-the-way" : "subagent"
+                  } sessions can run concurrently. Wait for one to finish before spawning another.`,
+                });
+              }
+              if (origin === "btw") reservedBtw++;
+              else reservedModel++;
+              poolReservationHeld = true;
+              return Effect.void;
+            },
+          );
+          if (config.admission) {
+            admissionLease = yield* Effect.tryPromise({
+              try: (signal) =>
+                config.admission!.acquire(
+                  origin === "btw" ? "btw" : "direct",
+                  signal,
+                ),
+              catch: (error) =>
+                new SpawnError({
+                  message:
+                    error instanceof Error
+                      ? error.message
+                      : "Could not acquire a shared child execution slot.",
+                }),
+            });
+          }
           const backend: SubagentBackend | undefined =
             registry.get(backendName);
           if (!backend) {
@@ -567,8 +610,10 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             session,
             scope,
             liveToolMap: new Map(),
+            ...(admissionLease ? { admissionLease } : {}),
           };
           entries.set(id, entry);
+          leaseTransferred = true;
 
           // Pump: fold the event stream into the snapshot. Tied to the entry
           // scope, so closing the scope stops it. If the stream ends while the
@@ -578,7 +623,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           ).pipe(
             Effect.ensuring(
               Effect.sync(() => {
-                if (entry.snapshot.status === "running") {
+                if (isBusy(entry)) {
                   settle(entry, {
                     _tag: "Failed",
                     errorText: "Backend event stream ended unexpectedly",
@@ -596,8 +641,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
         return yield* doSpawn.pipe(
           Effect.ensuring(
             Effect.sync(() => {
-              if (origin === "btw") reservedBtw--;
-              else reservedModel--;
+              if (poolReservationHeld) {
+                if (origin === "btw") reservedBtw--;
+                else reservedModel--;
+              }
+              if (!leaseTransferred) admissionLease?.release();
               notify();
             }),
           ),
@@ -633,8 +681,17 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
     const abortEntry = (entry: Entry) =>
       Effect.gen(function* () {
         if (!isBusy(entry)) return;
+        if (entry.restarting && entry.admissionAbort) {
+          // This restart is only queued at the shared admission boundary; do
+          // not call into a dormant child Session that has not started again.
+          entry.admissionAbort.abort(new Error("Subagent restart was aborted"));
+          entry.admissionAbort = undefined;
+          entry.restarting = false;
+          notify(entry.snapshot.id);
+          return;
+        }
         const graceful = yield* entry.session.interrupt.pipe(
-          Effect.timeout(STOP_TIMEOUT_MS),
+          Effect.timeout(config.stopTimeoutMs ?? STOP_TIMEOUT_MS),
           Effect.result,
         );
         if (Result.isFailure(graceful)) {
@@ -642,9 +699,14 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // fallback ("Backend event stream ended unexpectedly") cannot win
           // the race and report the wrong terminal reason.
           yield* Effect.sync(() => {
-            settle(entry, { _tag: "Interrupted" });
+            // The SDK did not produce terminal evidence in time. The legacy
+            // snapshot remains an error so the user sees the interruption, but
+            // admission stays held and this dormant Session cannot be revived:
+            // otherwise a timed-out stop could oversell the shared limit.
+            entry.admissionUncertain = true;
+            settle(entry, { _tag: "Interrupted" }, false);
             entry.snapshot.errorText =
-              "Abort deadline exceeded; session was force-disposed";
+              "Abort deadline exceeded; child termination is uncertain";
             notify(entry.snapshot.id);
           });
           // Bound the close like disposeAll does: a stuck backend finalizer
@@ -702,6 +764,12 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
             message: `Subagent "${id}" is no longer tracked.`,
           });
         }
+        if (entry.admissionUncertain) {
+          return new SendError({
+            message:
+              "Cannot restart this child because its session is closed and its previous termination is uncertain. End the parent Session before starting more child executions.",
+          });
+        }
         // Restarting a settled subagent occupies a running slot again, so it
         // must respect the same cap as spawn. Steering an already-running one
         // does not consume additional capacity.
@@ -719,10 +787,46 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
           // both pass the check in that window. Cleared by RunStarted/settle,
           // or here when the backend rejects the send.
           entry.restarting = true;
-          return entry.session.send(text).pipe(
+          return Effect.gen(function* () {
+            if (config.admission) {
+              const admissionAbort = new AbortController();
+              entry.admissionAbort = admissionAbort;
+              const lease = yield* Effect.tryPromise({
+                try: (signal) => {
+                  const abortForEffect = () =>
+                    admissionAbort.abort(signal.reason);
+                  signal.addEventListener("abort", abortForEffect, {
+                    once: true,
+                  });
+                  return config
+                    .admission!.acquire(
+                      origin === "btw" ? "btw" : "direct",
+                      admissionAbort.signal,
+                    )
+                    .finally(() =>
+                      signal.removeEventListener("abort", abortForEffect),
+                    );
+                },
+                catch: (error) =>
+                  new SendError({
+                    message:
+                      error instanceof Error
+                        ? error.message
+                        : "Could not acquire a shared child execution slot.",
+                  }),
+              });
+              entry.admissionAbort = undefined;
+              entry.admissionLease = lease;
+            }
+            return yield* entry.session.send(text);
+          }).pipe(
             Effect.onError(() =>
               Effect.sync(() => {
                 entry.restarting = false;
+                entry.admissionAbort?.abort();
+                entry.admissionAbort = undefined;
+                entry.admissionLease?.release();
+                entry.admissionLease = undefined;
                 notify(entry.snapshot.id);
               }),
             ),
@@ -735,6 +839,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       disposed = true;
       const all = [...entries.values()];
       entries.clear();
+      for (const entry of all) entry.admissionAbort?.abort();
       yield* Effect.forEach(
         all,
         (entry) =>
@@ -763,6 +868,7 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
       get: (id) => entries.get(id)?.snapshot,
       getToolRenderer: (id) => entries.get(id)?.session.toolRenderer,
       size: () => entries.size,
+      childExecutionAdmission: () => config.admission?.snapshot(),
       subscribe: (listener) => {
         listeners.add(listener);
         return () => listeners.delete(listener);
@@ -796,7 +902,11 @@ const makeManager = (config: SubagentManagerConfig = {}) =>
 
     // Safety net: disposing the ManagedRuntime tears everything down even if
     // the extension forgot to call disposeAll explicitly.
-    yield* Effect.addFinalizer(() => disposeAll);
+    yield* Effect.addFinalizer(() =>
+      Effect.sync(() => unsubscribeAdmission?.()).pipe(
+        Effect.andThen(disposeAll),
+      ),
+    );
 
     return SubagentManager.of({
       spawn,
@@ -814,6 +924,10 @@ export interface SubagentManagerConfig {
   /** Session-branch high-water marks restored by the extension host. */
   initialModelCounter?: number;
   initialBtwCounter?: number;
+  /** Parent-session slot owner, shared with the Workflow extension. */
+  admission?: ChildExecutionAdmission;
+  /** Test-only seam for forced-stop lifecycle coverage. */
+  stopTimeoutMs?: number;
 }
 
 export const makeSubagentManagerLayer = (config: SubagentManagerConfig = {}) =>

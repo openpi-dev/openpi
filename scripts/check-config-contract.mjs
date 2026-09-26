@@ -45,6 +45,22 @@ const CONFIG_FIELD_CONTRACT = [
     setupTerms: ["total agent calls"],
   },
   {
+    path: "childExecutions",
+    writerTokens: ["childExecutions:"],
+    statusTokens: ["config.childExecutions"],
+    readmeTerms: ["Session child execution slots"],
+    setupTerms: ["child_execution_limit"],
+  },
+  {
+    path: "childExecutions.maxActive",
+    optional: true,
+    configTokens: ["readonly maxActive?: number"],
+    writerTokens: ["params.child_execution_limit"],
+    statusTokens: ["config.childExecutions.maxActive"],
+    readmeTerms: ["Session child execution slots"],
+    setupTerms: ["child_execution_limit"],
+  },
+  {
     path: "ui.webTheme",
     writerTokens: ["params.ui_web_theme"],
     statusTokens: ["config.ui.webTheme"],

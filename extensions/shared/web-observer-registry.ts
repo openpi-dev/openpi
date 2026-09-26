@@ -4,6 +4,7 @@ import type {
   TranscriptItem,
   TranscriptPart,
 } from "../subagents/src/domain.ts";
+import type { ChildExecutionAdmissionSnapshot } from "./child-execution-admission.ts";
 
 export type WebCapabilityKind =
   | "subagents"
@@ -145,6 +146,8 @@ export interface WebCapabilityProjection<
   readonly omitted: number;
   /** Records were omitted or a user-visible string was shortened. */
   readonly truncated: boolean;
+  /** Session-local child admission state, never a task prompt or transcript. */
+  readonly childExecutionAdmission?: ChildExecutionAdmissionSnapshot;
 }
 
 export interface WebCapabilitySnapshot {
@@ -166,11 +169,14 @@ interface BoundedActivityText {
 }
 
 function boundedActivityText(value: string): BoundedActivityText {
-  if (value.length <= WEB_MAX_ACTIVITY_TEXT) {
+  // Cut on code points: a UTF-16 unit cut can split a surrogate pair and emit a
+  // lone surrogate, which the JSON capability snapshot cannot represent.
+  const characters = [...value];
+  if (characters.length <= WEB_MAX_ACTIVITY_TEXT) {
     return { value, truncated: false };
   }
   return {
-    value: `${value.slice(0, WEB_MAX_ACTIVITY_TEXT - 1)}…`,
+    value: `${characters.slice(0, WEB_MAX_ACTIVITY_TEXT - 1).join("")}…`,
     truncated: true,
   };
 }
@@ -286,8 +292,9 @@ export function projectSubagentCapability(
     readonly createdAt: number;
     readonly settledAt?: number;
   }[],
+  childExecutionAdmission?: ChildExecutionAdmissionSnapshot,
 ): WebCapabilityProjection<WebSubagentActivity> {
-  return boundedActivityProjection(source, (value) => {
+  const projection = boundedActivityProjection(source, (value) => {
     const id = boundedActivityText(value.id);
     const title = boundedActivityText(value.title);
     return {
@@ -305,6 +312,10 @@ export function projectSubagentCapability(
       truncated: id.truncated || title.truncated,
     };
   });
+  return {
+    ...projection,
+    ...(childExecutionAdmission ? { childExecutionAdmission } : {}),
+  };
 }
 
 /** Project only manager-owned display data; never load child session files. */

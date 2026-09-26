@@ -52,6 +52,10 @@ import {
 } from "../shared/activity-status.ts";
 import { sanitizeText } from "../shared/agent-transcript.ts";
 import {
+  sessionChildExecutionAdmission,
+  type ChildExecutionAdmission,
+} from "../shared/child-execution-admission.ts";
+import {
   BelowEditorNavigationEditor,
   BelowEditorStripState,
 } from "../shared/below-editor-navigation.ts";
@@ -60,6 +64,7 @@ import {
   inheritedChildToolAllowlist,
   resolveStandaloneChildProjectTrust,
 } from "../shared/child-session.ts";
+import { onSetupApply } from "../shared/setup-apply.ts";
 import { completionOwnerFor } from "../shared/completion-inbox.ts";
 import { formatContextUtilization } from "../shared/context-utilization.ts";
 import {
@@ -511,6 +516,7 @@ export default function (
     options.getResultDisplay ??
     (() => loadSetupConfig().ui.subagentResultDisplay);
   let runtime: SubagentRuntime | undefined;
+  let admission: ChildExecutionAdmission | undefined;
   let managerPromise: Promise<SubagentManagerShape> | undefined;
   let restoredIdCounters: SubagentIdCounters = {
     modelCounter: 0,
@@ -560,7 +566,16 @@ export default function (
     (runtime ??= createSubagentRuntime({
       initialModelCounter: restoredIdCounters.modelCounter,
       initialBtwCounter: restoredIdCounters.btwCounter,
+      ...(admission ? { admission } : {}),
     }));
+
+  if (pi.events) {
+    onSetupApply(pi, () => {
+      admission?.configure({
+        maxActive: loadSetupConfig().childExecutions.maxActive,
+      });
+    });
+  }
 
   const persistId = (id: string) =>
     pi.appendEntry(SUBAGENT_ID_WATERMARK_ENTRY_TYPE, subagentIdWatermark(id));
@@ -577,7 +592,11 @@ export default function (
           scope && sessionContext?.sessionManager === scope
             ? registerWebCapability(scope, {
                 kind: "subagents",
-                snapshot: () => projectSubagentCapability(manager.view.list()),
+                snapshot: () =>
+                  projectSubagentCapability(
+                    manager.view.list(),
+                    manager.view.childExecutionAdmission?.(),
+                  ),
                 detail: (id) => {
                   const snapshot = manager.view.get(id);
                   return snapshot ? projectSubagentDetail(snapshot) : undefined;
@@ -692,7 +711,11 @@ export default function (
     let manager: SubagentManagerShape | undefined;
     try {
       manager = await getManager();
-      if (manager.view.size() === 0) return;
+      if (
+        manager.view.size() === 0 &&
+        !manager.view.childExecutionAdmission?.()?.enabled
+      )
+        return;
       await openSubagentPicker(ctx, manager.view, initialId);
       settledAcknowledgedAt = Date.now();
     } finally {
@@ -786,6 +809,9 @@ export default function (
   };
 
   pi.on("session_start", (_event, ctx) => {
+    admission = sessionChildExecutionAdmission(ctx.sessionManager, {
+      maxActive: loadSetupConfig().childExecutions.maxActive,
+    });
     restoredIdCounters = restoreSubagentIdCounters(
       ctx.sessionManager.getBranch(),
     );
@@ -879,6 +905,8 @@ export default function (
     dashboardOpen = false;
     const closing = runtime;
     runtime = undefined;
+    admission?.shutdown();
+    admission = undefined;
     managerPromise = undefined;
     // Disposing the runtime runs the manager finalizer, which tears down all
     // subagent scopes (and, later, their real child processes).
@@ -1682,7 +1710,10 @@ export default function (
         return;
       }
       const manager = await getManager();
-      if (manager.view.size() === 0) {
+      if (
+        manager.view.size() === 0 &&
+        !manager.view.childExecutionAdmission?.()?.enabled
+      ) {
         ctx.ui.notify(
           "No subagents yet. The agent spawns them with subagent_spawn.",
           "info",

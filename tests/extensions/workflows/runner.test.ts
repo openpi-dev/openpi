@@ -820,6 +820,7 @@ test("cancel during prompt owns the session and returns after bounded disposal",
   const outcome = await outcomePromise;
   assert.equal(outcome.ok, false);
   assert.equal(outcome.aborted, true);
+  assert.equal(outcome.retainAdmissionLease, true);
   assert.match(outcome.error ?? "", /aborted.*abort timed out/i);
   assert.equal(harness.aborts(), 1);
   assert.equal(harness.disposals(), 1);
