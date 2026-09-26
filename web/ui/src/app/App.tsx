@@ -3,6 +3,7 @@ import {
   type CSSProperties,
   useCallback,
   useEffect,
+  useMemo,
   useRef,
   useState,
 } from "react";
@@ -19,7 +20,10 @@ import {
   InspectionPanel,
   type InspectionTarget,
 } from "../features/inspection/InspectionPanel.tsx";
-import { SessionChangesPopover } from "../features/review/SessionChangesPopover.tsx";
+import {
+  QuestionPanel,
+  type QuestionWorkingCache,
+} from "../features/questions/QuestionPanel.tsx";
 import { useGitReview } from "../features/review/use-git-review.ts";
 import { SessionSidebar } from "../features/sessions/SessionSidebar.tsx";
 import { ProviderSettingsPage } from "../features/settings/ProviderSettingsPage.tsx";
@@ -27,11 +31,12 @@ import { recordedSubagents } from "../features/subagents/recorded-subagents.ts";
 import { SubagentPanel } from "../features/subagents/SubagentPanel.tsx";
 import { Trajectory } from "../features/trajectory/Trajectory.tsx";
 import { Transcript } from "../features/transcript/Transcript.tsx";
+import type { SessionReadingCache } from "../features/transcript/session-reading-state.ts";
 import { SessionUsageBar } from "../features/workbar/SessionUsageBar.tsx";
 import type { WorkbarTool } from "../features/workbar/types.ts";
 import { WorkbarPanel } from "../features/workbar/WorkbarPanel.tsx";
 import { sessionTitle, workspaceName } from "../lib/format.ts";
-import { QuestionPanel } from "../features/questions/QuestionPanel.tsx";
+import { isControlledSession } from "../lib/session-control.ts";
 import { webStore } from "../store/web-store.ts";
 
 const SIDEBAR_DEFAULT_WIDTH = 280;
@@ -62,6 +67,11 @@ export function App() {
   const artifactProvider = useRef<ArtifactProviderHandle>(null);
   const artifactOpenFromFiles = useRef(false);
   const artifactReturn = useRef<"files" | null>(null);
+  const readingCache = useMemo<SessionReadingCache>(() => new Map(), []);
+  const questionWorkingCache = useMemo<QuestionWorkingCache>(
+    () => new Map(),
+    [],
+  );
   const [artifactPanelOpen, setArtifactPanelOpen] = useState(false);
   const [resizingPane, setResizingPane] = useState(false);
   const [centerCollapsed, setCenterCollapsed] = useState(false);
@@ -96,15 +106,17 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
+    entry: "general" | "credentials";
   } | null>(null);
   const [workbarTarget, setWorkbarTarget] = useState<{
     sessionId: string;
     sessionPath: string;
     tool: WorkbarTool;
     requestRevision: number;
-    reviewFilePath?: string;
   } | null>(null);
   const [workbarOpen, setWorkbarOpen] = useState(false);
+  const [workbarActiveTool, setWorkbarActiveTool] =
+    useState<WorkbarTool | null>(null);
   const [subagentTarget, setSubagentTarget] = useState<{
     sessionId: string;
     sessionPath: string;
@@ -164,7 +176,7 @@ export function App() {
       !snapshot ||
       !session ||
       state.sessionSwitching ||
-      session.id !== snapshot.currentSessionId
+      !isControlledSession(snapshot, session)
     )
       return;
     workbarReturnFocus.current = null;
@@ -182,7 +194,10 @@ export function App() {
     inspection &&
     !state.workspaceDraft &&
     !state.sessionSwitching &&
-    inspection.sessionId === state.snapshot?.currentSessionId &&
+    isControlledSession(state.snapshot, {
+      id: inspection.sessionId,
+      path: inspection.sessionPath,
+    }) &&
     inspection.sessionPath === state.snapshot?.selectedSession?.path &&
     inspection.modelKey === modelKey;
   useEffect(() => {
@@ -201,25 +216,35 @@ export function App() {
     providerSettings &&
     !state.workspaceDraft &&
     !state.sessionSwitching &&
-    providerSettings.sessionId === state.snapshot?.currentSessionId &&
+    isControlledSession(state.snapshot, {
+      id: providerSettings.sessionId,
+      path: providerSettings.sessionPath,
+    }) &&
     providerSettings.sessionPath === state.snapshot?.selectedSession?.path;
   useEffect(() => {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
-  const openProviderSettings = () => {
-    const snapshot = state.snapshot;
-    const session = snapshot?.selectedSession;
-    if (
-      state.workspaceDraft ||
-      !session ||
-      state.sessionSwitching ||
-      session.id !== snapshot.currentSessionId
-    )
-      return;
+  const openProviderSettings = async (
+    entry: "general" | "credentials" = "general",
+  ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
         : null;
+    const target = await actions.prepareSession();
+    if (!target) return;
+    const current = webStore.getState();
+    const snapshot = current.snapshot;
+    const session = snapshot?.selectedSession;
+    if (
+      current.workspaceDraft ||
+      !session ||
+      current.sessionSwitching ||
+      !isControlledSession(snapshot, session) ||
+      session.id !== target.sessionId ||
+      session.path !== target.sessionPath
+    )
+      return;
     actions.closeMobileSidebar();
     setInspection(null);
     setSubagentTarget(null);
@@ -229,6 +254,7 @@ export function App() {
       sessionId: session.id,
       sessionPath: session.path,
       cwd: session.cwd,
+      entry,
     });
   };
   const closeProviderSettings = useCallback(() => {
@@ -251,7 +277,18 @@ export function App() {
     inspect();
   };
   const configureOpenPiFromSettings = async (request: string) => {
-    return actions.sendPrompt(`/openpi-setup ${request}`);
+    if (await actions.sendPrompt(`/openpi-setup ${request}`)) return true;
+    const latest = webStore.getState();
+    throw new Error(
+      latest.notice ||
+        t(
+          latest.promptAdmissionRecovery
+            ? "setupResolveAdmission"
+            : latest.liveRunning || latest.activeTurn
+              ? "settingsSetupBusyHint"
+              : "setupRequestFailed",
+        ),
+    );
   };
 
   useEffect(() => {
@@ -262,32 +299,55 @@ export function App() {
   const selected = state.workspaceDraft
     ? undefined
     : state.snapshot?.selectedSession;
-  const gitReview = useGitReview(selected, state.snapshot?.cursor);
-  const gitSnapshot = gitReview.result?.ok
-    ? gitReview.result.snapshot
-    : undefined;
-  const openReview = (filePath?: string, returnFocus?: HTMLElement) => {
-    if (!selected || state.sessionSwitching) return;
-    workbarReturnFocus.current =
-      returnFocus ??
-      (document.activeElement instanceof HTMLElement
-        ? document.activeElement
-        : null);
-    setSubagentTarget(null);
-    setInspection(null);
-    setWorkbarOpen(true);
-    setWorkbarTarget((current) => ({
-      sessionId: selected.id,
-      sessionPath: selected.path,
-      tool: "review",
-      requestRevision: (current?.requestRevision ?? 0) + 1,
-      ...(filePath ? { reviewFilePath: filePath } : {}),
-    }));
-  };
+  const controlled = isControlledSession(state.snapshot, selected);
+  const execution = state.snapshot?.selectedExecution;
+  const selectedExecution =
+    execution?.sessionId === selected?.id &&
+    execution?.sessionPath === selected?.path
+      ? execution
+      : undefined;
+  const selectedRunning =
+    (controlled &&
+      (state.liveRunning ||
+        Boolean(state.activeTurn) ||
+        state.snapshot?.runtime.status === "running")) ||
+    selectedExecution?.status === "running";
+  const gitReview = useGitReview(selected, state.snapshot?.cursor, {
+    active: workbarOpen && workbarActiveTool === "review",
+    running: selectedRunning,
+  });
+  const workbarMessages = useMemo(() => {
+    const previewingFiles =
+      artifactPanelOpen && artifactReturn.current === "files";
+    if (!(workbarOpen && workbarActiveTool === "files") && !previewingFiles)
+      return [];
+    return [
+      ...(selected?.entries.flatMap((entry) =>
+        entry.message ? [entry.message] : [],
+      ) ?? []),
+      ...state.liveMessages
+        .filter((entry) =>
+          entry.optimistic
+            ? entry.optimistic.sessionId === selected?.id &&
+              entry.optimistic.sessionPath === selected?.path
+            : controlled,
+        )
+        .map((entry) => entry.message),
+    ];
+  }, [
+    workbarOpen,
+    workbarActiveTool,
+    artifactPanelOpen,
+    selected?.entries,
+    selected?.id,
+    selected?.path,
+    controlled,
+    state.liveMessages,
+  ]);
   const workbarBound = Boolean(
     workbarTarget &&
       selected &&
-      !state.sessionSwitching &&
+      state.selectedPath === selected.path &&
       workbarTarget.sessionId === selected.id &&
       workbarTarget.sessionPath === selected.path,
   );
@@ -300,6 +360,10 @@ export function App() {
   }, [workbarBound, workbarTarget]);
   const openWorkbar = (tool: WorkbarTool = "launcher") => {
     if (!selected || state.sessionSwitching) return;
+    if (artifactPanelOpen) {
+      artifactReturn.current = null;
+      artifactProvider.current?.close({ restoreFocus: false });
+    }
     if (!workbarVisible)
       workbarReturnFocus.current =
         document.activeElement instanceof HTMLElement
@@ -313,9 +377,6 @@ export function App() {
       sessionPath: selected.path,
       tool,
       requestRevision: (current?.requestRevision ?? 0) + 1,
-      ...(tool === "review" && current?.reviewFilePath
-        ? { reviewFilePath: current.reviewFilePath }
-        : {}),
     }));
   };
   const closeWorkbar = () => {
@@ -405,7 +466,9 @@ export function App() {
   const hasMessages =
     selected?.entries.some(
       (entry) => entry.type === "message" && entry.message,
-    ) || state.liveMessages.length > 0;
+    ) ||
+    Boolean(selected?.history?.beforeEntryId) ||
+    state.liveMessages.length > 0;
   const landing =
     !loading && !state.sessionSwitching && (!selected || !hasMessages);
   const resend = useCallback(
@@ -424,22 +487,38 @@ export function App() {
         <ArtifactProvider
           ref={artifactProvider}
           sessionId={selected?.id}
-          disabled={Boolean(subagentVisible || providerSettingsVisible)}
-          onOpen={() => {
+          sessionPath={selected?.path}
+          disabled={Boolean(
+            state.workspaceDraft ||
+              state.sessionSwitching ||
+              subagentVisible ||
+              providerSettingsVisible,
+          )}
+          onOpen={(nested) => {
             setArtifactPanelOpen(true);
-            artifactReturn.current = artifactOpenFromFiles.current
-              ? "files"
-              : null;
+            if (!nested)
+              artifactReturn.current = artifactOpenFromFiles.current
+                ? "files"
+                : null;
             artifactOpenFromFiles.current = false;
             setSubagentTarget(null);
             setWorkbarOpen(false);
             setInspection(null);
           }}
-          onClose={() => {
+          onClose={(reason) => {
             setArtifactPanelOpen(false);
             const target = artifactReturn.current;
             artifactReturn.current = null;
-            if (target) openWorkbar(target);
+            if (
+              reason === "user" &&
+              target &&
+              workbarBound &&
+              !state.workspaceDraft &&
+              !state.sessionSwitching
+            ) {
+              setWorkbarActiveTool("files");
+              setWorkbarOpen(true);
+            }
           }}
         >
           <SessionSidebar
@@ -451,10 +530,12 @@ export function App() {
             searchOpen={state.searchOpen}
             mobileOpen={mobileSidebarOpen}
             settingsDisabled={Boolean(
-              state.workspaceDraft || state.sessionSwitching || !selected,
+              state.sessionSwitching ||
+                state.modelSelectionPending ||
+                !state.snapshot,
             )}
             returnFocusRef={sidebarTrigger}
-            onOpenSettings={openProviderSettings}
+            onOpenSettings={() => void openProviderSettings("general")}
             actions={actions}
           />
           {state.sidebarCollapsed && (
@@ -501,6 +582,8 @@ export function App() {
                 title={t("openTools")}
                 disabled={!selected || state.sessionSwitching}
                 onClick={(event) => {
+                  if (artifactPanelOpen)
+                    artifactProvider.current?.close({ restoreFocus: false });
                   workbarReturnFocus.current = event.currentTarget;
                   if (workbarBound && !workbarVisible) setWorkbarOpen(true);
                   else openWorkbar("launcher");
@@ -567,7 +650,7 @@ export function App() {
               <Trajectory
                 key={selected.path}
                 snapshot={state.snapshot}
-                running={state.liveRunning}
+                running={selectedRunning}
               />
             ) : landing ? (
               <section
@@ -580,6 +663,8 @@ export function App() {
               </section>
             ) : state.snapshot ? (
               <Transcript
+                key={`transcript:${JSON.stringify([selected?.id, selected?.path])}`}
+                readingCache={readingCache}
                 snapshot={state.snapshot}
                 liveMessages={state.liveMessages}
                 liveRunning={state.liveRunning}
@@ -590,16 +675,21 @@ export function App() {
                 scrollToBottom={state.scrollToBottom}
                 onResend={resend}
                 onInspectSubagent={inspectSubagent}
+                onHistoryAnchorChange={actions.setHistoryAnchor}
+                onRefreshHistory={actions.refreshSnapshot}
+                onPromptProjection={actions.rememberPromptProjection}
               />
             ) : null}
             {!providerSettingsVisible &&
               selected &&
               state.snapshot &&
               !state.sessionSwitching &&
-              selected.id === state.snapshot.currentSessionId && (
+              isControlledSession(state.snapshot, selected) && (
                 <QuestionPanel
-                  key={selected.id}
+                  key={JSON.stringify([selected.id, selected.path])}
                   sessionId={selected.id}
+                  sessionPath={selected.path}
+                  workingCache={questionWorkingCache}
                   revision={state.snapshot.cursor}
                   connected={state.connection === "connected"}
                 />
@@ -609,26 +699,38 @@ export function App() {
                 planSelectionPending={state.planSelectionPending}
                 workspaceDraft={state.workspaceDraft}
                 draftModel={state.draftModel}
+                createdSession={state.createdSession}
                 modelSelectionPending={state.modelSelectionPending}
                 modelSearch={state.modelSearch}
                 thinkingPendingLevel={state.thinkingPendingLevel}
                 onInspect={inspect}
-                onOpenProviders={openProviderSettings}
+                onOpenProviders={() => void openProviderSettings("credentials")}
+                onCommandAction={(action) => {
+                  const current = webStore.getState();
+                  if (
+                    current.sessionSwitching ||
+                    current.workspaceDraft ||
+                    !selected ||
+                    current.snapshot?.selectedSession?.path !== selected.path ||
+                    current.snapshot.selectedSession.id !== selected.id
+                  )
+                    return false;
+                  if (
+                    action === "terminal" ||
+                    action === "review" ||
+                    action === "side-conversation"
+                  )
+                    openWorkbar(action);
+                  else if (action === "subagents") inspectSubagent();
+                  else inspect();
+                  return true;
+                }}
                 onInspectSubagent={inspectSubagent}
                 activeTurn={state.activeTurn}
                 turnCancellationPending={state.turnCancellationPending}
                 turnTerminalStatus={state.turnTerminalStatus}
                 pendingFollowUpsReceipt={state.pendingFollowUpsReceipt}
                 commandDiscovery={state.commandDiscovery}
-                accessory={
-                  gitSnapshot && gitSnapshot.files.length > 0 ? (
-                    <SessionChangesPopover
-                      key={gitSnapshot.repositoryRoot}
-                      snapshot={gitSnapshot}
-                      onOpenReview={openReview}
-                    />
-                  ) : undefined
-                }
                 snapshot={state.snapshot}
                 selectedPath={state.selectedPath}
                 selectedWorkspace={selected?.cwd ?? state.selectedWorkspace}
@@ -659,7 +761,7 @@ export function App() {
               key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
               target={inspection}
               onClose={closeInspection}
-              onOpenProviders={openProviderSettings}
+              onOpenProviders={() => void openProviderSettings("credentials")}
             />
           )}
           {subagentVisible && (
@@ -668,7 +770,10 @@ export function App() {
               sessionId={subagentTarget.sessionId}
               initialId={subagentTarget.id}
               activity={
-                subagentTarget.sessionId === state.snapshot?.currentSessionId
+                isControlledSession(state.snapshot, {
+                  id: subagentTarget.sessionId,
+                  path: subagentTarget.sessionPath,
+                })
                   ? state.snapshot?.runtime.capabilities.subagents
                   : undefined
               }
@@ -677,9 +782,10 @@ export function App() {
                   (entry) => (entry.message ? [entry.message] : []),
                 ),
               )}
-              liveAvailable={
-                subagentTarget.sessionId === state.snapshot?.currentSessionId
-              }
+              liveAvailable={isControlledSession(state.snapshot, {
+                id: subagentTarget.sessionId,
+                path: subagentTarget.sessionPath,
+              })}
               onClose={() => setSubagentTarget(null)}
             />
           )}
@@ -690,16 +796,22 @@ export function App() {
               requestedTool={workbarTarget.tool}
               requestRevision={workbarTarget.requestRevision}
               sessionId={selected.id}
+              canControl={
+                !state.sessionSwitching &&
+                isControlledSession(state.snapshot, selected)
+              }
+              onActivateSession={() =>
+                void actions.selectSession(selected.path)
+              }
               cwd={selected.cwd}
-              capabilities={state.snapshot?.runtime.capabilities ?? {}}
-              messages={[
-                ...selected.entries.flatMap((entry) =>
-                  entry.message ? [entry.message] : [],
-                ),
-                ...state.liveMessages.map((entry) => entry.message),
-              ]}
+              capabilities={
+                isControlledSession(state.snapshot, selected)
+                  ? (state.snapshot?.runtime.capabilities ?? {})
+                  : {}
+              }
+              messages={workbarMessages}
+              onActiveToolChange={setWorkbarActiveTool}
               review={gitReview}
-              reviewInitialFilePath={workbarTarget.reviewFilePath}
               onBeforeArtifactOpen={() => {
                 artifactOpenFromFiles.current = true;
               }}
@@ -708,41 +820,47 @@ export function App() {
               onClose={closeWorkbar}
             />
           )}
-          {!state.sidebarCollapsed && viewportWidth > AUXILIARY_BREAKPOINT && (
-            <PaneResizeHandle
-              side="left"
-              value={paneWidths.sidebar}
-              min={SIDEBAR_MIN_WIDTH}
-              max={sidebarMax}
-              defaultValue={SIDEBAR_DEFAULT_WIDTH}
-              collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
-              onCollapse={() => actions.toggleSidebar(false)}
-              onChange={(sidebar) =>
-                setPaneWidths((current) => ({ ...current, sidebar }))
-              }
-              onDraggingChange={setResizingPane}
-            />
-          )}
-          {auxiliaryVisible &&
-            !centerCollapsed &&
-            viewportWidth > AUXILIARY_BREAKPOINT && (
-              <PaneResizeHandle
-                side="right"
-                value={paneWidths.auxiliary}
-                min={AUXILIARY_MIN_WIDTH}
-                max={auxiliaryMax}
-                defaultValue={AUXILIARY_DEFAULT_WIDTH}
-                collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
-                onCollapse={closeAuxiliaryPanel}
-                onExpandPastMax={
-                  workbarVisible ? () => setCenterCollapsed(true) : undefined
-                }
-                onChange={(auxiliary) =>
-                  setPaneWidths((current) => ({ ...current, auxiliary }))
-                }
-                onDraggingChange={setResizingPane}
-              />
-            )}
+          <section
+            aria-label={t("resizePanes")}
+            style={{ display: "contents" }}
+          >
+            {!state.sidebarCollapsed &&
+              viewportWidth > AUXILIARY_BREAKPOINT && (
+                <PaneResizeHandle
+                  side="left"
+                  value={paneWidths.sidebar}
+                  min={SIDEBAR_MIN_WIDTH}
+                  max={sidebarMax}
+                  defaultValue={SIDEBAR_DEFAULT_WIDTH}
+                  collapseThreshold={SIDEBAR_COLLAPSE_THRESHOLD}
+                  onCollapse={() => actions.toggleSidebar(false)}
+                  onChange={(sidebar) =>
+                    setPaneWidths((current) => ({ ...current, sidebar }))
+                  }
+                  onDraggingChange={setResizingPane}
+                />
+              )}
+            {auxiliaryVisible &&
+              !centerCollapsed &&
+              viewportWidth > AUXILIARY_BREAKPOINT && (
+                <PaneResizeHandle
+                  side="right"
+                  value={paneWidths.auxiliary}
+                  min={AUXILIARY_MIN_WIDTH}
+                  max={auxiliaryMax}
+                  defaultValue={AUXILIARY_DEFAULT_WIDTH}
+                  collapseThreshold={AUXILIARY_COLLAPSE_THRESHOLD}
+                  onCollapse={closeAuxiliaryPanel}
+                  onExpandPastMax={
+                    workbarVisible ? () => setCenterCollapsed(true) : undefined
+                  }
+                  onChange={(auxiliary) =>
+                    setPaneWidths((current) => ({ ...current, auxiliary }))
+                  }
+                  onDraggingChange={setResizingPane}
+                />
+              )}
+          </section>
           <button
             className="sidebar-scrim"
             type="button"
@@ -758,6 +876,7 @@ export function App() {
           key={`${providerSettings.sessionId}:${providerSettings.sessionPath}`}
           sessionId={providerSettings.sessionId}
           cwd={providerSettings.cwd}
+          entry={providerSettings.entry}
           models={state.snapshot?.models ?? []}
           currentModel={currentModel}
           thinkingLevel={
@@ -770,7 +889,15 @@ export function App() {
           setupBusy={
             state.liveRunning ||
             state.promptAdmissionPending ||
-            Boolean(state.activeTurn)
+            Boolean(state.activeTurn) ||
+            state.modelSelectionPending ||
+            state.thinkingPendingLevel !== null ||
+            state.sessionSwitching
+          }
+          setupBlockedReason={
+            state.promptAdmissionRecovery
+              ? t("setupResolveAdmission")
+              : undefined
           }
           modelSelectionPending={state.modelSelectionPending}
           onSelectModel={(value) => void actions.selectModel(value)}
@@ -781,8 +908,13 @@ export function App() {
             providerSettings.sessionId === state.snapshot.currentSessionId ? (
               <div className="settings-interaction">
                 <QuestionPanel
-                  key={providerSettings.sessionId}
+                  key={JSON.stringify([
+                    providerSettings.sessionId,
+                    providerSettings.sessionPath,
+                  ])}
                   sessionId={providerSettings.sessionId}
+                  sessionPath={providerSettings.sessionPath}
+                  workingCache={questionWorkingCache}
                   revision={state.snapshot.cursor}
                   connected={state.connection === "connected"}
                 />

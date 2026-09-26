@@ -186,12 +186,12 @@ export function buildSetupSuccessText(
     `Saved OpenPI setup. ${changed.length ? `Changed effective fields: ${changed.join(", ")}.` : "Effective configuration unchanged; saving may create or migrate the document without changing behavior."}`,
     `${currentConfiguration}${normalizationNote}`,
     "Describe changes only from this receipt's changed effective fields and final configuration. A successful save does not imply a visual or behavioral change. Do not infer a before/after transition from the requested preset name.",
-    "This setup episode is complete; configure_my_pi_setup is now hidden. Do not call it again. Do not edit configuration files directly. If the user requests another configuration change, tell them to run /openpi-setup <request> to start a new setup episode.",
+    "This setup episode is complete; configure_my_pi_setup is now hidden for this completed episode. Do not call it again within this completed episode. Do not edit configuration files directly. A later /openpi-setup <request> starts a new episode and makes the writer available again.",
   ].join(" ");
 }
 
 export function buildSetupNoopClosureText() {
-  return "No configuration update was confirmed in this setup run. The configuration writer is now hidden. To make a configuration change, run /openpi-setup <request>; do not edit configuration files directly.";
+  return "No configuration update was confirmed in this setup episode, which is now closed. The configuration writer is now hidden for this closed episode. A later /openpi-setup <request> starts a new episode and makes the writer available again. Do not edit configuration files directly.";
 }
 
 export const CONFIGURE_MY_PI_SETUP_TOOL_NAME = "configure_my_pi_setup";
@@ -217,7 +217,12 @@ export default function openPiSetup(pi: ExtensionAPI) {
   let claimedToolCallId: string | undefined;
   let blockedMatchingClaimCount = 0;
   let requestSequence = 0;
-  const pendingRequests: Array<{ requestId: string; prompt: string }> = [];
+  const pendingRequests: Array<{
+    requestId: string;
+    prompt: string;
+    request: string;
+    command: "openpi-setup" | "my-pi-setup";
+  }> = [];
   const publishEpisode = () =>
     pi.events.emit(OPENPI_SETUP_EPISODE_CHANNEL, {
       active: episode === "active",
@@ -280,9 +285,17 @@ export default function openPiSetup(pi: ExtensionAPI) {
     pi.sendMessage(
       {
         customType: SETUP_REQUEST_CUSTOM_TYPE,
-        content: request.prompt,
+        content: [
+          "A new OpenPI setup episode has started for this /openpi-setup request. configure_my_pi_setup is active for this episode. Earlier success or closure messages apply only to their earlier episodes.",
+          "",
+          request.prompt,
+        ].join("\n"),
         display: true,
-        details: { requestId: request.requestId },
+        details: {
+          requestId: request.requestId,
+          request: request.request,
+          command: request.command,
+        },
       },
       { triggerTurn: true },
     );
@@ -632,7 +645,11 @@ export default function openPiSetup(pi: ExtensionAPI) {
     },
   });
 
-  const setupHandler = async (args: string, ctx: ExtensionCommandContext) => {
+  const setupHandler = async (
+    args: string,
+    ctx: ExtensionCommandContext,
+    command: "openpi-setup" | "my-pi-setup",
+  ) => {
     const request = args.trim();
     const inspected = inspectSetupConfig();
     const diagnostics = formatSetupDiagnostics(inspected);
@@ -676,17 +693,22 @@ export default function openPiSetup(pi: ExtensionAPI) {
       throw new Error(message);
     }
     const requestId = `setup-${++requestSequence}`;
-    pendingRequests.push({ requestId, prompt: prompt.join("\n") });
+    pendingRequests.push({
+      requestId,
+      prompt: prompt.join("\n"),
+      request: args,
+      command,
+    });
     if (episode === "idle") episode = "armed";
     if (ctx.isIdle() && episode === "armed") dispatchNextRequest(ctx);
   };
 
   pi.registerCommand("openpi-setup", {
     description: "View or change OpenPI configuration in natural language",
-    handler: setupHandler,
+    handler: (args, ctx) => setupHandler(args, ctx, "openpi-setup"),
   });
   pi.registerCommand("my-pi-setup", {
     description: "Legacy alias — use /openpi-setup",
-    handler: setupHandler,
+    handler: (args, ctx) => setupHandler(args, ctx, "my-pi-setup"),
   });
 }

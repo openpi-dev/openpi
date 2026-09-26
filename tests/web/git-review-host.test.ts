@@ -62,6 +62,7 @@ test("Git review HTTP access authenticates and binds the exact Session", async (
     const query = new URLSearchParams({
       sessionId: session.id,
       path: session.path,
+      source: "session",
     });
 
     assert.equal(

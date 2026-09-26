@@ -1,13 +1,16 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
+import { readTurnTiming, WEB_TURN_TIMING_ENTRY } from "./turn-timing.ts";
+import { readTurnChangesDetail, summarizeTurnChanges, WEB_TURN_CHANGES_ENTRY, type WebTurnChanges } from "./turn-changes.ts";
 import { WEB_COMMAND_INPUT, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import type { WebCapabilitySnapshot } from "../../extensions/shared/web-observer-registry.ts";
-import type { WebActiveTurn, WebThinkingProjection } from "../runtime/types.ts";
+import type { WebActiveTurn, WebThinkingProjection, WebSessionExecution } from "../runtime/types.ts";
 import { bashReceipt, projectEvidenceArguments, isEvidenceTool, type LiveToolEvidence } from "./evidence.ts";
 
 export const WEB_PROTOCOL_VERSION = 1;
 export const WEB_MAX_EVENTS = 200;
 export const WEB_MAX_EVENT_BYTES = 64 * 1024;
 export const WEB_MAX_TEXT = 12_000;
+export const WEB_PROMPT_MAX_TEXT_LENGTH = 12_000;
 export const WEB_MAX_SESSION_PREVIEW = 500;
 const WEB_MAX_METADATA_TEXT = 500;
 export const WEB_MAX_ENTRIES = 250;
@@ -62,6 +65,11 @@ export interface WebSessionSummary {
   firstMessage: string;
   archived?: boolean;
   ungrouped?: boolean;
+  /** Present only while this exact Session is known to the current runtime. */
+  execution?: {
+    status: "running" | "idle";
+    pendingFollowUps?: number;
+  };
 }
 
 export interface WebWorkspaceSummary {
@@ -97,6 +105,8 @@ export interface WebCommandSummary {
   source: "extension" | "prompt" | "skill";
   availability: "available" | "unsupported";
   argumentHint?: string;
+  action?: "terminal" | "review" | "subagents" | "runtime" | "side-conversation";
+  unavailableReason?: "terminal_only" | "not_integrated";
   support?: "plan" | "setup";
 }
 
@@ -238,6 +248,23 @@ export interface WebSessionProjection {
   entries: ReturnType<typeof projectEntry>[];
   bytes: number;
   truncation: WebProjectionTruncation;
+  history?: {
+    leafEntryId: string | null;
+    beforeEntryId: string | null;
+    anchorEntryId?: string;
+    anchorOnBranch?: boolean;
+  };
+}
+
+export interface WebHistoryAnchor {
+  sessionId: string;
+  sessionPath: string;
+  entryId: string;
+}
+
+export interface WebSessionHistoryPage extends WebSessionProjection {
+  anchorEntryId: string;
+  requestedBeforeEntryId: string;
 }
 
 export interface WebSessionUsage {
@@ -271,18 +298,30 @@ export interface WebEmbeddedBrowserState {
   loading: boolean;
   canGoBack: boolean;
   canGoForward: boolean;
+  deviceScaleFactor?: number;
 }
+
+export interface WebBrowserFrame {
+  data: string;
+  mimeType: "image/png";
+  width: number;
+  height: number;
+}
+
+export const WEB_BROWSER_TEXT_MAX_LENGTH = 16_384;
 
 export type WebEmbeddedBrowserAction =
   | { type: "navigate"; url: string }
   | { type: "back" | "forward" | "reload" | "stop" }
-  | { type: "resize"; width: number; height: number }
+  | { type: "resize"; width: number; height: number; deviceScaleFactor?: number }
+  | { type: "text"; text: string }
   | {
       type: "mouse";
       event: "move" | "down" | "up" | "wheel";
       x: number;
       y: number;
       button?: "left" | "middle" | "right";
+      buttons?: number;
       deltaX?: number;
       deltaY?: number;
     }
@@ -292,6 +331,7 @@ export type WebEmbeddedBrowserAction =
       key: string;
       code?: string;
       text?: string;
+      modifiers?: number;
     };
 
 export type WebInteractiveTerminalEvent =
@@ -302,6 +342,7 @@ export type WebInteractiveTerminalEvent =
 export interface WebMessageTruncation {
   readonly truncated: true;
   readonly text?: true;
+  readonly visibleText?: true;
   readonly partsOmitted?: number;
   readonly details?: true;
 }
@@ -375,15 +416,18 @@ export interface WebGitReviewFile {
   status: WebGitReviewFileStatus;
   diff: string;
   diffTruncated: boolean;
+  diffLoaded?: boolean;
   additions: number;
   deletions: number;
 }
+
+export type WebGitReviewSource = "unstaged" | "staged" | "branch" | "session";
 
 export interface WebGitReviewSnapshot {
   repositoryRoot: string;
   currentBranch: string | null;
   baseBranch: string | null;
-  comparison: "branch" | "session";
+  comparison: WebGitReviewSource;
   revision: string;
   files: WebGitReviewFile[];
   additions: number;
@@ -398,6 +442,7 @@ export type WebGitReviewResult =
       reason:
         | "not_git_repository"
         | "unborn_repository"
+        | "baseline_unavailable"
         | "git_failed";
     };
 
@@ -432,9 +477,13 @@ export interface WebSnapshot {
   };
   /** Absent until the browser selects or creates a real Web Session. */
   currentSessionId?: string;
+  /** Pi's current file identity; copied files may share an embedded id. */
+  currentSessionPath?: string;
   workspaces: WebWorkspaceSummary[];
   sessions: WebSessionSummary[];
   selectedSession?: WebSessionProjection;
+  /** Facts for the selected Session; they do not transfer input control. */
+  selectedExecution?: WebSessionExecution;
   /** Current Pi Session only. Historical projections do not invent live context usage. */
   usage?: WebSessionUsage;
   models: WebModelSummary[];
@@ -599,6 +648,7 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
       textTruncated: text.truncated,
+      visibleTextTruncated: text.truncated,
     };
   }
   if (!Array.isArray(content)) {
@@ -617,12 +667,14 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       parts: [] as WebMessagePart[],
       partsOmitted: 0,
       textTruncated: text.truncated,
+      visibleTextTruncated: text.truncated,
     };
   }
 
   const parts: WebMessagePart[] = [];
   let visibleText = "";
   let textTruncated = false;
+  let visibleTextTruncated = false;
   const retainedParts = Math.min(content.length, WEB_MAX_MESSAGE_PARTS);
   for (let index = 0; index < retainedParts; index++) {
     const part = content[index];
@@ -633,13 +685,18 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
       const text = boundedTextProjection(typed.text, WEB_MAX_TEXT);
       projected = { type: "text", text: text.value };
       textTruncated ||= text.truncated;
+      visibleTextTruncated ||= text.truncated;
       if (visibleText.length < WEB_MAX_TEXT) {
         const separator = visibleText.length > 0 ? "\n" : "";
         const remaining = WEB_MAX_TEXT - visibleText.length - separator.length;
         if (remaining > 0) visibleText += `${separator}${text.value.slice(0, remaining)}`;
-        if (text.value.length > remaining) textTruncated = true;
+        if (text.value.length > remaining) {
+          textTruncated = true;
+          visibleTextTruncated = true;
+        }
       } else {
         textTruncated = true;
+        visibleTextTruncated = true;
       }
     } else if (
       typed.type === "image" &&
@@ -700,11 +757,25 @@ function projectContent(message: Record<string, unknown>, resolvePath?: (path: s
     parts.push(projected);
   }
   const contentText = boundedTextProjection(visibleText, WEB_MAX_TEXT);
+  visibleTextTruncated ||= contentText.truncated;
+  // Inspect only a bounded number of omitted data properties; never invoke
+  // arbitrary getters while projecting an untrusted Session message.
+  const inspectionEnd = Math.min(content.length, retainedParts + WEB_MAX_MESSAGE_PARTS);
+  for (let index = retainedParts; !visibleTextTruncated && index < inspectionEnd; index++) {
+    const part = Object.getOwnPropertyDescriptor(content, index)?.value;
+    if (part && typeof part === "object" && Object.getOwnPropertyDescriptor(part, "type")?.value === "text" &&
+      typeof Object.getOwnPropertyDescriptor(part, "text")?.value === "string" && Object.getOwnPropertyDescriptor(part, "text")!.value.length > 0)
+      visibleTextTruncated = true;
+  }
+  // Beyond the inspection budget, offer full-text recovery rather than silently
+  // hiding a later text part. The role gate below excludes tool results.
+  if (content.length > inspectionEnd) visibleTextTruncated = true;
   return {
     content: contentText.value,
     parts,
     partsOmitted: Math.max(0, content.length - retainedParts),
     textTruncated: textTruncated || contentText.truncated,
+    visibleTextTruncated,
   };
 }
 
@@ -768,6 +839,9 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
             ...(content.textTruncated || metadataTruncated || errorMessage?.truncated
               ? { text: true as const }
               : {}),
+            ...((role?.value === "user" || role?.value === "assistant") && content.visibleTextTruncated
+              ? { visibleText: true as const }
+              : {}),
             ...(content.partsOmitted > 0
               ? { partsOmitted: content.partsOmitted }
               : {}),
@@ -778,12 +852,28 @@ export function projectMessage(message: unknown, resolvePath?: (path: string) =>
   };
 }
 
-export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined) {
+export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) => string | undefined): {
+  type: SessionEntry["type"];
+  id: string;
+  timestamp: string;
+  parentId?: string | null;
+  message?: WebLiveMessage;
+  turnTiming?: ReturnType<typeof readTurnTiming>;
+  turnChanges?: WebTurnChanges;
+} {
+  const metadata = { id: entry.id, timestamp: entry.timestamp, ...(entry.parentId === undefined ? {} : { parentId: entry.parentId }) };
+  if (entry.type === "custom" && entry.customType === WEB_TURN_TIMING_ENTRY) {
+    const turnTiming = readTurnTiming(entry.data);
+    if (turnTiming) return { type: entry.type, ...metadata, turnTiming };
+  }
+  if (entry.type === "custom" && entry.customType === WEB_TURN_CHANGES_ENTRY) {
+    const detail = readTurnChangesDetail(entry.data);
+    if (detail) return { type: entry.type, ...metadata, turnChanges: summarizeTurnChanges(detail) };
+  }
   if (entry.type === "custom_message") {
     return {
       type: "message" as const,
-      id: entry.id,
-      timestamp: entry.timestamp,
+      ...metadata,
       message: projectMessage(
         {
           role: "custom",
@@ -801,18 +891,18 @@ export function projectEntry(entry: SessionEntry, resolvePath?: (path: string) =
     if (data && typeof data === "object" && "text" in data && typeof data.text === "string") {
       const message: WebLiveMessage = { role: entry.customType === WEB_COMMAND_INPUT ? "user" : "custom", content: data.text.slice(0, WEB_MAX_TEXT), customType: entry.customType,
         ...("commandId" in data && typeof data.commandId === "string" ? { commandId: data.commandId.slice(0, 200) } : {}),
-        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true } } : {}) };
-      return { type: "message", id: entry.id, timestamp: entry.timestamp,
+        ...(data.text.length > WEB_MAX_TEXT || ("truncated" in data && data.truncated === true) ? { truncation: { truncated: true, text: true,
+          ...(entry.customType === WEB_COMMAND_INPUT && data.text.length > WEB_MAX_TEXT ? { visibleText: true as const } : {}) } } : {}) };
+      return { type: "message", ...metadata,
         message };
     }
   }
   if (entry.type !== "message") {
-    return { type: entry.type, id: entry.id, timestamp: entry.timestamp };
+    return { type: entry.type, ...metadata };
   }
   return {
     type: entry.type,
-    id: entry.id,
-    timestamp: entry.timestamp,
+    ...metadata,
     message: projectMessage(entry.message, resolvePath),
   };
 }
@@ -823,7 +913,8 @@ export function jsonByteLength(value: unknown) {
   return textEncoder.encode(JSON.stringify(value)).byteLength;
 }
 
-export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined) {
+export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (path: string) => string | undefined, maxBytes = WEB_MAX_SELECTED_TRANSCRIPT_BYTES) {
+  const budget = Math.min(maxBytes, WEB_MAX_SELECTED_TRANSCRIPT_BYTES);
   const retained = entries.slice(-WEB_MAX_ENTRIES);
   const projected: ReturnType<typeof projectEntry>[] = [];
   let bytes = 2;
@@ -831,8 +922,28 @@ export function projectEntries(entries: readonly SessionEntry[], resolvePath?: (
   let messagesTruncated = 0;
   for (let index = retained.length - 1; index >= 0; index--) {
     const entry = projectEntry(retained[index]!, resolvePath);
-    const entryBytes = jsonByteLength(entry) + (projected.length > 0 ? 1 : 0);
-    if (bytes + entryBytes > WEB_MAX_SELECTED_TRANSCRIPT_BYTES) break;
+    let entryBytes = jsonByteLength(entry);
+    if (entryBytes + 2 > budget && entry.message?.parts?.length) {
+      const originalParts = entry.message.parts;
+      const previousOmitted = entry.message.truncation?.partsOmitted ?? 0;
+      const message = {
+        ...entry.message,
+        parts: [] as WebMessagePart[],
+        truncation: { ...entry.message.truncation, truncated: true as const, partsOmitted: previousOmitted + originalParts.length },
+      };
+      entry.message = message;
+      let retainedBytes = jsonByteLength(entry) + 2;
+      for (const part of originalParts) {
+        const partBytes = jsonByteLength(part) + (message.parts.length > 0 ? 1 : 0);
+        if (retainedBytes + partBytes > budget) break;
+        message.parts.push(part);
+        retainedBytes += partBytes;
+      }
+      message.truncation.partsOmitted = previousOmitted + originalParts.length - message.parts.length;
+      entryBytes = jsonByteLength(entry);
+    }
+    entryBytes += projected.length > 0 ? 1 : 0;
+    if (bytes + entryBytes > budget) break;
     projected.unshift(entry);
     bytes += entryBytes;
     if (entry.type === "message" && entry.message) {

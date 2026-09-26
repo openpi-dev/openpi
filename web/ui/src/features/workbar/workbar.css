@@ -523,8 +523,15 @@
 }
 
 .terminal-status-dot.ready { background: #56d364; }
-.terminal-status-dot.connecting { background: #e3b341; }
+.terminal-status-dot.connecting,
+.terminal-status-dot.reconnecting,
+.terminal-status-dot.restarting { background: #e3b341; }
 .terminal-status-dot.error { background: #ff7b72; }
+
+.interactive-terminal-status > .interactive-terminal-actions {
+  flex: 0 0 auto;
+  gap: 4px;
+}
 
 .interactive-terminal-status button {
   display: grid;
@@ -544,6 +551,13 @@
   background: #23282e;
   color: #fff;
 }
+
+.interactive-terminal-status button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.openpi-dialog .terminal-restart-error { color: var(--error); }
 
 .interactive-terminal-status button svg {
   width: 14px;
@@ -779,3 +793,6 @@
 @media (prefers-reduced-motion: reduce) {
   .browser-loading-line { animation: none; }
 }
+.generated-file-edit { margin: 0 12px 12px; font-size: 12px; }
+.generated-file-edit summary { cursor: pointer; color: var(--muted); }
+.generated-file-edit pre { margin: 8px 0; padding: 10px; overflow: auto; max-height: 360px; white-space: pre; background: var(--sidebar); border-radius: 6px; }

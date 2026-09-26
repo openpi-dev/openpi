@@ -8,6 +8,38 @@ Research records preserve sourced investigation and distinguish observations, in
 
 ## Validated investigations
 
+- [`WEB_EXECUTION_RECOVERY_2026-09-26.md`](WEB_EXECUTION_RECOVERY_2026-09-26.md) - exact-request prompt recovery, terminal reconnect/restart and native-modal ownership, retained child inspection, full checks/tests, ablation and bounded browser observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
+- [`WEB_OPERATOR_ACTION_CONTINUITY_2026-09-26.md`](WEB_OPERATOR_ACTION_CONTINUITY_2026-09-26.md) - native question working position, mutation feedback, model search continuity, and context completion ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
+- [`WEB_SESSION_WORKING_POSITION_2026-09-26.md`](WEB_SESSION_WORKING_POSITION_2026-09-26.md) - exact Session draft ownership, paired reading-window/bookmark recovery, reader/controller selection, and native archive pagination; full checks/tests, ablation, and bounded manual browser observations ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
+- [`WEB_WORKBAR_INSPECTION_RETURN_2026-09-26.md`](WEB_WORKBAR_INSPECTION_RETURN_2026-09-26.md) — 工作栏按键归属、diff 刷新与原列表返回、文件预览作用域和焦点恢复；完整检查和测试通过（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_SETTINGS_RECOVERY_2026-09-26.md`](WEB_SETTINGS_RECOVERY_2026-09-26.md) — 设置任务入口、草稿离开确认与加载/保存/原生版本冲突的恢复；完整检查和测试通过（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_QUEUED_COMPOSER_2026-09-26.md`](WEB_QUEUED_COMPOSER_2026-09-26.md) — Codex Desktop 输入区排队消息与 Pi 队列能力边界、紧凑逐条预览及可访问展开（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_BACKGROUND_SESSION_OBSERVATION_2026-09-26.md`](WEB_BACKGROUND_SESSION_OBSERVATION_2026-09-26.md) — 后台会话的精确身份、侧栏运行/排队状态，以及 Files/Trajectory/Review 跨会话隔离（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md`](WEB_TURN_EVIDENCE_AND_ITEM_RECOVERY_2026-09-23.md) — Codex-style paged Pi history/item recovery and per-user-turn Git evidence; local gates passed, CI pending ([#597](https://github.com/openpi-dev/openpi/issues/597), [PR #598](https://github.com/openpi-dev/openpi/pull/598)).
+
+- [`WEB_GIT_REVIEW_IDENTITY_2026-09-23.md`](WEB_GIT_REVIEW_IDENTITY_2026-09-23.md) — 逐文件重命名两端、暂存/工作树比较对象身份及真实 Chromium 刷新验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_READING_AND_LIFECYCLE_2026-09-22.md`](WEB_READING_AND_LIFECYCLE_2026-09-22.md) — 长会话历史、正文阅读、后台执行投影、待处理消息及输入控制文件身份；含真实 SDK 与 Chromium 验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_INTERACTION_ROUND5_2026-09-22.md`](WEB_INTERACTION_ROUND5_2026-09-22.md) — 侧栏后台工作、图片粘贴与预览、设置布局、原生命令和完整回合耗时；含真实连续 setup 的正反证据与边界（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_INTERACTION_ROUND4_2026-09-21.md`](WEB_INTERACTION_ROUND4_2026-09-21.md) — 表单回执、冲突重载、迟到凭据反馈、设置键盘导航与浏览器拖拽的第四轮验证（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_INTERACTION_ROUND3_2026-09-21.md`](WEB_INTERACTION_ROUND3_2026-09-21.md) — 模型表单草稿、重复 diff 读取、本地浏览器地址、编辑组合键与指针请求积压的第三轮复现及修复（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_NATIVE_INTERACTIONS_2026-09-20.md`](WEB_NATIVE_INTERACTIONS_2026-09-20.md) — Git 原生比较范围、CDP 浏览器、外部文件预览和 Pi 原生可编辑设置的参考调查与修复验收（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #598](https://github.com/openpi-dev/openpi/pull/598)）。
+
+- [`WEB_PR561_ASYNC_ITERATION_2026-09-20.md`](WEB_PR561_ASYNC_ITERATION_2026-09-20.md) — 第二轮 PR #561 测试：会话级变更投影、diff 焦点、终端队列及创建取消、文件引用清理；含合并后整合范围（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
+
+- [`WEB_PR561_USAGE_ITERATION_2026-09-20.md`](WEB_PR561_USAGE_ITERATION_2026-09-20.md) — PR #561 使用测试：图片导入的发送与会话边界、浏览器粘贴与 Shift、键盘分栏（[#597](https://github.com/openpi-dev/openpi/issues/597)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
+
 - [`WEB_MODULE_IMPLEMENTATION_2026-09-19.md`](WEB_MODULE_IMPLEMENTATION_2026-09-19.md) — Web 工作区十二模块的实现边界、现有/第三方组件复用判断、测试与非 Benchmark 的性能限制（[#559](https://github.com/openpi-dev/openpi/issues/559)、[#560](https://github.com/openpi-dev/openpi/issues/560)、[PR #561](https://github.com/openpi-dev/openpi/pull/561)）。
 
 - [`WEB_SUBAGENT_INSPECTION_2026-09-18.md`](WEB_SUBAGENT_INSPECTION_2026-09-18.md) — 子代理任务总览、真实状态和只读子对话；含 Pi Web / Maka 组件参考及验证边界（[#560](https://github.com/openpi-dev/openpi/issues/560)）。

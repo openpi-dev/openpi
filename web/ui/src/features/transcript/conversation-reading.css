@@ -1,0 +1,62 @@
+/* Response typography is separate from the existing execution evidence UI. */
+.composer-session-notice {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--page);
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.conversation .message-row.response .markdown {
+  font-weight: 450;
+  line-height: 1.8;
+  letter-spacing: .005em;
+}
+
+.conversation .message-row.response .message-content,
+.conversation .message-row.response > .message-actions {
+  max-width: 100%;
+  width: 100%;
+}
+
+.conversation .message-row.assistant.final-response { padding-inline: 0; }
+.conversation .message-row.response .markdown p { margin-bottom: 1.15em; }
+.conversation .message-row.response .markdown :is(ul, ol) { margin-bottom: 1.15em; padding-left: 1.65em; }
+.conversation .message-row.response .markdown ul { list-style: disc outside; }
+.conversation .message-row.response .markdown ol { list-style: decimal outside; }
+.conversation .message-row.response .markdown .contains-task-list { list-style: none; }
+.conversation .message-row.response .markdown li + li { margin-top: .55em; }
+.conversation .message-row.response .markdown li > :is(p, ul, ol) { margin-bottom: .55em; }
+.conversation .message-row.response .markdown :is(h1, h2, h3, h4) { margin-top: 1.6em; margin-bottom: .65em; line-height: 1.45; }
+
+.conversation .message-row.response .markdown :not(pre) > code {
+  padding: .08em .35em;
+  border: 0;
+  border-radius: .4em;
+  background: color-mix(in srgb, var(--text) 8%, var(--page));
+  color: var(--text);
+  font-size: .93em;
+  box-decoration-break: clone;
+  -webkit-box-decoration-break: clone;
+}
+
+.conversation .message-row.response .markdown pre code { font-size: .9em; line-height: 1.65; }
+.conversation .message-row.response .markdown :is(a, .artifact-link) { text-decoration: none; text-align: start; }
+.conversation .message-row.response .markdown :is(a, .artifact-link):hover { text-decoration: underline; text-underline-offset: .18em; }
+.conversation .message-row.response .markdown .artifact-link-path { display: none; }
+.conversation .message-row.response .markdown .artifact-link:focus-visible { outline: 2px solid var(--focus); outline-offset: 3px; border-radius: 3px; }
+
+.conversation .message-row.user { padding-block: 12px 24px; }
+.conversation .message-row.user .message-body {
+  padding: 12px 18px;
+  border-radius: 22px;
+  background: color-mix(in srgb, var(--text) 5%, var(--page));
+  box-shadow: none;
+  line-height: 1.75;
+}

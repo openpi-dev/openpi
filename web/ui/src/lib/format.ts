@@ -4,7 +4,10 @@ export function sessionTitle(
   session: Partial<WebSessionSummary>,
   fallback: string,
 ) {
-  return session.name?.trim() || session.firstMessage?.trim() || fallback;
+  const name = session.name?.trim();
+  if (name) return name;
+  const first = session.firstMessage?.trim();
+  return first && first !== "(no messages)" ? first : fallback;
 }
 
 export function workspaceName(path: string) {

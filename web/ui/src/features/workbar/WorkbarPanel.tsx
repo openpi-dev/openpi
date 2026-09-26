@@ -118,15 +118,20 @@ function WorkbarLauncher({
 function SideConversationPanel({
   sessionId,
   activity,
+  active,
 }: {
   sessionId: string;
   activity?: WebCapabilityProjection<WebSubagentActivity>;
+  active: boolean;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [draft, setDraft] = useState("");
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const draft = drafts[selectedId ?? ""] ?? "";
+  const navigation = useRef(0);
   const [busy, setBusy] = useState(false);
+  const busyRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
   const [detailRevision, setDetailRevision] = useState(0);
   const [lastStatus, setLastStatus] = useState<
@@ -137,13 +142,22 @@ function SideConversationPanel({
   const items = (activity?.items ?? []).filter((item) => item.origin === "btw");
   const selected = items.find((item) => item.id === selectedId);
   const status = selected?.status ?? lastStatus;
+  const selectConversation = (id: string | null) => {
+    navigation.current++;
+    setSelectedId(id);
+    setLastStatus(null);
+    setError(null);
+  };
 
   const submit = async (event: FormEvent) => {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || busy) return;
+    if (!text || busyRef.current) return;
+    busyRef.current = true;
     abort.current?.abort();
     const controller = new AbortController();
+    const generation = navigation.current;
+    const draftKey = selectedId ?? "";
     abort.current = controller;
     setBusy(true);
     setError(null);
@@ -160,26 +174,38 @@ function SideConversationPanel({
           : { kind: "subagents", action: "spawn-btw", prompt: text },
         controller.signal,
       );
-      if (response.sessionId !== sessionId)
+      if (controller.signal.aborted) return;
+      if (
+        response.sessionId !== sessionId ||
+        (selectedId && response.detail.id !== selectedId)
+      )
         throw new Error(t("inspectionChanged"));
+      setDrafts((current) =>
+        current[draftKey] === draft ? { ...current, [draftKey]: "" } : current,
+      );
+      if (generation !== navigation.current) return;
       setSelectedId(response.detail.id);
       setLastStatus(response.detail.status);
-      setDraft("");
       setDetailRevision((value) => value + 1);
     } catch (caught) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && generation === navigation.current)
         setError(
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
   const stop = async () => {
-    if (!selectedId || busy) return;
+    if (!selectedId || busyRef.current) return;
+    busyRef.current = true;
     abort.current?.abort();
     const controller = new AbortController();
+    const generation = navigation.current;
     abort.current = controller;
     setBusy(true);
     setError(null);
@@ -189,15 +215,22 @@ function SideConversationPanel({
         { kind: "subagents", action: "cancel-btw", id: selectedId },
         controller.signal,
       );
+      if (controller.signal.aborted || generation !== navigation.current)
+        return;
+      if (response.sessionId !== sessionId || response.detail.id !== selectedId)
+        throw new Error(t("inspectionChanged"));
       setLastStatus(response.detail.status);
       setDetailRevision((value) => value + 1);
     } catch (caught) {
-      if (!controller.signal.aborted)
+      if (!controller.signal.aborted && generation === navigation.current)
         setError(
           caught instanceof Error ? caught.message : t("inspectionUnavailable"),
         );
     } finally {
-      if (!controller.signal.aborted) setBusy(false);
+      if (!controller.signal.aborted) {
+        busyRef.current = false;
+        setBusy(false);
+      }
     }
   };
 
@@ -208,21 +241,19 @@ function SideConversationPanel({
           <button
             type="button"
             className="workbar-back"
-            onClick={() => {
-              setSelectedId(null);
-              setLastStatus(null);
-              setError(null);
-            }}
+            onClick={() => selectConversation(null)}
           >
             <ArrowLeft aria-hidden="true" /> {t("backToSideConversations")}
           </button>
           <SubagentDetailView
-            key={`${sessionId}:${selectedId}:${detailRevision}`}
+            key={`${sessionId}:${selectedId}`}
             sessionId={sessionId}
             id={selectedId}
             activity={selected}
             client={client}
             liveAvailable
+            active={active}
+            refreshRevision={detailRevision}
             fullView={false}
             readOnlyNote={false}
           />
@@ -238,7 +269,10 @@ function SideConversationPanel({
             <ul>
               {items.map((item) => (
                 <li key={item.id}>
-                  <button type="button" onClick={() => setSelectedId(item.id)}>
+                  <button
+                    type="button"
+                    onClick={() => selectConversation(item.id)}
+                  >
                     <span>
                       <strong>{item.title || item.id}</strong>
                       <small>{t(`subagentState_${item.status}`)}</small>
@@ -256,7 +290,11 @@ function SideConversationPanel({
           {error}
         </p>
       )}
-      <form className="side-conversation-composer" onSubmit={submit}>
+      <form
+        className="side-conversation-composer"
+        onSubmit={submit}
+        aria-busy={busy}
+      >
         <textarea
           value={draft}
           disabled={busy}
@@ -265,12 +303,20 @@ function SideConversationPanel({
               ? t("continueSideConversation")
               : t("startSideConversation")
           }
-          onChange={(event) => setDraft(event.currentTarget.value)}
+          onChange={(event) => {
+            const value = event.currentTarget.value;
+            setDrafts((current) => ({ ...current, [selectedId ?? ""]: value }));
+          }}
           onKeyDown={(event) => {
             if (
               event.key === "Enter" &&
               !event.shiftKey &&
-              !event.nativeEvent.isComposing
+              !event.altKey &&
+              !event.ctrlKey &&
+              !event.metaKey &&
+              !event.defaultPrevented &&
+              !event.nativeEvent.isComposing &&
+              event.nativeEvent.keyCode !== 229
             ) {
               event.preventDefault();
               event.currentTarget.form?.requestSubmit();
@@ -290,7 +336,9 @@ function SideConversationPanel({
           )}
           <button type="submit" disabled={busy || !draft.trim()}>
             <Send aria-hidden="true" />
-            {t(selectedId ? "send" : "start")}
+            {t(
+              busy ? "sideConversationPending" : selectedId ? "send" : "start",
+            )}
           </button>
         </div>
       </form>
@@ -366,10 +414,14 @@ function GeneratedFilesPanel({
                 type="button"
                 disabled={!artifacts}
                 title={file.reference}
-                onClick={() => {
+                onClick={(event) => {
                   if (!artifacts) return;
                   onBeforeOpen();
-                  artifacts.open(file.reference);
+                  artifacts.open(
+                    encodeURI(file.reference),
+                    undefined,
+                    event.currentTarget,
+                  );
                 }}
               >
                 <FileCode2 aria-hidden="true" />
@@ -382,6 +434,13 @@ function GeneratedFilesPanel({
                 <em>{t(`fileChange_${file.change ?? file.tool}`)}</em>
                 <ChevronRight aria-hidden="true" />
               </button>
+              {file.diff && (
+                <details className="generated-file-edit">
+                  <summary>{t("recordedFileEdit")}</summary>
+                  {file.diffTruncated && <p>{t("artifactPreviewTruncated")}</p>}
+                  <pre>{file.diff}</pre>
+                </details>
+              )}
             </li>
           ))}
         </ul>
@@ -404,6 +463,9 @@ export function WorkbarPanel({
   onRestoreConversation,
   onBeforeArtifactOpen,
   onClose,
+  onActiveToolChange,
+  canControl = true,
+  onActivateSession,
 }: {
   visible: boolean;
   requestedTool: WorkbarTool;
@@ -418,10 +480,19 @@ export function WorkbarPanel({
   onRestoreConversation: () => void;
   onBeforeArtifactOpen: () => void;
   onClose: () => void;
+  onActiveToolChange?: (tool: WorkbarTool | null) => void;
+  canControl?: boolean;
+  onActivateSession?: () => void;
 }) {
   const { t } = useTranslation();
   const [tabs, setTabs] = useState(() => initialWorkbarTabs(requestedTool));
   const handledRequest = useRef(requestRevision);
+  useEffect(() => {
+    onActiveToolChange?.(
+      visible ? (tabs.launcherOpen ? "launcher" : tabs.active) : null,
+    );
+    return () => onActiveToolChange?.(null);
+  }, [visible, tabs.launcherOpen, tabs.active, onActiveToolChange]);
   useEffect(() => {
     if (handledRequest.current === requestRevision) return;
     handledRequest.current = requestRevision;
@@ -454,7 +525,13 @@ export function WorkbarPanel({
       hidden={!visible}
       aria-label={t(activeLabel ?? "openTools")}
       onKeyDown={(event) => {
-        if (event.key !== "Escape" || event.nativeEvent.isComposing) return;
+        if (
+          event.key !== "Escape" ||
+          event.defaultPrevented ||
+          event.nativeEvent.isComposing
+        )
+          return;
+        event.stopPropagation();
         if (tabs.launcherOpen && tabs.active) {
           event.preventDefault();
           setTabs(dismissWorkbarLauncher);
@@ -562,15 +639,32 @@ export function WorkbarPanel({
             hidden={tabs.launcherOpen || tabs.active !== tool}
             key={tool}
           >
-            {tool === "side-conversation" ? (
+            {!canControl &&
+            ["side-conversation", "terminal", "browser"].includes(tool) ? (
+              <div className="workbar-empty">
+                <p>{t("toolsRequireCurrentSession")}</p>
+                {onActivateSession && (
+                  <button
+                    type="button"
+                    className="secondary"
+                    onClick={onActivateSession}
+                  >
+                    {t("activateViewedSession")}
+                  </button>
+                )}
+              </div>
+            ) : tool === "side-conversation" ? (
               <SideConversationPanel
                 sessionId={sessionId}
+                active={visible && !tabs.launcherOpen && tabs.active === tool}
                 activity={capabilities.subagents}
               />
             ) : tool === "review" ? (
               <ReviewPanel
+                active={visible && !tabs.launcherOpen && tabs.active === tool}
                 review={review}
                 initialFilePath={reviewInitialFilePath}
+                onOpenFiles={() => select("files")}
                 onClose={() =>
                   setTabs((current) => closeWorkbarTool(current, "review"))
                 }

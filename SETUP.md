@@ -36,6 +36,11 @@ The terminal theme above remains Pi-owned. OpenPI Web has separate package-owned
 
 ## Configure this package
 
+The Web settings forms submit package-owned changes through `/openpi-setup`; they do not introduce another settings writer. Role/model choices, concurrency, skill and plugin configuration requests remain visible in that episode, including required confirmation and its final apply/closure receipt. The Web submission message is not proof of persistence. Pi-owned model definitions and credentials have separate direct forms backed by Pi's `models.json` and native login API; secrets never enter the setup prompt.
+
+Web shows the original setup command and its results, including failed or unapplied requests, rather than hiding the configuration episode. Appearance controls wait for the current run to settle before accepting another change. Chat-width and font-size reset buttons request the existing defaults through the same setup entry point. The model tree selects the editable Pi definition and retains unsaved drafts within the same Session; narrow screens use a labeled settings-section selector.
+
+Each delivered setup request explicitly announces its new episode. Success and closure messages apply only to their completed episode; a later `/openpi-setup` request can activate the writer again without reusing the prior episode's authority.
 The `compact` footer preset resolves to `plain` style with the default single-row layout; it is not a separate stored style. Applying it to the default footer does not change its appearance. Successful setup receipts distinguish saving the document from changing effective settings and list only fields that actually changed. Keeping defaults without invoking the writer does not create a file.
 
 Explicit field assignments retain their meaning: `footerStyle="compact"` is invalid; the allowed styles are `plain`, `powerline`, and `powerline-mono`. Setup should explain the legal choices and wait for a valid choice instead of silently applying a preset or default. Requesting the `compact` preset is valid and resets both style and layout. Tool writes reject invalid footer styles and presets; stored invalid styles block writes rather than being repaired automatically.

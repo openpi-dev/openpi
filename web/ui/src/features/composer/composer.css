@@ -3,6 +3,8 @@
   border-radius: 8px;
 }
 
+.composer-toolbar[hidden] { display: none; }
+
 .composer.composer-m02.is-dragging {
   border-color: var(--accent);
   box-shadow: 0 0 0 2px color-mix(in oklch, var(--accent) 20%, transparent);
@@ -165,7 +167,7 @@
   color: var(--muted);
 }
 
-.file-reference-heading p { margin-top: 3px; }
+.file-reference-heading p { margin-top: 3px; color: var(--text); }
 .file-reference-error { color: var(--error) !important; }
 
 @media (max-width: 520px) {

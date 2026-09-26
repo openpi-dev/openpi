@@ -177,6 +177,7 @@ export const Markdown = memo(function Markdown({
 }: {
   children: string;
 }) {
+  const { t } = useTranslation();
   const artifacts = useContext(ArtifactContext);
   return (
     <div className="markdown">
@@ -207,7 +208,7 @@ export const Markdown = memo(function Markdown({
           a({ href, node, children: label, ...props }) {
             href = windowsLink(node) ?? href;
             if (isLocalArtifactLink(href ?? ""))
-              return artifacts ? (
+              return artifacts && !artifacts.disabled ? (
                 <button
                   type="button"
                   className="artifact-link"
@@ -221,7 +222,10 @@ export const Markdown = memo(function Markdown({
                   </small>
                 </button>
               ) : (
-                <span title="Open this file from its Session">{label}</span>
+                <span title={t("artifactReferenceUnavailable", { path: href })}>
+                  {label}
+                  <small className="artifact-link-path"> ({href})</small>
+                </span>
               );
             const safeHref = safeUrl(href ?? "");
             return safeHref ? (
@@ -235,7 +239,7 @@ export const Markdown = memo(function Markdown({
           img({ src, node, alt, title }) {
             src = windowsLink(node) ?? src;
             if (isLocalArtifactLink(src ?? ""))
-              return artifacts ? (
+              return artifacts && !artifacts.disabled ? (
                 <button
                   type="button"
                   className="artifact-link"
@@ -249,7 +253,10 @@ export const Markdown = memo(function Markdown({
                   </small>
                 </button>
               ) : (
-                <span>[image: {alt || "image"}]</span>
+                <span title={t("artifactReferenceUnavailable", { path: src })}>
+                  [image: {alt || "image"}]
+                  <small className="artifact-link-path"> ({src})</small>
+                </span>
               );
             const safeHref = safeUrl(src ?? "");
             const label = alt || "image";

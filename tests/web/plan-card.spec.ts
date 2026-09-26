@@ -72,6 +72,7 @@ function transcript(
     generatedAt: "2026-09-19T00:00:00Z",
     cursor: 1,
     currentSessionId: active ? "session" : "other",
+    currentSessionPath: active ? "/tmp/session" : "/tmp/other",
     workspaces: [],
     sessions: [],
     models: [],

@@ -11,6 +11,7 @@ import {
   WEB_MAX_COMMANDS,
 } from "../../web/protocol/types.ts";
 import {
+  assertWebCommandSupported,
   commandsForServices,
   createCommandDiscoveryBridge,
   projectWebCommands,
@@ -59,6 +60,7 @@ test("projects Pi command identities without exposing source metadata", () => {
       name: "extension:run",
       source: "extension",
       availability: "unsupported",
+      unavailableReason: "not_integrated",
       description: "Run  an extension",
     },
     {
@@ -108,6 +110,111 @@ test("bounds command projections by count, bytes, and scan work", () => {
   );
   assert.deepEqual(scanBounded.commands, []);
   assert.equal(scanBounded.truncation.commandsOmitted, 1_025);
+});
+
+function ownedCommand(name: string, extension: string) {
+  const item = command(name, "extension");
+  item.sourceInfo.path = fileURLToPath(
+    new URL(`../../extensions/${extension}/index.ts`, import.meta.url),
+  );
+  return item;
+}
+
+test("offers native setup and existing Web panels only for the actual package command sources", () => {
+  const result = projectWebCommands([
+    ownedCommand("openpi-setup", "setup"),
+    ownedCommand("my-pi-setup", "setup"),
+    ownedCommand("ps", "background-terminals"),
+    ownedCommand("lg", "git-info"),
+    ownedCommand("subagents", "subagents"),
+    ownedCommand("usage", "usage"),
+    ownedCommand("btw", "subagents"),
+    ownedCommand("sessions", "sessions"),
+    command("openpi-setup", "extension"),
+    command("ps", "extension"),
+  ]);
+  assert.deepEqual(
+    result.commands.slice(0, 2).map(({ name, availability, action }) => ({
+      name,
+      availability,
+      action,
+    })),
+    [
+      { name: "openpi-setup", availability: "available", action: undefined },
+      { name: "my-pi-setup", availability: "available", action: undefined },
+    ],
+  );
+  assert.deepEqual(
+    result.commands.slice(2, 6).map(({ action }) => action),
+    ["terminal", "review", "subagents", undefined],
+  );
+  assert.equal(result.commands[6]?.action, "side-conversation");
+  assert.equal(result.commands[7]?.unavailableReason, "terminal_only");
+  assert.ok(
+    result.commands
+      .slice(8)
+      .every(
+        (item) =>
+          item.availability === "unsupported" && item.action === undefined,
+      ),
+  );
+  assert.equal(JSON.stringify(result).includes("extensions/"), false);
+});
+
+test("guards the native untruncated registry while leaving ordinary prompts and unknown slash text to Pi", async () => {
+  const services = Object.create(null) as AgentSessionServices;
+  const available = [
+    ...Array.from({ length: WEB_MAX_COMMANDS + 1 }, (_, index) =>
+      command(`template-${index}`, "prompt"),
+    ),
+    ownedCommand("openpi-setup", "setup"),
+    ownedCommand("ps", "background-terminals"),
+    ownedCommand("btw", "subagents"),
+    command("unreviewed", "extension"),
+  ];
+  const bridge = createCommandDiscoveryBridge();
+  const api = { getCommands: () => available } as ExtensionAPI;
+  await (typeof bridge.extension === "function"
+    ? bridge.extension(api)
+    : bridge.extension.factory(api));
+  registerCommandDiscoveryBridge(services, bridge);
+  assert.equal(
+    commandsForServices(services).commands.some((item) => item.name === "btw"),
+    false,
+  );
+  assert.doesNotThrow(() =>
+    assertWebCommandSupported(services, "ordinary text"),
+  );
+  assert.doesNotThrow(() =>
+    assertWebCommandSupported(services, "/unknown/path"),
+  );
+  assert.doesNotThrow(() =>
+    assertWebCommandSupported(services, "/template-0 request"),
+  );
+  assert.doesNotThrow(() =>
+    assertWebCommandSupported(services, "/openpi-setup inspect settings"),
+  );
+  assert.throws(
+    () => assertWebCommandSupported(services, "/ps"),
+    /opens a Web panel/u,
+  );
+  assert.throws(
+    () => assertWebCommandSupported(services, "/ps ignored arguments"),
+    /without arguments/u,
+  );
+  assert.throws(
+    () => assertWebCommandSupported(services, "/btw question"),
+    /opens a Web panel/u,
+  );
+  assert.throws(
+    () => assertWebCommandSupported(services, "/unreviewed"),
+    /not available in the Web runtime/u,
+  );
+  available.push(command("unsafe", "extension"));
+  assert.throws(
+    () => assertWebCommandSupported(services, "/unsafe"),
+    /not available/u,
+  );
 });
 
 test("fails closed before binding and follows the bridge registered for services", async () => {

@@ -97,6 +97,7 @@ test("Plan switch changes only owner state; first message gets planning context 
       headers,
       data: {
         sessionId,
+        sessionPath,
         enabled: false,
         expectedRevision: before.runtime.planRevision,
       },

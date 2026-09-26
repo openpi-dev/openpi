@@ -1,15 +1,18 @@
 import { createStore } from "zustand/vanilla";
 import { reduceLiveTools } from "../../../protocol/live-tools.ts";
-import type {
-  WebCommandSummary,
-  WebEvent,
-  WebLiveMessage,
-  WebModelSummary,
-  WebPromptImage,
-  WebSnapshot,
-  WebThinkingState,
+import {
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebCommandSummary,
+  type WebEvent,
+  type WebHistoryAnchor,
+  type WebLiveMessage,
+  type WebModelSummary,
+  type WebPromptImage,
+  type WebSnapshot,
+  type WebThinkingState,
 } from "../../../protocol/types.ts";
 import { i18n } from "../i18n.ts";
+import { isControlledSession } from "../lib/session-control.ts";
 import { WebApiError, WebClient } from "../protocol/client.ts";
 import { consumeEventStream } from "../protocol/event-stream.ts";
 
@@ -26,8 +29,10 @@ const refreshEventTypes = new Set([
   "session_start",
   "session_switched",
   "session_progress",
+  "queue_update",
   "prompt_failed",
   "model_select",
+  "settings_changed",
   "workspace_imported",
   "workspace_removed",
   "workspace_renamed",
@@ -75,6 +80,54 @@ function persist(key: string, value: unknown) {
 export interface LiveEntry {
   key: string;
   message: WebLiveMessage;
+  timestamp?: string;
+  optimistic?: {
+    sessionId: string;
+    sessionPath: string;
+    commandId: string;
+    afterEntryId: string | null;
+    admitted: boolean;
+    // UI duplicate-display association, not a native delivery acknowledgement.
+    projectedEntryId?: string;
+  };
+}
+
+function trimLiveMessages(entries: LiveEntry[]) {
+  let remaining = 8;
+  const retained: LiveEntry[] = [];
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const entry = entries[index]!;
+    if (entry.optimistic || remaining-- > 0) retained.push(entry);
+  }
+  return retained.reverse();
+}
+
+function ownPendingMessages(
+  entries: LiveEntry[],
+  session: WebSnapshot["selectedSession"],
+) {
+  return entries.filter(
+    (entry) =>
+      entry.optimistic?.sessionId === session?.id &&
+      entry.optimistic?.sessionPath === session?.path &&
+      entry.optimistic !== undefined,
+  );
+}
+
+function admitPromptProjection(
+  entries: LiveEntry[],
+  sessionId: string,
+  sessionPath: string,
+  commandId: string,
+) {
+  return entries.map((entry) =>
+    entry.optimistic?.sessionId === sessionId &&
+    entry.optimistic.sessionPath === sessionPath &&
+    entry.optimistic.commandId === commandId &&
+    !entry.optimistic.admitted
+      ? { ...entry, optimistic: { ...entry.optimistic, admitted: true } }
+      : entry,
+  );
 }
 
 export interface PromptAdmissionRecovery {
@@ -83,13 +136,19 @@ export interface PromptAdmissionRecovery {
   content: string;
   commandId: string;
   optimisticKey: string;
+  afterEntryId?: string | null;
+  timestamp?: string;
   images?: readonly WebPromptImage[];
+  retryable?: boolean;
   phase: "checking" | "verification-failed" | "ready" | "submitting";
 }
 
 export interface PromptAdmissionResolution {
+  sessionId: string;
+  sessionPath: string;
   commandId: string;
   content: string;
+  images?: readonly WebPromptImage[];
 }
 
 interface SessionActivation {
@@ -123,9 +182,11 @@ export interface WebStoreState {
   turnTerminalStatus: string | null;
   pendingFollowUpsReceipt: number | null;
   draftModel: WebModelSummary | null;
+  createdSession: SessionTarget | null;
   modelSelectionPending: boolean;
   modelSearch: ModelSearchState;
   snapshot: WebSnapshot | null;
+  historyAnchor: WebHistoryAnchor | null;
   cursor: number | null;
   selectedPath: string | null;
   selectedWorkspace: string | null;
@@ -158,6 +219,12 @@ export interface WebStoreState {
 }
 
 export interface WebStoreActions {
+  setHistoryAnchor: (anchor: WebHistoryAnchor | null) => void;
+  rememberPromptProjection: (
+    sessionId: string,
+    sessionPath: string,
+    pairs: { key: string; entryId: string }[],
+  ) => void;
   selectPlanMode: (enabled: boolean) => Promise<void>;
   start: () => void;
   stop: () => void;
@@ -169,8 +236,9 @@ export interface WebStoreActions {
   chooseWorkspace: () => Promise<void>;
   setWorkspace: (path: string | null) => void;
   renameWorkspace: (path: string, name: string) => Promise<void>;
-  removeWorkspace: (path: string) => Promise<void>;
+  removeWorkspace: (path: string) => Promise<boolean>;
   createSession: (workspacePath: string) => Promise<SessionTarget | null>;
+  prepareSession: () => Promise<SessionTarget | null>;
   selectSession: (path: string) => Promise<void>;
   renameSession: (path: string, name: string) => Promise<void>;
   archiveSession: (path: string) => Promise<void>;
@@ -185,6 +253,7 @@ export interface WebStoreActions {
     images?: readonly WebPromptImage[],
   ) => Promise<boolean>;
   checkPromptAdmissionRecovery: () => Promise<void>;
+  retryPromptAdmission: () => Promise<boolean>;
   sendPromptAsNew: (
     content: string,
     images?: readonly WebPromptImage[],
@@ -244,10 +313,17 @@ export function createWebStore(
     images: readonly WebPromptImage[];
     commandId: string;
     optimisticKey: string;
+    afterEntryId: string | null;
+    timestamp: string;
   } | null = null;
   let sessionActivation: SessionActivation | null = null;
   let creationRetry: { workspacePath: string; commandId: string } | null = null;
   let sessionSelectionTail = Promise.resolve();
+  let pendingSessionSelection: {
+    path: string;
+    epoch: number;
+    promise: Promise<void>;
+  } | null = null;
   let refreshTimer: number | null = null;
   let refreshInFlight = false;
   let refreshPending = false;
@@ -263,6 +339,7 @@ export function createWebStore(
   let acceptedThinkingEpoch = -1;
   let commandDiscoveryController: AbortController | null = null;
   let commandDiscoveryGeneration = 0;
+  let planSelectionGeneration = 0;
   const terminalPromptIds = new Set<string>();
   const completedActivationIds = new Set<string>();
 
@@ -275,18 +352,22 @@ export function createWebStore(
     }
   };
 
-  const resetLivePatch = () => ({
-    activeTurn: null,
-    turnCancellationPending: false,
-    turnTerminalStatus: null,
-    pendingFollowUpsReceipt: null,
-    liveMessages: [] as LiveEntry[],
-    liveRunning: false,
-    livePhase: "idle" as const,
-    liveRetry: null,
-    thinkingStarts: {},
-    thinkingDurations: {},
-  });
+  const resetLivePatch = () => {
+    planSelectionGeneration++;
+    return {
+      planSelectionPending: false,
+      activeTurn: null,
+      turnCancellationPending: false,
+      turnTerminalStatus: null,
+      pendingFollowUpsReceipt: null,
+      liveMessages: [] as LiveEntry[],
+      liveRunning: false,
+      livePhase: "idle" as const,
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+    };
+  };
 
   const resetModelSearch = (): { modelSearch: ModelSearchState } => {
     modelSearchGeneration++;
@@ -338,6 +419,7 @@ export function createWebStore(
         target.epoch === sessionEpoch &&
         get().selectedWorkspace === target.workspacePath &&
         snapshot?.currentSessionId === target.sessionId &&
+        isControlledSession(snapshot) &&
         snapshot.selectedSession?.id === target.sessionId &&
         get().selectedPath === snapshot.selectedSession.path &&
         snapshot.selectedSession.cwd === target.workspacePath &&
@@ -580,7 +662,7 @@ export function createWebStore(
     };
 
     const applyRuntimeEvent = (event: WebEvent) => {
-      const current = get();
+      let current = get();
       const detail = event.detail ?? {};
       const eventSessionId = detail.sessionId;
       const sessionTransition = [
@@ -593,7 +675,16 @@ export function createWebStore(
 
       const recovery = current.promptAdmissionRecovery;
       const recoveryCommandId = recovery?.commandId;
+      const selected = current.snapshot?.selectedSession;
+      const matchesSelected =
+        selected?.id === eventSessionId &&
+        selected?.path === current.selectedPath &&
+        (detail.sessionPath === undefined ||
+          detail.sessionPath === selected?.path);
       if (
+        matchesSelected &&
+        recovery?.sessionId === selected?.id &&
+        recovery?.sessionPath === selected?.path &&
         typeof detail.commandId === "string" &&
         detail.commandId === recoveryCommandId &&
         [
@@ -604,33 +695,60 @@ export function createWebStore(
           "turn_settled",
         ].includes(event.type)
       ) {
-        const handled = event.type !== "prompt_failed";
+        const restoreInputPreview = event.type !== "prompt_failed";
         set({
           promptAdmissionRecovery: null,
-          promptAdmissionResolution:
-            handled && recovery
-              ? {
-                  commandId: recovery.commandId,
-                  content: recovery.content,
-                }
-              : current.promptAdmissionResolution,
+          promptAdmissionResolution: recovery
+            ? {
+                sessionId: recovery.sessionId,
+                sessionPath: recovery.sessionPath,
+                commandId: recovery.commandId,
+                content: recovery.content,
+                images: recovery.images,
+              }
+            : current.promptAdmissionResolution,
           liveMessages:
-            handled &&
+            restoreInputPreview &&
             recovery &&
             !current.liveMessages.some(
               (entry) => entry.key === recovery.optimisticKey,
             )
-              ? [
+              ? trimLiveMessages([
                   ...current.liveMessages,
                   {
                     key: recovery.optimisticKey,
+                    timestamp: recovery.timestamp ?? event.timestamp,
+                    optimistic: {
+                      sessionId: recovery.sessionId,
+                      sessionPath: recovery.sessionPath,
+                      commandId: recovery.commandId,
+                      afterEntryId: recovery.afterEntryId ?? null,
+                      admitted: event.type === "prompt_accepted",
+                    },
                     message: { role: "user", content: recovery.content },
                   },
-                ].slice(-8)
+                ])
               : current.liveMessages,
         });
       }
-      if (event.type === "runtime_changed") set(resetModelSearch());
+      if (
+        event.type === "prompt_accepted" &&
+        matchesSelected &&
+        selected &&
+        typeof detail.commandId === "string"
+      ) {
+        set({
+          liveMessages: admitPromptProjection(
+            get().liveMessages,
+            selected.id,
+            selected.path,
+            detail.commandId,
+          ),
+        });
+      }
+      current = get();
+      if (event.type === "runtime_changed" || event.type === "settings_changed")
+        set(resetModelSearch());
       if (event.type === "runtime_changed") clearCommandDiscovery();
 
       if (current.sessionSwitching && !sessionTransition) {
@@ -643,6 +761,14 @@ export function createWebStore(
         !sessionTransition
       ) {
         scheduleSnapshotRefresh();
+        return;
+      }
+      if (
+        !sessionTransition &&
+        (detail.message || event.type.startsWith("tool_execution_")) &&
+        !isControlledSession(current.snapshot)
+      ) {
+        if (refreshEventTypes.has(event.type)) scheduleSnapshotRefresh();
         return;
       }
 
@@ -697,6 +823,33 @@ export function createWebStore(
         }
         if (belongs && sessionActivation?.epoch !== sessionEpoch) return;
         if (!belongs) {
+          if (
+            !sessionActivation &&
+            current.selectedPath &&
+            current.snapshot?.selectedSession?.path === current.selectedPath
+          ) {
+            clearCommandDiscovery();
+            resetThinking();
+            set({
+              ...resetLivePatch(),
+              liveMessages: ownPendingMessages(
+                current.liveMessages,
+                current.snapshot.selectedSession,
+              ),
+              // Control moved, but the reader still owns this exact view.
+              // Revoke input until the snapshot confirms the new controller;
+              // a view-switching placeholder would unmount its history window.
+              snapshot: {
+                ...current.snapshot,
+                currentSessionId: undefined,
+                currentSessionPath: undefined,
+              },
+              modelSelectionPending: false,
+            });
+            const epoch = sessionEpoch;
+            void get().actions.refreshSnapshot({ epoch });
+            return;
+          }
           clearCommandDiscovery();
           const epoch = ++sessionEpoch;
           resetThinking();
@@ -706,12 +859,6 @@ export function createWebStore(
             ...resetLivePatch(),
             promptAdmissionPending: false,
             promptAdmissionRecovery: null,
-            promptAdmissionResolution: recovery
-              ? {
-                  commandId: recovery.commandId,
-                  content: recovery.content,
-                }
-              : current.promptAdmissionResolution,
             selectedPath: typeof eventPath === "string" ? eventPath : null,
             draftModel: current.workspaceDraft ? current.draftModel : null,
             modelSelectionPending: false,
@@ -727,7 +874,13 @@ export function createWebStore(
               });
             });
         } else {
-          set(resetLivePatch());
+          set({
+            ...resetLivePatch(),
+            liveMessages: ownPendingMessages(
+              current.liveMessages,
+              current.snapshot?.selectedSession,
+            ),
+          });
         }
       } else if (event.type === "prompt_accepted") {
         const settled = terminalPromptIds.has(String(detail.commandId ?? ""));
@@ -794,13 +947,6 @@ export function createWebStore(
       } else if (detail.message && typeof detail.message === "object") {
         const message = detail.message as WebLiveMessage;
         let liveMessages = current.liveMessages;
-        if (message.role === "user") {
-          liveMessages = liveMessages.filter(
-            (entry) =>
-              !entry.key.startsWith("optimistic-") ||
-              entry.message.content !== message.content,
-          );
-        }
         const key =
           typeof detail.messageKey === "string"
             ? detail.messageKey
@@ -812,7 +958,7 @@ export function createWebStore(
             ? liveMessages.map((entry, entryIndex) =>
                 entryIndex === index ? live : entry,
               )
-            : [...liveMessages, live].slice(-8);
+            : trimLiveMessages([...liveMessages, live]);
         const thinkingStarts = { ...current.thinkingStarts };
         const thinkingDurations = { ...current.thinkingDurations };
         if (message.parts?.some((part) => part.type === "thinking")) {
@@ -826,13 +972,22 @@ export function createWebStore(
 
       if (event.type === "prompt_failed") {
         rememberBounded(terminalPromptIds, detail.commandId);
+        const failedActiveTurn =
+          typeof detail.commandId === "string" &&
+          current.activeTurn?.commandId === detail.commandId;
         set({
           liveMessages: get().liveMessages.filter(
-            (entry) => !entry.key.startsWith("optimistic-"),
+            (entry) =>
+              !entry.optimistic ||
+              entry.optimistic.commandId !== detail.commandId,
           ),
-          liveRunning: false,
-          livePhase: "idle",
-          liveRetry: null,
+          ...(failedActiveTurn || current.livePhase !== "running"
+            ? {
+                liveRunning: false,
+                livePhase: "idle" as const,
+                liveRetry: null,
+              }
+            : {}),
           notice:
             typeof detail.error === "string" ? detail.error : "Prompt failed",
         });
@@ -901,6 +1056,68 @@ export function createWebStore(
     };
 
     const actions: WebStoreActions = {
+      rememberPromptProjection(sessionId, sessionPath, pairs) {
+        const current = get();
+        const selected = current.snapshot?.selectedSession;
+        if (
+          current.selectedPath !== sessionPath ||
+          selected?.id !== sessionId ||
+          selected.path !== sessionPath
+        )
+          return;
+        const nativeIds = new Set(selected.entries.map((entry) => entry.id));
+        const usedIds = new Set(
+          current.liveMessages.flatMap((entry) =>
+            entry.optimistic?.sessionId === sessionId &&
+            entry.optimistic.sessionPath === sessionPath &&
+            entry.optimistic.projectedEntryId
+              ? [entry.optimistic.projectedEntryId]
+              : [],
+          ),
+        );
+        const projections = new Map(
+          pairs.map((pair) => [pair.key, pair.entryId]),
+        );
+        let changed = false;
+        const liveMessages = current.liveMessages.map((entry) => {
+          const entryId = projections.get(entry.key);
+          if (
+            !entryId ||
+            !nativeIds.has(entryId) ||
+            usedIds.has(entryId) ||
+            entry.optimistic?.sessionId !== sessionId ||
+            entry.optimistic.sessionPath !== sessionPath ||
+            !entry.optimistic.admitted ||
+            entry.optimistic.projectedEntryId
+          )
+            return entry;
+          changed = true;
+          usedIds.add(entryId);
+          return {
+            ...entry,
+            optimistic: { ...entry.optimistic, projectedEntryId: entryId },
+            message: { role: "user", content: "" },
+          };
+        });
+        if (changed) set({ liveMessages });
+      },
+      setHistoryAnchor(anchor) {
+        const selected = get().snapshot?.selectedSession;
+        if (
+          anchor &&
+          (selected?.id !== anchor.sessionId ||
+            selected.path !== anchor.sessionPath)
+        )
+          return;
+        const current = get().historyAnchor;
+        if (
+          current?.entryId === anchor?.entryId &&
+          current?.sessionId === anchor?.sessionId &&
+          current?.sessionPath === anchor?.sessionPath
+        )
+          return;
+        set({ historyAnchor: anchor });
+      },
       start() {
         if (streamController) return;
         streamController = new AbortController();
@@ -919,27 +1136,40 @@ export function createWebStore(
         const generation = ++snapshotGeneration;
         const requestedPath = get().selectedPath;
         try {
-          const snapshot = await client.snapshot(requestedPath);
+          const anchor = get().historyAnchor;
+          const snapshot =
+            anchor && anchor.sessionPath === requestedPath
+              ? await client.snapshot(requestedPath, anchor)
+              : await client.snapshot(requestedPath);
           if (epoch !== sessionEpoch || generation !== snapshotGeneration)
             return false;
           const hasCurrent = typeof snapshot.currentSessionId === "string";
           const currentSession = hasCurrent
-            ? snapshot.sessions.find(
-                (session) =>
-                  session.id === snapshot.currentSessionId &&
-                  session.controller === "web",
+            ? snapshot.sessions.find((session) =>
+                isControlledSession(snapshot, session),
               )
             : undefined;
           const selectedIsCurrent = hasCurrent
-            ? snapshot.selectedSession?.id === snapshot.currentSessionId &&
-              snapshot.selectedSession?.path === currentSession?.path
+            ? isControlledSession(snapshot)
             : snapshot.selectedSession === undefined;
+          const selectedIsKnown = snapshot.selectedSession
+            ? snapshot.sessions.some(
+                (session) =>
+                  session.id === snapshot.selectedSession!.id &&
+                  session.path === snapshot.selectedSession!.path,
+              )
+            : !hasCurrent;
           const requestedExists =
             !requestedPath ||
             snapshot.sessions.some((session) => session.path === requestedPath);
           const requestedMatches =
             !requestedPath || snapshot.selectedSession?.path === requestedPath;
-          if (!requestedExists || !requestedMatches || !selectedIsCurrent) {
+          if (
+            !requestedExists ||
+            !requestedMatches ||
+            !selectedIsKnown ||
+            (!requestedPath && !selectedIsCurrent)
+          ) {
             set({ selectedPath: null });
             if (!options.canonicalRetry) {
               return actions.refreshSnapshot({
@@ -961,11 +1191,10 @@ export function createWebStore(
             : undefined;
           const selectedWorkspace = get().workspaceDraft
             ? get().selectedWorkspace
-            : snapshot.workspaces.some(
-                  (workspace) => workspace.path === selectedSessionWorkspace,
-                )
-              ? selectedSessionWorkspace
-              : (activeWorkspace ?? retainedWorkspace ?? null);
+            : (selectedSessionWorkspace ??
+              activeWorkspace ??
+              retainedWorkspace ??
+              null);
           const shouldReset = options.resetCursor;
           if (
             get().snapshot?.selectedSession?.path !==
@@ -983,11 +1212,42 @@ export function createWebStore(
             clearThinkingGate();
           }
           const previousSessionId = get().snapshot?.currentSessionId;
-          if (previousSessionId !== snapshot.currentSessionId) {
+          const previousController = get().snapshot?.sessions.find((session) =>
+            isControlledSession(get().snapshot, session),
+          );
+          const controllerChanged =
+            previousSessionId !== snapshot.currentSessionId ||
+            previousController?.path !== currentSession?.path;
+          const selectionChanged =
+            get().snapshot?.selectedSession?.id !==
+              snapshot.selectedSession?.id ||
+            get().snapshot?.selectedSession?.path !==
+              snapshot.selectedSession?.path;
+          const previous = get().snapshot;
+          const modelSearchChanged =
+            shouldReset ||
+            controllerChanged ||
+            selectionChanged ||
+            previous?.currentSessionPath !== snapshot.currentSessionPath ||
+            JSON.stringify(previous?.models) !==
+              JSON.stringify(snapshot.models) ||
+            previous?.truncation.modelsOmitted !==
+              snapshot.truncation.modelsOmitted;
+          if (controllerChanged) {
             clearCommandDiscovery();
+            resetThinking();
+            clearThinkingGate();
           }
           set({
-            ...(shouldReset ? resetLivePatch() : {}),
+            ...(shouldReset || controllerChanged || selectionChanged
+              ? {
+                  ...resetLivePatch(),
+                  liveMessages: ownPendingMessages(
+                    get().liveMessages,
+                    snapshot.selectedSession,
+                  ),
+                }
+              : {}),
             connection:
               get().connection === "connecting"
                 ? "connecting"
@@ -1015,11 +1275,10 @@ export function createWebStore(
                 : !get().promptAdmissionPending && !promptAdmission
                   ? false
                   : get().liveRunning,
-            selectedPath:
-              currentSession?.path ?? snapshot.selectedSession?.path ?? null,
+            selectedPath: snapshot.selectedSession?.path ?? null,
             selectedWorkspace,
             snapshot,
-            ...resetModelSearch(),
+            ...(modelSearchChanged ? resetModelSearch() : {}),
           });
           acceptThinking();
           return true;
@@ -1057,17 +1316,12 @@ export function createWebStore(
           ...resetLivePatch(),
           ...resetModelSearch(),
           selectedWorkspace: path,
+          createdSession: null,
           workspaceDraft: true,
           sessionSwitching: false,
           modelSelectionPending: false,
           promptAdmissionPending: false,
           promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
           notice: null,
         });
       },
@@ -1084,19 +1338,41 @@ export function createWebStore(
         try {
           await client.removeWorkspace(path);
           if (get().selectedWorkspace === path) clearCommandDiscovery();
-          set({
-            selectedPath: null,
-            selectedWorkspace:
-              get().selectedWorkspace === path ? null : get().selectedWorkspace,
-          });
+          if (get().workspaceDraft && get().selectedWorkspace === path)
+            set({ selectedWorkspace: null });
           await actions.refreshSnapshot();
+          return true;
         } catch (error) {
           showError(error);
+          return false;
         }
+      },
+      async prepareSession() {
+        if (get().sessionSwitching || get().modelSelectionPending) return null;
+        if (!get().selectedWorkspace) await actions.chooseWorkspace();
+        const state = get();
+        const workspace = state.selectedWorkspace;
+        if (!workspace || state.sessionSwitching || state.modelSelectionPending)
+          return null;
+        const session = state.snapshot?.selectedSession;
+        if (
+          !state.workspaceDraft &&
+          isControlledSession(state.snapshot) &&
+          session?.id === state.snapshot?.currentSessionId &&
+          session?.cwd === workspace
+        ) {
+          return {
+            epoch: sessionEpoch,
+            sessionId: session.id,
+            sessionPath: session.path,
+            workspacePath: workspace,
+          };
+        }
+        if (!state.workspaceDraft && session) return null;
+        return actions.createSession(workspace);
       },
       async createSession(workspacePath) {
         if (!workspacePath || get().modelSelectionPending) return null;
-        const current = get();
         const epoch = ++sessionEpoch;
         resetThinking();
         clearCommandDiscovery();
@@ -1115,14 +1391,9 @@ export function createWebStore(
           mobileSidebarOpen: false,
           promptAdmissionPending: false,
           promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
           selectedPath: null,
           selectedWorkspace: workspacePath,
+          createdSession: null,
           workspaceDraft: true,
           sessionSwitching: true,
         });
@@ -1186,7 +1457,11 @@ export function createWebStore(
             const sessionPath = get().selectedPath;
             if (!sessionPath) return;
             target.sessionPath = sessionPath;
-            set({ workspaceDraft: false, notice: null });
+            set({
+              workspaceDraft: false,
+              createdSession: target,
+              notice: null,
+            });
             const draft = get().draftModel;
             if (
               draft &&
@@ -1222,30 +1497,58 @@ export function createWebStore(
       },
       async selectSession(path) {
         if (!path) return;
-        creationRetry = null;
         const current = get();
+        if (
+          pendingSessionSelection?.path === path &&
+          pendingSessionSelection.epoch === sessionEpoch
+        ) {
+          set({ mobileSidebarOpen: false });
+          await pendingSessionSelection.promise;
+          return;
+        }
+        if (
+          !current.workspaceDraft &&
+          !current.sessionSwitching &&
+          current.selectedPath === path &&
+          current.snapshot?.selectedSession?.path === path &&
+          isControlledSession(current.snapshot)
+        ) {
+          set({ mobileSidebarOpen: false });
+          return;
+        }
+        creationRetry = null;
+        const sameView =
+          !current.workspaceDraft &&
+          current.selectedPath === path &&
+          current.snapshot?.selectedSession?.path === path;
         clearCommandDiscovery();
         set({
           ...resetModelSearch(),
           workspaceDraft: false,
-          draftModel: null,
+          ...(sameView ? {} : { draftModel: null, createdSession: null }),
           modelSelectionPending: false,
         });
-        const epoch = ++sessionEpoch;
+        const epoch = sameView ? sessionEpoch : ++sessionEpoch;
         resetThinking();
-        promptAdmissionToken = null;
-        promptAdmission = null;
+        if (!sameView) {
+          promptAdmissionToken = null;
+          promptAdmission = null;
+        }
         set({
           ...resetLivePatch(),
+          liveMessages: sameView
+            ? ownPendingMessages(
+                current.liveMessages,
+                current.snapshot?.selectedSession,
+              )
+            : [],
           mobileSidebarOpen: false,
-          promptAdmissionPending: false,
-          promptAdmissionRecovery: null,
-          promptAdmissionResolution: current.promptAdmissionRecovery
-            ? {
-                commandId: current.promptAdmissionRecovery.commandId,
-                content: current.promptAdmissionRecovery.content,
-              }
-            : current.promptAdmissionResolution,
+          promptAdmissionPending: sameView
+            ? current.promptAdmissionPending
+            : false,
+          promptAdmissionRecovery: sameView
+            ? current.promptAdmissionRecovery
+            : null,
           selectedPath: path,
           sessionSwitching: true,
         });
@@ -1255,12 +1558,12 @@ export function createWebStore(
           try {
             await client.selectSession(path);
             if (epoch !== sessionEpoch) return;
-            if (!(await actions.refreshSnapshot({ epoch }))) {
+            if (!(await actions.refreshSnapshot({ epoch })) && !sameView) {
               set({ selectedPath: null });
             }
           } catch (error) {
             if (epoch !== sessionEpoch) return;
-            set({ selectedPath: null });
+            if (!sameView) set({ selectedPath: null });
             showError(error);
             await actions.refreshSnapshot({ epoch });
           } finally {
@@ -1269,7 +1572,13 @@ export function createWebStore(
           }
         });
         sessionSelectionTail = selection.catch(() => undefined);
-        await selection;
+        pendingSessionSelection = { path, epoch, promise: selection };
+        try {
+          await selection;
+        } finally {
+          if (pendingSessionSelection?.promise === selection)
+            pendingSessionSelection = null;
+        }
       },
       async renameSession(path, name) {
         try {
@@ -1293,7 +1602,8 @@ export function createWebStore(
         try {
           await client.unarchiveSession(path);
           if (epoch !== sessionEpoch) return true;
-          return await actions.refreshSnapshot({ epoch });
+          const refreshed = await actions.refreshSnapshot({ epoch });
+          return epoch !== sessionEpoch || refreshed;
         } catch (error) {
           if (epoch === sessionEpoch) showError(error);
           return false;
@@ -1328,6 +1638,7 @@ export function createWebStore(
         if (
           !sessionId ||
           !state.selectedPath ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path
         )
@@ -1351,7 +1662,6 @@ export function createWebStore(
         modelSearchController = controller;
         const generation = ++modelSearchGeneration;
         const epoch = sessionEpoch;
-        const catalogGeneration = snapshotGeneration;
         const sessionId = get().snapshot?.currentSessionId;
         set({
           modelSearch: {
@@ -1372,7 +1682,6 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
-            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;
@@ -1390,7 +1699,6 @@ export function createWebStore(
           if (
             controller.signal.aborted ||
             epoch !== sessionEpoch ||
-            catalogGeneration !== snapshotGeneration ||
             generation !== modelSearchGeneration
           )
             return;
@@ -1423,6 +1731,7 @@ export function createWebStore(
           state.modelSelectionPending ||
           state.workspaceDraft ||
           !sessionId ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.liveRunning ||
@@ -1438,10 +1747,11 @@ export function createWebStore(
       async selectPlanMode(enabled) {
         const state = get();
         const snapshot = state.snapshot;
-        const sessionId = snapshot?.selectedSession?.id;
+        const session = snapshot?.selectedSession;
         if (
-          !sessionId ||
-          sessionId !== snapshot?.currentSessionId ||
+          !snapshot ||
+          !session ||
+          !isControlledSession(snapshot, session) ||
           state.workspaceDraft ||
           state.sessionSwitching ||
           state.planSelectionPending ||
@@ -1453,30 +1763,46 @@ export function createWebStore(
         )
           return;
         const epoch = sessionEpoch;
+        const generation = ++planSelectionGeneration;
         set({ planSelectionPending: true });
         try {
           await client.setPlanMode(
-            sessionId,
+            session.id,
+            session.path,
             enabled,
             snapshot.runtime.planRevision,
           );
           if (
             epoch === sessionEpoch &&
+            generation === planSelectionGeneration &&
             !(await actions.refreshSnapshot({ epoch }))
           )
             throw new Error(i18n.t("planModeUnconfirmed"));
         } catch (error) {
-          if (epoch === sessionEpoch) {
+          if (
+            epoch === sessionEpoch &&
+            generation === planSelectionGeneration
+          ) {
             await actions.refreshSnapshot({ epoch });
-            if (epoch === sessionEpoch) showError(error);
+            if (
+              epoch === sessionEpoch &&
+              generation === planSelectionGeneration
+            )
+              showError(error);
           }
         } finally {
-          set({ planSelectionPending: false });
+          if (epoch === sessionEpoch && generation === planSelectionGeneration)
+            set({ planSelectionPending: false });
         }
       },
       async cancelActiveTurn() {
         const turn = get().activeTurn ?? get().snapshot?.runtime.activeTurn;
-        if (!turn || get().turnCancellationPending || get().sessionSwitching)
+        if (
+          !turn ||
+          !isControlledSession(get().snapshot) ||
+          get().turnCancellationPending ||
+          get().sessionSwitching
+        )
           return;
         const epoch = sessionEpoch;
         set({ turnCancellationPending: true });
@@ -1493,6 +1819,15 @@ export function createWebStore(
       async sendPrompt(rawContent, promptImages = []) {
         if (get().planSelectionPending) return false;
         const content = rawContent.trim();
+        if (content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
+          set({
+            notice: i18n.t("promptTooLong", {
+              count: content.length,
+              limit: WEB_PROMPT_MAX_TEXT_LENGTH,
+            }),
+          });
+          return false;
+        }
         const images = promptImages.map((image) => ({ ...image }));
         const imageSignature = JSON.stringify(
           images.map(({ data, mimeType, name }) => [
@@ -1583,6 +1918,14 @@ export function createWebStore(
         const optimisticKey = retrying
           ? promptAdmission!.optimisticKey
           : `optimistic-${commandId}`;
+        const timestamp = retrying
+          ? promptAdmission!.timestamp
+          : new Date().toISOString();
+        const afterEntryId = retrying
+          ? promptAdmission!.afterEntryId
+          : (get().snapshot?.selectedSession?.history?.leafEntryId ??
+            get().snapshot?.selectedSession?.entries.at(-1)?.id ??
+            null);
         promptAdmission = {
           sessionId,
           sessionPath,
@@ -1591,15 +1934,25 @@ export function createWebStore(
           images,
           commandId,
           optimisticKey,
+          timestamp,
+          afterEntryId,
         };
         promptAdmissionToken = admission;
         set({
           liveMessages: retrying
             ? get().liveMessages
-            : [
+            : trimLiveMessages([
                 ...get().liveMessages,
                 {
                   key: optimisticKey,
+                  timestamp,
+                  optimistic: {
+                    sessionId,
+                    sessionPath,
+                    commandId,
+                    afterEntryId,
+                    admitted: false,
+                  },
                   message: {
                     role: "user",
                     content,
@@ -1615,7 +1968,7 @@ export function createWebStore(
                       : {}),
                   },
                 },
-              ].slice(-8),
+              ]),
           notice: null,
           pendingFollowUpsReceipt: null,
           turnTerminalStatus: null,
@@ -1634,17 +1987,44 @@ export function createWebStore(
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
+            sessionId !== get().snapshot?.selectedSession?.id ||
             promptAdmissionToken !== admission
           )
             return false;
           const settled = terminalPromptIds.has(receipt.id);
           if (promptAdmission?.commandId === commandId) promptAdmission = null;
           set({
-            ...promptAcceptedLivePatch(settled, get().livePhase),
-            pendingFollowUpsReceipt: receipt.pendingFollowUps ?? null,
+            liveMessages:
+              receipt.accepted && receipt.id === commandId
+                ? admitPromptProjection(
+                    get().liveMessages,
+                    sessionId,
+                    sessionPath,
+                    commandId,
+                  )
+                : get().liveMessages,
+            ...(isControlledSession(get().snapshot)
+              ? promptAcceptedLivePatch(settled, get().livePhase)
+              : {}),
+            pendingFollowUpsReceipt: isControlledSession(get().snapshot)
+              ? (receipt.pendingFollowUps ?? null)
+              : null,
             ...(replacement &&
             get().promptAdmissionRecovery?.commandId === replacement.commandId
-              ? { promptAdmissionRecovery: null }
+              ? {
+                  promptAdmissionRecovery: null,
+                  ...(retrying
+                    ? {
+                        promptAdmissionResolution: {
+                          sessionId: replacement.sessionId,
+                          sessionPath: replacement.sessionPath,
+                          commandId: replacement.commandId,
+                          content: replacement.content,
+                          images: replacement.images,
+                        },
+                      }
+                    : {}),
+                }
               : {}),
           });
           scheduleSnapshotRefresh(120);
@@ -1653,23 +2033,69 @@ export function createWebStore(
           if (
             epoch !== sessionEpoch ||
             sessionPath !== get().selectedPath ||
+            sessionId !== get().snapshot?.selectedSession?.id ||
             promptAdmissionToken !== admission
           )
             return false;
-          if (
+          const knownRejection =
             error instanceof WebApiError &&
-            error.code === "COMMAND_ADMISSION_UNKNOWN" &&
-            promptAdmission?.commandId === commandId
-          ) {
+            [
+              "WORKSPACE_REQUIRED",
+              "SESSION_CONFLICT",
+              "PROMPT_REJECTED",
+              "COMMAND_CONFLICT",
+              "PROMPT_ADMISSION_CAPACITY",
+              "INVALID_PROMPT",
+              "INVALID_PROMPT_IMAGES",
+            ].includes(error.code ?? "");
+          const confirmedAdmission =
+            terminalPromptIds.has(commandId) ||
+            get().liveMessages.some(
+              (entry) =>
+                entry.optimistic?.sessionId === sessionId &&
+                entry.optimistic.sessionPath === sessionPath &&
+                entry.optimistic.commandId === commandId &&
+                entry.optimistic.admitted,
+            ) ||
+            (get().activeTurn?.sessionId === sessionId &&
+              get().activeTurn?.commandId === commandId);
+          if (!knownRejection && confirmedAdmission) {
+            if (promptAdmission?.commandId === commandId)
+              promptAdmission = null;
+            if (
+              replacement &&
+              get().promptAdmissionRecovery?.commandId === replacement.commandId
+            ) {
+              set({
+                promptAdmissionRecovery: null,
+                ...(retrying
+                  ? {
+                      promptAdmissionResolution: {
+                        sessionId: replacement.sessionId,
+                        sessionPath: replacement.sessionPath,
+                        commandId: replacement.commandId,
+                        content: replacement.content,
+                        images: replacement.images,
+                      },
+                    }
+                  : {}),
+              });
+            }
+            return true;
+          }
+          if (!knownRejection && promptAdmission?.commandId === commandId) {
             const recovery = promptAdmission;
             promptAdmission = null;
             set({
-              liveRunning: false,
-              livePhase: "idle",
-              liveRetry: null,
               notice: null,
               promptAdmissionPending: false,
-              promptAdmissionRecovery: { ...recovery, phase: "checking" },
+              promptAdmissionRecovery: {
+                ...recovery,
+                retryable:
+                  !(error instanceof WebApiError) ||
+                  error.code !== "COMMAND_ADMISSION_UNKNOWN",
+                phase: "checking",
+              },
             });
             const refreshed = await actions.refreshSnapshot({
               resetCursor: true,
@@ -1677,6 +2103,25 @@ export function createWebStore(
             });
             const currentRecovery = get().promptAdmissionRecovery;
             if (currentRecovery?.commandId === commandId) {
+              if (
+                get().activeTurn?.sessionId === sessionId &&
+                get().activeTurn?.commandId === commandId &&
+                get().selectedPath === sessionPath &&
+                get().snapshot?.selectedSession?.path === sessionPath &&
+                isControlledSession(get().snapshot)
+              ) {
+                set({
+                  promptAdmissionRecovery: null,
+                  promptAdmissionResolution: {
+                    sessionId: currentRecovery.sessionId,
+                    sessionPath: currentRecovery.sessionPath,
+                    commandId: currentRecovery.commandId,
+                    content: currentRecovery.content,
+                    images: currentRecovery.images,
+                  },
+                });
+                return true;
+              }
               set({
                 promptAdmissionRecovery: {
                   ...currentRecovery,
@@ -1686,22 +2131,7 @@ export function createWebStore(
             }
             return false;
           }
-          const knownRejection =
-            error instanceof WebApiError &&
-            [
-              "WORKSPACE_REQUIRED",
-              "SESSION_CONFLICT",
-              "PROMPT_REJECTED",
-              "COMMAND_CONFLICT",
-              "PROMPT_ADMISSION_CAPACITY",
-            ].includes(error.code ?? "");
           if (!knownRejection) {
-            set({
-              liveRunning: true,
-              livePhase:
-                get().livePhase === "running" ? "running" : "preparing",
-              liveRetry: null,
-            });
             showError(error);
             return false;
           }
@@ -1710,9 +2140,12 @@ export function createWebStore(
             liveMessages: get().liveMessages.filter(
               (entry) => entry.key !== optimisticKey,
             ),
-            livePhase: "idle",
-            liveRetry: null,
-            liveRunning: false,
+            ...(retrying &&
+            replacement &&
+            error instanceof WebApiError &&
+            error.code === "PROMPT_REJECTED"
+              ? { promptAdmissionRecovery: null }
+              : {}),
           });
           showError(error);
           return false;
@@ -1748,6 +2181,48 @@ export function createWebStore(
           });
         }
       },
+      async retryPromptAdmission() {
+        const recovery = get().promptAdmissionRecovery;
+        if (
+          !recovery?.retryable ||
+          recovery.phase !== "ready" ||
+          recovery.sessionPath !== get().selectedPath ||
+          recovery.sessionPath !== get().snapshot?.selectedSession?.path ||
+          recovery.sessionId !== get().snapshot?.selectedSession?.id
+        )
+          return false;
+        const images = recovery.images ?? [];
+        promptAdmission = {
+          ...recovery,
+          images,
+          imageSignature: JSON.stringify(
+            images.map(({ data, mimeType, name }) => [
+              mimeType,
+              name ?? "",
+              data,
+            ]),
+          ),
+          afterEntryId: recovery.afterEntryId ?? null,
+          timestamp: recovery.timestamp ?? new Date().toISOString(),
+        };
+        set({
+          promptAdmissionRecovery: { ...recovery, phase: "submitting" },
+          notice: null,
+        });
+        try {
+          return await actions.sendPrompt(recovery.content, images);
+        } finally {
+          const currentRecovery = get().promptAdmissionRecovery;
+          if (
+            currentRecovery?.commandId === recovery.commandId &&
+            currentRecovery.phase === "submitting"
+          ) {
+            set({
+              promptAdmissionRecovery: { ...currentRecovery, phase: "ready" },
+            });
+          }
+        }
+      },
       async sendPromptAsNew(rawContent, promptImages) {
         const recovery = get().promptAdmissionRecovery;
         if (
@@ -1762,6 +2237,7 @@ export function createWebStore(
         const content = rawContent.trim();
         const images = promptImages ?? recovery.images ?? [];
         if (!content && images.length === 0) return false;
+        promptAdmission = null;
         set({
           promptAdmissionRecovery: { ...recovery, phase: "submitting" },
           notice: null,
@@ -1787,6 +2263,8 @@ export function createWebStore(
       abandonPromptAdmission() {
         const recovery = get().promptAdmissionRecovery;
         if (!recovery || recovery.phase === "submitting") return;
+        if (promptAdmission?.commandId === recovery.commandId)
+          promptAdmission = null;
         set({
           liveMessages: get().liveMessages.filter(
             (entry) => entry.key !== recovery.optimisticKey,
@@ -1805,6 +2283,7 @@ export function createWebStore(
         if (
           state.workspaceDraft ||
           !sessionId ||
+          !isControlledSession(state.snapshot) ||
           sessionId !== state.snapshot?.currentSessionId ||
           state.selectedPath !== state.snapshot?.selectedSession?.path ||
           state.sessionSwitching
@@ -1921,11 +2400,13 @@ export function createWebStore(
       turnTerminalStatus: null,
       pendingFollowUpsReceipt: null,
       snapshot: null,
+      historyAnchor: null,
       cursor: null,
       selectedPath: null,
       selectedWorkspace: null,
       workspaceDraft: false,
       draftModel: null,
+      createdSession: null,
       modelSelectionPending: false,
       modelSearch: {
         query: "",

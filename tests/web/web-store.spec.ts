@@ -1,13 +1,14 @@
 // @vitest-environment jsdom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type {
-  WebCommandDiscoveryResult,
-  WebEvent,
-  WebModelSearchResult,
-  WebModelSummary,
-  WebSnapshot,
-  WebThinkingState,
+import {
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebCommandDiscoveryResult,
+  type WebEvent,
+  type WebModelSearchResult,
+  type WebModelSummary,
+  type WebSnapshot,
+  type WebThinkingState,
 } from "../../web/protocol/types.ts";
 import {
   type CommandReceipt,
@@ -161,7 +162,12 @@ it("Plan changes wait for canonical confirmation, prevent duplicate clicks and d
   expect(store.getState().planSelectionPending).toBe(true);
   await store.getState().actions.selectPlanMode(true);
   expect(await store.getState().actions.sendPrompt("wait")).toBe(false);
-  expect(change).toHaveBeenCalledExactlyOnceWith("session-1", true, null);
+  expect(change).toHaveBeenCalledExactlyOnceWith(
+    "session-1",
+    "/tmp/ws/session.jsonl",
+    true,
+    null,
+  );
   const after = snapshot();
   after.cursor++;
   after.runtime.plan = "planning";
@@ -173,6 +179,77 @@ it("Plan changes wait for canonical confirmation, prevent duplicate clicks and d
   expect(store.getState().planSelectionPending).toBe(false);
   expect(store.getState().liveMessages).toEqual([]);
   expect(prompt).not.toHaveBeenCalled();
+});
+
+it("does not change Plan mode from a copied Session observer", async () => {
+  const client = new FakeClient();
+  const change = vi.spyOn(client, "setPlanMode");
+  const current = snapshot();
+  current.currentSessionPath = current.selectedSession!.path;
+  current.runtime.planRevision = null;
+  current.selectedSession!.path = "/tmp/ws/copied-session.jsonl";
+  current.sessions.push({
+    ...current.sessions[0]!,
+    path: current.selectedSession!.path,
+    controller: "none",
+  });
+  const store = createWebStore(client);
+  store.setState({
+    snapshot: current,
+    selectedPath: current.selectedSession!.path,
+    workspaceDraft: false,
+  });
+  await store.getState().actions.selectPlanMode(true);
+  expect(change).not.toHaveBeenCalled();
+  expect(store.getState().planSelectionPending).toBe(false);
+});
+
+it("keeps a newer Plan write pending when an older receipt arrives after retaking the same view", async () => {
+  const client = new FakeClient();
+  const initial = snapshot();
+  initial.currentSessionPath = initial.selectedSession!.path;
+  initial.runtime.plan = "inactive";
+  initial.runtime.planRevision = null;
+  client.snapshots.push(Promise.resolve(initial));
+  const first = deferred<{ sessionId: string }>();
+  const second = deferred<{ sessionId: string }>();
+  const change = vi
+    .spyOn(client, "setPlanMode")
+    .mockReturnValueOnce(first.promise)
+    .mockReturnValueOnce(second.promise);
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  const oldWrite = store.getState().actions.selectPlanMode(true);
+  const observer = structuredClone(initial);
+  observer.currentSessionId = "other";
+  observer.currentSessionPath = "/tmp/ws/other.jsonl";
+  observer.sessions[0]!.controller = "none";
+  observer.sessions.push({
+    ...initial.sessions[0]!,
+    id: "other",
+    path: observer.currentSessionPath,
+  });
+  client.snapshots.push(Promise.resolve(observer));
+  await store.getState().actions.refreshSnapshot();
+  expect(store.getState().planSelectionPending).toBe(false);
+  const activated = structuredClone(initial);
+  activated.runtime.plan = "planning";
+  activated.runtime.planRevision = "first-plan";
+  client.snapshots.push(Promise.resolve(activated));
+  await store.getState().actions.selectSession(initial.selectedSession!.path);
+  const newWrite = store.getState().actions.selectPlanMode(false);
+  expect(change).toHaveBeenCalledTimes(2);
+  expect(store.getState().planSelectionPending).toBe(true);
+  first.resolve({ sessionId: "session-1" });
+  await oldWrite;
+  expect(store.getState().planSelectionPending).toBe(true);
+  const confirmed = structuredClone(initial);
+  confirmed.runtime.planRevision = "second-plan";
+  client.snapshots.push(Promise.resolve(confirmed));
+  second.resolve({ sessionId: "session-1" });
+  await newWrite;
+  expect(store.getState().planSelectionPending).toBe(false);
+  expect(store.getState().snapshot?.runtime.plan).toBe("inactive");
 });
 
 class FakeClient extends WebClient {
@@ -390,7 +467,654 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("sidebar Session navigation", () => {
+  it("keeps a successful restore receipt when selection changes during its canonical refresh", async () => {
+    const client = new FakeClient();
+    const current = snapshot();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    const refresh = deferred<WebSnapshot>();
+    client.snapshots.push(refresh.promise, Promise.resolve(target));
+    vi.spyOn(client, "unarchiveSession").mockResolvedValue({
+      path: "/tmp/ws/archived.jsonl",
+      archived: false,
+    });
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: current,
+      selectedPath: current.selectedSession!.path,
+    });
+    const restoring = store
+      .getState()
+      .actions.unarchiveSession("/tmp/ws/archived.jsonl");
+    await vi.waitFor(() =>
+      expect(client.snapshotPaths).toEqual([current.selectedSession!.path]),
+    );
+    await store.getState().actions.selectSession(target.selectedSession!.path);
+    refresh.resolve(current);
+    expect(await restoring).toBe(true);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    expect(store.getState().snapshot).toBe(target);
+    expect(store.getState().notice).toBeNull();
+  });
+
+  it("does not reset live state or issue a selection for the confirmed current file", async () => {
+    const client = new FakeClient();
+    const current = snapshot();
+    current.currentSessionPath = current.selectedSession!.path;
+    client.snapshots.push(Promise.resolve(current));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    store.setState({
+      liveMessages: [
+        {
+          key: "stream",
+          message: { role: "assistant", content: "Partial reply" },
+        },
+      ],
+      activeTurn: {
+        sessionId: "session-1",
+        sessionPath: current.currentSessionPath,
+        commandId: "active",
+        epoch: 1,
+      },
+      liveRunning: true,
+      livePhase: "running",
+      planSelectionPending: true,
+      modelSelectionPending: true,
+      turnCancellationPending: true,
+      mobileSidebarOpen: true,
+    });
+    const before = store.getState();
+    await store.getState().actions.selectSession(current.selectedSession!.path);
+    expect(client.selections).toEqual([]);
+    expect(client.snapshotPaths).toHaveLength(1);
+    expect(store.getState().liveMessages).toBe(before.liveMessages);
+    expect(store.getState().activeTurn).toBe(before.activeTurn);
+    expect(store.getState()).toMatchObject({
+      liveRunning: true,
+      livePhase: "running",
+      planSelectionPending: true,
+      modelSelectionPending: true,
+      turnCancellationPending: true,
+      sessionSwitching: false,
+      mobileSidebarOpen: false,
+    });
+  });
+
+  it("deduplicates an in-flight selection of the same target", async () => {
+    const client = new FakeClient();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    client.snapshots.push(Promise.resolve(snapshot()), Promise.resolve(target));
+    const receipt = deferred<SessionMutationResult>();
+    client.selectionResults.push(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const first = store
+      .getState()
+      .actions.selectSession(target.selectedSession!.path);
+    await vi.waitFor(() => expect(client.selections).toHaveLength(1));
+    const second = store
+      .getState()
+      .actions.selectSession(target.selectedSession!.path);
+    expect(store.getState().sessionSwitching).toBe(true);
+    receipt.resolve({});
+    await Promise.all([first, second]);
+    expect(client.selections).toEqual([target.selectedSession!.path]);
+    expect(client.snapshotPaths).toHaveLength(2);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+    expect(store.getState().sessionSwitching).toBe(false);
+  });
+
+  it.each([false, true])(
+    "still activates the same viewed observer path (copied id: %s)",
+    async (copiedId) => {
+      const client = new FakeClient();
+      const controller = activeSnapshot(
+        "controller",
+        "/tmp/ws/controller.jsonl",
+      );
+      const viewed = activeSnapshot(
+        copiedId ? "controller" : "reader",
+        "/tmp/ws/reader.jsonl",
+      );
+      const background = {
+        ...controller,
+        currentSessionPath: controller.selectedSession!.path,
+        selectedSession: viewed.selectedSession,
+        sessions: [
+          ...controller.sessions,
+          { ...viewed.sessions[0]!, controller: "none" as const },
+        ],
+      };
+      client.snapshots.push(
+        Promise.resolve(background),
+        Promise.resolve(viewed),
+      );
+      const store = createWebStore(client);
+      store.setState({ selectedPath: viewed.selectedSession!.path });
+      await store.getState().actions.refreshSnapshot();
+      await store
+        .getState()
+        .actions.selectSession(viewed.selectedSession!.path);
+      expect(client.selections).toEqual([viewed.selectedSession!.path]);
+      expect(store.getState().snapshot?.currentSessionId).toBe(
+        viewed.currentSessionId,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "keeps a valid reader when removing a workspace (reader workspace: %s)",
+    async (readerWorkspace) => {
+      const client = new FakeClient();
+      const controller = activeSnapshot("controller", "/tmp/control/c.jsonl", {
+        workspace: "/tmp/control",
+      });
+      const reader = activeSnapshot("reader", "/tmp/read/r.jsonl", {
+        workspace: "/tmp/read",
+      });
+      const removed = readerWorkspace ? "/tmp/read" : "/tmp/unrelated";
+      const background = {
+        ...controller,
+        currentSessionPath: controller.selectedSession!.path,
+        selectedSession: reader.selectedSession,
+        sessions: [
+          ...controller.sessions,
+          { ...reader.sessions[0]!, controller: "none" as const },
+        ],
+        workspaces: [
+          ...controller.workspaces,
+          ...reader.workspaces,
+          { path: "/tmp/unrelated", name: "Unrelated", current: false },
+        ],
+      };
+      vi.spyOn(client, "removeWorkspace").mockResolvedValue({
+        path: removed,
+        removed: true,
+      });
+      client.snapshots.push(
+        Promise.resolve({
+          ...background,
+          workspaces: background.workspaces.filter(
+            (item) => item.path !== removed,
+          ),
+          sessions: background.sessions.map((item) =>
+            item.cwd === removed ? { ...item, ungrouped: true } : item,
+          ),
+        }),
+      );
+      const store = createWebStore(client);
+      store.setState({
+        snapshot: background,
+        selectedPath: reader.selectedSession!.path,
+        selectedWorkspace: "/tmp/read",
+      });
+      await store.getState().actions.removeWorkspace(removed);
+      expect(client.snapshotPaths).toEqual([reader.selectedSession!.path]);
+      expect(store.getState().selectedPath).toBe(reader.selectedSession!.path);
+    },
+  );
+
+  it("does not overwrite a newer selection when workspace removal settles late", async () => {
+    const client = new FakeClient();
+    const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+    const removal = deferred<{ path: string; removed: true }>();
+    vi.spyOn(client, "removeWorkspace").mockReturnValue(removal.promise);
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: snapshot(),
+      selectedPath: snapshot().selectedSession!.path,
+      selectedWorkspace: "/tmp/ws",
+    });
+    const removing = store.getState().actions.removeWorkspace("/tmp/unrelated");
+    client.snapshots.push(Promise.resolve(target), Promise.resolve(target));
+    await store.getState().actions.selectSession(target.selectedSession!.path);
+    removal.resolve({ path: "/tmp/unrelated", removed: true });
+    await removing;
+    expect(client.snapshotPaths).toEqual([
+      target.selectedSession!.path,
+      target.selectedSession!.path,
+    ]);
+    expect(store.getState().selectedPath).toBe(target.selectedSession!.path);
+  });
+
+  it.each([false, true])(
+    "keeps the exact controlled Session sendable after hiding its workspace (other workspace: %s)",
+    async (hasOtherWorkspace) => {
+      const client = new FakeClient();
+      const before = snapshot();
+      const after = {
+        ...before,
+        workspaces: hasOtherWorkspace
+          ? [{ path: "/tmp/other", name: "Other", current: true }]
+          : [],
+        sessions: before.sessions.map((session) => ({
+          ...session,
+          ungrouped: true,
+        })),
+      };
+      client.snapshots.push(Promise.resolve(before), Promise.resolve(after));
+      vi.spyOn(client, "removeWorkspace").mockResolvedValue({
+        path: "/tmp/ws",
+        removed: true,
+      });
+      const prompt = vi.spyOn(client, "prompt");
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+
+      await store.getState().actions.removeWorkspace("/tmp/ws");
+
+      expect(store.getState().selectedWorkspace).toBe("/tmp/ws");
+      expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
+      expect(store.getState().workspaceDraft).toBe(false);
+      expect(await store.getState().actions.sendPrompt("continue here")).toBe(
+        true,
+      );
+      expect(prompt).toHaveBeenCalledExactlyOnceWith(
+        "session-1",
+        "continue here",
+        expect.any(String),
+        "/tmp/ws/session.jsonl",
+        false,
+        [],
+      );
+      expect(client.creations).toEqual([]);
+      expect(client.selections).toEqual([]);
+      store.getState().actions.stop();
+    },
+  );
+});
+
+describe("native prompt resolution provenance", () => {
+  it.each(["workspace", "create", "select", "foreign"] as const)(
+    "does not treat %s navigation as acceptance and preserves prior native evidence",
+    async (navigation) => {
+      const client = new FakeClient();
+      const initial = snapshot();
+      const target = activeSnapshot("B", "/tmp/ws/b.jsonl");
+      initial.sessions.push({ ...target.sessions[0]!, controller: "none" });
+      client.snapshots.push(Promise.resolve(target));
+      client.creationResult = async (commandId) => ({
+        cancelled: false,
+        commandId,
+        sessionId: "B",
+        sessionPath: target.selectedSession!.path,
+      });
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      const images = [
+        { data: "AA==", mimeType: "image/png" as const, name: "draft.png" },
+      ];
+      const evidence = {
+        sessionId: "session-1",
+        sessionPath: initial.selectedSession!.path,
+        commandId: "previous-native",
+        content: "Accepted earlier",
+        images,
+      };
+      store.setState({
+        snapshot: initial,
+        selectedPath:
+          navigation === "foreign" ? null : initial.selectedSession!.path,
+        selectedWorkspace: "/tmp/ws",
+        cursor: 4,
+        promptAdmissionResolution: evidence,
+        promptAdmissionRecovery: {
+          sessionId: "session-1",
+          sessionPath: initial.selectedSession!.path,
+          commandId: "unknown",
+          content: "Still uncertain",
+          optimisticKey: "optimistic-unknown",
+          images,
+          phase: "verification-failed",
+        },
+      });
+      try {
+        if (navigation === "workspace")
+          store.getState().actions.setWorkspace("/tmp/new");
+        if (navigation === "create")
+          await store.getState().actions.createSession("/tmp/ws");
+        if (navigation === "select")
+          await store
+            .getState()
+            .actions.selectSession(target.selectedSession!.path);
+        if (navigation === "foreign") {
+          store.getState().actions.start();
+          await vi.waitFor(() =>
+            expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+          );
+          stream.emit(
+            runtimeEvent(5, "session_switched", {
+              sessionId: "B",
+              sessionPath: target.selectedSession!.path,
+            }),
+          );
+          await vi.waitFor(() =>
+            expect(store.getState().sessionSwitching).toBe(false),
+          );
+        }
+        expect(store.getState().promptAdmissionRecovery).toBeNull();
+        expect(store.getState().promptAdmissionResolution).toBe(evidence);
+        expect(store.getState().promptAdmissionResolution?.images).toBe(images);
+      } finally {
+        store.getState().actions.stop();
+      }
+    },
+  );
+
+  it("projects exact identity and the original images only after matching native evidence", async () => {
+    const stream = eventStreamHarness();
+    const store = createWebStore(new FakeClient(), {
+      consumeEvents: stream.consumeEvents,
+    });
+    const initial = snapshot();
+    const images = [{ data: "AA==", mimeType: "image/png" as const }];
+    const recovery = {
+      sessionId: "session-1",
+      sessionPath: initial.selectedSession!.path,
+      commandId: "unknown",
+      content: "Original draft",
+      optimisticKey: "optimistic-unknown",
+      images,
+      phase: "verification-failed" as const,
+    };
+    store.setState({
+      snapshot: initial,
+      selectedPath: initial.selectedSession!.path,
+      cursor: 4,
+      promptAdmissionRecovery: recovery,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      stream.emit(
+        runtimeEvent(5, "prompt_accepted", {
+          sessionId: recovery.sessionId,
+          sessionPath: "/tmp/copied.jsonl",
+          commandId: recovery.commandId,
+        }),
+      );
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      stream.emit(
+        runtimeEvent(6, "prompt_accepted", {
+          sessionId: recovery.sessionId,
+          sessionPath: recovery.sessionPath,
+          commandId: recovery.commandId,
+        }),
+      );
+      expect(store.getState().promptAdmissionResolution).toEqual({
+        sessionId: recovery.sessionId,
+        sessionPath: recovery.sessionPath,
+        commandId: recovery.commandId,
+        content: recovery.content,
+        images,
+      });
+      expect(store.getState().promptAdmissionResolution?.images).toBe(images);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+});
+
 describe("OpenPI Web store", () => {
+  it("retains a valid requested background view without moving the input controller", async () => {
+    const client = new FakeClient();
+    const current = activeSnapshot("controller", "/tmp/ws/controller.jsonl");
+    const viewed = activeSnapshot("viewed", "/tmp/ws/viewed.jsonl");
+    const background = {
+      ...current,
+      sessions: [
+        ...current.sessions,
+        { ...viewed.sessions[0]!, controller: "none" as const },
+      ],
+      selectedSession: viewed.selectedSession,
+      selectedExecution: {
+        sessionId: "viewed",
+        sessionPath: "/tmp/ws/viewed.jsonl",
+        status: "running" as const,
+        pendingFollowUps: 2,
+        liveTools: [],
+        liveToolsOmitted: 0,
+      },
+    };
+    client.snapshots.push(
+      Promise.resolve(background),
+      Promise.resolve(current),
+    );
+    const store = createWebStore(client);
+    store.setState({
+      snapshot: viewed,
+      selectedPath: "/tmp/ws/viewed.jsonl",
+      liveMessages: [
+        {
+          key: "optimistic-read-view",
+          message: { role: "user", content: "Queued in viewed Session" },
+          optimistic: {
+            sessionId: "viewed",
+            sessionPath: "/tmp/ws/viewed.jsonl",
+            commandId: "read-view",
+            afterEntryId: null,
+            admitted: true,
+          },
+        },
+        {
+          key: "old-controller-live",
+          message: { role: "assistant", content: "Old live fragment" },
+        },
+      ],
+    });
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(client.snapshotPaths).toEqual(["/tmp/ws/viewed.jsonl"]);
+    expect(store.getState().selectedPath).toBe("/tmp/ws/viewed.jsonl");
+    expect(store.getState().snapshot?.currentSessionId).toBe("controller");
+    expect(store.getState().snapshot?.selectedExecution?.pendingFollowUps).toBe(
+      2,
+    );
+    expect(store.getState().liveMessages.map((entry) => entry.key)).toEqual([
+      "optimistic-read-view",
+    ]);
+    expect(
+      await store.getState().actions.sendPrompt("must stay read only"),
+    ).toBe(false);
+    expect(client.prompts).toEqual([]);
+    store.getState().actions.stop();
+  });
+
+  it("keeps both scoped pending submissions when one same-text native message arrives", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      await store.getState().actions.sendPrompt("继续");
+      await store.getState().actions.sendPrompt("继续");
+      stream.emit(
+        runtimeEvent(10, "message_start", {
+          sessionId: "session-1",
+          messageKey: "native-user",
+          message: { role: "user", content: "继续" },
+        }),
+      );
+      const pending = store
+        .getState()
+        .liveMessages.filter((entry) => entry.optimistic);
+      expect(pending).toHaveLength(2);
+      expect(pending[0]?.optimistic).toMatchObject({
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      });
+      for (let index = 0; index < 12; index++)
+        stream.emit(
+          runtimeEvent(11 + index, "message_start", {
+            sessionId: "session-1",
+            messageKey: `live-${index}`,
+            message: { role: "assistant", content: `Step ${index}` },
+          }),
+        );
+      expect(
+        store.getState().liveMessages.filter((entry) => entry.optimistic),
+      ).toHaveLength(2);
+      expect(
+        store.getState().liveMessages.filter((entry) => !entry.optimistic)
+          .length,
+      ).toBeLessThanOrEqual(8);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it("keeps its requested view and scoped pending message when another client changes the controller", async () => {
+    const client = new FakeClient();
+    const viewed = snapshot();
+    const controller = activeSnapshot(
+      "controller",
+      "/tmp/ws/controller.jsonl",
+      { cursor: 20 },
+    );
+    const background = {
+      ...controller,
+      sessions: [
+        ...controller.sessions,
+        { ...viewed.sessions[0]!, controller: "none" as const },
+      ],
+      selectedSession: viewed.selectedSession,
+    };
+    client.snapshots.push(
+      Promise.resolve(viewed),
+      Promise.resolve(background),
+      Promise.resolve(controller),
+    );
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    store.getState().actions.start();
+    try {
+      await vi.waitFor(() =>
+        expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+      );
+      await store.getState().actions.sendPrompt("My pending message");
+      stream.emit(
+        runtimeEvent(10, "session_switched", {
+          sessionId: "controller",
+          sessionPath: "/tmp/ws/controller.jsonl",
+        }),
+      );
+      await vi.waitFor(() =>
+        expect(store.getState().sessionSwitching).toBe(false),
+      );
+      expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
+      expect(store.getState().snapshot?.currentSessionId).toBe("controller");
+      expect(
+        store.getState().liveMessages.filter((entry) => entry.optimistic),
+      ).toHaveLength(1);
+      stream.emit(
+        runtimeEvent(21, "message_update", {
+          sessionId: "controller",
+          messageKey: "foreign",
+          message: { role: "assistant", content: "Foreign controller content" },
+        }),
+      );
+      expect(
+        store
+          .getState()
+          .liveMessages.some(
+            (entry) => entry.message.content === "Foreign controller content",
+          ),
+      ).toBe(false);
+      expect(
+        await store
+          .getState()
+          .actions.sendPrompt("Not authorized in this view"),
+      ).toBe(false);
+      expect(client.prompts).toHaveLength(1);
+    } finally {
+      store.getState().actions.stop();
+    }
+  });
+
+  it.each([true, false])(
+    "only clears own pending when selection changes the viewed file (same view: %s)",
+    async (sameView) => {
+      const client = new FakeClient();
+      const viewed = activeSnapshot("A", "/tmp/ws/a.jsonl");
+      const controller = activeSnapshot("B", "/tmp/ws/b.jsonl");
+      const background = {
+        ...controller,
+        sessions: [
+          ...controller.sessions,
+          { ...viewed.sessions[0]!, controller: "none" as const },
+        ],
+        selectedSession: viewed.selectedSession,
+      };
+      const target = sameView ? viewed : controller;
+      client.snapshots.push(Promise.resolve(target));
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      store.setState({
+        snapshot: background,
+        cursor: 4,
+        selectedPath: "/tmp/ws/a.jsonl",
+        selectedWorkspace: "/tmp/ws",
+        liveMessages: [
+          {
+            key: "optimistic-a",
+            message: { role: "user", content: "Queued A" },
+            optimistic: {
+              sessionId: "A",
+              sessionPath: "/tmp/ws/a.jsonl",
+              commandId: "a",
+              afterEntryId: null,
+              admitted: true,
+            },
+          },
+        ],
+      });
+      vi.spyOn(client, "selectSession").mockImplementation(async (path) => {
+        if (sameView)
+          stream.emit(
+            runtimeEvent(5, "session_switched", {
+              sessionId: "A",
+              sessionPath: path,
+            }),
+          );
+        return {};
+      });
+      store.getState().actions.start();
+      try {
+        await vi.waitFor(() =>
+          expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+        );
+        await store
+          .getState()
+          .actions.selectSession(target.selectedSession!.path);
+        expect(store.getState().selectedPath).toBe(
+          target.selectedSession!.path,
+        );
+        expect(store.getState().snapshot?.currentSessionId).toBe(
+          target.currentSessionId,
+        );
+        expect(
+          store.getState().liveMessages.filter((entry) => entry.optimistic),
+        ).toHaveLength(sameView ? 1 : 0);
+      } finally {
+        store.getState().actions.stop();
+      }
+    },
+  );
+
   it("discovers commands once for the active Session and caches the result", async () => {
     const client = new FakeClient();
     client.snapshots.push(Promise.resolve(snapshot()));
@@ -616,10 +1340,11 @@ describe("OpenPI Web store", () => {
     });
   });
 
-  it("clears model search results when a new snapshot is accepted for the same Session", async () => {
+  it("clears model search results when the model catalog changes in the same Session", async () => {
     const client = new FakeClient();
     const refreshed = snapshot();
     refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    refreshed.models = [{ ...refreshed.models[0]!, label: "Changed model" }];
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(refreshed),
@@ -664,10 +1389,11 @@ describe("OpenPI Web store", () => {
     });
   });
 
-  it("rejects a model search result from an older same-Session snapshot generation", async () => {
+  it("rejects a model search result from an older same-Session model catalog", async () => {
     const client = new FakeClient();
     const refreshed = snapshot();
     refreshed.generatedAt = "2026-09-03T00:00:01Z";
+    refreshed.models = [{ ...refreshed.models[0]!, label: "Changed model" }];
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(refreshed),
@@ -706,13 +1432,93 @@ describe("OpenPI Web store", () => {
     expect(store.getState().modelSearch.models).toEqual([]);
   });
 
-  it("falls back to the canonical active Session when a selected transcript is stale", async () => {
+  it.each(["loading", "ready"] as const)(
+    "invalidates a %s model search on settings changes outside the bounded catalog",
+    async (status) => {
+      const client = new FakeClient();
+      const current = snapshot();
+      current.truncation = {
+        ...current.truncation,
+        modelsOmitted: 1,
+        truncated: true,
+      };
+      client.snapshots.push(Promise.resolve(current));
+      const result = deferred<WebModelSearchResult>();
+      const found: WebModelSearchResult = {
+        models: [
+          {
+            provider: "test",
+            id: "hidden-model",
+            name: "Old hidden name",
+            label: "Old hidden name",
+            current: false,
+          },
+        ],
+        totalAvailable: 2,
+        totalMatches: 1,
+        truncation: {
+          truncated: false,
+          matchesOmitted: 0,
+          maxResults: 50,
+          maxBytes: 64 * 1024,
+          bytes: 200,
+        },
+      };
+      client.modelSearchResults.push(result.promise);
+      const search = vi.spyOn(client, "searchModels");
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      store.getState().actions.start();
+      try {
+        await vi.waitFor(() =>
+          expect(stream.consumeEvents).toHaveBeenCalledOnce(),
+        );
+        const searching = store.getState().actions.searchModels("hidden");
+        await vi.waitFor(() => expect(search).toHaveBeenCalledOnce());
+        if (status === "ready") {
+          result.resolve(found);
+          await searching;
+        }
+        expect(store.getState().modelSearch.status).toBe(status);
+
+        stream.emit(runtimeEvent(5, "settings_changed"));
+        expect(store.getState().modelSearch.status).toBe("idle");
+        if (status === "loading")
+          expect(search.mock.calls[0]?.[2]?.aborted).toBe(true);
+
+        const refreshed = {
+          ...current,
+          cursor: 5,
+          generatedAt: "2026-09-03T00:00:01Z",
+        };
+        client.snapshots.push(Promise.resolve(refreshed));
+        expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+        expect(store.getState().snapshot?.models).toEqual(current.models);
+        expect(store.getState().snapshot?.truncation.modelsOmitted).toBe(1);
+        if (status === "loading") {
+          result.resolve(found);
+          await searching;
+        }
+        expect(store.getState().modelSearch.query).toBe("");
+        expect(store.getState().modelSearch.status).toBe("idle");
+        expect(store.getState().modelSearch.models).toEqual([]);
+      } finally {
+        result.resolve(found);
+        store.getState().actions.stop();
+      }
+    },
+  );
+
+  it("keeps an available transcript as a read-only view when a different Session controls input", async () => {
     const client = new FakeClient();
     const stale = activeSnapshot("session-2", "/tmp/ws/current.jsonl");
     stale.sessions.unshift({
       ...stale.sessions[0]!,
       id: "session-1",
       path: "/tmp/ws/browsed.jsonl",
+      controller: "none",
     });
     stale.selectedSession = {
       ...stale.selectedSession!,
@@ -730,10 +1536,14 @@ describe("OpenPI Web store", () => {
       await store.getState().actions.refreshSnapshot({ resetCursor: true }),
     ).toBe(true);
 
-    expect(client.snapshotPaths).toEqual(["/tmp/ws/browsed.jsonl", null]);
-    expect(store.getState().selectedPath).toBe("/tmp/ws/current.jsonl");
-    expect(store.getState().snapshot?.selectedSession?.id).toBe("session-2");
-    expect(store.getState().cursor).toBe(6);
+    expect(client.snapshotPaths).toEqual(["/tmp/ws/browsed.jsonl"]);
+    expect(store.getState().selectedPath).toBe("/tmp/ws/browsed.jsonl");
+    expect(store.getState().snapshot?.selectedSession?.id).toBe("session-1");
+    expect(store.getState().snapshot?.currentSessionId).toBe("session-2");
+    expect(
+      await store.getState().actions.sendPrompt("do not switch control"),
+    ).toBe(false);
+    expect(client.prompts).toEqual([]);
   });
 
   it("clears a vanished selected path and retries the canonical snapshot once", async () => {
@@ -899,6 +1709,11 @@ describe("OpenPI Web store", () => {
 
     current = activeSnapshot("session-1", "/tmp/ws/copy.jsonl");
     expect(await store.getState().actions.refreshSnapshot()).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
+    expect(store.getState().promptAdmissionRecovery?.sessionPath).toBe(
+      "/tmp/ws/session.jsonl",
+    );
+    store.getState().actions.abandonPromptAdmission();
     expect(await store.getState().actions.sendPrompt("once")).toBe(true);
 
     const [first, second] = fetcher.mock.calls.map(([, options]) =>
@@ -918,7 +1733,7 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("rejects a same-ID copied transcript after the canonical retry too", async () => {
+  it("allows a same-ID copied transcript to be read without granting the original's input control", async () => {
     const client = new FakeClient();
     const copied = snapshot();
     const copyPath = "/tmp/ws/copy.jsonl";
@@ -932,15 +1747,28 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     store.setState({ selectedPath: copyPath });
 
-    expect(await store.getState().actions.refreshSnapshot()).toBe(false);
+    expect(await store.getState().actions.refreshSnapshot()).toBe(true);
 
-    expect(client.snapshotPaths).toEqual([copyPath, null]);
-    expect(store.getState().selectedPath).toBeNull();
-    expect(store.getState().snapshot).toBeNull();
+    expect(client.snapshotPaths).toEqual([copyPath]);
+    expect(store.getState().selectedPath).toBe(copyPath);
+    expect(store.getState().snapshot?.selectedSession?.path).toBe(copyPath);
     expect(
       await store.getState().actions.sendPrompt("do not send to the original"),
     ).toBe(false);
     expect(client.prompts).toEqual([]);
+    const cancel = vi
+      .spyOn(client, "cancelActiveTurn")
+      .mockResolvedValue({ state: "accepted" });
+    store.setState({
+      activeTurn: {
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+        commandId: "original-turn",
+        epoch: 1,
+      },
+    });
+    await store.getState().actions.cancelActiveTurn();
+    expect(cancel).not.toHaveBeenCalled();
   });
 
   it.each(["network failure", "invalid canonical projection"])(
@@ -1125,6 +1953,180 @@ describe("OpenPI Web store", () => {
     ]);
     expect(store.getState().promptAdmissionPending).toBe(false);
     expect(store.getState().livePhase).toBe("preparing");
+    store.getState().actions.stop();
+  });
+
+  it("marks only the exact HTTP-accepted prompt as admitted for display", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+
+    const sending = store.getState().actions.sendPrompt("pending");
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(false);
+    receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    expect(await sending).toBe(true);
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(true);
+    store.getState().actions.stop();
+  });
+
+  it.each(["unknown", "lost", "wrong-command", "not-accepted"])(
+    "does not mark %s prompt admission as accepted for display",
+    async (result) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      vi.spyOn(client, "prompt").mockImplementation(async (_id, _text, id) => {
+        if (result === "unknown")
+          throw new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN");
+        if (result === "lost") throw new TypeError("lost receipt");
+        return {
+          id: result === "wrong-command" ? "other" : id,
+          accepted: result !== "not-accepted",
+        };
+      });
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      await store.getState().actions.sendPrompt("pending");
+      expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(
+        false,
+      );
+      store.getState().actions.stop();
+    },
+  );
+
+  it("marks only the matching scoped prompt accepted by an event", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    const sending = store.getState().actions.sendPrompt("pending");
+    const commandId = prompt.mock.calls[0]![2];
+    const selected = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...selected,
+        currentSessionId: "controller-other",
+        currentSessionPath: "/tmp/ws/other.jsonl",
+      },
+    });
+    stream.emit(
+      runtimeEvent(5, "prompt_accepted", {
+        commandId,
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/copy.jsonl",
+      }),
+    );
+    stream.emit(
+      runtimeEvent(6, "prompt_accepted", {
+        commandId: "another-command",
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      }),
+    );
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(false);
+    stream.emit(
+      runtimeEvent(7, "prompt_accepted", {
+        commandId,
+        sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
+      }),
+    );
+    expect(store.getState().liveMessages[0]?.optimistic?.admitted).toBe(true);
+    expect(store.getState().snapshot?.currentSessionId).toBe(
+      "controller-other",
+    );
+    expect(store.getState().liveRunning).toBe(false);
+    receipt.resolve({ id: commandId, accepted: true });
+    await sending;
+    store.getState().actions.stop();
+  });
+
+  it("remembers only valid admitted prompt projections and releases their preview data", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const receipt = deferred<CommandReceipt>();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt.promise);
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const sending = store
+      .getState()
+      .actions.sendPrompt("image", [
+        { mimeType: "image/png", data: "cHJldmlldw==" },
+      ]);
+    const original = store.getState().liveMessages[0]!;
+    const native = {
+      id: "native-user",
+      parentId: null,
+      type: "message" as const,
+      timestamp: original.timestamp!,
+      message: original.message,
+    };
+    const current = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...current,
+        selectedSession: { ...current.selectedSession!, entries: [native] },
+      },
+    });
+    const remember = store.getState().actions.rememberPromptProjection;
+    const pair = [{ key: original.key, entryId: native.id }];
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toBe(original);
+    receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true });
+    await sending;
+    const accepted = store.getState().liveMessages[0]!;
+    expect(accepted.message.parts?.[0]).toHaveProperty("previewUrl");
+    remember("wrong-id", "/tmp/ws/session.jsonl", pair);
+    remember("session-1", "/tmp/ws/copy.jsonl", pair);
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: original.key, entryId: "missing" },
+    ]);
+    expect(store.getState().liveMessages[0]).toBe(accepted);
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toEqual({
+      ...accepted,
+      optimistic: { ...accepted.optimistic, projectedEntryId: native.id },
+      message: { role: "user", content: "" },
+    });
+    const projected = store.getState().liveMessages[0]!;
+    remember("session-1", "/tmp/ws/session.jsonl", pair);
+    expect(store.getState().liveMessages[0]).toBe(projected);
+    const nextPending = {
+      ...accepted,
+      key: "next-pending",
+      optimistic: { ...accepted.optimistic!, commandId: "next-command" },
+    };
+    store.setState({ liveMessages: [projected, nextPending] });
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: nextPending.key, entryId: native.id },
+    ]);
+    expect(store.getState().liveMessages[1]).toBe(nextPending);
+    const newerSnapshot = store.getState().snapshot!;
+    store.setState({
+      snapshot: {
+        ...newerSnapshot,
+        selectedSession: {
+          ...newerSnapshot.selectedSession!,
+          entries: [{ ...native, id: "newer-native-user" }],
+        },
+      },
+    });
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: projected.key, entryId: "newer-native-user" },
+    ]);
+    expect(store.getState().liveMessages[0]).toBe(projected);
+    remember("session-1", "/tmp/ws/session.jsonl", [
+      { key: nextPending.key, entryId: native.id },
+    ]);
+    expect(store.getState().liveMessages[1]).toBe(nextPending);
     store.getState().actions.stop();
   });
 
@@ -1329,10 +2331,13 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
-  it("recovers the canonical Session after an external activation", async () => {
+  it("recovers the canonical Session when an external activation no longer lists the previously viewed file", async () => {
     const client = new FakeClient();
     client.snapshots.push(
       Promise.resolve(snapshot()),
+      Promise.resolve(
+        activeSnapshot("session-2", "/tmp/ws/external.jsonl", { cursor: 5 }),
+      ),
       Promise.resolve(
         activeSnapshot("session-2", "/tmp/ws/external.jsonl", { cursor: 5 }),
       ),
@@ -1351,7 +2356,7 @@ describe("OpenPI Web store", () => {
       }),
     );
     await vi.waitFor(() =>
-      expect(store.getState().sessionSwitching).toBe(false),
+      expect(store.getState().snapshot?.currentSessionId).toBe("session-2"),
     );
 
     expect(store.getState().selectedPath).toBe("/tmp/ws/external.jsonl");
@@ -1831,7 +2836,12 @@ describe("OpenPI Web store", () => {
 
   it("retries an uncertain admission with the same identity without idling the running turn", async () => {
     const client = new FakeClient();
-    client.snapshots.push(Promise.resolve(snapshot()));
+    const running = snapshot();
+    running.runtime.status = "running";
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(running),
+    );
     const prompt = vi
       .spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -1842,7 +2852,7 @@ describe("OpenPI Web store", () => {
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
     expect(store.getState().liveRunning).toBe(true);
     expect(store.getState().liveMessages).toHaveLength(1);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
     expect(prompt.mock.calls[0]?.[2]).toEqual(expect.any(String));
     expect(prompt.mock.calls[1]?.[2]).toBe(prompt.mock.calls[0]?.[2]);
     expect(prompt.mock.calls[1]?.[3]).toBe("/tmp/ws/session.jsonl");
@@ -1850,9 +2860,322 @@ describe("OpenPI Web store", () => {
     store.getState().actions.stop();
   });
 
+  it("rejects over-limit trimmed UTF-16 input before creation or a prompt POST", async () => {
+    const client = new FakeClient();
+    const prompt = vi.spyOn(client, "prompt");
+    const create = vi.spyOn(client, "createSession");
+    const store = createWebStore(client);
+    store.getState().actions.setWorkspace("/tmp/ws");
+    const tooLong = "\ud83d\ude42".repeat(WEB_PROMPT_MAX_TEXT_LENGTH / 2 + 1);
+    expect(await store.getState().actions.sendPrompt(`  ${tooLong}  `)).toBe(
+      false,
+    );
+    expect(prompt).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().livePhase).toBe("idle");
+    store.getState().actions.stop();
+  });
+
+  it.each(["INVALID_PROMPT", "INVALID_PROMPT_IMAGES", "PROMPT_REJECTED"])(
+    "keeps the existing native turn running when admission rejects with %s",
+    async (code) => {
+      const client = new FakeClient();
+      client.snapshots.push(Promise.resolve(snapshot()));
+      vi.spyOn(client, "prompt").mockRejectedValue(
+        new WebApiError("rejected", 400, code),
+      );
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      const activeTurn = {
+        sessionId: "session-1",
+        commandId: "original",
+        epoch: 1,
+      };
+      const liveRetry = { attempt: 1, maxAttempts: 2 };
+      store.setState({
+        activeTurn,
+        liveRunning: true,
+        livePhase: "running",
+        liveRetry,
+      });
+      expect(await store.getState().actions.sendPrompt("follow-up")).toBe(
+        false,
+      );
+      expect(store.getState().liveRunning).toBe(true);
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().activeTurn).toBe(activeTurn);
+      expect(store.getState().liveRetry).toBe(liveRetry);
+      expect(store.getState().liveMessages).toEqual([]);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      store.getState().actions.stop();
+    },
+  );
+
+  it("does not idle another native turn when a follow-up emits prompt_failed", async () => {
+    const client = new FakeClient();
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const stream = eventStreamHarness();
+    const store = createWebStore(client, {
+      consumeEvents: stream.consumeEvents,
+    });
+    await store.getState().actions.refreshSnapshot();
+    const activeTurn = {
+      sessionId: "session-1",
+      commandId: "original",
+      epoch: 1,
+    };
+    store.setState({ activeTurn, liveRunning: true, livePhase: "running" });
+    store.getState().actions.start();
+    stream.emit(
+      runtimeEvent(5, "prompt_failed", {
+        sessionId: "session-1",
+        commandId: "rejected-follow-up",
+        error: "rejected",
+      }),
+    );
+    expect(store.getState().activeTurn).toBe(activeTurn);
+    expect(store.getState().liveRunning).toBe(true);
+    expect(store.getState().livePhase).toBe("running");
+    store.getState().actions.stop();
+  });
+
+  it("keeps an uncertain original and its images until explicit retry or replacement", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockImplementationOnce(async (_sessionId, _content, commandId) => ({
+        id: commandId,
+        accepted: true,
+      }));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    const images = [
+      {
+        data: "aW1hZ2U=",
+        mimeType: "image/png" as const,
+        name: "original.png",
+      },
+    ];
+    expect(await store.getState().actions.sendPrompt("original", images)).toBe(
+      false,
+    );
+    expect(store.getState().promptAdmissionRecovery).toMatchObject({
+      content: "original",
+      images,
+      phase: "ready",
+      retryable: true,
+    });
+    expect(store.getState().livePhase).toBe("idle");
+    expect(store.getState().liveRunning).toBe(false);
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    expect(await store.getState().actions.sendPrompt("edited", [])).toBe(false);
+    expect(await store.getState().actions.sendPrompt("original", images)).toBe(
+      false,
+    );
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
+    expect(prompt.mock.calls[1]).toEqual([
+      "session-1",
+      "original",
+      prompt.mock.calls[0]![2],
+      "/tmp/ws/session.jsonl",
+      true,
+      images,
+    ]);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toMatchObject({
+      commandId: prompt.mock.calls[0]![2],
+      content: "original",
+      images,
+    });
+    expect(store.getState().liveMessages).toHaveLength(1);
+    store.getState().actions.stop();
+  });
+
+  it("uses a new identity only for an explicitly replaced uncertain request, even with the same payload", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockImplementationOnce(async (_sessionId, _content, commandId) => ({
+        id: commandId,
+        accepted: true,
+      }));
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("original")).toBe(false);
+    expect(await store.getState().actions.sendPromptAsNew("original")).toBe(
+      true,
+    );
+    expect(prompt.mock.calls[1]![2]).not.toBe(prompt.mock.calls[0]![2]);
+    expect(prompt.mock.calls[1]![4]).toBe(false);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    store.getState().actions.stop();
+  });
+
+  it("leaves recovery after an original-ID retry receives its cached rejection without clearing the draft", async () => {
+    const client = new FakeClient();
+    vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+    const prompt = vi
+      .spyOn(client, "prompt")
+      .mockRejectedValueOnce(new TypeError("lost receipt"))
+      .mockRejectedValueOnce(
+        new WebApiError("Pi rejected this prompt", 422, "PROMPT_REJECTED"),
+      );
+    const store = createWebStore(client);
+    await store.getState().actions.refreshSnapshot();
+    expect(await store.getState().actions.sendPrompt("original")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
+    expect(prompt.mock.calls[1]![2]).toBe(prompt.mock.calls[0]![2]);
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    expect(store.getState().liveMessages).toEqual([]);
+    expect(store.getState().notice).toBe("Pi rejected this prompt");
+    expect(store.getState().promptAdmissionPending).toBe(false);
+    store.getState().actions.stop();
+  });
+
+  it.each(["prompt_accepted", "turn_started"])(
+    "uses exact native %s evidence when the original HTTP receipt is subsequently lost",
+    async (type) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      const receipt = deferred<CommandReceipt>();
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockReturnValue(receipt.promise);
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      const sending = store.getState().actions.sendPrompt("original");
+      const commandId = prompt.mock.calls[0]![2];
+      stream.emit(
+        runtimeEvent(5, type, { sessionId: "session-1", commandId, epoch: 1 }),
+      );
+      receipt.reject(new TypeError("lost receipt"));
+      expect(await sending).toBe(true);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      expect(store.getState().liveMessages).toHaveLength(1);
+      expect(prompt).toHaveBeenCalledOnce();
+      store.getState().actions.stop();
+    },
+  );
+
+  it.each(["prompt_failed", "prompt_settled", "turn_settled"])(
+    "uses native %s as handled evidence before a lost HTTP receipt without changing execution success",
+    async (type) => {
+      const client = new FakeClient();
+      vi.spyOn(client, "snapshot").mockResolvedValue(snapshot());
+      const receipt = deferred<CommandReceipt>();
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockReturnValue(receipt.promise);
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      const activeTurn = {
+        sessionId: "session-1",
+        commandId: "another-running-turn",
+        epoch: 3,
+      };
+      store.setState({ activeTurn, liveRunning: true, livePhase: "running" });
+      store.getState().actions.start();
+      const sending = store.getState().actions.sendPrompt("original");
+      const commandId = prompt.mock.calls[0]![2];
+      stream.emit(
+        runtimeEvent(5, type, {
+          sessionId: "session-1",
+          commandId,
+          epoch: 1,
+          outcome: "failed",
+          error: "Native execution failed",
+        }),
+      );
+      receipt.reject(new TypeError("lost receipt"));
+      expect(await sending).toBe(true);
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionPending).toBe(false);
+      expect(store.getState().activeTurn).toBe(activeTurn);
+      expect(store.getState().liveRunning).toBe(true);
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().turnTerminalStatus).toBeNull();
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(prompt).toHaveBeenCalledOnce();
+      store.getState().actions.stop();
+    },
+  );
+
+  it.each(["recovery", "later-refresh"])(
+    "settles an original lost receipt using canonical active-turn evidence from %s",
+    async (when) => {
+      const client = new FakeClient();
+      let nativeKnown = when === "recovery";
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockRejectedValue(new TypeError("lost receipt"));
+      vi.spyOn(client, "snapshot").mockImplementation(async () => {
+        const next = snapshot();
+        const commandId = prompt.mock.calls[0]?.[2];
+        if (commandId && nativeKnown)
+          next.runtime = {
+            status: "running",
+            capabilities: {},
+            activeTurn: {
+              sessionId: "session-1",
+              sessionPath: "/tmp/ws/session.jsonl",
+              commandId,
+              epoch: 1,
+            },
+          };
+        return next;
+      });
+      const store = createWebStore(client);
+      await store.getState().actions.refreshSnapshot();
+      expect(await store.getState().actions.sendPrompt("original")).toBe(
+        when === "recovery",
+      );
+      if (when === "later-refresh") {
+        expect(store.getState().promptAdmissionRecovery?.phase).toBe("ready");
+        nativeKnown = true;
+        await store.getState().actions.refreshSnapshot();
+        expect(await store.getState().actions.retryPromptAdmission()).toBe(
+          true,
+        );
+      }
+      expect(store.getState().activeTurn?.commandId).toBe(
+        prompt.mock.calls[0]![2],
+      );
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toMatchObject({
+        commandId: prompt.mock.calls[0]![2],
+        content: "original",
+      });
+      expect(store.getState().livePhase).toBe("running");
+      expect(store.getState().liveRunning).toBe(true);
+      expect(prompt).toHaveBeenCalledTimes(when === "recovery" ? 1 : 2);
+      store.getState().actions.stop();
+    },
+  );
+
   it("reconciles an unknown admission and requires an explicit new request", async () => {
     const client = new FakeClient();
     client.snapshots.push(
+      Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
     );
@@ -1867,14 +3190,16 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
 
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
     expect(store.getState().promptAdmissionRecovery).toMatchObject({
       content: "once",
       phase: "ready",
+      retryable: false,
     });
     expect(store.getState().livePhase).toBe("idle");
     expect(store.getState().liveRunning).toBe(false);
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(false);
     expect(prompt).toHaveBeenCalledTimes(2);
 
     expect(await store.getState().actions.sendPromptAsNew("edited")).toBe(true);
@@ -1914,6 +3239,7 @@ describe("OpenPI Web store", () => {
     const client = new FakeClient();
     client.snapshots.push(
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
       Promise.reject(new Error("snapshot unavailable")),
     );
     const prompt = vi
@@ -1927,7 +3253,7 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
 
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery?.phase).toBe(
       "verification-failed",
@@ -1947,6 +3273,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     const prompt = vi
       .spyOn(client, "prompt")
@@ -1957,7 +3284,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(await store.getState().actions.sendPromptAsNew("   ")).toBe(false);
     expect(store.getState().promptAdmissionRecovery?.phase).toBe("ready");
@@ -1976,6 +3303,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     const replacement = deferred<CommandReceipt>();
     const prompt = vi
@@ -1988,7 +3316,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     const first = store.getState().actions.sendPromptAsNew("edited");
     await vi.waitFor(() => expect(prompt).toHaveBeenCalledTimes(3));
@@ -2003,55 +3331,78 @@ describe("OpenPI Web store", () => {
     expect(store.getState().promptAdmissionRecovery).toBeNull();
   });
 
-  it("turns matching late canonical evidence into a draft resolution", async () => {
-    const client = new FakeClient();
-    client.snapshots.push(
-      Promise.resolve(snapshot()),
-      Promise.resolve(snapshot()),
-    );
-    const prompt = vi
-      .spyOn(client, "prompt")
-      .mockRejectedValueOnce(new TypeError("lost receipt"))
-      .mockRejectedValueOnce(
-        new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN"),
+  it.each(["prompt_accepted", "prompt_failed"])(
+    "turns matching late canonical %s into a draft resolution",
+    async (type) => {
+      const client = new FakeClient();
+      client.snapshots.push(
+        Promise.resolve(snapshot()),
+        Promise.resolve(snapshot()),
+        Promise.resolve(snapshot()),
       );
-    const stream = eventStreamHarness();
-    const store = createWebStore(client, {
-      consumeEvents: stream.consumeEvents,
-    });
-    await store.getState().actions.refreshSnapshot();
-    store.getState().actions.start();
-    await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
-    const commandId = String(prompt.mock.calls[0]?.[2]);
+      const prompt = vi
+        .spyOn(client, "prompt")
+        .mockRejectedValueOnce(new TypeError("lost receipt"))
+        .mockRejectedValueOnce(
+          new WebApiError("unknown", 409, "COMMAND_ADMISSION_UNKNOWN"),
+        );
+      const stream = eventStreamHarness();
+      const store = createWebStore(client, {
+        consumeEvents: stream.consumeEvents,
+      });
+      await store.getState().actions.refreshSnapshot();
+      store.getState().actions.start();
+      await store.getState().actions.sendPrompt("once");
+      await store.getState().actions.retryPromptAdmission();
+      const commandId = String(prompt.mock.calls[0]?.[2]);
 
-    stream.emit(
-      runtimeEvent(5, "prompt_accepted", {
+      stream.emit(
+        runtimeEvent(5, type, {
+          sessionId: "session-1",
+          commandId,
+          error: "Native execution failed",
+        }),
+      );
+
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toEqual({
         sessionId: "session-1",
+        sessionPath: "/tmp/ws/session.jsonl",
         commandId,
-      }),
-    );
+        content: "once",
+        images: [],
+      });
+      expect(store.getState().liveMessages).toEqual(
+        type === "prompt_failed"
+          ? []
+          : [
+              {
+                key: `optimistic-${commandId}`,
+                timestamp: expect.any(String),
+                optimistic: {
+                  sessionId: "session-1",
+                  sessionPath: "/tmp/ws/session.jsonl",
+                  commandId,
+                  afterEntryId: null,
+                  admitted: true,
+                },
+                message: { role: "user", content: "once" },
+              },
+            ],
+      );
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(await store.getState().actions.sendPrompt("once")).toBe(false);
+      store.getState().actions.acknowledgePromptAdmissionResolution(commandId);
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      store.getState().actions.stop();
+    },
+  );
 
-    expect(store.getState().promptAdmissionRecovery).toBeNull();
-    expect(store.getState().promptAdmissionResolution).toEqual({
-      commandId,
-      content: "once",
-    });
-    expect(store.getState().liveMessages).toEqual([
-      {
-        key: `optimistic-${commandId}`,
-        message: { role: "user", content: "once" },
-      },
-    ]);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(false);
-    store.getState().actions.acknowledgePromptAdmissionResolution(commandId);
-    expect(store.getState().promptAdmissionResolution).toBeNull();
-    store.getState().actions.stop();
-  });
-
-  it("clears recovery when changing workspace and preserves its draft resolution", async () => {
+  it("clears recovery when changing workspace without treating navigation as admission evidence", async () => {
     const client = new FakeClient();
     client.snapshots.push(
+      Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
     );
@@ -2063,16 +3414,11 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
-    const commandId = store.getState().promptAdmissionRecovery?.commandId;
-
+    await store.getState().actions.retryPromptAdmission();
     store.getState().actions.setWorkspace("/tmp/repo-b");
 
     expect(store.getState().promptAdmissionRecovery).toBeNull();
-    expect(store.getState().promptAdmissionResolution).toEqual({
-      commandId,
-      content: "once",
-    });
+    expect(store.getState().promptAdmissionResolution).toBeNull();
   });
 
   it("abandons unknown admission recovery without clearing its draft content", async () => {
@@ -2080,6 +3426,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
     );
     vi.spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -2089,7 +3436,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("keep me");
-    await store.getState().actions.sendPrompt("keep me");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery?.content).toBe("keep me");
     store.getState().actions.abandonPromptAdmission();
@@ -2112,6 +3459,7 @@ describe("OpenPI Web store", () => {
     client.snapshots.push(
       Promise.resolve(snapshot()),
       Promise.resolve(running),
+      Promise.resolve(running),
     );
     vi.spyOn(client, "prompt")
       .mockRejectedValueOnce(new TypeError("lost receipt"))
@@ -2121,7 +3469,7 @@ describe("OpenPI Web store", () => {
     const store = createWebStore(client);
     await store.getState().actions.refreshSnapshot();
     await store.getState().actions.sendPrompt("once");
-    await store.getState().actions.sendPrompt("once");
+    await store.getState().actions.retryPromptAdmission();
 
     expect(store.getState().promptAdmissionRecovery).not.toBeNull();
     expect(store.getState().livePhase).toBe("running");
@@ -2215,7 +3563,10 @@ describe("OpenPI Web store", () => {
 
   it("preserves retry identity when successful headers have a truncated receipt body", async () => {
     const client = new FakeClient();
-    client.snapshots.push(Promise.resolve(snapshot()));
+    client.snapshots.push(
+      Promise.resolve(snapshot()),
+      Promise.resolve(snapshot()),
+    );
     const fetcher = vi
       .fn()
       .mockResolvedValueOnce(new Response("{", { status: 202 }))
@@ -2232,7 +3583,7 @@ describe("OpenPI Web store", () => {
     await store.getState().actions.refreshSnapshot();
     expect(await store.getState().actions.sendPrompt("once")).toBe(false);
     expect(store.getState().liveMessages).toHaveLength(1);
-    expect(await store.getState().actions.sendPrompt("once")).toBe(true);
+    expect(await store.getState().actions.retryPromptAdmission()).toBe(true);
     const first = JSON.parse(String(fetcher.mock.calls[0]?.[1].body));
     const second = JSON.parse(String(fetcher.mock.calls[1]?.[1].body));
     expect(second.commandId).toBe(first.commandId);
@@ -2325,6 +3676,28 @@ describe("draft model selection", () => {
     store.setState({ snapshot: initial });
     return { client, store };
   }
+
+  it("prepares settings before the first prompt and reuses the confirmed Session", async () => {
+    const { client, store } = draftHarness();
+    store.getState().actions.setWorkspace("/tmp/ws");
+    client.snapshots.push(Promise.resolve(snapshot()));
+    const target = await store.getState().actions.prepareSession();
+    expect(target?.sessionId).toBe("session-1");
+    expect(client.creations).toHaveLength(1);
+    expect(client.prompts).toHaveLength(0);
+    expect(await store.getState().actions.prepareSession()).toMatchObject({
+      sessionId: target?.sessionId,
+      workspacePath: "/tmp/ws",
+    });
+    expect(client.creations).toHaveLength(1);
+  });
+
+  it("does not prepare or prompt when initial workspace selection is cancelled", async () => {
+    const { client, store } = draftHarness();
+    expect(await store.getState().actions.prepareSession()).toBeNull();
+    expect(client.creations).toHaveLength(0);
+    expect(client.prompts).toHaveLength(0);
+  });
 
   it("selects before a workspace without creating or mutating a Session and retains it after chooser cancellation", async () => {
     const { client, store } = draftHarness();
@@ -2844,7 +4217,7 @@ describe("thinking level selection", () => {
 
   for (const resetCursor of [false, true]) {
     for (const outcome of ["success", "rejection"] as const) {
-      it(`canonical same-ID copy recovery clears old thinking and protects a newer POST from late ${outcome} (resetCursor=${resetCursor})`, async () => {
+      it(`same-ID controller changes require explicit selection and protect a newer thinking POST from late ${outcome} (resetCursor=${resetCursor})`, async () => {
         const { client, store } = await harness({ revision: 40 });
         const superseded = deferred<WebThinkingState & { sessionId: string }>();
         client.setThinkingResults.push(superseded.promise);
@@ -2862,8 +4235,8 @@ describe("thinking level selection", () => {
             ...snapshot().sessions[0],
             controller: "none",
           });
-          // The requested old file still exists, but the host now controls its
-          // same-ID copy. Recover through the store's real canonical retry.
+          // Keep the old file readable while the controller moves to its
+          // same-ID copy. Only explicit selection can enable new mutations.
           client.snapshots.push(
             Promise.resolve({
               ...copied,
@@ -2874,16 +4247,17 @@ describe("thinking level selection", () => {
           expect(
             await store.getState().actions.refreshSnapshot({ resetCursor }),
           ).toBe(true);
-          expect(client.snapshotPaths.slice(-2)).toEqual([
-            "/tmp/ws/session.jsonl",
-            null,
-          ]);
-          expect(store.getState().selectedPath).toBe(copiedPath);
+          expect(client.snapshotPaths.at(-1)).toBe("/tmp/ws/session.jsonl");
+          expect(store.getState().selectedPath).toBe("/tmp/ws/session.jsonl");
           expect(store.getState().thinkingPendingLevel).toBeNull();
           expect(store.getState().snapshot?.thinking).toMatchObject({
             level: "medium",
             revision: 2,
           });
+          store.getState().actions.selectThinking("low");
+          expect(mutations).toHaveBeenCalledOnce();
+          await store.getState().actions.selectSession(copiedPath);
+          expect(store.getState().selectedPath).toBe(copiedPath);
 
           const newer = deferred<WebThinkingState & { sessionId: string }>();
           client.setThinkingResults.push(newer.promise);

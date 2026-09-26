@@ -338,6 +338,7 @@ test("session_start hides configure_my_pi_setup after registration refresh", asy
 });
 
 test("openpi-setup and my-pi-setup expose the tool then inject the setup message", async () => {
+  const prompts: string[] = [];
   for (const name of ["openpi-setup", "my-pi-setup"] as const) {
     const h = visibilityHarness();
     await h.emit("session_start");
@@ -351,8 +352,35 @@ test("openpi-setup and my-pi-setup expose the tool then inject the setup message
     assert.match(String(content), /available only for this setup run/i);
     assert.match(String(content), /\/openpi-setup <request>/);
     assert.doesNotMatch(String(content), /intercom/i);
+    prompts.push(String(content));
+    assert.deepEqual(
+      (h.setupRequests()[0]?.message as { details?: unknown }).details,
+      {
+        requestId: "setup-1",
+        command: name,
+        request: "关闭下一步预测",
+      },
+    );
     assert.deepEqual(h.userMessages, []);
   }
+  assert.equal(
+    prompts[0],
+    prompts[1],
+    "presentation metadata must not alter the model-facing setup prompt",
+  );
+});
+
+test("setup metadata retains the original argument text independently of the expanded prompt", async () => {
+  const h = visibilityHarness();
+  await h.emit("session_start");
+  await h.runCommand("my-pi-setup", "  set theme to dark\n");
+  const message = h.setupRequests()[0]?.message as {
+    details: { request: string; command: string };
+    content: string;
+  };
+  assert.equal(message.details.request, "  set theme to dark\n");
+  assert.equal(message.details.command, "my-pi-setup");
+  assert.match(message.content, /this request:\nset theme to dark\n/u);
 });
 
 test("setup activation fails closed for a foreign same-name writer", async () => {
@@ -534,7 +562,8 @@ test("successful setup result closes the episode and names the only re-entry", (
   assert.match(result, /Normalized or migrated.*ui\.footerStyle/);
   assert.match(result, /setup episode is complete/i);
   assert.match(result, /configure_my_pi_setup.*hidden/i);
-  assert.match(result, /do not call it again/i);
+  assert.match(result, /do not call it again within this completed episode/i);
+  assert.match(result, /new episode and makes the writer available again/i);
   assert.match(result, /do not edit.*configuration files/i);
   assert.match(result, /\/openpi-setup <request>/);
 });
@@ -544,6 +573,8 @@ test("no-op setup result records the bounded re-entry contract", () => {
 
   assert.match(result, /no configuration update was confirmed/i);
   assert.match(result, /now hidden/i);
+  assert.match(result, /for this closed episode/i);
+  assert.match(result, /new episode and makes the writer available again/i);
   assert.match(result, /\/openpi-setup <request>/);
   assert.match(result, /do not edit configuration files directly/i);
 });

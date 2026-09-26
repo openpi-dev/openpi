@@ -78,3 +78,23 @@ test("generated files deduplicate by resolved path and keep the latest result", 
     },
   ]);
 });
+
+test("generated files retain only the successful tool's recorded edit", () => {
+  const edit = {
+    ...result("edit", false),
+    details: { diff: "-before\n+after" },
+  };
+  const [file] = generatedFiles([
+    call("edit", "edit", "/other/repo/file.ts"),
+    edit,
+  ]);
+  assert.equal(file?.diff, "-before\n+after");
+  assert.equal(file?.diffTruncated, false);
+  assert.deepEqual(
+    generatedFiles([
+      call("edit", "edit", "/other/repo/file.ts"),
+      { ...edit, isError: true },
+    ]),
+    [],
+  );
+});

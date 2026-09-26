@@ -1,6 +1,7 @@
 import { mkdir, realpath, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
 import { createEvidenceWriteTool } from "./write-evidence.ts";
+import { createTurnChangeRecorder } from "./turn-changes.ts";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { controlPlan, type PlanControlRequest } from "../../extensions/plan-mode/control.ts";
 import {
@@ -20,6 +21,7 @@ import {
 import {
   type WebActiveTurn,
   type WebModelSelectionOptions,
+  type WebModelConfiguration,
   type WebPromptOptions,
   type WebPromptAdmissionReceipt,
   type WebProviderAuthProjection,
@@ -28,14 +30,17 @@ import {
   type WebRuntimeEvent,
   type WebSessionCreationOptions,
   type WebSessionCreationResult,
+  type WebSessionExecution,
   type WebThinkingProjection,
   type WebThinkingSelectionOptions,
   type WebTurnCancellationOptions,
   type WebTurnCancellationResult,
   WebRuntimeRequestError,
 } from "./types.ts";
-import { projectMessage, projectAssistantError } from "../protocol/types.ts";
+import { projectMessage, projectAssistantError, jsonByteLength, boundedText, WEB_MAX_TEXT } from "../protocol/types.ts";
+import { LIVE_TOOL_LIMIT, type LiveToolEvidence } from "../protocol/evidence.ts";
 import { elapsed, traceWeb } from "../trace.ts";
+import { WEB_TURN_TIMING_ENTRY, type WebTurnTiming } from "../protocol/turn-timing.ts";
 import {
   applyHttpProxySettings,
   configureHttpDispatcher,
@@ -46,6 +51,7 @@ import {
   type WebHostLease,
 } from "./web-host-lease.ts";
 import {
+  assertWebCommandSupported,
   commandsForServices,
   createCommandDiscoveryBridge,
   registerCommandDiscoveryBridge,
@@ -56,6 +62,7 @@ import {
   projectWebTrustStatus,
 } from "./trust-status.ts";
 import { projectWebModelSearch } from "./model-discovery.ts";
+import { readModelConfigurations, saveModelConfiguration } from "./model-configuration.ts";
 import { matchesSessionIdentity } from "./session-identity.ts";
 import {
   projectWebSettingsResources,
@@ -68,6 +75,7 @@ const WEB_MAX_PROVIDER_AUTH_ITEMS = 250;
 const WEB_MAX_PROVIDER_AUTH_SCANNED = 1_024;
 const WEB_MAX_PROVIDER_ID_LENGTH = 160;
 const WEB_MAX_PROVIDER_NAME_LENGTH = 160;
+const WEB_MAX_QUEUED_MESSAGES = 20;
 const WEB_PROVIDER_AUTH_SOURCES = new Set<WebProviderAuthSource>([
   "stored",
   "runtime",
@@ -81,6 +89,9 @@ type PromptTrace = {
   commandId: string;
   sessionId: string;
   startedAt: number;
+  executionStartedAt?: number;
+  executionClock?: number;
+  sessionPath?: string;
   started: boolean;
   queued: boolean;
   userMessageObserved: boolean;
@@ -91,6 +102,43 @@ type PromptTrace = {
 type TurnSettlement = WebActiveTurn & {
   outcome: "completed" | "cancelled" | "failed" | "uncertain";
 };
+
+function observePromptOutcome(trace: PromptTrace, event: AgentSessionEvent) {
+  if (event.type !== "message_end" || event.message.role !== "assistant") return;
+  const outcome = event.message.stopReason === "aborted" ? "cancelled"
+    : event.message.stopReason === "error" ? "failed"
+      : event.message.stopReason === "stop" || event.message.stopReason === "length" ? "completed" : undefined;
+  // A later continuation cannot erase native cancellation evidence. Only
+  // agent_settled publishes a terminal outcome for the whole Pi run.
+  if (outcome && trace.outcome !== "cancelled") trace.outcome = outcome;
+}
+
+function executingTools(session: AgentSession) {
+  const pending = session.state.pendingToolCalls;
+  if (!pending.size) return { liveTools: [], liveToolsOmitted: 0 };
+  const messages = session.messages;
+  const liveTools: LiveToolEvidence[] = [];
+  const seen = new Set<string>();
+  let bytes = 0;
+  outer: for (let index = messages.length - 1; index >= Math.max(0, messages.length - 128); index--) {
+    const message = messages[index];
+    if (message?.role !== "assistant") continue;
+    for (let partIndex = message.content.length - 1; partIndex >= Math.max(0, message.content.length - 64); partIndex--) {
+      const part = message.content[partIndex];
+      if (part?.type !== "toolCall" || !pending.has(part.id) || seen.has(part.id)) continue;
+      const call = projectMessage({ role: "assistant", content: [part] }, path => resolve(session.sessionManager.getCwd(), path)).parts?.[0];
+      if (call?.type !== "toolCall") continue;
+      const item: LiveToolEvidence = { call, state: "running" };
+      bytes += jsonByteLength(item);
+      if (bytes > 512 * 1024) break outer;
+      liveTools.push(item);
+      seen.add(part.id);
+      if (liveTools.length >= LIVE_TOOL_LIMIT) break outer;
+    }
+    if (seen.size === pending.size) break;
+  }
+  return { liveTools, liveToolsOmitted: Math.max(0, pending.size - liveTools.length) };
+}
 
 function errorText(error: unknown) {
   return error instanceof Error ? error.message : String(error);
@@ -153,6 +201,7 @@ export class PiWebRuntime implements WebRuntimeController {
   private activePromptTrace?: PromptTrace;
   private promptOrigins?: AsyncLocalStorage<PromptTrace | undefined>;
   private readonly pendingPromptTraces: PromptTrace[] = [];
+  private suspendedPromptTraces?: WeakMap<AgentSession, { active?: PromptTrace; pending: PromptTrace[] }>;
   private nextTurnEpoch = 0;
   private readonly terminalTurnKeys = new Set<string>();
   private readonly turnSettlementWaiters = new Map<
@@ -278,6 +327,38 @@ export class PiWebRuntime implements WebRuntimeController {
 
   getActiveTurn() {
     return this.activeTurnFromTrace(this.activePromptTrace);
+  }
+
+  getSessionExecution(sessionId: string, sessionPath: string): WebSessionExecution {
+    const unknown: WebSessionExecution = { sessionId, sessionPath, status: "unknown", liveTools: [], liveToolsOmitted: 0 };
+    const owner = this.sessionRuntimeForRead(sessionId, sessionPath);
+    if (!owner) return unknown;
+    const session = owner.session;
+    const followUps = session.getFollowUpMessages();
+    const trace = owner === this.runtime ? this.activePromptTrace : this.suspendedPromptTraces?.get(session)?.active;
+    const activeTurn = this.activeTurnFromTrace(trace);
+    return {
+      sessionId, sessionPath,
+      status: session.isIdle ? "idle" : "running",
+      pendingFollowUps: followUps.length,
+      queuedMessages: followUps.slice(0, WEB_MAX_QUEUED_MESSAGES).map((message) => boundedText(message, WEB_MAX_TEXT)),
+      ...executingTools(session),
+      ...(activeTurn ? { activeTurn } : {}),
+    };
+  }
+
+  getSessionManagerForRead(sessionId: string, sessionPath: string) {
+    return this.sessionRuntimeForRead(sessionId, sessionPath)?.session.sessionManager;
+  }
+
+  private sessionRuntimeForRead(sessionId: string, sessionPath: string) {
+    if (this.disposed || !this.hasSelectedWorkspace) return undefined;
+    const expected = { expectedSessionId: sessionId, expectedSessionPath: sessionPath };
+    if (matchesSessionIdentity(this.runtime.session.sessionManager, expected)) return this.runtime;
+    for (const retained of this.retainedRuntimes) {
+      if (matchesSessionIdentity(retained.session.sessionManager, expected)) return retained;
+    }
+    return undefined;
   }
 
   cancelTurn(options: WebTurnCancellationOptions) {
@@ -470,6 +551,67 @@ export class PiWebRuntime implements WebRuntimeController {
     };
   }
 
+  private assertSettingsWritable(sessionId: string) {
+    this.assertActive();
+    this.assertWorkspaceSelected();
+    if (sessionId !== this.sessionManager.getSessionId() || !this.isIdle()) {
+      throw new WebRuntimeRequestError("Wait for the active Session to become idle before saving settings", "SESSION_CONFLICT", 409);
+    }
+  }
+
+  private async mutateSettings(sessionId: string, operation: () => Promise<void>) {
+    // Reuse prompt admission: a second tab cannot begin a turn halfway through
+    // a configuration write, and already-admitted turns are checked for idle.
+    const previousAdmission = this.promptAdmission;
+    let release = () => {};
+    this.promptAdmission = new Promise<void>((resolve) => { release = resolve; });
+    try {
+      await previousAdmission;
+      this.assertSettingsWritable(sessionId);
+      await operation();
+    } finally { release(); }
+  }
+
+  saveProviderKey(sessionId: string, provider: string, apiKey: string) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      const models = this.runtime.services.modelRuntime;
+      if (!models.getProvider(provider)?.auth.apiKey?.login) throw new Error("API key login is unavailable for this provider");
+      let submitted = false;
+      await models.login(provider, "api_key", {
+        signal: AbortSignal.timeout(10_000),
+        notify: () => undefined,
+        prompt: async (prompt) => {
+          if (prompt.type === "select") {
+            const option = prompt.options.find((item) => item.id === "api-key" || item.id === "bearer-token");
+            if (option) return option.id;
+          }
+          if (prompt.type === "secret" && !submitted) {
+            submitted = true;
+            return apiKey;
+          }
+          throw new Error("This provider needs additional authentication settings");
+        },
+      });
+    }));
+  }
+
+  readModelConfigurations() {
+    return readModelConfigurations(this.runtime.services.agentDir);
+  }
+
+  saveModelConfiguration(sessionId: string, revision: string, model: WebModelConfiguration) {
+    return this.serializeControllerMutation(() => this.mutateSettings(sessionId, async () => {
+      await saveModelConfiguration(this.runtime.services.agentDir, revision, model);
+      await this.runtime.services.modelRuntime.refresh({ allowNetwork: false, signal: AbortSignal.timeout(10_000) });
+      const updated = this.runtime.services.modelRuntime.getModel(model.provider, model.id);
+      if (!updated) throw new Error("Saved model was not loaded by Pi");
+      const current = this.runtime.session.model;
+      if (current?.provider === model.provider && current.id === model.id) {
+        await this.runtime.session.setModel(updated);
+      }
+    }));
+  }
+
   getSessionUsage() {
     const stats = this.runtime.session.getSessionStats();
     return {
@@ -500,12 +642,12 @@ export class PiWebRuntime implements WebRuntimeController {
     );
   }
 
-  setPlanMode(request: PlanControlRequest & { sessionId: string }) {
+  setPlanMode(request: PlanControlRequest & { sessionId: string; sessionPath: string }) {
     return this.serializeControllerMutation(async () => {
       this.assertActive();
       this.assertWorkspaceSelected();
       const session = this.runtime.session;
-      if (request.sessionId !== session.sessionManager.getSessionId())
+      if (!matchesSessionIdentity(session.sessionManager, { expectedSessionId: request.sessionId, expectedSessionPath: request.sessionPath }))
         throw new WebRuntimeRequestError("The active Session changed", "SESSION_CONFLICT", 409);
       // Include preflight/queued work, not just provider streaming. The owner
       // callback below is synchronous: no prompt can enter mid-transition.
@@ -723,6 +865,7 @@ export class PiWebRuntime implements WebRuntimeController {
       ? {
           commandId: options.commandId,
           sessionId,
+          sessionPath: session.sessionManager.getSessionFile() ?? `current:${sessionId}`,
           startedAt,
           started: false,
           queued: false,
@@ -762,6 +905,7 @@ export class PiWebRuntime implements WebRuntimeController {
             409,
           );
         }
+        assertWebCommandSupported(agentRuntime.services, content);
         if (promptTrace && agentRuntime === this.runtime) {
           this.pendingPromptTraces.push(promptTrace);
           this.activePromptTrace ??= this.pendingPromptTraces.shift();
@@ -862,7 +1006,8 @@ export class PiWebRuntime implements WebRuntimeController {
           admitted &&
           options?.commandId &&
           !agentLifecycleStarted &&
-          !queuedForAgent
+          !queuedForAgent &&
+          session.isIdle
         ) {
           this.emit("prompt_settled", {
             commandId: options.commandId,
@@ -880,7 +1025,10 @@ export class PiWebRuntime implements WebRuntimeController {
             this.activePromptTrace?.commandId === promptTrace.commandId
               ? this.activePromptTrace.started
               : promptTrace.started;
-          if (!promptTrace.queued && !promptTrace.started) {
+          // Native extension commands may start a triggerTurn asynchronously:
+          // their handler returns before the delayed agent_start is projected.
+          // Pi already reports an active run, so keep its admitted identity.
+          if (!promptTrace.queued && !promptTrace.started && session.isIdle) {
             this.removePromptTrace(promptTrace);
           }
         }
@@ -1123,7 +1271,7 @@ export class PiWebRuntime implements WebRuntimeController {
         settingsManager,
         modelRuntimeSignal: AbortSignal.timeout(STARTUP_TIMEOUT_MS),
         resourceLoaderOptions: {
-          extensionFactories: [commandDiscovery.extension],
+          extensionFactories: [commandDiscovery.extension, createTurnChangeRecorder(options.sessionManager, options.cwd)],
         },
       });
       registerCommandDiscoveryBridge(services, commandDiscovery);
@@ -1237,10 +1385,11 @@ export class PiWebRuntime implements WebRuntimeController {
     // request or an unrelated run. This also retains its controlling Web tab.
     if (event.type === "agent_start" && !this.activePromptTrace) {
       const origin = this.promptOrigins?.getStore();
-      if (origin && !origin.started && origin.sessionId === session.sessionManager.getSessionId()) {
+      if (origin && !origin.started && matchesSessionIdentity(session.sessionManager, { expectedSessionId: origin.sessionId, expectedSessionPath: origin.sessionPath })) {
         this.activePromptTrace = origin;
       }
     }
+    if (this.activePromptTrace) observePromptOutcome(this.activePromptTrace, event);
     if (event.type === "agent_start" && this.activePromptTrace) {
       this.startPromptTrace(this.activePromptTrace);
     }
@@ -1316,6 +1465,9 @@ export class PiWebRuntime implements WebRuntimeController {
           level: event.level,
         });
         break;
+      case "queue_update":
+        this.emit(event.type, { sessionId: session.sessionManager.getSessionId() });
+        break;
       case "auto_retry_start":
         this.emit(event.type, {
           attempt: event.attempt,
@@ -1332,30 +1484,6 @@ export class PiWebRuntime implements WebRuntimeController {
         break;
       case "message_update":
       case "message_end":
-        if (
-          event.type === "message_end" &&
-          event.message.role === "assistant" &&
-          this.activePromptTrace
-        ) {
-          // Preserve the terminal model result for classification, but defer
-          // publication until Pi confirms the entire run is settled.
-          const outcome =
-            event.message.stopReason === "aborted"
-              ? "cancelled"
-              : event.message.stopReason === "error"
-                ? "failed"
-                : event.message.stopReason === "stop" ||
-                    event.message.stopReason === "length"
-                  ? "completed"
-                  : undefined;
-          // A later queued continuation must not erase proof that the
-          // provider result targeted by Stop was aborted. The control remains
-          // owned until agent_settled; this outcome does not claim that every
-          // queued follow-up in the same Pi execution was cancelled.
-          if (outcome && this.activePromptTrace.outcome !== "cancelled") {
-            this.activePromptTrace.outcome = outcome;
-          }
-        }
         this.emit(event.type, {
           message: projectMessage(event.message, (path) => resolve(this.cwd, path)),
           ...(this.liveMessageKey ? { messageKey: this.liveMessageKey } : {}),
@@ -1388,18 +1516,28 @@ export class PiWebRuntime implements WebRuntimeController {
       sessionId: trace.sessionId,
       commandId: trace.commandId,
       epoch: trace.epoch,
+      ...(trace.executionStartedAt !== undefined && trace.executionClock !== undefined
+        ? {
+            startedAt: trace.executionStartedAt,
+            elapsedMs: Math.max(0, Math.floor(performance.now() - trace.executionClock)),
+            sessionPath: trace.sessionPath,
+          }
+        : {}),
     };
   }
 
-  private startPromptTrace(trace: PromptTrace) {
+  private startPromptTrace(trace: PromptTrace, sessionManager = this.sessionManager, publish = true) {
     if (trace.started) return;
     trace.started = true;
+    trace.executionStartedAt = Date.now();
+    trace.executionClock = performance.now();
+    trace.sessionPath = sessionManager.getSessionFile?.() ?? `current:${trace.sessionId}`;
     trace.epoch = ++this.nextTurnEpoch;
     const activeTurn = this.activeTurnFromTrace(trace);
-    if (activeTurn) this.emit("turn_started", { ...activeTurn });
+    if (activeTurn && publish) this.emit("turn_started", { ...activeTurn });
   }
 
-  private settlePromptTrace(trace: PromptTrace) {
+  private settlePromptTrace(trace: PromptTrace, sessionManager = this.sessionManager, publish = true) {
     const activeTurn = this.activeTurnFromTrace(trace);
     if (!activeTurn) return;
     const settlement: TurnSettlement = {
@@ -1410,12 +1548,30 @@ export class PiWebRuntime implements WebRuntimeController {
     const key = this.turnKey(activeTurn);
     if (this.terminalTurnKeys.has(key)) return;
     this.terminalTurnKeys.add(key);
+    if (activeTurn.startedAt !== undefined && activeTurn.elapsedMs !== undefined) {
+      const timing: WebTurnTiming = {
+        version: 1,
+        sessionId: activeTurn.sessionId,
+        commandId: activeTurn.commandId,
+        epoch: activeTurn.epoch,
+        startedAt: activeTurn.startedAt,
+        finishedAt: Date.now(),
+        elapsedMs: activeTurn.elapsedMs,
+        outcome: settlement.outcome,
+      };
+      try {
+        sessionManager.appendCustomEntry(WEB_TURN_TIMING_ENTRY, timing);
+      } catch {
+        // Optional display evidence must never change Pi's terminal outcome.
+        traceWeb("turn_timing_persistence_failed", { commandId: activeTurn.commandId });
+      }
+    }
     this.turnAbortOperations.delete(key);
     while (this.terminalTurnKeys.size > 64) {
       const oldest = this.terminalTurnKeys.values().next().value;
       if (typeof oldest === "string") this.terminalTurnKeys.delete(oldest);
     }
-    this.emit("turn_settled", { ...settlement });
+    if (publish) this.emit("turn_settled", { ...settlement });
     for (const resolveSettlement of this.turnSettlementWaiters.get(key) ?? []) {
       resolveSettlement(settlement);
     }
@@ -1491,14 +1647,39 @@ export class PiWebRuntime implements WebRuntimeController {
 
   private retainRuntime(runtime: AgentSessionRuntime) {
     this.retainedRuntimes.add(runtime);
-    const unsubscribe = runtime.session.subscribe((event) => {
-      if (event.type !== "agent_settled") return;
+    const session = runtime.session;
+    let progressTimer: ReturnType<typeof setTimeout> | undefined;
+    const progress = () => {
+      progressTimer = undefined;
+      if (!this.retainedRuntimes.has(runtime)) return;
       this.emit("session_progress", {
-        sessionId: runtime.session.sessionManager.getSessionId(),
+        sessionId: session.sessionManager.getSessionId(),
+        sessionPath: session.sessionManager.getSessionFile() ?? `current:${session.sessionManager.getSessionId()}`,
       });
-      this.releaseRetainedRuntime(runtime);
+    };
+    const unsubscribe = session.subscribe((event) => {
+      const traces = this.suspendedPromptTraces?.get(session);
+      if (traces) {
+        if (event.type === "agent_start" || (event.type === "message_start" && event.message.role === "user")) {
+          traces.active ??= traces.pending.shift();
+          if (traces.active) this.startPromptTrace(traces.active, session.sessionManager, false);
+        }
+        if (traces.active) observePromptOutcome(traces.active, event);
+        if (event.type === "agent_settled") {
+          if (traces.active?.started) this.settlePromptTrace(traces.active, session.sessionManager, false);
+          this.suspendedPromptTraces?.delete(session);
+        }
+      }
+      if (event.type === "agent_settled") {
+        clearTimeout(progressTimer);
+        progress();
+        this.releaseRetainedRuntime(runtime);
+      } else if (["agent_start", "message_start", "message_end", "tool_execution_start", "tool_execution_end", "queue_update"].includes(event.type) && !progressTimer) {
+        progressTimer = setTimeout(progress, 100);
+        progressTimer.unref();
+      }
     });
-    this.retainedSubscriptions.set(runtime, unsubscribe);
+    this.retainedSubscriptions.set(runtime, () => { clearTimeout(progressTimer); unsubscribe(); });
     this.releaseRetainedRuntime(runtime);
   }
 
@@ -1509,7 +1690,7 @@ export class PiWebRuntime implements WebRuntimeController {
     this.retainedRuntimes.delete(runtime);
     this.unsubscribeSession?.();
     this.unsubscribeSession = undefined;
-    this.resetPromptTraces();
+    this.switchPromptTraceOwner(previous.session, runtime.session);
     this.retainRuntime(previous);
     this.runtime = runtime;
     this.attachActiveSession(runtime, runtime.session);
@@ -1568,7 +1749,7 @@ export class PiWebRuntime implements WebRuntimeController {
       }
       throw error;
     }
-    this.resetPromptTraces();
+    this.switchPromptTraceOwner(previous.session, replacement.session);
     this.retainRuntime(previous);
   }
 
@@ -1593,9 +1774,13 @@ export class PiWebRuntime implements WebRuntimeController {
     }
   }
 
-  private resetPromptTraces() {
-    this.activePromptTrace = undefined;
-    this.pendingPromptTraces.length = 0;
-    this.turnAbortOperations.clear();
+  private switchPromptTraceOwner(previous: AgentSession, next: AgentSession) {
+    const owners = this.suspendedPromptTraces ??= new WeakMap();
+    if (this.activePromptTrace || this.pendingPromptTraces.length) owners.set(previous, { active: this.activePromptTrace, pending: [...this.pendingPromptTraces] });
+    else owners.delete(previous);
+    const incoming = owners.get(next);
+    this.activePromptTrace = incoming?.active;
+    this.pendingPromptTraces.splice(0, this.pendingPromptTraces.length, ...(incoming?.pending ?? []));
+    owners.delete(next);
   }
 }

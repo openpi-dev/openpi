@@ -5,20 +5,38 @@ import { Tooltip } from "@astryxdesign/core/Tooltip";
 import {
   Archive,
   ArchiveRestore,
+  CircleDot,
+  ListOrdered,
   MoreHorizontal,
   PanelLeftClose,
   Plus,
+  RefreshCw,
   Search,
   Settings,
   SquarePen,
   Trash2,
   X,
 } from "lucide-react";
-import { type RefObject, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type RefObject,
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { useTranslation } from "react-i18next";
-import type { WebSnapshot } from "../../../../protocol/types.ts";
+import {
+  WEB_MAX_ARCHIVED_SESSION_QUERY,
+  type WebSnapshot,
+} from "../../../../protocol/types.ts";
 import { OpenPiLogo } from "../../components/OpenPiLogo.tsx";
 import { compactPath, relativeTime, sessionTitle } from "../../lib/format.ts";
+import {
+  type ArchivedSessionPage,
+  WebApiError,
+  WebClient,
+} from "../../protocol/client.ts";
 import type { WebStoreActions } from "../../store/web-store.ts";
 
 interface SessionSidebarProps {
@@ -71,13 +89,112 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const [editTarget, setEditTarget] = useState<EditTarget | null>(null);
   const [deleteTarget, setDeleteTarget] = useState<DeleteTarget | null>(null);
   const [draft, setDraft] = useState("");
+  const [editError, setEditError] = useState(false);
   const searchInput = useRef<HTMLInputElement>(null);
   const searchButton = useRef<HTMLButtonElement>(null);
   const editInput = useRef<HTMLInputElement>(null);
   const sidebar = useRef<HTMLDivElement>(null);
   const closeButton = useRef<HTMLButtonElement>(null);
   const snapshot = props.snapshot;
+  const client = useMemo(() => new WebClient(), []);
   const [archived, setArchived] = useState(false);
+  const archiveQuery = props.query.trim();
+  const archiveScope = JSON.stringify([archived, archiveQuery]);
+  const currentArchiveScope = useRef({ key: archiveScope });
+  if (currentArchiveScope.current.key !== archiveScope)
+    currentArchiveScope.current = { key: archiveScope };
+  const mounted = useRef(false);
+  const [archivePage, setArchivePage] = useState<
+    (ArchivedSessionPage & { query: string }) | null
+  >(null);
+  const [archiveLoading, setArchiveLoading] = useState(false);
+  const [archiveError, setArchiveError] = useState<{
+    query: string;
+    kind: "failed" | "stale";
+    cursor?: string;
+    retainedCount?: number;
+  } | null>(null);
+  const archiveRequest = useRef<AbortController | null>(null);
+  const scopedArchivePage =
+    archivePage?.query === archiveQuery ? archivePage : null;
+  const scopedArchiveError =
+    archiveError?.query === archiveQuery ? archiveError : null;
+  const loadArchives = useCallback(
+    async (cursor?: string, retainedCount?: number) => {
+      if (!archived) return;
+      archiveRequest.current?.abort();
+      const controller = new AbortController();
+      archiveRequest.current = controller;
+      setArchiveLoading(true);
+      setArchiveError(null);
+      try {
+        let page = await client.listArchivedSessions(
+          { query: archiveQuery, ...(cursor ? { cursor } : {}), limit: 25 },
+          controller.signal,
+        );
+        if (controller.signal.aborted || archiveRequest.current !== controller)
+          return;
+        const sessions = [...page.sessions];
+        // A metadata refresh should keep the range the reader already opened.
+        while (
+          !cursor &&
+          retainedCount !== undefined &&
+          sessions.length < retainedCount &&
+          page.nextCursor
+        ) {
+          page = await client.listArchivedSessions(
+            { query: archiveQuery, cursor: page.nextCursor, limit: 25 },
+            controller.signal,
+          );
+          if (
+            controller.signal.aborted ||
+            archiveRequest.current !== controller
+          )
+            return;
+          const additional = page.sessions.filter(
+            (session) =>
+              !sessions.some((existing) => existing.path === session.path),
+          );
+          sessions.push(...additional);
+          if (!additional.length) break;
+        }
+        setArchivePage((previous) => ({
+          ...page,
+          query: archiveQuery,
+          sessions:
+            cursor && previous?.query === archiveQuery
+              ? [
+                  ...previous.sessions,
+                  ...sessions.filter(
+                    (session) =>
+                      !previous.sessions.some(
+                        (existing) => existing.path === session.path,
+                      ),
+                  ),
+                ]
+              : sessions,
+        }));
+      } catch (error) {
+        if (!controller.signal.aborted && archiveRequest.current === controller)
+          setArchiveError({
+            query: archiveQuery,
+            kind:
+              error instanceof WebApiError &&
+              error.code === "ARCHIVED_SESSION_CURSOR_STALE"
+                ? "stale"
+                : "failed",
+            ...(cursor ? { cursor } : {}),
+            ...(retainedCount !== undefined ? { retainedCount } : {}),
+          });
+      } finally {
+        if (archiveRequest.current === controller) {
+          archiveRequest.current = null;
+          setArchiveLoading(false);
+        }
+      }
+    },
+    [archiveQuery, archived, client],
+  );
   const [archiveCollapsed, setArchiveCollapsed] = useState<Set<string>>(
     new Set(),
   );
@@ -85,18 +202,57 @@ export function SessionSidebar(props: SessionSidebarProps) {
   const restoreInFlight = useRef(new Set<string>());
   const [restoreError, setRestoreError] = useState(false);
   const [saving, setSaving] = useState(false);
+  const saveInFlight = useRef(false);
+  const [removing, setRemoving] = useState(false);
+  const removeInFlight = useRef(false);
+  const [removeError, setRemoveError] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const createInFlight = useRef(false);
   const restore = async (path: string) => {
     if (restoreInFlight.current.has(path)) return;
     restoreInFlight.current.add(path);
     setRestoring(new Set(restoreInFlight.current));
     setRestoreError(false);
+    const scope = currentArchiveScope.current;
     try {
-      if (!(await props.actions.unarchiveSession(path))) setRestoreError(true);
+      const restored = await props.actions.unarchiveSession(path);
+      if (!mounted.current || currentArchiveScope.current !== scope) return;
+      if (!restored) setRestoreError(true);
+      else {
+        setArchivePage((page) =>
+          page
+            ? {
+                ...page,
+                sessions: page.sessions.filter((item) => item.path !== path),
+              }
+            : null,
+        );
+        await loadArchives();
+      }
     } finally {
       restoreInFlight.current.delete(path);
-      setRestoring(new Set(restoreInFlight.current));
+      if (mounted.current) setRestoring(new Set(restoreInFlight.current));
     }
   };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+  useEffect(() => {
+    setRestoreError(false);
+    setArchiveError(null);
+    if (archived) {
+      setArchivePage((page) => (page?.query === archiveQuery ? page : null));
+      void loadArchives();
+    }
+    return () => {
+      archiveRequest.current?.abort();
+      archiveRequest.current = null;
+    };
+  }, [archiveQuery, archived, loadArchives]);
 
   useEffect(() => {
     if (!props.searchOpen) return;
@@ -128,21 +284,25 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
   const grouped = useMemo(() => {
     const query = props.query.trim().toLowerCase();
+    const sessions = archived
+      ? (scopedArchivePage?.sessions ?? [])
+      : (snapshot?.sessions ?? []);
     const visible = (workspacePath: string, workspaceMatches: boolean) =>
-      (snapshot?.sessions ?? []).filter(
+      sessions.filter(
         (session) =>
           Boolean(session.archived) === archived &&
           (workspacePath === "__ungrouped__"
             ? session.ungrouped
             : session.cwd === workspacePath && !session.ungrouped) &&
           (!query ||
+            archived ||
             workspaceMatches ||
             `${sessionTitle(session, t("untitledSession"))} ${session.cwd}`
               .toLowerCase()
               .includes(query)),
       );
     const workspaces = [...(snapshot?.workspaces ?? [])];
-    for (const session of snapshot?.sessions ?? []) {
+    for (const session of sessions) {
       if (
         !session.ungrouped &&
         !workspaces.some((workspace) => workspace.path === session.cwd)
@@ -179,15 +339,19 @@ export function SessionSidebar(props: SessionSidebarProps) {
         group.sessions.length > 0 ||
         (!archived && !group.ungrouped && (!query || group.matches)),
     );
-  }, [archived, props.query, snapshot, t]);
+  }, [archived, props.query, scopedArchivePage, snapshot, t]);
 
   const confirmedPath =
-    snapshot?.selectedSession?.id === snapshot?.currentSessionId &&
     snapshot?.selectedSession?.path === props.selectedPath
       ? props.selectedPath
       : null;
   const activeWorkspace = confirmedPath
-    ? snapshot?.sessions.find((session) => session.path === confirmedPath)?.cwd
+    ? (snapshot?.selectedSession?.cwd ??
+      snapshot?.sessions.find(
+        (session) =>
+          session.path === confirmedPath &&
+          session.id === snapshot?.selectedSession?.id,
+      )?.cwd)
     : props.selectedPath
       ? null
       : props.selectedWorkspace;
@@ -197,22 +361,89 @@ export function SessionSidebar(props: SessionSidebarProps) {
   );
 
   const openEdit = (target: EditTarget) => {
+    if (saveInFlight.current) return;
     setDraft(target.name);
+    setEditError(false);
     setEditTarget(target);
   };
   const saveEdit = async () => {
     const name = draft.trim();
-    if (!editTarget || !name || saving) return;
+    if (
+      !editTarget ||
+      !name ||
+      name === editTarget.name ||
+      saveInFlight.current
+    )
+      return;
+    const target = editTarget;
+    const scope = currentArchiveScope.current;
+    const retainedCount = scopedArchivePage?.sessions.length ?? 25;
+    saveInFlight.current = true;
     setSaving(true);
+    setEditError(false);
     try {
-      if (editTarget.kind === "workspace")
-        await props.actions.renameWorkspace(editTarget.path, name);
-      else await props.actions.renameSession(editTarget.path, name);
+      if (target.kind === "workspace")
+        await props.actions.renameWorkspace(target.path, name);
+      else await props.actions.renameSession(target.path, name);
+      if (!mounted.current) return;
       setEditTarget(null);
+      if (
+        target.kind === "session" &&
+        archived &&
+        currentArchiveScope.current === scope
+      )
+        void loadArchives(undefined, retainedCount);
     } catch {
-      // The store reports the error; keep the user's draft in the dialog.
+      if (mounted.current) setEditError(true);
     } finally {
-      setSaving(false);
+      saveInFlight.current = false;
+      if (mounted.current) setSaving(false);
+    }
+  };
+  const removeWorkspace = async () => {
+    if (!deleteTarget || removeInFlight.current) return;
+    const target = deleteTarget;
+    removeInFlight.current = true;
+    setRemoving(true);
+    setRemoveError(false);
+    try {
+      const removed = await props.actions.removeWorkspace(target.path);
+      if (!mounted.current) return;
+      if (removed) setDeleteTarget(null);
+      else setRemoveError(true);
+    } catch {
+      if (mounted.current) setRemoveError(true);
+    } finally {
+      removeInFlight.current = false;
+      if (mounted.current) setRemoving(false);
+    }
+  };
+  const startSession = async (workspacePath: string | null) => {
+    if (createInFlight.current) return;
+    const scope = currentArchiveScope.current;
+    createInFlight.current = true;
+    setCreating(true);
+    try {
+      if (!workspacePath) {
+        await props.actions.chooseWorkspace();
+        return;
+      }
+      const target = await props.actions.createSession(workspacePath);
+      if (
+        !mounted.current ||
+        currentArchiveScope.current !== scope ||
+        !target?.sessionId ||
+        !target.sessionPath ||
+        target.workspacePath !== workspacePath
+      )
+        return;
+      setArchived(false);
+      props.actions.setQuery("");
+    } catch {
+      // Native creation owns error feedback; preserve the reader's list scope.
+    } finally {
+      createInFlight.current = false;
+      if (mounted.current) setCreating(false);
     }
   };
 
@@ -286,11 +517,9 @@ export function SessionSidebar(props: SessionSidebarProps) {
         type="button"
         aria-label={t("newSession")}
         title={t("newSession")}
-        onClick={() =>
-          props.selectedWorkspace
-            ? void props.actions.createSession(props.selectedWorkspace)
-            : void props.actions.chooseWorkspace()
-        }
+        disabled={creating}
+        aria-busy={creating || undefined}
+        onClick={() => void startSession(props.selectedWorkspace)}
       >
         <SquarePen />
         <span>{t("newSession")}</span>
@@ -307,6 +536,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             type="search"
             value={props.query}
             placeholder={t("searchPlaceholder")}
+            maxLength={archived ? WEB_MAX_ARCHIVED_SESSION_QUERY : undefined}
             aria-label={t("searchConversations")}
             onChange={(event) => props.actions.setQuery(event.target.value)}
           />
@@ -362,8 +592,58 @@ export function SessionSidebar(props: SessionSidebarProps) {
           {t("archivedConversations")}
         </button>
       </fieldset>
-      {archived && <p className="sidebar-scope-note">{t("loadedArchives")}</p>}
-      {loadedHistoryBounded && (
+      {archived && (
+        <div className="sidebar-archive-actions">
+          <button
+            type="button"
+            className="icon-button"
+            aria-label={t("refreshArchives")}
+            title={t("refreshArchives")}
+            disabled={archiveLoading}
+            onClick={() => void loadArchives()}
+          >
+            <RefreshCw aria-hidden="true" />
+          </button>
+          {archiveLoading && <span role="status">{t("loadingArchives")}</span>}
+        </div>
+      )}
+      {archived && scopedArchiveError && (
+        <div className="sidebar-scope-note" role="alert">
+          <p>
+            {t(
+              scopedArchiveError.kind === "stale"
+                ? "archiveCursorStale"
+                : "archiveLoadFailed",
+            )}
+          </p>
+          <button
+            type="button"
+            disabled={archiveLoading}
+            onClick={() =>
+              void loadArchives(
+                scopedArchiveError.kind === "stale"
+                  ? undefined
+                  : scopedArchiveError.cursor,
+                scopedArchiveError.retainedCount,
+              )
+            }
+          >
+            {t(
+              scopedArchiveError.kind === "stale"
+                ? "refreshArchives"
+                : "retryArchives",
+            )}
+          </button>
+        </div>
+      )}
+      {archived && Boolean(scopedArchivePage?.truncation.recordsUnscanned) && (
+        <p className="sidebar-scope-note">
+          {t("archiveScanBounded", {
+            count: scopedArchivePage?.truncation.recordsUnscanned,
+          })}
+        </p>
+      )}
+      {!archived && loadedHistoryBounded && (
         <p className="sidebar-scope-note">
           {t("loadedHistoryBounded", {
             sessions: snapshot?.truncation.sessionsOmitted,
@@ -371,7 +651,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
           })}
         </p>
       )}
-      {restoreError && (
+      {archived && restoreError && (
         <p className="sidebar-scope-note" role="alert">
           {t("restoreFailed")}
         </p>
@@ -382,8 +662,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             const collapsed =
               (archived ? archiveCollapsed : props.collapsed).has(group.path) &&
               !props.query.trim();
-            const active =
-              !archived && !group.ungrouped && activeWorkspace === group.path;
+            const active = !group.ungrouped && activeWorkspace === group.path;
             return (
               <section
                 className={`workspace-group ${collapsed ? "collapsed" : ""} ${active ? "is-active-workspace" : ""}`}
@@ -423,7 +702,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
                   {!group.ungrouped && (
                     <span className="workspace-row-actions">
                       <ActionMenu
-                        label="Workspace options"
+                        label={t("workspaceOptions")}
                         items={[
                           {
                             id: "rename",
@@ -441,11 +720,13 @@ export function SessionSidebar(props: SessionSidebarProps) {
                             label: t("removeWorkspace"),
                             icon: <Trash2 />,
                             variant: "destructive",
-                            onClick: () =>
+                            onClick: () => {
+                              setRemoveError(false);
                               setDeleteTarget({
                                 path: group.path,
                                 name: group.name,
-                              }),
+                              });
+                            },
                           },
                         ]}
                       />
@@ -454,9 +735,11 @@ export function SessionSidebar(props: SessionSidebarProps) {
                           className="workspace-action"
                           type="button"
                           aria-label={`${t("newSession")} ${group.name}`}
+                          disabled={creating}
+                          aria-busy={creating || undefined}
                           onClick={(event) => {
                             event.stopPropagation();
-                            void props.actions.createSession(group.path);
+                            void startSession(group.path);
                           }}
                         >
                           <Plus />
@@ -468,71 +751,112 @@ export function SessionSidebar(props: SessionSidebarProps) {
                 {!collapsed && (
                   <div className="workspace-sessions">
                     {group.sessions.length ? (
-                      group.sessions.map((session) => (
-                        <div className="session-row" key={session.path}>
-                          <button
-                            className={`session ${session.path === confirmedPath ? "active" : ""}`}
-                            type="button"
-                            aria-current={
-                              session.path === confirmedPath
-                                ? "page"
-                                : undefined
-                            }
-                            aria-label={`${sessionTitle(session, t("untitledSession"))} · ${session.path}`}
-                            onClick={() =>
-                              void props.actions.selectSession(session.path)
-                            }
-                          >
-                            <span className="session-title">
-                              {sessionTitle(session, t("untitledSession"))}
-                            </span>
-                            <span className="session-time">
-                              {relativeTime(session.modified)}
-                            </span>
-                          </button>
-                          <ActionMenu
-                            label={t("conversationOptions")}
-                            items={[
-                              {
-                                id: "rename",
-                                label: t("renameConversation"),
-                                icon: <SquarePen />,
-                                onClick: () =>
-                                  openEdit({
-                                    kind: "session",
-                                    path: session.path,
-                                    name: sessionTitle(
-                                      session,
-                                      t("untitledSession"),
-                                    ),
-                                  }),
-                              },
-                              {
-                                id: archived ? "restore" : "archive",
-                                label: restoring.has(session.path)
-                                  ? t("restoringConversation")
-                                  : t(
-                                      archived
-                                        ? "restoreConversation"
-                                        : "archiveConversation",
-                                    ),
-                                icon: archived ? (
-                                  <ArchiveRestore />
-                                ) : (
-                                  <Archive />
-                                ),
-                                isDisabled: restoring.has(session.path),
-                                onClick: () =>
-                                  archived
-                                    ? void restore(session.path)
-                                    : void props.actions.archiveSession(
-                                        session.path,
+                      group.sessions.map((session) => {
+                        const running = session.execution?.status === "running";
+                        const queued = session.execution?.pendingFollowUps ?? 0;
+                        const selected =
+                          session.path === confirmedPath &&
+                          session.id === snapshot?.selectedSession?.id;
+                        const statusLabel = [
+                          ...(running ? [t("execution_running")] : []),
+                          ...(queued > 0
+                            ? [t("pendingFollowUpsHint", { count: queued })]
+                            : []),
+                        ].join(" · ");
+                        return (
+                          <div className="session-row" key={session.path}>
+                            <button
+                              className={`session ${selected ? "active" : ""}`}
+                              type="button"
+                              aria-current={selected ? "page" : undefined}
+                              aria-label={[
+                                sessionTitle(session, t("untitledSession")),
+                                session.path,
+                                statusLabel,
+                              ]
+                                .filter(Boolean)
+                                .join(" · ")}
+                              onClick={() =>
+                                void props.actions.selectSession(session.path)
+                              }
+                            >
+                              <span
+                                className="session-title"
+                                title={sessionTitle(
+                                  session,
+                                  t("untitledSession"),
+                                )}
+                              >
+                                {sessionTitle(session, t("untitledSession"))}
+                              </span>
+                              {statusLabel && (
+                                <Tooltip content={statusLabel}>
+                                  <span
+                                    className="session-status"
+                                    aria-hidden="true"
+                                  >
+                                    {running && (
+                                      <CircleDot className="session-running" />
+                                    )}
+                                    {queued > 0 && (
+                                      <span className="session-queue">
+                                        <ListOrdered />
+                                        <span>
+                                          {queued > 99 ? "99+" : queued}
+                                        </span>
+                                      </span>
+                                    )}
+                                  </span>
+                                </Tooltip>
+                              )}
+                              <span className="session-time">
+                                {relativeTime(session.modified)}
+                              </span>
+                            </button>
+                            <ActionMenu
+                              label={t("conversationOptions")}
+                              items={[
+                                {
+                                  id: "rename",
+                                  label: t("renameConversation"),
+                                  icon: <SquarePen />,
+                                  onClick: () =>
+                                    openEdit({
+                                      kind: "session",
+                                      path: session.path,
+                                      name: sessionTitle(
+                                        session,
+                                        t("untitledSession"),
                                       ),
-                              },
-                            ]}
-                          />
-                        </div>
-                      ))
+                                    }),
+                                },
+                                {
+                                  id: archived ? "restore" : "archive",
+                                  label: restoring.has(session.path)
+                                    ? t("restoringConversation")
+                                    : t(
+                                        archived
+                                          ? "restoreConversation"
+                                          : "archiveConversation",
+                                      ),
+                                  icon: archived ? (
+                                    <ArchiveRestore />
+                                  ) : (
+                                    <Archive />
+                                  ),
+                                  isDisabled: restoring.has(session.path),
+                                  onClick: () =>
+                                    archived
+                                      ? void restore(session.path)
+                                      : void props.actions.archiveSession(
+                                          session.path,
+                                        ),
+                                },
+                              ]}
+                            />
+                          </div>
+                        );
+                      })
                     ) : (
                       <div className="empty">{t("noConversations")}</div>
                     )}
@@ -542,12 +866,39 @@ export function SessionSidebar(props: SessionSidebarProps) {
             );
           })
         ) : (
-          <div className="empty">
+          <div
+            className="empty"
+            hidden={archived && (archiveLoading || Boolean(scopedArchiveError))}
+          >
             {props.query.trim()
-              ? t(loadedHistoryBounded ? "noMatchingLoaded" : "noMatching")
-              : t(archived ? "noLoadedArchives" : "noSessions")}
+              ? t(
+                  archived && scopedArchivePage?.truncation.recordsUnscanned
+                    ? "noMatchingScannedArchives"
+                    : !archived && loadedHistoryBounded
+                      ? "noMatchingLoaded"
+                      : "noMatching",
+                )
+              : t(
+                  archived
+                    ? scopedArchivePage?.truncation.recordsUnscanned
+                      ? "noScannedArchives"
+                      : "noArchivedSessions"
+                    : "noSessions",
+                )}
           </div>
         )}
+        {archived &&
+          scopedArchivePage?.nextCursor &&
+          scopedArchiveError?.kind !== "stale" && (
+            <button
+              type="button"
+              className="sidebar-archive-more"
+              disabled={archiveLoading}
+              onClick={() => void loadArchives(scopedArchivePage.nextCursor)}
+            >
+              {t("moreArchives")}
+            </button>
+          )}
       </div>
 
       <div className="sidebar-footer">
@@ -568,7 +919,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
       <Dialog
         isOpen={Boolean(editTarget)}
         onOpenChange={(open: boolean) =>
-          !open && !saving && setEditTarget(null)
+          !open && !saveInFlight.current && setEditTarget(null)
         }
         purpose="form"
         width={400}
@@ -594,6 +945,7 @@ export function SessionSidebar(props: SessionSidebarProps) {
             ref={editInput}
             value={draft}
             maxLength={80}
+            disabled={saving}
             aria-label={
               editTarget?.kind === "workspace"
                 ? t("workspaceName")
@@ -601,12 +953,29 @@ export function SessionSidebar(props: SessionSidebarProps) {
             }
             onChange={(event) => setDraft(event.target.value)}
           />
+          {editError && (
+            <p className="sidebar-dialog-error" role="alert">
+              {t("renameFailed")}
+            </p>
+          )}
           <div className="dialog-actions">
-            <button type="button" onClick={() => setEditTarget(null)}>
+            <button
+              type="button"
+              disabled={saving}
+              onClick={() => {
+                if (!saveInFlight.current) setEditTarget(null);
+              }}
+            >
               {t("cancel")}
             </button>
-            <button type="submit" className="primary" disabled={saving}>
-              {t("save")}
+            <button
+              type="submit"
+              className="primary"
+              disabled={
+                saving || !draft.trim() || draft.trim() === editTarget?.name
+              }
+            >
+              {t(saving ? "savingName" : "save")}
             </button>
           </div>
         </form>
@@ -614,30 +983,41 @@ export function SessionSidebar(props: SessionSidebarProps) {
 
       <Dialog
         isOpen={Boolean(deleteTarget)}
-        onOpenChange={(open: boolean) => !open && setDeleteTarget(null)}
+        onOpenChange={(open: boolean) =>
+          !open && !removeInFlight.current && setDeleteTarget(null)
+        }
         purpose="form"
         width={440}
-        aria-label={t("deleteWorkspace")}
+        aria-label={t("removeWorkspace")}
       >
         <div className="openpi-dialog">
-          <strong>{t("deleteWorkspace")}</strong>
+          <strong>{t("removeWorkspace")}</strong>
+          <p className="sidebar-dialog-path">{deleteTarget?.path}</p>
           <p>
             {deleteTarget?.name}：{t("workspaceDeleteConfirm")}
           </p>
+          {removeError && (
+            <p className="sidebar-dialog-error" role="alert">
+              {t("workspaceRemoveFailed")}
+            </p>
+          )}
           <div className="dialog-actions">
-            <button type="button" onClick={() => setDeleteTarget(null)}>
+            <button
+              type="button"
+              disabled={removing}
+              onClick={() => {
+                if (!removeInFlight.current) setDeleteTarget(null);
+              }}
+            >
               {t("cancel")}
             </button>
             <button
               type="button"
               className="danger"
-              onClick={() => {
-                if (!deleteTarget) return;
-                void props.actions.removeWorkspace(deleteTarget.path);
-                setDeleteTarget(null);
-              }}
+              disabled={removing}
+              onClick={() => void removeWorkspace()}
             >
-              {t("deleteWorkspace")}
+              {t(removing ? "removingWorkspace" : "removeWorkspace")}
             </button>
           </div>
         </div>

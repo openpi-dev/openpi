@@ -4,34 +4,43 @@ import type {
   WebSubagentDetail,
 } from "../../../../extensions/shared/web-observer-registry.ts";
 import {
-  type WebQuestionRequest,
-  type WebQuestionAnswers,
-  type WebQuestionReceipt,
-} from "../../../protocol/questions.ts";
-import {
   ARTIFACT_MAX_BYTES,
   type ArtifactMetadata,
   type ArtifactPreview,
 } from "../../../protocol/artifacts.ts";
+import {
+  type WebQuestionAnswers,
+  type WebQuestionReceipt,
+  type WebQuestionRequest,
+} from "../../../protocol/questions.ts";
+import type { WebTurnChangesResult } from "../../../protocol/turn-changes.ts";
 import {
   WEB_MAX_MODEL_SEARCH_RESULTS,
   type WebCommandDiscoveryResult,
   type WebEmbeddedBrowserAction,
   type WebEmbeddedBrowserState,
   type WebGitReviewResult,
+  type WebHistoryAnchor,
   type WebInteractiveTerminal,
   type WebInteractiveTerminalEvent,
   type WebModelSearchResult,
   type WebModelSummary,
   type WebPromptImage,
+  type WebSessionHistoryPage,
+  type WebSessionSummary,
   type WebSettingsCatalog,
   type WebSnapshot,
   type WebThinkingState,
 } from "../../../protocol/types.ts";
 import type { WebProjectTrustStatus } from "../../../runtime/trust-status.ts";
-import type { WebProviderAuthProjection } from "../../../runtime/types.ts";
+import type {
+  WebModelConfiguration,
+  WebModelConfigurations,
+  WebProviderAuthProjection,
+} from "../../../runtime/types.ts";
 
 const tokenStorageKey = "openpi.web.token";
+
 import { controllerIdentity } from "./controller.ts";
 
 export class WebApiError extends Error {
@@ -79,6 +88,21 @@ export interface SessionMutationResult {
   cancelled?: boolean;
   path?: string;
   sessionPath?: string;
+}
+
+export interface ArchivedSessionPage {
+  sessions: Omit<
+    WebSessionSummary,
+    "source" | "origin" | "controller" | "readOnly"
+  >[];
+  nextCursor?: string;
+  truncation: {
+    truncated: boolean;
+    matchesOmitted: number;
+    recordsUnscanned: number;
+    maxPageSize: number;
+    maxScanned: number;
+  };
 }
 
 export interface SessionCreationResult {
@@ -151,14 +175,74 @@ export class WebClient {
     }
   }
 
-  snapshot(path?: string | null) {
-    const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+  snapshot(path?: string | null, historyAnchor?: WebHistoryAnchor) {
+    const query = new URLSearchParams();
+    if (path) query.set("path", path);
+    if (historyAnchor && historyAnchor.sessionPath === path) {
+      query.set("historyAnchor", historyAnchor.entryId);
+      query.set("historySessionId", historyAnchor.sessionId);
+    }
+    const suffix = query.size ? `?${query}` : "";
     return this.request<WebSnapshot>(`/api/snapshot${suffix}`);
   }
 
-  gitReview(sessionId: string, path: string, signal?: AbortSignal) {
+  async sessionHistory(
+    anchor: WebHistoryAnchor,
+    beforeEntryId: string,
+    signal: AbortSignal,
+  ) {
+    const result = await this.request<{ session: WebSessionHistoryPage }>(
+      `/api/session/history?${new URLSearchParams({ sessionId: anchor.sessionId, path: anchor.sessionPath, anchorEntryId: anchor.entryId, beforeEntryId })}`,
+      { signal, timeoutMessage: "History request timed out. Please retry." },
+    );
+    return result.session;
+  }
+
+  sessionItem(
+    sessionId: string,
+    sessionPath: string,
+    entryId: string,
+    cursor: number,
+    signal: AbortSignal,
+  ) {
+    return this.request<{
+      entryId: string;
+      text: string;
+      nextCursor: number | null;
+      totalChars: number;
+    }>(
+      `/api/session/item?${new URLSearchParams({ sessionId, sessionPath, entryId, cursor: String(cursor) })}`,
+      { signal, timeoutMessage: "Message request timed out. Please retry." },
+    );
+  }
+
+  turnChanges(
+    sessionId: string,
+    sessionPath: string,
+    promptEntryId: string,
+    signal: AbortSignal,
+    filePath?: string,
+  ) {
+    return this.request<WebTurnChangesResult>(
+      `/api/turn-changes?${new URLSearchParams({ sessionId, sessionPath, promptEntryId, ...(filePath ? { filePath } : {}) })}`,
+      {
+        signal,
+        timeoutMessage: "Turn changes request timed out. Please retry.",
+      },
+    );
+  }
+
+  gitReview(
+    sessionId: string,
+    path: string,
+    signal?: AbortSignal,
+    options?: {
+      source: import("../../../protocol/types.ts").WebGitReviewSource;
+      file?: string;
+    },
+  ) {
     return this.request<WebGitReviewResult>(
-      `/api/git-review?${new URLSearchParams({ sessionId, path })}`,
+      `/api/git-review?${new URLSearchParams({ sessionId, path, ...options })}`,
       { signal, timeoutMessage: "Git review timed out. Please retry." },
     );
   }
@@ -195,6 +279,22 @@ export class WebClient {
     );
   }
 
+  authorizeArtifact(
+    sessionId: string,
+    reference: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ handle: string }>("/api/artifacts/authorize-file", {
+      method: "POST",
+      body: JSON.stringify({
+        sessionId,
+        reference,
+        access: "read-external-file",
+      }),
+      signal,
+    });
+  }
+
   releaseArtifact(sessionId: string, handle: string) {
     return this.request(
       "/api/artifacts/content?" + new URLSearchParams({ sessionId, handle }),
@@ -202,7 +302,10 @@ export class WebClient {
     );
   }
 
-  async downloadArtifact(artifact: ArtifactMetadata, signal: AbortSignal) {
+  async downloadArtifact(
+    artifact: Pick<ArtifactMetadata, "sessionId" | "handle" | "revision">,
+    signal: AbortSignal,
+  ) {
     const controller = new AbortController();
     const abort = () => controller.abort();
     signal.addEventListener("abort", abort, { once: true });
@@ -256,7 +359,7 @@ export class WebClient {
   openBrowser(
     sessionId: string,
     url: string,
-    viewport: { width: number; height: number },
+    viewport: { width: number; height: number; deviceScaleFactor?: number },
     signal?: AbortSignal,
   ) {
     return this.request<WebEmbeddedBrowserState>("/api/browser/open", {
@@ -301,6 +404,52 @@ export class WebClient {
       );
     }
     return response.blob();
+  }
+
+  async streamBrowserFrames(
+    sessionId: string,
+    signal: AbortSignal,
+    onFrame: (
+      frame: import("../../../protocol/types.ts").WebBrowserFrame,
+    ) => void,
+  ) {
+    const response = await fetch(
+      `/api/browser/frames?${new URLSearchParams({ sessionId })}`,
+      { headers: await this.headers(), signal },
+    );
+    if (!response.ok)
+      throw new WebApiError("Browser stream unavailable", response.status);
+    const reader = response.body?.getReader();
+    if (!reader) throw new Error("Browser stream unavailable");
+    const decoder = new TextDecoder();
+    let buffer = "";
+    try {
+      while (!signal.aborted) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+        if (buffer.length > 25 * 1024 * 1024)
+          throw new Error("Browser frame exceeds its limit");
+        let boundary = buffer.indexOf("\n\n");
+        while (boundary >= 0) {
+          const record = buffer.slice(0, boundary);
+          buffer = buffer.slice(boundary + 2);
+          if (record.startsWith("data: ")) {
+            const frame = JSON.parse(
+              record.slice(6),
+            ) as import("../../../protocol/types.ts").WebBrowserFrame;
+            if (
+              frame.mimeType === "image/png" &&
+              typeof frame.data === "string"
+            )
+              onFrame(frame);
+          }
+          boundary = buffer.indexOf("\n\n");
+        }
+      }
+    } finally {
+      await reader.cancel().catch(() => undefined);
+    }
   }
 
   createInteractiveTerminal(
@@ -451,6 +600,20 @@ export class WebClient {
     );
   }
 
+  listArchivedSessions(
+    options: { query?: string; cursor?: string; limit?: number } = {},
+    signal?: AbortSignal,
+  ) {
+    const query = new URLSearchParams();
+    if (options.query !== undefined) query.set("q", options.query);
+    if (options.cursor !== undefined) query.set("cursor", options.cursor);
+    if (options.limit !== undefined) query.set("limit", String(options.limit));
+    return this.request<ArchivedSessionPage>(
+      `/api/sessions/archived?${query}`,
+      { signal },
+    );
+  }
+
   thinking(sessionId: string, signal: AbortSignal) {
     return this.request<WebThinkingState & { sessionId: string }>(
       `/api/thinking?sessionId=${encodeURIComponent(sessionId)}`,
@@ -470,12 +633,18 @@ export class WebClient {
 
   setPlanMode(
     sessionId: string,
+    sessionPath: string,
     enabled: boolean,
     expectedRevision: string | null,
   ) {
     return this.request<{ sessionId: string }>("/api/plan", {
       method: "POST",
-      body: JSON.stringify({ sessionId, enabled, expectedRevision }),
+      body: JSON.stringify({
+        sessionId,
+        sessionPath,
+        enabled,
+        expectedRevision,
+      }),
     });
   }
 
@@ -491,6 +660,39 @@ export class WebClient {
       `/api/providers/auth-status?sessionId=${encodeURIComponent(sessionId)}`,
       { signal },
     );
+  }
+
+  saveProviderKey(
+    sessionId: string,
+    provider: string,
+    apiKey: string,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/providers/api-key", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, provider, apiKey }),
+      signal,
+    });
+  }
+
+  modelConfigurations(sessionId: string, signal?: AbortSignal) {
+    return this.request<WebModelConfigurations>(
+      `/api/models/configuration?sessionId=${encodeURIComponent(sessionId)}`,
+      { signal },
+    );
+  }
+
+  saveModelConfiguration(
+    sessionId: string,
+    revision: string,
+    model: WebModelConfiguration,
+    signal?: AbortSignal,
+  ) {
+    return this.request<{ saved: true }>("/api/models/configuration", {
+      method: "POST",
+      body: JSON.stringify({ sessionId, revision, model }),
+      signal,
+    });
   }
 
   commands(sessionId: string, signal?: AbortSignal) {
@@ -567,7 +769,11 @@ export class WebClient {
       "/api/turns/cancel",
       {
         method: "POST",
-        body: JSON.stringify(turn),
+        body: JSON.stringify({
+          sessionId: turn.sessionId,
+          commandId: turn.commandId,
+          epoch: turn.epoch,
+        }),
       },
     );
   }

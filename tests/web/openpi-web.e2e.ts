@@ -1,10 +1,13 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { AxeBuilder } from "@axe-core/playwright";
 import { SessionManager } from "@earendil-works/pi-coding-agent";
 import { expect, type Page, test } from "@playwright/test";
+import { DEFAULT_SETUP_CONFIG } from "../../extensions/shared/setup-config.ts";
 import type { WebSnapshot } from "../../web/protocol/types.ts";
+import { projectWebSetupConfig } from "../../web/runtime/settings-catalog.ts";
 import {
   installThinkingFixture,
   MOCK_SESSION_ID,
@@ -16,11 +19,186 @@ if (!token) throw new Error("OPENPI_WEB_E2E_TOKEN is required");
 
 const authenticatedPath = "/";
 
+for (const firstControl of ["settings", "thinking"] as const) {
+  test(`first-use ${firstControl} works before sending a message and preserves the draft`, async ({
+    page,
+  }) => {
+    const sessionId = "first-use-session";
+    const path = "/first-use/session.jsonl";
+    let created = false;
+    let level = "high";
+    let revision = 10_000;
+    let creations = 0;
+    const prompts: unknown[] = [];
+    await page.route("**/events?**", (route) =>
+      route.fulfill({
+        contentType: "text/event-stream",
+        body: ": heartbeat\n\n",
+      }),
+    );
+    await page.route("**/api/snapshot**", async (route) => {
+      const response = await route.fetch();
+      const snapshot = await response.json();
+      snapshot.cursor = revision;
+      snapshot.workspaces = [
+        { path: "/first-use", name: "First use", current: created },
+      ];
+      snapshot.sessions = [];
+      snapshot.models = [
+        {
+          provider: "test",
+          id: "reasoner",
+          name: "Reasoner",
+          label: "Reasoner",
+          current: true,
+        },
+      ];
+      snapshot.thinking = {
+        supported: true,
+        available: ["low", "high"],
+        level,
+        revision,
+      };
+      snapshot.runtime = { status: "idle", capabilities: {} };
+      if (created) {
+        snapshot.currentSessionId = sessionId;
+        snapshot.currentSessionPath = path;
+        snapshot.sessions = [
+          {
+            id: sessionId,
+            path,
+            cwd: "/first-use",
+            source: "web-session",
+            origin: "web",
+            controller: "web",
+            readOnly: false,
+            name: "New session",
+            created: "2026-09-20T00:00:00Z",
+            modified: "2026-09-20T00:00:00Z",
+            messageCount: 0,
+            firstMessage: "",
+          },
+        ];
+        snapshot.selectedSession = {
+          id: sessionId,
+          path,
+          cwd: "/first-use",
+          entries: [],
+          bytes: 0,
+          truncation: {
+            truncated: false,
+            maxBytes: 1024,
+            entriesOmitted: 0,
+            messagesTruncated: 0,
+            messagePartsOmitted: 0,
+          },
+        };
+      } else {
+        delete snapshot.currentSessionId;
+        delete snapshot.currentSessionPath;
+        delete snapshot.selectedSession;
+      }
+      await route.fulfill({ response, json: snapshot });
+    });
+    await page.route("**/api/sessions", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.workspacePath).toBe("/first-use");
+      created = true;
+      creations++;
+      revision++;
+      await route.fulfill({
+        status: 201,
+        json: { commandId: body.commandId, sessionId, sessionPath: path },
+      });
+    });
+    await page.route("**/api/thinking", async (route) => {
+      const body = route.request().postDataJSON();
+      expect(body.sessionId).toBe(sessionId);
+      level = body.level;
+      revision++;
+      await route.fulfill({
+        json: {
+          sessionId,
+          supported: true,
+          available: ["low", "high"],
+          level,
+          revision,
+        },
+      });
+    });
+    await page.route("**/api/settings/catalog?**", (route) =>
+      route.fulfill({
+        json: {
+          sessionId,
+          setup: projectWebSetupConfig(DEFAULT_SETUP_CONFIG),
+          resources: {
+            skills: [],
+            plugins: [],
+            totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+            diagnostics: { extensionErrors: 0, skillErrors: 0 },
+            truncation: {
+              truncated: false,
+              skillsOmitted: 0,
+              pluginsOmitted: 0,
+              resourcesOmitted: 0,
+            },
+          },
+        },
+      }),
+    );
+    await page.route("**/api/prompts", (route) => {
+      prompts.push(route.request().postDataJSON());
+      return route.fulfill({
+        status: 500,
+        json: { error: "No prompt expected" },
+      });
+    });
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    const settings = page.getByRole("button", { name: "设置", exact: true });
+    const thinking = page.locator(".thinking-picker");
+    await expect(settings).toBeEnabled();
+    await expect(thinking).toBeEnabled();
+    await page.locator(".workspace-picker").click();
+    await page
+      .getByRole("menuitem", { name: "First use", exact: true })
+      .click();
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("Keep my first message");
+    const openSettings = async () => {
+      await settings.click();
+      const dialog = page.getByRole("dialog", { name: "设置", exact: true });
+      await expect(dialog).toBeVisible();
+      await expect(
+        dialog.getByRole("heading", { name: "常规", exact: true }),
+      ).toBeVisible();
+      await dialog.getByRole("button", { name: "关闭", exact: true }).click();
+    };
+    const chooseThinking = async () => {
+      await thinking.click();
+      await page.getByRole("menuitem", { name: "low", exact: true }).click();
+      await expect(thinking).toHaveAttribute("aria-label", "思考等级: low");
+    };
+    if (firstControl === "settings") {
+      await openSettings();
+      await chooseThinking();
+    } else {
+      await chooseThinking();
+      await openSettings();
+    }
+    expect(creations).toBe(1);
+    expect(prompts).toEqual([]);
+    await expect(input).toHaveValue("Keep my first message");
+    await page.unrouteAll({ behavior: "wait" });
+  });
+}
+
 function alignControlledSessionFixture(snapshot: WebSnapshot) {
   const session = snapshot.selectedSession;
   if (!session || session.id !== snapshot.currentSessionId) {
     throw new Error("A controlled fixture must select its current Session");
   }
+  snapshot.currentSessionPath = session.path;
   snapshot.sessions = [
     {
       id: session.id,
@@ -125,6 +303,8 @@ for (const width of [1280, 390]) {
     await page.getByRole("button", { name: "取消", exact: true }).click();
     await page.getByRole("button", { name: "编辑消息", exact: true }).click();
     await expect(editor).toHaveValue("Original message ".repeat(30));
+    // Finish active snapshot handlers before Playwright disposes their context.
+    await page.unrouteAll({ behavior: "wait" });
   });
 }
 
@@ -439,6 +619,14 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   expect(initialSidebar).not.toBeNull();
   expect(initialConversation).not.toBeNull();
 
+  const sidebarHandle = page.getByRole("separator", { name: "调整侧边栏宽度" });
+  await sidebarHandle.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(sidebarHandle).toHaveAttribute("aria-valuenow", "296");
+  await expect(sidebar).toHaveCSS("width", "296px");
+  await page.keyboard.press("Enter");
+  await expect(sidebar).toHaveCSS("width", "280px");
+
   await dragPane(page, "left", 80);
   await expect
     .poll(async () => (await sidebar.boundingBox())?.width ?? 0)
@@ -453,6 +641,12 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
 
   const workbar = await openWorkbarTool(page, "生成文件");
+  const workbarHandle = page.getByRole("separator", { name: "调整工具栏宽度" });
+  await workbarHandle.focus();
+  await page.keyboard.press("ArrowLeft");
+  await expect(workbarHandle).toHaveAttribute("aria-valuenow", "536");
+  await page.keyboard.press("Enter");
+  await expect(workbarHandle).toHaveAttribute("aria-valuenow", "520");
   const centerBeforeRightDrag = await conversation.boundingBox();
   await dragPane(page, "right", -70);
   await expect
@@ -472,9 +666,107 @@ test("desktop panes resize by pointer and collapse beyond their thresholds", asy
   await expect(page.locator('[data-pane-resizer="right"]')).toHaveCount(0);
 });
 
+test("refreshing an open diff preserves the draft and composer focus", async ({
+  page,
+}) => {
+  let refreshed = false;
+  await page.route("**/api/git-review?**", (route) =>
+    route.fulfill({
+      json: {
+        ok: true,
+        snapshot: {
+          repositoryRoot: "/workspace",
+          currentBranch: "main",
+          baseBranch: null,
+          comparison: "session",
+          revision: refreshed ? "new" : "old",
+          additions: 1,
+          deletions: 0,
+          truncated: false,
+          files: [
+            {
+              path: "focus-note.txt",
+              status: "untracked",
+              additions: 1,
+              deletions: 0,
+              diff: `@@ -0,0 +1 @@\n+${refreshed ? "refreshed" : "original"}`,
+              diffTruncated: false,
+            },
+          ],
+        },
+      },
+    }),
+  );
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await openWorkbench(page);
+  const workbar = await openWorkbarTool(page, "变更");
+  await workbar
+    .getByRole("button", { name: "focus-note.txt", exact: true })
+    .click();
+  const input = page.getByRole("textbox", { name: "描述任务" });
+  await input.fill("Keep editing this draft");
+  refreshed = true;
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect(workbar.getByRole("figure")).toContainText("refreshed");
+  await expect(input).toBeFocused();
+  await input.press("End");
+  await input.pressSequentially(" safely");
+  await expect(input).toHaveValue("Keep editing this draft safely");
+});
+
+test("file reference validation can be cancelled without changing the draft", async ({
+  page,
+}) => {
+  let release!: () => void;
+  let started!: () => void;
+  const pending = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const requested = new Promise<void>((resolve) => {
+    started = resolve;
+  });
+  await page.route("**/api/artifacts/resolve", async (route) => {
+    started();
+    await pending;
+    await route
+      .fulfill({ status: 503, json: { error: "fixture unavailable" } })
+      .catch(() => {});
+  });
+  try {
+    await openWorkbench(page);
+    const input = page.getByRole("textbox", { name: "描述任务" });
+    await input.fill("Keep this draft");
+    await page.getByRole("button", { name: "添加上下文", exact: true }).click();
+    await page.getByRole("menuitem", { name: /引用工作区文件/u }).click();
+    const dialog = page.getByRole("dialog");
+    await dialog.getByRole("textbox").fill("README.md");
+    await dialog.getByRole("button", { name: "插入引用" }).click();
+    await requested;
+    const cancel = dialog.getByRole("button", { name: "取消", exact: true });
+    await expect(cancel).toBeEnabled();
+    await cancel.click();
+    await expect(dialog).toBeHidden();
+    await expect(input).toHaveValue("Keep this draft");
+  } finally {
+    release();
+    await page.unrouteAll({ behavior: "wait" });
+  }
+});
+
 test("workbar exposes five tools and completes a side conversation lifecycle", async ({
   page,
 }) => {
+  await page.route("**/api/snapshot**", async (route) => {
+    const response = await route.fetch();
+    const snapshot = await response.json();
+    snapshot.runtime.status = "running";
+    snapshot.runtime.activeTurn = {
+      sessionId: snapshot.currentSessionId,
+      commandId: "busy-parent",
+      epoch: 1,
+    };
+    await route.fulfill({ response, json: snapshot });
+  });
   type SideAction = {
     sessionId: string;
     kind: "subagents";
@@ -564,6 +856,9 @@ test("workbar exposes five tools and completes a side conversation lifecycle", a
   await question.fill("Inspect this in isolation");
   await question.press("Enter");
   await expect(workbar.getByText("Side response")).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "停止当前轮次", exact: true }),
+  ).toBeVisible();
   await expect
     .poll(() => actions.map((action) => action.action))
     .toEqual(["spawn-btw"]);
@@ -601,9 +896,238 @@ test("terminal tool runs a real workspace shell", async ({ page }) => {
     .toContain("OPENPI_WEB_TERMINAL_OK");
 });
 
+test("model configuration drafts survive switching settings tabs", async ({
+  page,
+}) => {
+  await page.route("**/api/models/configuration?**", (route) =>
+    route.fulfill({ json: { revision: "draft-test", models: [] } }),
+  );
+  await openWorkbench(page);
+  await page.getByRole("button", { name: "设置", exact: true }).click();
+  const dialog = page.getByRole("dialog", { name: "设置" });
+  const generalTab = dialog.getByRole("tab", { name: "常规", exact: true });
+  await generalTab.focus();
+  await page.keyboard.press("ArrowRight");
+  await expect(
+    dialog.getByRole("tab", { name: "模型", exact: true }),
+  ).toBeFocused();
+  await dialog
+    .getByRole("textbox", { name: "API 地址", exact: true })
+    .fill("http://localhost:12345/v1");
+  await dialog
+    .getByRole("textbox", { name: "显示名称", exact: true })
+    .fill("Unfinished model");
+  await dialog.getByRole("tab", { name: "技能", exact: true }).click();
+  await page.keyboard.press("End");
+  await expect(
+    dialog.getByRole("tab", { name: "插件", exact: true }),
+  ).toBeFocused();
+  await page.keyboard.press("Home");
+  await expect(generalTab).toBeFocused();
+  await dialog.getByRole("tab", { name: "模型", exact: true }).click();
+  await expect(
+    dialog.getByRole("textbox", { name: "API 地址", exact: true }),
+  ).toHaveValue("http://localhost:12345/v1");
+  await expect(
+    dialog.getByRole("textbox", { name: "显示名称", exact: true }),
+  ).toHaveValue("Unfinished model");
+});
+
+test("real embedded Chromium opens bare local addresses and paints shortcut edits", async ({
+  page,
+}, testInfo) => {
+  const inputs: string[] = [];
+  const mouseEvents: Array<{
+    phase: string | null;
+    button: string | null;
+    buttons: string | null;
+  }> = [];
+  const fixture = createServer((request, response) => {
+    const url = new URL(request.url ?? "/", "http://localhost");
+    if (url.pathname === "/mouse") {
+      mouseEvents.push({
+        phase: url.searchParams.get("phase"),
+        button: url.searchParams.get("button"),
+        buttons: url.searchParams.get("buttons"),
+      });
+      response.end("ok");
+      return;
+    }
+    if (url.pathname === "/event") {
+      inputs.push(url.searchParams.get("text") ?? "");
+      response.end("ok");
+      return;
+    }
+    response.setHeader("Content-Type", "text/html; charset=utf-8");
+    response.end(
+      `<!doctype html><title>Real input fixture</title><style>body{margin:0;background:white}input{width:70%;height:60px;font:24px sans-serif}#marker{position:fixed;top:0;right:0;width:48px;height:48px;background:rgb(200,0,0)}#pointer-pad{height:100px;user-select:none}</style><input id="editor" autofocus value="original text" oninput="document.getElementById('marker').style.background=this.value==='X'?'rgb(0,200,0)':'rgb(200,0,0)';fetch('/event?text='+encodeURIComponent(this.value))"><div id="marker"></div><div id="pointer-pad"></div><script>for(const phase of ['mousedown','mouseup','dragstart','dragend'])document.addEventListener(phase,e=>fetch('/mouse?phase='+phase+'&button='+e.button+'&buttons='+e.buttons));document.addEventListener('contextmenu',e=>e.preventDefault());</script>`,
+    );
+  });
+  await new Promise<void>((resolve) => fixture.listen(0, "127.0.0.1", resolve));
+  const address = fixture.address();
+  if (!address || typeof address === "string")
+    throw new Error("Missing fixture port");
+  try {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await openWorkbench(page);
+    const workbar = await openWorkbarTool(page, "浏览器");
+    await workbar
+      .getByRole("textbox", { name: "浏览器地址" })
+      .fill(`127.0.0.1:${address.port}`);
+    // The host allows 8s for cold Chromium startup; await its receipt before
+    // beginning the separate painted-frame assertion.
+    const startup = page.waitForResponse(
+      (response) =>
+        response.url().endsWith("/api/browser/open") &&
+        response.request().method() === "POST",
+      { timeout: 20000 },
+    );
+    await workbar
+      .getByRole("button", { name: "打开地址", exact: true })
+      .click();
+    const started = await startup;
+    expect(started.ok(), await started.text()).toBe(true);
+    expect(started.request().postDataJSON()).toMatchObject({
+      url: `http://127.0.0.1:${address.port}/`,
+    });
+    const viewport = workbar.locator(".browser-viewport");
+    const frame = viewport.locator("img");
+    await expect(frame).toBeVisible();
+    const painted = () =>
+      frame.evaluate((image) => {
+        if (
+          !(image instanceof HTMLImageElement) ||
+          !image.complete ||
+          !image.naturalWidth
+        )
+          return false;
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = 1;
+        const context = canvas.getContext("2d");
+        if (!context) return false;
+        context.drawImage(image, image.naturalWidth - 20, 20, 1, 1, 0, 0, 1, 1);
+        const [red, green] = context.getImageData(0, 0, 1, 1).data;
+        return green! > 150 && red! < 50;
+      });
+    const samples: Array<{
+      shortcut: string;
+      inputToPaintUpperBoundMs: number;
+    }> = [];
+    for (const modifier of ["Control", "Meta"]) {
+      await viewport.click({ position: { x: 30, y: 30 } });
+      const started = performance.now();
+      await viewport.press(`${modifier}+a`);
+      await viewport.press("X");
+      await expect.poll(() => inputs.at(-1)).toBe("X");
+      await expect.poll(painted).toBe(true);
+      samples.push({
+        shortcut: `${modifier}+a`,
+        inputToPaintUpperBoundMs: Math.round(performance.now() - started),
+      });
+      if (modifier === "Control")
+        await viewport.screenshot({
+          path: testInfo.outputPath("browser-input.png"),
+        });
+      await viewport.press(`${modifier}+z`);
+      await expect.poll(() => inputs.at(-1)).toBe("original text");
+      await expect.poll(painted).toBe(false);
+    }
+    const bounds = await viewport.boundingBox();
+    if (!bounds) throw new Error("Browser viewport missing");
+    const textDragStart = mouseEvents.length;
+    await page.mouse.move(bounds.x + 40, bounds.y + 30);
+    await page.mouse.down();
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(textDragStart)
+          .some((event) => event.phase === "mousedown"),
+      )
+      .toBe(true);
+    await page.mouse.move(bounds.x - 40, bounds.y + 30, { steps: 3 });
+    await page.mouse.up();
+    // Undo can leave selected text. Native HTML dragging suppresses mouseup
+    // and ends with dragend instead; both must report the released button.
+    const textRelease = () =>
+      mouseEvents
+        .slice(textDragStart)
+        .find(
+          (event) => event.phase === "mouseup" || event.phase === "dragend",
+        );
+    await expect.poll(textRelease).toMatchObject({
+      phase: expect.stringMatching(/^(mouseup|dragend)$/),
+      button: "0",
+      buttons: "0",
+    });
+    if (textRelease()?.phase === "dragend") {
+      await expect
+        .poll(() =>
+          mouseEvents
+            .slice(textDragStart)
+            .some((event) => event.phase === "dragstart"),
+        )
+        .toBe(true);
+    }
+    // A non-selectable area exercises plain pointer capture independently of
+    // the browser's native drag-and-drop lifecycle.
+    const pointerDragStart = mouseEvents.length;
+    await page.mouse.move(bounds.x + 40, bounds.y + 100);
+    await page.mouse.down();
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(pointerDragStart)
+          .some((event) => event.phase === "mousedown"),
+      )
+      .toBe(true);
+    await page.mouse.move(bounds.x - 40, bounds.y + 100, { steps: 3 });
+    await page.mouse.up();
+    await expect
+      .poll(() =>
+        mouseEvents
+          .slice(pointerDragStart)
+          .find((event) => event.phase === "mouseup"),
+      )
+      .toEqual({ phase: "mouseup", button: "0", buttons: "0" });
+    await viewport.click({ button: "right", position: { x: 40, y: 100 } });
+    await expect
+      .poll(() => mouseEvents.at(-1))
+      .toEqual({ phase: "mouseup", button: "2", buttons: "0" });
+    const evidencePath = testInfo.outputPath("input-to-painted-frame.json");
+    await writeFile(
+      evidencePath,
+      JSON.stringify(
+        {
+          samples,
+          mouseEvents,
+          limitation:
+            "Local smoke including automation and polling overhead; not a benchmark.",
+        },
+        null,
+        2,
+      ),
+    );
+    await testInfo.attach("input-to-painted-frame", {
+      path: evidencePath,
+      contentType: "application/json",
+    });
+  } finally {
+    fixture.closeAllConnections();
+    await new Promise<void>((resolve, reject) =>
+      fixture.close((error) => (error ? reject(error) : resolve())),
+    );
+  }
+});
+
 test("browser tool keeps an interactive page inside the workbar", async ({
   page,
 }) => {
+  await page.route("**/api/browser/frames?**", (route) =>
+    route.fulfill({
+      contentType: "text/event-stream",
+      body: `data: ${JSON.stringify({ mimeType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR4nGP4DwQACfsD/fteaysAAAAASUVORK5CYII=", width: 400, height: 600 })}\n\n`,
+    }),
+  );
   type BrowserState = {
     sessionId: string;
     url: string;
@@ -1030,15 +1554,31 @@ test("discovers and completes Pi commands without submitting unsupported command
     /\/deploy/u,
     /\/inspect/u,
     /\/optimize/u,
+    /\/extension:setup/u,
   ]);
+  const unavailableOption = listbox.getByRole("option", {
+    name: /\/extension:setup/u,
+  });
+  await expect(unavailableOption).toBeDisabled();
+  await expect(unavailableOption).toContainText("此扩展命令尚未接入 Web");
   const menu = page.locator(".slash-command-menu");
   const menuBox = await menu.boundingBox();
   const composerBox = await page.locator(".composer").boundingBox();
   expect(menuBox).not.toBeNull();
   expect(composerBox).not.toBeNull();
   expect(menuBox!.height).toBeLessThanOrEqual(225);
-  expect(menuBox!.y).toBeGreaterThanOrEqual(
-    composerBox!.y + composerBox!.height + 7,
+  if ((await menu.getAttribute("data-placement")) === "above") {
+    expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(
+      composerBox!.y - 7,
+    );
+  } else {
+    expect(menuBox!.y).toBeGreaterThanOrEqual(
+      composerBox!.y + composerBox!.height + 7,
+    );
+  }
+  expect(menuBox!.y).toBeGreaterThanOrEqual(0);
+  expect(menuBox!.y + menuBox!.height).toBeLessThanOrEqual(
+    page.viewportSize()!.height,
   );
 
   for (let index = 0; index < 5; index++) await input.press("ArrowDown");
@@ -1470,6 +2010,7 @@ test("recovers an unknown prompt admission only after an explicit user decision"
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.currentSessionId = sessionId;
+    snapshot.currentSessionPath = "/unknown-admission/session.jsonl";
     snapshot.workspaces = [
       { path: "/unknown-admission", name: "Recovery", current: true },
     ];
@@ -1587,6 +2128,24 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     const response = await route.fetch();
     const snapshot = await response.json();
     snapshot.currentSessionId = sessionId;
+    snapshot.workspaces = [
+      { path: "/inspection", name: "Inspection", current: true },
+    ];
+    snapshot.sessions = [
+      {
+        id: sessionId,
+        path: "/inspection/session.jsonl",
+        cwd: "/inspection",
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        created: "2026-09-20T00:00:00Z",
+        modified: "2026-09-20T00:00:00Z",
+        messageCount: 0,
+        firstMessage: "",
+      },
+    ];
     snapshot.selectedSession = {
       id: sessionId,
       path: "/inspection/session.jsonl",
@@ -1706,18 +2265,27 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect(dialog).not.toBeVisible();
     await page.getByRole("button", { name: "服务商凭据", exact: true }).click();
     const providerSettings = page.getByRole("dialog", { name: "设置" });
+    await expect(providerSettings).toHaveCSS("opacity", "1");
     const settingsNavigation = providerSettings.getByRole("tablist", {
       name: "设置导航",
     });
+    const selectSettings = async (id: "models" | "general", label: string) => {
+      if (width <= 640)
+        await providerSettings
+          .getByRole("combobox", { name: "设置导航" })
+          .selectOption(id);
+      else
+        await settingsNavigation
+          .getByRole("tab", { name: label, exact: true })
+          .click();
+    };
     await expect(
       providerSettings.getByRole("heading", { name: "常规" }),
     ).toBeVisible();
     await expect(
       providerSettings.getByRole("button", { name: "打开运行详情" }),
     ).toBeVisible();
-    await settingsNavigation
-      .getByRole("tab", { name: "模型", exact: true })
-      .click();
+    await selectSettings("models", "模型");
     await expect(
       providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
@@ -1725,18 +2293,14 @@ test("inspects session-scoped runtime and terminal details on desktop and mobile
     await expect
       .poll(() => reads.filter((x) => x === "providers/auth-status").length)
       .toBe(width === 1280 ? 1 : 2);
-    await settingsNavigation
-      .getByRole("tab", { name: "常规", exact: true })
-      .click();
+    await selectSettings("general", "常规");
     await expect(
       providerSettings.getByRole("heading", { name: "常规" }),
     ).toBeVisible();
     await expect(
       providerSettings.getByRole("button", { name: "打开运行详情" }),
     ).toBeVisible();
-    await settingsNavigation
-      .getByRole("tab", { name: "模型", exact: true })
-      .click();
+    await selectSettings("models", "模型");
     await expect(
       providerSettings.getByRole("heading", { name: "Inspection Model" }),
     ).toBeVisible();
@@ -1858,6 +2422,7 @@ test("adds validated file references without hiding the prompt contract", async 
     await dialog.getByRole("button", { name: "插入引用" }).click();
     await expect(dialog).toContainText("请选择当前会话工作区内的文件。");
     await expect(draft).toHaveValue("`README.md`");
+    await expect(dialog).toHaveCSS("opacity", "1");
     expect((await new AxeBuilder({ page }).analyze()).violations).toEqual([]);
     await page.screenshot({
       path: testInfo.outputPath(`file-reference-${width}.png`),

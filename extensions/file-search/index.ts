@@ -1,7 +1,10 @@
 /**
  * file-search — first-class `fd` and `rg` tools for pi.
  *
- * On session start the extension resolves a usable binary for each tool:
+ * In the TUI the extension resolves a usable binary on session start.
+ * Headless/Web sessions resolve on the first search tool call so optional
+ * downloads never block opening a Session or starting an independent child.
+ * Resolution order:
  * a normally installed system binary is preferred (silently), then an
  * existing binary in the agent's managed bin directory (`~/.pi/agent/bin`,
  * silently — e.g. cached by an earlier download), and only when neither
@@ -145,6 +148,7 @@ export default function fileSearchTools(pi: ExtensionAPI) {
     patchOwnedTools(pi, "fileSearch", {
       enable: OPENPI_TOOL_SURFACE.fileSearch.entry,
     });
+    if (!ctx.hasUI) return;
     const exit = await Effect.runPromiseExit(
       Effect.gen(function* () {
         const initialized = yield* Effect.all(

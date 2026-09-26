@@ -47,17 +47,48 @@
 }
 
 .session-sidebar .session {
-  height: auto;
+  height: 38px;
   min-height: 38px;
   padding-top: 6px;
   padding-bottom: 6px;
-  align-items: flex-start;
+  align-items: center;
+}
+
+.session-sidebar .session-status,
+.session-sidebar .session-queue {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 3px;
+}
+
+.session-sidebar .session-status {
+  gap: 6px;
+  color: var(--text);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+.session-sidebar .session-status svg {
+  width: 12px;
+  height: 12px;
+  flex: 0 0 auto;
+}
+
+.session-sidebar .session-running {
+  color: var(--accent);
+}
+
+.session-sidebar .session-time {
+  min-width: 27px;
+  text-align: right;
 }
 
 .session-sidebar .session-title {
-  overflow: visible;
-  overflow-wrap: anywhere;
-  white-space: normal;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   line-height: 1.35;
 }
 
@@ -72,6 +103,34 @@
 
 .session-sidebar .session-row > .astryx-menu-trigger {
   top: 5px;
+}
+
+.sidebar-archive-actions {
+  display: flex;
+  min-height: 34px;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.sidebar-archive-more {
+  margin: 8px 0;
+}
+
+.sidebar-scope-note p {
+  margin: 0 0 4px;
+}
+
+.sidebar-dialog-path {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.sidebar-dialog-error {
+  color: var(--error);
 }
 
 .sidebar-footer {

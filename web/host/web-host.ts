@@ -23,6 +23,7 @@ import {
 } from "../../extensions/shared/web-observer-registry.ts";
 import { loadSetupConfig } from "../../extensions/shared/setup-config.ts";
 import { projectWebSetupConfig } from "../runtime/settings-catalog.ts";
+import { validModelConfiguration } from "../runtime/model-configuration.ts";
 import { projectPlanControl } from "../../extensions/plan-mode/control.ts";
 import { registerWebCommandFeedback, WEB_COMMAND_FEEDBACK } from "../../extensions/shared/web-command-feedback.ts";
 import {
@@ -41,9 +42,11 @@ import {
   WEB_PROMPT_IMAGE_MAX_BYTES,
   WEB_PROMPT_IMAGE_MAX_COUNT,
   WEB_PROMPT_IMAGE_MAX_TOTAL_BYTES,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
   WEB_PROTOCOL_VERSION,
   type WebEvent,
   type WebEmbeddedBrowserAction,
+  WEB_BROWSER_TEXT_MAX_LENGTH,
   type WebInteractiveTerminalEvent,
   type WebPromptImage,
   type WebSnapshot,
@@ -221,6 +224,12 @@ function parseBrowserAction(
   body: Record<string, unknown>,
 ): WebEmbeddedBrowserAction | undefined {
   const action = body.action;
+  if (
+    action === "text" &&
+    typeof body.text === "string" &&
+    body.text.length > 0 &&
+    body.text.length <= WEB_BROWSER_TEXT_MAX_LENGTH
+  ) return { type: "text", text: body.text };
   if (action === "navigate") {
     const url = browserAddress(body.url);
     return url ? ({ type: "navigate", url } satisfies WebEmbeddedBrowserAction) : undefined;
@@ -235,12 +244,14 @@ function parseBrowserAction(
   if (
     action === "resize" &&
     isBoundedInteger(body.width, 320, 2_560) &&
-    isBoundedInteger(body.height, 240, 2_560)
+    isBoundedInteger(body.height, 240, 2_560) &&
+    (body.deviceScaleFactor === undefined || finiteNumber(body.deviceScaleFactor, 1, 2))
   ) {
     return {
       type: "resize",
       width: body.width,
       height: body.height,
+      ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
     } satisfies WebEmbeddedBrowserAction;
   }
   if (
@@ -250,6 +261,7 @@ function parseBrowserAction(
     finiteNumber(body.y, 0, 4_096) &&
     (body.button === undefined ||
       ["left", "middle", "right"].includes(String(body.button))) &&
+    (body.buttons === undefined || isBoundedInteger(body.buttons, 0, 7)) &&
     (body.deltaX === undefined || finiteNumber(body.deltaX, -10_000, 10_000)) &&
     (body.deltaY === undefined || finiteNumber(body.deltaY, -10_000, 10_000))
   ) {
@@ -260,7 +272,8 @@ function parseBrowserAction(
       y: body.y,
       ...(body.button
         ? { button: body.button as "left" | "middle" | "right" }
-        : {}),
+          : {}),
+      ...(typeof body.buttons === "number" ? { buttons: body.buttons } : {}),
       ...(typeof body.deltaX === "number" ? { deltaX: body.deltaX } : {}),
       ...(typeof body.deltaY === "number" ? { deltaY: body.deltaY } : {}),
     } satisfies WebEmbeddedBrowserAction;
@@ -271,6 +284,7 @@ function parseBrowserAction(
     typeof body.key === "string" &&
     body.key.length > 0 &&
     body.key.length <= 32 &&
+    (body.modifiers === undefined || isBoundedInteger(body.modifiers, 0, 15)) &&
     (body.code === undefined ||
       (typeof body.code === "string" && body.code.length <= 64)) &&
     (body.text === undefined ||
@@ -280,6 +294,7 @@ function parseBrowserAction(
       type: "key",
       event: body.event,
       key: body.key,
+      ...(typeof body.modifiers === "number" ? { modifiers: body.modifiers } : {}),
       ...(typeof body.code === "string" ? { code: body.code } : {}),
       ...(typeof body.text === "string" ? { text: body.text } : {}),
     } satisfies WebEmbeddedBrowserAction;
@@ -362,6 +377,7 @@ export class WebHost {
   private readonly adapter: PiWebAdapter;
   private readonly clients = new Set<ServerResponse>();
   private readonly terminalStreams = new Set<ServerResponse>();
+  private readonly browserStreams = new Set<() => void>();
   private readonly clientHeartbeats = new Map<
     ServerResponse,
     ReturnType<typeof setInterval>
@@ -405,7 +421,7 @@ export class WebHost {
       const turn = this.runtime.getActiveTurn();
       const admission = turn && this.promptAdmissions.get(turn.commandId);
       if (!turn || !admission?.controllerId || admission.sessionId !== turn.sessionId ||
-          turn.sessionId !== this.runtime.sessionManager.getSessionId()) return undefined;
+          !this.adapter.isCurrentSession({ id: admission.sessionId, path: admission.sessionPath })) return undefined;
       return { ...turn, workspace: this.runtime.cwd, controllerId: admission.controllerId };
     }, () => this.publish("questions_changed"));
     this.artifacts = new ArtifactReader(() => this.runtime.workspaceSelected && !this.stopping ? { sessionId: this.runtime.sessionManager.getSessionId(), cwd: this.runtime.cwd } : undefined);
@@ -586,6 +602,7 @@ export class WebHost {
       this.unsubscribeCapabilities();
       this.artifacts.dispose();
       this.interactiveTerminals.dispose();
+      for (const close of this.browserStreams) close();
       this.unsubscribeRuntime();
       this.chooserAbort.abort();
       for (const client of [...this.clients]) this.removeSseClient(client, "end");
@@ -778,8 +795,9 @@ export class WebHost {
         !target ||
         (body.width !== undefined && !isBoundedInteger(body.width, 320, 2_560)) ||
         (body.height !== undefined && !isBoundedInteger(body.height, 240, 2_560)) ||
+        (body.deviceScaleFactor !== undefined && !finiteNumber(body.deviceScaleFactor, 1, 2)) ||
         Object.keys(body).some(
-          (key) => !["sessionId", "url", "width", "height"].includes(key),
+          (key) => !["sessionId", "url", "width", "height", "deviceScaleFactor"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -796,6 +814,7 @@ export class WebHost {
         {
           width: typeof body.width === "number" ? body.width : 1_024,
           height: typeof body.height === "number" ? body.height : 768,
+          ...(typeof body.deviceScaleFactor === "number" ? { deviceScaleFactor: body.deviceScaleFactor } : {}),
         },
       );
       return this.json(response, 200, state);
@@ -817,6 +836,56 @@ export class WebHost {
             code: "BROWSER_NOT_FOUND",
             error: "the embedded browser is not running",
           });
+    }
+    if (url.pathname === "/api/browser/frames") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "Browser frames require GET" });
+      const sessionId = url.searchParams.get("sessionId");
+      if (!sessionId || !this.validTerminalQuery(url, ["sessionId"])) return this.json(response, 400, { error: "An exact Session id is required" });
+      if (!(await this.requireActiveToolSession(sessionId, response))) return;
+      if (!this.embeddedBrowser.subscribeFrames) return this.json(response, 501, { error: "Browser streaming is unavailable" });
+      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
+      if (!(await this.embeddedBrowser.state(sessionId))) return this.json(response, 404, { error: "Browser is not open" });
+      if (response.destroyed || response.writableEnded) return;
+      if (this.browserStreams.size >= 4) return this.json(response, 429, { error: "Browser viewer limit reached" });
+      let stop: (() => void) | undefined;
+      let pending: import("../protocol/types.ts").WebBrowserFrame | undefined;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      let closed = false;
+      let unsubscribe = () => {};
+      const flush = () => {
+        timer = undefined;
+        if (closed || !pending || response.writableNeedDrain) return;
+        if (this.runtime.sessionManager.getSessionId() !== sessionId) { close(); return; }
+        const frame = pending; pending = undefined;
+        response.write(`data: ${JSON.stringify(frame)}\n\n`);
+      };
+      const schedule = () => { if (!closed && !timer) timer = setTimeout(flush, 16); };
+      const heartbeat = setInterval(() => { if (!closed && !response.writableNeedDrain) response.write(": heartbeat\n\n"); }, 15_000);
+      const close = () => {
+        if (closed) return;
+        closed = true; pending = undefined;
+        clearTimeout(timer); clearInterval(heartbeat);
+        stop?.(); unsubscribe();
+        this.browserStreams.delete(close);
+        response.off("drain", schedule);
+        response.destroy();
+      };
+      this.browserStreams.add(close);
+      response.once("close", close);
+      response.on("drain", schedule);
+      unsubscribe = this.runtime.subscribe(() => {
+        if (this.runtime.sessionManager.getSessionId() !== sessionId) close();
+      });
+      response.writeHead(200, { "Content-Type": "text/event-stream", "Cache-Control": "no-store", Connection: "keep-alive", "X-Accel-Buffering": "no" });
+      response.write(": connected\n\n");
+      try {
+        stop = await this.embeddedBrowser.subscribeFrames(sessionId, frame => {
+          if (!frame) { close(); return; }
+          if (!closed) { pending = frame; schedule(); }
+        });
+        if (!stop || closed) { stop?.(); close(); }
+      } catch { close(); }
+      return;
     }
     if (url.pathname === "/api/browser/frame") {
       if (request.method !== "GET")
@@ -847,7 +916,8 @@ export class WebHost {
     if (url.pathname === "/api/browser/action") {
       if (request.method !== "POST")
         return this.json(response, 405, { error: "browser actions require POST" });
-      const body = await this.readJson(request);
+      // JSON can escape each UTF-16 code unit into six ASCII bytes.
+      const body = await this.readJson(request, WEB_BROWSER_TEXT_MAX_LENGTH * 6 + MAX_COMMAND_BYTES);
       if (typeof body.sessionId !== "string")
         return this.json(response, 400, {
           code: "INVALID_BROWSER_ACTION",
@@ -1009,6 +1079,14 @@ export class WebHost {
       const handle = await this.artifacts.resolveFile(body.sessionId, body.reference, body.parent);
       return this.json(response, 200, { handle });
     }
+    if (url.pathname === "/api/artifacts/authorize-file") {
+      if (request.method !== "POST") return this.json(response, 405, { error: "File authorization requires POST" });
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.reference !== "string" || body.access !== "read-external-file")
+        return this.json(response, 400, { error: "An explicit single-file authorization is required" });
+      const handle = await this.artifacts.authorizeFile(body.sessionId, body.reference);
+      return this.json(response, 200, { handle });
+    }
     if (url.pathname === "/api/artifacts/content") {
       const handle = url.searchParams.get("handle");
       const sessionId = url.searchParams.get("sessionId");
@@ -1147,6 +1225,42 @@ export class WebHost {
       this.publish("session_selected", { sessionPath: session.path });
       return this.json(response, 200, result);
     }
+    if (url.pathname === "/api/providers/api-key" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.provider !== "string" || body.provider.length > 160 || typeof body.apiKey !== "string" || !body.apiKey.trim() || body.apiKey.length > 8192 || /[\r\n\u0000]/u.test(body.apiKey)) {
+        return this.json(response, 400, { error: "sessionId, provider and a valid API key are required" });
+      }
+      if (!this.runtime.saveProviderKey) return this.json(response, 501, { error: "Provider configuration unavailable" });
+      try {
+        await this.runtime.saveProviderKey(body.sessionId, body.provider, body.apiKey.trim());
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch (error) {
+        // Provider errors can contain credential material. Never project them.
+        return this.json(response, error instanceof WebRuntimeRequestError ? error.statusCode : 422, {
+          error: "Could not complete credential save. Wait for an idle Session, refresh status and retry; this provider may require additional authentication settings.",
+        });
+      }
+    }
+    if (url.pathname === "/api/models/configuration" && request.method === "POST") {
+      const body = await this.readJson(request);
+      if (Object.keys(body).length !== 3 || typeof body.sessionId !== "string" || typeof body.revision !== "string" || !validModelConfiguration(body.model)) return this.json(response, 400, { error: "Invalid model configuration" });
+      if (!this.runtime.saveModelConfiguration) return this.json(response, 501, { error: "Model configuration unavailable" });
+      try {
+        await this.runtime.saveModelConfiguration(body.sessionId, body.revision, body.model);
+        this.publish("settings_changed", {});
+        return this.json(response, 200, { saved: true });
+      } catch (error) {
+        // Native/provider failures can include secrets. Only project typed codes.
+        const typed = error instanceof WebRuntimeRequestError;
+        return this.json(response, typed ? error.statusCode : 422, {
+          ...(typed ? { code: error.code } : {}),
+          error: typed && error.code === "MODEL_CONFIGURATION_CONFLICT"
+            ? "Model configuration changed; refresh before saving"
+            : "Could not complete model save. Wait for an idle Session and refresh configuration before retrying.",
+        });
+      }
+    }
     if (url.pathname === "/api/model" && request.method === "POST") {
       const body = await this.readJson(request);
       if (
@@ -1202,9 +1316,10 @@ export class WebHost {
           error: parsedImages.error,
         });
       }
-      if ((!content && parsedImages.images.length === 0) || content.length > 12_000) {
+      if ((!content && parsedImages.images.length === 0) || content.length > WEB_PROMPT_MAX_TEXT_LENGTH) {
         return this.json(response, 400, {
-          error: "prompt must contain text or images and at most 12000 characters",
+          code: "INVALID_PROMPT",
+          error: `prompt must contain text or images and at most ${WEB_PROMPT_MAX_TEXT_LENGTH} characters`,
         });
       }
       const imageSignature = promptImageSignature(parsedImages.images);
@@ -1356,14 +1471,17 @@ export class WebHost {
     if (url.pathname === "/api/plan" && request.method === "POST") {
       const body = await this.readJson(request, 1024);
       if (typeof body.sessionId !== "string" || !body.sessionId || body.sessionId.length > 256 ||
+        !validSessionPath(body.sessionPath) ||
         typeof body.enabled !== "boolean" ||
         !(body.expectedRevision === null || (typeof body.expectedRevision === "string" && body.expectedRevision.length <= 256)) ||
-        Object.keys(body).some((key) => !["sessionId", "enabled", "expectedRevision"].includes(key)))
-        return this.json(response, 400, { code: "INVALID_PLAN_REQUEST", error: "A Session, enabled flag and expected Plan revision are required" });
+        Object.keys(body).some((key) => !["sessionId", "sessionPath", "enabled", "expectedRevision"].includes(key)))
+        return this.json(response, 400, { code: "INVALID_PLAN_REQUEST", error: "An exact Session id and path, enabled flag and expected Plan revision are required" });
       if (!this.runtime.setPlanMode)
         return this.json(response, 501, { code: "PLAN_CONTROL_UNAVAILABLE", error: "Plan control is unavailable" });
       try {
-        const plan = await this.runtime.setPlanMode({ sessionId: body.sessionId, enabled: body.enabled, expectedRevision: body.expectedRevision });
+        if (!this.adapter.isCurrentSession({ id: body.sessionId, path: body.sessionPath }))
+          throw new WebRuntimeRequestError("Only the active Web session accepts Plan changes", "SESSION_CONFLICT", 409);
+        const plan = await this.runtime.setPlanMode({ sessionId: body.sessionId, sessionPath: body.sessionPath, enabled: body.enabled, expectedRevision: body.expectedRevision });
         return this.json(response, 200, { sessionId: body.sessionId, ...plan });
       } catch (error) {
         const failure = this.runtimeRequestFailure(error, "PLAN_SELECTION_FAILED", "Plan mode could not be changed");
@@ -1550,7 +1668,7 @@ export class WebHost {
     const diagnosticSession = url.searchParams.get("sessionId");
     if (
       diagnosticSession !== null &&
-      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
+      ["/api/thinking", "/api/trust", "/api/providers/auth-status", "/api/models/configuration", "/api/capabilities/detail", "/api/settings/catalog"].includes(url.pathname) &&
       diagnosticSession !== this.runtime.sessionManager.getSessionId()
     ) {
       return this.json(response, 409, {
@@ -1626,14 +1744,20 @@ export class WebHost {
     if (url.pathname === "/api/git-review") {
       const sessionId = url.searchParams.get("sessionId");
       const sessionPath = url.searchParams.get("path");
+      const source = url.searchParams.get("source") ?? "unstaged";
+      const filePath = url.searchParams.get("file");
       if (
+        !["unstaged", "staged", "branch", "session"].includes(source) ||
+        (filePath !== null && (!filePath || filePath.length > 4096 || filePath.includes("\0"))) ||
+        url.searchParams.getAll("source").length > 1 ||
+        url.searchParams.getAll("file").length > 1 ||
         !sessionId ||
         sessionId.length > 256 ||
         !sessionPath ||
         url.searchParams.getAll("sessionId").length !== 1 ||
         url.searchParams.getAll("path").length !== 1 ||
         [...url.searchParams.keys()].some(
-          (key) => key !== "sessionId" && key !== "path",
+          (key) => !["sessionId", "path", "source", "file"].includes(key),
         )
       ) {
         return this.json(response, 400, {
@@ -1651,7 +1775,11 @@ export class WebHost {
       return this.json(
         response,
         200,
-        await this.gitReviews.read(session.path, session.cwd),
+        await this.gitReviews.read(session.path, session.cwd, {
+          source: source as import("../protocol/types.ts").WebGitReviewSource,
+          summary: filePath === null,
+          ...(filePath === null ? {} : { filePath }),
+        }),
       );
     }
     if (url.pathname === "/api/sessions") {
@@ -1860,6 +1988,14 @@ export class WebHost {
         workspaceSelected: this.runtime.workspaceSelected,
         models: this.runtime.listModels().filter((model) => model.current),
       });
+    if (url.pathname === "/api/models/configuration") {
+      if (!this.runtime.readModelConfigurations) return this.json(response, 501, { error: "Model configuration unavailable" });
+      try {
+        return this.json(response, 200, await this.runtime.readModelConfigurations());
+      } catch {
+        return this.json(response, 422, { error: "Cannot read models.json; check its JSON format" });
+      }
+    }
     if (url.pathname === "/api/providers/auth-status") {
       if (!this.runtime.listProviderAuth) {
         return this.json(response, 501, {
@@ -1896,9 +2032,17 @@ export class WebHost {
       }
     }
     if (url.pathname === "/api/snapshot") {
+      const historyEntry = url.searchParams.get("historyAnchor");
+      const historySession = url.searchParams.get("historySessionId");
+      if ((historyEntry !== null || historySession !== null) &&
+        (!historyEntry || !historySession || historyEntry.length > 128 || historySession.length > 128 ||
+         /[\s\u0000-\u001f]/u.test(historyEntry) || url.searchParams.getAll("historyAnchor").length !== 1 ||
+         url.searchParams.getAll("historySessionId").length !== 1))
+        return this.json(response, 400, { error: "a bounded history Session and entry anchor are required" });
       const cursor = this.sequence;
       const projection = await this.adapter.getSnapshot(
         url.searchParams.get("path") ?? undefined,
+        historyEntry && historySession ? { sessionId: historySession, entryId: historyEntry } : undefined,
       );
       const setup = loadSetupConfig();
       const snapshot: WebSnapshot = {
@@ -1923,11 +2067,73 @@ export class WebHost {
         snapshot.truncation.truncated = true;
         finalBytes = jsonByteLength(snapshot);
       }
+      while (finalBytes > WEB_MAX_SNAPSHOT_BYTES && snapshot.selectedExecution?.liveTools.length) {
+        snapshot.selectedExecution.liveTools = snapshot.selectedExecution.liveTools.slice(1);
+        snapshot.selectedExecution.liveToolsOmitted++;
+        snapshot.truncation.truncated = true;
+        finalBytes = jsonByteLength(snapshot);
+      }
       while (snapshot.truncation.bytes !== finalBytes) {
         snapshot.truncation.bytes = finalBytes;
         finalBytes = jsonByteLength(snapshot);
       }
       return this.json(response, 200, snapshot);
+    }
+    if (url.pathname === "/api/session/history") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const keys = ["sessionId", "path", "anchorEntryId", "beforeEntryId"] as const;
+      const values = keys.map((key) => url.searchParams.get(key));
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
+        keys.some((key, index) => url.searchParams.getAll(key).length !== 1 || !values[index] ||
+          values[index]!.length > (key === "path" ? 4096 : 128) || /[\u0000-\u001f]/u.test(values[index]!)))
+        return this.json(response, 400, { code: "INVALID_HISTORY_REQUEST", error: "an exact Session id, path and native entry boundaries are required" });
+      const page = await this.adapter.getSessionHistory(values[0]!, values[1]!, values[2]!, values[3]!);
+      if (page.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
+      if (page.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "The Session branch changed. Refresh the conversation before loading history." });
+      return this.json(response, 200, { session: page.session });
+    }
+    if (url.pathname === "/api/session/item") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const keys = ["sessionId", "sessionPath", "entryId", "cursor"] as const;
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
+        keys.some((key) => {
+          const value = url.searchParams.get(key);
+          return url.searchParams.getAll(key).length !== 1 || !value ||
+            value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
+        }) || !/^(0|[1-9]\d{0,9})$/u.test(url.searchParams.get("cursor") ?? ""))
+        return this.json(response, 400, { code: "INVALID_SESSION_ITEM_REQUEST", error: "an exact Session item and bounded cursor are required" });
+      const result = await this.adapter.getSessionItem(
+        url.searchParams.get("sessionId")!,
+        url.searchParams.get("sessionPath")!,
+        url.searchParams.get("entryId")!,
+        Number(url.searchParams.get("cursor")),
+      );
+      if (result.status === "not_found") return this.json(response, 404, { code: "SESSION_NOT_FOUND", error: "Session is not in the selected workspace" });
+      if (result.status === "changed") return this.json(response, 409, { code: "SESSION_HISTORY_CHANGED", error: "Session item is no longer on this branch" });
+      if (result.status === "invalid_cursor") return this.json(response, 400, { code: "INVALID_SESSION_ITEM_CURSOR", error: "Cursor is beyond the native message" });
+      return this.json(response, 200, result.page);
+    }
+    if (url.pathname === "/api/turn-changes") {
+      if (request.method !== "GET") return this.json(response, 405, { error: "GET required" });
+      const keys = ["sessionId", "sessionPath", "promptEntryId", "filePath"] as const;
+      const required = keys.slice(0, 3);
+      if ([...url.searchParams.keys()].some((key) => !keys.includes(key as typeof keys[number])) ||
+        required.some((key) => {
+          const value = url.searchParams.get(key);
+          return url.searchParams.getAll(key).length !== 1 || !value ||
+            value.length > (key === "sessionPath" ? 4096 : 128) || /[\u0000-\u001f]/u.test(value);
+        }) || url.searchParams.getAll("filePath").length > 1 ||
+        (url.searchParams.has("filePath") &&
+          (!url.searchParams.get("filePath") || url.searchParams.get("filePath")!.length > 4096 ||
+            /[\u0000-\u001f]/u.test(url.searchParams.get("filePath")!))))
+        return this.json(response, 400, { code: "INVALID_TURN_CHANGES_REQUEST", error: "an exact Session and prompt entry are required" });
+      const result = await this.adapter.getTurnChanges(
+        url.searchParams.get("sessionId")!,
+        url.searchParams.get("sessionPath")!,
+        url.searchParams.get("promptEntryId")!,
+        url.searchParams.get("filePath") ?? undefined,
+      );
+      return this.json(response, 200, result);
     }
     if (url.pathname === "/api/session") {
       const path = url.searchParams.get("path");

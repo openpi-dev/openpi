@@ -1,6 +1,12 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import {
+  cleanup,
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+} from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -43,13 +49,22 @@ const commands: WebCommandSummary[] = [
     name: "ps",
     description: "List background terminals",
     source: "extension",
-    availability: "unsupported",
+    availability: "available",
+    action: "terminal",
   },
   {
     name: "btw",
     description: "Keeps working while asking a side question",
     source: "extension",
-    availability: "unsupported",
+    availability: "available",
+    action: "side-conversation",
+  },
+  {
+    name: "openpi-setup",
+    description: "Configure OpenPI",
+    source: "extension",
+    availability: "available",
+    argumentHint: "[request]",
   },
 ];
 
@@ -60,6 +75,7 @@ function snapshot(): WebSnapshot {
     generatedAt: "2026-09-09T00:00:00Z",
     cursor: 1,
     currentSessionId: "session-1",
+    currentSessionPath: "/tmp/workspace/session.jsonl",
     workspaces: [{ path: "/tmp/workspace", name: "Workspace", current: true }],
     sessions: [],
     selectedSession: {
@@ -94,11 +110,15 @@ function renderComposer(
     draft?: boolean;
     landing?: boolean;
     commandDiscovery?: Partial<CommandDiscoveryState>;
+    onCommandAction?: (
+      action: NonNullable<WebCommandSummary["action"]>,
+    ) => boolean;
   } = {},
 ) {
   const store = createWebStore();
   const discoverCommands = vi.fn(async () => {});
   const sendPrompt = vi.fn(async () => true);
+  const onCommandAction = options.onCommandAction ?? vi.fn(() => true);
   const props = {
     snapshot: snapshot(),
     selectedWorkspace: "/tmp/workspace",
@@ -112,6 +132,7 @@ function renderComposer(
     turnTerminalStatus: null,
     pendingFollowUpsReceipt: null,
     thinkingPendingLevel: null,
+    onCommandAction,
     commandDiscovery: {
       sessionId: "session-1",
       status: "ready" as const,
@@ -130,7 +151,7 @@ function renderComposer(
   render(
     createElement(I18nextProvider, { i18n }, createElement(Composer, props)),
   );
-  return { discoverCommands, sendPrompt };
+  return { discoverCommands, sendPrompt, onCommandAction };
 }
 
 function enterCommand(value: string) {
@@ -145,17 +166,21 @@ function enterCommand(value: string) {
 }
 
 describe("Web slash command discovery", () => {
-  it("shows only runnable commands until a query asks for an unsupported one", () => {
+  it("lists runnable commands first and keeps unsupported commands discoverable", () => {
     expect(filterWebCommands(commands, "").map((item) => item.name)).toEqual([
       "review",
       "release",
+      "ps",
+      "btw",
+      "openpi-setup",
+      "extension:setup",
     ]);
     expect(
       filterWebCommands(commands, "review").map((item) => item.name),
     ).toEqual(["review"]);
     expect(
       filterWebCommands(commands, "configure").map((item) => item.name),
-    ).toEqual(["extension:setup"]);
+    ).toEqual(["openpi-setup", "extension:setup"]);
     expect(
       filterWebCommands(commands, "skill").map((item) => item.name),
     ).toEqual(["release"]);
@@ -180,14 +205,21 @@ describe("Web slash command discovery", () => {
     expect(screen.queryByRole("listbox")).toBeNull();
   });
 
-  it("summarizes a discovery result with no runnable Web commands", () => {
+  it("shows the command and its reason instead of an empty dead end when all commands are unsupported", () => {
     renderComposer({
       commandDiscovery: { commands: [commands[0]!], totalAvailable: 1 },
     });
     enterCommand("/");
 
-    expect(screen.getByText(i18n.t("commandsNoAvailable"))).toBeTruthy();
-    expect(screen.queryByRole("listbox")).toBeNull();
+    expect(
+      screen.getByRole<HTMLButtonElement>("option", {
+        name: /extension:setup/u,
+      }).disabled,
+    ).toBe(true);
+    expect(
+      screen.getByText(i18n.t("commandUnavailable_not_integrated")),
+    ).toBeTruthy();
+    expect(screen.queryByText(i18n.t("commandsNoAvailable"))).toBeNull();
   });
 
   it("keeps no-match distinct when all discovered commands are unsupported", () => {
@@ -306,5 +338,89 @@ describe("Web slash command discovery", () => {
 
     expect(screen.getByText(i18n.t("commandSessionRequired"))).toBeTruthy();
     expect(discoverCommands).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["ps", "terminal"],
+    ["lg", "review"],
+    ["subagents", "subagents"],
+    ["usage", "runtime"],
+    ["btw", "side-conversation"],
+  ] as const)(
+    "completes then opens /%s without sending a model prompt",
+    (name, action) => {
+      const { sendPrompt, onCommandAction } = renderComposer({
+        commandDiscovery: {
+          commands: [
+            { name, source: "extension", availability: "available", action },
+          ],
+        },
+      });
+      const input = enterCommand(`/${name}`);
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(input.value).toBe(`/${name} `);
+      expect(onCommandAction).not.toHaveBeenCalled();
+      fireEvent.keyDown(input, { key: "Enter" });
+      expect(onCommandAction).toHaveBeenCalledWith(action);
+      expect(sendPrompt).not.toHaveBeenCalled();
+      expect(input.value).toBe("");
+    },
+  );
+
+  it("keeps panel command arguments and attachments instead of dropping them", async () => {
+    const { sendPrompt, onCommandAction } = renderComposer();
+    const input = enterCommand("/ps retain these arguments");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("commandPanelArguments"),
+    );
+    expect(input.value).toBe("/ps retain these arguments");
+    fireEvent.change(input, { target: { value: "/ps " } });
+    const file = new File(
+      [new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])],
+      "image.png",
+      { type: "image/png" },
+    );
+    fireEvent.change(
+      input.closest("form")!.querySelector('input[type="file"]')!,
+      { target: { files: [file] } },
+    );
+    await waitFor(() => expect(screen.getByText("image.png")).toBeTruthy());
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("commandPanelArguments"),
+    );
+    expect(screen.getByText("image.png")).toBeTruthy();
+    expect(input.value).toBe("/ps ");
+    expect(onCommandAction).not.toHaveBeenCalled();
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it("retains the command if its panel cannot open", () => {
+    const action = vi.fn(() => false);
+    const { sendPrompt } = renderComposer({ onCommandAction: action });
+    const input = enterCommand("/ps ");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(action).toHaveBeenCalledWith("terminal");
+    expect(input.value).toBe("/ps ");
+    expect(screen.getByRole("alert").textContent).toBe(
+      i18n.t("commandPanelUnavailable"),
+    );
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+
+  it("executes canonical setup through Pi and rejects unsupported commands with arguments", () => {
+    const { sendPrompt } = renderComposer();
+    const input = enterCommand("/extension:setup inspect this");
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(screen.getByRole("alert").textContent).toContain(
+      i18n.t("commandUnavailable_not_integrated"),
+    );
+    expect(sendPrompt).not.toHaveBeenCalled();
+    fireEvent.change(input, {
+      target: { value: "/openpi-setup inspect settings" },
+    });
+    fireEvent.keyDown(input, { key: "Enter" });
+    expect(sendPrompt).toHaveBeenCalledWith("/openpi-setup inspect settings");
   });
 });

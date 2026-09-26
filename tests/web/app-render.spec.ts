@@ -6,11 +6,18 @@ import {
   fireEvent,
   render,
   screen,
+  waitFor,
+  within,
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { projectEntry, type WebSnapshot } from "../../web/protocol/types.ts";
+import { useStore } from "zustand";
+import {
+  projectEntry,
+  WEB_PROMPT_MAX_TEXT_LENGTH,
+  type WebSnapshot,
+} from "../../web/protocol/types.ts";
 import { App } from "../../web/ui/src/app/App.tsx";
 import { Providers } from "../../web/ui/src/app/providers.tsx";
 import { Markdown } from "../../web/ui/src/components/Markdown.tsx";
@@ -19,10 +26,19 @@ import { ActivityBar } from "../../web/ui/src/features/activity/ActivityBar.tsx"
 import { Composer } from "../../web/ui/src/features/composer/Composer.tsx";
 import { SessionSidebar } from "../../web/ui/src/features/sessions/SessionSidebar.tsx";
 import { SubagentDetailView } from "../../web/ui/src/features/subagents/SubagentPanel.tsx";
+import {
+  type SessionReadingCache,
+  sessionReadingScope,
+} from "../../web/ui/src/features/transcript/session-reading-state.ts";
 import { Transcript } from "../../web/ui/src/features/transcript/Transcript.tsx";
 import { i18n } from "../../web/ui/src/i18n.ts";
 import { WebClient } from "../../web/ui/src/protocol/client.ts";
+import type { EventStreamOptions } from "../../web/ui/src/protocol/event-stream.ts";
 import { createWebStore, webStore } from "../../web/ui/src/store/web-store.ts";
+import { installCheckVisibilityFixture } from "./check-visibility-fixture.ts";
+import { questionFixture } from "./question-fixtures.ts";
+
+installCheckVisibilityFixture();
 
 afterEach(() => {
   cleanup();
@@ -160,6 +176,249 @@ it("keeps a workspace draft separate from the old Session UI and retains text af
     webStore.setState(initial, true);
   }
 });
+
+it.each([
+  { trigger: "providerAvailability", selected: "modelSettings" },
+  { trigger: "settings", selected: "generalSettings" },
+])(
+  "routes the App $trigger entry to $selected and retains question drafts through settings",
+  async ({ trigger, selected }) => {
+    const original = webStore.getState();
+    const isolated = createWebStore().getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const refresh = vi
+      .spyOn(original.actions, "refreshSnapshot")
+      .mockResolvedValue(true);
+    const showModal = Object.getOwnPropertyDescriptor(
+      HTMLDialogElement.prototype,
+      "showModal",
+    );
+    const closeDialog = Object.getOwnPropertyDescriptor(
+      HTMLDialogElement.prototype,
+      "close",
+    );
+    const matchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = true;
+      },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = false;
+      },
+    });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (media: string) => ({
+        matches: false,
+        media,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input), "http://localhost");
+        const responses: Record<string, unknown> = {
+          "/api/questions/pending": {
+            pending: {
+              sessionId: "session",
+              requestId: "app-question",
+              toolCallId: "app-question-tool",
+              expiresAt: Date.now() + 600_000,
+              questions: questionFixture,
+            },
+          },
+          "/api/git-review": { ok: false, reason: "not_git_repository" },
+          "/api/models/configuration": {
+            revision: "entry-fixture",
+            models: [],
+          },
+          "/api/providers/auth-status": {
+            providers: [
+              {
+                id: "fixture-provider",
+                name: "Fixture Provider",
+                authMethods: ["api_key"],
+                configured: false,
+                subscription: false,
+                nameTruncated: false,
+              },
+            ],
+            truncation: {
+              truncated: false,
+              providersOmitted: 0,
+              namesTruncated: 0,
+              maxProviders: 250,
+            },
+          },
+          "/api/settings/catalog": {
+            sessionId: "session",
+            setup: {
+              capabilities: { discovery: "explicit" },
+              suggestions: { enabled: false },
+              workflows: { concurrency: 6, maxAgentCalls: 64 },
+              ui: {
+                webTheme: "system",
+                webChatWidth: 820,
+                webChatFontSize: 14,
+                webExpandThinking: false,
+                showHeader: false,
+                customFooter: true,
+                footerStyle: "plain",
+                subagentResultDisplay: "compact",
+                bashToolDisplay: "compact",
+                fileMutationDisplay: "compact",
+              },
+              postEditConfigured: false,
+              subagents: { roleModels: {} },
+            },
+            resources: {
+              skills: [],
+              plugins: [],
+              totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+              diagnostics: { extensionErrors: 0, skillErrors: 0 },
+              truncation: {
+                truncated: false,
+                skillsOmitted: 0,
+                pluginsOmitted: 0,
+                resourcesOmitted: 0,
+              },
+            },
+          },
+        };
+        const body = responses[url.pathname];
+        if (body === undefined)
+          throw new Error(`Unexpected entry fixture request: ${url.pathname}`);
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.models = [
+      {
+        provider: "fixture-provider",
+        id: "fixture-model",
+        name: "Fixture Model",
+        label: "Fixture Model",
+        current: true,
+      },
+    ];
+    webStore.setState(
+      {
+        ...isolated,
+        actions: original.actions,
+        snapshot,
+        connection: "connected",
+        selectedWorkspace: "/tmp",
+        selectedPath: "/tmp/session",
+        sidebarCollapsed: false,
+        workspaceDraft: false,
+        sessionSwitching: false,
+      },
+      true,
+    );
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = renderWithI18n(createElement(App));
+      fireEvent.click(await screen.findByRole("radio", { name: /完整交互/ }));
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("questionNotes") }),
+      );
+      fireEvent.change(
+        screen.getByRole("textbox", { name: i18n.t("questionNotes") }),
+        {
+          target: { value: "Keep this question draft across settings" },
+        },
+      );
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: i18n.t(trigger) })),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: i18n.t("settings"),
+      });
+      expect(
+        within(dialog).getByRole("tab", {
+          name: i18n.t(selected),
+          selected: true,
+        }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("tabpanel", { name: i18n.t(selected) }),
+      ).toBeTruthy();
+      if (trigger === "providerAvailability")
+        expect(
+          (
+            await within(dialog).findByLabelText<HTMLInputElement>(
+              i18n.t("providerApiKey"),
+            )
+          ).value,
+        ).toBe("");
+      else
+        expect(
+          within(dialog).queryByLabelText(i18n.t("providerApiKey")),
+        ).toBeNull();
+      expect(webStore.getState().snapshot?.selectedSession?.path).toBe(
+        "/tmp/session",
+      );
+      expect(
+        (
+          await within(dialog).findByRole<HTMLTextAreaElement>("textbox", {
+            name: i18n.t("questionNotes"),
+          })
+        ).value,
+      ).toBe("Keep this question draft across settings");
+      fireEvent.click(
+        within(dialog).getByRole("button", {
+          name: i18n.t("close"),
+        }),
+      );
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("dialog", { name: i18n.t("settings") }),
+        ).toBeNull(),
+      );
+      expect(
+        (
+          await screen.findByRole<HTMLTextAreaElement>("textbox", {
+            name: i18n.t("questionNotes"),
+          })
+        ).value,
+      ).toBe("Keep this question draft across settings");
+    } finally {
+      view?.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      refresh.mockRestore();
+      fetch.mockRestore();
+      webStore.setState(original, true);
+      if (showModal)
+        Object.defineProperty(
+          HTMLDialogElement.prototype,
+          "showModal",
+          showModal,
+        );
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+      if (closeDialog)
+        Object.defineProperty(
+          HTMLDialogElement.prototype,
+          "close",
+          closeDialog,
+        );
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+      if (matchMedia) Object.defineProperty(window, "matchMedia", matchMedia);
+      else Reflect.deleteProperty(window, "matchMedia");
+    }
+  },
+);
 
 const truncation = {
   bytes: 0,
@@ -498,7 +757,7 @@ it("marks only live execution evidence for shimmer styling", () => {
   expect(process?.querySelectorAll(".process-step.running")).toHaveLength(2);
 });
 
-it("keeps OpenPI setup episodes out of the main conversation", () => {
+it("folds legacy setup instructions while keeping results and subsequent task messages visible", () => {
   const snapshot = activeSnapshot();
   snapshot.selectedSession!.entries = [
     {
@@ -590,9 +849,360 @@ it("keeps OpenPI setup episodes out of the main conversation", () => {
     screen.getAllByText("Continue the actual task").length,
   ).toBeGreaterThan(0);
   expect(screen.getByText("Visible continuation")).toBeTruthy();
-  expect(screen.queryByText("Hidden configuration response")).toBeNull();
-  expect(screen.queryByText("Hidden configuration evidence")).toBeNull();
-  expect(screen.queryByText("/openpi-setup Apply a dark theme")).toBeNull();
+  expect(screen.getByText("Hidden configuration response")).toBeTruthy();
+  expect(
+    screen.getAllByText("Hidden configuration evidence").length,
+  ).toBeGreaterThan(0);
+  expect(
+    screen.getByText("/openpi-setup Apply a dark theme", {
+      selector: ".message-body",
+    }),
+  ).toBeTruthy();
+  expect(screen.queryByText("Apply a dark theme")).toBeNull();
+});
+
+it.each([true, false])(
+  "only folds a setup echo linked to its exact native command parent (%s)",
+  (linked) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const content = "/openpi-setup set theme to dark";
+    snapshot.selectedSession!.entries = [
+      projectEntry({
+        id: "command-entry",
+        parentId: null,
+        timestamp: "2026-09-22T00:00:00Z",
+        type: "custom",
+        customType: "openpi-web-command-input",
+        data: { text: content, commandId: "command-one" },
+      }),
+      projectEntry({
+        id: "setup-entry",
+        parentId: linked ? "command-entry" : "other-entry",
+        timestamp: "2026-09-22T00:00:01Z",
+        type: "custom_message",
+        customType: "openpi-setup-request",
+        display: true,
+        content: "Expanded internal configuration instructions",
+        details: {
+          requestId: "setup-one",
+          command: "openpi-setup",
+          request: "set theme to dark",
+        },
+      }),
+      {
+        id: "result-entry",
+        timestamp: "2026-09-22T00:00:02Z",
+        type: "message",
+        message: { role: "assistant", content: "The theme is now dark." },
+      },
+    ];
+    const projected = vi.fn();
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          {
+            key: "optimistic-command-one",
+            message: { role: "user", content },
+            optimistic: {
+              sessionId: "session",
+              sessionPath: "/tmp/session",
+              commandId: "command-one",
+              afterEntryId: null,
+              admitted: true,
+            },
+          },
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onPromptProjection: projected,
+      }),
+    );
+    expect(
+      view.container.querySelectorAll(".message-row.user .message-body"),
+    ).toHaveLength(linked ? 1 : 2);
+    expect(
+      screen.queryByText("Expanded internal configuration instructions"),
+    ).toBeNull();
+    expect(screen.getByText("The theme is now dark.")).toBeTruthy();
+    expect(projected).toHaveBeenCalledWith("session", "/tmp/session", [
+      { key: "optimistic-command-one", entryId: "command-entry" },
+    ]);
+  },
+);
+
+it("does not consume a later identical command draft using an older native command id", () => {
+  const snapshot = activeSnapshot();
+  const content = "/usage";
+  snapshot.selectedSession!.entries = [
+    projectEntry({
+      id: "older-command",
+      parentId: null,
+      timestamp: "2026-09-22T00:00:00Z",
+      type: "custom",
+      customType: "openpi-web-command-input",
+      data: { text: content, commandId: "old-command-id" },
+    }),
+  ];
+  const projected = vi.fn();
+  const view = renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [
+        {
+          key: "optimistic-new-command-id",
+          message: { role: "user", content },
+          optimistic: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: "new-command-id",
+            afterEntryId: "older-command",
+            admitted: true,
+          },
+        },
+      ],
+      liveRunning: true,
+      livePhase: "running",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+      onPromptProjection: projected,
+    }),
+  );
+  expect(
+    view.container.querySelectorAll(".message-row.user .message-body"),
+  ).toHaveLength(2);
+  expect(projected).not.toHaveBeenCalled();
+});
+
+it.each([1, 2])(
+  "reconciles timestamp-free live users once while keeping native history ids (%s copies)",
+  (copies) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const content = "New user request while reading old history";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "before-request",
+        type: "message",
+        timestamp: "2026-09-22T00:00:00Z",
+        message: {
+          role: "assistant",
+          content: "Previous answer",
+          timestamp: 100,
+        },
+      },
+      {
+        id: "native-request",
+        parentId: "before-request",
+        type: "message",
+        timestamp: "2026-09-22T00:00:01Z",
+        message: {
+          role: "user",
+          content,
+          timestamp: 200,
+          parts: [{ type: "text", text: content }],
+        },
+      },
+    ];
+    const projected = vi.fn();
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          {
+            key: "optimistic-new-command",
+            message: { role: "user", content },
+            optimistic: {
+              sessionId: "session",
+              sessionPath: "/tmp/session",
+              commandId: "new-command",
+              afterEntryId: "before-request",
+              admitted: true,
+            },
+          },
+          ...Array.from({ length: copies }, (_, index) => ({
+            key: `legacy-user-${index}`,
+            message: { role: "user", content },
+          })),
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: async () => true,
+        onPromptProjection: projected,
+      }),
+    );
+    expect(
+      view.container.querySelectorAll(".message-row.user .message-body"),
+    ).toHaveLength(copies);
+    expect(
+      view.container
+        .querySelector(".message-row.user")
+        ?.getAttribute("data-history-entry"),
+    ).toBe("native-request");
+    expect(projected).toHaveBeenCalledWith("session", "/tmp/session", [
+      { key: "optimistic-new-command", entryId: "native-request" },
+    ]);
+  },
+);
+
+it.each(["openpi-setup", "my-pi-setup"])(
+  "shows the original /%s request once and retries the command instead of the internal prompt",
+  async (command) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime = { status: "idle", capabilities: {} };
+    const request = "set theme to dark";
+    const content = `/${command} ${request}`;
+    snapshot.selectedSession!.entries = [
+      projectEntry({
+        id: "setup",
+        parentId: null,
+        type: "custom_message",
+        customType: "openpi-setup-request",
+        timestamp: "2026-09-22T00:00:00Z",
+        content: "INTERNAL EXPANDED CONFIGURATION PROMPT",
+        display: true,
+        details: { requestId: "setup-1", command, request },
+      }),
+      {
+        id: "result",
+        type: "message",
+        timestamp: "2026-09-22T00:00:01Z",
+        message: {
+          role: "toolResult",
+          toolName: "configure_my_pi_setup",
+          toolCallId: "setup-call",
+          content: "Configuration write failed",
+          isError: true,
+        },
+      },
+      {
+        id: "answer",
+        type: "message",
+        timestamp: "2026-09-22T00:00:02Z",
+        message: {
+          role: "assistant",
+          content: "Configuration could not be completed",
+          stopReason: "error",
+          errorMessage: "Fixture provider error",
+        },
+      },
+      {
+        id: "timing",
+        type: "custom",
+        timestamp: "2026-09-22T00:00:03Z",
+        turnTiming: {
+          version: 1,
+          sessionId: "session",
+          commandId: "web-command",
+          epoch: 1,
+          startedAt: 1000,
+          finishedAt: 4000,
+          elapsedMs: 3000,
+          outcome: "failed",
+        },
+      },
+    ];
+    const resend = vi.fn(async () => true);
+    const view = renderWithI18n(
+      createElement(Transcript, {
+        snapshot,
+        liveMessages: [
+          { key: "optimistic-web-command", message: { role: "user", content } },
+        ],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom: 0,
+        onResend: resend,
+      }),
+    );
+    const users = view.container.querySelectorAll(
+      ".message-row.user .message-body",
+    );
+    expect(users).toHaveLength(1);
+    expect(users[0]?.textContent).toBe(content);
+    expect(
+      screen.queryByText("INTERNAL EXPANDED CONFIGURATION PROMPT"),
+    ).toBeNull();
+    expect(
+      screen.getAllByText("Configuration write failed").length,
+    ).toBeGreaterThan(0);
+    expect(screen.getByText("Fixture provider error")).toBeTruthy();
+    expect(
+      view.container.querySelector(".turn-duration")?.textContent,
+    ).toContain("3s");
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("retryPrompt") }),
+      );
+    });
+    expect(resend).toHaveBeenCalledWith(content);
+  },
+);
+
+it("does not retry an unrelated user task when a legacy setup request has no original-command metadata", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime = { status: "idle", capabilities: {} };
+  snapshot.selectedSession!.entries = [
+    {
+      id: "user",
+      type: "message",
+      timestamp: "2026-09-22T00:00:00Z",
+      message: { role: "user", content: "Unrelated earlier task" },
+    },
+    projectEntry({
+      id: "setup",
+      parentId: "user",
+      type: "custom_message",
+      customType: "openpi-setup-request",
+      timestamp: "2026-09-22T00:00:01Z",
+      content: "Legacy expanded setup prompt",
+      display: true,
+    }),
+    {
+      id: "error",
+      type: "message",
+      timestamp: "2026-09-22T00:00:02Z",
+      message: {
+        role: "assistant",
+        content: "",
+        stopReason: "error",
+        errorMessage: "Visible setup failure",
+      },
+    },
+  ];
+  renderWithI18n(
+    createElement(Transcript, {
+      snapshot,
+      liveMessages: [],
+      liveRunning: false,
+      livePhase: "idle",
+      liveRetry: null,
+      thinkingStarts: {},
+      thinkingDurations: {},
+      scrollToBottom: 0,
+      onResend: async () => true,
+    }),
+  );
+  expect(screen.getByText("Visible setup failure")).toBeTruthy();
+  expect(
+    screen.queryByRole("button", { name: i18n.t("retryPrompt") }),
+  ).toBeNull();
 });
 
 it("renders side conversation messages with transcript role styling", async () => {
@@ -676,6 +1286,7 @@ function activeSnapshot(): WebSnapshot {
     generatedAt: "2026-09-01T10:00:00Z",
     cursor: 1,
     currentSessionId: "session",
+    currentSessionPath: "/tmp/session",
     workspaces: [],
     sessions: [],
     models: [],
@@ -691,6 +1302,670 @@ function activeSnapshot(): WebSnapshot {
     },
   };
 }
+
+it.each([
+  [false, false],
+  [true, false],
+  [true, true],
+])(
+  "returns from a Files preview to the same list and outer opener (nested: %s, Tools navigation: %s)",
+  async (nested, viaTools) => {
+    const original = webStore.getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const resolve = vi
+      .spyOn(WebClient.prototype, "resolveArtifact")
+      .mockImplementation(async (_session, reference) => ({
+        handle: reference,
+      }));
+    const release = vi
+      .spyOn(WebClient.prototype, "releaseArtifact")
+      .mockResolvedValue({});
+    const read = vi
+      .spyOn(WebClient.prototype, "artifactPreview")
+      .mockImplementation(async (sessionId, handle) => ({
+        artifact: {
+          sessionId,
+          handle,
+          path: handle,
+          name: handle.split("/").at(-1)!,
+          revision: "a",
+          bytes: 32,
+          preview: "text",
+        },
+        text: handle.endsWith("report.md")
+          ? "[Next file](./next.md)"
+          : "Nested file text",
+        truncated: false,
+      }));
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "write-call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-report",
+              name: "write",
+              arguments: '{"path":"report.md"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "write-result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-report",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ];
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      liveRunning: false,
+      liveMessages: [],
+      activeTurn: null,
+    });
+    const view = renderWithI18n(createElement(App));
+    try {
+      const tools = screen.getByRole("button", {
+        name: i18n.t("openTools"),
+      });
+      tools.focus();
+      fireEvent.click(tools);
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(i18n.t("generatedFiles"), "u"),
+        }),
+      );
+      const files = view.container.querySelector<HTMLElement>(
+        ".generated-files-list",
+      )!;
+      files.scrollTop = 77;
+      const opener = within(files).getByRole("button", { name: /report.md/u });
+      fireEvent.click(opener);
+      await screen.findByRole("button", { name: /Next file/u });
+      expect(opener.isConnected).toBe(true);
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")!.hidden,
+      ).toBe(true);
+      if (nested) {
+        fireEvent.click(screen.getByRole("button", { name: /Next file/u }));
+        await screen.findByText("Nested file text");
+      }
+      if (viaTools) {
+        tools.focus();
+        fireEvent.click(tools);
+      } else {
+        fireEvent.click(
+          screen.getByRole("button", { name: i18n.t("closePreview") }),
+        );
+      }
+      await waitFor(() =>
+        expect(document.activeElement).toBe(viaTools ? tools : opener),
+      );
+      expect(
+        screen.queryByRole("button", { name: i18n.t("closePreview") }),
+      ).toBeNull();
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")!.hidden,
+      ).toBe(false);
+      expect(view.container.querySelector(".generated-files-list")).toBe(files);
+      expect(files.scrollTop).toBe(77);
+      fireEvent.keyDown(opener, { key: "Escape" });
+      await waitFor(() => expect(document.activeElement).toBe(tools));
+    } finally {
+      view.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      resolve.mockRestore();
+      release.mockRestore();
+      read.mockRestore();
+      webStore.setState(original, true);
+    }
+  },
+);
+
+it.each(["switching", "path"])(
+  "invalidates a Files preview without reopening its source across %s",
+  async (boundary) => {
+    const original = webStore.getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const resolve = vi
+      .spyOn(WebClient.prototype, "resolveArtifact")
+      .mockResolvedValue({ handle: "report" });
+    const release = vi
+      .spyOn(WebClient.prototype, "releaseArtifact")
+      .mockResolvedValue({});
+    const read = vi
+      .spyOn(WebClient.prototype, "artifactPreview")
+      .mockResolvedValue({
+        artifact: {
+          sessionId: "session",
+          handle: "report",
+          path: "/tmp/report.md",
+          name: "report.md",
+          revision: "a",
+          bytes: 4,
+          preview: "text",
+        },
+        text: "File preview",
+        truncated: false,
+      });
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.selectedSession!.entries = [
+      {
+        id: "call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-report",
+              name: "write",
+              arguments: '{"path":"report.md"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-report",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ];
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      liveRunning: false,
+      liveMessages: [],
+      activeTurn: null,
+    });
+    const view = renderWithI18n(createElement(App));
+    try {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("openTools") }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", {
+          name: new RegExp(i18n.t("generatedFiles"), "u"),
+        }),
+      );
+      const files = view.container.querySelector<HTMLElement>(
+        ".generated-files-list",
+      )!;
+      fireEvent.click(
+        within(files).getByRole("button", { name: /report.md/u }),
+      );
+      await screen.findByText("File preview");
+      const sidebar = screen.getByRole("button", {
+        name: i18n.t("collapseSidebar"),
+      });
+      sidebar.focus();
+      act(() =>
+        webStore.setState(
+          boundary === "switching"
+            ? { sessionSwitching: true }
+            : {
+                selectedPath: "/tmp/copied-session",
+                snapshot: {
+                  ...snapshot,
+                  selectedSession: {
+                    ...snapshot.selectedSession!,
+                    path: "/tmp/copied-session",
+                  },
+                },
+              },
+        ),
+      );
+      expect(screen.queryByText("File preview")).toBeNull();
+      expect(document.activeElement).toBe(sidebar);
+      expect(
+        view.container.querySelector<HTMLElement>(".workbar-panel")?.hidden ??
+          true,
+      ).toBe(true);
+      await waitFor(() => expect(release).toHaveBeenCalled());
+      expect(
+        screen.queryByRole("button", { name: i18n.t("closePreview") }),
+      ).toBeNull();
+    } finally {
+      view.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      resolve.mockRestore();
+      release.mockRestore();
+      read.mockRestore();
+      webStore.setState(original, true);
+    }
+  },
+);
+
+it("keeps background Session files, trajectory and activity scoped to the selected identity", async () => {
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const review = vi.spyOn(WebClient.prototype, "gitReview").mockResolvedValue({
+    ok: false,
+    reason: "not_git_repository",
+  });
+  const snapshot = activeSnapshot();
+  snapshot.currentSessionId = "active-a";
+  snapshot.currentSessionPath = "/tmp/a";
+  snapshot.runtime.activeTurn = {
+    sessionId: "active-a",
+    sessionPath: "/tmp/a",
+    commandId: "turn-a",
+    epoch: 1,
+  };
+  snapshot.runtime.capabilities = {
+    "background-terminals": {
+      items: [
+        { id: "terminal-a", title: "A build", status: "running", createdAt: 1 },
+      ],
+      omitted: 0,
+      truncated: false,
+    },
+  };
+  snapshot.workspaces = [{ path: "/tmp", name: "Workspace", current: true }];
+  snapshot.selectedSession = {
+    ...snapshot.selectedSession!,
+    id: "background-b",
+    path: "/tmp/b",
+    entries: [
+      {
+        id: "b-call",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-b",
+              name: "write",
+              arguments: '{"path":"b.txt"}',
+            },
+          ],
+        },
+      },
+      {
+        id: "b-result",
+        type: "message",
+        timestamp: snapshot.generatedAt,
+        message: {
+          role: "toolResult",
+          toolCallId: "write-b",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ],
+  };
+  snapshot.selectedExecution = {
+    sessionId: "background-b",
+    sessionPath: "/tmp/b",
+    status: "running",
+    liveTools: [
+      {
+        call: { type: "toolCall", name: "bash", arguments: "{}" },
+        state: "running",
+      },
+    ],
+    liveToolsOmitted: 0,
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: "/tmp/b",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+    sessionSwitching: false,
+    liveRunning: true,
+    activeTurn: snapshot.runtime.activeTurn,
+    liveMessages: [
+      {
+        key: "a-call",
+        message: {
+          role: "assistant",
+          content: "",
+          parts: [
+            {
+              type: "toolCall",
+              id: "write-a",
+              name: "write",
+              arguments: '{"path":"a.txt"}',
+            },
+          ],
+        },
+      },
+      {
+        key: "a-result",
+        message: {
+          role: "toolResult",
+          toolCallId: "write-a",
+          content: "saved",
+          isError: false,
+        },
+      },
+    ],
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    expect(screen.getByText(i18n.t("backgroundSessionRunning"))).toBeTruthy();
+    expect(
+      screen.getByText(i18n.t("observedSessionTools", { count: 1 })),
+    ).toBeTruthy();
+    expect(screen.queryByLabelText("Runtime activity")).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: i18n.t("stopTurn") }),
+    ).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("trajectory") }));
+    expect(screen.getByText(i18n.t("trajectoryRunning"))).toBeTruthy();
+    act(() =>
+      webStore.setState({
+        snapshot: {
+          ...snapshot,
+          selectedExecution: { ...snapshot.selectedExecution!, status: "idle" },
+        },
+      }),
+    );
+    expect(screen.queryByText(i18n.t("trajectoryRunning"))).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("openTools") }));
+    fireEvent.click(
+      screen.getByRole("button", {
+        name: new RegExp(i18n.t("generatedFiles"), "u"),
+      }),
+    );
+    const files = view.container.querySelector<HTMLElement>(
+      ".generated-files-list",
+    )!;
+    expect(files.textContent).toContain("b.txt");
+    expect(files.textContent).not.toContain("a.txt");
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    review.mockRestore();
+    webStore.setState(original, true);
+  }
+});
+
+it("refreshes background Session Git review while a different Session runs", async () => {
+  vi.useFakeTimers();
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const review = vi.spyOn(WebClient.prototype, "gitReview").mockResolvedValue({
+    ok: false,
+    reason: "not_git_repository",
+  });
+  const snapshot = activeSnapshot();
+  snapshot.currentSessionId = "running-a";
+  snapshot.currentSessionPath = "/tmp/a";
+  snapshot.selectedSession = {
+    ...snapshot.selectedSession!,
+    id: "idle-b",
+    path: "/tmp/b",
+  };
+  snapshot.selectedExecution = {
+    sessionId: "idle-b",
+    sessionPath: "/tmp/b",
+    status: "idle",
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  webStore.setState({
+    snapshot,
+    selectedPath: "/tmp/b",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+    sessionSwitching: false,
+    liveRunning: true,
+    liveMessages: [],
+    activeTurn: {
+      sessionId: "running-a",
+      sessionPath: "/tmp/a",
+      commandId: "a",
+      epoch: 1,
+    },
+  });
+  const view = renderWithI18n(createElement(App));
+  try {
+    await act(async () => vi.advanceTimersByTimeAsync(250));
+    expect(review).toHaveBeenCalledTimes(1);
+    expect(review).toHaveBeenCalledWith(
+      "idle-b",
+      "/tmp/b",
+      expect.any(AbortSignal),
+      expect.any(Object),
+    );
+    act(() => webStore.setState({ snapshot: { ...snapshot, cursor: 2 } }));
+    await act(async () => vi.advanceTimersByTimeAsync(2_100));
+    expect(review).toHaveBeenCalledTimes(2);
+  } finally {
+    view.unmount();
+    start.mockRestore();
+    stop.mockRestore();
+    review.mockRestore();
+    webStore.setState(original, true);
+  }
+});
+
+it("keeps the reader mounted across an external controller change and revokes input until refreshed", async () => {
+  const original = webStore.getState();
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.workspaces = [{ path: "/tmp", name: "Workspace", current: true }];
+  snapshot.sessions = [
+    {
+      id: "session",
+      path: "/tmp/session",
+      cwd: "/tmp",
+      name: "Reading A",
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      messageCount: 4,
+      firstMessage: "Earlier question",
+    },
+  ];
+  const entry = (
+    id: string,
+    role: string,
+    content: string,
+    parentId: string | null,
+  ) => ({
+    id,
+    parentId,
+    type: "message" as const,
+    timestamp: snapshot.generatedAt,
+    message: { role, content },
+  });
+  snapshot.selectedSession!.entries = [
+    entry("latest", "assistant", "Recent answer", "older-answer"),
+  ];
+  snapshot.selectedSession!.history = {
+    leafEntryId: "latest",
+    beforeEntryId: "latest",
+  };
+  snapshot.selectedSession!.truncation = {
+    ...truncation,
+    truncated: true,
+    entriesOmitted: 2,
+  };
+  let eventStream!: EventStreamOptions;
+  const client = new WebClient();
+  let completeRefresh!: (next: WebSnapshot) => void;
+  const refresh = vi.spyOn(client, "snapshot").mockReturnValue(
+    new Promise((resolve) => {
+      completeRefresh = resolve;
+    }),
+  );
+  const prompt = vi.spyOn(client, "prompt");
+  const history = vi
+    .spyOn(WebClient.prototype, "sessionHistory")
+    .mockResolvedValue({
+      ...snapshot.selectedSession!,
+      entries: [
+        entry("older-user", "user", "Earlier question", null),
+        entry("older-answer", "assistant", "Earlier answer", "older-user"),
+      ],
+      anchorEntryId: "latest",
+      requestedBeforeEntryId: "latest",
+      truncation: { ...truncation, entriesOmitted: 0 },
+      history: {
+        leafEntryId: "latest",
+        beforeEntryId: null,
+        anchorEntryId: "latest",
+        anchorOnBranch: true,
+      },
+    });
+  const store = createWebStore(client, {
+    consumeEvents: (options) => {
+      eventStream = options;
+      options.onConnected();
+      return new Promise<void>((resolve) =>
+        options.signal.addEventListener("abort", () => resolve(), {
+          once: true,
+        }),
+      );
+    },
+  });
+  store.setState({
+    snapshot,
+    cursor: 1,
+    selectedPath: "/tmp/session",
+    selectedWorkspace: "/tmp",
+    workspaceDraft: false,
+  });
+  webStore.setState(store.getState(), true);
+  const unsubscribe = store.subscribe((next) => webStore.setState(next, true));
+  const view = renderWithI18n(createElement(App));
+  try {
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("historyLoadOlder") }),
+      ),
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    const viewport = view.container.querySelector<HTMLElement>(
+      '.conversation[role="log"]',
+    )!;
+    Object.defineProperty(viewport, "scrollHeight", {
+      configurable: true,
+      value: 1000,
+    });
+    Object.defineProperty(viewport, "clientHeight", {
+      configurable: true,
+      value: 200,
+    });
+    viewport.scrollTop = 100;
+    fireEvent.scroll(viewport);
+    const anchor = store.getState().historyAnchor;
+    expect(anchor?.entryId).toBe("latest");
+    act(() =>
+      eventStream.onEvent({
+        protocolVersion: 1,
+        sequence: 2,
+        timestamp: snapshot.generatedAt,
+        type: "session_switched",
+        detail: { sessionId: "controller-b", sessionPath: "/tmp/b" },
+      }),
+    );
+    expect(view.container.querySelector('.conversation[role="log"]')).toBe(
+      viewport,
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    expect(store.getState().historyAnchor).toEqual(anchor);
+    expect(
+      view.container.querySelector<HTMLTextAreaElement>(".composer textarea")
+        ?.disabled,
+    ).toBe(true);
+    expect(
+      await store.getState().actions.sendPrompt("Must not reach old A"),
+    ).toBe(false);
+    expect(prompt).not.toHaveBeenCalled();
+    expect(refresh).toHaveBeenCalledWith("/tmp/session", anchor);
+    const next = structuredClone(snapshot);
+    next.cursor = 2;
+    next.currentSessionId = "controller-b";
+    next.currentSessionPath = "/tmp/b";
+    next.sessions[0]!.controller = "none";
+    next.sessions.push({
+      ...next.sessions[0]!,
+      id: "controller-b",
+      path: "/tmp/b",
+      controller: "web",
+    });
+    next.selectedSession!.history = {
+      ...next.selectedSession!.history!,
+      anchorEntryId: "latest",
+      anchorOnBranch: true,
+    };
+    await act(async () => completeRefresh(next));
+    expect(view.container.querySelector('.conversation[role="log"]')).toBe(
+      viewport,
+    );
+    expect(screen.getByText("Earlier answer")).toBeTruthy();
+    expect(viewport.scrollTop).toBe(100);
+    expect(store.getState().historyAnchor).toEqual(anchor);
+    expect(history).toHaveBeenCalledOnce();
+  } finally {
+    view.unmount();
+    store.getState().actions.stop();
+    unsubscribe();
+    refresh.mockRestore();
+    prompt.mockRestore();
+    history.mockRestore();
+    webStore.setState(original, true);
+  }
+});
 
 it("groups transcript turns with state and confirmed file change receipts", () => {
   const snapshot = activeSnapshot();
@@ -964,6 +2239,246 @@ it("follows same-key streamed growth, preserves reading position, and honors exp
   expect(scroll).toHaveBeenCalledOnce();
 });
 
+it("restores the same native entry offset after leaving a Session, without sharing it with a copied path", () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.history = {
+    leafEntryId: "e3",
+    beforeEntryId: "e2",
+  };
+  snapshot.selectedSession!.entries = [
+    {
+      id: "e2",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Read this prompt" },
+    },
+    {
+      id: "e3",
+      parentId: "e2",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "assistant", content: "Read this answer" },
+    },
+  ];
+  const cache: SessionReadingCache = new Map();
+  let returned = false;
+  const bounds = vi
+    .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+    .mockImplementation(function (this: HTMLElement) {
+      if (this.classList.contains("conversation"))
+        return new DOMRect(0, 10, 300, 100);
+      if (this.dataset.historyEntry === "e2")
+        return new DOMRect(0, returned ? 200 : 5, 300, 50);
+      return new DOMRect();
+    });
+  const scrollHeight = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockReturnValue(1000);
+  const clientHeight = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockReturnValue(100);
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  const scroll = vi.fn(function (this: HTMLElement, options: ScrollToOptions) {
+    this.scrollTop = options.top ?? 0;
+  });
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value: scroll,
+  });
+  const node = (path = snapshot.selectedSession!.path, scrollToBottom = 0) =>
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Transcript, {
+        key: path,
+        snapshot: {
+          ...snapshot,
+          selectedSession: { ...snapshot.selectedSession!, path },
+        },
+        readingCache: cache,
+        liveMessages: [],
+        liveRunning: false,
+        livePhase: "idle",
+        liveRetry: null,
+        thinkingStarts: {},
+        thinkingDurations: {},
+        scrollToBottom,
+        onResend: async () => true,
+      }),
+    );
+  try {
+    const view = render(node());
+    const viewport =
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    viewport.scrollTop = 150;
+    fireEvent.scroll(viewport);
+    view.rerender(node("/tmp/copied-session"));
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(1000);
+    const saved = cache.get(sessionReadingScope(snapshot.selectedSession))!;
+    expect(saved.window?.anchor).toBe("e3");
+    expect(saved.position).toMatchObject({
+      key: "e2",
+      offset: -5,
+      scrollTop: 150,
+      pinned: false,
+    });
+    returned = true;
+    view.rerender(node());
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(195);
+    expect(
+      screen.getByRole("button", { name: i18n.t("jumpToLatest") }),
+    ).toBeTruthy();
+    view.rerender(node(snapshot.selectedSession!.path, 1));
+    expect(
+      view.container.querySelector<HTMLElement>(".conversation")!.scrollTop,
+    ).toBe(1000);
+    expect(cache.has(sessionReadingScope(snapshot.selectedSession))).toBe(
+      false,
+    );
+    view.unmount();
+  } finally {
+    bounds.mockRestore();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
+it("keeps the App reader through switching and trajectory without transferring it to another Session", () => {
+  const original = webStore.getState();
+  const start = vi
+    .spyOn(original.actions, "start")
+    .mockImplementation(() => {});
+  const stop = vi.spyOn(original.actions, "stop").mockImplementation(() => {});
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.selectedSession!.entries = [
+    {
+      id: "e1",
+      type: "message",
+      timestamp: snapshot.generatedAt,
+      message: { role: "user", content: "Reader A" },
+    },
+  ];
+  snapshot.selectedSession!.history = {
+    leafEntryId: "e1",
+    beforeEntryId: null,
+  };
+  snapshot.sessions = [
+    {
+      id: "session",
+      path: "/tmp/session",
+      cwd: "/tmp",
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      messageCount: 1,
+      firstMessage: "Reader A",
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+    },
+  ];
+  const scrollHeight = vi
+    .spyOn(HTMLElement.prototype, "scrollHeight", "get")
+    .mockReturnValue(1000);
+  const clientHeight = vi
+    .spyOn(HTMLElement.prototype, "clientHeight", "get")
+    .mockReturnValue(100);
+  const originalScroll = Object.getOwnPropertyDescriptor(
+    HTMLElement.prototype,
+    "scrollTo",
+  );
+  Object.defineProperty(HTMLElement.prototype, "scrollTo", {
+    configurable: true,
+    value(this: HTMLElement, options: ScrollToOptions) {
+      this.scrollTop = options.top ?? 0;
+    },
+  });
+  try {
+    webStore.setState({
+      snapshot,
+      selectedPath: "/tmp/session",
+      selectedWorkspace: "/tmp",
+      workspaceDraft: false,
+      sessionSwitching: false,
+      connection: "connected",
+      liveRunning: false,
+      liveMessages: [],
+    });
+    const view = render(createElement(Providers, null, createElement(App)));
+    const scroller = () =>
+      view.container.querySelector<HTMLElement>(".conversation")!;
+    scroller().scrollTop = 180;
+    fireEvent.scroll(scroller());
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("trajectory") }));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("chatView") }));
+    expect(scroller().scrollTop).toBe(180);
+    act(() =>
+      webStore.setState({ sessionSwitching: true, selectedPath: "/tmp/other" }),
+    );
+    act(() =>
+      webStore.setState({
+        sessionSwitching: false,
+        snapshot: {
+          ...snapshot,
+          selectedSession: {
+            ...snapshot.selectedSession!,
+            id: "other",
+            path: "/tmp/other",
+          },
+        },
+      }),
+    );
+    expect(scroller().scrollTop).toBe(1000);
+    act(() =>
+      webStore.setState({
+        sessionSwitching: true,
+        selectedPath: "/tmp/session",
+      }),
+    );
+    act(() => webStore.setState({ sessionSwitching: false, snapshot }));
+    expect(scroller().scrollTop).toBe(180);
+    for (const id of ["C", "D", "E", "F"]) {
+      act(() =>
+        webStore.setState({
+          selectedPath: `/tmp/${id}`,
+          snapshot: {
+            ...snapshot,
+            selectedSession: {
+              ...snapshot.selectedSession!,
+              id,
+              path: `/tmp/${id}`,
+            },
+          },
+        }),
+      );
+    }
+    act(() => webStore.setState({ selectedPath: "/tmp/session", snapshot }));
+    expect(scroller().scrollTop).toBe(180);
+    view.unmount();
+  } finally {
+    webStore.setState(original, true);
+    start.mockRestore();
+    stop.mockRestore();
+    scrollHeight.mockRestore();
+    clientHeight.mockRestore();
+    if (originalScroll)
+      Object.defineProperty(HTMLElement.prototype, "scrollTo", originalScroll);
+    else Reflect.deleteProperty(HTMLElement.prototype, "scrollTo");
+  }
+});
+
 it("shows cancellation and queued follow-up receipts on the active session", () => {
   const snapshot = activeSnapshot();
   const store = createWebStore();
@@ -1013,6 +2528,88 @@ it("shows cancellation and queued follow-up receipts on the active session", () 
     screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("stopTurn") })
       .disabled,
   ).toBe(true);
+});
+
+it("shows Pi's queued messages inside the composer after reload and in a background session", () => {
+  const snapshot = activeSnapshot();
+  const selected = snapshot.selectedSession!;
+  const firstMessage = `First follow-up ${"x".repeat(90)} complete queued text`;
+  snapshot.currentSessionId = "another-session";
+  snapshot.selectedExecution = {
+    sessionId: selected.id,
+    sessionPath: selected.path,
+    status: "running",
+    pendingFollowUps: 2,
+    queuedMessages: [firstMessage, ""],
+    liveTools: [],
+    liveToolsOmitted: 0,
+  };
+  const store = createWebStore();
+  const props = {
+    snapshot,
+    selectedWorkspace: "/tmp",
+    sessionSwitching: false,
+    promptAdmissionPending: false,
+    liveRunning: false,
+    landing: false,
+    activeTurn: null,
+    turnCancellationPending: false,
+    turnTerminalStatus: null,
+    pendingFollowUpsReceipt: null,
+    thinkingPendingLevel: null,
+    actions: store.getState().actions,
+  };
+  const view = renderWithI18n(createElement(Composer, props));
+  const queued = screen.getByRole("region", {
+    name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+  });
+  expect(queued.closest("form.composer")).toBeTruthy();
+  expect(queued.querySelector("ol")).toBeNull();
+  expect(queued.textContent).toContain("First follow-up");
+  expect(queued.textContent).toContain(i18n.t("queuedImage"));
+  expect(
+    screen.getByRole("button", {
+      name: `${i18n.t("queuedMessageExpand")}: ${i18n.t("queuedImage")}`,
+    }),
+  ).toBeTruthy();
+  const first = screen.getByRole("button", {
+    name: /First follow-up/,
+  });
+  expect(first.getAttribute("aria-expanded")).toBe("false");
+  fireEvent.click(first);
+  expect(
+    screen
+      .getByRole("button", {
+        name: `${i18n.t("queuedMessageCollapse")}: ${firstMessage}`,
+      })
+      .getAttribute("aria-expanded"),
+  ).toBe("true");
+  expect(
+    screen.queryByText(i18n.t("pendingFollowUpsHint", { count: 2 }), {
+      selector: ".composer-hint",
+    }),
+  ).toBeNull();
+
+  snapshot.selectedExecution = {
+    ...snapshot.selectedExecution!,
+    pendingFollowUps: 0,
+    queuedMessages: [],
+  };
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        snapshot: structuredClone(snapshot),
+      }),
+    ),
+  );
+  expect(
+    screen.queryByRole("region", {
+      name: i18n.t("pendingFollowUpsHint", { count: 2 }),
+    }),
+  ).toBeNull();
 });
 
 it("keeps background terminal activity and omission receipts visible", () => {
@@ -1322,7 +2919,7 @@ it("reports failed copy honestly, supports retry, and cleans up feedback on unmo
   }
 });
 
-it("shows bounded archive history even when its workspace summary was omitted", async () => {
+it("loads archived history even when its workspace summary was omitted", async () => {
   const store = createWebStore();
   const restore = vi
     .spyOn(store.getState().actions, "unarchiveSession")
@@ -1359,6 +2956,18 @@ it("shows bounded archive history even when its workspace summary was omitted", 
       truncated: true,
     },
   };
+  const read = vi
+    .spyOn(WebClient.prototype, "listArchivedSessions")
+    .mockResolvedValue({
+      sessions: snapshot.sessions,
+      truncation: {
+        truncated: false,
+        matchesOmitted: 0,
+        recordsUnscanned: 0,
+        maxPageSize: 100,
+        maxScanned: 2000,
+      },
+    });
   renderWithI18n(
     createElement(SessionSidebar, {
       snapshot,
@@ -1374,13 +2983,12 @@ it("shows bounded archive history even when its workspace summary was omitted", 
     }),
   );
   fireEvent.click(screen.getByRole("button", { name: "Archived" }));
-  expect(screen.getByText("Archived work")).toBeTruthy();
+  expect(await screen.findByText("Archived work")).toBeTruthy();
   expect(screen.getAllByText("/omitted").length).toBeGreaterThan(0);
-  expect(
-    screen.getByText(
-      "20 more sessions and 1 workspace summaries are not loaded. Search covers the loaded list only.",
-    ),
-  ).toBeTruthy();
+  expect(read).toHaveBeenCalledWith(
+    { query: "", limit: 25 },
+    expect.any(AbortSignal),
+  );
   fireEvent.click(screen.getByRole("button", { name: "Conversation options" }));
   fireEvent.click(
     await screen.findByRole("menuitem", { name: "Restore conversation" }),
@@ -1392,6 +3000,7 @@ it("shows bounded archive history even when its workspace summary was omitted", 
   ).toBeTruthy();
   expect(restore).toHaveBeenCalledWith("/omitted/a.jsonl");
   expect(screen.getByText("Archived work")).toBeTruthy();
+  read.mockRestore();
 });
 
 it("shows complete model identities before workspace selection", () => {
@@ -1624,31 +3233,39 @@ describe("thinking level picker", () => {
     ).toBe(i18n.t("thinkingUnsupportedHint"));
   });
 
-  it("disables the picker for a workspace draft", () => {
+  it("prepares a native session when opening thinking from a workspace draft", async () => {
     const props = thinkingProps(idleThinkingSnapshot());
-    const { container } = renderWithI18n(
-      createElement(Composer, { ...props, workspaceDraft: true }),
+    const prepareSession = vi.fn(async () => null);
+    renderWithI18n(
+      createElement(Composer, {
+        ...props,
+        workspaceDraft: true,
+        actions: { ...props.actions, prepareSession },
+      }),
     );
     expect(
       screen.getByRole<HTMLButtonElement>("button", {
         name: thinkingPickerName("medium"),
       }).disabled,
-    ).toBe(true);
-    expect(
-      container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
-    ).toBe(i18n.t("thinkingDraftHint"));
+    ).toBe(false);
+    await act(async () =>
+      fireEvent.click(
+        screen.getByRole("button", { name: thinkingPickerName("medium") }),
+      ),
+    );
+    expect(prepareSession).toHaveBeenCalledOnce();
   });
 
-  it("disables the picker for a non-current session", () => {
+  it("hides the controller's picker while viewing a non-current session", () => {
     const props = thinkingProps(
       idleThinkingSnapshot({ currentSessionId: "another-session" }),
     );
     const { container } = renderWithI18n(createElement(Composer, props));
     expect(
-      screen.getByRole<HTMLButtonElement>("button", {
+      screen.queryByRole("button", {
         name: thinkingPickerName("medium"),
-      }).disabled,
-    ).toBe(true);
+      }),
+    ).toBeNull();
     expect(
       container.querySelector(".thinking-picker-wrap")?.getAttribute("title"),
     ).toBe(i18n.t("thinkingInactiveHint"));
@@ -1889,7 +3506,7 @@ it("debounces bounded model search when the snapshot omitted models", async () =
     ),
   );
   await act(() => vi.advanceTimersByTimeAsync(250));
-  expect(searchModels).toHaveBeenCalledTimes(2);
+  expect(searchModels).toHaveBeenCalledTimes(1);
   expect(searchModels).toHaveBeenLastCalledWith("hidden");
 
   rerender(
@@ -2108,6 +3725,433 @@ it("renders explicit choices for an unknown prompt admission", () => {
   ).toBe(true);
 });
 
+it("retains an over-limit draft, explains the exact trimmed limit, and sends nothing", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const store = createWebStore();
+  const send = vi.fn(async () => false);
+  const view = renderWithI18n(
+    createElement(Composer, {
+      ...thinkingProps(snapshot),
+      actions: { ...store.getState().actions, sendPrompt: send },
+    }),
+  );
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  const content = "\ud83d\ude42".repeat(WEB_PROMPT_MAX_TEXT_LENGTH / 2 + 1);
+  fireEvent.change(input, { target: { value: `  ${content}  ` } });
+  expect(input.value).toBe(`  ${content}  `);
+  expect(input.getAttribute("aria-invalid")).toBe("true");
+  expect(screen.getByRole("alert").textContent).toBe(
+    i18n.t("promptTooLong", {
+      count: content.length,
+      limit: WEB_PROMPT_MAX_TEXT_LENGTH,
+    }),
+  );
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(true);
+  fireEvent.submit(view.container.querySelector("form")!);
+  expect(send).not.toHaveBeenCalled();
+
+  const atLimit = `  ${"x".repeat(WEB_PROMPT_MAX_TEXT_LENGTH)}  `;
+  fireEvent.change(input, { target: { value: atLimit } });
+  expect(input.value).toBe(atLimit);
+  expect(input.getAttribute("aria-invalid")).toBeNull();
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("send") })
+      .disabled,
+  ).toBe(false);
+  await act(async () =>
+    fireEvent.submit(view.container.querySelector("form")!),
+  );
+  expect(send).toHaveBeenCalledWith(atLimit);
+});
+
+it("retries only the original uncertain request and retains the current revised composer draft", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  snapshot.sessions = [
+    {
+      ...snapshot.selectedSession!,
+      source: "web-session",
+      origin: "web",
+      controller: "web",
+      readOnly: false,
+      created: snapshot.generatedAt,
+      modified: snapshot.generatedAt,
+      messageCount: 0,
+      firstMessage: "",
+    },
+  ];
+  const client = new WebClient();
+  vi.spyOn(client, "snapshot").mockResolvedValue(snapshot);
+  const receipt = deferred<{ id: string; accepted: boolean }>();
+  const prompt = vi
+    .spyOn(client, "prompt")
+    .mockRejectedValueOnce(new TypeError("lost receipt"))
+    .mockReturnValueOnce(receipt.promise);
+  const store = createWebStore(client);
+  await store.getState().actions.refreshSnapshot();
+  function ConnectedComposer() {
+    const state = useStore(store);
+    return createElement(Composer, {
+      ...thinkingProps(state.snapshot!, state.actions),
+      selectedWorkspace: state.selectedWorkspace,
+      promptAdmissionPending: state.promptAdmissionPending,
+      promptAdmissionRecovery: state.promptAdmissionRecovery,
+      promptAdmissionResolution: state.promptAdmissionResolution,
+      liveRunning: state.liveRunning,
+      activeTurn: state.activeTurn,
+    });
+  }
+  try {
+    const view = renderWithI18n(createElement(ConnectedComposer));
+    const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "original" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    expect(prompt).toHaveBeenCalledOnce();
+    expect(input.value).toBe("original");
+    expect(store.getState().promptAdmissionRecovery?.retryable).toBe(true);
+    fireEvent.change(input, { target: { value: "edited current draft" } });
+    fireEvent.submit(view.container.querySelector("form")!);
+    expect(prompt).toHaveBeenCalledOnce();
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("retryOriginalAdmission") }),
+    );
+    await waitFor(() => expect(prompt).toHaveBeenCalledTimes(2));
+    expect(prompt.mock.calls[1]).toEqual([
+      "session",
+      "original",
+      prompt.mock.calls[0]![2],
+      "/tmp/session",
+      true,
+      [],
+    ]);
+    fireEvent.change(input, { target: { value: "edited again during retry" } });
+    await act(async () =>
+      receipt.resolve({ id: prompt.mock.calls[0]![2], accepted: true }),
+    );
+    expect(input.value).toBe("edited again during retry");
+    expect(store.getState().promptAdmissionRecovery).toBeNull();
+    expect(store.getState().promptAdmissionResolution).toBeNull();
+    expect(store.getState().liveMessages).toHaveLength(1);
+    expect(store.getState().liveMessages[0]!.message.content).toBe("original");
+  } finally {
+    store.getState().actions.stop();
+  }
+});
+
+it.each([
+  ["unchanged", "prompt_accepted"],
+  ["retyped", "prompt_accepted"],
+  ["edited", "prompt_accepted"],
+  ["unchanged", "prompt_failed"],
+  ["retyped", "prompt_failed"],
+  ["edited", "prompt_failed"],
+])(
+  "settles a %s submission when recovery and late %s are batched into one render",
+  async (revision, type) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.sessions = [
+      {
+        ...snapshot.selectedSession!,
+        source: "web-session",
+        origin: "web",
+        controller: "web",
+        readOnly: false,
+        created: snapshot.generatedAt,
+        modified: snapshot.generatedAt,
+        messageCount: 0,
+        firstMessage: "",
+      },
+    ];
+    let stream!: EventStreamOptions;
+    let loseReceipt!: (error: unknown) => void;
+    const receipt = new Promise<{ id: string; accepted: boolean }>(
+      (_resolve, reject) => {
+        loseReceipt = reject;
+      },
+    );
+    const client = new WebClient();
+    const prompt = vi.spyOn(client, "prompt").mockReturnValue(receipt);
+    vi.spyOn(client, "snapshot")
+      .mockResolvedValueOnce(snapshot)
+      .mockImplementationOnce(async () => {
+        stream.onEvent({
+          protocolVersion: 1,
+          sequence: 2,
+          timestamp: snapshot.generatedAt,
+          type,
+          detail: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: prompt.mock.calls[0]![2],
+            error: "Native execution failed",
+          },
+        });
+        return snapshot;
+      })
+      .mockResolvedValue(snapshot);
+    const store = createWebStore(client, {
+      consumeEvents: (options) => {
+        stream = options;
+        options.onConnected();
+        return new Promise<void>((resolve) =>
+          options.signal.addEventListener("abort", () => resolve(), {
+            once: true,
+          }),
+        );
+      },
+    });
+    await store.getState().actions.refreshSnapshot();
+    store.getState().actions.start();
+    function ConnectedComposer() {
+      const state = useStore(store);
+      return createElement(Composer, {
+        ...thinkingProps(state.snapshot!, state.actions),
+        selectedWorkspace: state.selectedWorkspace,
+        promptAdmissionPending: state.promptAdmissionPending,
+        promptAdmissionRecovery: state.promptAdmissionRecovery,
+        promptAdmissionResolution: state.promptAdmissionResolution,
+      });
+    }
+    try {
+      const view = renderWithI18n(createElement(ConnectedComposer));
+      const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      });
+      fireEvent.change(input, { target: { value: "original" } });
+      fireEvent.submit(view.container.querySelector("form")!);
+      expect(prompt).toHaveBeenCalledOnce();
+      if (revision !== "unchanged") {
+        fireEvent.change(input, { target: { value: "edited" } });
+        if (revision === "retyped")
+          fireEvent.change(input, { target: { value: "original" } });
+      }
+      await act(async () => loseReceipt(new TypeError("lost receipt")));
+      expect(store.getState().promptAdmissionRecovery).toBeNull();
+      expect(store.getState().promptAdmissionResolution).toBeNull();
+      if (type === "prompt_failed")
+        expect(store.getState().notice).toBe("Native execution failed");
+      expect(input.value).toBe(
+        revision === "unchanged"
+          ? ""
+          : revision === "retyped"
+            ? "original"
+            : "edited",
+      );
+      expect(prompt).toHaveBeenCalledOnce();
+    } finally {
+      store.getState().actions.stop();
+    }
+  },
+);
+
+it("does not lend a rejected composer submission's revision to an external admission", async () => {
+  const snapshot = activeSnapshot();
+  snapshot.runtime.status = "idle";
+  const actions = {
+    ...createWebStore().getState().actions,
+    sendPrompt: vi.fn(async () => false),
+  };
+  const props = thinkingProps(snapshot, actions);
+  const view = renderWithI18n(createElement(Composer, props));
+  const input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+    name: i18n.t("describeTask"),
+  });
+  fireEvent.change(input, { target: { value: "unrelated rejected draft" } });
+  await act(async () =>
+    fireEvent.submit(view.container.querySelector("form")!),
+  );
+  const recovery = {
+    sessionId: "session",
+    sessionPath: "/tmp/session",
+    commandId: "external-setup-card",
+    optimisticKey: "optimistic-external-setup-card",
+    content: "/openpi-setup repair",
+    phase: "ready" as const,
+    retryable: true,
+  };
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, { ...props, promptAdmissionRecovery: recovery }),
+    ),
+  );
+  expect(input.value).toBe("unrelated rejected draft");
+  view.rerender(
+    createElement(
+      I18nextProvider,
+      { i18n },
+      createElement(Composer, {
+        ...props,
+        promptAdmissionResolution: {
+          sessionId: recovery.sessionId,
+          sessionPath: recovery.sessionPath,
+          commandId: recovery.commandId,
+          content: recovery.content,
+        },
+      }),
+    ),
+  );
+  expect(input.value).toBe("unrelated rejected draft");
+});
+
+it.each([
+  ["abandon", "unchanged"],
+  ["abandon", "edited"],
+  ["abandon", "retyped"],
+  ["cached-rejection", "unchanged"],
+  ["cached-rejection", "edited"],
+  ["cached-rejection", "retyped"],
+  ["navigation", "unchanged"],
+  ["navigation", "edited"],
+  ["navigation", "retyped"],
+])(
+  "settles the next %s submission with a %s revision despite a previous recovery capture",
+  async (previous, revision) => {
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    const send = vi.fn(async () => false);
+    const abandon = vi.fn();
+    const retry = vi.fn(async () => false);
+    const acknowledge = vi.fn();
+    const props = thinkingProps(snapshot, {
+      ...createWebStore().getState().actions,
+      sendPrompt: send,
+      abandonPromptAdmission: abandon,
+      retryPromptAdmission: retry,
+      acknowledgePromptAdmissionResolution: acknowledge,
+    });
+    const view = renderWithI18n(createElement(Composer, props));
+    let input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+      name: i18n.t("describeTask"),
+    });
+    fireEvent.change(input, { target: { value: "first X" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    const recovery = {
+      sessionId: "session",
+      sessionPath: "/tmp/session",
+      commandId: "X",
+      optimisticKey: "optimistic-X",
+      content: "first X",
+      retryable: true,
+      phase: "ready" as const,
+    };
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          promptAdmissionRecovery: recovery,
+        }),
+      ),
+    );
+    if (previous === "cached-rejection") {
+      await act(async () =>
+        fireEvent.click(
+          screen.getByRole("button", {
+            name: i18n.t("retryOriginalAdmission"),
+          }),
+        ),
+      );
+      expect(retry).toHaveBeenCalledExactlyOnceWith();
+    } else {
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("abandonAdmission") }),
+      );
+      expect(abandon).toHaveBeenCalledOnce();
+    }
+    view.rerender(
+      createElement(I18nextProvider, { i18n }, createElement(Composer, props)),
+    );
+    expect(input.value).toBe("first X");
+
+    fireEvent.change(input, { target: { value: "second Y" } });
+    await act(async () =>
+      fireEvent.submit(view.container.querySelector("form")!),
+    );
+    expect(send).toHaveBeenCalledTimes(2);
+    if (previous === "navigation") {
+      const other = {
+        ...snapshot,
+        currentSessionId: "other",
+        currentSessionPath: "/tmp/other",
+        selectedSession: {
+          ...snapshot.selectedSession!,
+          id: "other",
+          path: "/tmp/other",
+        },
+      };
+      view.rerender(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(Composer, { ...props, snapshot: other }),
+        ),
+      );
+      expect(
+        screen.getByRole<HTMLTextAreaElement>("textbox", {
+          name: i18n.t("describeTask"),
+        }).value,
+      ).toBe("");
+      view.rerender(
+        createElement(
+          I18nextProvider,
+          { i18n },
+          createElement(Composer, props),
+        ),
+      );
+      input = screen.getByRole<HTMLTextAreaElement>("textbox", {
+        name: i18n.t("describeTask"),
+      });
+      expect(input.value).toBe("second Y");
+    }
+    if (revision !== "unchanged") {
+      fireEvent.change(input, { target: { value: "third revision" } });
+      if (revision === "retyped")
+        fireEvent.change(input, { target: { value: "second Y" } });
+    }
+    view.rerender(
+      createElement(
+        I18nextProvider,
+        { i18n },
+        createElement(Composer, {
+          ...props,
+          promptAdmissionResolution: {
+            sessionId: "session",
+            sessionPath: "/tmp/session",
+            commandId: "Y",
+            content: "second Y",
+            images: [],
+          },
+        }),
+      ),
+    );
+    expect(input.value).toBe(
+      revision === "unchanged"
+        ? ""
+        : revision === "retyped"
+          ? "second Y"
+          : "third revision",
+    );
+    expect(acknowledge).toHaveBeenCalledExactlyOnceWith("Y");
+  },
+);
+
 it("requires another canonical check after admission verification fails", () => {
   const snapshot = activeSnapshot();
   snapshot.runtime.status = "idle";
@@ -2155,7 +4199,7 @@ it("requires another canonical check after admission verification fails", () => 
 });
 
 it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
-  "clears a recovered draft matching admitted content %j when late evidence arrives",
+  "clears only an unchanged recovered draft when late evidence arrives (%j)",
   (draft) => {
     const snapshot = activeSnapshot();
     snapshot.runtime.status = "idle";
@@ -2201,6 +4245,8 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
           ...baseProps,
           promptAdmissionRecovery: null,
           promptAdmissionResolution: {
+            sessionId: "session",
+            sessionPath: snapshot.selectedSession!.path,
             commandId: "unknown-command",
             content: "keep this draft",
           },
@@ -2208,7 +4254,7 @@ it.each(["keep this draft", "  keep this draft  ", "\nkeep this draft\n"])(
       ),
     );
 
-    expect(input.value).toBe("");
+    expect(input.value).toBe(draft === "keep this draft" ? "" : draft);
     expect(acknowledge).toHaveBeenCalledWith("unknown-command");
   },
 );
@@ -2339,6 +4385,8 @@ it("preserves an edited recovered draft when late evidence arrives", () => {
         ...baseProps,
         promptAdmissionRecovery: null,
         promptAdmissionResolution: {
+          sessionId: "session",
+          sessionPath: snapshot.selectedSession!.path,
           commandId: "unknown-command",
           content: "original",
         },
@@ -2459,6 +4507,7 @@ it("clears an old session draft without letting its late send clear the new one"
   const nextSnapshot = {
     ...snapshot,
     currentSessionId: "next-session",
+    currentSessionPath: "/tmp/next-session",
     selectedSession: {
       ...snapshot.selectedSession!,
       id: "next-session",
@@ -2568,6 +4617,7 @@ it("transfers an unsent draft through manual new-session creation", () => {
   const createdSnapshot = {
     ...snapshot,
     currentSessionId: "created-session",
+    currentSessionPath: "/tmp/created-session",
     selectedSession: {
       ...snapshot.selectedSession!,
       id: "created-session",
@@ -2583,6 +4633,12 @@ it("transfers an unsent draft through manual new-session creation", () => {
         snapshot: createdSnapshot,
         selectedPath: "/tmp/created-session",
         sessionSwitching: false,
+        createdSession: {
+          epoch: 1,
+          sessionId: "created-session",
+          sessionPath: "/tmp/created-session",
+          workspacePath: "/tmp",
+        },
       }),
     ),
   );

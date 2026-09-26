@@ -75,6 +75,8 @@ export function SubagentDetailView({
   liveAvailable,
   fullView,
   readOnlyNote = true,
+  active = true,
+  refreshRevision = 0,
 }: {
   sessionId: string;
   id: string;
@@ -84,6 +86,8 @@ export function SubagentDetailView({
   liveAvailable: boolean;
   fullView: boolean;
   readOnlyNote?: boolean;
+  active?: boolean;
+  refreshRevision?: number;
 }) {
   const { t } = useTranslation();
   const [detail, setDetail] = useState<WebSubagentDetail | null>(null);
@@ -94,8 +98,9 @@ export function SubagentDetailView({
   const viewport = useRef<HTMLDivElement>(null);
   const pinned = useRef(true);
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: revision explicitly requests a fresh detail projection.
+  // biome-ignore lint/correctness/useExhaustiveDependencies: revisions explicitly request a fresh detail projection.
   useEffect(() => {
+    if (!active) return;
     if (!liveAvailable) {
       setLoading(false);
       setError(t("subagentUnavailable"));
@@ -162,7 +167,17 @@ export function SubagentDetailView({
       clearTimeout(timer);
       document.removeEventListener("visibilitychange", resume);
     };
-  }, [client, sessionId, id, activity?.status, revision, liveAvailable, t]);
+  }, [
+    active,
+    client,
+    sessionId,
+    id,
+    activity?.status,
+    revision,
+    refreshRevision,
+    liveAvailable,
+    t,
+  ]);
 
   useLayoutEffect(() => {
     void detail;
@@ -196,7 +211,11 @@ export function SubagentDetailView({
   );
   const SectionHeading = fullView ? "h2" : "h3";
   return (
-    <section className="subagent-detail" aria-label={t("subagentDetails")}>
+    <section
+      className="subagent-detail"
+      aria-label={t("subagentDetails")}
+      hidden={!active}
+    >
       <header className="subagent-detail-heading">
         <div>
           <span className={`subagent-state ${state ?? "unknown"}`}>
@@ -422,7 +441,14 @@ export function SubagentPanel({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
-  const [selectedId, select] = useState<string | null>(initialId ?? null);
+  const [selectedId, setSelectedId] = useState<string | null>(
+    initialId ?? null,
+  );
+  const [detailId, setDetailId] = useState<string | null>(initialId ?? null);
+  const select = (id: string | null) => {
+    if (id) setDetailId(id);
+    setSelectedId(id);
+  };
   const [fullView, setFullView] = useState(
     () => window.matchMedia?.("(max-width: 1100px)").matches ?? false,
   );
@@ -525,18 +551,20 @@ export function SubagentPanel({
           <X />
         </button>
       </header>
-      {selectedId ? (
+      {detailId && (
         <SubagentDetailView
-          key={`${sessionId}:${selectedId}`}
+          key={`${sessionId}:${detailId}`}
           sessionId={sessionId}
-          id={selectedId}
-          activity={selected}
+          id={detailId}
+          activity={items.find((item) => item.id === detailId)}
           client={client}
-          saved={saved}
+          saved={records.find((record) => record.id === detailId)}
           liveAvailable={liveAvailable}
           fullView={fullView}
+          active={Boolean(selectedId)}
         />
-      ) : (
+      )}
+      {!selectedId && (
         <nav className="subagent-list" aria-label={t("subagentTasks")}>
           {[true, false].map((running) => {
             const group = allTasks.filter(

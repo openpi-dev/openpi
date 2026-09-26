@@ -1,12 +1,13 @@
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { Button } from "@astryxdesign/core/Button";
 import { Dialog } from "@astryxdesign/core/Dialog";
 import {
   Bot,
   Check,
   Cpu,
-  KeyRound,
   Layers3,
   Plug,
+  Plus,
   SlidersHorizontal,
   X,
 } from "lucide-react";
@@ -18,6 +19,8 @@ import type {
   WebSettingsPreferencesPatch,
   WebThemePreference,
 } from "../../../../protocol/types.ts";
+import type { WebModelConfiguration } from "../../../../runtime/types.ts";
+import { ModelConfigurationEditor } from "./ModelConfigurationEditor.tsx";
 import { ProviderStatusSection } from "./ProviderStatusSection.tsx";
 import {
   GeneralSettingsPanel,
@@ -49,12 +52,14 @@ function modelKey(model: WebModelSummary) {
 export function ProviderSettingsPage({
   sessionId,
   cwd,
+  entry = "general",
   models,
   currentModel,
   thinkingLevel,
   theme,
   capabilities,
-  setupBusy,
+  setupBusy: sessionBusy,
+  setupBlockedReason,
   modelSelectionPending,
   onSelectModel,
   onConfigureOpenPi,
@@ -65,12 +70,14 @@ export function ProviderSettingsPage({
 }: {
   sessionId: string;
   cwd: string;
+  entry?: "general" | "credentials";
   models: WebModelSummary[];
   currentModel?: WebModelSummary;
   thinkingLevel: string;
   theme: WebThemePreference;
   capabilities?: WebCapabilitySnapshot;
   setupBusy: boolean;
+  setupBlockedReason?: string;
   modelSelectionPending: boolean;
   onSelectModel: (value: string) => void;
   onConfigureOpenPi: (request: string) => Promise<boolean>;
@@ -80,15 +87,34 @@ export function ProviderSettingsPage({
   onClose: () => void;
 }) {
   const { t } = useTranslation();
+  const setupBusy = sessionBusy || Boolean(setupBlockedReason);
   const closeButton = useRef<HTMLButtonElement>(null);
-  const [section, setSection] = useState<SettingsSection>("general");
+  const tabs = useRef<HTMLDivElement>(null);
+  const [section, setSection] = useState<SettingsSection>(
+    entry === "credentials" ? "models" : "general",
+  );
+  const [modelsVisited, setModelsVisited] = useState(entry === "credentials");
+  const [configuredModels, setConfiguredModels] = useState<
+    WebModelConfiguration[]
+  >([]);
   const [setupPending, setSetupPending] = useState(false);
+  const [providerRevision, refreshProviders] = useState(0);
   const [setupSubmitted, setSetupSubmitted] = useState(false);
   const setupRefreshPending = useRef(false);
   const setupObservedBusy = useRef(false);
   const setupRefreshTimer = useRef(0);
   const [preferencePending, setPreferencePending] = useState(false);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [modelDraftDirty, setModelDraftDirty] = useState(false);
+  const [credentialDraftDirty, setCredentialDraftDirty] = useState(false);
+  const [modelSaving, setModelSaving] = useState(false);
+  const [credentialSaving, setCredentialSaving] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<
+    | { kind: "close" | "runtime" }
+    | { kind: "model"; key: string; provider: string }
+    | null
+  >(null);
+  const saving = modelSaving || credentialSaving;
   const {
     catalog,
     error: catalogError,
@@ -101,32 +127,47 @@ export function ProviderSettingsPage({
         ? modelKey(models[0])
         : "",
   );
+  const viewedModel = useRef<WebModelSummary | undefined>(undefined);
 
+  const modelCatalog = useMemo(() => {
+    const merged = new Map(models.map((model) => [modelKey(model), model]));
+    for (const model of configuredModels) {
+      const key = `${model.provider}/${model.id}`;
+      if (!merged.has(key))
+        merged.set(key, {
+          provider: model.provider,
+          id: model.id,
+          name: model.name,
+          label: model.name || model.id,
+          current: false,
+        });
+    }
+    return [...merged.values()];
+  }, [configuredModels, models]);
   const groupedModels = useMemo(() => {
     const groups = new Map<string, WebModelSummary[]>();
-    for (const model of models) {
+    for (const model of modelCatalog) {
       const group = groups.get(model.provider) ?? [];
       group.push(model);
       groups.set(model.provider, group);
     }
     return [...groups.entries()];
-  }, [models]);
-  const selectedModel =
-    models.find((model) => modelKey(model) === selectedModelKey) ??
-    currentModel ??
-    models[0];
+  }, [modelCatalog]);
+  const catalogModel = modelCatalog.find(
+    (model) => modelKey(model) === selectedModelKey,
+  );
+  if (catalogModel) viewedModel.current = catalogModel;
+  // A catalog refresh cannot authorize leaving an open credential draft.
+  const selectedModel = selectedModelKey
+    ? (catalogModel ??
+      (viewedModel.current && modelKey(viewedModel.current) === selectedModelKey
+        ? viewedModel.current
+        : undefined))
+    : undefined;
 
   useEffect(() => {
     closeButton.current?.focus();
   }, []);
-  useEffect(() => {
-    if (!models.length) {
-      setSelectedModelKey("");
-      return;
-    }
-    if (models.some((model) => modelKey(model) === selectedModelKey)) return;
-    setSelectedModelKey(modelKey(currentModel ?? models[0]!));
-  }, [currentModel, models, selectedModelKey]);
   useEffect(() => {
     if (!setupSubmitted) return;
     if (setupBusy) {
@@ -143,7 +184,7 @@ export function ProviderSettingsPage({
   useEffect(() => () => window.clearTimeout(setupRefreshTimer.current), []);
 
   const configureOpenPi = async (request: string) => {
-    if (setupPending) return false;
+    if (setupPending || setupBusy) return false;
     setSetupPending(true);
     setSetupSubmitted(false);
     setupRefreshPending.current = false;
@@ -194,7 +235,7 @@ export function ProviderSettingsPage({
   };
 
   const updateWebPreferences = async (patch: WebSettingsPreferencesPatch) => {
-    if (preferencePending) return false;
+    if (preferencePending || setupPending || setupBusy) return false;
     setPreferencePending(true);
     setSetupError(null);
     try {
@@ -209,6 +250,42 @@ export function ProviderSettingsPage({
     }
   };
 
+  const selectSection = (next: SettingsSection) => {
+    setSection(next);
+    if (next === "models") setModelsVisited(true);
+    setSetupError(null);
+  };
+  const navigate = (
+    target: NonNullable<typeof pendingNavigation>,
+    discard = false,
+  ) => {
+    if (target.kind === "model" ? credentialSaving : saving) return;
+    const changesProvider =
+      target.kind === "model" &&
+      target.provider !== (selectedModel?.provider ?? "");
+    const needsConfirmation =
+      target.kind === "model"
+        ? changesProvider && credentialDraftDirty
+        : modelDraftDirty || credentialDraftDirty;
+    if (needsConfirmation && !discard) {
+      setPendingNavigation(target);
+      return;
+    }
+    setPendingNavigation(null);
+    if (target.kind === "model") setSelectedModelKey(target.key);
+    else if (target.kind === "runtime") onOpenRuntimeStatus();
+    else onClose();
+  };
+  const selectModelDetail = (key: string, provider?: string) =>
+    navigate({
+      kind: "model",
+      key,
+      provider:
+        provider ??
+        modelCatalog.find((model) => modelKey(model) === key)?.provider ??
+        "",
+    });
+
   return (
     <Dialog
       isOpen
@@ -218,28 +295,73 @@ export function ProviderSettingsPage({
       maxHeight="calc(100dvh - 16px)"
       className="provider-settings-dialog"
       aria-label={t("settings")}
-      onOpenChange={(open: boolean) => !open && onClose()}
+      onOpenChange={(open: boolean) => {
+        if (!open && !pendingNavigation) navigate({ kind: "close" });
+      }}
     >
       <section className="provider-settings-surface">
         <header className="provider-settings-header">
           <strong className="provider-settings-title">{t("settings")}</strong>
+          <select
+            className="provider-settings-mobile-picker"
+            aria-label={t("settingsNavigation")}
+            value={section}
+            onChange={(event) => {
+              const next = settingsSections.find(
+                ({ id }) => id === event.target.value,
+              );
+              if (next) selectSection(next.id);
+            }}
+          >
+            {settingsSections.map(({ id, label }) => (
+              <option key={id} value={id}>
+                {t(label)}
+              </option>
+            ))}
+          </select>
           <div
             className="provider-settings-navigation"
+            ref={tabs}
             aria-label={t("settingsNavigation")}
             role="tablist"
           >
-            {settingsSections.map(({ id, label, Icon }) => (
+            {settingsSections.map(({ id, label, Icon }, index) => (
               <button
                 key={id}
                 type="button"
                 role="tab"
+                id={`settings-tab-${id}`}
+                tabIndex={section === id ? 0 : -1}
                 aria-selected={section === id}
                 aria-controls={`settings-panel-${id}`}
                 className="provider-settings-tab"
                 title={t(label)}
-                onClick={() => {
-                  setSection(id);
-                  setSetupError(null);
+                onClick={() => selectSection(id)}
+                onKeyDown={(event) => {
+                  if (
+                    event.altKey ||
+                    event.ctrlKey ||
+                    event.metaKey ||
+                    event.nativeEvent.isComposing
+                  )
+                    return;
+                  const next =
+                    event.key === "Home"
+                      ? 0
+                      : event.key === "End"
+                        ? settingsSections.length - 1
+                        : event.key === "ArrowRight"
+                          ? (index + 1) % settingsSections.length
+                          : event.key === "ArrowLeft"
+                            ? (index + settingsSections.length - 1) %
+                              settingsSections.length
+                            : undefined;
+                  if (next === undefined) return;
+                  event.preventDefault();
+                  selectSection(settingsSections[next]!.id);
+                  tabs.current
+                    ?.querySelectorAll<HTMLButtonElement>('[role="tab"]')
+                    [next]?.focus();
                 }}
               >
                 <Icon aria-hidden="true" />
@@ -252,7 +374,9 @@ export function ProviderSettingsPage({
             type="button"
             className="icon-button provider-settings-close"
             aria-label={t("close")}
-            onClick={onClose}
+            disabled={saving}
+            title={saving ? t("savingSettings") : t("close")}
+            onClick={() => navigate({ kind: "close" })}
           >
             <X />
           </button>
@@ -261,6 +385,7 @@ export function ProviderSettingsPage({
         <div className="provider-settings-main">
           <div
             id="settings-panel-general"
+            aria-labelledby="settings-tab-general"
             role="tabpanel"
             hidden={section !== "general"}
           >
@@ -272,16 +397,19 @@ export function ProviderSettingsPage({
               cwd={cwd}
               theme={theme}
               setupPending={setupPending || setupBusy}
-              preferencePending={preferencePending}
+              preferencePending={preferencePending || setupPending || setupBusy}
+              setupBusy={setupBusy}
+              setupBlockedReason={setupBlockedReason}
               onConfigure={configureOpenPi}
               onUpdatePreferences={updateWebPreferences}
-              onOpenRuntimeStatus={onOpenRuntimeStatus}
+              onOpenRuntimeStatus={() => navigate({ kind: "runtime" })}
               onRefresh={refresh}
             />
           </div>
 
           <section
             id="settings-panel-models"
+            aria-labelledby="settings-tab-models"
             className="settings-models"
             role="tabpanel"
             hidden={section !== "models"}
@@ -305,7 +433,8 @@ export function ProviderSettingsPage({
                             key === selectedModelKey ? "page" : undefined
                           }
                           className="settings-model-item"
-                          onClick={() => setSelectedModelKey(key)}
+                          disabled={credentialSaving}
+                          onClick={() => selectModelDetail(key)}
                         >
                           <span>
                             <strong>{model.name || model.id}</strong>
@@ -321,13 +450,18 @@ export function ProviderSettingsPage({
                     })}
                   </section>
                 ))}
-                {!models.length && (
+                {!modelCatalog.length && (
                   <p className="settings-model-empty">{t("noModels")}</p>
                 )}
               </div>
-              <div className="settings-model-provider-link">
-                <KeyRound aria-hidden="true" /> {t("providerReadOnly")}
-              </div>
+              <button
+                type="button"
+                className="settings-model-provider-link"
+                disabled={credentialSaving}
+                onClick={() => selectModelDetail("")}
+              >
+                <Plus aria-hidden="true" /> {t("addModel")}
+              </button>
             </aside>
             <div className="settings-model-detail">
               {selectedModel ? (
@@ -342,7 +476,11 @@ export function ProviderSettingsPage({
                       label={
                         selectedModel.current
                           ? t("currentModel")
-                          : t("useThisModel")
+                          : models.some(
+                                (model) => modelKey(model) === selectedModelKey,
+                              )
+                            ? t("useThisModel")
+                            : t("unavailable")
                       }
                       variant={selectedModel.current ? "secondary" : "primary"}
                       size="sm"
@@ -352,12 +490,26 @@ export function ProviderSettingsPage({
                         ) : undefined
                       }
                       isDisabled={
-                        selectedModel.current || modelSelectionPending
+                        setupBusy ||
+                        saving ||
+                        selectedModel.current ||
+                        modelSelectionPending ||
+                        !models.some(
+                          (model) => modelKey(model) === selectedModelKey,
+                        )
                       }
                       isLoading={modelSelectionPending}
-                      onClick={() => onSelectModel(modelKey(selectedModel))}
+                      onClick={() => {
+                        if (!setupBusy && !saving)
+                          onSelectModel(modelKey(selectedModel));
+                      }}
                     />
                   </header>
+                  {setupBusy && !selectedModel.current && (
+                    <p className="settings-edit-state" role="status">
+                      {setupBlockedReason || t("modelSelectionBusy")}
+                    </p>
+                  )}
                   <dl className="settings-model-metadata">
                     <div>
                       <dt>{t("provider")}</dt>
@@ -368,22 +520,47 @@ export function ProviderSettingsPage({
                       <dd>{selectedModel.id}</dd>
                     </div>
                   </dl>
-                  <ProviderStatusSection
-                    sessionId={sessionId}
-                    providerId={selectedModel.provider}
-                    active={section === "models"}
-                  />
                 </>
               ) : (
-                <div className="provider-settings-state">
-                  <strong>{t("noModels")}</strong>
-                </div>
+                <header className="settings-model-detail-heading">
+                  <h1>{t("addModel")}</h1>
+                </header>
               )}
+              {modelsVisited && (
+                <ModelConfigurationEditor
+                  key={`model-config:${sessionId}`}
+                  sessionId={sessionId}
+                  selectedKey={selectedModelKey}
+                  selectedModel={selectedModel}
+                  onSelect={selectModelDetail}
+                  onModelsLoaded={setConfiguredModels}
+                  onDraftChange={setModelDraftDirty}
+                  onSavingChange={setModelSaving}
+                  busy={setupBusy}
+                  onSaved={async () => {
+                    refreshProviders((value) => value + 1);
+                    return onPreferencesChanged();
+                  }}
+                />
+              )}
+              <ProviderStatusSection
+                key={`providers:${sessionId}`}
+                sessionId={sessionId}
+                providerId={selectedModel?.provider ?? ""}
+                active={section === "models"}
+                refreshRevision={providerRevision}
+                focusOnOpen={entry === "credentials"}
+                onDraftChange={setCredentialDraftDirty}
+                onSavingChange={setCredentialSaving}
+                busy={setupBusy}
+                onSaved={onPreferencesChanged}
+              />
             </div>
           </section>
 
           <div
             id="settings-panel-skills"
+            aria-labelledby="settings-tab-skills"
             role="tabpanel"
             hidden={section !== "skills"}
           >
@@ -391,11 +568,14 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
 
           <div
             id="settings-panel-subagents"
+            aria-labelledby="settings-tab-subagents"
             role="tabpanel"
             hidden={section !== "subagents"}
           >
@@ -403,6 +583,7 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               currentModel={currentModel}
+              models={models}
               activity={capabilities?.subagents}
               setupPending={setupPending || setupBusy}
               onConfigure={configureOpenPi}
@@ -412,6 +593,7 @@ export function ProviderSettingsPage({
 
           <div
             id="settings-panel-plugins"
+            aria-labelledby="settings-tab-plugins"
             role="tabpanel"
             hidden={section !== "plugins"}
           >
@@ -419,6 +601,8 @@ export function ProviderSettingsPage({
               catalog={catalog}
               error={catalogError}
               onRefresh={refresh}
+              setupPending={setupPending || setupBusy}
+              onConfigure={configureOpenPi}
             />
           </div>
         </div>
@@ -434,6 +618,27 @@ export function ProviderSettingsPage({
           </div>
         )}
       </section>
+      {pendingNavigation && (
+        <AlertDialog
+          isOpen
+          onOpenChange={(open: boolean) => {
+            if (!open) setPendingNavigation(null);
+          }}
+          title={t(
+            pendingNavigation.kind === "model"
+              ? "unsavedCredentialTitle"
+              : "unsavedSettingsTitle",
+          )}
+          description={t(
+            pendingNavigation.kind === "model"
+              ? "unsavedCredentialDetail"
+              : "unsavedSettingsDetail",
+          )}
+          cancelLabel={t("keepEditing")}
+          actionLabel={t("discardAndContinue")}
+          onAction={() => navigate(pendingNavigation, true)}
+        />
+      )}
     </Dialog>
   );
 }
