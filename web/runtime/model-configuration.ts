@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { lstat, readFile, rename, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import type { WebModelConfiguration } from "./types.ts";
+import { type WebModelConfiguration, WebRuntimeRequestError } from "./types.ts";
 
 const apis = new Set(["openai-responses", "openai-completions", "anthropic-messages"]);
 const record = (value: unknown): value is Record<string, unknown> =>
@@ -59,7 +59,7 @@ export async function readModelConfigurations(agentDir: string) {
 export async function saveModelConfiguration(agentDir: string, revision: string, model: WebModelConfiguration) {
   if (!validModelConfiguration(model)) throw new Error("Invalid model configuration");
   const current = await readConfiguration(agentDir);
-  if (revision !== current.revision) throw new Error("Model configuration changed; refresh before saving");
+  if (revision !== current.revision) throw new WebRuntimeRequestError("Model configuration changed; refresh before saving", "MODEL_CONFIGURATION_CONFLICT", 409);
   const previous = current.providers[model.provider];
   if (previous !== undefined && !record(previous)) throw new Error("Invalid provider configuration");
   const config = record(previous) ? previous : {};
@@ -80,7 +80,7 @@ export async function saveModelConfiguration(agentDir: string, revision: string,
   const temporary = `${current.path}.${randomUUID()}.tmp`;
   try {
     await writeFile(temporary, `${JSON.stringify(current.value, null, 2)}\n`, { mode: 0o600, flag: "wx" });
-    if ((await readConfiguration(agentDir)).revision !== revision) throw new Error("Model configuration changed; refresh before saving");
+    if ((await readConfiguration(agentDir)).revision !== revision) throw new WebRuntimeRequestError("Model configuration changed; refresh before saving", "MODEL_CONFIGURATION_CONFLICT", 409);
     await rename(temporary, current.path);
   } finally {
     await unlink(temporary).catch(() => undefined);

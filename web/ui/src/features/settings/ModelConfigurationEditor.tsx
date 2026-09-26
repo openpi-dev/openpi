@@ -1,10 +1,11 @@
+import { AlertDialog } from "@astryxdesign/core/AlertDialog";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type {
   WebModelConfiguration,
   WebModelConfigurations,
 } from "../../../../runtime/types.ts";
-import { WebClient } from "../../protocol/client.ts";
+import { WebApiError, WebClient } from "../../protocol/client.ts";
 
 const emptyModel: WebModelConfiguration = {
   provider: "",
@@ -17,6 +18,21 @@ const emptyModel: WebModelConfiguration = {
   maxTokens: 16384,
 };
 
+const modelFields = [
+  "provider",
+  "id",
+  "name",
+  "baseUrl",
+  "api",
+  "reasoning",
+  "contextWindow",
+  "maxTokens",
+] as const;
+
+function sameModel(left: WebModelConfiguration, right: WebModelConfiguration) {
+  return modelFields.every((field) => left[field] === right[field]);
+}
+
 export function ModelConfigurationEditor({
   sessionId,
   selectedKey,
@@ -25,14 +41,18 @@ export function ModelConfigurationEditor({
   onModelsLoaded,
   busy,
   onSaved,
+  onDraftChange,
+  onSavingChange,
 }: {
   sessionId: string;
   selectedKey?: string;
   selectedModel?: { provider: string; id: string; name: string };
-  onSelect?: (key: string) => void;
+  onSelect?: (key: string, provider?: string) => void;
   onModelsLoaded?: (models: WebModelConfiguration[]) => void;
   busy: boolean;
   onSaved: () => Promise<boolean>;
+  onDraftChange?: (dirty: boolean) => void;
+  onSavingChange?: (saving: boolean) => void;
 }) {
   const { t } = useTranslation();
   const client = useMemo(() => new WebClient(), []);
@@ -43,73 +63,139 @@ export function ModelConfigurationEditor({
   const selected = selectedKey ?? localSelection;
   const selectedRef = useRef(selected);
   selectedRef.current = selected;
+  const onSelectRef = useRef(onSelect);
+  onSelectRef.current = onSelect;
+  const onModelsLoadedRef = useRef(onModelsLoaded);
+  onModelsLoadedRef.current = onModelsLoaded;
   const drafts = useRef(new Map<string, WebModelConfiguration>());
+  const baselines = useRef(
+    new Map<string, { model: WebModelConfiguration; configured: boolean }>(),
+  );
+  const [conflictedDrafts, setConflictedDrafts] = useState(new Set<string>());
+  const [dirty, setDirty] = useState(false);
   const [load, reload] = useState<{
     selection?: string;
+    source?: string;
     saved?: boolean;
     clearMissing?: boolean;
+    discard?: string;
   }>({});
+  const [loading, setLoading] = useState(true);
+  const [discardSelection, setDiscardSelection] = useState<string | null>(null);
   const saveOperation = useRef<AbortController | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
-  const [error, setError] = useState(false);
+  const [loadError, setLoadError] = useState(false);
+  const [saveError, setSaveError] = useState<{
+    selection: string;
+    reason: "failed" | "conflict";
+  } | null>(null);
+  const currentSaveError = conflictedDrafts.has(selected)
+    ? "conflict"
+    : saveError?.selection === selected
+      ? saveError.reason
+      : null;
   const provider = selectedModel?.provider;
   const id = selectedModel?.id;
   const name = selectedModel?.name;
   useEffect(() => {
     if (!configuration) return;
-    setError(false);
-    setModel(
-      drafts.current.get(selected) ??
-        configuration.models.find(
-          (item) => `${item.provider}/${item.id}` === selected,
-        ) ??
-        (provider && id
-          ? { ...emptyModel, provider, id, name: name || id }
-          : emptyModel),
+    const configuredModel = configuration.models.find(
+      (item) => `${item.provider}/${item.id}` === selected,
     );
+    const baseline =
+      configuredModel ??
+      (provider && id
+        ? { ...emptyModel, provider, id, name: name || id }
+        : emptyModel);
+    if (!drafts.current.has(selected))
+      baselines.current.set(selected, {
+        model: baseline,
+        configured: Boolean(configuredModel),
+      });
+    setModel(drafts.current.get(selected) ?? baseline);
+    setDiscardSelection((current) => (current === selected ? current : null));
   }, [configuration, selected, provider, id, name]);
+  useEffect(() => onDraftChange?.(dirty), [dirty, onDraftChange]);
+  useEffect(() => onSavingChange?.(saving), [saving, onSavingChange]);
   useEffect(() => () => saveOperation.current?.abort(), []);
   useEffect(() => {
     const controller = new AbortController();
-    setConfiguration(null);
-    setError(false);
+    setLoading(true);
+    setLoadError(false);
     setSaved(false);
     void client.modelConfigurations(sessionId, controller.signal).then(
       (value) => {
         if (controller.signal.aborted) return;
+        setConflictedDrafts((current) => {
+          const next = new Set(current);
+          for (const [key, draft] of drafts.current) {
+            if (key === load.discard) continue;
+            const baseline = baselines.current.get(key);
+            const latest = value.models.find(
+              (item) =>
+                `${item.provider}/${item.id}` ===
+                (key || `${draft.provider}/${draft.id}`),
+            );
+            if (
+              baseline &&
+              (latest
+                ? !sameModel(baseline.model, latest)
+                : baseline.configured)
+            )
+              next.add(key);
+          }
+          if (load.discard !== undefined) next.delete(load.discard);
+          return next;
+        });
+        if (load.discard !== undefined) {
+          drafts.current.delete(load.discard);
+          baselines.current.delete(load.discard);
+          setDirty(drafts.current.size > 0);
+          if (selectedRef.current === load.source) setSaveError(null);
+        }
         setConfiguration(value);
-        onModelsLoaded?.(value.models);
-        if (load.selection !== undefined) {
+        onModelsLoadedRef.current?.(value.models);
+        if (
+          load.selection !== undefined &&
+          selectedRef.current === load.source
+        ) {
           const latest = value.models.find(
             (item) => `${item.provider}/${item.id}` === load.selection,
           );
+          if (load.discard !== undefined) setModel(latest ?? emptyModel);
           if (latest) {
-            drafts.current.delete(load.selection);
             setLocalSelection(load.selection);
-            onSelect?.(load.selection);
+            onSelectRef.current?.(load.selection, latest.provider);
           } else if (load.clearMissing) {
-            drafts.current.delete(load.selection);
             setLocalSelection("");
-            onSelect?.("");
+            onSelectRef.current?.("");
           }
           setSaved(Boolean(latest && load.saved));
         }
+        setLoading(false);
       },
       () => {
-        if (!controller.signal.aborted) setError(true);
+        if (!controller.signal.aborted) {
+          setLoadError(true);
+          setLoading(false);
+        }
       },
     );
     return () => controller.abort();
-  }, [client, sessionId, load, onSelect, onModelsLoaded]);
+  }, [client, sessionId, load]);
 
   const editModel = (patch: Partial<WebModelConfiguration>) => {
-    setModel((current) => {
-      const updated = { ...current, ...patch };
-      drafts.current.set(selected, updated);
-      return updated;
-    });
+    const updated = { ...model, ...patch };
+    setModel(updated);
+    if (
+      sameModel(updated, baselines.current.get(selected)?.model ?? emptyModel)
+    )
+      drafts.current.delete(selected);
+    else drafts.current.set(selected, updated);
+    setDirty(drafts.current.size > 0);
     setSaved(false);
+    if (currentSaveError === "failed") setSaveError(null);
   };
 
   return (
@@ -120,9 +206,16 @@ export function ModelConfigurationEditor({
         className="settings-edit-form"
         onSubmit={(event) => {
           event.preventDefault();
-          if (saving || busy || !configuration) return;
+          if (
+            saving ||
+            busy ||
+            loading ||
+            !configuration ||
+            currentSaveError === "conflict"
+          )
+            return;
           setSaving(true);
-          setError(false);
+          setSaveError(null);
           setSaved(false);
           const controller = new AbortController();
           saveOperation.current = controller;
@@ -138,10 +231,16 @@ export function ModelConfigurationEditor({
               async () => {
                 if (controller.signal.aborted) return;
                 drafts.current.delete(submittedSelection);
+                baselines.current.set(submittedSelection, {
+                  model,
+                  configured: true,
+                });
+                setDirty(drafts.current.size > 0);
                 reload(
                   selectedRef.current === submittedSelection
                     ? {
                         selection: `${model.provider}/${model.id}`,
+                        source: submittedSelection,
                         saved: true,
                         clearMissing: true,
                       }
@@ -149,12 +248,19 @@ export function ModelConfigurationEditor({
                 );
                 await onSaved().catch(() => false);
               },
-              () => {
+              (reason) => {
                 if (
                   !controller.signal.aborted &&
                   selectedRef.current === submittedSelection
                 )
-                  setError(true);
+                  setSaveError({
+                    selection: submittedSelection,
+                    reason:
+                      reason instanceof WebApiError &&
+                      reason.code === "MODEL_CONFIGURATION_CONFLICT"
+                        ? "conflict"
+                        : "failed",
+                  });
               },
             )
             .finally(() => {
@@ -167,7 +273,7 @@ export function ModelConfigurationEditor({
             {t("configuredModels")}
             <select
               value={selected}
-              disabled={saving || !configuration}
+              disabled={saving || loading || !configuration}
               onChange={(event) => {
                 const key = event.target.value;
                 setLocalSelection(key);
@@ -201,6 +307,7 @@ export function ModelConfigurationEditor({
               disabled={
                 saving ||
                 busy ||
+                loading ||
                 !configuration ||
                 (configuration.models.some(
                   (item) => `${item.provider}/${item.id}` === selected,
@@ -217,7 +324,7 @@ export function ModelConfigurationEditor({
           {t("modelConfig_api")}
           <select
             value={model.api}
-            disabled={saving || busy || !configuration}
+            disabled={saving || busy || loading || !configuration}
             onChange={(event) => {
               const api = event.target.value;
               if (
@@ -243,7 +350,7 @@ export function ModelConfigurationEditor({
               max={100000000}
               step={1}
               value={model[field]}
-              disabled={saving || busy || !configuration}
+              disabled={saving || busy || loading || !configuration}
               onChange={(event) =>
                 editModel({ [field]: Number(event.target.value) })
               }
@@ -254,36 +361,84 @@ export function ModelConfigurationEditor({
           <input
             type="checkbox"
             checked={model.reasoning}
-            disabled={saving || busy || !configuration}
+            disabled={saving || busy || loading || !configuration}
             onChange={(event) => editModel({ reasoning: event.target.checked })}
           />{" "}
           {t("modelConfig_reasoning")}
         </label>
-        <button type="submit" disabled={saving || busy || !configuration}>
+        <button
+          type="submit"
+          disabled={
+            saving ||
+            busy ||
+            loading ||
+            !configuration ||
+            currentSaveError === "conflict"
+          }
+        >
           {t(saving ? "savingSettings" : "saveModelConfiguration")}
         </button>
+        {drafts.current.has(selected) && (
+          <p className="settings-edit-state" role="status">
+            {t("modelConfigurationUnsaved")}
+          </p>
+        )}
         {saved && load.selection === selected && (
           <p role="status">{t("modelConfigurationSaved")}</p>
         )}
-        {error && (
+        {loadError && (
           <div role="alert">
-            <p>{t("modelConfigurationFailed")}</p>
+            <p>{t("modelConfigurationLoadFailed")}</p>
             <button
               type="button"
-              disabled={saving}
-              onClick={() => {
-                drafts.current.delete(selected);
-                reload({
-                  selection: selected || `${model.provider}/${model.id}`,
-                  clearMissing: Boolean(selected),
-                });
-              }}
+              disabled={saving || loading}
+              onClick={() => reload({})}
             >
-              {t("reloadModelConfiguration")}
+              {t("retryModelConfiguration")}
             </button>
           </div>
         )}
+        {currentSaveError && (
+          <div role="alert">
+            <p>
+              {t(
+                currentSaveError === "conflict"
+                  ? "modelConfigurationConflict"
+                  : "modelConfigurationFailed",
+              )}
+            </p>
+            {currentSaveError === "conflict" && (
+              <button
+                type="button"
+                disabled={saving || loading}
+                onClick={() => setDiscardSelection(selected)}
+              >
+                {t("reloadModelConfiguration")}
+              </button>
+            )}
+          </div>
+        )}
       </form>
+      {discardSelection !== null && (
+        <AlertDialog
+          isOpen
+          onOpenChange={(open: boolean) => !open && setDiscardSelection(null)}
+          title={t("discardModelDraftTitle")}
+          description={t("discardModelDraftDetail")}
+          cancelLabel={t("keepEditing")}
+          actionLabel={t("discardAndReload")}
+          onAction={() => {
+            if (saving || loading) return;
+            reload({
+              selection: discardSelection || `${model.provider}/${model.id}`,
+              source: discardSelection,
+              discard: discardSelection,
+              clearMissing: Boolean(discardSelection),
+            });
+            setDiscardSelection(null);
+          }}
+        />
+      )}
     </section>
   );
 }

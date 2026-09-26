@@ -1249,8 +1249,15 @@ export class WebHost {
         await this.runtime.saveModelConfiguration(body.sessionId, body.revision, body.model);
         this.publish("settings_changed", {});
         return this.json(response, 200, { saved: true });
-      } catch {
-        return this.json(response, 409, { error: "Could not complete model save. Wait for an idle Session and refresh configuration before retrying." });
+      } catch (error) {
+        // Native/provider failures can include secrets. Only project typed codes.
+        const typed = error instanceof WebRuntimeRequestError;
+        return this.json(response, typed ? error.statusCode : 422, {
+          ...(typed ? { code: error.code } : {}),
+          error: typed && error.code === "MODEL_CONFIGURATION_CONFLICT"
+            ? "Model configuration changed; refresh before saving"
+            : "Could not complete model save. Wait for an idle Session and refresh configuration before retrying.",
+        });
       }
     }
     if (url.pathname === "/api/model" && request.method === "POST") {

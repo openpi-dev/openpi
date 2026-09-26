@@ -313,8 +313,10 @@ it("validates and inserts a workspace file reference at the caret", async () => 
   await waitFor(() =>
     expect(release).toHaveBeenCalledWith("session-1", "artifact-1"),
   );
-  expect(document.activeElement).toBe(input);
-  expect(input.selectionStart).toBe(`Review \`${reference}\``.length);
+  await waitFor(() => {
+    expect(document.activeElement).toBe(input);
+    expect(input.selectionStart).toBe(`Review \`${reference}\``.length);
+  });
 });
 
 it("keeps a failed active-session reference editable", async () => {

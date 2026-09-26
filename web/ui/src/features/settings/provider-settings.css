@@ -1046,6 +1046,10 @@
   margin-top: 26px;
 }
 
+.provider-status-detail > .settings-form-field {
+  margin-bottom: 16px;
+}
+
 .provider-detail-heading {
   display: flex;
   align-items: center;
@@ -1444,6 +1448,20 @@
   display: grid;
   gap: 12px;
   padding-block: 16px;
+}
+
+.settings-edit-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.settings-model-item:disabled,
+.settings-model-provider-link:disabled,
+.provider-settings-close:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .settings-form-field {

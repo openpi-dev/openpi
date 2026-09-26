@@ -97,6 +97,7 @@ export function App() {
     sessionId: string;
     sessionPath: string;
     cwd: string;
+    entry: "general" | "credentials";
   } | null>(null);
   const [workbarTarget, setWorkbarTarget] = useState<{
     sessionId: string;
@@ -214,7 +215,9 @@ export function App() {
   useEffect(() => {
     if (providerSettings && !providerSettingsVisible) setProviderSettings(null);
   }, [providerSettings, providerSettingsVisible]);
-  const openProviderSettings = async () => {
+  const openProviderSettings = async (
+    entry: "general" | "credentials" = "general",
+  ) => {
     providerSettingsTrigger.current =
       document.activeElement instanceof HTMLElement
         ? document.activeElement
@@ -242,6 +245,7 @@ export function App() {
       sessionId: session.id,
       sessionPath: session.path,
       cwd: session.cwd,
+      entry,
     });
   };
   const closeProviderSettings = useCallback(() => {
@@ -498,7 +502,7 @@ export function App() {
                 !state.snapshot,
             )}
             returnFocusRef={sidebarTrigger}
-            onOpenSettings={openProviderSettings}
+            onOpenSettings={() => void openProviderSettings("general")}
             actions={actions}
           />
           {state.sidebarCollapsed && (
@@ -661,7 +665,7 @@ export function App() {
                 modelSearch={state.modelSearch}
                 thinkingPendingLevel={state.thinkingPendingLevel}
                 onInspect={inspect}
-                onOpenProviders={openProviderSettings}
+                onOpenProviders={() => void openProviderSettings("credentials")}
                 onCommandAction={(action) => {
                   const current = webStore.getState();
                   if (
@@ -718,7 +722,7 @@ export function App() {
               key={`${inspection.sessionId}:${inspection.sessionPath}:${inspection.terminalId ?? "status"}`}
               target={inspection}
               onClose={closeInspection}
-              onOpenProviders={openProviderSettings}
+              onOpenProviders={() => void openProviderSettings("credentials")}
             />
           )}
           {subagentVisible && (
@@ -833,6 +837,7 @@ export function App() {
           key={`${providerSettings.sessionId}:${providerSettings.sessionPath}`}
           sessionId={providerSettings.sessionId}
           cwd={providerSettings.cwd}
+          entry={providerSettings.entry}
           models={state.snapshot?.models ?? []}
           currentModel={currentModel}
           thinkingLevel={

@@ -3803,6 +3803,91 @@ test("stop aborts an open workspace picker", async () => {
   }
 });
 
+test("model configuration saves distinguish typed conflicts from sanitized save failures", async () => {
+  const cwd = await mkdtemp(join(tmpdir(), "openpi-web-model-write-"));
+  const runtime = testRuntime(cwd);
+  let failure: Error | undefined;
+  runtime.saveModelConfiguration = async () => {
+    if (failure) throw failure;
+  };
+  const { host, launched, headers } = await startTestHost(runtime);
+  const body = JSON.stringify({
+    sessionId: runtime.sessionManager.getSessionId(),
+    revision: "fixture-revision",
+    model: {
+      provider: "fixture",
+      id: "fixture-model",
+      name: "Fixture",
+      baseUrl: "http://127.0.0.1:9/v1",
+      api: "openai-responses",
+      reasoning: false,
+      contextWindow: 128000,
+      maxTokens: 4096,
+    },
+  });
+  const save = () =>
+    fetch(`${launched.origin}/api/models/configuration`, {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json" },
+      body,
+    });
+  const genericMessage =
+    "Could not complete model save. Wait for an idle Session and refresh configuration before retrying.";
+  try {
+    assert.equal((await save()).status, 200);
+
+    failure = new WebRuntimeRequestError(
+      "Provider echoed fixture-secret-conflict",
+      "MODEL_CONFIGURATION_CONFLICT",
+      409,
+    );
+    const conflict = await save();
+    assert.equal(conflict.status, 409);
+    assert.deepEqual(await conflict.json(), {
+      code: "MODEL_CONFIGURATION_CONFLICT",
+      error: "Model configuration changed; refresh before saving",
+    });
+
+    failure = new WebRuntimeRequestError(
+      "Provider echoed fixture-secret-session",
+      "SESSION_CONFLICT",
+      409,
+    );
+    const sessionConflict = await save();
+    assert.equal(sessionConflict.status, 409);
+    assert.deepEqual(await sessionConflict.json(), {
+      code: "SESSION_CONFLICT",
+      error: genericMessage,
+    });
+
+    failure = new WebRuntimeRequestError(
+      "Provider echoed fixture-secret-unavailable",
+      "MODEL_NOT_AVAILABLE",
+      422,
+    );
+    const unavailable = await save();
+    assert.equal(unavailable.status, 422);
+    assert.deepEqual(await unavailable.json(), {
+      code: "MODEL_NOT_AVAILABLE",
+      error: genericMessage,
+    });
+
+    failure = Object.assign(
+      new Error("Provider echoed fixture-secret-failure"),
+      {
+        code: "MODEL_CONFIGURATION_CONFLICT",
+        statusCode: 409,
+      },
+    );
+    const generic = await save();
+    assert.equal(generic.status, 422);
+    assert.deepEqual(await generic.json(), { error: genericMessage });
+  } finally {
+    await host.stop();
+    await rm(cwd, { recursive: true, force: true });
+  }
+});
+
 test("provider key writes require authentication and sanitize provider failures", async () => {
   const cwd = await mkdtemp(join(tmpdir(), "openpi-web-provider-write-"));
   const runtime = testRuntime(cwd);

@@ -472,6 +472,16 @@ const resources = {
       providerKeyPlaceholder: "Paste a key to add or replace it",
       saveProviderKey: "Save API key",
       savingSettings: "Saving…",
+      keepEditing: "Keep editing",
+      discardAndContinue: "Discard and continue",
+      unsavedSettingsTitle: "Discard unsaved changes?",
+      unsavedSettingsDetail:
+        "Unsaved model and credential changes will be lost.",
+      unsavedCredentialTitle: "Discard the unsaved credential?",
+      unsavedCredentialDetail:
+        "The new key has not been saved and will be cleared.",
+      modelSelectionBusy:
+        "This session is busy. Model changes are unavailable.",
       providerKeySaved:
         "Saved to Pi credentials. Existing keys are never displayed.",
       providerSaveFailed:
@@ -492,11 +502,21 @@ const resources = {
       modelConfig_maxTokens: "Maximum output (tokens)",
       modelConfig_reasoning: "Supports reasoning",
       saveModelConfiguration: "Save model",
-      reloadModelConfiguration: "Load latest configuration",
+      reloadModelConfiguration: "Discard draft and load latest",
+      retryModelConfiguration: "Retry loading",
+      discardModelDraftTitle: "Discard this model draft?",
+      discardModelDraftDetail:
+        "The latest configuration will replace this unsaved draft.",
+      discardAndReload: "Discard and reload",
+      modelConfigurationUnsaved: "Unsaved changes",
+      modelConfigurationConflict:
+        "Model configuration changed elsewhere. Your draft is unchanged.",
+      modelConfigurationLoadFailed:
+        "Could not load model configuration. Your draft is unchanged.",
       modelConfigurationSaved:
         "Saved to Pi models.json. Configure the provider API key to make this model available.",
       modelConfigurationFailed:
-        "Could not load or complete the save. Check models.json, wait until the session is idle and refresh before retrying.",
+        "Model save did not complete. Your draft is unchanged.",
       setupConfigurationRequest: "Configuration request",
       configureViaSetup: "Apply via OpenPI setup",
       setupFormDetail:
@@ -1214,6 +1234,13 @@ const resources = {
       providerKeyPlaceholder: "粘贴密钥以添加或替换",
       saveProviderKey: "保存密钥",
       savingSettings: "正在保存…",
+      keepEditing: "继续编辑",
+      discardAndContinue: "放弃更改并继续",
+      unsavedSettingsTitle: "放弃未保存的更改？",
+      unsavedSettingsDetail: "未保存的模型和凭据修改将被丢弃。",
+      unsavedCredentialTitle: "放弃未保存的凭据？",
+      unsavedCredentialDetail: "新密钥尚未保存，继续后将清空。",
+      modelSelectionBusy: "当前会话忙碌，暂不能切换模型。",
       providerKeySaved: "已保存到 Pi 凭据存储。已有密钥不会回显。",
       providerSaveFailed:
         "密钥保存未完成。请等待会话空闲，刷新状态后重试；部分服务商需要额外认证信息。",
@@ -1233,11 +1260,17 @@ const resources = {
       modelConfig_maxTokens: "最大输出（tokens）",
       modelConfig_reasoning: "支持推理",
       saveModelConfiguration: "保存模型",
-      reloadModelConfiguration: "载入最新配置",
+      reloadModelConfiguration: "放弃草稿并载入最新配置",
+      retryModelConfiguration: "重试读取",
+      discardModelDraftTitle: "放弃这份模型草稿？",
+      discardModelDraftDetail: "最新配置将替换这份未保存的草稿。",
+      discardAndReload: "放弃并重新载入",
+      modelConfigurationUnsaved: "未保存的更改",
+      modelConfigurationConflict: "模型配置已在别处更改，当前草稿已保留。",
+      modelConfigurationLoadFailed: "无法读取模型配置，草稿已保留。",
       modelConfigurationSaved:
         "已保存到 Pi models.json。配置服务商密钥后即可选择此模型。",
-      modelConfigurationFailed:
-        "读取或保存未完成。请检查 models.json，等待会话空闲，刷新配置后重试。",
+      modelConfigurationFailed: "模型保存未完成，草稿已保留。",
       setupConfigurationRequest: "配置需求",
       configureViaSetup: "通过 OpenPI setup 应用",
       setupFormDetail:

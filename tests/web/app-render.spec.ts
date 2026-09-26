@@ -6,6 +6,7 @@ import {
   fireEvent,
   render,
   screen,
+  within,
 } from "@testing-library/react";
 import { createElement } from "react";
 import { I18nextProvider } from "react-i18next";
@@ -161,6 +162,207 @@ it("keeps a workspace draft separate from the old Session UI and retains text af
     webStore.setState(initial, true);
   }
 });
+
+it.each([
+  { trigger: "providerAvailability", selected: "modelSettings" },
+  { trigger: "settings", selected: "generalSettings" },
+])(
+  "routes the App $trigger entry to $selected",
+  async ({ trigger, selected }) => {
+    const original = webStore.getState();
+    const isolated = createWebStore().getState();
+    const start = vi
+      .spyOn(original.actions, "start")
+      .mockImplementation(() => {});
+    const stop = vi
+      .spyOn(original.actions, "stop")
+      .mockImplementation(() => {});
+    const refresh = vi
+      .spyOn(original.actions, "refreshSnapshot")
+      .mockResolvedValue(true);
+    const showModal = Object.getOwnPropertyDescriptor(
+      HTMLDialogElement.prototype,
+      "showModal",
+    );
+    const closeDialog = Object.getOwnPropertyDescriptor(
+      HTMLDialogElement.prototype,
+      "close",
+    );
+    const matchMedia = Object.getOwnPropertyDescriptor(window, "matchMedia");
+    Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = true;
+      },
+    });
+    Object.defineProperty(HTMLDialogElement.prototype, "close", {
+      configurable: true,
+      value(this: HTMLDialogElement) {
+        this.open = false;
+      },
+    });
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: (media: string) => ({
+        matches: false,
+        media,
+        addEventListener() {},
+        removeEventListener() {},
+      }),
+    });
+    const fetch = vi
+      .spyOn(globalThis, "fetch")
+      .mockImplementation(async (input) => {
+        const url = new URL(String(input), "http://localhost");
+        const responses: Record<string, unknown> = {
+          "/api/questions/pending": { pending: null },
+          "/api/git-review": { ok: false, reason: "not_git_repository" },
+          "/api/models/configuration": {
+            revision: "entry-fixture",
+            models: [],
+          },
+          "/api/providers/auth-status": {
+            providers: [
+              {
+                id: "fixture-provider",
+                name: "Fixture Provider",
+                authMethods: ["api_key"],
+                configured: false,
+                subscription: false,
+                nameTruncated: false,
+              },
+            ],
+            truncation: {
+              truncated: false,
+              providersOmitted: 0,
+              namesTruncated: 0,
+              maxProviders: 250,
+            },
+          },
+          "/api/settings/catalog": {
+            sessionId: "session",
+            setup: {
+              capabilities: { discovery: "explicit" },
+              suggestions: { enabled: false },
+              workflows: { concurrency: 6, maxAgentCalls: 64 },
+              ui: {
+                webTheme: "system",
+                webChatWidth: 820,
+                webChatFontSize: 14,
+                webExpandThinking: false,
+                showHeader: false,
+                customFooter: true,
+                footerStyle: "plain",
+                subagentResultDisplay: "compact",
+                bashToolDisplay: "compact",
+                fileMutationDisplay: "compact",
+              },
+              postEditConfigured: false,
+              subagents: { roleModels: {} },
+            },
+            resources: {
+              skills: [],
+              plugins: [],
+              totals: { extensions: 0, skills: 0, prompts: 0, themes: 0 },
+              diagnostics: { extensionErrors: 0, skillErrors: 0 },
+              truncation: {
+                truncated: false,
+                skillsOmitted: 0,
+                pluginsOmitted: 0,
+                resourcesOmitted: 0,
+              },
+            },
+          },
+        };
+        const body = responses[url.pathname];
+        if (body === undefined)
+          throw new Error(`Unexpected entry fixture request: ${url.pathname}`);
+        return new Response(JSON.stringify(body), { status: 200 });
+      });
+    const snapshot = activeSnapshot();
+    snapshot.runtime.status = "idle";
+    snapshot.models = [
+      {
+        provider: "fixture-provider",
+        id: "fixture-model",
+        name: "Fixture Model",
+        label: "Fixture Model",
+        current: true,
+      },
+    ];
+    webStore.setState(
+      {
+        ...isolated,
+        actions: original.actions,
+        snapshot,
+        connection: "connected",
+        selectedWorkspace: "/tmp",
+        selectedPath: "/tmp/session",
+        sidebarCollapsed: false,
+        workspaceDraft: false,
+        sessionSwitching: false,
+      },
+      true,
+    );
+    let view: ReturnType<typeof render> | undefined;
+    try {
+      view = renderWithI18n(createElement(App));
+      await act(async () =>
+        fireEvent.click(screen.getByRole("button", { name: i18n.t(trigger) })),
+      );
+      const dialog = await screen.findByRole("dialog", {
+        name: i18n.t("settings"),
+      });
+      expect(
+        within(dialog).getByRole("tab", {
+          name: i18n.t(selected),
+          selected: true,
+        }),
+      ).toBeTruthy();
+      expect(
+        within(dialog).getByRole("tabpanel", { name: i18n.t(selected) }),
+      ).toBeTruthy();
+      if (trigger === "providerAvailability")
+        expect(
+          (
+            await within(dialog).findByLabelText<HTMLInputElement>(
+              i18n.t("providerApiKey"),
+            )
+          ).value,
+        ).toBe("");
+      else
+        expect(
+          within(dialog).queryByLabelText(i18n.t("providerApiKey")),
+        ).toBeNull();
+      expect(webStore.getState().snapshot?.selectedSession?.path).toBe(
+        "/tmp/session",
+      );
+    } finally {
+      view?.unmount();
+      start.mockRestore();
+      stop.mockRestore();
+      refresh.mockRestore();
+      fetch.mockRestore();
+      webStore.setState(original, true);
+      if (showModal)
+        Object.defineProperty(
+          HTMLDialogElement.prototype,
+          "showModal",
+          showModal,
+        );
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
+      if (closeDialog)
+        Object.defineProperty(
+          HTMLDialogElement.prototype,
+          "close",
+          closeDialog,
+        );
+      else Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
+      if (matchMedia) Object.defineProperty(window, "matchMedia", matchMedia);
+      else Reflect.deleteProperty(window, "matchMedia");
+    }
+  },
+);
 
 const truncation = {
   bytes: 0,

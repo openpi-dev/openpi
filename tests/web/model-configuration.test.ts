@@ -1,5 +1,13 @@
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import fsPromises, {
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -69,7 +77,12 @@ test("native model configuration preserves other fields, rejects stale writes an
       assert.equal((await stat(path)).mode & 0o777, 0o600);
     await assert.rejects(
       saveModelConfiguration(directory, before.revision, model),
-      /changed/u,
+      {
+        name: "WebRuntimeRequestError",
+        message: "Model configuration changed; refresh before saving",
+        code: "MODEL_CONFIGURATION_CONFLICT",
+        statusCode: 409,
+      },
     );
     const runtime = await ModelRuntime.create({
       modelsPath: path,
@@ -93,6 +106,45 @@ test("native model configuration preserves other fields, rejects stale writes an
       }),
       false,
     );
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("model configuration rejects a revision change before rename and preserves the external write", async (context) => {
+  const directory = await mkdtemp(join(tmpdir(), "openpi-model-config-race-"));
+  const path = join(directory, "models.json");
+  const external = JSON.stringify({ providers: {}, external: true });
+  try {
+    await writeFile(path, JSON.stringify({ providers: {} }));
+    const before = await readModelConfigurations(directory);
+    const originalWrite = fsPromises.writeFile;
+    context.mock.method(
+      fsPromises,
+      "writeFile",
+      async (...args: Parameters<typeof originalWrite>) => {
+        await originalWrite(...args);
+        if (String(args[0]).startsWith(`${path}.`))
+          await originalWrite(path, external);
+      },
+    );
+    syncBuiltinESMExports();
+    context.after(() => {
+      context.mock.restoreAll();
+      syncBuiltinESMExports();
+    });
+
+    await assert.rejects(
+      saveModelConfiguration(directory, before.revision, model),
+      {
+        name: "WebRuntimeRequestError",
+        message: "Model configuration changed; refresh before saving",
+        code: "MODEL_CONFIGURATION_CONFLICT",
+        statusCode: 409,
+      },
+    );
+    assert.equal(await readFile(path, "utf8"), external);
+    assert.deepEqual(await readdir(directory), ["models.json"]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }

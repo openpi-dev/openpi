@@ -16,6 +16,15 @@ import { ProviderSettingsPage } from "../../web/ui/src/features/settings/Provide
 import { i18n } from "../../web/ui/src/i18n.ts";
 
 beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    configurable: true,
+    value: vi.fn((query: string) => ({
+      matches: false,
+      media: query,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    })),
+  });
   Object.defineProperty(HTMLDialogElement.prototype, "showModal", {
     configurable: true,
     value(this: HTMLDialogElement) {
@@ -30,6 +39,7 @@ beforeAll(() => {
   });
 });
 afterAll(() => {
+  Reflect.deleteProperty(window, "matchMedia");
   Reflect.deleteProperty(HTMLDialogElement.prototype, "showModal");
   Reflect.deleteProperty(HTMLDialogElement.prototype, "close");
 });
@@ -239,6 +249,372 @@ it("preserves an unfinished model configuration when changing settings tabs", as
       }) as HTMLInputElement
     ).value,
   ).toBe("http://localhost:12345/v1");
+});
+
+it("opens the credentials entry in Models and focuses the provider controls", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings({ entry: "credentials" });
+  expect(screen.getByRole("tabpanel").id).toBe("settings-panel-models");
+  const provider = await screen.findByRole("combobox", {
+    name: i18n.t("provider"),
+  });
+  await waitFor(() => expect(document.activeElement).toBe(provider));
+});
+
+it("confirms leaving a model draft and preserves it after cancel", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const onClose = vi.fn();
+  renderSettings({ onClose });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  const address = await screen.findByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("modelConfig_baseUrl"),
+  });
+  await waitFor(() => expect(address.disabled).toBe(false));
+  fireEvent.change(address, { target: { value: "http://localhost:12345/v1" } });
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("close") }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(onClose).not.toHaveBeenCalled();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("keepEditing") }));
+  expect(screen.queryByRole("alertdialog")).toBeNull();
+  expect(address.value).toBe("http://localhost:12345/v1");
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("close") }));
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("discardAndContinue") }),
+  );
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("guards runtime navigation even while the edited model tab is hidden", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const onOpenRuntimeStatus = vi.fn();
+  renderSettings({ onOpenRuntimeStatus });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  const address = await screen.findByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("modelConfig_baseUrl"),
+  });
+  await waitFor(() => expect(address.disabled).toBe(false));
+  fireEvent.change(address, { target: { value: "http://localhost:12345/v1" } });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("generalSettings") }));
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("openRuntimeDetails") }),
+  );
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(onOpenRuntimeStatus).not.toHaveBeenCalled();
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("discardAndContinue") }),
+  );
+  expect(onOpenRuntimeStatus).toHaveBeenCalledOnce();
+});
+
+it("confirms a model provider change before discarding an unsent credential", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  renderSettings({ currentModel: models[1], entry: "credentials" });
+  const credential = await screen.findByLabelText<HTMLInputElement>(
+    i18n.t("providerApiKey"),
+  );
+  fireEvent.change(credential, { target: { value: "unsent-fixture-key" } });
+  fireEvent.click(screen.getByRole("button", { name: /GPT 5.6 Luna/u }));
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  expect(screen.getByText(i18n.t("unsavedCredentialTitle"))).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("keepEditing") }));
+  expect(credential.value).toBe("unsent-fixture-key");
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+    "DeepSeek V4",
+  );
+  fireEvent.click(screen.getByRole("button", { name: /GPT 5.6 Luna/u }));
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("discardAndContinue") }),
+  );
+  expect(screen.queryByLabelText(i18n.t("providerApiKey"))).toBeNull();
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+    "GPT 5.6 Luna",
+  );
+});
+
+it("blocks dismissal and provider changes until a credential save settles", async () => {
+  const fallback = settingsFetcher();
+  let finishSave: ((response: Response) => void) | undefined;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn((input: RequestInfo | URL, init?: RequestInit) => {
+      if (init?.method === "POST")
+        return new Promise<Response>((resolve) => {
+          finishSave = resolve;
+        });
+      return fallback(input);
+    }),
+  );
+  const onClose = vi.fn();
+  renderSettings({ currentModel: models[1], onClose, entry: "credentials" });
+  const credential = await screen.findByLabelText(i18n.t("providerApiKey"));
+  fireEvent.change(credential, { target: { value: "submitted-fixture-key" } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("saveProviderKey") }),
+  );
+  const close = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("close"),
+  });
+  expect(close.disabled).toBe(true);
+  expect(
+    screen.getByRole<HTMLButtonElement>("button", { name: /GPT 5.6 Luna/u })
+      .disabled,
+  ).toBe(true);
+  fireEvent(
+    close.closest("dialog")!,
+    new Event("cancel", { cancelable: true }),
+  );
+  expect(onClose).not.toHaveBeenCalled();
+  await waitFor(() => expect(finishSave).toBeDefined());
+  await act(async () => {
+    finishSave?.(reply({ saved: true }));
+  });
+  await waitFor(() => expect(close.disabled).toBe(false));
+  fireEvent.click(close);
+  expect(onClose).toHaveBeenCalledOnce();
+});
+
+it("retains an unsent credential when a model save refreshes provider status", async () => {
+  const fallback = settingsFetcher();
+  const savedModel = {
+    provider: "deepseek",
+    id: "deepseek-v4",
+    name: "DeepSeek V4",
+    baseUrl: "http://localhost:12345/v1",
+    api: "openai-responses",
+    reasoning: true,
+    contextWindow: 128000,
+    maxTokens: 16384,
+  };
+  let persisted = false;
+  const fetcher = vi.fn(
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/models/configuration")) {
+        if (init?.method === "POST") {
+          persisted = true;
+          return reply({ saved: true });
+        }
+        return reply({
+          revision: persisted ? "saved" : "initial",
+          models: persisted ? [savedModel] : [],
+        });
+      }
+      return fallback(input);
+    },
+  );
+  vi.stubGlobal("fetch", fetcher);
+  renderSettings({ currentModel: models[1], entry: "credentials" });
+  const credential = await screen.findByLabelText<HTMLInputElement>(
+    i18n.t("providerApiKey"),
+  );
+  const address = screen.getByRole<HTMLInputElement>("textbox", {
+    name: i18n.t("modelConfig_baseUrl"),
+  });
+  await waitFor(() => expect(address.disabled).toBe(false));
+  fireEvent.change(credential, { target: { value: "unsent-fixture-key" } });
+  fireEvent.change(address, { target: { value: savedModel.baseUrl } });
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("saveModelConfiguration") }),
+  );
+  await screen.findByText(i18n.t("modelConfigurationSaved"));
+  await waitFor(() =>
+    expect(
+      fetcher.mock.calls.filter(([input]) =>
+        String(input).includes("/api/providers/auth"),
+      ),
+    ).toHaveLength(2),
+  );
+  expect(screen.getByLabelText(i18n.t("providerApiKey"))).toBe(credential);
+  expect(credential.value).toBe("unsent-fixture-key");
+});
+
+it.each([false, true])(
+  "selects a newly saved model while preferences refresh is pending (credential draft: %s)",
+  async (credentialDraft) => {
+    const fallback = settingsFetcher();
+    const savedModel = {
+      provider: "fixture",
+      id: "new-model",
+      name: "New fixture model",
+      baseUrl: "http://localhost:12345/v1",
+      api: "openai-responses",
+      reasoning: true,
+      contextWindow: 128000,
+      maxTokens: 16384,
+    };
+    let persisted = false;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).includes("/api/models/configuration")) {
+          if (init?.method === "POST") {
+            persisted = true;
+            return reply({ saved: true });
+          }
+          return reply({
+            revision: persisted ? "saved" : "initial",
+            models: persisted ? [savedModel] : [],
+          });
+        }
+        return fallback(input);
+      }),
+    );
+    let finishRefresh: ((result: boolean) => void) | undefined;
+    const onPreferencesChanged = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          finishRefresh = resolve;
+        }),
+    );
+    renderSettings({ onPreferencesChanged });
+    fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+    const address = await screen.findByRole<HTMLInputElement>("textbox", {
+      name: i18n.t("modelConfig_baseUrl"),
+    });
+    await waitFor(() => expect(address.disabled).toBe(false));
+    fireEvent.click(screen.getByRole("button", { name: i18n.t("addModel") }));
+    let credential: HTMLInputElement | undefined;
+    if (credentialDraft) {
+      fireEvent.change(
+        await screen.findByRole("combobox", { name: i18n.t("provider") }),
+        { target: { value: "deepseek" } },
+      );
+      credential = screen.getByLabelText<HTMLInputElement>(
+        i18n.t("providerApiKey"),
+      );
+      fireEvent.change(credential, { target: { value: "unsent-fixture-key" } });
+    }
+    for (const field of ["provider", "id", "name", "baseUrl"] as const)
+      fireEvent.change(
+        screen.getByRole("textbox", { name: i18n.t(`modelConfig_${field}`) }),
+        { target: { value: savedModel[field] } },
+      );
+    fireEvent.click(
+      screen.getByRole("button", { name: i18n.t("saveModelConfiguration") }),
+    );
+    if (credentialDraft) {
+      await screen.findByRole("alertdialog");
+      expect(credential?.value).toBe("unsent-fixture-key");
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+        i18n.t("addModel"),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("keepEditing") }),
+      );
+      expect(credential?.value).toBe("unsent-fixture-key");
+      fireEvent.click(
+        screen.getByRole("button", { name: /New fixture model/u }),
+      );
+      fireEvent.click(
+        screen.getByRole("button", { name: i18n.t("discardAndContinue") }),
+      );
+    }
+    await waitFor(() =>
+      expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+        savedModel.name,
+      ),
+    );
+    expect(
+      screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("close") })
+        .disabled,
+    ).toBe(true);
+    await act(async () => {
+      finishRefresh?.(true);
+    });
+    await waitFor(() =>
+      expect(
+        screen.getByRole<HTMLButtonElement>("button", { name: i18n.t("close") })
+          .disabled,
+      ).toBe(false),
+    );
+  },
+);
+
+it("keeps the inspected provider when external model removal needs credential confirmation", async () => {
+  const fallback = settingsFetcher();
+  const configuredModel = {
+    provider: "deepseek",
+    id: "configuration-only",
+    name: "Removed external model",
+    baseUrl: "http://localhost:12345/v1",
+    api: "openai-responses",
+    reasoning: true,
+    contextWindow: 128000,
+    maxTokens: 16384,
+  };
+  let removed = false;
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      if (String(input).includes("/api/models/configuration")) {
+        if (init?.method === "POST") {
+          removed = true;
+          return new Response(
+            JSON.stringify({
+              code: "MODEL_CONFIGURATION_CONFLICT",
+              error: "conflict",
+            }),
+            { status: 409 },
+          );
+        }
+        return reply({
+          revision: removed ? "removed" : "initial",
+          models: removed ? [] : [configuredModel],
+        });
+      }
+      return fallback(input);
+    }),
+  );
+  renderSettings({ entry: "credentials" });
+  fireEvent.click(
+    await screen.findByRole("button", { name: /Removed external model/u }),
+  );
+  const credential = await screen.findByLabelText<HTMLInputElement>(
+    i18n.t("providerApiKey"),
+  );
+  fireEvent.change(credential, { target: { value: "unsent-fixture-key" } });
+  fireEvent.change(
+    screen.getByRole("textbox", { name: i18n.t("modelConfig_name") }),
+    { target: { value: "My model draft" } },
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("saveModelConfiguration") }),
+  );
+  fireEvent.click(
+    await screen.findByRole("button", {
+      name: i18n.t("reloadModelConfiguration"),
+    }),
+  );
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("discardAndReload") }),
+  );
+  await screen.findByText(i18n.t("unsavedCredentialTitle"));
+  expect(credential.value).toBe("unsent-fixture-key");
+  expect(screen.getByRole("heading", { level: 1 }).textContent).toBe(
+    configuredModel.name,
+  );
+  fireEvent.click(screen.getByRole("button", { name: i18n.t("keepEditing") }));
+  expect(screen.getByLabelText(i18n.t("providerApiKey"))).toBe(credential);
+  expect(credential.value).toBe("unsent-fixture-key");
+  fireEvent.click(screen.getByRole("button", { name: /GPT 5.6 Luna/u }));
+  fireEvent.click(
+    screen.getByRole("button", { name: i18n.t("discardAndContinue") }),
+  );
+  expect(screen.queryByLabelText(i18n.t("providerApiKey"))).toBeNull();
+});
+
+it("disables using another model during a running session", async () => {
+  vi.stubGlobal("fetch", settingsFetcher());
+  const onSelectModel = vi.fn();
+  renderSettings({ setupBusy: true, onSelectModel });
+  fireEvent.click(screen.getByRole("tab", { name: i18n.t("modelSettings") }));
+  fireEvent.click(screen.getByRole("button", { name: /DeepSeek V4/u }));
+  const useModel = screen.getByRole<HTMLButtonElement>("button", {
+    name: i18n.t("useThisModel"),
+  });
+  expect(useModel.disabled).toBe(true);
+  expect(screen.getByText(i18n.t("modelSelectionBusy"))).toBeTruthy();
+  fireEvent.click(useModel);
+  expect(onSelectModel).not.toHaveBeenCalled();
 });
 
 it("saves a write-only key directly to Pi without submitting a setup prompt", async () => {
