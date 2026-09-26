@@ -1664,6 +1664,34 @@ export class WebHost {
         },
       });
     }
+    if (url.pathname === "/api/sessions/search") {
+      const query = url.searchParams.get("q") ?? "";
+      const includeArchived = url.searchParams.get("archived") === "true";
+      const rawOffset = url.searchParams.get("offset");
+      const rawLimit = url.searchParams.get("limit");
+      const offset = rawOffset === null ? 0 : Number(rawOffset);
+      const limit = rawLimit === null ? undefined : Number(rawLimit);
+      const result = await this.adapter.searchSessions({
+        query,
+        includeArchived,
+        offset,
+        ...(limit !== undefined ? { limit } : {}),
+      });
+      if (result.status === "invalid") {
+        return this.json(response, 400, {
+          code: "INVALID_SESSION_QUERY",
+          error: "session search query is invalid or exceeds its bounds",
+        });
+      }
+      return this.json(response, 200, {
+        query,
+        sessions: result.sessions,
+        ...(result.nextOffset !== undefined
+          ? { nextOffset: result.nextOffset }
+          : {}),
+        truncation: result.truncation,
+      });
+    }
     if (url.pathname === "/api/terminal-sessions") {
       const query = url.searchParams.get("query") ?? "";
       if (query.length > 200) {
